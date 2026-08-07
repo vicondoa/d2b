@@ -787,6 +787,9 @@
           policyInputRoot nativeGnuTarget "broker-production";
         guestPolicyRoot =
           policyInputRoot nativeMuslTarget "guest-real-libshpool";
+        # The guest static policy consumes only
+        # guest-real-libshpool/production/{closure.json,Cargo.lock}; the
+        # policy metadata and lock are reserved for deny and audit.
         policyInputsPresent = builtins.pathExists
           (./. + "/packages/policy-inputs");
         artifactBaselinePath =
@@ -929,6 +932,7 @@
               grep -Fq "Machine: ${expectedMachine}" "$header" \
                 || fail D2B-BZLARTIFACT-LINKAGE
               printf '%s\n' ${lib.escapeShellArg expectedE} > "$TMPDIR/expected-e-machine"
+              # Guest artifacts are ET_DYN static PIE and have no PT_INTERP or DT_NEEDED.
               ${if guest then ''
                 grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' "$header" \
                   || fail D2B-BZLARTIFACT-LINKAGE

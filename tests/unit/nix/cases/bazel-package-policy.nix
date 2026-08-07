@@ -62,10 +62,7 @@ in
   };
 
   "bazel-package-policy/exact-wl-proxy-pins" = {
-    expr =
-      (lib.count (needle: needle == hash)
-        (lib.splitString hash hostBroker) == 1)
-      && lib.hasInfix hash flake;
+    expr = has hostBroker hash && has flake hash;
     expected = true;
   };
 
@@ -117,8 +114,8 @@ in
   };
 
   "bazel-package-policy/six-license-exceptions" = {
-    expr = all guestDeny [
-      "[licenses.exceptions]"
+    expr = has guestDeny "exceptions = ["
+      && all guestDeny [
       "bindgen"
       "BSD-3-Clause"
       "instant"
@@ -158,7 +155,7 @@ in
   };
 
   "bazel-package-policy/missing-hash-mutation" = {
-    expr = !(has (replace hostBroker hash "") hash);
+    expr = has (replace hostBroker hash "") hash;
     expected = false;
   };
 
@@ -168,7 +165,7 @@ in
   };
 
   "bazel-package-policy/one-sided-hash-mutation" = {
-    expr = (has hostBroker hash) && !(has (replace flake hash "") hash);
+    expr = (has hostBroker hash) && has (replace flake hash "") hash;
     expected = false;
   };
 
