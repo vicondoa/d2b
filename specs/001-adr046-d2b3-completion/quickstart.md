@@ -260,9 +260,10 @@ authorized integration-lineage merge preserves F's tree.
 > until the external gate, T589, and T220's coordinated contract/changelog checks pass.
 
 An identity-ambiguous sidecar is never unlinked. The parked candidate remains ineligible and
-the durable incident remains retained. Cleanup can open a sidecar namespace only while it
-holds both the shared candidate lock and private nonserializable `SidecarCleanupOwner`; a
-lock loser cannot fabricate that owner. A parked incident is success-shaped only after its
+the durable incident remains retained. Cleanup can open a sidecar namespace only while its
+private `SidecarCleanupOwner<'guard>` exclusively borrows the exact
+`CandidateSidecarGuard` that owns the locked OFD; a lock loser cannot fabricate either, and
+the cleanup owner cannot outlive or be paired with another guard. A parked incident is success-shaped only after its
 immutable structured `Sc002IncidentPreimageV1` with every applicable kind-specific
 component, kind-bearing anchor, preimage-complete metadata, exact typed content-addressed
 payload, and append-only
@@ -330,12 +331,23 @@ $X sc002-successor-admit \
   --successor-snapshot "$SUCCESSOR_SNAPSHOT"
 ```
 
+The request file is the exact 19-field `Sc002IncidentDispositionRequestV1`, not inspect JSON
+and not a caller-written disposition prefix. The authority substitutes only the envelope
+kind, copies the semantic fields and freeze digest, omits the verified embedded freeze,
+derives the request digest, inserts the pinned authority/key fields, and signs the exact
+22-field disposition. Candidate-internal freeze/request durability completes first.
+`--request-out` then resolves the output parent with anchored openat2, writes a deterministic
+create-exclusive same-directory temporary, syncs it, renames no-replace, verifies the final
+inode and bytes, and syncs the parent. Every fd is CLOEXEC. Exact replay completes or
+revalidates a pre/post-rename crash without truncating or replacing any foreign leaf.
+
 The transition is closed and operational:
 
 | Inspect state/cause | Required action | Successful next state |
 | --- | --- | --- |
 | `recovery-resumable` | run `sc002-incident-recover` | `parked`, `mismatch-retained`, `disposition-validated`, or `successor-admitted`, whichever is the maximal uniquely reconstructible contiguous branch |
 | `recovery-irreconcilable`, including `evidence-census-conflict`, without a disposition matching the current typed evidence digest | run inspect with `--json`, run `sc002-disposition-request` with the clean successor snapshot, submit that exact request, then run `sc002-incident-apply` with the same snapshot | `disposition-validated` |
+| `recovery-irreconcilable` whose recursive scan cannot cover every descendant stably within the hard ceiling | restore read access or stop the changing writer, then rerun `sc002-disposition-request`; no request is emitted before complete coverage | unchanged until a complete scan yields the request, then `disposition-validated` |
 | `recovery-irreconcilable` with the matching signed disposition already durable | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
 | `parked` without a matching disposition | freeze the successor and create/submit the canonical request, then run `sc002-incident-apply` with that same successor snapshot | `disposition-validated` |
 | `mismatch-retained` or a crash after disposition publication | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
@@ -345,10 +357,11 @@ The transition is closed and operational:
 If the locked primary-evidence digest changes between inspect and apply, apply exits `4`,
 returns the new inspect projection, and requires a newly bound disposition. No generic retry,
 force flag, deletion selector, or alternate path is accepted.
-The test contract compares independently authored literal expectations with all 61 receipt
-negative ids and all 45 malformed retired/primary-census ids from `data-model.md`, and uses
-the shared nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest
-copied from production is not evidence.
+The test contract compares independently authored literal expectations with all 61 receipt,
+56 malformed retired/primary-census, and 25 request-output ids from `data-model.md`, scans all
+thirteen SC-002 recovery redaction canaries, and uses the shared
+nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest copied from
+production is not evidence.
 
 `SC002_INCIDENT_ID` and `SC002_DISPOSITION_ID` are stable lowercase 64-hex typed digests.
 Exit `0` means the requested read or transition completed; `2` means invalid syntax or
@@ -621,6 +634,22 @@ is accepted only by coordinator replay of the same intent and the same pinned ap
 after the old peer is proven dead. Completion or rollback is terminal, so repeating apply
 with no pending intent refuses and never reapplies.
 
+Inspect the sole current-source handoff without an intent selector:
+
+```bash
+"$D2B_DEPLOY_EXE" --inspect-authorized-handoff
+```
+
+The planned human result is the exact five-line
+`HostGenerationHandoffStatusV1` projection from `data-model.md`; `--json` emits its closed
+seven fields. Every `recovery-pending` state names the live apply peer, source broker, or
+target broker as owner, a wait or restart-existing-broker action, and its exact allowed
+successors. A valid `recovery-irreconcilable` state exists only with a complete
+immutable-audit-backed rollback and advances only to `rolled-back` after the existing broker
+unit resumes. Root inspection, path/token/intent selection, daemon recovery, and a new unit
+are refused. Neither projection exposes an intent, generation, pid, uid, store path, or
+apply-peer identity.
+
 The host acceptance must race two authorization commands and two apply commands, inject an
 otherwise impossible two-pending-intent census, disconnect before and after the first
 mutation, and invoke apply after terminal completion. Exactly one contender may win only
@@ -773,6 +802,14 @@ The exact fixture, literal constant, 15-edge fixture, 90-case fixture, three edg
 meta-poisons, and production enumerator are mutually read-independent. An empty set,
 runtime-derived count, skipped visit, or early failure cannot satisfy a negative.
 
+The separate literal `host-generation-pre-start-case-ids.txt` runs before the first mutation:
+one unprivileged positive, root refusal for bootstrap/stable-reference/rollback, apply
+without authorization, and apply before each source daemon/broker/Hello/catalogue/capability/
+target pin/apply pin/GC-root/coordinator/existing-unit prerequisite. All fifteen ids must run
+with zero mutation. The source-floor `poison-case-ids.txt` is the exact 91-line list printed
+in `data-model.md`; neither it nor the separately literal 90 apply-peer ids is formed by a
+runtime Cartesian product.
+
 Outside transient verifier-local kernel handles and bytes, every raw value in apply-peer
 admission and identity verification is forbidden in coordinator state,
 receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
@@ -842,6 +879,14 @@ fi
   fail 'unexpected d2b/microvm lifecycle unit set after excluding d2b.slice; restore the required three-unit generation'
 d2b vm status acceptance-vm
 ```
+
+The host test repeats that exact census before VM start, after public start, after daemon
+restart/adoption, and after public stop. Its independent 27-id unit registry retains the
+positive/enumeration/empty/missing/service/socket/slice/path/timer/template/instance/
+malformed/skip cases and adds d2b target/template/instance plus microvm
+socket/slice/target/path/timer poisons. Every injected unit survives the sole `d2b.slice`
+exclusion and fails exact equality. A transient per-VM unit therefore cannot hide between
+lifecycle observations.
 
 To roll a successfully migrated host back to a prior validated configuration, set the prior
 values explicitly and run that target through the same broker-owned path:

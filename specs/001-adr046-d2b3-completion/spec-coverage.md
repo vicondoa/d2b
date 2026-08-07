@@ -1112,22 +1112,29 @@ issuer-authentication/capability, and 21-id hash-vector negative registries requ
 cardinality, enclosing hashes, and unaffected signatures before their semantic or pinned-key
 refusals. Copied authority/key digests cannot produce either private result. Apply-peer
 coverage has separate 15-edge, 90-case, 15-negative, and fifteen-forbidden-value fixtures,
-with six pre-first and 84 post-first cases.
+with six pre-first and 84 post-first cases. A separate 15-case pre-start/root registry and
+27-case unit registry close omitted lifecycle boundaries.
 SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
 human/JSON remediation, and closed exits. A verified payload reaches `parked`; an
 authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
 namespaces; and a raced rename is exactly `recovery-resumable` or
-`recovery-irreconcilable` with every name preserved. Irreconcilable invalid or unstable
-primary evidence uses a complete recursively enumerated census or identity-bearing
-bounded-failure commitment whose scope binds every descendant and canonical failing-path
-digest and excludes resolution/request/disposition/freeze leaves; raw `01ff`, copied
+`recovery-irreconcilable` with every name preserved. One recursive grammar includes absent
+roots, directory nodes, and regular-file members. An irreconcilable bounded failure can
+authorize only after two equal stable walks cover every descendant within the hard ceiling;
+unreadable, unstable, incomplete, or over-hard-ceiling scope remains inspectable but denies
+request, apply, and admission. The scope binds the canonical failing-path digest and excludes
+resolution/request/disposition/freeze leaves; raw `01ff`, copied
 commitments, and post-resolution primary changes block admission. One structured incident
 preimage carries every kind-specific component and is repeated by all durable status/path
-records. A private nonserializable cleanup owner is required for namespace access. The
-successor triplet is durably frozen before the canonical authority request is signed and is
-identical through apply/admit. The shared nineteen-digest typed hash oracle and exact 61 receipt plus 45
-malformed-census negative registries prohibit a raw locator hash or a self-referential
-resolution digest. These refinements add no work-item or task id.
+records. `SidecarCleanupOwner<'guard>` exclusively borrows the private guard owning the OFD
+lock, so stale authority cannot survive release. The successor triplet is durably frozen
+before the exact 19-field request; the authority performs only the closed 19-to-22
+transformation, and apply/admit preserve it. Request output is anchored, atomic, crash-safe,
+and CLOEXEC. The shared nineteen-digest typed hash oracle, exact 61 receipt, 56
+malformed-census, 25 request-output, and thirteen-row recovery redaction registries prohibit
+a raw locator hash, self-referential resolution digest, or output leak. Every SC-002 cause
+and handoff recovery-pending/irreconcilable state has an inspect/action/status/successor row.
+These refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
 counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this

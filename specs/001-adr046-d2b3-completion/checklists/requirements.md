@@ -29,20 +29,34 @@
   `EvidenceRecord`; failed operator records import without a receipt but cannot close
 - [x] SC-002 recovery has closed inspect/recover/request/apply/successor transitions for parked,
   resumable, irreconcilable, and `evidence-census-conflict` states; its frozen primary scope
-  recursively binds every descendant, excludes resolution/request/disposition/freeze leaves,
-  and raw `01ff` cannot authorize
+  uses one absent-root/directory/regular-file grammar and recursively binds every descendant;
+  an incomplete, unstable, unreadable, or over-hard-ceiling scan denies admission; the scope
+  excludes resolution/request/disposition/freeze leaves, and raw `01ff` cannot authorize
 - [x] SC-002 persists one structured incident preimage with every kind-specific component
   byte-identically in preimage/anchor/metadata/status/resolution/freeze/request/disposition/
   admission records, and replays the same recursive scope and paths
 - [x] Successor selection is durably frozen before signing; the canonical authority request,
   signed disposition, apply, and admit all bind the same successor triplet
+- [x] The request has an exact 19-field schema and closed 19-to-22 disposition transform;
+  `--request-out` uses anchored openat2, deterministic create-exclusive temporary state,
+  file and parent sync, no-replace publication, final inode verification, exact replay, and
+  CLOEXEC on every descriptor
+- [x] Cleanup authority is `SidecarCleanupOwner<'guard>` borrowing the exact private
+  `CandidateSidecarGuard`, and compile/API seals prevent stale-owner lifetime, fd
+  reconstruction, duplication, transfer, serialization, or cross-guard use
+- [x] Every SC-002 cause and host-generation recovery-pending/irreconcilable state has an
+  exact inspect/action/status/successor row, with no daemon recovery owner or new unit
+- [x] Literal expectations pin the 15 mutation edges, all 90 apply-peer ids, all 91
+  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 56 census ids, 25
+  request-output ids, and thirteen recovery redaction rows independently from production
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
-  nonserializable `SidecarCleanupOwner`
+  lifetime-bound `SidecarCleanupOwner<'guard>`
 - [x] Source-floor issuer validation returns private nonserializable authenticated
   provenance before the final validated-floor result; copied digests cannot mint either
-- [x] Source-floor 32/20/21, mutation-edge 15-case post-mutation, unit-census, and complete
-  fifteen-row apply-peer forbidden-value expectations are independently pinned
+- [x] Source-floor 32/20/21 and 91-case, mutation-edge 15/90 plus post-mutation,
+  pre-start/root, unit-census, SC-002 output/census, and both forbidden-value expectations
+  are independently pinned
 - [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization

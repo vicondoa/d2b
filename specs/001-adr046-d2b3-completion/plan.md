@@ -198,9 +198,12 @@ applicable census, and record publication or return. There is no second cleanup 
 lock-free path. A live importer retains that lock, so cleanup cannot inspect, rename, or
 remove its temp; every same-leaf or different-leaf cleanup, incident command, and retention
 guard is serialized by that same lock before namespace access, and restart cleanup proceeds
-only after acquiring the released lock with fresh fds, a fresh census, and the private
-nonserializable `SidecarCleanupOwner`. Every cleanup namespace open or mutation requires
-that owner; a loser cannot construct or serialize one. Under the lock,
+only after acquiring the released lock with fresh CLOEXEC fds and a fresh census into the
+private `CandidateSidecarGuard`. Cleanup borrows that exact guard into
+`SidecarCleanupOwner<'guard>`; every cleanup namespace open or mutation is a method on that
+borrow, so the owner cannot outlive, be paired with another, or remain usable after the OFD
+guard. Neither type exposes raw-fd extraction, duplication, transfer, construction,
+serialization, clone, conversion, or `'static` storage. Under the lock,
 cleanup moves the opened temp with `renameat2(RENAME_NOREPLACE)` into a reserved quarantine
 name, reopens it, requires the same device/inode plus owner/mode/link/digest identity, then
 never calls `unlinkat` on a sidecar data leaf. An identity-preserving orphan moves
@@ -234,12 +237,21 @@ moves each representable named leaf through the closed temporary, cleanup-quaran
 payload, retired-source, or retired-existing-destination slot into durable residue, or binds
 the complete recursively enumerated frozen primary-evidence census or identity-bearing bounded-failure commitment
 when names are absent or metadata/status/census is unusable or unstable. The frozen scope
+uses one grammar containing every absent root, directory node, and regular-file member,
 records every descendant path/content identity, binds the canonical failing-path digest,
 excludes resolution/request/disposition/freeze leaves, and a raw `01ff` sentinel cannot authorize. It never restores,
 unlinks, fabricates residue, or edits a conflicting primary
 branch. Before an authority signs, `sc002-disposition-request` durably freezes the clean
-successor triplet and emits the canonical request. Apply and admission must both rederive
-the same triplet and match that freeze, request, and signed disposition. The latter cases
+successor triplet and emits the exact 19-field canonical request. The authority performs
+only the closed 19-to-22 transformation in `data-model.md`, including the embedded freeze,
+freeze digest, derived request digest, pinned authority/key fields, and signature. The
+candidate request becomes durable before anchored openat2 resolution and crash-safe atomic
+publication to `--request-out`; every descriptor is CLOEXEC. Apply and admission must both
+rederive the same triplet and match that freeze, request, and signed disposition. An
+admission-capable bounded-failure commitment requires two equal complete walks covering
+every descendant within the hard ceiling; an incomplete, unstable, unreadable, or
+over-hard-ceiling scope remains inspectable but denies request, apply, and admission until a
+fresh complete scan succeeds. The latter cases
 publish a separate append-only resolution `disposition-validated` record, and every primary or resolution branch reaches fresh
 `successor-admitted`. Ordinary terminals leave ephemeral namespaces empty; nonterminal
 variants never claim that predicate.
@@ -794,6 +806,17 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    only durable coordinator replay of the same intent can accept a replacement connection
    from the same pinned apply object after the old peer is proven dead. Terminal intents are
    never selected or replayed by a later command.
+   T595's unprivileged selector-free
+   `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` exposes the exact
+   `HostGenerationHandoffStatusV1` projection from `data-model.md`. Every
+   `recovery-pending` row names whether the live apply peer, source broker, or target broker
+   owns progress, one closed wait/restart-existing-broker action, and the exact allowed
+   successors. `recovery-irreconcilable` is valid only when immutable pre-mutation/outcome
+   audit proves one complete rollback; restarting the existing broker unit drives only that
+   rollback to `rolled-back`. Root inspection, an intent selector, a path, a token, a daemon
+   recovery owner, or a new unit is forbidden. Human/JSON status contains only bounded
+   state/phase/owner/action/successor enums and no identity, generation, path, or apply-peer
+   canary.
    The entrypoint may build and verify the target closure, durably stage immutable bytes, and
    submit one opaque intent; it cannot publish a profile, control a service, initiate
    rollback, or select a path, unit, generation, command, or argv.
@@ -905,12 +928,17 @@ evidence is accepted. T589 freezes the independent flat expected-set files
 `tests/golden/delivery/source-floor-v1/hash-vector-negative-case-ids.txt`,
 `tests/golden/delivery/source-floor-v1/receipt-negative-case-ids.txt`,
 `tests/golden/delivery/sc002-sidecar-lock-case-ids.txt`,
-`tests/golden/delivery/sc002-activation-receipt-negative-case-ids.txt`, and
-`tests/golden/delivery/sc002-census-negative-case-ids.txt`; production enumerators and poison
+`tests/golden/delivery/sc002-activation-receipt-negative-case-ids.txt`,
+`tests/golden/delivery/sc002-census-negative-case-ids.txt`,
+`tests/golden/delivery/sc002-request-output-negative-case-ids.txt`, and
+`tests/golden/delivery/sc002-recovery-forbidden-values.tsv`; production enumerators and poison
 generators may consume none of them. The forbidden-value registry is input only to test
-injection and captured-surface comparison, never to production filtering. T604 separately
-owns `tests/golden/delivery/host-generation-unit-census-case-ids.txt`; its independent
-literal 15-case constant and the fixture must agree before the host test can run. The source
+injection and captured-surface comparison, never to production filtering. `data-model.md`
+lists the complete literal 15-edge, 90-case, and 91-case source-floor fixture contents rather
+than leaving their bytes to a runtime Cartesian product. T604 separately owns
+`tests/golden/delivery/{host-generation-pre-start-case-ids,host-generation-unit-census-case-ids}.txt`;
+their independent literal 15-case and 27-case constants must agree before the host test can
+run. The source
 floor and hermetic matrix-meta negatives run through
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`; the mutation and unit cases are
 also required in T604's no-skip `make test-host-integration` result. `tasks.md` pins every
@@ -939,6 +967,16 @@ source for test case enumeration.
 | External disposition and conditional close | T219 | Revalidates the T072 disposition, T603 phase-plan chain, and T220 final nonbinding phase-plan receipt, but those process rounds do not replace or dispose the retained Wave 5 binding delivery request. T219 first requires the external owner to land the delivery-contract/tooling change and validator, then imports exactly one valid `Wave5RetainedRequestDispositionV1` bound to the byte-preserved request and exact F. Before that import, T219 authorizes no request, attestation, seal, merge-target registration, merge eligibility, or merge. `remain-blocked` stays blocked; `abandon-without-merge` is terminal and cannot advance; `recover-panel-without-new-request` permits only the external recovery-attestation surface, still requiring the complete ten-role unanimous exact-F panel before seal or merge. The record creates no second request and supplies no panel result or constitutional waiver. F and `adr046w5` delivery history stay immutable. |
 
 The T589 ownership row is refined by the SC-002/source-floor closure in `tasks.md`.
+Its older SC-002 and unit-count shorthand is superseded by the closed registries in
+`data-model.md` and `tasks.md`: 61 receipt ids, 56 malformed-census ids, 25 request-output
+ids, thirteen SC-002 recovery redaction rows, fifteen pre-start/root ids, and twenty-seven
+unit-census ids. Version 2 must additionally pin the exact 19-field disposition request,
+closed 19-to-22 authority transformation, candidate-first and atomic anchored request-output
+protocol, all-descriptor CLOEXEC, one recursive absent-root/directory/file member grammar,
+full-descendant coverage for every admission-capable bounded failure, and the
+lifetime-bound `SidecarCleanupOwner<'guard>`. T595 owns the separate exact
+`HostGenerationHandoffStatusV1` recovery-pending/irreconcilable
+inspect/action/status/successor projection. These corrections change no task dependency.
 The accepted `docs/specs/ADR-046-validation-and-delivery.md` Version 2 amendment and its
 generated manifests belong exclusively to the external pre-T589 row; T589 does not edit
 them. In addition to its prior implementation files, T589 owns
@@ -1003,7 +1041,8 @@ remaining prose negative. A separate literal 32-id receipt/transition negative
 registry is read-independent from all of those matrices and reaches only its named canonical,
 framing, authority, transition, or C/Q check. Within
 T589's SC-002 cleanup, the fixed stable OFD-lock inode and private nonserializable
-`SidecarCleanupOwner` precede all namespace access. The lock and owner serialize cleanup against every importer, cleanup,
+`CandidateSidecarGuard` plus lifetime-bound `SidecarCleanupOwner<'guard>` precede all
+namespace access. The lock and owner serialize cleanup against every importer, cleanup,
 incident-recover, incident-apply, successor-admit, and retention live owner. Verified
 orphans move under distinct retirement ids into the bounded
 durable census. Incidents use an immutable complete structured preimage plus preimage-complete metadata; a no-replace moved and
@@ -1020,7 +1059,7 @@ recursive whole-scope retention guard and proves the canonical candidate root, e
 permanent delivery-history namespace, and every complete kind-specific preimage copy remain
 immutable. Overlap tests latch both orderings for every
 writer/cleanup and writer/retention pair and recover two identical orphan leaves without
-collision. The exact 61 receipt, 45 malformed-census, 32 source-floor receipt, 20 issuer-authentication/
+collision. The exact 61 receipt, 56 malformed-census, 25 request-output, 32 source-floor receipt, 20 issuer-authentication/
 capability, and 21 hash-vector negative registries are independent of production and their
 poison builders. T595/T604 own the independent closed 15-edge registry, six
 pre-first transition cases, exact 84-case post-first cross-product, and closed 15-case
@@ -1404,25 +1443,33 @@ file-synced expected payload reaches `parked`. Every nonterminal census is exact
 closed cause, deterministic human/JSON remediation, and exit behavior. Recover is offered
 only for a uniquely resumable prefix. Before signing,
 `sc002-disposition-request` freezes the clean successor triplet and emits the canonical
-authority request; apply and admission both rederive that exact binding. Authenticated apply either retains each representable
+19-field authority request; the authority performs only the exact 19-to-22 transformation,
+and request output uses the anchored openat2/create-exclusive/file-sync/no-replace/reopen/
+parent-sync replay protocol. Apply and admission both rederive that exact binding. Authenticated apply either retains each representable
 name through the closed residue slots and publishes `mismatch-retained`, or binds the
 complete recursively enumerated frozen primary-evidence census or identity-bearing
 bounded-failure commitment in a
 separate append-only resolution branch when names, metadata, primary status, or census
-stability is irreconcilable. The frozen scope binds every descendant plus the canonical
+stability is irreconcilable. The one recursive grammar includes every directory and regular
+file; a bounded failure authorizes only after every descendant is covered by two stable
+walks within the hard ceiling. Otherwise request, apply, and admission deny until a fresh
+complete scan succeeds. The frozen scope binds every descendant plus the canonical
 failing-path digest, excludes resolution/request/disposition/freeze leaves, and raw `01ff` is
 non-authorizing. Every branch reaches fresh-successor
 admission without overwrite, restoration, fabricated residue, or `unlinkat`. The same
-correction gives cleanup one private nonserializable `SidecarCleanupOwner`, expands the
+correction gives cleanup one private `CandidateSidecarGuard` owning the sole locked fd and
+one lifetime-bound nonserializable `SidecarCleanupOwner<'guard>`, expands the
 overlap matrix to every importer/cleanup/incident/successor/retention live-owner pair;
 pins literal source-floor and mutation-edge constants independently from fixtures and
-production; adds the exact 32/20/21 source-floor, 15-case mutation-edge, and SC-002
-receipt/census negative registries plus the shared SC-002 hash oracle;
+production; adds the exact 32/20/21 source-floor, 15-case mutation-edge, 61/56/25 SC-002
+receipt/census/request-output negative registries, thirteen-row recovery redaction registry,
+and shared SC-002 hash oracle;
 adds shrink/hook meta-poisons; and closes the fifteen-row apply-peer raw-value registry. No
 task dependency changes; T589's owned fixture and schema lists expand as stated
 in `tasks.md`.
 The T589 table row's older fixture-count shorthand is superseded by the closed owned-file
-list in `tasks.md`. T604 retains sole ownership of the separate unit-census fixture. No
+list in `tasks.md`. T604 retains sole ownership of the separate 15-id pre-start/root and
+27-id unit-census fixtures. No
 other file owner changes.
 
 #### Wave 5 validation and evidence
@@ -1688,6 +1735,7 @@ immutable.
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI, while T072 omitted Wave 5's contemporaneous plan-panel predicate. | The committed constitution permits no artifact-local waiver for these gaps, and existing Wave 5 implementation does not prove its historical entry gate. | FR-036 now makes a separate accepted Principle VI constitution amendment that expressly dispositions the W2-W5 plan-panel gap an external prerequisite for every implementation, resume, fix, close, merge, and advance path. T072 requires the exact retained Wave 5 plan-panel receipt to check; no current receipt is claimed, and current remediation remains evidence only. |
 | Feature-local Wave 5 recovery prose allowed one binding delivery panel per candidate and a second request after a failed or content-invalidated binding result. | `ADR-046-validation-and-delivery` section 12.3 and `docs/contributing/panel-review.md` require the binding ten-role panel exactly once per wave. Delivery state already retains a Wave 5 `panel-request.json`; content invalidation does not reclassify or erase it. Iterative findings belong only to the nonbinding phase-plan surface. | T220 uses repeatable `/d2b-panel-round plan` phase reviews for scoped pre-close convergence; those rounds create no delivery request or reservation. T219 is non-authorizing until the external owner lands and validates one `Wave5RetainedRequestDispositionV1`. Only `recover-panel-without-new-request` can reach close, and only after a separate complete unanimous ten-role exact-F panel; the disposition cannot waive or supply that result. This feature batch does not authorize another request, seal, or merge; the contract/tooling owner remains external scope. |
 | The accepted external `ADR-046-validation-and-delivery` contract remains Version 1 and therefore does not yet own the complete Wave 5 incident/source-floor byte contract. | Feature-local planning artifacts can specify the required shape but cannot amend the accepted external normative contract, generated manifests, schemas, source, or tests. | External scope escalation: Version 2 must pin the thirteen-line cause/remediation projection; distinct resumable/irreconcilable variants; inspect/request/apply/successor convergence for `evidence-census-conflict`; a pre-signing durable successor freeze and canonical authority request whose exact triplet persists through apply/admit; structured durable incident preimages containing every kind-specific component and repeated across all status/path records; recursively enumerated frozen primary-evidence and retention scopes with identity-bearing bounded-failure replay and raw `01ff` non-authorizing; typed receipt locator plus the nineteen-digest SC-002 hash golden; payload-file plus all-ancestor durability; one-lock cleanup exclusion plus private `SidecarCleanupOwner`; residue-backed `mismatch-retained`; private source-floor authenticated issuer provenance consumed into the private validated-floor result with copied-digest rejection; exact receipt, malformed-census, source-floor 32/20/21, 15-case post-mutation, and unit negative registries; and the complete fifteen-row apply-peer registry. Its approvals, regenerated manifests, Gate 0 receipt, and ancestor binding remain pre-T589 prerequisites. Feature `spec.md`, `data-model.md`, `quickstart.md`, `contracts/README.md`, and `tasks.md` now agree on that planned requirement, but do not supply external acceptance or implementation authority. |
+| Earlier feature planning left the disposition request as a prose prefix transform, retained a second flat primary-census grammar, allowed partial bounded-failure traversal authority, did not tie cleanup authority to the OFD guard lifetime, and described request output as merely create-exclusive. | The accepted external Version 1 contract, source, tests, schemas, normative/reference docs, and panel artifacts remain unchanged and cannot be silently amended by this feature-only batch. | External scope escalation: Version 2 must add the exact 19-field request and 19-to-22 transformation; successor-freeze and request-digest continuity; one recursive absent-root/directory/regular-file grammar; full-descendant coverage or admission denial with hard work ceilings; `CandidateSidecarGuard` plus `SidecarCleanupOwner<'guard>` lifetime/API seals; all-descriptor CLOEXEC and exec-leak proof; anchored openat2, deterministic temp, file-sync, no-replace, final-inode verification, parent-sync, and exact replay for `--request-out`; every cause and handoff recovery-pending/irreconcilable inspect/action/status/successor row; the literal 15-edge, 90-case, and 91-case matrices; the 15 pre-start/root and 27 unit cases; 56 census and 25 output ids; and the thirteen-row SC-002 redaction registry. External schemas, reference/status prose, tests, source, Nix, changelog, contributor guidance, and panel artifacts must move only in their owning workflow before T589. |
 
 ### Recorded drift
 

@@ -297,9 +297,12 @@ merge-target registration, merge eligibility, and merge.
     `sha256` through the candidate directory before it publishes the `EvidenceRecord`.
     Every importer, cleanup worker, incident transition, successor admission, and retention
     guard holds the same verified candidate-scoped exclusive OFD lock through publication or
-    return. Successful cleanup acquisition also yields the sole private nonserializable
-    `SidecarCleanupOwner`; every namespace open or cleanup mutation requires it, and a loser
-    cannot construct, serialize, clone, or recover it from an fd. A live owner cannot be cleaned; a nonblocking cleanup loser returns before any
+    return. Successful acquisition yields one private `CandidateSidecarGuard` that solely
+    owns the locked `OwnedFd`; cleanup borrows it into
+    `SidecarCleanupOwner<'guard>`. Every namespace open or cleanup mutation is a method on
+    that borrow, so it cannot outlive, be paired with a later guard, or remain usable after
+    lock release. Neither type exposes construction, raw-fd extraction, duplication,
+    transfer, serialization, clone, conversion, or `'static` storage. A live owner cannot be cleaned; a nonblocking cleanup loser returns before any
     namespace open or mutation, and restart
     cleanup begins only after lock acquisition, moves the opened temp to a reserved
     quarantine name, reopens and verifies the same device/inode and full identity, derives
@@ -323,14 +326,22 @@ merge-target registration, merge eligibility, and merge.
     retaining representable names as durable residue or by publishing a complete recursively
     enumerated frozen primary-evidence census or identity-bearing bounded-failure commitment,
     then appending
-    the separate resolution.     The frozen primary scope binds every descendant path/content identity plus the canonical
+    the separate resolution. The one recursive grammar contains every absent root, directory,
+    and regular-file member. An admission-capable bounded failure must cover every descendant
+    in two equal stable walks within the hard ceiling; unreadable, unstable, incomplete, or
+    over-hard-ceiling scope denies request, apply, and admission until a fresh complete scan.
+    The frozen primary scope binds every descendant path/content identity plus the canonical
     failure-path digest and excludes every resolution,
     resolution-evidence, successor-freeze, disposition-request, disposition, receipt, and successor leaf, so no digest contains
     itself. A raw `01ff` sentinel, copied commitment, or changed primary scope never
     authorizes successor admission. Invalid and unstable census causes remain inspectable and
     actionable through inspect `--json`, signed apply, and fresh-successor admission.
     Before signing, `sc002-disposition-request` durably freezes the clean successor triplet
-    and emits the canonical authority request. Apply and admission rederive that same
+    and emits the exact 19-field canonical authority request. The authority performs only
+    the closed 19-to-22 transformation in `data-model.md`. Candidate request durability
+    precedes anchored openat2, deterministic temporary, file-sync, no-replace, final-inode
+    verification, and parent-sync publication to `--request-out`; exact replay is
+    crash-safe, and every descriptor is CLOEXEC. Apply and admission rederive that same
     snapshot triplet and require the same freeze, request, and signed disposition. Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
     nonterminal variant claims a terminal empty census.
     T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope
@@ -350,9 +361,20 @@ merge-target registration, merge eligibility, and merge.
     Independent literal fixtures pin the complete receipt, retired-census,
     primary-evidence-census, source-floor 32-id receipt, 20-id issuer-authentication/
     capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
-    unit-census, and forbidden-value negative registries. Source-floor signature validation
+    15-id pre-start/root, 27-id unit-census, 25-id request-output, and both forbidden-value
+    registries. The SC-002 census set has 56 ids and includes directory completeness plus
+    full-descendant bounded-failure refusal. Source-floor signature validation
     returns private nonserializable `AuthenticatedSourceFloorIssuerProvenance` and consumes
     it into the separate private validated-floor result; copied authority/key digests cannot
     produce either. One shared nineteen-digest/one-signature SC-002 domain-hash
     golden is the oracle for every typed locator, incident, resolution, and disposition
     digest; raw SHA-256 locator definitions are ineligible.
+16. **Recovery is never a status-only dead end.** Every closed SC-002 cause maps to one
+    inspect/action/status/successor row. Incomplete descendant coverage remains inspectable
+    but denies request/apply/admission until a fresh complete scan succeeds. The separate
+    selector-free `HostGenerationHandoffStatusV1` projection gives each
+    `recovery-pending` and valid `recovery-irreconcilable` handoff state one broker owner,
+    closed action, and exact successor set. Recovery uses only the existing broker unit.
+    Human/JSON schemas and both redaction registries remain synchronized; no path, fd,
+    generation, raw identity, request body, or free-form remediation enters logs, audit,
+    metrics, spans, errors, panic, or `Debug`.

@@ -317,16 +317,28 @@ namespace mutations; the sole post-release retry discards every pre-lock fd and 
 opens fresh descriptions, and recensors under the lock. No per-leaf lock, optimistic census,
 or incident-only bypass exists.
 
-Successful lock acquisition for cleanup yields exactly one private
-`SidecarCleanupOwner`. This nonserializable live-owner value has no public fields,
-constructor, accessor, `Clone`, `Copy`, `Default`, serde implementation, conversion, or
-reconstruction from a lock fd. Every cleanup namespace open, quarantine/retirement rename,
-census, and return consumes or mutably borrows this owner; helpers that accept only a
-candidate fd or decoded locator cannot clean. A nonblocking loser never obtains the owner.
-Restart drops every prior process-local value, independently reopens and validates the lock
-inode, acquires the lock, and only then receives a new owner and opens a namespace. Thus the
-lock and the Rust authority have the same single live owner rather than relying on prose
-that callers voluntarily serialize.
+Successful lock acquisition yields one private `CandidateSidecarGuard` that solely owns the
+`OwnedFd` carrying the locked open file description. The guard has no raw-fd accessor,
+`AsRawFd`, `IntoRawFd`, duplication, transfer, serialization, `Clone`, or conversion
+surface. Its private `Drop` closes that sole description and therefore releases the OFD
+lock. The lock fd and every candidate, ancestor-directory, namespace, snapshot, request,
+disposition, temporary, and reopened leaf fd are created with `O_CLOEXEC`; any received fd
+uses `MSG_CMSG_CLOEXEC`, and no plain `dup` or non-CLOEXEC reconstruction is permitted.
+
+Cleanup additionally requires exactly one private
+`SidecarCleanupOwner<'guard>`. It is constructed only by
+`CandidateSidecarGuard::enter_cleanup(&mut self)` and contains the exclusive mutable borrow
+of that exact guard. It has no public fields, constructor, accessor, `Clone`, `Copy`,
+`Default`, serde implementation, conversion, fd reconstruction, or independent lifetime.
+Every cleanup namespace open, quarantine/retirement rename, census, and return is a method
+on that owner and reaches the held directory authority only through its borrowed guard.
+Consequently an owner cannot outlive, be paired with a later, or remain usable after the OFD
+guard that created it. A nonblocking loser never obtains either authority. Restart drops all
+process-local values, independently reopens and validates the lock inode with `O_CLOEXEC`,
+acquires the lock into a fresh guard, and only then may borrow a fresh cleanup owner and open
+a namespace. Compile-fail/API-surface tests must reject owner return as `'static`, storage
+beyond the guard, construction from any fd, guard extraction, guard replacement, fd
+duplication, and use after guard drop.
 
 If every recorded identity member matches, cleanup derives one `Sc002RetirementIdV1` as
 
@@ -769,6 +781,7 @@ RecursiveNodeObservation =
   u8(node-kind) ||
   u64be(st_dev) || u64be(st_ino) ||
   i64be_twos_complement(st_ctime_sec) || u32be(st_ctime_nsec) ||
+  u32be(st_mode) || u32be(st_uid) || u32be(st_gid) ||
   u64be(st_size) || u64be(st_nlink) ||
   content_digest[32]
 ```
@@ -781,6 +794,9 @@ Node kind is `0x00 = absent`, `0x01 = directory`, or `0x02 = regular-file`. An a
 root has an empty relative path and zero identity/content fields. A directory has a zero
 content digest. A regular file carries
 `Sc002PrimaryEvidenceLeafContentDigestV1` computed from its exact once-opened bytes.
+`st_mode` is the exact unsigned mode/type word returned by the no-follow stat and must agree
+with `node-kind`; `st_uid` and `st_gid` are the exact unsigned owner values. All three are
+fixed-width fields even for absent roots, where they are zero.
 For a present root, the root itself appears first with an empty relative path, followed by
 every descendant directory and regular file recursively in unsigned-byte relative-path
 order. The relative path is canonical component bytes beneath the already selected root,
@@ -809,14 +825,30 @@ a conflicting anchor. The candidate directory supplies the parked triplet. A con
 anchor is never trusted for either; an accepted disposition must supply and authenticate the
 complete preimage before resolution can advance.
 
-The complete form is binary version `0x01`, body tag `0x00`, `incident_id[32]`,
-`parked_candidate_id[32]`, `parked_content_id[32]`, `parked_snapshot_sha256[32]`,
-`u32be(record-count)`, then records sorted by unsigned locator bytes. Each record is
-`u32be(locator-length) || locator || u8(presence) || u64be(encoded-length) ||
-content-digest[32]`; `presence` is closed to `0x00 = absent` and `0x01 = present`, an absent
-record carries zero length and 32 zero bytes, and a present record carries the typed
-`Sc002PrimaryEvidenceLeafContentDigestV1` of the exact once-opened bytes. A complete census
-is bounded to 128 records and 2,097,152 present bytes.
+The complete census uses the same recursive node grammar as the scope-identity constructor;
+there is no second flat locator/presence grammar:
+
+```text
+0x01 || 0x00 ||
+incident_id[32] ||
+parked_candidate_id[32] || parked_content_id[32] || parked_snapshot_sha256[32] ||
+u32be(node-count) ||
+RecursiveNodeObservation[node-count]
+```
+
+The observations are ordered first by root code, then by unsigned canonical relative-path
+bytes. Every one of the eight root codes occurs exactly once as either the fixed-width
+all-zero absent-root observation or a present root node. A present directory root and every
+descendant directory are explicit `node-kind = 0x01` members; every regular file is an
+explicit `node-kind = 0x02` member carrying its exact encoded length and typed once-opened
+content digest. Directory observations carry their opened identity, mode, owner, size, link
+count, and change time with a zero content digest. A directory's complete sorted descendant
+sequence and the enclosing node count bind membership; a valid directory observation cannot
+stand in for omitted children. The complete form is limited to 128 node observations and
+2,097,152 present regular-file bytes. Missing roots, duplicate root/path pairs, an absent
+root with nonzero fields, a directory with a nonzero content digest, a file with a zero or
+wrong digest, a descendant without every ancestor directory, or any unlisted descendant
+refuses.
 
 An invalid, unstable, unenumerable, or prospectively over-bound primary scope uses the
 separate bounded-failure form, never an authorization sentinel:
@@ -859,22 +891,38 @@ partial member list or traversal-order prefix enters the commitment. Both scope 
 ordered primary-root code, and the no-follow device/inode/change identity of every opened
 primary root. Raw filesystem identity is never rendered.
 
-The bounded-failure form is accepted only when the same locked scan owns all opened fds,
-recursively records every successfully visited node plus the failing node's complete
-ancestor chain in both scope identities, records the first failure by fixed root order and
-canonical relative-path order, and revalidates the after identity immediately before
-publishing the resolution-evidence leaf. For a bound exceeded inside one directory, the
-failure path is that directory and the observation includes its before/after identity and the saturated
-limit-plus-one count; no filesystem iteration prefix is an authorization input. A continuing
-mutation, changed failure root/path/cause, or inability to reproduce the same recursive
+The bounded-failure form is admission-capable only when two complete locked recursive walks
+cover every descendant beneath every present root, yield the same ordered
+`RecursiveNodeObservation` sequence, and compute equal before/after scope identities. It is a
+bounded representation, not permission to commit a traversal prefix. The scanner may stream
+the observations, but it must still cover the full scope. Its hard work ceiling is 4,096
+nodes, 67,108,864 regular-file bytes, and depth 64. Exceeding that hard ceiling, losing read
+or execute access to any directory, or observing any identity/member change between the two
+walks produces no admission-capable commitment and denies request publication, disposition
+apply, and successor admission.
+
+Within that hard ceiling, `record-limit`, `byte-limit`, `unknown-name`, and
+`record-invalid` may use the bounded-failure encoding only after the two complete stable
+walks cover every descendant and the failure path names the first semantic failure in fixed
+root/path order. `enumeration-unavailable` and `identity-unstable` remain inspectable
+irreconcilable causes but are never admission-capable evidence. The operator must restore
+readability or stop the changing writer and rerun `sc002-disposition-request`; that command
+recensors from fresh `O_CLOEXEC` fds and either produces a complete coverage-bound request or
+returns exit `4` with the unchanged status projection. It never truncates the scope to make
+the request signable.
+
+For a soft bound exceeded inside one directory, the failure path is that directory, the full
+walk still includes every descendant, and the saturated count is exact limit-plus-one. No
+filesystem iteration prefix is an authorization input. A continuing mutation, changed
+failure root/path/cause, incomplete walk, or inability to reproduce the same full recursive
 failure exits `4` with the same stable incident projection and publishes nothing. At
-successor admission the scanner replays the same recursive walk and requires the failure
-cause, root, canonical failing-path digest, saturated counts, and current recursive scope
-identity to equal the committed after values. Copying a failure body to another incident or
-parked triplet, changing any primary descendant name or bytes, or replaying the old body
-after a recursive scope-identity change
-blocks admission. The two-byte `0x01 0xff` spelling is detection-only poison and is never a
-valid primary-evidence census, disposition input, resolution record, or successor authority.
+successor admission the scanner repeats both complete walks and requires the failure cause,
+root, canonical failing-path digest, saturated counts, full descendant set, and current
+recursive scope identity to equal the committed values. Copying a failure body to another
+incident or parked triplet, changing any primary descendant name or bytes, or replaying the
+old body after a recursive scope-identity change blocks admission. The two-byte `0x01 0xff`
+spelling is detection-only poison and is never a valid primary-evidence census, disposition
+input, resolution record, or successor authority.
 
 Duplicate locators, unknown names, unstable identities represented as a complete body,
 native-width integers, joined-path traversal, included resolution/disposition leaves, or any
@@ -1160,6 +1208,43 @@ identity-bearing bounded-failure commitment:
 | resolution `disposition-validated`, exact persisted complete census or bounded-failure commitment, non-null disposition/freeze/request IDs, and non-null signed successor triplet | frozen irreconcilable cause | `admit-successor` |
 | resolution `successor-admitted`, exact persisted complete census or bounded-failure commitment and successor triplet | frozen irreconcilable cause | `none` |
 
+The grouped rows above do not leave individual causes implicit. Every closed cause has this
+inspect/action/status/successor path:
+
+| Cause | Inspect state | Required action | Durable status reached | Successor path |
+| --- | --- | --- | --- | --- |
+| `retirement-id-collision` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
+| `retirement-census-exhausted` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
+| `retirement-census-invalid` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
+| `identity-ambiguity` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
+| `anchor-publication-pending` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
+| `anchor-final-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence | resolution `disposition-validated` | admit the same frozen successor |
+| `metadata-publication-pending` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
+| `metadata-final-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence | resolution `disposition-validated` | admit the same frozen successor |
+| `source-present-payload-absent` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
+| `payload-file-sync-pending` | `recovery-resumable` | run incident recover and replay every required sync | `parked` | request/apply, then admit |
+| `payload-present-status-absent` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
+| `source-payload-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence | resolution `disposition-validated` | admit the same frozen successor |
+| `incident-names-absent` | `recovery-irreconcilable` | request/apply the complete zero-residue census | resolution `disposition-validated` | admit the same frozen successor |
+| `payload-identity-mismatch` | `recovery-irreconcilable` | retain representable names, otherwise request/apply complete recursive evidence | primary or resolution `disposition-validated` | admit the same frozen successor |
+| `payload-destination-conflict` | `recovery-irreconcilable` | retain representable names, otherwise request/apply complete recursive evidence | primary or resolution `disposition-validated` | admit the same frozen successor |
+| `status-prefix-repairable` | `recovery-resumable` | run incident recover | maximal contiguous primary state | continue its projected request/apply/admit action |
+| `status-branch-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence without editing either branch | resolution `disposition-validated` | admit the same frozen successor |
+| `residue-staging-pending` | `recovery-resumable` | run incident recover | `mismatch-retained` | apply, then admit |
+| `residue-status-absent` | `recovery-resumable` | run incident recover | `mismatch-retained` | apply, then admit |
+| `evidence-census-conflict` with complete stable descendant coverage | `recovery-irreconcilable` | request/apply the complete census or admission-capable bounded commitment | resolution `disposition-validated` | admit only after full recursive replay |
+| `evidence-census-conflict` without complete stable descendant coverage | `recovery-irreconcilable` | restore read access or stop the changing writer, then rerun disposition request | unchanged nonterminal projection until coverage is complete | request/apply/admit only after coverage; admission is denied before then |
+
+Every row is exercised independently. Inspect always exits `0` with the same stable human
+or JSON projection. The action column is selected only from the locked state: an absent
+matching disposition projects `obtain-incident-disposition`, a matching durable disposition
+projects `apply-incident-disposition`, and `disposition-validated` projects
+`admit-successor`. A request refusal caused by incomplete descendant coverage exits `4`,
+retains the same incident id/cause/state, publishes no freeze or request, and names the
+specific remediation above. No row ends at an uninspectable parked prefix, generic retry,
+or terminal state without either successor admission or an explicit coverage guard that
+denies it.
+
 The `parked` row's cause is its incident kind. Every locked incident census maps to exactly
 one row. Invalid CLI syntax or a noncanonical caller-supplied ID exits `2`; an absent
 canonical stable id exits `3`. A partial metadata temporary is
@@ -1274,13 +1359,38 @@ Sc002SuccessorFreezeDigestV1 =
 After final reopen plus leaf/parent/every-ancestor sync, the same command publishes the
 canonical unsigned `Sc002IncidentDispositionRequestV1` at
 `evidence-sidecars/sc002/incidents/disposition-requests/sha256/<incident-id>/<request-sha256>.json`
-and writes the exact same bytes create-exclusively to the operator's explicit
-`--request-out PATH` as a current-effective-uid-owned regular single-link mode-`0600` file.
-The request fields are exactly the disposition fields below through
-`deliveryContractSpecSha256`, followed by the complete canonical `successorFreeze` object
-and its `successorFreezeSha256`; it omits
-`dispositionRequestSha256`, authority, key, and signature fields so it cannot claim
-authentication. The canonical request is at most 65,536 bytes. Its typed digest is:
+before publishing an operator output. Its canonical JSON has exactly these 19 fields in this
+order:
+
+| Ordinal | Request field | Rule |
+| --- | --- | --- |
+| 1 | `schemaVersion` | integer `1` |
+| 2 | `kind` | literal `sc002-incident-disposition-request` |
+| 3 | `action` | literal `abandon-candidate-admit-successor` |
+| 4 | `incidentKind` | exact `Sc002IncidentKindV1` |
+| 5 | `incidentId` | canonical `Sc002IncidentIdV1` |
+| 6 | `preimageLocator` | exact immutable preimage locator |
+| 7 | `incidentPreimage` | complete canonical `Sc002IncidentPreimageV1` |
+| 8 | `incidentIdPreimageHex` | exact lowercase-hex preimage that recomputes the incident id |
+| 9 | `parkedCandidateId` | exact parked candidate id |
+| 10 | `parkedContentId` | exact parked content id |
+| 11 | `parkedSnapshotSha256` | exact parked snapshot digest |
+| 12 | `successorCandidateId` | exact distinct frozen successor candidate id |
+| 13 | `successorContentId` | exact frozen successor content id |
+| 14 | `successorSnapshotSha256` | exact frozen successor snapshot digest |
+| 15 | `resolutionEvidenceKind` | null, `complete-census`, or `bounded-failure-commitment` |
+| 16 | `resolutionEvidenceSha256` | null with field 15, otherwise its exact typed digest |
+| 17 | `deliveryContractSpecSha256` | exact accepted Version 2 content digest |
+| 18 | `successorFreeze` | complete canonical `Sc002SuccessorFreezeV1` object |
+| 19 | `successorFreezeSha256` | exact typed digest of field 18 |
+
+It contains no `dispositionRequestSha256`, authority, verification-key, or signature field
+and therefore cannot claim authentication. The canonical request is at most 65,536 bytes.
+It uses the same canonical UTF-8, no-BOM/no-whitespace/no-trailing-byte, field-order,
+shortest ASCII escaping, lowercase-hex, unsigned-integer, duplicate/missing/unknown-field,
+and decode-then-reencode equality rules as the disposition. A request unequal to its
+canonical re-encoding is malformed before its digest is accepted.
+Its typed digest is:
 
 ```text
 Sc002DispositionRequestDigestV1 =
@@ -1290,14 +1400,56 @@ Sc002DispositionRequestDigestV1 =
   )
 ```
 
-The authority workflow accepts only this complete request. It independently verifies the
-embedded freeze and its typed digest, exact incident projection or frozen primary-evidence commitment, accepted
-contract digest, and complete structured preimage, then copies the request fields and
-freeze digest byte-for-byte into the signed disposition. It inserts only the
-disposition-pinned authority/key fields and the signature. No prose request, inspect output
-without a freeze, caller-supplied successor triplet, or post-signing successor selection is
-eligible. Regenerating a request after any incident scope or successor triplet change yields
-a different request digest and requires a new signature.
+  The authority workflow accepts only this complete request and performs one exact
+  transformation. It independently verifies the embedded freeze and field 19, the incident
+  projection or fully descendant-covering primary-evidence commitment, accepted contract
+  digest, and complete structured preimage. The disposition copies request field 1; substitutes
+  only field 2 with `kind = "sc002-incident-disposition"`; copies request fields 3 through 17
+  byte-for-byte in the same order; omits the embedded field-18 freeze object after reopening
+  and verifying it; copies request field 19 as disposition field
+  `successorFreezeSha256`; inserts the independently recomputed request digest as
+  `dispositionRequestSha256`; inserts the disposition-pinned `authoritySha256` and
+  `verificationKeySha256`; and appends `signatureEd25519`. No other field is synthesized,
+  renamed, reordered, omitted, or copied from a caller. The signature covers that exact
+  22-field disposition with only its final signature field omitted. The disposition validator
+  performs the inverse comparison against the reopened request and freeze before signature
+  acceptance. No prose request, inspect output without a freeze, caller-supplied successor
+  triplet, or post-signing successor selection is eligible. Regenerating a request after any
+  incident scope or successor triplet change yields a different request digest and requires a
+  new signature.
+
+  Only after the candidate-internal request leaf and all changed candidate ancestors are
+  durable does the command publish the exact same request bytes to `--request-out PATH`.
+  `PATH` is resolved once from an `O_PATH|O_DIRECTORY|O_CLOEXEC` fd for `.` when relative or
+  `/` when absolute. Every parent is opened with
+  `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)` and
+  `O_PATH|O_DIRECTORY|O_CLOEXEC`; the final component must be one canonical nonempty
+  component, and `.`, `..`, repeated separators, NUL, symlink parents, and a symlink leaf
+  refuse. No joined path is reopened after resolution.
+
+  Publication uses the deterministic same-directory temporary name
+  `.d2b-sc002-request-<request-sha256>.tmp`. The command opens it with
+  `O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW`, sets and verifies current-effective-uid
+  ownership, mode `0600`, and link count one, writes the exact canonical bytes, `fsync`s the
+  file, and publishes with `renameat2(RENAME_NOREPLACE)`. It reopens the final leaf with
+  `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires the same device/inode as the still-open temporary
+  file description plus exact owner/mode/link/digest/bytes, then `fsync`s the parent
+  directory. Before returning, it re-resolves the canonical parent components from the same
+  root/cwd anchor with the same openat2 policy and requires the same parent device/inode; a
+  renamed or replaced parent is a conflict even though all data remains preserved. It never
+  truncates, replaces, or follows an existing output.
+
+  Exact replay is crash-safe. An exact already-published final leaf returns `0` after reopen,
+  full verification, and parent `fsync`. If the final leaf is absent and the deterministic
+  temporary exists, replay reopens and fully verifies that exact temporary before completing
+  the no-replace rename. If neither exists it restarts publication. A nonidentical temporary
+  or final leaf, unexpected type/owner/mode/link count, output-parent replacement, or final
+  inode mismatch exits `4`, preserves both names, and directs the operator to choose a clean
+  output path or remove the foreign residue manually. A crash before rename exposes no final
+  output; a crash after rename but before parent `fsync` is resolved only by the exact replay
+  rules. Request-output failure never rolls back or edits the already durable
+  candidate-internal freeze/request, so rerunning the identical command can reproduce the
+  exact authority input without minting another request digest.
 
 `Sc002IncidentDispositionV1` is the sole accepted disposition record. The accepted Version 2
 contract also pins two closed typed constructors:
@@ -1581,7 +1733,8 @@ linearizes after the winner. Tests assert the complete case id set rather than c
 dynamically generated cases, and each case records one of the two allowed serial histories.
 No test may pass by timing out, skipping a latch, sharing an open file description, retaining
 a pre-lock namespace fd, inspecting a live owner's namespace, or constructing,
-serializing, cloning, or reconstructing `SidecarCleanupOwner` from an fd.
+serializing, cloning, returning beyond its guard, pairing with another guard, or
+reconstructing `SidecarCleanupOwner<'guard>` from an fd.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -1702,7 +1855,7 @@ production enumeration:
   receipt/failed-record-positive-receipt
   ```
 
-- `tests/golden/delivery/sc002-census-negative-case-ids.txt` contains exactly these 45
+- `tests/golden/delivery/sc002-census-negative-case-ids.txt` contains exactly these 56
   newline-terminated ids in this order:
 
   ```text
@@ -1751,7 +1904,29 @@ production enumeration:
   primary-census/failure-saturation
   primary-census/failure-copied-cross-incident
   primary-census/raw-01ff-authority
+  primary-census/root-missing
+  primary-census/root-duplicate
+  primary-census/directory-node-missing
+  primary-census/directory-digest-nonzero
+  primary-census/file-digest-zero
+  primary-census/node-kind-mode-mismatch
+  primary-census/descendant-parent-missing
+  primary-census/descendant-omitted
+  primary-census/bounded-failure-incomplete-descendants
+  primary-census/bounded-failure-hard-node-ceiling
+  primary-census/bounded-failure-hard-byte-ceiling
   ```
+
+The retained `locator-*` and `presence-*` spellings are stable negative-case ids, not a
+second wire grammar. Their exact meanings under the recursive grammar are:
+`record-count` tests `node-count`; `locator-length` and `locator-truncated` test recursive
+relative-path framing; `locator-outside-scope` tests a root/path outside the closed root
+table; `duplicate-locator` tests a duplicate root-code/relative-path pair; `locator-order`
+tests root-code then unsigned-path order; `presence-tag` tests `node-kind`; `absent-length`
+tests an absent root with a nonempty path or nonzero size; `absent-digest` tests any nonzero
+absent-root identity/content field; `present-length` tests regular-file length against the
+once-opened bytes; and `present-digest` tests the typed regular-file content digest. Tests
+must not implement those ids by decoding the retired flat locator/presence shape.
 
 A separately authored literal array in the test module must equal each file before any
 negative can count. The receipt encoder, census encoders, poison builders, and production
@@ -1761,7 +1936,78 @@ pass. Missing, duplicate, extra, reordered, unknown, dynamically skipped, or unv
 an early unrelated failure, or a generated expectation fails the enforcing runner. A
 separate post-resolution mutation case changes a primary name after a valid bounded-failure
 commitment and must block successor admission; it is a state-transition negative, not a
-malformed encoding and therefore is not conflated with the 45 malformed census ids.
+malformed encoding and therefore is not conflated with the 56 malformed census ids.
+
+`tests/golden/delivery/sc002-request-output-negative-case-ids.txt` contains exactly these 25
+newline-terminated ids in order:
+
+```text
+request-output/path-empty
+request-output/path-dot
+request-output/path-dotdot
+request-output/path-repeated-separator
+request-output/path-nul
+request-output/parent-symlink
+request-output/parent-replaced
+request-output/leaf-symlink
+request-output/temp-type
+request-output/temp-owner
+request-output/temp-mode
+request-output/temp-hardlink
+request-output/temp-bytes
+request-output/final-type
+request-output/final-owner
+request-output/final-mode
+request-output/final-hardlink
+request-output/final-bytes
+request-output/final-inode-mismatch
+request-output/foreign-eexist
+request-output/crash-before-temp-fsync
+request-output/crash-after-temp-fsync
+request-output/crash-after-rename-before-parent-fsync
+request-output/exact-replay-after-parent-fsync
+request-output/descriptor-exec-leak
+```
+
+A separately authored literal 25-id constant equals this file before any output test runs.
+The path resolver, output publisher, crash injector, descriptor tracker, and production code
+read neither expectation. Every case reaches only its named openat2, ownership, mode, link,
+content, inode, no-replace, durability, replay, or CLOEXEC check. The exact replay case is a
+positive idempotence oracle and must perform zero writes after full final-leaf and parent
+durability verification. Missing, duplicate, reordered, skipped, early-failing, or
+production-derived cases fail the enforcing runner.
+
+`tests/golden/delivery/sc002-recovery-forbidden-values.tsv` is the independent closed
+redaction registry for the incident/request/output path. It contains exactly these
+tab-separated, newline-terminated rows and no header:
+
+```text
+request-out-path	/tmp/d2b-sc002-request-canary.json
+request-temp-name	.d2b-sc002-request-canary.tmp
+successor-snapshot-path	/tmp/d2b-sc002-successor-canary
+disposition-input-path	/tmp/d2b-sc002-disposition-canary.json
+preimage-locator	evidence-sidecars/sc002/incidents/preimages/canary
+source-locator	evidence-sidecars/sc002/canary-source
+payload-locator	evidence-sidecars/sc002/incidents/payload/canary
+resolution-evidence-locator	evidence-sidecars/sc002/incidents/resolution-evidence/canary
+failure-relative-path	canary/private/descendant
+filesystem-device	818181
+filesystem-inode	828282
+filesystem-ctime-sec	838383
+canonical-request-body	d2b-sc002-canonical-request-body-canary-v1
+```
+
+Each literal is injected independently through inspect, recover, request, request-output
+replay, apply, admission, cleanup, and retention owners. It must be absent from human and
+JSON status, wire diagnostics, error and `Display`, log fields/messages, audit,
+tracing events and span attributes, metric name/help/label/value/exemplar, panic, and every
+`Debug`. The exact `--request-out` file, exact disposition input fixture, candidate-private
+canonical request leaf, and the test's private injection buffer are the only scan
+exclusions; no path, prefix, process, directory, or broad evidence-sidecar exclusion is
+allowed. Bounded incident/disposition/successor ids may appear only in their declared
+operator status fields. Metrics contain none of those ids and no recovery-state path. A
+missing visit, changed literal, duplicate row, omitted captured surface, unexpected
+projection, or production read of this fixture fails before evidence acceptance.
 
 ---
 
@@ -2087,6 +2333,108 @@ fixture. Tests require exact ordered equality between all four, and a missing, e
 duplicate, reordered, or changed role/artifact pair fails before the 91-case poison matrix
 can count as visited.
 
+`tests/golden/delivery/source-floor-v1/poison-case-ids.txt` is itself pinned rather than
+generated from the role table or class list. It contains exactly these 91
+newline-terminated ids in this class-major, role-major order:
+
+```text
+source-floor/missing/source-daemon-peer
+source-floor/missing/source-broker-peer
+source-floor/missing/source-wire-schema
+source-floor/missing/source-privilege-schema
+source-floor/missing/source-operation-catalogue
+source-floor/missing/source-operation-catalogue-fingerprint
+source-floor/missing/source-compatibility-disposition
+source-floor/missing/source-capability-api-fingerprint
+source-floor/missing/source-serialization-snapshot
+source-floor/missing/source-positive-fixture
+source-floor/missing/source-bare-protocol-negative-fixture
+source-floor/missing/source-cross-fingerprint-negative-fixture
+source-floor/missing/source-installed-apply-object
+source-floor/duplicate/source-daemon-peer
+source-floor/duplicate/source-broker-peer
+source-floor/duplicate/source-wire-schema
+source-floor/duplicate/source-privilege-schema
+source-floor/duplicate/source-operation-catalogue
+source-floor/duplicate/source-operation-catalogue-fingerprint
+source-floor/duplicate/source-compatibility-disposition
+source-floor/duplicate/source-capability-api-fingerprint
+source-floor/duplicate/source-serialization-snapshot
+source-floor/duplicate/source-positive-fixture
+source-floor/duplicate/source-bare-protocol-negative-fixture
+source-floor/duplicate/source-cross-fingerprint-negative-fixture
+source-floor/duplicate/source-installed-apply-object
+source-floor/extra/source-daemon-peer
+source-floor/extra/source-broker-peer
+source-floor/extra/source-wire-schema
+source-floor/extra/source-privilege-schema
+source-floor/extra/source-operation-catalogue
+source-floor/extra/source-operation-catalogue-fingerprint
+source-floor/extra/source-compatibility-disposition
+source-floor/extra/source-capability-api-fingerprint
+source-floor/extra/source-serialization-snapshot
+source-floor/extra/source-positive-fixture
+source-floor/extra/source-bare-protocol-negative-fixture
+source-floor/extra/source-cross-fingerprint-negative-fixture
+source-floor/extra/source-installed-apply-object
+source-floor/empty/source-daemon-peer
+source-floor/empty/source-broker-peer
+source-floor/empty/source-wire-schema
+source-floor/empty/source-privilege-schema
+source-floor/empty/source-operation-catalogue
+source-floor/empty/source-operation-catalogue-fingerprint
+source-floor/empty/source-compatibility-disposition
+source-floor/empty/source-capability-api-fingerprint
+source-floor/empty/source-serialization-snapshot
+source-floor/empty/source-positive-fixture
+source-floor/empty/source-bare-protocol-negative-fixture
+source-floor/empty/source-cross-fingerprint-negative-fixture
+source-floor/empty/source-installed-apply-object
+source-floor/stale-generation/source-daemon-peer
+source-floor/stale-generation/source-broker-peer
+source-floor/stale-generation/source-wire-schema
+source-floor/stale-generation/source-privilege-schema
+source-floor/stale-generation/source-operation-catalogue
+source-floor/stale-generation/source-operation-catalogue-fingerprint
+source-floor/stale-generation/source-compatibility-disposition
+source-floor/stale-generation/source-capability-api-fingerprint
+source-floor/stale-generation/source-serialization-snapshot
+source-floor/stale-generation/source-positive-fixture
+source-floor/stale-generation/source-bare-protocol-negative-fixture
+source-floor/stale-generation/source-cross-fingerprint-negative-fixture
+source-floor/stale-generation/source-installed-apply-object
+source-floor/stale-digest/source-daemon-peer
+source-floor/stale-digest/source-broker-peer
+source-floor/stale-digest/source-wire-schema
+source-floor/stale-digest/source-privilege-schema
+source-floor/stale-digest/source-operation-catalogue
+source-floor/stale-digest/source-operation-catalogue-fingerprint
+source-floor/stale-digest/source-compatibility-disposition
+source-floor/stale-digest/source-capability-api-fingerprint
+source-floor/stale-digest/source-serialization-snapshot
+source-floor/stale-digest/source-positive-fixture
+source-floor/stale-digest/source-bare-protocol-negative-fixture
+source-floor/stale-digest/source-cross-fingerprint-negative-fixture
+source-floor/stale-digest/source-installed-apply-object
+source-floor/cross-disposition/source-daemon-peer
+source-floor/cross-disposition/source-broker-peer
+source-floor/cross-disposition/source-wire-schema
+source-floor/cross-disposition/source-privilege-schema
+source-floor/cross-disposition/source-operation-catalogue
+source-floor/cross-disposition/source-operation-catalogue-fingerprint
+source-floor/cross-disposition/source-compatibility-disposition
+source-floor/cross-disposition/source-capability-api-fingerprint
+source-floor/cross-disposition/source-serialization-snapshot
+source-floor/cross-disposition/source-positive-fixture
+source-floor/cross-disposition/source-bare-protocol-negative-fixture
+source-floor/cross-disposition/source-cross-fingerprint-negative-fixture
+source-floor/cross-disposition/source-installed-apply-object
+```
+
+The separately authored literal 91-id test constant must equal this file before any poison
+runs. It repeats these bytes directly; it may not form a Cartesian product at runtime or
+read `role-artifact-matrix.tsv`.
+
 `SourceGenerationCompatibilityInstallationV1` contains, in exact order,
 `schemaVersion = 1`, `kind = "source-generation-compatibility-installation"`,
 `manifestSha256`, `dispositionSha256`, `sourceGenerationSha256`,
@@ -2232,6 +2580,124 @@ form the six pre-first and 84 post-first expectations from literal test axes, an
 those with the 90-id fixture. No expected count reads `mutation_edge_count`, registry
 length, discovered hooks, or another runtime count. Thus production and expectation cannot
 omit the same edge by sharing enumeration.
+
+The mutation-edge fixture contains exactly:
+
+```text
+host-generation.source-bootstrap-publish
+host-generation.target-profile-publish
+host-generation.target-broker-service-transition
+host-generation.coordinator-transfer-to-target
+host-generation.target-daemon-service-transition
+host-generation.target-pointer-publish
+host-generation.target-reference-publish
+host-generation.target-pointer-repair
+host-generation.target-reference-repair
+host-generation.rollback-target-daemon-service
+host-generation.rollback-pointer-restore
+host-generation.rollback-reference-restore
+host-generation.rollback-profile-publish
+host-generation.rollback-source-broker-service
+host-generation.rollback-source-daemon-service
+```
+
+The apply-peer fixture is also literal, not a runtime Cartesian product. It contains exactly:
+
+```text
+apply-peer/pre-first/peer-exit
+apply-peer/pre-first/peer-exec
+apply-peer/pre-first/peer-pid-reuse
+apply-peer/pre-first/peer-start-identity-mismatch
+apply-peer/pre-first/peer-executable-identity-mismatch
+apply-peer/pre-first/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-profile-publish/peer-exit
+apply-peer/post-first/host-generation.target-profile-publish/peer-exec
+apply-peer/post-first/host-generation.target-profile-publish/peer-pid-reuse
+apply-peer/post-first/host-generation.target-profile-publish/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-profile-publish/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-profile-publish/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-broker-service-transition/peer-exit
+apply-peer/post-first/host-generation.target-broker-service-transition/peer-exec
+apply-peer/post-first/host-generation.target-broker-service-transition/peer-pid-reuse
+apply-peer/post-first/host-generation.target-broker-service-transition/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-broker-service-transition/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-broker-service-transition/peer-identity-ambiguity
+apply-peer/post-first/host-generation.coordinator-transfer-to-target/peer-exit
+apply-peer/post-first/host-generation.coordinator-transfer-to-target/peer-exec
+apply-peer/post-first/host-generation.coordinator-transfer-to-target/peer-pid-reuse
+apply-peer/post-first/host-generation.coordinator-transfer-to-target/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.coordinator-transfer-to-target/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.coordinator-transfer-to-target/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-daemon-service-transition/peer-exit
+apply-peer/post-first/host-generation.target-daemon-service-transition/peer-exec
+apply-peer/post-first/host-generation.target-daemon-service-transition/peer-pid-reuse
+apply-peer/post-first/host-generation.target-daemon-service-transition/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-daemon-service-transition/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-daemon-service-transition/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-pointer-publish/peer-exit
+apply-peer/post-first/host-generation.target-pointer-publish/peer-exec
+apply-peer/post-first/host-generation.target-pointer-publish/peer-pid-reuse
+apply-peer/post-first/host-generation.target-pointer-publish/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-pointer-publish/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-pointer-publish/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-reference-publish/peer-exit
+apply-peer/post-first/host-generation.target-reference-publish/peer-exec
+apply-peer/post-first/host-generation.target-reference-publish/peer-pid-reuse
+apply-peer/post-first/host-generation.target-reference-publish/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-reference-publish/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-reference-publish/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-pointer-repair/peer-exit
+apply-peer/post-first/host-generation.target-pointer-repair/peer-exec
+apply-peer/post-first/host-generation.target-pointer-repair/peer-pid-reuse
+apply-peer/post-first/host-generation.target-pointer-repair/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-pointer-repair/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-pointer-repair/peer-identity-ambiguity
+apply-peer/post-first/host-generation.target-reference-repair/peer-exit
+apply-peer/post-first/host-generation.target-reference-repair/peer-exec
+apply-peer/post-first/host-generation.target-reference-repair/peer-pid-reuse
+apply-peer/post-first/host-generation.target-reference-repair/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.target-reference-repair/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.target-reference-repair/peer-identity-ambiguity
+apply-peer/post-first/host-generation.rollback-target-daemon-service/peer-exit
+apply-peer/post-first/host-generation.rollback-target-daemon-service/peer-exec
+apply-peer/post-first/host-generation.rollback-target-daemon-service/peer-pid-reuse
+apply-peer/post-first/host-generation.rollback-target-daemon-service/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.rollback-target-daemon-service/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.rollback-target-daemon-service/peer-identity-ambiguity
+apply-peer/post-first/host-generation.rollback-pointer-restore/peer-exit
+apply-peer/post-first/host-generation.rollback-pointer-restore/peer-exec
+apply-peer/post-first/host-generation.rollback-pointer-restore/peer-pid-reuse
+apply-peer/post-first/host-generation.rollback-pointer-restore/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.rollback-pointer-restore/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.rollback-pointer-restore/peer-identity-ambiguity
+apply-peer/post-first/host-generation.rollback-reference-restore/peer-exit
+apply-peer/post-first/host-generation.rollback-reference-restore/peer-exec
+apply-peer/post-first/host-generation.rollback-reference-restore/peer-pid-reuse
+apply-peer/post-first/host-generation.rollback-reference-restore/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.rollback-reference-restore/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.rollback-reference-restore/peer-identity-ambiguity
+apply-peer/post-first/host-generation.rollback-profile-publish/peer-exit
+apply-peer/post-first/host-generation.rollback-profile-publish/peer-exec
+apply-peer/post-first/host-generation.rollback-profile-publish/peer-pid-reuse
+apply-peer/post-first/host-generation.rollback-profile-publish/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.rollback-profile-publish/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.rollback-profile-publish/peer-identity-ambiguity
+apply-peer/post-first/host-generation.rollback-source-broker-service/peer-exit
+apply-peer/post-first/host-generation.rollback-source-broker-service/peer-exec
+apply-peer/post-first/host-generation.rollback-source-broker-service/peer-pid-reuse
+apply-peer/post-first/host-generation.rollback-source-broker-service/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.rollback-source-broker-service/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.rollback-source-broker-service/peer-identity-ambiguity
+apply-peer/post-first/host-generation.rollback-source-daemon-service/peer-exit
+apply-peer/post-first/host-generation.rollback-source-daemon-service/peer-exec
+apply-peer/post-first/host-generation.rollback-source-daemon-service/peer-pid-reuse
+apply-peer/post-first/host-generation.rollback-source-daemon-service/peer-start-identity-mismatch
+apply-peer/post-first/host-generation.rollback-source-daemon-service/peer-executable-identity-mismatch
+apply-peer/post-first/host-generation.rollback-source-daemon-service/peer-identity-ambiguity
+```
+
+The literal 90-id test constant repeats this order directly and may not call a product,
+generator, or shared matrix helper.
 `tests/golden/delivery/host-generation-mutation-edge-meta-negative-case-ids.txt` contains
 exactly three newline-terminated ids in order:
 `mutation-edge-meta/production-edge-removed`,
@@ -2268,6 +2734,81 @@ check. Empty production and expected sets, a dynamically skipped case, an early 
 failure, or a count learned from production is a failure, not a visit. This file, the
 15-edge file, the 90-case file, the three-case meta registry, production enumeration, and
 all literal expectations are mutually read-independent.
+
+`tests/golden/delivery/host-generation-pre-start-case-ids.txt` closes the pre-mutation and
+root-invocation surface that the edge matrix does not cover. It contains exactly these 15
+newline-terminated ids in order:
+
+```text
+pre-start/unprivileged-authorize-positive
+pre-start/root-authorize-bootstrap-refused
+pre-start/root-authorize-stable-reference-refused
+pre-start/root-authorize-rollback-refused
+pre-start/apply-without-authorization
+pre-start/apply-before-source-daemon-ready
+pre-start/apply-before-source-broker-ready
+pre-start/apply-before-source-hello
+pre-start/apply-before-catalogue-match
+pre-start/apply-before-capability-seal
+pre-start/apply-before-target-object-pin
+pre-start/apply-before-installed-apply-pin
+pre-start/apply-before-gc-root
+pre-start/apply-before-coordinator-durable
+pre-start/apply-before-existing-broker-unit-active
+```
+
+A separately authored literal constant equals this file. Each refusal has zero mutation
+edges, zero pre-mutation audit rows claiming an attempted mutation, no fd transfer before
+the named prerequisite, and the closed remediation for that exact prerequisite. The three
+root cases execute the documented bootstrap, stable-reference, and rollback authorization
+forms as uid 0 and must fail before public-socket authorization or `sudo`. A skipped,
+unvisited, reordered, duplicate, production-derived, or early unrelated refusal fails the
+matrix.
+
+The independently authored
+`tests/golden/delivery/host-generation-unit-census-case-ids.txt` contains exactly these 27
+newline-terminated ids in order:
+
+```text
+unit-census/positive
+unit-census/enumeration-error
+unit-census/empty
+unit-census/missing-d2bd-service
+unit-census/missing-broker-socket
+unit-census/missing-broker-service
+unit-census/unexpected-d2b-service
+unit-census/unexpected-d2b-socket
+unit-census/unexpected-d2b-slice
+unit-census/unexpected-d2b-path
+unit-census/unexpected-d2b-timer
+unit-census/unexpected-microvm-template
+unit-census/unexpected-microvm-instance
+unit-census/malformed-row
+unit-census/skip-marker
+unit-census/pre-start-positive
+unit-census/post-start-positive
+unit-census/post-restart-positive
+unit-census/post-stop-positive
+unit-census/unexpected-d2b-target
+unit-census/unexpected-d2b-template
+unit-census/unexpected-d2b-instance
+unit-census/unexpected-microvm-socket
+unit-census/unexpected-microvm-slice
+unit-census/unexpected-microvm-target
+unit-census/unexpected-microvm-path
+unit-census/unexpected-microvm-timer
+```
+
+`positive` remains the candidate-bound acceptance census. The four phase-specific positives
+repeat exact full-namespace equality before VM start, after public start, after daemon
+restart/adoption, and after public stop. Each added poison loads exactly one named unit:
+`d2b-unexpected.target`, `d2b@.service`, `d2b@unexpected.service`,
+`microvm-unexpected.socket`, `microvm-unexpected.slice`,
+`microvm-unexpected.target`, `microvm-unexpected.path`, or
+`microvm-unexpected.timer`. Together with the retained service/socket/slice/path/timer and
+microvm template/instance cases, every allowed systemd unit kind and both governed prefixes
+are exercised. A separate literal 27-id constant equals this fixture; the production filter,
+expected-three-unit array, fixture, and literal are mutually read-independent.
 
 `tests/golden/delivery/host-generation-apply-peer-forbidden-values.tsv` is the closed literal
 observability canary registry. It covers every raw input read by apply-peer admission and
@@ -2330,6 +2871,57 @@ device/inode/mount identity, serializer output, native-width integer, or caller-
 enters either preimage. Tests reconstruct both digests independently
 and reject wrong domain, terminator, width, endian, field order, hex decoding, or cross-class
 substitution. Metrics contain neither raw values nor either digest.
+
+`HostGenerationHandoffStatusV1` is the operator projection for the one nonterminal intent in
+the current source generation. The unprivileged
+`d2b-host-generation-deploy --inspect-authorized-handoff [--json]` entrypoint reaches it
+through the existing public socket; it accepts no intent id, generation selector, path,
+authority token, or root invocation. JSON contains exactly, in order,
+`schemaVersion = 1`, `kind = "host-generation-handoff-status"`, `state`, `phase`, `owner`,
+`action`, and `successorStates`. `phase` is null or one exact closed mutation-edge id.
+`owner` is only `none`, `apply-peer-live`, `source-broker-recovery`, or
+`target-broker-recovery`. It never contains a pid, uid, unit path, generation, store path,
+intent id, digest, or executable identity. `successorStates` is a sorted unique array from
+the same closed state set, not free-form guidance.
+
+The complete state/action/successor table is:
+
+| Durable state | Inspect action | Required operator action | Allowed durable successors |
+| --- | --- | --- | --- |
+| `authorized-pending` | `run-authorized-apply` | run the already documented privileged apply with the separately pinned installed apply object | `apply-claimed` |
+| `apply-claimed` with live peer | `wait-for-live-apply` | wait and re-inspect; a second connection refuses | `mutating`, or `authorized-pending` only after durable zero-mutation claim release |
+| `mutating` with live peer | `wait-for-live-apply` | wait and re-inspect | `transfer-pending`, `completed`, or `recovery-pending` after proven peer death |
+| `recovery-pending` with active broker recovery owner | `wait-for-broker-recovery` | wait and re-inspect | `mutating`, `transfer-pending`, `completed`, `rolled-back`, or `recovery-irreconcilable` |
+| `recovery-pending` with failed existing broker unit | `restart-existing-broker` | restart only `d2b-priv-broker.service`, then re-inspect | same row with active owner |
+| `transfer-pending` | `wait-for-broker-recovery` | wait and re-inspect; restart only the existing broker unit if it is failed | `completed`, `rolled-back`, `recovery-pending`, or `recovery-irreconcilable` |
+| `recovery-irreconcilable` | `restart-existing-broker-for-rollback` | restart only the existing broker unit; its immutable pre-mutation/outcome audit selects the one verified rollback | `rolled-back` |
+| `completed` | `none` | inspect only | none |
+| `rolled-back` | `rebuild-host-generation` | correct the target and begin a new authorization from the unprivileged preflight | none in this intent; a new intent starts only after this one is terminal |
+
+A state may be classified `recovery-irreconcilable` only when the immutable coordinator and
+audit history prove one complete rollback to the prior profile/service/pointer/reference
+tuple. If that proof is absent, the classifier returns a typed invalid-coordinator refusal,
+performs no mutation, and never labels the state recovery-capable. Every valid
+`recovery-pending` or `recovery-irreconcilable` projection therefore has an inspect command,
+one closed action, observable current status, and a mechanically checked terminal successor.
+The broker-owned recovery action is automatic after startup; neither the daemon nor a new
+unit becomes a recovery owner.
+
+Human inspection is exactly five newline-terminated lines:
+
+```text
+state: <STATE>
+phase: <PHASE_OR_NONE>
+owner: <OWNER>
+action: <ACTION>
+successor-states: <SORTED_COMMA_LIST_OR_NONE>
+```
+
+The bracketed values are closed bounded enums. No line carries an identifier, path, command
+argument, or free-form sentence. The apply command and broker recovery return the same
+projection on a valid refusal or concurrent transition. Tests cover every row, every allowed
+edge, every forbidden edge, live/failed broker ownership, restart replay, terminal
+idempotence, and raw apply-peer canary absence in both forms.
 
 ---
 

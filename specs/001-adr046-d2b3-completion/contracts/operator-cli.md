@@ -154,6 +154,29 @@ version or `schemaVersion: 1` retains the old 0/1/2 behavior and MUST NOT be int
 Version 2. Arbitrary Version 1 operation IDs are not converted to the 16-byte Version 2 form.
 The d2b 3.0 clean cutover imports no persisted Version 1 recovery state.
 
+## Host-generation handoff recovery
+
+This is a planned T595 target-closure helper contract, not behavior available at the
+committed base. The unprivileged
+`d2b-host-generation-deploy --inspect-authorized-handoff [--json]` command reads the sole
+current-source nonterminal intent through the existing public socket. It accepts no intent
+id, generation selector, path, token, or root invocation.
+
+Its exact `HostGenerationHandoffStatusV1` schema and five-line human projection are in
+`data-model.md`. Every `recovery-pending` state identifies only the closed owner class,
+action, and allowed successor states. An active source or target broker recovery owner
+projects `wait-for-broker-recovery`; a failed existing broker unit projects
+`restart-existing-broker`. A valid `recovery-irreconcilable` state exists only when immutable
+pre-mutation/outcome audit proves one complete rollback, projects
+`restart-existing-broker-for-rollback`, and can advance only to `rolled-back`. No state
+directs daemon repair or a new unit.
+
+Human and JSON output contain no intent, generation, pid, uid, store path, unit path,
+executable identity, or free-form remediation. The apply command and broker recovery return
+the same projection after a valid conflict or concurrent transition. Every state-table row,
+forbidden transition, root refusal, broker live/failed condition, restart, terminal replay,
+and redaction case is independently pinned.
+
 ## Retirement register
 
 Populate as each is retired. `d2b host migrate-storage` is already classified: it served the
