@@ -695,6 +695,7 @@ fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, Box<dyn s
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
     let lock = libc::flock {
         l_type: libc::F_WRLCK as libc::c_short,
