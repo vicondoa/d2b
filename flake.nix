@@ -1095,6 +1095,7 @@
           nix-unit-misc = [
             "assertions.nix"
             "autostart-wiring.nix"
+            "bazel-package-policy.nix"
             "bazel-toolchain.nix"
             "examples-with-observability.nix"
             "ifname-nix-rust-parity.nix"
