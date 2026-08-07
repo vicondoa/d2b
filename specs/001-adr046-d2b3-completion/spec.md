@@ -53,7 +53,7 @@ authorize W2 entry.
 implementation, run a convergence or finding-fix lane, request a work panel, seal, merge, or
 advance, a separate amendment to Constitution Principle VI must be accepted outside this
 feature root and committed on the integration lineage. That amendment must expressly address
-both the unpanelled and unsealed W0/W1 history and the already-dispatched W2-W4 work whose
+both the unpanelled and unsealed W0/W1 history and the already-dispatched W2-W5 work whose
 contemporaneous plan panels are unproven, and must state the conditions under which the
 program may continue. The accepted amendment commit must be an ancestor of the exact
 execution base. Feature-local historical and remedial records are evidence for that external
@@ -567,13 +567,17 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   the final three. Before F freezes, T589 MUST implement one hermetic closed-profile validator
   used by panel-request, seal, and merge-eligibility, with negative tests for missing, extra,
   duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
-  MUST require all eight records to bind F and F's tree. T219 alone
-  runs F's one binding panel, seal, and merge after T602; no content, evidence identity, or
-  candidate change is permitted under F after its request, and F can never receive a second
-  request. A nonunanimous F is retained as failed, its recommendations alone scope the fix
-  round, and a distinct successor must repeat T220 and T600-T602 plus the delta/full-context
-  follow-up panel before receiving its own one request. An external policy/tooling refusal is
-  an integrator scope escalation, never a finding waiver. Before
+  MUST require all eight records to bind F and F's tree. Before F is final, T220 MUST run the
+  nonbinding `/d2b-panel-round plan` phase surface over each integrated provisional candidate.
+  Findings scope a fix round through T220 and require validation plus a delta/full-context
+  phase-panel rerun; that loop may iterate and issues no binding delivery request. Only a
+  unanimous phase-panel result may freeze final F for T600-T602. T219 alone then requests the
+  wave's binding delivery panel exactly once, against F, and seals and merges only that
+  unanimously accepted immutable candidate. No content, evidence identity, or candidate
+  change is permitted after that request. A nonunanimous binding result is retained as the
+  failed Wave 5 close, and neither F nor a successor may receive a second binding request for
+  the wave. The integrator MUST stop and escalate the external policy/tooling disposition;
+  findings are never waived. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
   analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
   authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
@@ -726,7 +730,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Canonicalization Scheme and no trailing bytes.
 
   `candidateId`, full `commitOid`, and full `treeOid` MUST equal the current frozen W7
-  candidate (initially F7 and later only a distinct successor after durable failure).
+  provisional candidate. A distinct provisional identity is allowed only before the wave's
+  binding request, after a nonbinding phase finding or pre-request evidence expiry.
   `previewSha256` MUST digest the exact canonical preview bytes used for that run.
   `hostIdentitySha256` MUST be the lowercase SHA-256 of the UTF-8 domain
   `d2b:recovery-host:v1`, one zero byte, and the lowercase contents of `/etc/machine-id` from
@@ -764,13 +769,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   no skip. Empty discovery is failure. A close stage MUST call this validator rather than
   copy a subset of its predicates.
 
-  Expiration after a binding panel request durably fails that immutable candidate; evidence
-  is not refreshed in place. Failure closure retains the request, panel, seal, and
-  eligibility records and releases the candidate slot only after the closure is durable.
-  The integrator then creates a distinct successor candidate, obtains a fresh canonical
-  attestation bound to it, reruns complete candidate validation, and may issue that
-  successor's single binding panel request. No predecessor attestation, panel, seal, or
-  eligibility result transfers, even when commit and tree bytes are unchanged.
+  Expiration after the wave's binding panel request durably fails that immutable candidate;
+  evidence is not refreshed in place. Failure closure retains the request, panel, seal, and
+  eligibility records. Because the binding panel is exactly once per wave, no successor may
+  receive another binding request. The integrator MUST stop and escalate the external
+  disposition rather than transfer approval, refresh evidence, or waive the failed close.
 
   T580 MUST import exactly one existing delivery `EvidenceRecord` with
   `validation = "recovery-point-attestation"` and `result = "passed"`, bound through its
@@ -808,11 +811,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 #### Delivery and governance
 
 - **FR-025**: Remaining work MUST be delivered wave by wave following the ADR-046 delivery
-  contract. Each wave has two distinct panel gates: a unanimous `/d2b-panel-round plan`
-  review bound to the exact implementation base and feature-artifact snapshot before any
-  implementation or fix lane is dispatched, and a unanimous `/d2b-panel-round work` review
-  of the integrated candidate after convergence and before advance. The work review does not
-  substitute for the plan review. Waves seal and merge in strict order; a wave MUST NOT seal
+  contract. Each wave has a nonbinding phase-panel surface and exactly one binding delivery
+  panel. `/d2b-panel-round plan` reviews the exact implementation base and feature-artifact
+  snapshot before implementation dispatch and handles iterative finding-fix rounds over
+  provisional integrated candidates before the final candidate is selected. Every content
+  change invalidates that phase result and requires a delta/full-context rerun. Only after
+  phase-panel convergence may the final immutable candidate receive the wave's single binding
+  `/d2b-panel-round work` request. A binding finding leaves the wave unsealed and cannot be
+  followed by a second binding request for any candidate. The binding review does not
+  substitute for the entry plan review. Waves seal and merge in strict order; a wave MUST NOT seal
   or merge before its predecessor has sealed at full unanimity and merged. This ordering
   constrains **exit** only. Pipelining may relax the predecessor-merge condition for
   implementation start under FR-048, but never relaxes the successor wave's own plan-review
@@ -931,7 +938,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   finding-fix lane, request a work panel, seal, merge, or advance, an explicit separate
   amendment to Constitution Principle VI MUST be accepted and committed outside this feature
   root. It MUST expressly disposition the W0/W1 missing panel and seal history and the
-  unproven contemporaneous W2-W4 plan panels, and it MUST state the conditions for program
+  unproven contemporaneous W2-W5 plan panels, and it MUST state the conditions for program
   continuation. Its commit MUST be an ancestor of the exact execution base. The FR-034
   historical record, a current remedial plan panel, and a candidate-bound historical-entry
   remediation record are evidence only and MUST NOT satisfy this prerequisite. Until it is
@@ -948,7 +955,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   and unanimous ten-role panel sign-off with zero outstanding recommendations against that
   snapshot. For ordinary prospective pipelining after FR-036 is satisfied, a missing or
   absent predecessor seal blocks the successor's **exit** and not its **entry**. This rule
-  does not make W0/W1's missing seals or W2-W4's late remediation non-blocking before the
+  does not make W0/W1's missing seals or W2-W5's late remediation non-blocking before the
   external amendment. FR-025's prohibition on partial-wave advance therefore means a wave is never
   *delivered* early and its evidence is never *accepted* early; it does not mean implementation
   must wait. Once FR-036's external prerequisite is satisfied, this matches the delivery
@@ -1201,9 +1208,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **Cutover**: The one-time, host-scoped, previewable, consent-gated, partially reversible
   procedure that replaces the pre-ADR-046 control plane with a live Zone runtime, assigning
   every existing artifact a disposition of adopt, preserve, or destroy.
-- **Wave**: The delivery unit. Each wave has entry criteria, immutable candidate snapshots,
-  candidate-bound validation, at most one binding panel per candidate, one unanimously
-  accepted candidate and seal, and exit criteria.
+- **Wave**: The delivery unit. Each wave has entry criteria, provisional candidate snapshots
+  reviewed iteratively on the nonbinding phase-panel surface, candidate-bound validation, and
+  exactly one binding delivery-panel request for one final immutable candidate. A binding
+  finding leaves the wave without a seal and never authorizes a second binding request.
 - **Work item**: The smallest tracked unit of implementation, bound to one owning
   specification with exact destination paths and required validation, and holding a state
   that must reach merged before its wave can seal.
@@ -1371,9 +1379,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
   RSS is at or below 24,576 KiB with no baseline subtraction; owner fan-in is singular;
   current removal proofs pass; and checked reference behavior matches emitted CLI and wire
-  output. T219 then runs F's exactly one binding panel and seal. F stays immutable and cannot
-  receive another request. Nonunanimity fails F and routes scoped fixes through a distinct,
-  fully revalidated successor; the successful merge preserves that candidate's tree.
+  output. Before F is final, T220 iterates scoped fixes and delta/full-context
+  `/d2b-panel-round plan` phase reviews to unanimous convergence without issuing a binding
+  delivery request. T219 then requests the wave's exactly one binding panel and seals only a
+  unanimous F. F stays immutable. A binding nonunanimity fails the wave close, permits no
+  successor request, and requires integrator scope escalation; a successful merge preserves
+  F's tree.
 - **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
   for `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and
   built and no skip. W2-W4 carry the closed continuity result directly; W5 carries it only
@@ -1468,15 +1479,18 @@ carries the object verbatim rather than copying selected fields into the task ro
 - The ADR-046 delivery contract in `ADR-046-validation-and-delivery` governs the binding
   work-panel, seal, and merge-eligibility surfaces; it does not supersede the repository's
   per-wave phase gate. Every wave retains one unanimous plan review before implementation
-  dispatch and one unanimous work review after convergence. For already-dispatched W2-W4,
+  dispatch, iterative nonbinding plan-phase review for finding fixes before final-candidate
+  selection, and exactly one binding work review at close. For already-dispatched W2-W5,
   the feature artifacts currently prove no contemporaneous plan-review receipt: historical
   compliance remains unproven, a current remedial plan review is evidence only until FR-036's
   external constitution amendment lands, and the later work panel cannot repair or substitute
   for the missed historical gate. After that amendment, its stated conditions and the
   feature-local gates apply together. Wave 5's T603 plan review is then the mandatory gate
   for resumed implementation after a valid T072 historical or current remedial entry
-  disposition. W6-W8 must pass their prospective plan gates before their first implementation
-  lane.
+  disposition. T072 may be checked only by an exact retained Wave 5 plan-panel receipt bound
+  to the actual first-dispatch base and feature snapshot; no such receipt is claimed by this
+  specification. W6-W8 must pass their prospective plan gates before their first
+  implementation lane.
 - The project constitution applies in full, in particular the audited-privilege boundary,
   the isolation-over-convenience rule, contract versioning, test-layer discipline, and the
   ban on internal process markers in shipped artifacts. The feature cannot amend or waive it;
@@ -1492,7 +1506,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   snapshot. All 14 assigned work items are independently recorded as `Merged`, but that fact
   does not cure Principle VI or authorize W2. The legacy-named `waiver-w0-w1.md` is only the
   FR-034 evidence record. Program continuation depends on the separate FR-036 constitution
-  amendment, and neither that file nor the W2-W4 late-remediation records may stand in for it.
+  amendment, and neither that file nor the W2-W5 late-remediation records may stand in for it.
 - FR-075 requires the pre-ADR-046 operator lifecycle to remain functional throughout W2
   through W6 and makes exact-candidate continuity evidence a wave-close gate. It is replaced
   only by the explicit cutover in W7 and removed under the release gate.
