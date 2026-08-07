@@ -324,22 +324,25 @@ source through the incident transition and returns the fixed
 grows an unbounded retirement set. A valid retired orphan is immutable, non-authorizing
 residue and does not block retry or close.
 
-The sole candidate-retention owner is T589's private
+The sole candidate-retention guard is T589's private
 `packages/xtask/src/delivery/storage.rs::CandidateRetentionOwner`; no importer, restart
-cleanup worker, panel stage, or generic filesystem sweep may mint or imitate it. It never
-removes a retired leaf individually. It may retire the whole candidate only after it
-acquires the same exclusive candidate OFD lock and a full delivery-state census proves all
-of the following: the candidate is terminal `merged` or `abandoned-unmerged`; every
-request, reservation, panel, seal, eligibility, and merge transition is terminal; every
-SC-002 incident is absent or `successor-admitted`; no other candidate or retained external
-record references this candidate; both ephemeral namespaces are empty; and the receipt,
-retired, incident, disposition, and status namespaces are exact, bounded, and valid. It
-then atomically renames the whole candidate directory to an owner-only tombstone beneath
-the held state-root fd, `fsync`s the state root, removes only that tombstoned tree with
-fd-relative no-symlink/no-mount-crossing traversal, and `fsync`s the state root again. A
-failed predicate or census performs zero mutation and returns
-`sc002-candidate-retention-blocked`. This explicit whole-candidate transition is the only
-cleanup predicate; there is no clock-driven or per-leaf SC-002 deletion.
+cleanup worker, panel stage, or generic filesystem sweep may mint or imitate it. It owns no
+deletion authority. After acquiring the same exclusive candidate OFD lock, it performs one
+zero-mutation whole-scope retention check. The full delivery-state census must prove all of
+the following: the candidate is terminal `merged` or `abandoned-unmerged`; every request,
+reservation, panel, seal, eligibility, and merge transition is terminal; every SC-002
+incident is absent or `successor-admitted`; every retained external reference to the
+candidate remains resolvable; both ephemeral namespaces are empty; and the receipt, retired,
+incident, disposition, and status namespaces are exact, bounded, and valid. The guard also
+proves that the candidate root remains at its canonical address and that all request,
+reservation, panel-request, panel-record, evidence-record, receipt, seal, eligibility,
+merge, incident, disposition, and status history, including authenticated absence where a
+terminal state has no such artifact, remains immutable. The separately owned
+`evidence-sidecars/sc002/retired` subtree retains every verified orphan under the bounded
+census above. Neither that subtree nor any other candidate descendant is automatically
+unlinked, and the candidate root is never renamed, tombstoned, or deleted. A failed predicate
+or census performs zero mutation and returns `sc002-candidate-retention-blocked`. There is no
+clock-driven, per-leaf, subtree, or candidate-root deletion.
 
 Before ordinary success or an ordinary refusal returns, the still-held lock guards an exact
 empty census of both ephemeral reserved namespaces and the bounded durable census above. No
@@ -504,7 +507,7 @@ wrong-binding races. Each overlap uses two independently
 opened descriptions of the same verified lock inode and latches both orderings at temp
 creation, file sync, quarantine move, retirement move, and incident move. The loser must
 receive the live-owner refusal before namespace access; after release, exactly one retry may
-advance. Every case proves bounded completion with no deadlock, no unverified unlink, and an
+advance. Every case proves bounded completion with no deadlock, no sidecar-data unlink, and an
 exact final census within 64 leaves and 1,048,576 bytes. An ordinary winner or loser leaves
 both ephemeral namespaces empty.
 Every identity-ambiguous case instead proves the durable incident entry or still-ambiguous

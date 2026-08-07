@@ -1465,12 +1465,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   blocks record publication and every close stage, survives restart, and is never
   automatically unlinked. Ordinary success/refusal requires both ephemeral namespaces empty.
   Identity ambiguity intentionally leaves a durable incident entry or ambiguous name and
-  MUST NOT claim zero residue. T589's private `CandidateRetentionOwner` is the sole owner
-  permitted to remove retired data, and only by retiring the whole terminal candidate after
-  the exact request/reservation/panel/seal/eligibility/merge, incident, reference, lock,
-  ephemeral, and bounded durable-census predicate in `data-model.md` passes. There is no
-  per-leaf or clock-driven deletion. Only after durable publication and identity-preserving
-  ordinary cleanup may the `EvidenceRecord` be published.
+  MUST NOT claim zero residue. T589's private `CandidateRetentionOwner` is a zero-mutation
+  whole-scope retention guard, not deletion authority. Under the same lock it requires the
+  exact terminal request/reservation/panel/seal/eligibility/merge, incident, external-
+  reference, ephemeral, and bounded durable-census predicate in `data-model.md` to pass. It
+  must also prove that the canonical candidate root and all request, panel-record,
+  evidence-record, receipt, seal, eligibility, merge, incident, disposition, and status
+  history remain immutable. Verified orphans remain in the separately owned bounded
+  `evidence-sidecars/sc002/retired` subtree. No candidate descendant is automatically
+  unlinked, and the candidate root is never renamed, tombstoned, or deleted. Only after
+  durable publication and identity-preserving ordinary cleanup may the `EvidenceRecord` be
+  published.
   An identical sidecar
   left by a crash may be reopened and reused only after the complete
   identity/hash/owner/mode check; a different existing leaf refuses. A failed operator record
@@ -1494,8 +1499,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   replayed, or tampered disposition bytes refuse before any state transition. Before T589
   dispatch, a separate external amendment MUST bump accepted
   `ADR-046-validation-and-delivery` from Version 1 to Version 2, normatively pin the incident
-  commands, disposition/signature/schema/golden/negative contract, retirement identity and
-  bounded candidate-retention owner, and validator authority, receive the parent ADR's
+  commands, disposition/signature/schema/golden/negative contract, retirement identity,
+  bounded zero-mutation candidate-retention owner, whole-scope retention guard, and validator
+  authority, receive the parent ADR's
   required approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and
   pass Gate 0 on a commit that is an ancestor of T589's base. T589 MUST NOT own or perform
   that external amendment.

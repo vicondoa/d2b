@@ -293,14 +293,20 @@ merge-target registration, merge eligibility, and merge.
     Every importer and cleanup worker holds the same verified candidate-scoped exclusive OFD
     lock through record publication or return. A live owner cannot be cleaned; restart
     cleanup begins only after lock acquisition, moves the opened temp to a reserved
-    quarantine name, reopens and verifies the same device/inode and full identity, performs a
-    final name/identity check, then unlinks through the held parent fd and `fsync`s that
-    parent. An identity mismatch never unlinks or restores the suspect. It durably moves the
+    quarantine name, reopens and verifies the same device/inode and full identity, derives
+    the candidate/content/device/inode-bound retirement id, and moves the leaf no-replace
+    into the bounded `evidence-sidecars/sc002/retired` subtree. It then reopens and
+    revalidates the retired leaf and `fsync`s the leaf plus both directories. No sidecar data
+    leaf is unlinked. An identity mismatch never unlinks or restores the suspect. It durably moves the
     currently named inode to
     `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, or preserves an
     unmovable ambiguous name, and blocks record publication and every close stage. Ordinary
     paths leave both ephemeral namespaces empty; ambiguity intentionally retains incident
-    residue. Crash retry may
+    residue. T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope
+    retention guard: it preserves the canonical candidate root and all request, panel-record,
+    evidence-record, receipt, seal, eligibility, merge, incident, disposition, and status
+    history. It never renames, tombstones, or deletes the candidate root or automatically
+    unlinks any candidate descendant. Crash retry may
     reuse only an identical fully revalidated durable leaf; a different existing leaf or
     concurrent wrong-byte/binding input refuses.
     T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and
