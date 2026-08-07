@@ -619,7 +619,7 @@ fn fresh_hub_bootstrap(
         ));
     }
     generated?;
-    Ok(result?)
+    result
 }
 
 fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
