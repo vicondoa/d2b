@@ -1,0 +1,407 @@
+{
+  "artifactKind": "bazel-rust-coverage-seed",
+  "authorityCount": 4,
+  "authorityDigests": [
+    {
+      "path": "bazel/generated/action-network-policy.json",
+      "sha256": "8b09b9929a754ec93baee78afbabeeb8d4da08c8c7694cf256160cde42d6e0b3"
+    },
+    {
+      "path": "bazel/generated/configured-targets.json",
+      "sha256": "8c086489a3b02dab2c9a0dfcdecb66c601ab02f871b3470ecdbdc678e555e350"
+    },
+    {
+      "path": "bazel/generated/output-manifest.json",
+      "sha256": "224993b2946f448fdda1ba02e28e7ae9b61e9e97a727b1c6e56bbf5850a5483f"
+    },
+    {
+      "path": "bazel/generated/source-census.json",
+      "sha256": "e15ae49082201093a5d4651b66534ed5d6e9d12e381709104dff5a05588fc0c1"
+    }
+  ],
+  "mappingStatus": "planned",
+  "plannedCarrierCount": 20,
+  "plannedCarrierLabels": [
+    "//ci/rust:api_census",
+    "//ci/rust:audit_broker",
+    "//ci/rust:audit_guest",
+    "//ci/rust:audit_main",
+    "//ci/rust:broker_default",
+    "//ci/rust:broker_fakebackends",
+    "//ci/rust:broker_layer1",
+    "//ci/rust:clippy",
+    "//ci/rust:deny_broker",
+    "//ci/rust:deny_guest",
+    "//ci/rust:deny_main",
+    "//ci/rust:fmt",
+    "//ci/rust:guest_shell_runner",
+    "//ci/rust:main_doctests",
+    "//ci/rust:main_harness_free",
+    "//ci/rust:main_tests",
+    "//ci/rust:no_bash_ast",
+    "//ci/rust:pinned_test_inventory",
+    "//ci/rust:schema_reproducibility",
+    "//ci/rust:stub_no_socket"
+  ],
+  "schemaVersion": 1,
+  "seedStatus": "foundation",
+  "surfaceCount": 18,
+  "surfaceIds": [
+    "rust-api-surface",
+    "rust-assert-pinned",
+    "rust-audit-broker",
+    "rust-audit-guest",
+    "rust-audit-main",
+    "rust-broker-default",
+    "rust-broker-fakebackends",
+    "rust-broker-layer1",
+    "rust-deny-broker",
+    "rust-deny-guest",
+    "rust-deny-main",
+    "rust-guest-shell-runner",
+    "rust-main-clippy",
+    "rust-main-format",
+    "rust-main-workspace-tests",
+    "rust-no-bash-ast",
+    "rust-schema-reproducibility",
+    "rust-stub-no-socket"
+  ],
+  "surfaces": [
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo +nightly-2026-02-16 doc --locked --manifest-path packages/Cargo.toml --workspace --exclude d2b-priv-broker --exclude d2b-guest-shell-runner --lib --no-deps"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:api_census"
+      ],
+      "slice": "api",
+      "surfaceId": "rust-api-surface"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "repository-tool",
+        "lockfile": null,
+        "manifest": null,
+        "selectors": [
+          "bash tests/tools/assert-pinned-tests.sh"
+        ]
+      },
+      "cargoVerdictOwner": "not-applicable",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:pinned_test_inventory"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-assert-pinned"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo audit --file packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production/policy/Cargo.lock --no-fetch",
+          "cargo audit --file packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production/policy/Cargo.lock --no-fetch"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:audit_broker"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-audit-broker"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo audit --file packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/Cargo.lock --no-fetch --ignore RUSTSEC-2024-0384",
+          "cargo audit --file packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool/policy/Cargo.lock --no-fetch --ignore RUSTSEC-2024-0384"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:audit_guest"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-audit-guest"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo audit --file packages/Cargo.lock --no-fetch --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:audit_main"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-audit-main"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo test --locked --manifest-path packages/Cargo.toml -p d2b-priv-broker --no-default-features -- --test-threads 1"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:broker_default"
+      ],
+      "slice": "broker",
+      "surfaceId": "rust-broker-default"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo test --locked --manifest-path packages/Cargo.toml -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads 1"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:broker_fakebackends"
+      ],
+      "slice": "broker",
+      "surfaceId": "rust-broker-fakebackends"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo test --locked --manifest-path packages/Cargo.toml -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads 1"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:broker_layer1"
+      ],
+      "slice": "broker",
+      "surfaceId": "rust-broker-layer1"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo deny --metadata-path packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production/policy/metadata.json check --config packages/d2b-priv-broker/deny.toml bans licenses sources",
+          "cargo deny --metadata-path packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production/policy/metadata.json check --config packages/d2b-priv-broker/deny.toml bans licenses sources"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:deny_broker"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-deny-broker"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo deny --metadata-path packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json check --config packages/d2b-guest-shell-runner/deny.toml bans licenses sources",
+          "cargo deny --metadata-path packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json check --config packages/d2b-guest-shell-runner/deny.toml bans licenses sources"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:deny_guest"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-deny-guest"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo deny --manifest-path packages/Cargo.toml check --config packages/deny.toml"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:deny_main"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-deny-main"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo clippy --locked --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings",
+          "cargo fmt --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --check",
+          "cargo nextest list --locked --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --no-default-features --features real-libshpool --message-format json",
+          "cargo nextest run --locked --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --no-default-features --features real-libshpool",
+          "cargo test --doc --locked --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --no-default-features --features real-libshpool"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:guest_shell_runner"
+      ],
+      "slice": "aux",
+      "surfaceId": "rust-guest-shell-runner"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo clippy --locked --manifest-path packages/Cargo.toml --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:clippy"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-main-clippy"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo fmt --manifest-path packages/Cargo.toml --all --check"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:fmt"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-main-format"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo nextest list --locked --manifest-path packages/Cargo.toml --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner --message-format json",
+          "cargo nextest run --locked --manifest-path packages/Cargo.toml --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner",
+          "cargo test --doc --locked --manifest-path packages/Cargo.toml --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:main_doctests",
+        "//ci/rust:main_harness_free",
+        "//ci/rust:main_tests"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-main-workspace-tests"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "tests/tools/no-bash-ast-walker/Cargo.lock",
+        "manifest": "tests/tools/no-bash-ast-walker/Cargo.toml",
+        "selectors": [
+          "cargo run --release --quiet --manifest-path tests/tools/no-bash-ast-walker/Cargo.toml -- packages"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:no_bash_ast"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-no-bash-ast"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "cargo",
+        "lockfile": "packages/Cargo.lock",
+        "manifest": "packages/Cargo.toml",
+        "selectors": [
+          "cargo xtask gen-schemas"
+        ]
+      },
+      "cargoVerdictOwner": "current Cargo gate",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:schema_reproducibility"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-schema-reproducibility"
+    },
+    {
+      "basis": "foundation",
+      "cargoBaseline": {
+        "kind": "repository-tool",
+        "lockfile": null,
+        "manifest": null,
+        "selectors": [
+          "bash tests/tools/stub-no-socket.sh"
+        ]
+      },
+      "cargoVerdictOwner": "not-applicable",
+      "mappingStatus": "planned",
+      "plannedCarrierLabels": [
+        "//ci/rust:stub_no_socket"
+      ],
+      "slice": "main",
+      "surfaceId": "rust-stub-no-socket"
+    }
+  ]
+}
