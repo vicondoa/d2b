@@ -210,7 +210,7 @@ fn helper_invocation_site_is_closed_to_one_typed_rust_consumer() {
             continue;
         };
         if source.contains(invocation) {
-            sites.push(path);
+            sites.push(path.clone());
         }
         let is_test_path = path
             .components()
