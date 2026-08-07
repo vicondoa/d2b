@@ -1469,8 +1469,13 @@ carries the object verbatim rather than copying selected fields into the task ro
   reserved namespaces, and `fsync` the incident directory and old leaf parent. The incident
   digest uses the `identity-ambiguity` domain and binds the closed reopen stage plus ordered
   before/after identity digests. All four kind-specific preimages and their bounded identity
-  and census sub-digests are exactly those in `data-model.md`; raw inode identity is never
-  rendered. If that move is itself ambiguous, cleanup leaves the suspect name in place.
+  and census sub-digests are exactly those in `data-model.md`. In particular,
+  `CanonicalRetiredCensusV1` is the Version-1 `0x01` grammar with normal body tag `0x00`,
+  exact path/record length framing, unsigned-byte path ordering, the closed entry,
+  observation, and failure tag tables, the all-zero/`u64::MAX` unavailable tuple, and the
+  exact two-byte `0x01 0xff` whole-census over-bound sentinel; no implementation-defined
+  iteration order, errno, or partial over-bound prefix enters `C`. Raw inode identity is
+  never rendered. If that move is itself ambiguous, cleanup leaves the suspect name in place.
   Every incident durably persists its payload or still-ambiguous-name locator and a status
   whose immutable `incidentKind` matches the id domain. Missing, unknown, duplicate,
   cross-kind, or mismatched incident status is malformed and blocks every close stage.
@@ -1514,7 +1519,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   dispatch, a separate external amendment MUST bump accepted
   `ADR-046-validation-and-delivery` from Version 1 to Version 2, normatively pin the incident
   commands, closed incident-kind enum, four kind-specific domain-separated incident-id
-  preimages and golden vectors, persisted status kind,
+  preimages and golden vectors, the complete versioned census byte grammar and its
+  normal-empty/normal-sorted-mixed/over-bound golden vectors, persisted status kind, the
+  distinct deterministic `Sc002IncidentCliStatusV1` JSON projection and remediation table,
   disposition/signature/schema/golden/negative contract, retirement identity,
   bounded zero-mutation candidate-retention owner, whole-scope retention guard, and validator
   authority, receive the parent ADR's

@@ -288,10 +288,12 @@ Exit `0` means the requested read or transition completed; `2` means invalid syn
 malformed input; `3` means an ID was not found; and `4` means stale state, conflict, or
 blocked admission. Human output contains only the fixed state, stable IDs as data, one closed
 remediation action, and a static next-command name. It never prints interpolated argv. The
-equivalent `--json` output is the version-1 `sc002-incident-status` envelope and its
-`remediation` is exactly one of `obtain-incident-disposition`,
+equivalent `--json` output is the distinct version-1 `sc002-incident-cli-status` projection,
+not the persisted `sc002-incident-status` envelope. Its required final `remediation` field is
+derived from the durable status and locked disposition census and is exactly one of
+`obtain-incident-disposition`,
 `apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
-field.
+field. Persisted status has no remediation field.
 
 The disposition's only action is `abandon-candidate-admit-successor`. It cannot delete the
 incident, make the parked candidate eligible, reuse its receipt/evidence, release a binding

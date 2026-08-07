@@ -390,12 +390,73 @@ I = SHA-256(
 
 The bounded retired-census digest `C` is
 `SHA-256("d2b:sc002:retired-census:v1\0" || u64be(canonical-census-length) ||
-canonical-census)`. The canonical census is the validator's length-framed bytewise-sorted
-sequence of relative raw-name bytes, closed entry-type tag, identity digest when available,
-and exact encoded-size/content digest when readable. An unavailable member uses the closed
-failure tag selected by the validator rather than free-form text. Observation stops and
-records the fixed over-bound sentinel immediately after the 65th leaf or 1,048,577th encoded
-byte, so deriving an incident id cannot itself require an unbounded read.
+canonical-census)`. `canonical-census` is exactly `CanonicalRetiredCensusV1`; no JSON,
+platform integer, errno, display path, or implementation iteration order enters these bytes.
+Its complete byte grammar is:
+
+```text
+CanonicalRetiredCensusV1 =
+    0x01 || 0x00 || u64be(record-count) || Record[record-count]
+  | 0x01 || 0xff
+
+Record =
+  u32be(relative-path-length) || relative-path[relative-path-length] ||
+  u8(entry-type) || u8(observation) || u8(failure) ||
+  identity-digest[32] || u64be(encoded-size) || content-digest[32]
+```
+
+`0x01` is the census-grammar version. Body tag `0x00` means a complete bounded census.
+The exact two bytes `0x01 0xff` are the sole over-bound representation; they carry no
+partial records, count, reason, or host-dependent value. A normal empty census is exactly
+`0x01 0x00` followed by eight zero bytes.
+
+A relative path is the raw Unix name bytes below `retired/sha256`, with its one or two
+components joined by the single byte `0x2f`; Unix forbids that byte inside a component.
+The zero-length path is reserved solely for failure to enumerate `retired/sha256` itself.
+Each valid content-digest directory is traversal structure and is not a record. Every
+depth-two object is one terminal record. A depth-one object that is not a valid canonical
+content-digest directory, an empty content-digest directory, an enumeration failure, or an
+object at a forbidden depth is instead one terminal failure record. The validator never
+follows a symlink. It sorts complete records by unsigned lexicographic comparison of
+`relative-path`, with a shorter equal prefix first, before encoding them; duplicate paths
+are malformed and never receive a tie-breaker.
+
+The closed `entry-type` values are `0x00 = unavailable`, `0x01 = regular`,
+`0x02 = directory`, `0x03 = symlink`, and `0x04 = other` (socket, FIFO, device, or any
+remaining type). The closed `observation` values are `0x00 = unavailable` and
+`0x01 = complete`. The closed `failure` values, selected by the first applicable step in
+this listed validation order, are:
+
+| Value | Meaning |
+| --- | --- |
+| `0x00` | no failure |
+| `0x01` | invalid name, depth, or directory layout |
+| `0x02` | no-follow metadata unavailable |
+| `0x03` | invalid entry type |
+| `0x04` | owner, mode, link count, or encoded-size metadata invalid |
+| `0x05` | no-follow open unavailable |
+| `0x06` | bounded content read unavailable |
+| `0x07` | identity changed across observation |
+| `0x08` | path digest, content digest, or candidate binding mismatch |
+| `0x09` | directory enumeration unavailable |
+
+Only two field combinations are legal. A stable fully read regular member uses
+`entry-type = 0x01`, `observation = 0x01`, and either `failure = 0x00` or, when its complete
+bytes expose a binding mismatch, `failure = 0x08`; it carries the `I` digest above, its exact
+`u64be` encoded size, and the SHA-256 digest of those exact bytes. Every other failure uses
+`observation = 0x00`, identity digest as 32 zero bytes, encoded size as eight `0xff` bytes,
+and content digest as 32 zero bytes. That tuple is the sole unavailable representation and
+cannot be confused with an available empty file. No other tag combination is accepted.
+
+The observation charge is the terminal-record count plus the sum of exact encoded sizes of
+complete readable regular members; structural digest directories add neither a record nor
+content bytes. Before accepting a 65th terminal record or byte 1,048,577, the validator
+stops without reading another member and replaces the entire would-be normal encoding with
+the exact `0x01 0xff` sentinel. Thus traversal order cannot leak into an over-bound digest
+and incident-id derivation cannot require an unbounded read. Prospective-add exhaustion
+continues to digest the valid bounded pre-add census and binds the current/prospective
+counts in the incident preimage below; an already over-bound observed tree uses the
+sentinel digest and is malformed.
 
 The incident digest is the stable `Sc002IncidentIdV1`: exactly 32 bytes rendered as 64
 lowercase hexadecimal characters. It is derived by exactly one kind-specific preimage:
@@ -438,26 +499,59 @@ Every incident transition durably persists the incident payload or still-ambiguo
 locator and one `Sc002IncidentStatusV1` before returning its typed refusal. Payload/locator,
 status, and incident-id kind must agree one-to-one on every restart and census; a missing,
 unknown, duplicate, cross-kind, or mismatched status blocks publication and close.
-`tests/golden/delivery/sc002-incident-id-v1.json` contains exactly one canonical vector for
-each of the four enum members. Every vector records the decoded input components, identity
-and census sub-digests where applicable, exact length-delimited preimage bytes, and expected
-lowercase incident id. Tests independently recompute every sub-digest and final id and reject
-kind-domain substitution, tuple-order substitution, stage substitution, omitted census
-evidence, and a fabricated second census identity.
+`tests/golden/delivery/sc002-incident-id-v1.json` contains exactly one canonical incident-id
+vector for each of the four enum members and a `canonicalCensusV1` section with exactly three
+byte vectors: normal-empty, normal-sorted-mixed (one complete member and one unavailable
+member presented out of order), and over-bound (`01ff`). Every incident vector records the
+decoded input components, identity and census sub-digests where applicable, exact
+length-delimited preimage bytes, and expected lowercase incident id. Each census vector
+records semantic inputs, exact canonical bytes, their framed length, and expected `C`.
+Tests independently encode the census bytes, recompute every sub-digest and final id, and
+reject version/body/tag substitution, incorrect framing or unsigned-byte ordering,
+noncanonical unavailable fields, partial records attached to `01ff`, kind-domain
+substitution, tuple-order substitution, stage substitution, omitted census evidence, and a
+fabricated second census identity. Accepted `ADR-046-validation-and-delivery` Version 2 pins
+this complete grammar, tag table, sentinel, ordering, the three census vectors, and all four
+incident vectors before T589 dispatch.
 
 `Sc002DispositionIdV1` has the same rendered form and is
 `SHA-256("d2b:sc002:disposition-id:v1\0" || u64be(disposition-length) ||
-canonical-authenticated-disposition)`. One immutable `Sc002IncidentStatusV1`
-records exactly, in order, `schemaVersion = 1`, `kind = "sc002-incident-status"`,
-`incidentKind` as the exact `Sc002IncidentKindV1` used to derive `incidentId`, `incidentId`,
-the parked candidate/content/snapshot triplet, `state`, nullable-but-always-present
-`dispositionId`, and a nullable-but-always-present successor candidate/content/snapshot
-triplet. `incidentKind` is immutable across every state transition. Null is the sole absent
-representation; omission is malformed. Its closed transition is:
+canonical-authenticated-disposition)`. Each persisted immutable
+`Sc002IncidentStatusV1` version records exactly these fields in this order:
+`schemaVersion = 1`, `kind = "sc002-incident-status"`, `incidentKind` as the exact
+`Sc002IncidentKindV1` used to derive `incidentId`, `incidentId`, `parkedCandidateId`,
+`parkedContentId`, `parkedSnapshotSha256`, `state`, `dispositionId`,
+`successorCandidateId`, `successorContentId`, and `successorSnapshotSha256`.
+`incidentKind` is immutable across every state transition. Each ID in the disposition and
+successor positions is nullable but always present; the successor fields are either all null
+or all non-null. Null is the sole absent representation; omission is malformed. Durable
+status never contains a `remediation` field. Its closed transition is:
 
 ```text
 parked -> disposition-validated -> successor-admitted
 ```
+
+CLI JSON is deliberately a separate deterministic projection rather than the durable status
+envelope. `Sc002IncidentCliStatusV1` records exactly the same fields in the same order except
+that `kind` is the distinct literal `sc002-incident-cli-status`, followed by one final
+required field `remediation`. Its closed values are `obtain-incident-disposition`,
+`apply-incident-disposition`, `admit-successor`, and `none`. Projection reopens and validates
+the durable status and disposition namespace under the same candidate lock, then selects:
+
+| Durable state and census | `remediation` |
+| --- | --- |
+| `parked`, null disposition/successor IDs, no matching durable authenticated disposition | `obtain-incident-disposition` |
+| `parked`, null disposition/successor IDs, exact matching durable authenticated disposition present after a publication-before-status crash | `apply-incident-disposition` |
+| `disposition-validated`, non-null disposition ID, null successor triplet | `admit-successor` |
+| `successor-admitted`, non-null disposition ID and successor triplet | `none` |
+
+Every other state/field/census combination is malformed and produces no CLI status object.
+The strict schemas are
+`docs/reference/schemas/delivery/sc002-incident-status-v1.schema.json` and
+`docs/reference/schemas/delivery/sc002-incident-cli-status-v1.schema.json`. The status and
+CLI JSON goldens prove that `remediation` is rejected from durable status, required exactly
+once as the last CLI field, derived by the table rather than accepted from a caller or
+stored status, and never free-form.
 
 `Sc002IncidentDispositionV1` is the sole accepted disposition record. Its canonical JSON
 object has exactly these fields in this order:
@@ -539,10 +633,11 @@ records; replay against another incident, candidate, content, snapshot, or contr
 generation; replacement between open/hash/decode/publish/reopen; stale state; conflicting
 same-id bytes; and copied SC-002 evidence in the successor. Every negative refuses before a
 state transition, request, reservation release, incident deletion, or candidate admission.
-The status schema and human/JSON fixtures additionally exercise every
-`Sc002IncidentKindV1`, require status `incidentKind` to match the id domain and durable
-payload/locator, and consume all four vectors from
-`tests/golden/delivery/sc002-incident-id-v1.json`.
+The durable-status and CLI-status schemas plus human/JSON fixtures additionally exercise
+every `Sc002IncidentKindV1`, require status `incidentKind` to match the id domain and durable
+payload/locator, consume all four incident vectors and all three census vectors from
+`tests/golden/delivery/sc002-incident-id-v1.json`, and cover every row of the deterministic
+remediation table.
 
 T589 owns the planned delivery CLI contract:
 `wave sc002-incident-inspect --snapshot PATH --incident-id ID [--json]`,
@@ -554,16 +649,17 @@ completed, exit `2` means invalid syntax or malformed input, exit `3` means the 
 incident/disposition/successor ID was not found, and exit `4` means stale state, conflict,
 or blocked admission; no other stable exit is assigned. Human output is the fixed state plus
 one static next-command name and never interpolates executable argv. JSON is the closed
-`Sc002IncidentStatusV1` envelope with one remediation enum:
-`obtain-incident-disposition`, `apply-incident-disposition`, `admit-successor`, or `none`;
-it has no free-form remediation field. T589's focused parser, state-transition, human/JSON
-golden, disposition-schema/signature, exit, crash, stale-ID, replay, and
+`Sc002IncidentCliStatusV1` projection above, not the durable `Sc002IncidentStatusV1`
+envelope; its required final `remediation` field is derived by the closed table and has no
+free-form counterpart. T589's focused parser, state-transition, durable-status/CLI-schema,
+human/JSON golden, disposition-schema/signature, exit, crash, stale-ID, replay, and
 no-request/no-unlink tests own this contract. Its
 existing `changelog.d/resource-api-production.md` fragment carries the operator-visible
 delivery recovery entry. Before T589 dispatch, a separate external specification-amendment
 workflow must bump accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2,
-pin this complete command, disposition-authority, canonical-record, retention-owner, and
-validator contract, receive the parent ADR's required pre-panel and post-panel approvals,
+pin this complete command, census-byte/golden, durable-status/CLI-projection,
+disposition-authority, canonical-record, retention-owner, and validator contract, receive
+the parent ADR's required pre-panel and post-panel approvals,
 regenerate `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and
 `ADR-046-implementation-graph.{json,md}`, and pass Gate 0 on the exact amendment commit.
 That commit must be an ancestor of T589's base. T589 does not own or edit that normative
