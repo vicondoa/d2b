@@ -1106,7 +1106,7 @@ compatibility authorities only produce and validate conforming objects. The inde
 13-row role/artifact fixture, exact 91-id class/role poison product, and five copied-issuer
 cases require valid cardinality, enclosing hashes, and unaffected signatures before their
 semantic or pinned-key refusals. Apply-peer coverage has separate 15-edge, 90-case,
-12-negative, and seven-forbidden-value fixtures, with six pre-first and 84 post-first cases.
+13-negative, and nine-forbidden-value fixtures, with six pre-first and 84 post-first cases.
 SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
 human/JSON remediation, and closed exits. A verified payload reaches `parked`; an
 authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral

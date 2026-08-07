@@ -687,9 +687,10 @@ store path, derivation name, NAR identity/hash, or executable content digest is 
 receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
 name/label/value/exemplar, audit, panic, or `Debug` output. Persisted correlation contains
 only typed fixed domain-separated digests, and metrics carry no raw or digested peer-identity
-label or value. The exact seven-row literal canary registry in `data-model.md` injects PID,
-start, store-path, derivation, NAR identity, NAR hash, and executable-content values one at a
-time. Only that fixture and the test's private injection buffer are scan exclusions. Every
+label or value. The exact nine-row literal canary registry in `data-model.md` injects pidfd
+number, PID, start identity, proc path, executable store path, executable derivation, NAR
+identity, NAR hash, and executable content digest one at a time. Only that fixture and the
+test's private injection buffer are scan exclusions. Every
 literal must be absent from every captured surface while the expected class-specific
 correlation digests remain present where allowed. An empty, malformed,
 over-bound, mismatched, changed, unreadable, or nonexistent input exits 2 with the named
