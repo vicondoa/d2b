@@ -1134,7 +1134,14 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   specification may seal, and a wave holding evidence gathered before the amendment MUST
   regather that evidence rather than carry it forward. This is a standing program obligation
   for the full duration of W2 through W8, not a one-time precondition satisfied at program
-  start.
+  start. For T589 this obligation moves to dispatch, not seal: its planned SC-002 incident
+  surface materially changes the accepted delivery contract. A separate external amendment
+  MUST bump `ADR-046-validation-and-delivery` from Version 1 to Version 2, receive the parent
+  ADR's required pre-panel and post-panel approvals, regenerate
+  `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and
+  `ADR-046-implementation-graph.{json,md}`, and pass Gate 0 and drift validation on an exact
+  commit that is an ancestor of T589's base. T589 MUST refuse every source edit until that
+  prerequisite validates and MUST NOT own the amendment or regenerated artifacts.
 
 #### Program scope
 
@@ -1438,9 +1445,18 @@ carries the object verbatim rather than copying selected fields into the task ro
   after acquiring the released lock. Under the lock, cleanup MUST atomically move the opened
   temp into a reserved quarantine name with `renameat2(RENAME_NOREPLACE)`, reopen it, require
   the same device/inode, owner, mode, link count, digest, and bytes as the pre-move fd, and
-  perform a final fd-relative name/identity check before `unlinkat` and leaf-parent `fsync`.
-  An identity mismatch MUST never call `unlinkat` and MUST not restore the suspect to the temp
-  namespace. Instead it MUST move the currently named suspect with
+  MUST NOT call `unlinkat` on a sidecar data leaf. A verified orphan MUST move with
+  `renameat2(RENAME_NOREPLACE)` into
+  `evidence-sidecars/sc002/retired/sha256/<content-digest>/<retirement-id>.bin`, where the
+  fixed domain-separated retirement id binds the candidate triplet, content digest, and
+  recorded device/inode without exposing raw inode identity. Cleanup MUST reopen and
+  revalidate the retired leaf and sync the leaf plus both directories. Two identical orphan
+  leaves with distinct inodes MUST retire under distinct ids. `EEXIST`, a 65th retired leaf,
+  more than 1,048,576 total retired bytes, or any malformed retired census MUST preserve the
+  source through the incident transition rather than overwrite, reuse, unlink, or grow the
+  set. A valid census permits at most 64 leaves of at most 16,384 bytes each. An identity
+  mismatch MUST not restore the suspect to the temp namespace. Instead it MUST move the
+  currently named suspect with
   `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident namespace
   `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
   reserved namespaces, and `fsync` the incident directory and old leaf parent. The incident
@@ -1449,7 +1465,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   blocks record publication and every close stage, survives restart, and is never
   automatically unlinked. Ordinary success/refusal requires both ephemeral namespaces empty.
   Identity ambiguity intentionally leaves a durable incident entry or ambiguous name and
-  MUST NOT claim zero residue. Only after durable publication and identity-preserving
+  MUST NOT claim zero residue. T589's private `CandidateRetentionOwner` is the sole owner
+  permitted to remove retired data, and only by retiring the whole terminal candidate after
+  the exact request/reservation/panel/seal/eligibility/merge, incident, reference, lock,
+  ephemeral, and bounded durable-census predicate in `data-model.md` passes. There is no
+  per-leaf or clock-driven deletion. Only after durable publication and identity-preserving
   ordinary cleanup may the `EvidenceRecord` be published.
   An identical sidecar
   left by a crash may be reopened and reused only after the complete
@@ -1461,9 +1481,24 @@ carries the object verbatim rather than copying selected fields into the task ro
   stale or wrong canonical outer `candidate_id`/`content_id`/`snapshot_sha256` triplet,
   sidecar content-digest mismatch, a receipt on a failed record, progress-free
   evidence, live-owner cleanup, temp replacement before quarantine move, quarantine
-  replacement before reopen, replacement immediately before unlink, unexpected ephemeral
-  residue, any durable incident entry, or an over-budget sample fails
+  replacement before reopen, replacement on either side of retirement, retirement-id
+  collision, retirement-census overflow or corruption, two identical orphans failing to
+  retain distinct names, unexpected ephemeral residue, unauthorized candidate-retention
+  cleanup, any durable incident entry, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
+  `sc002-incident-apply` accepts only the closed canonically encoded and Ed25519-authenticated
+  `Sc002IncidentDispositionV1` from `data-model.md`. It binds the incident, parked and
+  distinct successor triplets, exact accepted delivery-contract Version 2 digest, pinned
+  authority, and pinned key; the validator is private and consumed by value. Unknown,
+  missing, duplicate, reordered, noncanonical, unsigned, wrong-key, wrong-domain, stale,
+  replayed, or tampered disposition bytes refuse before any state transition. Before T589
+  dispatch, a separate external amendment MUST bump accepted
+  `ADR-046-validation-and-delivery` from Version 1 to Version 2, normatively pin the incident
+  commands, disposition/signature/schema/golden/negative contract, retirement identity and
+  bounded candidate-retention owner, and validator authority, receive the parent ADR's
+  required approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and
+  pass Gate 0 on a commit that is an ancestor of T589's base. T589 MUST NOT own or perform
+  that external amendment.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
   framework-internal switches. Zero capabilities disappear silently: any deliberate

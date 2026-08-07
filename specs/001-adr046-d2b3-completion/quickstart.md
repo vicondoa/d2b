@@ -251,10 +251,13 @@ authorized integration-lineage merge preserves F's tree.
 ### Recover a parked SC-002 sidecar incident
 
 > **Planned contract, not a command available at this committed base.** T589 owns these
-> delivery subcommands, their accepted validation/delivery contract amendment, focused tests,
-> generated help/schema goldens, and the operator-visible entry in its existing
-> `changelog.d/resource-api-production.md` fragment. Do not claim recovery until that task
-> and T220's coordinated contract/changelog checks pass.
+> delivery subcommands, focused tests, generated help/schema goldens, and the
+> operator-visible entry in its existing `changelog.d/resource-api-production.md` fragment.
+> Before T589, a separate external amendment must bump accepted
+> `ADR-046-validation-and-delivery` from Version 1 to Version 2, receive the required
+> approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and pass Gate
+> 0 on an ancestor of T589's base. T589 does not own that amendment. Do not claim recovery
+> until the external gate, T589, and T220's coordinated contract/changelog checks pass.
 
 An identity-ambiguous sidecar is never unlinked. The parked candidate remains ineligible and
 the durable incident remains retained. Recovery is inspect, apply one authenticated external
@@ -297,6 +300,9 @@ derived candidate/content/snapshot triplet and no copied SC-002 bytes. For `adr0
 admits only T220's nonbinding replacement-candidate and exact-candidate evidence flow while
 preserving the retained request byte-for-byte; T219's external retained-request disposition
 is still required. A consumed ordinary wave stops for its external wave disposition.
+`SC002_DISPOSITION` is the exact canonical, signed `Sc002IncidentDispositionV1`; the apply
+command trusts only the Version 2 contract's pinned authority and Ed25519 key, never a key
+selected by the file.
 
 ---
 

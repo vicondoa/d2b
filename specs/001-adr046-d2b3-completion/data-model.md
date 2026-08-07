@@ -283,17 +283,67 @@ single-link current-effective-uid `0600` leaf, records its device/inode, owner, 
 count, digest, and bytes, and atomically moves the name into a unique reserved quarantine
 name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf. Cleanup never
 calls `unlinkat` on a sidecar data leaf: Linux has no inode-qualified unlink, so a final
-name check followed by `unlinkat` would retain a name/inode race. If every recorded identity
-member matches, cleanup moves the still-named leaf with
-`renameat2(RENAME_NOREPLACE)` into the durable candidate-relative retired namespace
-`evidence-sidecars/sc002/retired/sha256/<content-digest>.bin`, reopens and revalidates it,
-and `fsync`s both directory fds. A replacement can therefore cause only quarantine and
-refusal, never deletion of an unverified inode. A verified retired orphan is immutable,
-non-authorizing residue and does not block retry or close; it is removed only when the
-external retention owner retires the whole candidate, never by per-leaf automated cleanup.
+name check followed by `unlinkat` would retain a name/inode race.
+
+If every recorded identity member matches, cleanup derives one `Sc002RetirementIdV1` as
+
+```text
+SHA-256(
+  "d2b:sc002:retirement-id:v1\0" ||
+  candidate_id[32] || content_id[32] || snapshot_sha256[32] ||
+  content_digest[32] || u64be(st_dev) || u64be(st_ino)
+)
+```
+
+where every named digest is decoded from its canonical lowercase 64-hex representation
+before hashing. Only the resulting lowercase 64-hex retirement id is rendered; raw device
+and inode values never enter an error, record, path component, or observability surface.
+Cleanup moves the still-named leaf with `renameat2(RENAME_NOREPLACE)` into
+`evidence-sidecars/sc002/retired/sha256/<content-digest>/<retirement-id>.bin`, reopens and
+revalidates the same device/inode, owner, mode, link count, digest, bytes, candidate binding,
+and path-derived retirement id, and `fsync`s the leaf plus both directory fds. Two
+single-link orphan files with identical bytes have distinct device/inode identities and
+therefore distinct retirement ids and durable names. A crash after the retirement rename is
+recovered from the retired census; it is never recreated from a missing source name.
+
+`EEXIST` at the retirement destination is not an idempotent-success signal while the source
+name still exists. Cleanup opens and validates the existing destination without following
+links, preserves both names, and moves the source to the incident path below with the fixed
+`sc002-retirement-id-collision` refusal. It never overwrites, reuses, or unlinks either
+leaf. The ordinary two-identical-orphan test must retire both leaves under different ids;
+a forced retirement-id collision must take this incident transition and block publication
+and close.
+
+The retired census is bounded to at most 64 regular single-link current-effective-uid
+`0600` leaves and at most 1,048,576 total encoded bytes beneath `retired/sha256`, with no
+unknown directory level, leaf, or name. Every leaf must be at most 16,384 bytes and must
+revalidate against both path digests and the candidate binding. Before adding a 65th leaf,
+exceeding the byte bound, or accepting a malformed census, cleanup preserves the current
+source through the incident transition and returns the fixed
+`sc002-retirement-census-exhausted` or `sc002-retirement-census-invalid` refusal. It never
+grows an unbounded retirement set. A valid retired orphan is immutable, non-authorizing
+residue and does not block retry or close.
+
+The sole candidate-retention owner is T589's private
+`packages/xtask/src/delivery/storage.rs::CandidateRetentionOwner`; no importer, restart
+cleanup worker, panel stage, or generic filesystem sweep may mint or imitate it. It never
+removes a retired leaf individually. It may retire the whole candidate only after it
+acquires the same exclusive candidate OFD lock and a full delivery-state census proves all
+of the following: the candidate is terminal `merged` or `abandoned-unmerged`; every
+request, reservation, panel, seal, eligibility, and merge transition is terminal; every
+SC-002 incident is absent or `successor-admitted`; no other candidate or retained external
+record references this candidate; both ephemeral namespaces are empty; and the receipt,
+retired, incident, disposition, and status namespaces are exact, bounded, and valid. It
+then atomically renames the whole candidate directory to an owner-only tombstone beneath
+the held state-root fd, `fsync`s the state root, removes only that tombstoned tree with
+fd-relative no-symlink/no-mount-crossing traversal, and `fsync`s the state root again. A
+failed predicate or census performs zero mutation and returns
+`sc002-candidate-retention-blocked`. This explicit whole-candidate transition is the only
+cleanup predicate; there is no clock-driven or per-leaf SC-002 deletion.
+
 Before ordinary success or an ordinary refusal returns, the still-held lock guards an exact
-empty census of both ephemeral reserved namespaces. No joined path or broad sweep is
-allowed.
+empty census of both ephemeral reserved namespaces and the bounded durable census above. No
+joined path or broad sweep is allowed.
 
 Identity ambiguity has one different, attainable terminal state. If the quarantine reopen or
 the post-retirement reopen does not prove the recorded inode, cleanup MUST NOT restore the
@@ -328,16 +378,86 @@ transition is:
 parked -> disposition-validated -> successor-admitted
 ```
 
+`Sc002IncidentDispositionV1` is the sole accepted disposition record. Its canonical JSON
+object has exactly these fields in this order:
+
+| Field | Type and rule |
+| --- | --- |
+| `schemaVersion` | integer `1` |
+| `kind` | literal `sc002-incident-disposition` |
+| `action` | literal `abandon-candidate-admit-successor` |
+| `incidentId` | canonical `Sc002IncidentIdV1` |
+| `parkedCandidateId` | lowercase 64-hex id equal to the parked status |
+| `parkedContentId` | lowercase 64-hex id equal to the parked status |
+| `parkedSnapshotSha256` | lowercase 64-hex digest equal to the parked status |
+| `successorCandidateId` | lowercase 64-hex id distinct from the parked candidate id |
+| `successorContentId` | lowercase 64-hex id for the fresh successor |
+| `successorSnapshotSha256` | lowercase 64-hex digest for the fresh successor snapshot |
+| `deliveryContractSpecSha256` | exact content digest for accepted `ADR-046-validation-and-delivery` Version 2 in the regenerated spec-set manifest |
+| `authoritySha256` | exact disposition-authority digest pinned by that accepted Version 2 contract |
+| `verificationKeySha256` | SHA-256 of the exact 32-byte Ed25519 public key pinned to that authority by the accepted Version 2 contract |
+| `signatureEd25519` | lowercase 128-hex Ed25519 signature, final field |
+
+The encoded record is canonical UTF-8 JSON with no BOM, whitespace, or trailing newline and
+is at most 4,096 bytes. Fields occur only in the order above. Strings are ASCII with the
+shortest JSON escaping, and integers use unsigned base-10 spelling with no leading zero.
+Duplicate, missing, reordered, or unknown fields, alternate escapes, invalid UTF-8,
+non-ASCII text, or bytes unequal to decode-then-canonical-reencode are malformed. The
+signature covers
+
+```text
+"d2b:sc002:incident-disposition-signature:v1\0" ||
+u64be(unsigned-canonical-length) ||
+unsigned-canonical-object
+```
+
+where the unsigned object is the exact ordered object above with only the final
+`signatureEd25519` field omitted. The validator first requires the Version 2 content digest,
+authority digest, verification-key digest, and pinned key to match the accepted external
+contract, then verifies the signature. A key or authority supplied by the disposition file
+is never trusted as a selector.
+
+`sc002-incident-apply` opens `--disposition PATH` exactly once with
+`O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires a regular single-link file owned by the current
+effective uid with mode exactly `0600`, reads at most 4,097 bytes, hashes before decode, and
+validates from those same bytes. T589 owns one private, nonserializable
+`ValidatedSc002IncidentDisposition` result with no public constructor, fields, `Clone`,
+`Copy`, `Default`, serde implementation, or conversion from the decoded DTO. Apply consumes
+that result by value. While holding the candidate lock, it publishes the exact authenticated
+bytes create-exclusively at
+`evidence-sidecars/sc002/dispositions/sha256/<disposition-id>.json`, `fsync`s the leaf and
+all created parent directories, and only then durably transitions status to
+`disposition-validated`. An existing path is accepted only when a same-fd reopen proves the
+exact bytes and binding; otherwise it is a conflict. `sc002-successor-admit` reopens and
+revalidates those durable bytes through the same validator before consuming the result and
+transitioning status. A crash before either directory sync cannot advance the state; a
+crash after it replays the same disposition idempotently.
+
 The parked candidate remains permanently ineligible at every transition. A validated
-disposition has the sole action `abandon-candidate-admit-successor`; it binds the incident,
-parked triplet, distinct successor triplet, and the accepted external disposition authority.
-It never authorizes unlink, incident deletion, publication of the parked record, a binding
-panel request, reservation release, or reuse of evidence. Successor admission requires a
-fresh snapshot with no copied SC-002 receipt or incident bytes. For `adr046w5`, it admits
-only T220's nonbinding replacement-candidate and exact-candidate evidence path while
-preserving the byte-identical retained request and reservation; T219's separate external
+disposition binds the incident, parked triplet, distinct successor triplet, accepted Version
+2 contract digest, authority, key, and signature. It never authorizes unlink, incident
+deletion, publication of the parked record, a binding panel request, reservation release,
+or reuse of evidence. Successor admission requires a fresh snapshot with no copied SC-002
+receipt, incident, retired, status, or disposition bytes. For `adr046w5`, it admits only
+T220's nonbinding replacement-candidate and exact-candidate evidence path while preserving
+the byte-identical retained request and reservation; T219's separate external
 retained-request disposition remains mandatory. Any other wave whose binding request was
 already consumed must stop for its external wave disposition rather than use this flow.
+
+The strict schema is
+`docs/reference/schemas/delivery/sc002-incident-disposition-v1.schema.json`. The canonical
+signed fixture is
+`tests/golden/delivery/sc002-incident-disposition-v1.json` and uses only a checked-in test
+key; its accepted Version 2 contract digest, authority digest, key digest, unsigned signing
+bytes, signature, and derived disposition id are asserted independently. Closed negatives
+cover 4,097 bytes; unknown, missing, duplicate, and reordered fields; noncanonical JSON;
+wrong version, kind, action, id width/case, incident, parked triplet, successor triplet, or
+contract digest; equal parked/successor candidate ids; missing, unknown, copied, or wrong
+authority/key; unsigned, malformed, wrong-domain, wrong-key, and post-signature-tampered
+records; replay against another incident, candidate, content, snapshot, or contract
+generation; replacement between open/hash/decode/publish/reopen; stale state; conflicting
+same-id bytes; and copied SC-002 evidence in the successor. Every negative refuses before a
+state transition, request, reservation release, incident deletion, or candidate admission.
 
 T589 owns the planned delivery CLI contract:
 `wave sc002-incident-inspect --snapshot PATH --incident-id ID [--json]`,
@@ -352,11 +472,20 @@ one static next-command name and never interpolates executable argv. JSON is the
 `Sc002IncidentStatusV1` envelope with one remediation enum:
 `obtain-incident-disposition`, `apply-incident-disposition`, `admit-successor`, or `none`;
 it has no free-form remediation field. T589's focused parser, state-transition, human/JSON
-golden, exit, crash, stale-ID, replay, and no-request/no-unlink tests own this contract. Its
+golden, disposition-schema/signature, exit, crash, stale-ID, replay, and
+no-request/no-unlink tests own this contract. Its
 existing `changelog.d/resource-api-production.md` fragment carries the operator-visible
-delivery recovery entry, and T220 verifies the accepted validation/delivery specification,
-generated help, schema/goldens, and fragment fold. This assigns future work only; these
-commands are not claimed implemented at this planning base.
+delivery recovery entry. Before T589 dispatch, a separate external specification-amendment
+workflow must bump accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2,
+pin this complete command, disposition-authority, canonical-record, retention-owner, and
+validator contract, receive the parent ADR's required pre-panel and post-panel approvals,
+regenerate `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and
+`ADR-046-implementation-graph.{json,md}`, and pass Gate 0 on the exact amendment commit.
+That commit must be an ancestor of T589's base. T589 does not own or edit that normative
+amendment or its generated manifests; it implements the already accepted Version 2
+contract. T220 later verifies generated help, schemas/goldens, and fragment fold without
+substituting for this pre-T589 gate. This assigns future work only; these commands are not
+claimed implemented at this planning base.
 
 If a crash leaves the canonical sidecar durable before record publication, retry opens that
 leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
@@ -369,12 +498,15 @@ ephemeral-residue census, and record publication.
 Synchronized tests cover importer versus cleanup and cleanup versus cleanup for both the same
 input and different inputs, temp replacement before quarantine move, quarantine replacement
 before reopen, replacement before and after the retirement move, same-bytes/same-record
-idempotence, and different-bytes or wrong-binding races. Each overlap uses two independently
+idempotence, two identical orphan leaves retiring to distinct retirement ids, forced
+retirement `EEXIST`, retirement-census exhaustion/corruption, and different-bytes or
+wrong-binding races. Each overlap uses two independently
 opened descriptions of the same verified lock inode and latches both orderings at temp
 creation, file sync, quarantine move, retirement move, and incident move. The loser must
 receive the live-owner refusal before namespace access; after release, exactly one retry may
 advance. Every case proves bounded completion with no deadlock, no unverified unlink, and an
-exact final census. An ordinary winner or loser leaves both ephemeral namespaces empty.
+exact final census within 64 leaves and 1,048,576 bytes. An ordinary winner or loser leaves
+both ephemeral namespaces empty.
 Every identity-ambiguous case instead proves the durable incident entry or still-ambiguous
 name remains, restart redetects it, and publication and close remain blocked.
 
