@@ -529,6 +529,17 @@ fn fresh_hub_bootstrap(
         "walker" => "product",
         _ => return Ok(None),
     };
+    if hub == "walker"
+        && !matches!(
+            fs::symlink_metadata(root.join("bazel/cargo/product.lock")),
+            Ok(metadata) if metadata.file_type().is_file()
+        )
+    {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "product lock is required before walker bootstrap",
+        ));
+    }
     let root_lockfile = root.join(format!("bazel/cargo/{hub}.lock"));
     let selected_exists = match fs::symlink_metadata(&root_lockfile) {
         Ok(metadata) if metadata.file_type().is_file() => true,
@@ -580,21 +591,15 @@ fn fresh_hub_bootstrap(
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
     let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor);
     let cleanup = fs::remove_dir_all(&workspace);
-    if cleanup.is_err() {
-        drop(guard);
-        return Err(fresh_bootstrap_error(
-            hub,
-            "fresh bootstrap cleanup failed; retry the selected hub command",
-        ));
-    }
-    let generated = match generated {
-        Ok(generated) => generated,
-        Err(error) => {
-            drop(guard);
-            return Err(error);
-        }
+    let result = if cleanup.is_ok() {
+        generated
+            .as_ref()
+            .ok()
+            .map(|bytes| install_fresh_lock(root, hub, bytes))
+            .transpose()
+    } else {
+        Ok(None)
     };
-    let result = install_fresh_lock(root, hub, &generated);
     let after = fresh_content_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
     drop(guard);
@@ -605,7 +610,16 @@ fn fresh_hub_bootstrap(
                 .into(),
         );
     }
-    result.map(Some)
+    if cleanup.is_err() {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "fresh bootstrap cleanup failed; retry the selected hub command",
+        ));
+    }
+    if let Err(error) = generated {
+        return Err(error);
+    }
+    Ok(Some(result.expect("generated output has an installation result")?))
 }
 
 fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -991,6 +1005,10 @@ fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io
             copy_tree_without_build_outputs(&source_path, &destination_path)?;
         } else if entry.file_type()?.is_file() {
             fs::copy(source_path, destination_path)?;
+        } else {
+            return Err(std::io::Error::other(
+                "unsupported filesystem entry in isolated workspace input",
+            ));
         }
     }
     Ok(())
