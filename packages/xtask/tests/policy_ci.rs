@@ -15,11 +15,7 @@ const V3_PR_GATE_WORKFLOWS: &[&str] = &[
     ".github/workflows/pr-l1-static-fast.yml",
 ];
 
-const REPIN_CONTROLS: &[&str] = &[
-    "CARGO_BAZEL_REPIN",
-    "REPIN",
-    "CARGO_BAZEL_REPIN_ONLY",
-];
+const REPIN_CONTROLS: &[&str] = &["CARGO_BAZEL_REPIN", "REPIN", "CARGO_BAZEL_REPIN_ONLY"];
 
 const CONTRIBUTOR_ONLY_COMMANDS: &[&str] = &[
     "bazel-repin",

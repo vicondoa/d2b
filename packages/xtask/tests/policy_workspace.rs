@@ -199,10 +199,11 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
         "hidden-public-api.txt",
         "capability-trait-impls.txt",
     ] {
-        assert!(root
-            .join("tests/golden/api-surface")
-            .join(required)
-            .is_file());
+        assert!(
+            root.join("tests/golden/api-surface")
+                .join(required)
+                .is_file()
+        );
     }
 }
 
@@ -1113,11 +1114,13 @@ fn bazel_prep_crates_are_registered_with_dependency_leaf_ownership() {
         "d2b-test-locator",
     ] {
         assert!(workspace.contains(&format!("\"{package}\"")));
-        assert!(repo_root()
-            .join("packages")
-            .join(package)
-            .join("src/lib.rs")
-            .is_file());
+        assert!(
+            repo_root()
+                .join("packages")
+                .join(package)
+                .join("src/lib.rs")
+                .is_file()
+        );
     }
     let support = read_repo_file("packages/d2b-bazel-support/Cargo.toml");
     let execution = read_repo_file("packages/d2b-bazel-exec/Cargo.toml");
