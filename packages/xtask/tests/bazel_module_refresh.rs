@@ -81,9 +81,19 @@ fn refresh_is_no_argument_absolute_and_lock_only() {
             "--lockfile_mode=update".to_owned()
         ]
     );
-    assert!(executor.calls[0].1.iter().all(|argument| {
-        argument.starts_with("--output_") || argument.starts_with("--symlink_prefix=")
-    }));
+    assert_eq!(
+        executor.calls[0].1,
+        vec![
+            format!(
+                "--output_user_root={}/.scratch/bazel/output-user-root",
+                root.display()
+            ),
+            format!(
+                "--output_base={}/.scratch/bazel/output-base",
+                root.display()
+            ),
+        ]
+    );
     assert!(executor.calls[0].3.is_empty());
 
     executor.write_lock = false;
@@ -121,11 +131,19 @@ fn fresh_repin_uses_command_local_off_and_refuses_it_after_module_refresh() {
     let output =
         bazel::bazel_repin_with_executor(&root, "product", &mut executor).expect("fresh repin");
     assert_eq!(output, vec![PathBuf::from("bazel/cargo/product.lock")]);
-    assert!(
-        executor.calls[0]
-            .2
-            .iter()
-            .any(|argument| argument == "--lockfile_mode=off")
+    assert_eq!(
+        executor.calls[0].2,
+        vec![
+            "run".to_owned(),
+            "--lockfile_mode=off".to_owned(),
+            format!(
+                "--symlink_prefix={}/.scratch/bazel/symlinks/",
+                root.display()
+            ),
+            "@rules_rust//crate_universe:cargo_bazel".to_owned(),
+            "--".to_owned(),
+            "generate".to_owned(),
+        ]
     );
     assert_eq!(
         executor.calls[0].3,

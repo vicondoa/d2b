@@ -29,6 +29,13 @@ fn module_declares_exactly_the_two_accepted_hubs() {
     assert_eq!(module.matches("\n    lockfile =").count(), 2);
     assert!(!module.contains("crate.spec"));
     assert!(!module.contains("Cargo.guest.lock"));
+    assert!(module.contains("manifests = [\"//:packages/Cargo.toml\"]"));
+    assert!(module.contains("cargo_lockfile = \"//:packages/Cargo.lock\""));
+    assert!(!module.contains(&format!("//{}:", "packages")));
+    let root_build = fs::read_to_string(root.join("BUILD.bazel")).expect("root BUILD");
+    assert!(root_build.contains("\"packages/Cargo.toml\""));
+    assert!(root_build.contains("\"packages/Cargo.lock\""));
+    assert!(!root.join("packages").join("BUILD.bazel").exists());
     for retired in ["main", "broker", "guest"] {
         let error = bazel::parse_repin(&["--hub".into(), retired.into()])
             .expect_err("retired hub must refuse");
@@ -128,6 +135,12 @@ fn generator_preview_is_the_only_generation_side_effect() {
     let outputs = bazel::gen_bazel(&[]).expect("generator preview");
     assert!(!outputs.is_empty());
     assert!(outputs.iter().all(|path| path.starts_with(".scratch")));
+    let nested_workspace_build = PathBuf::from("packages").join("BUILD.bazel");
+    assert!(
+        outputs
+            .iter()
+            .all(|path| !path.ends_with(&nested_workspace_build))
+    );
     let first_bytes = outputs
         .iter()
         .map(|path| fs::read(root.join(path)).expect("preview output"))
