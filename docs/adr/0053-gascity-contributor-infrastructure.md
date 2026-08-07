@@ -2,6 +2,17 @@
 
 - Status: Accepted
 - Date: 2026-08-02
+- Proposed partial supersession: [ADR 0055](0055-discover-fix-verify-panel-review.md)
+  replaces D7's open-ended review and fix loop, D8's undifferentiated blocking
+  treatment of recommendations in an admitted final set, and D21's rejection
+  of a four-level severity contract, own-findings-only payload, per-seat
+  `held` and `prior_resolutions` state, rotation, and no-cross-version-read
+  clauses. It substitutes one discovery panel, a shared deduplicated ledger,
+  batch implementation, constrained verification, and audit-only legacy
+  reading. D21's controller-owned roster selection, surface classifier,
+  profiles, pinned reviewer identity, and digest-bound evidence remain in
+  force. Dependent prototype and acceptance items change only where they
+  assert the replaced mechanics. ADR 0055 is not effective until accepted.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
   every optional seat a deterministic trigger table selects, under a
