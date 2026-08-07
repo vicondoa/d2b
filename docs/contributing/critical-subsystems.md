@@ -146,7 +146,7 @@ Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/s
 
 ## Control plane - `d2bd` + `d2b-priv-broker`
 
-**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh`
+**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (product workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh`
 
 The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. The legacy-unit policy lives in `packages/d2b-contract-tests/tests/policy_units.rs` and runs in the enforcing fixture-contract lane. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
@@ -240,6 +240,32 @@ is fail-closed (`path-safety-violation`,
 [`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)
 § "NetworkManager / systemd-networkd coexistence" and ADR 0013 for
 the rationale.
+
+## Bazel Rust workspace and native gate
+
+**Where:** `packages/Cargo.toml`, `packages/Cargo.lock`,
+`packages/Cargo.guest.lock`, `tests/tools/no-bash-ast-walker/`,
+`bazel/cargo/{product,walker}.lock`, `MODULE.bazel.lock`, the selected policy
+inputs under `packages/policy-inputs/`, and the existing Layer-1 gate
+surfaces.
+
+The product Cargo workspace is rooted at `packages/Cargo.toml` and includes
+the broker and guest shell runner. `packages/Cargo.lock` is the only
+authoritative product Cargo lock. `packages/Cargo.guest.lock` is generated
+static-guest closure input, not a workspace or hub authority. The no-bash AST
+walker remains a separate workspace with its own Cargo lock. Bazel has exactly
+the `product` and `walker` hubs; `main`, `broker`, and `guest` are retired hub
+identifiers, not additional authorities.
+
+Broker and guest policy are selected from the root lock for exact GNU and musl
+targets on both `x86_64-linux` and `aarch64-linux`. The native arm gate
+realizes the six system-specific checks, including `guest-static-elf`, runs
+`make test-rust-supply-chain` on the same stable head, binds every result, and
+refuses foreign systems, remote builders, and advisory classification. Release
+builds use the root manifest,
+`--locked`, explicit package/bin/default-feature selectors, and
+`packages/target/release`; the cache has one `packages -> target` workspace
+mapping plus explicit broker and guest gate target directories.
 
 ## Bazel pending kernel cleanup quarantine
 

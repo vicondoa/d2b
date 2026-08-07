@@ -94,6 +94,31 @@ For stacks that require panel gates, the first PR in the stack usually carries
 the contract/ADR/plan update. Do not dispatch implementation PRs for later
 waves until the plan/ADR panel returns unanimous signoff.
 
+## Cargo and Bazel lock boundaries
+
+The product workspace is `packages/Cargo.toml` with
+`packages/Cargo.lock` as its only authoritative product Cargo lock. It
+contains the broker and guest shell runner. The no-bash AST walker remains
+separate at `tests/tools/no-bash-ast-walker/` with its own Cargo manifest and
+lock, while `packages/Cargo.guest.lock` is only the generated static-guest
+closure input.
+
+The only Bazel hubs are `product` and `walker`, backed by
+`bazel/cargo/product.lock` and `bazel/cargo/walker.lock`. Refresh authority is
+split: a product manifest change refreshes the root Cargo lock, product hub,
+and then `MODULE.bazel.lock`; a walker manifest or lock change refreshes the
+walker Cargo lock, walker hub, and then `MODULE.bazel.lock`. Initial or
+combined setup commits the product hub, walker hub, and module lock in that
+order. Each sequence proves the untouched authority byte-identical, runs each
+command again as a clean no-op, and commits no generated lock, pin, BUILD file,
+or coverage output from a scope slice.
+
+Package policy uses exact broker GNU and guest musl selected paths on
+`x86_64-linux` and `aarch64-linux`. Selected policy inputs are projections of
+the root lock, not additional workspace locks. The native arm gate realizes
+the six system-specific checks and runs the supply-chain gate on the same
+stable head.
+
 ## Screenshot and visual artifact hygiene
 
 Screenshots and other visual artifacts submitted as validation evidence or
@@ -247,13 +272,13 @@ fields that request panel, agent, or model metadata.
   `builtins.getFlake (toString $ROOT)` source-capture during
   flake-eval gates (W2fu4 H8/H9).
 - Rust worktrees do NOT share a cargo target directory. Each worktree
-  keeps its own `packages/target/`; compiled-output dedup across
-  worktrees comes from `sccache` (`$SCCACHE_DIR`, default
-  `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
-  `packages/.cargo/config.toml` and the sibling-workspace configs under
-  `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
-  `packages/d2b-core/fuzz/`. A shared target dir is deliberately
-  avoided: cargo's target-dir lock is workspace-wide, so two worktrees
+  keeps its own product target at `packages/target/`; compiled-output dedup
+  across worktrees comes from `sccache` (`$SCCACHE_DIR`, default
+  `~/.cache/d2b-sccache`). The broker's default, layer-1, and fake-backends
+  streams use stable package-selected target directories, the guest stream
+  uses its stable package-selected target directory, and the walker uses
+  `tests/tools/no-bash-ast-walker/target`. A shared target dir is deliberately
+  avoided: Cargo's target-dir lock is workspace-wide, so two worktrees
   building concurrently at different SHAs would serialize pessimistically
   and stomp each other's incremental caches. To bypass sccache locally
   (e.g. when bisecting a compiler issue), set `RUSTC_WRAPPER=` or
@@ -313,11 +338,10 @@ fields that request panel, agent, or model metadata.
   fail-closed - the marker is deleted at the start of every run, so if the
   forcing ever stops working the marker is absent and the seal fails rather
   than passing without proof.
-- The persistent-shell helper is intentionally excluded from the main
-  Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
-  manifest path (and with `--features real-libshpool` when checking the
-  real shpool bridge); the top-level Rust/static/supply-chain gates wire
-  it explicitly like the broker workspace.
+- The persistent-shell helper is a member of the product Rust workspace at
+  `packages/d2b-guest-shell-runner/`. Run its root-manifest package selection
+  with `--features real-libshpool` when checking the real shpool bridge; the
+  top-level Rust/static/supply-chain gates use the same selected stream.
 - The integrator MUST run `nix-collect-garbage` after each wave merge.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:

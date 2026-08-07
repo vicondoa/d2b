@@ -33,15 +33,26 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 
 ### Rust workspace checks
 
-The `packages/` Cargo workspace is gated by `tests/static.sh` and by
-`nix flake check --no-build --all-systems`. To run the gate locally:
+The product Cargo workspace is rooted at `packages/Cargo.toml` and uses
+`packages/Cargo.lock` as its only authoritative product lock. It includes the
+broker and guest shell runner. The no-bash AST walker remains a separate
+workspace under `tests/tools/no-bash-ast-walker/`, and
+`packages/Cargo.guest.lock` is a generated static-guest closure input rather
+than a workspace lock. The product workspace is gated by `tests/static.sh` and
+by `nix flake check --no-build --all-systems`. To run the gate locally:
 
 ```bash
-cargo --manifest-path packages/Cargo.toml fmt --check
-cargo --manifest-path packages/Cargo.toml clippy --workspace --all-targets -- -D warnings
-cargo --manifest-path packages/Cargo.toml test --workspace
-cargo --manifest-path packages/Cargo.toml deny check
-cargo --manifest-path packages/Cargo.toml audit
+cargo fmt --manifest-path packages/Cargo.toml --all --check
+cargo clippy --locked --manifest-path packages/Cargo.toml --workspace --all-targets \
+  --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings
+cargo test --locked --manifest-path packages/Cargo.toml --workspace \
+  --exclude d2b-priv-broker --exclude d2b-guest-shell-runner
+cargo test --locked --manifest-path packages/Cargo.toml \
+  --package d2b-priv-broker --no-default-features
+cargo test --locked --manifest-path packages/Cargo.toml \
+  --package d2b-guest-shell-runner --no-default-features --features real-libshpool
+cargo deny --manifest-path packages/Cargo.toml check
+cargo audit --file packages/Cargo.lock --no-fetch
 nix build .#checks.x86_64-linux.rust-build \
           .#checks.x86_64-linux.rust-tests \
           .#checks.x86_64-linux.rust-clippy \
@@ -52,34 +63,47 @@ for c in rust-build rust-tests rust-clippy rust-deny rust-audit; do
 done
 ```
 
-The pinned toolchain in `packages/rust-toolchain.toml` is honored only
-when cargo is invoked with `--manifest-path packages/Cargo.toml` or from
-inside `packages/`. See
+The pinned toolchain in `packages/rust-toolchain.toml` is honored when Cargo
+uses the root manifest or runs from inside `packages/`. See
 [ADR 0009](docs/adr/0009-rust-toolchain-msrv-and-supply-chain.md) for
 toolchain, MSRV, and supply-chain policy.
 
-All d2b worktrees on paydro's host share Cargo build artifacts via
-repo-local `.cargo/config.toml` files:
+Each worktree keeps Cargo outputs local while sccache deduplicates compiled
+outputs. The product workspace uses `packages/target`; the dedicated broker
+and guest gate streams use stable package-selected target directories, and the
+walker uses `tests/tools/no-bash-ast-walker/target`:
 
-- `packages/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/workspace`
-- `packages/d2b-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/broker`
-- `packages/d2b-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
-- `packages/d2b-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/fuzz`
+Cargo's internal locking makes concurrent worktree builds safe, while stable
+target names keep sccache keys reusable and prevent feature-pass contention.
 
-Cargo's internal locking makes concurrent worktree builds safe, but a
-very old checkout may pay one slower rebuild while incremental state is
-refreshed in the shared cache.
-
-The persistent-shell feasibility helper is a standalone excluded workspace. Run
-it explicitly when iterating on that crate:
+The persistent-shell feasibility helper is a product-workspace member. Run its
+selected root-workspace stream explicitly when iterating on that crate:
 
 ```bash
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml fmt --check
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
-cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --config packages/d2b-guest-shell-runner/deny.toml
-cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
+cargo fmt --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --check
+cargo clippy --locked --manifest-path packages/Cargo.toml \
+  --package d2b-guest-shell-runner --no-default-features \
+  --features real-libshpool --all-targets -- -D warnings
+cargo test --locked --manifest-path packages/Cargo.toml \
+  --package d2b-guest-shell-runner --no-default-features --features real-libshpool
+cargo deny --metadata-path packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json \
+  check --config packages/d2b-guest-shell-runner/deny.toml
+cargo audit --file packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/Cargo.lock \
+  --no-fetch --ignore RUSTSEC-2024-0384
 ```
+
+The selected broker and guest policy inputs are generated for GNU and musl
+targets on both `x86_64-linux` and `aarch64-linux`. Package policy checks read
+only their exact system-and-target paths; the root lock and generated
+`Cargo.guest.lock` checks remain independent.
+
+The release workflow builds every product binary from `packages/Cargo.toml`
+with `--locked`, explicit package/bin/default-feature selectors, and copies
+from `packages/target/release`. Its cache has one `packages -> target`
+workspace mapping plus explicit broker and guest gate target directories.
+The native `test-flake-aarch64` job realizes its six checks and runs the
+supply-chain gate on `aarch64-linux`; it does not use a foreign system,
+remote builder, or advisory classification.
 
 `bash tests/static.sh` also has a fast path for Rust-heavy gates:
 

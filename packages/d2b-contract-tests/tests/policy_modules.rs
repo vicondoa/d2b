@@ -213,7 +213,7 @@ fn vm_submodule_cutover() {
 //
 // The Rust workspace dependency graph flows one way: contracts/core are leaves;
 // host depends on core+contracts; the binaries (d2b, d2bd) and the
-// privileged broker (d2b-priv-broker, a sibling workspace) sit above. The
+// privileged broker (d2b-priv-broker, a product-workspace member) sit above. The
 // broker must NOT depend on d2bd/d2b; the CLI/daemon must NOT depend on
 // the broker.
 // This is a pure static parse of the `Cargo.toml` files. It also asserts the
@@ -499,4 +499,181 @@ fn internal_deps(toml: &str) -> BTreeSet<String> {
         }
     }
     deps
+}
+
+// ---------------------------------------------------------------------------
+// The unified product workspace binding is deliberately checked from the
+// repository files rather than inferred from one document. Keeping the exact
+// ten-path census here makes a missing or unreadable binding artifact fail
+// closed, while the per-path tokens keep a semantically empty replacement from
+// satisfying the census.
+// ---------------------------------------------------------------------------
+const UNIFIED_WORKSPACE_BINDING_PATHS: [&str; 10] = [
+    "AGENTS.md",
+    "tests/AGENTS.md",
+    "CONTRIBUTING.md",
+    "docs/contributing/gates-and-lints.md",
+    "docs/contributing/workflow.md",
+    "docs/contributing/critical-subsystems.md",
+    "docs/adr/0052-bazel-rust-build-and-test.md",
+    "docs/adr/README.md",
+    "changelog.d/adr0054-broker-hub.md",
+    "packages/d2b-contract-tests/tests/policy_modules.rs",
+];
+
+const UNIFIED_WORKSPACE_BINDING_REQUIREMENTS: [(&str, &[&str]); 10] = [
+    (
+        "AGENTS.md",
+        &[
+            "unified product workspace",
+            "packages/Cargo.toml",
+            "packages/Cargo.lock",
+            "tests/tools/no-bash-ast-walker",
+        ],
+    ),
+    (
+        "tests/AGENTS.md",
+        &[
+            "packages/Cargo.guest.lock",
+            "d2b-priv-broker",
+            "d2b-guest-shell-runner",
+            "separate workspace",
+        ],
+    ),
+    (
+        "CONTRIBUTING.md",
+        &[
+            "packages/Cargo.toml",
+            "--locked",
+            "packages/target/release",
+            "aarch64-linux",
+        ],
+    ),
+    (
+        "docs/contributing/gates-and-lints.md",
+        &[
+            "bazel/cargo/product.lock",
+            "bazel/cargo/walker.lock",
+            "test-flake-aarch64",
+            "guest-static-elf",
+        ],
+    ),
+    (
+        "docs/contributing/workflow.md",
+        &[
+            "MODULE.bazel.lock",
+            "byte-identical",
+            "clean no-op",
+            "native arm gate",
+        ],
+    ),
+    (
+        "docs/contributing/critical-subsystems.md",
+        &[
+            "product",
+            "walker",
+            "Cargo.guest.lock",
+            "guest-static-elf",
+            "native arm gate",
+        ],
+    ),
+    (
+        "docs/adr/0052-bazel-rust-build-and-test.md",
+        &[
+            "Accepted amendment",
+            "ADR 0054",
+            "packages/Cargo.lock",
+            "product",
+            "walker",
+        ],
+    ),
+    (
+        "docs/adr/README.md",
+        &[
+            "[0052. Bazel as the Rust build and test scheduler]",
+            "ADR 0054 governs the newer workspace shape",
+            "packages/Cargo.guest.lock",
+            "product",
+            "walker",
+        ],
+    ),
+    (
+        "changelog.d/adr0054-broker-hub.md",
+        &["Accepted ADR 0054", "Cargo.guest.lock", "product", "walker"],
+    ),
+    (
+        "packages/d2b-contract-tests/tests/policy_modules.rs",
+        &[
+            "UNIFIED_WORKSPACE_BINDING_PATHS",
+            "UNIFIED_WORKSPACE_BINDING_REQUIREMENTS",
+            "fail closed",
+            "semantic",
+        ],
+    ),
+];
+
+#[test]
+fn unified_workspace_binding_paths_and_contracts_fail_closed() {
+    let path_set: BTreeSet<&str> = UNIFIED_WORKSPACE_BINDING_PATHS.iter().copied().collect();
+    assert_eq!(
+        path_set.len(),
+        UNIFIED_WORKSPACE_BINDING_PATHS.len(),
+        "unified workspace binding path census contains a duplicate"
+    );
+    assert_eq!(
+        UNIFIED_WORKSPACE_BINDING_REQUIREMENTS.len(),
+        UNIFIED_WORKSPACE_BINDING_PATHS.len(),
+        "every binding path must have one semantic requirement row"
+    );
+
+    let listed: BTreeSet<String> = git_listed_files(&UNIFIED_WORKSPACE_BINDING_PATHS)
+        .into_iter()
+        .collect();
+    assert_eq!(
+        listed,
+        path_set.iter().map(|path| (*path).to_string()).collect(),
+        "the binding path census must equal the tracked repository paths"
+    );
+
+    let mut corpus = String::new();
+    for (path, requirements) in UNIFIED_WORKSPACE_BINDING_REQUIREMENTS {
+        assert!(
+            path_set.contains(path),
+            "semantic requirement names an unbound path: {path}"
+        );
+        let content = read_repo_file_opt(path).unwrap_or_else(|| {
+            panic!("unified workspace binding path is missing or unreadable: {path}")
+        });
+        for requirement in requirements {
+            assert!(
+                content.contains(requirement),
+                "{path} is missing semantic workspace contract: {requirement}"
+            );
+        }
+        corpus.push_str(&content);
+        corpus.push('\n');
+    }
+
+    for contract in [
+        "packages/Cargo.toml",
+        "packages/Cargo.lock",
+        "packages/Cargo.guest.lock",
+        "tests/tools/no-bash-ast-walker/Cargo.lock",
+        "bazel/cargo/product.lock",
+        "bazel/cargo/walker.lock",
+        "MODULE.bazel.lock",
+        "broker-production-dependency-policy",
+        "guest-real-libshpool-package-policy",
+        "broker-host-artifact-contract",
+        "guest-static-elf",
+        "make test-rust-supply-chain",
+        "packages/target/release",
+        "ADR 0054 governs the newer workspace shape",
+        "ADR 0038 remains unchanged",
+    ] {
+        assert!(
+            corpus.contains(contract),
+            "unified workspace binding corpus is missing semantic contract: {contract}"
+        );
+    }
 }
