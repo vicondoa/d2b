@@ -476,7 +476,8 @@ fn bazel_repin_with_executable_target(
         fs::canonicalize(repo_root()?)?
     };
     reject_ambient_repin_before_bootstrap()?;
-    if let Some(output) = fresh_hub_bootstrap(&root, hub)? {
+    let mut fresh_executor = ProcessFreshBootstrapExecutor;
+    if let Some(output) = fresh_hub_bootstrap(&root, hub, &mut fresh_executor)? {
         return Ok(output);
     }
     let mut executor = ExecutableBazelExecutor;
@@ -500,6 +501,7 @@ fn reject_ambient_repin_before_bootstrap() -> Result<(), Box<dyn std::error::Err
 fn fresh_hub_bootstrap(
     root: &Path,
     hub: &str,
+    executor: &mut dyn FreshBootstrapExecutor,
 ) -> Result<Option<Vec<PathBuf>>, Box<dyn std::error::Error>> {
     let module_lock = root.join("MODULE.bazel.lock");
     match fs::symlink_metadata(&module_lock) {
@@ -562,7 +564,7 @@ fn fresh_hub_bootstrap(
     }
     fs::create_dir_all(&workspace)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
-    let generated = fresh_bootstrap_in_workspace(root, &workspace, hub)
+    let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor)
         .map_err(|_| fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"))
         ;
     let cleanup = fs::remove_dir_all(&workspace);
@@ -612,42 +614,65 @@ fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+trait FreshBootstrapExecutor {
+    fn run(
+        &mut self,
+        workspace: &Path,
+        hub: &str,
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>>;
+}
+
+struct ProcessFreshBootstrapExecutor;
+
+impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
+    fn run(
+        &mut self,
+        workspace: &Path,
+        hub: &str,
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+        let output_user_root = workspace.join("bazel-output-user-root");
+        let output_base = workspace.join("bazel-output-base");
+        let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+        let mut command = Command::new(executable);
+        command
+            .env_clear()
+            .current_dir(workspace)
+            .args([
+                "--batch",
+                &format!("--output_user_root={}", output_user_root.display()),
+                &format!("--output_base={}", output_base.display()),
+                "mod",
+                "deps",
+                "--lockfile_mode=off",
+            ])
+            .env("CARGO_BAZEL_REPIN", "1")
+            .env("CARGO_BAZEL_REPIN_ONLY", hub)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        for name in [
+            "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+        ] {
+            if let Some(value) = env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command
+            .status()
+            .map_err(|_| fresh_bootstrap_error(hub, "cannot start pinned Bazel"))
+    }
+}
+
 fn fresh_bootstrap_in_workspace(
     root: &Path,
     workspace: &Path,
     hub: &str,
+    executor: &mut dyn FreshBootstrapExecutor,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     prepare_fresh_workspace(root, workspace, hub)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot prepare isolated workspace"))?;
-    let output_user_root = workspace.join("bazel-output-user-root");
-    let output_base = workspace.join("bazel-output-base");
-    let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
-    let mut command = Command::new(executable);
-    command
-        .env_clear()
-        .current_dir(workspace)
-        .args([
-            "--batch",
-            &format!("--output_user_root={}", output_user_root.display()),
-            &format!("--output_base={}", output_base.display()),
-            "mod",
-            "deps",
-            "--lockfile_mode=off",
-        ])
-        .env("CARGO_BAZEL_REPIN", "1")
-        .env("CARGO_BAZEL_REPIN_ONLY", hub)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    for name in [
-        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
-    ] {
-        if let Some(value) = env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    let status = command
-        .status()
+    let status = executor
+        .run(workspace, hub)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot start pinned Bazel"))?;
     if !status.success() {
         return Err(fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"));
@@ -705,6 +730,13 @@ fn install_fresh_lock(
         }
         return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
     }
+    let directory = OpenOptions::new()
+        .read(true)
+        .open(destination.parent().expect("lock has a parent"))
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot open lock directory for sync"))?;
+    directory
+        .sync_all()
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
     Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
 }
 
@@ -2169,6 +2201,93 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 #[cfg(test)]
 mod fresh_bootstrap_tests {
     use super::*;
+
+    struct FakeFreshExecutor {
+        fail: bool,
+        calls: usize,
+    }
+
+    impl FreshBootstrapExecutor for FakeFreshExecutor {
+        fn run(
+            &mut self,
+            workspace: &Path,
+            hub: &str,
+        ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+            self.calls += 1;
+            if self.fail {
+                return Ok(Command::new("false").status()?);
+            }
+            fs::write(
+                workspace.join(format!("bazel/cargo/{hub}.lock")),
+                format!("{hub}-lock").as_bytes(),
+            )?;
+            Ok(Command::new("true").status()?)
+        }
+    }
+
+    fn bootstrap_fixture() -> PathBuf {
+        let source = repo_root().expect("repository root");
+        let root = create_exclusive_temp_dir("xtask-fresh-fixture").expect("fixture");
+        fs::create_dir_all(root.join("bazel/cargo")).expect("cargo directory");
+        for name in [".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel"] {
+            fs::copy(source.join(name), root.join(name)).expect("root input");
+        }
+        for name in ["BUILD.bazel", "cargo_bazel.bzl"] {
+            fs::copy(
+                source.join("bazel/cargo").join(name),
+                root.join("bazel/cargo").join(name),
+            )
+            .expect("cargo input");
+        }
+        copy_tree_without_build_outputs(&source.join("packages"), &root.join("packages"))
+            .expect("package inputs");
+        copy_tree_without_build_outputs(
+            &source.join("tests/tools/no-bash-ast-walker"),
+            &root.join("tests/tools/no-bash-ast-walker"),
+        )
+        .expect("walker inputs");
+        root
+    }
+
+    #[test]
+    fn routing_bootstraps_both_hubs_and_leaves_module_last() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+        };
+        assert_eq!(
+            fresh_hub_bootstrap(&root, "product", &mut executor).expect("product"),
+            Some(vec![PathBuf::from("bazel/cargo/product.lock")])
+        );
+        assert!(!root.join("bazel/cargo/walker.lock").exists());
+        assert!(!root.join("MODULE.bazel.lock").exists());
+        assert_eq!(
+            fresh_hub_bootstrap(&root, "walker", &mut executor).expect("walker"),
+            Some(vec![PathBuf::from("bazel/cargo/walker.lock")])
+        );
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor)
+            .expect("complete pair")
+            .is_none());
+        assert_eq!(executor.calls, 2);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn failed_bootstrap_releases_guard_for_retry() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: true,
+            calls: 0,
+        };
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert!(!root.join("bazel/cargo/product.lock").exists());
+        executor.fail = false;
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor)
+            .expect("retry")
+            .is_some());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 
     #[test]
     fn isolated_module_contains_only_the_selected_hub() {
