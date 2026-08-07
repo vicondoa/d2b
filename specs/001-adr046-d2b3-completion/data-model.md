@@ -317,6 +317,17 @@ namespace mutations; the sole post-release retry discards every pre-lock fd and 
 opens fresh descriptions, and recensors under the lock. No per-leaf lock, optimistic census,
 or incident-only bypass exists.
 
+Successful lock acquisition for cleanup yields exactly one private
+`SidecarCleanupOwner`. This nonserializable live-owner value has no public fields,
+constructor, accessor, `Clone`, `Copy`, `Default`, serde implementation, conversion, or
+reconstruction from a lock fd. Every cleanup namespace open, quarantine/retirement rename,
+census, and return consumes or mutably borrows this owner; helpers that accept only a
+candidate fd or decoded locator cannot clean. A nonblocking loser never obtains the owner.
+Restart drops every prior process-local value, independently reopens and validates the lock
+inode, acquires the lock, and only then receives a new owner and opens a namespace. Thus the
+lock and the Rust authority have the same single live owner rather than relying on prose
+that callers voluntarily serialize.
+
 If every recorded identity member matches, cleanup derives one `Sc002RetirementIdV1` as
 
 ```text
@@ -382,13 +393,24 @@ candidate remains resolvable; both ephemeral namespaces are empty; and the recei
 incident, disposition, status, and resolution namespaces are exact, bounded, and valid. The guard also
 proves that the candidate root remains at its canonical address and that all request,
 reservation, panel-request, panel-record, evidence-record, receipt, seal, eligibility,
-merge, incident, disposition, and status history, including authenticated absence where a
+merge, incident preimage, anchor, metadata, payload, residue-staging, residue, primary
+status, resolution-evidence, resolution status, successor freeze, disposition request,
+disposition, and successor-admission history, including authenticated absence where a
 terminal state has no such artifact, remains immutable. The separately owned
 `evidence-sidecars/sc002/retired` subtree retains every verified orphan under the bounded
 census above. Neither that subtree nor any other candidate descendant is automatically
 unlinked, and the candidate root is never renamed, tombstoned, or deleted. A failed predicate
 or census performs zero mutation and returns `sc002-candidate-retention-blocked`. There is no
 clock-driven, per-leaf, subtree, or candidate-root deletion.
+
+The retention census recursively walks every listed durable namespace through the same
+fd-relative node grammar used by the frozen primary-evidence scope. It requires every
+incident copy of `Sc002IncidentPreimageV1` to be byte-identical to the immutable preimage
+object and to contain all kind-specific collision, census/count, or ambiguity components.
+It also requires every signed disposition to name the same durable successor freeze and
+disposition request later consumed by apply and admission. A top-level directory identity,
+opaque `incidentIdPreimageHex`, or status count cannot stand in for that recursive
+path-and-content check.
 
 Before ordinary success or an ordinary refusal returns, the still-held lock guards an exact
 empty census of both ephemeral reserved namespaces and the bounded durable census above. No
@@ -548,6 +570,37 @@ continues to digest the valid bounded pre-add census and binds the current/prosp
 counts in the incident preimage below; an already over-bound observed tree uses the
 sentinel digest and is malformed.
 
+Every incident first constructs one canonical `Sc002IncidentPreimageV1`. Its JSON fields
+occur exactly in this order:
+
+`schemaVersion = 1`, `kind = "sc002-incident-preimage"`, `incidentKind`,
+`parkedCandidateId`, `parkedContentId`, `parkedSnapshotSha256`, `contentDigest`,
+`retirementId`, `sourceIdentitySha256`, `existingDestinationIdentitySha256`,
+`retiredCensusSha256`, `currentLeafCount`, `currentEncodedBytes`,
+`prospectiveLeafCount`, `prospectiveEncodedBytes`, `observationStage`,
+`beforeIdentitySha256`, `afterIdentitySha256`, and `incidentIdPreimageHex`.
+
+The parked triplet and content digest are always non-null. The collision variant requires
+only `retirementId`, `sourceIdentitySha256`, and
+`existingDestinationIdentitySha256`; exhausted census requires only
+`sourceIdentitySha256`, `retiredCensusSha256`, and all four counts; invalid census requires
+only `sourceIdentitySha256` and `retiredCensusSha256`; identity ambiguity requires only
+`observationStage`, `beforeIdentitySha256`, and `afterIdentitySha256`. Every other
+kind-specific field is null. The object independently reconstructs `B`, the exact
+kind-specific suffix, the domain-terminated binary preimage below, and
+`incidentIdPreimageHex`; disagreement is malformed. It is at most 8,192 bytes and follows
+the canonical JSON rules used by incident metadata.
+
+The exact bytes are create-exclusively published before the anchor at
+`evidence-sidecars/sc002/incidents/preimages/<incident-kind>/sha256/<incident-id>.json`,
+then final-reopened and leaf/parent/every-ancestor synced. Every anchor, metadata, primary
+status, resolution, disposition request, disposition, successor freeze, and successor
+admission record embeds the same complete `incidentPreimage` object byte-for-byte and names
+the same `preimageLocator`. A record that carries only an incident id or opaque preimage hex
+is incomplete and refuses. This duplication is deliberate replay evidence: any one valid
+durable transition can reconstruct all common and kind-specific inputs, while equality
+against the immutable preimage object prevents the copies from diverging.
+
 The incident digest is the stable `Sc002IncidentIdV1`: exactly 32 bytes rendered as 64
 lowercase hexadecimal characters. It is derived by exactly one kind-specific preimage:
 
@@ -588,10 +641,11 @@ uid, mode, link-count, name, and census bytes never enter an error or observabil
 Every incident transition first persists one immutable `Sc002IncidentAnchorV1`. Its
 canonical JSON records exactly, in order, `schemaVersion = 1`,
 `kind = "sc002-incident-anchor"`, `incidentKind`, `incidentId`,
-`incidentIdPreimageHex`, `parkedCandidateId`, `parkedContentId`,
-`parkedSnapshotSha256`, and `contentDigest`. It is at most 4,096 bytes and uses the same
+`preimageLocator`, `incidentPreimage`, `incidentIdPreimageHex`, `parkedCandidateId`, `parkedContentId`,
+`parkedSnapshotSha256`, and `contentDigest`. It is at most 16,384 bytes and uses the same
 canonical JSON rules as metadata below. The complete preimage must recompute the id, kind,
-parked triplet, and content digest. This anchor is create-exclusively published,
+parked triplet, and content digest, and both preimage representations must equal the exact
+durable `Sc002IncidentPreimageV1` bytes. This anchor is create-exclusively published,
 final-reopened, and leaf/parent/every-ancestor synced before metadata publication or any
 source-to-payload rename. Every restart classifier begins from it. A partial anchor
 temporary with the exact source still present is `recovery-resumable`; a nonidentical final
@@ -613,6 +667,8 @@ this order:
 | `kind` | literal `sc002-incident-metadata` |
 | `incidentKind` | exact `Sc002IncidentKindV1` |
 | `incidentId` | lowercase 64-hex id recomputed from this metadata |
+| `preimageLocator` | exact `incidents/preimages/<incidentKind>/sha256/<incidentId>.json` locator |
+| `incidentPreimage` | complete canonical `Sc002IncidentPreimageV1`, byte-identical to the immutable preimage object |
 | `incidentIdPreimageHex` | lowercase hex of the complete kind-specific preimage, including the exact domain terminator and every fixed-width field |
 | `parkedCandidateId` | exact candidate id from `B` |
 | `parkedContentId` | exact content id from `B` |
@@ -638,14 +694,16 @@ this order:
 
 Null is the only absent representation. The kind-specific non-null fields are exactly the
 components of the corresponding incident-id preimage above; all other kind-specific fields
-must be null. `anchorLocator`, `metadataLocator`, `sourceSlot`, `sourceLocator`, and `payloadLocator` must
+must be null. `preimageLocator`, `anchorLocator`, `metadataLocator`, `sourceSlot`, `sourceLocator`, and `payloadLocator` must
 agree with the closed kind/slot/locator table and the already held parent-directory
 authority. `sourceLocator` is accepted only from the recorded temporary,
 cleanup-quarantine, payload, or exact retired source/destination namespaces, and it is never
 rendered in an error or CLI projection. The metadata schema independently reconstructs the
-complete preimage bytes, compares them byte-for-byte with `incidentIdPreimageHex`, and
+complete preimage bytes from the structured object and the flattened kind-specific fields,
+requires both forms and the immutable preimage object to be byte-identical, compares them
+byte-for-byte with `incidentIdPreimageHex`, and
 recomputes `B`, `I`, `C`, every count, stage, and final incident id. The object is at most
-8,192 bytes and uses canonical UTF-8 JSON with no BOM, whitespace, or trailing newline,
+32,768 bytes and uses canonical UTF-8 JSON with no BOM, whitespace, or trailing newline,
 shortest ASCII string escaping, lowercase hex, and unsigned base-10 integers with no leading
 zero. A metadata object that cannot reconstruct its complete preimage and id or differs from
 decode-then-canonical-reencode is malformed.
@@ -653,6 +711,7 @@ decode-then-canonical-reencode is malformed.
 The exact durable paths are:
 
 ```text
+evidence-sidecars/sc002/incidents/preimages/<incident-kind>/sha256/<incident-id>.json
 evidence-sidecars/sc002/incidents/anchors/<incident-kind>/sha256/<incident-id>.json
 evidence-sidecars/sc002/incidents/metadata/sha256/<incident-id>.json
 evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin
@@ -673,7 +732,8 @@ or repairs primary bytes. The resolution record and the canonical bytes it authe
 MUST NOT be members of the census whose digest the resolution record embeds.
 
 `CanonicalIncidentPrimaryEvidenceCensusV1` therefore has one frozen primary-evidence scope:
-the incident's anchor, metadata, payload, residue-staging, residue, and primary status names
+the incident's immutable structured preimage, anchor, metadata, payload, residue-staging,
+residue, and primary status names
 plus the closed metadata-recorded source slots. It excludes every resolution record,
 resolution-evidence leaf, disposition leaf, receipt, and successor artifact. A name under an excluded
 namespace is not silently ignored when it aliases or appears beneath a primary root; the
@@ -700,23 +760,49 @@ Sc002IncidentPrimaryScopeIdentityDigestV1 =
 
 scope-payload =
   incident_id[32] || parked_candidate_id[32] || parked_content_id[32] ||
-  parked_snapshot_sha256[32] || u32be(root-count) ||
-  RootObservation[root-count]
+  parked_snapshot_sha256[32] || u32be(node-count) ||
+  RecursiveNodeObservation[node-count]
 
-RootObservation =
-  u8(root-code) || u64be(st_dev) || u64be(st_ino) ||
+RecursiveNodeObservation =
+  u8(root-code) ||
+  u32be(relative-path-length) || relative-path ||
+  u8(node-kind) ||
+  u64be(st_dev) || u64be(st_ino) ||
   i64be_twos_complement(st_ctime_sec) || u32be(st_ctime_nsec) ||
-  u64be(st_size) || u64be(st_nlink)
+  u64be(st_size) || u64be(st_nlink) ||
+  content_digest[32]
 ```
 
 Root codes are closed and ordered:
-`0x01 = anchor`, `0x02 = metadata`, `0x03 = payload`, `0x04 = residue-staging`,
-`0x05 = residue`, `0x06 = primary-status`, and `0x07 = source-slot`.
+`0x01 = preimage`, `0x02 = anchor`, `0x03 = metadata`, `0x04 = payload`,
+`0x05 = residue-staging`, `0x06 = residue`, `0x07 = primary-status`, and
+`0x08 = source-slot`.
+Node kind is `0x00 = absent`, `0x01 = directory`, or `0x02 = regular-file`. An absent
+root has an empty relative path and zero identity/content fields. A directory has a zero
+content digest. A regular file carries
+`Sc002PrimaryEvidenceLeafContentDigestV1` computed from its exact once-opened bytes.
+For a present root, the root itself appears first with an empty relative path, followed by
+every descendant directory and regular file recursively in unsigned-byte relative-path
+order. The relative path is canonical component bytes beneath the already selected root,
+never a caller path; empty, `.`, `..`, repeated separators, absolute bytes, NUL, and
+non-ASCII component bytes refuse. Symlinks, magic links, mounts, devices, sockets, and
+unknown node kinds refuse.
+
+Enumeration is fd-relative and recursive. Every component is opened beneath the held
+candidate directory with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV)`;
+the scanner never joins a path. It keeps each ancestor fd until its children have been
+enumerated, opens each regular leaf exactly once for identity and content hashing, and
+re-stats every directory and leaf after the scan. The complete form is limited to 128 node
+observations and 2,097,152 present file bytes, including nodes below status, residue, and
+source-slot directories. A nested unknown, duplicate, unstable, unreadable, or over-bound
+entry therefore cannot disappear behind a valid top-level root identity.
 `i64be_twos_complement` is exactly eight bytes in network order. `st_ctime_nsec` must be
 `0..=999,999,999`; an out-of-range value refuses. Every root is
-opened no-follow beneath the held candidate fd and observed twice through that same fd set.
-The constructor accepts no domain string, raw digest, path, errno, serializer object, or
-native-width integer.
+opened no-follow beneath the held candidate fd and every recursive node is observed twice
+through that same fd set. The constructor accepts no domain string, display path, errno,
+serializer object, or native-width integer. Relative path bytes enter only this typed
+internal commitment and never an error, log, metric, span, CLI projection, or `Debug`.
 
 The kind-bearing anchor parent lets restart recover the closed incident kind without decoding
 a conflicting anchor. The candidate directory supplies the parked triplet. A conflicting
@@ -743,14 +829,30 @@ u8(failure-cause) ||
 scope_identity_before[32] || scope_identity_after[32] ||
 u64be(observed-record-count-saturated) ||
 u64be(observed-present-bytes-saturated) ||
-u8(failure-root-code)
+u8(failure-root-code) ||
+failure_path_sha256[32]
 ```
 
 The closed failure causes are
 `0x01 = record-limit`, `0x02 = byte-limit`, `0x03 = enumeration-unavailable`,
 `0x04 = unknown-name`, `0x05 = identity-unstable`, and `0x06 = record-invalid`.
 `failure-root-code` is the first failing root in the fixed root-code order, not filesystem
-iteration order. Record and byte overflow encode exactly limit-plus-one (`129` and
+iteration order. `failure_path_sha256` is the typed
+`Sc002PrimaryEvidenceFailurePathDigestV1`:
+
+```text
+SHA-256(
+  "d2b:sc002:primary-evidence-failure-path:v1\0" ||
+  u8(failure-root-code) ||
+  u32be(relative-path-length) || canonical-relative-path
+)
+```
+
+It binds the canonical path of the first failing recursive node without rendering that path.
+An absent-root failure uses an empty relative path. Directory enumeration retains at most
+128 canonical child names; observing a 129th child fails at the containing directory, so
+`failure_path_sha256` binds that directory rather than an iteration-dependent child.
+Record and byte overflow encode exactly limit-plus-one (`129` and
 `2,097,153` respectively); an unavailable count uses `u64::MAX`. Counts never wrap and no
 partial member list or traversal-order prefix enters the commitment. Both scope identities are typed
 `Sc002IncidentPrimaryScopeIdentityDigestV1` values over the incident id, parked triplet, the
@@ -758,12 +860,19 @@ ordered primary-root code, and the no-follow device/inode/change identity of eve
 primary root. Raw filesystem identity is never rendered.
 
 The bounded-failure form is accepted only when the same locked scan owns all opened fds,
-records the before and after scope identities, and revalidates the after identity immediately
-before publishing the resolution-evidence leaf. A continuing mutation exits `4` with the
-same stable incident projection and publishes nothing. At successor admission the current
-scope identity must equal the committed `scope_identity_after`. Copying a failure body to
-another incident or parked triplet, changing any primary name, or replaying the old body
-after a scope-identity change
+recursively records every successfully visited node plus the failing node's complete
+ancestor chain in both scope identities, records the first failure by fixed root order and
+canonical relative-path order, and revalidates the after identity immediately before
+publishing the resolution-evidence leaf. For a bound exceeded inside one directory, the
+failure path is that directory and the observation includes its before/after identity and the saturated
+limit-plus-one count; no filesystem iteration prefix is an authorization input. A continuing
+mutation, changed failure root/path/cause, or inability to reproduce the same recursive
+failure exits `4` with the same stable incident projection and publishes nothing. At
+successor admission the scanner replays the same recursive walk and requires the failure
+cause, root, canonical failing-path digest, saturated counts, and current recursive scope
+identity to equal the committed after values. Copying a failure body to another incident or
+parked triplet, changing any primary descendant name or bytes, or replaying the old body
+after a recursive scope-identity change
 blocks admission. The two-byte `0x01 0xff` spelling is detection-only poison and is never a
 valid primary-evidence census, disposition input, resolution record, or successor authority.
 
@@ -797,14 +906,15 @@ directory. Only then may the resolution record embed the same typed digest.
 
 Incident publication is one closed, idempotent protocol under the candidate lock:
 
-1. Open or create and verify every required anchor, metadata, payload, status, resolution,
+1. Open or create and verify every required preimage, anchor, metadata, payload, status, resolution,
    resolution-evidence, residue-staging, and residue directory beneath the held candidate fd. `fsync` each newly created directory
    and every changed ancestor bottom-up through the candidate directory before a child name
    may become authoritative.
-2. Create-exclusively publish the canonical incident anchor through a same-directory
+2. Create-exclusively publish the canonical incident preimage and then the incident anchor,
+   each through a same-directory
    temporary leaf, `fsync` the complete leaf, rename it with `RENAME_NOREPLACE`, reopen the
-   final leaf, and `fsync` the anchor parent plus every ancestor through the candidate
-   directory. A partial or nonidentical anchor is a named recovery prefix and never
+   final leaf, and `fsync` its parent plus every ancestor through the candidate
+   directory. A partial or nonidentical preimage or anchor is a named recovery prefix and never
    authorizes metadata or payload publication.
 3. Create-exclusively publish the canonical metadata through a same-directory temporary
    leaf, `fsync` the complete leaf, rename it with `RENAME_NOREPLACE`, reopen the final leaf,
@@ -853,7 +963,13 @@ has two distinct closed nonterminal variants:
 
 Both variants preserve the same stable incident id, perform no unlink, and block publication
 and close. Restart, inspect, recover, apply, and successor admission use one locked
-classifier. A crash cannot move a state from irreconcilable back to resumable. The
+classifier. Before selecting a branch, that classifier reopens the immutable preimage path,
+requires every decodable anchor, metadata, primary status, resolution, disposition request,
+disposition, freeze, and successor record to carry the byte-identical structured preimage,
+and reconstructs the incident id from every common and kind-specific component. If a
+primary record is malformed, only a signed disposition request/disposition carrying the
+same complete object plus the frozen recursive primary-evidence commitment can drive the
+resolution branch. A crash cannot move a state from irreconcilable back to resumable. The
 classifier runs at every directory-create, temporary-create/write, leaf-`fsync`, no-replace
 publish, rename, payload-file-`fsync`, old-parent-`fsync`, new-parent-`fsync`,
 ancestor-`fsync`, reopen, residue transition, primary-status publication, and resolution
@@ -883,8 +999,8 @@ this complete grammar, tag table, sentinel, ordering, the three census vectors, 
 incident vectors before T589 dispatch.
 
 `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` is the one shared byte oracle for
-every SC-002 typed hash used by a locator, incident, resolution, or disposition. Its closed
-ordered `digests` array has exactly these sixteen ids:
+every SC-002 typed hash used by a locator, incident, resolution, successor freeze, request,
+or disposition. Its closed ordered `digests` array has exactly these nineteen ids:
 
 ```text
 activation-receipt-content
@@ -898,8 +1014,11 @@ incident-id-identity-ambiguity
 residue-id
 primary-evidence-leaf-content
 primary-scope-identity
+primary-evidence-failure-path
 primary-evidence-complete
 primary-evidence-bounded-failure
+successor-freeze
+disposition-request
 disposition-authority
 disposition-verification-key
 disposition-id
@@ -930,17 +1049,22 @@ canonical-authenticated-disposition)`. Each append-only immutable
 fields in this order:
 `schemaVersion = 1`, `kind = "sc002-incident-status"`, `incidentKind` as the exact
 `Sc002IncidentKindV1` used to derive `incidentId`, `incidentId`,
-`incidentIdPreimageHex`, `parkedCandidateId`,
+`preimageLocator`, `incidentPreimage`, `incidentIdPreimageHex`, `parkedCandidateId`,
 `parkedContentId`, `parkedSnapshotSha256`, `state`, `cause`, `residueIds`, `dispositionId`,
+`successorFreezeSha256`, `dispositionRequestSha256`,
 `successorCandidateId`, `successorContentId`, and `successorSnapshotSha256`.
 `incidentKind` is immutable across every state transition. Each ID in the disposition and
-successor positions is nullable but always present; the successor fields are either all null
-or all non-null. `residueIds` is an always-present lexicographically sorted array of unique
+successor-binding positions is nullable but always present. Freeze, request, disposition,
+and successor triplet are all null before disposition validation and all non-null from
+`disposition-validated` onward; partial presence is malformed. `residueIds` is an always-present lexicographically sorted array of unique
 `Sc002ResidueIdV1` values. It is empty on the verified-payload branch and contains every
 retained mismatch residue on the mismatch branch; a later state repeats it byte-for-byte.
-`incidentIdPreimageHex` is the complete kind-specific preimage and MUST reconstruct the
-incident id and parked triplet byte-for-byte; a status never depends on an unpersisted
-in-memory preimage. Null is the sole absent scalar representation; omission is malformed.
+`incidentPreimage` and `incidentIdPreimageHex` are the same complete kind-specific preimage
+and MUST reconstruct the incident id, parked triplet, content digest, and every applicable
+collision, census, count, or ambiguity component byte-for-byte; they must also equal the
+immutable object reopened at `preimageLocator`. A status never depends on an unpersisted
+in-memory preimage or metadata remaining decodable. Null is the sole absent scalar
+representation; omission is malformed.
 Durable status never contains a `remediation` field. The maximal valid contiguous state
 record is the current durable state. Its two closed transitions are:
 
@@ -952,14 +1076,17 @@ mismatch-retained -> disposition-validated -> successor-admitted
 `Sc002IncidentResolutionV1` is the separate append-only envelope for an irreconcilable
 primary branch. It contains exactly, in order, `schemaVersion = 1`,
 `kind = "sc002-incident-resolution"`, `incidentKind`, `incidentId`,
-`incidentIdPreimageHex`, `parkedCandidateId`, `parkedContentId`,
+`preimageLocator`, `incidentPreimage`, `incidentIdPreimageHex`, `parkedCandidateId`, `parkedContentId`,
 `parkedSnapshotSha256`, `recoveryClass =
 "recovery-irreconcilable"`, the exact closed `cause`,
 `primaryEvidenceKind`, `primaryEvidenceSha256`, `primaryEvidenceLocator`,
 `primaryEvidenceFailureCause`, sorted unique `residueIds`, `state`, `dispositionId`,
+`successorFreezeSha256`, `dispositionRequestSha256`,
 `successorCandidateId`, `successorContentId`, and `successorSnapshotSha256`. Its only
-contiguous transition is `disposition-validated -> successor-admitted`; the successor fields
-are all null in the first record and all non-null in the second. It is accepted only when
+contiguous transition is `disposition-validated -> successor-admitted`; the freeze, request,
+disposition, and successor triplet are already all non-null in the first record and repeat
+byte-for-byte in the second. Admission state, not a late triplet, is the only changed field.
+It is accepted only when
 the authenticated disposition binds the same incident and parked/successor triplets and the
 locked primary-evidence bytes and typed digest revalidate exactly.
 `primaryEvidenceKind` is closed to `complete-census` or
@@ -972,9 +1099,11 @@ after disposition validation is a conflict and cannot admit a successor.
 Primary status remains immutable and need not be structurally valid for this resolution
 branch; its exact raw bytes and locators are retained in the frozen primary-evidence
 commitment.
-Resolution JSON uses the same canonical UTF-8, field-order, integer, lowercase-hex,
+The resolution's structured preimage, hex preimage, and locator must agree exactly even
+when primary anchor or metadata bytes are malformed; the authenticated disposition supplies
+the same complete object and cannot omit any kind-specific component. Resolution JSON uses the same canonical UTF-8, field-order, integer, lowercase-hex,
 unknown-field, create-exclusive, leaf-sync, no-replace, final-reopen, parent-sync, and
-all-ancestor-sync rules as primary status and is at most 8,192 bytes.
+all-ancestor-sync rules as primary status and is at most 32,768 bytes.
 
 `Sc002IncidentCauseV1` is closed to the four `Sc002IncidentKindV1` spellings plus
 `anchor-publication-pending`, `anchor-final-conflict`,
@@ -998,8 +1127,10 @@ envelope. `Sc002IncidentCliStatusV1` records, in order, `schemaVersion`,
 `parkedCandidateId`, `parkedContentId`, `parkedSnapshotSha256`, `state`, `cause`,
 `residueIds`, `dispositionId`, the three successor IDs, nullable
 `resolutionEvidenceKind`, nullable `resolutionEvidenceSha256`, and final required
-`remediation`. It deliberately omits `incidentIdPreimageHex` from operator output while
-every durable status or resolution persists that complete preimage. The two resolution
+`remediation`. It deliberately omits `preimageLocator`, `incidentPreimage`,
+`successorFreezeSha256`, `dispositionRequestSha256`, and
+`incidentIdPreimageHex` from operator output while
+every durable status or resolution persists that complete structured preimage. The two resolution
 evidence fields are both null outside an irreconcilable resolution flow and otherwise expose
 only the bounded kind plus typed digest needed by the external disposition workflow; no raw
 locator or primary bytes are rendered. Its `state` is the exact durable primary/resolution
@@ -1024,9 +1155,9 @@ identity-bearing bounded-failure commitment:
 | `parked`, null disposition/successor IDs, no matching durable authenticated disposition | incident kind | `obtain-incident-disposition` |
 | `parked`, null disposition/successor IDs, exact matching durable authenticated disposition present after a publication-before-status crash | incident kind | `apply-incident-disposition` |
 | `mismatch-retained`, null disposition/successor IDs | frozen recovery cause | `apply-incident-disposition` |
-| `disposition-validated`, non-null disposition ID, null successor triplet | inherited incident kind or frozen recovery cause | `admit-successor` |
+| `disposition-validated`, non-null disposition/freeze/request IDs and non-null signed successor triplet | inherited incident kind or frozen recovery cause | `admit-successor` |
 | `successor-admitted`, non-null disposition ID and successor triplet | inherited incident kind or frozen recovery cause | `none` |
-| resolution `disposition-validated`, exact persisted complete census or bounded-failure commitment, null successor triplet | frozen irreconcilable cause | `admit-successor` |
+| resolution `disposition-validated`, exact persisted complete census or bounded-failure commitment, non-null disposition/freeze/request IDs, and non-null signed successor triplet | frozen irreconcilable cause | `admit-successor` |
 | resolution `successor-admitted`, exact persisted complete census or bounded-failure commitment and successor triplet | frozen irreconcilable cause | `none` |
 
 The `parked` row's cause is its incident kind. Every locked incident census maps to exactly
@@ -1039,6 +1170,7 @@ reconstructible missing predecessor are `status-prefix-repairable`; mutually exc
 nonidentical, or ambiguous branches are `status-branch-conflict`. Stored corruption is never
 collapsed into syntax exit `2` or a path-only diagnostic.
 The strict schemas are
+`docs/reference/schemas/delivery/sc002-incident-preimage-v1.schema.json`,
 `docs/reference/schemas/delivery/sc002-incident-anchor-v1.schema.json`,
 `docs/reference/schemas/delivery/sc002-incident-metadata-v1.schema.json`,
 `docs/reference/schemas/delivery/sc002-incident-status-v1.schema.json`,
@@ -1075,8 +1207,8 @@ next-command: <NEXT_COMMAND>
 The angle-bracket tokens describe bounded data fields; they are not printed literally.
 Nullable IDs render exactly `none`. `NEXT_COMMAND` is selected only by `remediation`:
 `resume-incident-recovery` renders `sc002-incident-recover`,
-`obtain-incident-disposition` and `apply-incident-disposition` both render the static command
-noun `sc002-incident-apply`, `admit-successor` renders
+`obtain-incident-disposition` renders `sc002-disposition-request`,
+`apply-incident-disposition` renders `sc002-incident-apply`, `admit-successor` renders
 `sc002-successor-admit`, and `none` renders `none`. It never contains a path, flag, ID,
 argument, shell fragment, executable path, or free-form sentence. The JSON projection
 contains the same bounded values in the declared field order and no `nextCommand` or
@@ -1092,11 +1224,15 @@ prints the same stable projection with `obtain-incident-disposition` or
 `apply-incident-disposition`, and performs no mutation or unlink. Recover is never the
 advertised command for `recovery-irreconcilable`.
 `obtain-incident-disposition` directs the operator to the disposition authority/workflow
-pinned by accepted Version 2; the operator runs inspect with `--json` and submits that exact
-bounded projection, including the nullable typed resolution-evidence pair. No repository
-command mints or self-signs that record.
+pinned by accepted Version 2; the operator first runs inspect with `--json`, then runs
+`sc002-disposition-request` with one clean successor snapshot and submits the exact canonical
+request output. That request includes the same locked incident projection, nullable typed
+resolution-evidence pair, durable successor freeze, complete structured incident preimage,
+and exact successor triplet. Inspect output alone is not a signing request. No repository
+command mints or self-signs the disposition record.
 `apply-incident-disposition` means run or replay `sc002-incident-apply` with the already
-obtained record. From `parked` it appends the authenticated transition. From a
+obtained record and the same successor snapshot used to create the signed request. From
+`parked` it appends the authenticated transition. From a
 recovery-irreconcilable prefix with representable named leaves it first completes durable
 no-unlink residue retention and publishes `mismatch-retained`, then appends the same
 authenticated transition. For zero-residue, `anchor-final-conflict`, malformed-metadata,
@@ -1109,6 +1245,59 @@ nothing. Every successful apply therefore moves the prescribed state to a termin
 authenticated disposition from which successor admission is reachable.
 `admit-successor` means invoke
 `sc002-successor-admit` with the validated disposition id and fresh successor snapshot.
+
+Successor selection is frozen before any authority signs. The operator runs
+`sc002-disposition-request` with the parked snapshot, stable incident id, and one clean
+successor snapshot. Under the candidate lock, the command derives the successor
+candidate/content/snapshot triplet from that exact immutable snapshot, rejects equality with
+the parked candidate, and recursively proves that it contains no copied SC-002 receipt,
+retired, preimage, anchor, metadata, payload, residue, status, resolution, freeze, request,
+or disposition bytes. It then create-exclusively publishes one canonical
+`Sc002SuccessorFreezeV1` at
+`evidence-sidecars/sc002/incidents/successor-freezes/sha256/<incident-id>/<freeze-sha256>.json`.
+The freeze contains exactly, in order, `schemaVersion = 1`,
+`kind = "sc002-successor-freeze"`, `incidentKind`, `incidentId`, `preimageLocator`,
+`incidentPreimage`, the parked triplet, the successor triplet, nullable
+`resolutionEvidenceKind`, nullable `resolutionEvidenceSha256`, and
+`deliveryContractSpecSha256`. Its typed digest is:
+
+```text
+Sc002SuccessorFreezeDigestV1 =
+  SHA-256(
+    "d2b:sc002:successor-freeze:v1\0" ||
+    u64be(canonical-freeze-length) || canonical-freeze
+  )
+```
+
+  The canonical freeze is at most 16,384 bytes.
+
+After final reopen plus leaf/parent/every-ancestor sync, the same command publishes the
+canonical unsigned `Sc002IncidentDispositionRequestV1` at
+`evidence-sidecars/sc002/incidents/disposition-requests/sha256/<incident-id>/<request-sha256>.json`
+and writes the exact same bytes create-exclusively to the operator's explicit
+`--request-out PATH` as a current-effective-uid-owned regular single-link mode-`0600` file.
+The request fields are exactly the disposition fields below through
+`deliveryContractSpecSha256`, followed by the complete canonical `successorFreeze` object
+and its `successorFreezeSha256`; it omits
+`dispositionRequestSha256`, authority, key, and signature fields so it cannot claim
+authentication. The canonical request is at most 65,536 bytes. Its typed digest is:
+
+```text
+Sc002DispositionRequestDigestV1 =
+  SHA-256(
+    "d2b:sc002:disposition-request:v1\0" ||
+    u64be(canonical-request-length) || canonical-request
+  )
+```
+
+The authority workflow accepts only this complete request. It independently verifies the
+embedded freeze and its typed digest, exact incident projection or frozen primary-evidence commitment, accepted
+contract digest, and complete structured preimage, then copies the request fields and
+freeze digest byte-for-byte into the signed disposition. It inserts only the
+disposition-pinned authority/key fields and the signature. No prose request, inspect output
+without a freeze, caller-supplied successor triplet, or post-signing successor selection is
+eligible. Regenerating a request after any incident scope or successor triplet change yields
+a different request digest and requires a new signature.
 
 `Sc002IncidentDispositionV1` is the sole accepted disposition record. The accepted Version 2
 contract also pins two closed typed constructors:
@@ -1145,6 +1334,8 @@ The disposition's canonical JSON object has exactly these fields in this order:
 | `action` | literal `abandon-candidate-admit-successor` |
 | `incidentKind` | exact `Sc002IncidentKindV1` |
 | `incidentId` | canonical `Sc002IncidentIdV1` |
+| `preimageLocator` | exact immutable kind-bearing preimage locator for this incident |
+| `incidentPreimage` | complete canonical `Sc002IncidentPreimageV1`, including every applicable kind-specific component |
 | `incidentIdPreimageHex` | complete lowercase-hex kind-specific preimage that recomputes `incidentId` |
 | `parkedCandidateId` | lowercase 64-hex id equal to the parked status |
 | `parkedContentId` | lowercase 64-hex id equal to the parked status |
@@ -1155,12 +1346,14 @@ The disposition's canonical JSON object has exactly these fields in this order:
 | `resolutionEvidenceKind` | null for a valid primary terminal; otherwise `complete-census` or `bounded-failure-commitment` |
 | `resolutionEvidenceSha256` | null for a valid primary terminal; otherwise the exact lowercase 64-hex `Sc002IncidentPrimaryEvidenceCensusDigestV1` selected by `resolutionEvidenceKind` |
 | `deliveryContractSpecSha256` | exact content digest for accepted `ADR-046-validation-and-delivery` Version 2 in the regenerated spec-set manifest |
+| `successorFreezeSha256` | exact `Sc002SuccessorFreezeDigestV1` for the pre-signing immutable successor freeze |
+| `dispositionRequestSha256` | exact `Sc002DispositionRequestDigestV1` for the authority request whose fields this record preserves |
 | `authoritySha256` | exact `Sc002DispositionAuthorityDigestV1` pinned by that accepted Version 2 contract |
 | `verificationKeySha256` | exact `Sc002DispositionVerificationKeyDigestV1` of the Ed25519 public key pinned to that authority |
 | `signatureEd25519` | lowercase 128-hex Ed25519 signature, final field |
 
 The encoded record is canonical UTF-8 JSON with no BOM, whitespace, or trailing newline and
-is at most 4,096 bytes. Fields occur only in the order above. Strings are ASCII with the
+is at most 32,768 bytes. Fields occur only in the order above. Strings are ASCII with the
 shortest JSON escaping, and integers use unsigned base-10 spelling with no leading zero.
 Duplicate, missing, reordered, or unknown fields, alternate escapes, invalid UTF-8,
 non-ASCII text, or bytes unequal to decode-then-canonical-reencode are malformed. The
@@ -1177,16 +1370,21 @@ where the unsigned object is the exact ordered object above with only the final
 authority digest, verification-key digest, and pinned key to match the accepted external
 contract, then verifies the signature. It independently decodes
 `incidentIdPreimageHex`, requires its domain to equal `incidentKind`, recomputes the incident
-id and parked triplet, and compares them with the signed fields. A key or authority supplied
-by the disposition file is never trusted as a selector.
+id and parked triplet, compares them with the signed fields and complete embedded
+`incidentPreimage`, reopens the durable freeze and request by their typed digests, and
+requires every request field and both triplets to match byte-for-byte. A key, authority,
+successor, freeze, or request supplied only by the disposition file is never trusted as a
+selector.
 
 `sc002-incident-apply` opens `--disposition PATH` exactly once with
 `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires a regular single-link file owned by the current
-effective uid with mode exactly `0600`, reads at most 4,097 bytes, hashes before decode, and
+effective uid with mode exactly `0600`, reads at most 32,769 bytes, hashes before decode, and
 validates from those same bytes. T589 owns one private, nonserializable
 `ValidatedSc002IncidentDisposition` result with no public constructor, fields, `Clone`,
-`Copy`, `Default`, serde implementation, or conversion from the decoded DTO. Apply consumes
-that result by value. While holding the candidate lock, it publishes the exact authenticated
+`Copy`, `Default`, serde implementation, or conversion from the decoded DTO. Apply also
+once-opens `--successor-snapshot PATH`, derives its triplet, and requires it to equal the
+durable freeze, request, and signed disposition before consuming that result by value.
+While holding the candidate lock, it publishes the exact authenticated
 bytes create-exclusively at
 `evidence-sidecars/sc002/dispositions/sha256/<disposition-id>.json` through the same
 temporary-leaf, file-sync, no-replace, reopen, parent-sync, and all-ancestor-sync protocol.
@@ -1199,11 +1397,15 @@ frozen primary scope, and publishes the separate resolution `disposition-validat
 Only then may it expose authenticated external disposition. An existing path is
 accepted only when an fd-relative reopen through the same held directory authority proves
 the exact bytes and binding; otherwise it is a
-conflict. `sc002-successor-admit` reopens and revalidates those durable bytes through the same
-validator before consuming the result and publishing `successor-admitted`. Each disposition
+conflict. `sc002-successor-admit` reopens and revalidates the same preimage, freeze, request,
+disposition, and successor snapshot through the same validator before consuming the result
+and publishing `successor-admitted`. Each disposition
 and status or resolution publication `fsync`s its leaf and every changed ancestor directory bottom-up
 through the candidate directory. A crash before any required ancestor sync cannot advance
 the maximal contiguous state; a crash after it replays the same transition idempotently.
+Every `disposition-validated` primary status or resolution already persists the freeze
+digest, request digest, and signed successor triplet. Admission repeats those values
+byte-for-byte and changes only the state, so no restart gap can select a different successor.
 An irreconcilable apply additionally requires a non-null matching resolution-evidence kind
 and digest before it may publish the resolution record; a primary-terminal apply requires
 both null. A raw `0x01 0xff` sentinel, stale or copied bounded-failure commitment, fabricated
@@ -1212,8 +1414,11 @@ either branch. Successor admission revalidates the persisted canonical evidence 
 and current scope identity before it appends `successor-admitted`.
 
 The incident candidate remains permanently ineligible at every transition. A validated
-disposition binds the incident, parked triplet, distinct successor triplet, accepted Version
-2 contract digest, authority, key, and signature. It never authorizes unlink, incident
+disposition binds the incident, complete structured preimage, parked triplet, pre-signing
+successor freeze, disposition request, distinct successor triplet, accepted Version 2
+contract digest, authority, key, and signature. Apply and admit both rederive that same
+successor triplet from the same immutable successor snapshot; neither accepts a later
+substitution. It never authorizes unlink, incident
 deletion, publication of the parked record, a binding panel request, reservation release,
 or reuse of evidence. Successor admission requires a fresh snapshot with no copied SC-002
 receipt, incident, retired, status, or disposition bytes. For `adr046w5`, it admits only
@@ -1222,21 +1427,27 @@ the byte-identical retained request and reservation; T219's separate external
 retained-request disposition remains mandatory. Any other wave whose binding request was
 already consumed must stop for its external wave disposition rather than use this flow.
 
-The strict schema is
+The strict schemas are
+`docs/reference/schemas/delivery/sc002-successor-freeze-v1.schema.json`,
+`docs/reference/schemas/delivery/sc002-incident-disposition-request-v1.schema.json`, and
 `docs/reference/schemas/delivery/sc002-incident-disposition-v1.schema.json`. The canonical
-signed fixture is
-`tests/golden/delivery/sc002-incident-disposition-v1.json` and uses only a checked-in test
-key; its accepted Version 2 contract digest, authority digest, key digest, unsigned signing
+freeze, request, and signed disposition fixtures are
+`tests/golden/delivery/sc002-successor-freeze-v1.json`,
+`tests/golden/delivery/sc002-incident-disposition-request-v1.json`, and
+`tests/golden/delivery/sc002-incident-disposition-v1.json`; they use only a checked-in test
+key. The accepted Version 2 contract digest, authority digest, key digest, unsigned signing
 bytes, signature, and derived disposition id are asserted independently. Closed negatives
-cover 4,097 bytes; unknown, missing, duplicate, and reordered fields; noncanonical JSON;
+cover 32,769 bytes; unknown, missing, duplicate, and reordered fields; noncanonical JSON;
 wrong version, envelope kind, action, incident kind, incident preimage/domain/framing,
 id width/case, incident, parked triplet, successor triplet, resolution evidence kind/digest,
-or contract
-digest; equal parked/successor candidate ids; missing, unknown, copied, or wrong
+successor freeze, disposition request, or contract
+digest; equal parked/successor candidate ids; successor snapshot changed before apply or
+admit; request produced before the final locked scope; missing, unknown, copied, or wrong
 authority/key; unsigned, malformed, wrong-domain, wrong-key, and post-signature-tampered
-records; replay against another incident, candidate, content, snapshot, or contract
+records; replay against another incident, candidate, content, snapshot, request, freeze, or contract
 generation; replacement between open/hash/decode/publish/reopen; stale state; conflicting
-same-id bytes; and copied SC-002 evidence in the successor. Every negative refuses before a
+same-id bytes; copied SC-002 evidence in the successor; and post-signing successor
+substitution at apply or admission. Every negative refuses before a
 state transition, request, reservation release, incident deletion, or candidate admission.
 The durable-status, resolution, and CLI-status schemas plus human/JSON fixtures additionally exercise
 every `Sc002IncidentKindV1`, require status `incidentKind` to match the id domain and durable
@@ -1249,14 +1460,18 @@ cause/remediation table, every terminal primary/resolution branch, and every rec
 T589 owns the planned delivery CLI contract:
 `wave sc002-incident-inspect --snapshot PATH --incident-id ID [--json]`,
 `wave sc002-incident-recover --snapshot PATH --incident-id ID [--json]`,
-`wave sc002-incident-apply --snapshot PATH --incident-id ID --disposition PATH [--json]`,
+`wave sc002-disposition-request --snapshot PATH --incident-id ID
+--successor-snapshot PATH --request-out PATH [--json]`,
+`wave sc002-incident-apply --snapshot PATH --incident-id ID --disposition PATH
+--successor-snapshot PATH [--json]`,
 and
 `wave sc002-successor-admit --snapshot PATH --incident-id ID --disposition-id ID
 --successor-snapshot PATH [--json]`. Exit `0` means the requested read or transition
 completed, exit `2` means invalid syntax or malformed input, exit `3` means the stable
 incident/disposition/successor ID was not found, and exit `4` means stale state, conflict,
 or blocked admission; no other stable exit is assigned. Reapplying the exact authenticated
-disposition after `disposition-validated`, recovering an already parked or later incident,
+disposition after `disposition-validated`, recreating the exact freeze/request to an
+identical mode-`0600` output, recovering an already parked or later incident,
 or readmitting the exact already admitted successor exits `0` after full durable
 revalidation and makes no write; a different disposition, successor, or binding exits `4`.
 Inspect exits `0` and projects every `recovery-resumable`,
@@ -1284,7 +1499,7 @@ state-transition, metadata/status/resolution-path, durable-status/resolution/CLI
 disposition-schema/signature, exit, crash, stale-ID, replay, and no-request/no-unlink tests
 own this contract. Its
 existing `changelog.d/resource-api-production.md` fragment carries the operator-visible
-delivery recovery entry, all four command nouns, the four exits, and the parked-candidate
+delivery recovery entry, all five command nouns, the four exits, and the parked-candidate
 successor requirement. Before T589 dispatch, a separate external specification-amendment
 workflow must bump accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2,
 pin this complete command, both census byte grammars/goldens, typed canonical receipt hash,
@@ -1308,12 +1523,13 @@ mode `0600`, link count one, device/inode stability, digest, bytes, decode, and 
 all match; it never replaces the leaf. A different or malformed existing leaf refuses.
 Crash injection covers source open, hash, decode, OFD-lock acquisition, temp write, file sync,
 no-replace publication, each ancestor-directory sync, quarantine move/reopen, verified
-retirement move/reopen, every incident namespace create/sync, anchor and metadata temporary
-create/write/file-sync/no-replace/final-reopen and every parent/ancestor sync, payload move,
+retirement move/reopen, every incident namespace create/sync, preimage, anchor, and metadata
+temporary create/write/file-sync/no-replace/final-reopen and every parent/ancestor sync, payload move,
 old-parent sync, payload-parent sync, every changed ancestor sync, payload reopen, each
 payload-file sync, residue staging/final move and reopen, resolution-evidence publication
 and reopen, each append-only status or resolution temporary/publication/reopen, every
-resolution-evidence/status/resolution parent/ancestor sync,
+resolution-evidence/status/resolution parent/ancestor sync, successor-freeze and
+disposition-request publication/reopen/sync, recursive scope walk/replay,
 cleanup-parent sync,
 ephemeral-residue census, and record publication.
 Synchronized tests cover the complete candidate-writer/cleanup/retention actor matrix below,
@@ -1329,8 +1545,8 @@ leaf fd or identity observation. Every case proves bounded completion with no de
 sidecar-data unlink, and an exact final census within 64 leaves and 1,048,576 bytes. An
 ordinary winner or loser leaves both ephemeral namespaces empty.
 Every identity-ambiguous verified terminal case proves the exact
-anchor/metadata/payload/parked-status prefix is durable outside both ephemeral namespaces. Every
-terminal cleanup-mismatch case proves anchor plus metadata, an empty ephemeral and residue-staging
+preimage/anchor/metadata/payload/parked-status prefix is durable outside both ephemeral namespaces. Every
+terminal cleanup-mismatch case proves preimage plus anchor and metadata, an empty ephemeral and residue-staging
 census, exact durable residue ids, and `mismatch-retained` outside those namespaces. A
 replacement-raced case is classified exactly once as `recovery-resumable` or
 `recovery-irreconcilable`, with every still-named leaf preserved and no false terminal status
@@ -1341,7 +1557,7 @@ resolution-to-successor convergence. All primary and resolution incident states
 block publication and close for the incident candidate.
 
 The serialization oracle uses the closed writer set `importer`, `cleanup`,
-`incident-recover`, `incident-apply`, and `successor-admit`, plus
+`incident-recover`, `disposition-request`, `incident-apply`, and `successor-admit`, plus
 `retention-guard`. It contains every `writer/cleanup` and `cleanup/writer` pair, the distinct
 `cleanup/cleanup` pair, and every `writer/retention-guard` and
 `retention-guard/writer` pair; same-input and different-input fixtures are present where the
@@ -1349,10 +1565,12 @@ pair admits both. This explicitly serializes cleanup against every live owner ra
 testing importer ownership as a proxy. It covers first-actor and second-actor lock ownership
 and latches at `temp-created`,
 `temp-file-synced`, `quarantine-renamed`, `retirement-renamed`,
-`incident-anchor-published`, `incident-metadata-published`, `incident-payload-renamed`,
+`incident-preimage-published`, `incident-anchor-published`, `incident-metadata-published`,
+`incident-payload-renamed`,
 `incident-residue-staged`, `incident-residue-finalized`, and
 `incident-status-published`, `resolution-evidence-published`,
-`incident-resolution-published`, and `successor-status-published`. Every actor opens its own
+`incident-resolution-published`, `successor-freeze-published`,
+`disposition-request-published`, and `successor-status-published`. Every actor opens its own
 file description for the one verified lock inode. This includes two cleanup workers targeting the same leaf and two cleanup
 workers targeting different candidate leaves beneath the same candidate; there is no
 per-leaf cleanup lock. A nonblocking contender must return `sc002-sidecar-owner-live` with
@@ -1362,7 +1580,8 @@ After release, exactly one retry acquires a fresh description, recensors under l
 linearizes after the winner. Tests assert the complete case id set rather than counting
 dynamically generated cases, and each case records one of the two allowed serial histories.
 No test may pass by timing out, skipping a latch, sharing an open file description, retaining
-a pre-lock namespace fd, or inspecting a live owner's namespace.
+a pre-lock namespace fd, inspecting a live owner's namespace, or constructing,
+serializing, cloning, or reconstructing `SidecarCleanupOwner` from an fd.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -1692,8 +1911,9 @@ generated from or read by the floor decoder, transition machine, schema, hash-ve
 consumer, poison generator, or 91-case role matrix. Each fixture recomputes every unaffected
 enclosing digest and signature and must reach only its named decoder, framing, transition,
 authority, or binding check. This registry, the independent 13-row role matrix, the 91-case
-semantic poison registry, the five-case copied-issuer registry, and the 15-digest/four-
-signature oracle are five independent expectations; success in one cannot supply the
+semantic poison registry, the five-case copied-issuer registry, the 20-case
+issuer-authentication/capability registry, the 21-case hash-vector registry, and the
+15-digest/four-signature oracle are seven independent expectations; success in one cannot supply the
 expected ids, cardinality, bytes, or visits of another.
 
 Issuer provenance is authenticated, not asserted by copying an authority digest. The
@@ -1733,6 +1953,74 @@ including one enclosed by otherwise valid outer hashes and signatures, is never 
 provenance. T589's independent expected-id file is
 `tests/golden/delivery/source-floor-v1/issuer-proof-negative-case-ids.txt`; neither the
 production validator nor the poison generator may read it.
+
+`tests/golden/delivery/source-floor-v1/issuer-authentication-negative-case-ids.txt`
+closes every remaining issuer/capability negative. It contains exactly these 20
+newline-terminated ids in order:
+
+```text
+source-floor-auth/missing-proof/manifest
+source-floor-auth/missing-proof/installation
+source-floor-auth/missing-proof/validation
+source-floor-auth/missing-proof/import
+source-floor-auth/wrong-key/manifest
+source-floor-auth/wrong-key/installation
+source-floor-auth/wrong-key/validation
+source-floor-auth/wrong-key/import
+source-floor-auth/cross-domain/manifest
+source-floor-auth/cross-domain/installation
+source-floor-auth/cross-domain/validation
+source-floor-auth/cross-domain/import
+source-floor-auth/rebound/execution-commit
+source-floor-auth/rebound/feature-snapshot
+source-floor-auth/rebound/source-generation
+source-floor-auth/direct-decoded-chain
+source-floor-auth/issuer-provenance-serialize
+source-floor-auth/issuer-provenance-clone
+source-floor-auth/validated-floor-serialize
+source-floor-auth/validated-floor-clone
+```
+
+A separately authored literal 20-id constant must equal the file. The twelve
+transition-specific cases retain canonical bytes, correct framing, and every unaffected
+proof; each reaches only its named pinned-key/domain check. The three rebound cases use a
+fully signed valid chain from another C, Q, or source generation and fail final binding.
+The final five are compile-fail/API-surface cases proving that direct decode cannot mint
+either private result and neither result can be serialized or cloned. Production validators,
+DTO decoders, poison builders, and API-surface discovery may not read the expected-id file.
+
+`tests/golden/delivery/source-floor-v1/hash-vector-negative-case-ids.txt` closes the byte
+oracle negatives. It contains exactly these 21 newline-terminated ids in order:
+
+```text
+source-floor-vector/digest-id-missing
+source-floor-vector/digest-id-extra
+source-floor-vector/digest-id-duplicate
+source-floor-vector/digest-id-reordered
+source-floor-vector/digest-id-unknown
+source-floor-vector/signature-id-missing
+source-floor-vector/signature-id-extra
+source-floor-vector/signature-id-duplicate
+source-floor-vector/signature-id-reordered
+source-floor-vector/signature-id-unknown
+source-floor-vector/domain-spelling
+source-floor-vector/domain-terminator
+source-floor-vector/payload
+source-floor-vector/frame-width
+source-floor-vector/frame-endian
+source-floor-vector/frame-length
+source-floor-vector/preimage
+source-floor-vector/digest
+source-floor-vector/verification-key
+source-floor-vector/signing-preimage
+source-floor-vector/signature
+```
+
+A separately authored literal 21-id constant equals the fixture before vectors run. Each
+poison changes exactly its named oracle member, reconstructs every unaffected semantic
+input independently, and reaches the intended count/order/id/domain/frame/preimage/digest/
+key/signature check. The vector consumer, production registry, and fixture are mutually
+read-independent; a generated expected list or early schema failure does not count.
 
 `SourceGenerationCompatibilityFloorV1` is one immutable aggregate with exactly these
 top-level fields:
@@ -1844,12 +2132,25 @@ approval, generated-manifest update, and Gate 0 receipt are external to this fea
 separate source-generation producer/installer and import/validation authorities implement
 and install objects conforming to those accepted schemas and vectors; they do not own or
 silently redefine the repository contract artifacts. T589 does not deserialize a floor and
-decide for itself. It invokes the exact disposition-pinned validator and consumes one private,
-nonserializable `ValidatedSourceGenerationCompatibilityFloor` result by value. That type has
-no public fields, constructor, serde implementation, `Clone`, `Copy`, `Default`, conversion,
-or byte importer; it binds the validated floor digest, source generation, C/Q, and
-authenticated issuer chain. A serialized receipt chain, even with copied matching authority
-digests, is not a dispatch capability.
+decide for itself. The exact disposition-pinned validator first authenticates all four
+issuer proofs against the keys selected only by the accepted disposition and returns one
+private `AuthenticatedSourceFloorIssuerProvenance` by value. That intermediate result has no
+public fields, constructor, accessor, serde implementation, `Clone`, `Copy`, `Default`,
+conversion, byte importer, or reconstruction from authority/key digests. It binds the exact
+manifest, installation, validation, and import canonical-byte digests, all four signature
+domains, the disposition, source generation, C, and Q. The semantic floor validator consumes
+it by value and only then may return one private, nonserializable
+`ValidatedSourceGenerationCompatibilityFloor` result by value. The final type has the same
+closed surface and additionally binds the validated aggregate floor digest and exact
+13-member census.
+
+Validation order is canonical/schema/framing and enclosing-digest reconstruction, then
+disposition/key selection and all four issuer signatures, then transition and member
+semantics, then exact-C/Q aggregate acceptance. A proof carrying copied matching authority
+and verification-key digests but signed by any unpinned key never produces
+`AuthenticatedSourceFloorIssuerProvenance`, even when all outer objects are recomputed and
+legitimately re-signed. A serialized receipt chain, decoded DTO, copied digest tuple, or the
+intermediate issuer result is not a dispatch capability.
 
 Acceptance is a closed append-only transition:
 
@@ -1921,7 +2222,7 @@ four newline-terminated ids in this order:
 fixture-contract runner fail for its named reason; a shrunken shared count, early structural
 failure, or unvisited poison cannot pass.
 
-The host-generation apply verifier has two additional independent registries. The exact 15
+The host-generation apply verifier has three additional independent registries. The exact 15
 ordered mutation ids are pinned one per newline in
 `tests/golden/delivery/host-generation-mutation-edge-ids.txt`. The exact 90 case ids remain
 separately pinned in `host-generation-apply-peer-case-ids.txt`; neither file is generated
@@ -1939,6 +2240,34 @@ exactly three newline-terminated ids in order:
 equality, the second poisons literal/fixture equality, and the third preserves both 15-edge
 lists while removing one pre-mutation verification visit. Each must fail through the
 enforcing runner before evidence acceptance.
+
+`tests/golden/delivery/host-generation-post-first-negative-case-ids.txt` contains exactly
+these 15 newline-terminated ids in order:
+
+```text
+post-first-negative/missing-edge
+post-first-negative/duplicate-edge
+post-first-negative/unknown-edge
+post-first-negative/reordered-edge
+post-first-negative/empty-edge-set
+post-first-negative/missing-transition
+post-first-negative/duplicate-transition
+post-first-negative/unknown-transition
+post-first-negative/unvisited-case
+post-first-negative/dynamic-case-skipped
+post-first-negative/verification-hook-missing
+post-first-negative/selected-edge-mutated
+post-first-negative/successor-mutated
+post-first-negative/durable-prefix-changed
+post-first-negative/first-audit-missing
+```
+
+A separately authored literal 15-id constant must equal the file. Each poison preserves
+every prerequisite needed to reach only its named edge/transition/visit/hook/mutation/audit
+check. Empty production and expected sets, a dynamically skipped case, an early structural
+failure, or a count learned from production is a failure, not a visit. This file, the
+15-edge file, the 90-case file, the three-case meta registry, production enumeration, and
+all literal expectations are mutually read-independent.
 
 `tests/golden/delivery/host-generation-apply-peer-forbidden-values.tsv` is the closed literal
 observability canary registry. It covers every raw input read by apply-peer admission and

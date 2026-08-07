@@ -1106,18 +1106,26 @@ contracts. Accepted external delivery Version 2 owns source-floor canonical enco
 digest/domain/framing, strict schemas, and exact 15-digest/four-signature vectors; the
 compatibility authorities only produce and validate conforming objects. The independent
 13-row role/artifact fixture, exact 91-id class/role poison product, five copied-issuer
-cases, and 32-id receipt/transition negative registry require valid cardinality, enclosing
-hashes, and unaffected signatures before their semantic or pinned-key refusals. Apply-peer
-coverage has separate 15-edge, 90-case, 13-negative, and fifteen-forbidden-value fixtures,
+cases, private nonserializable authenticated issuer provenance consumed into the private
+validated-floor result, and exact 32-id receipt/transition, 20-id
+issuer-authentication/capability, and 21-id hash-vector negative registries require valid
+cardinality, enclosing hashes, and unaffected signatures before their semantic or pinned-key
+refusals. Copied authority/key digests cannot produce either private result. Apply-peer
+coverage has separate 15-edge, 90-case, 15-negative, and fifteen-forbidden-value fixtures,
 with six pre-first and 84 post-first cases.
 SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
 human/JSON remediation, and closed exits. A verified payload reaches `parked`; an
 authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
 namespaces; and a raced rename is exactly `recovery-resumable` or
 `recovery-irreconcilable` with every name preserved. Irreconcilable invalid or unstable
-primary evidence uses a complete census or identity-bearing bounded-failure commitment whose
-scope excludes resolution leaves; raw `01ff`, copied commitments, and post-resolution
-primary changes block admission. The shared typed hash oracle and exact 61 receipt plus 45
+primary evidence uses a complete recursively enumerated census or identity-bearing
+bounded-failure commitment whose scope binds every descendant and canonical failing-path
+digest and excludes resolution/request/disposition/freeze leaves; raw `01ff`, copied
+commitments, and post-resolution primary changes block admission. One structured incident
+preimage carries every kind-specific component and is repeated by all durable status/path
+records. A private nonserializable cleanup owner is required for namespace access. The
+successor triplet is durably frozen before the canonical authority request is signed and is
+identical through apply/admit. The shared nineteen-digest typed hash oracle and exact 61 receipt plus 45
 malformed-census negative registries prohibit a raw locator hash or a self-referential
 resolution digest. These refinements add no work-item or task id.
 

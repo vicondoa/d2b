@@ -297,7 +297,9 @@ merge-target registration, merge eligibility, and merge.
     `sha256` through the candidate directory before it publishes the `EvidenceRecord`.
     Every importer, cleanup worker, incident transition, successor admission, and retention
     guard holds the same verified candidate-scoped exclusive OFD lock through publication or
-    return. A live owner cannot be cleaned; a nonblocking cleanup loser returns before any
+    return. Successful cleanup acquisition also yields the sole private nonserializable
+    `SidecarCleanupOwner`; every namespace open or cleanup mutation requires it, and a loser
+    cannot construct, serialize, clone, or recover it from an fd. A live owner cannot be cleaned; a nonblocking cleanup loser returns before any
     namespace open or mutation, and restart
     cleanup begins only after lock acquisition, moves the opened temp to a reserved
     quarantine name, reopens and verifies the same device/inode and full identity, derives
@@ -309,7 +311,8 @@ merge-target registration, merge eligibility, and merge.
     identity check; no check-then-unlink or name-only inode claim exists.
 
     An identity mismatch never unlinks or restores the suspect. It durably publishes the
-    kind-bearing incident anchor, complete metadata, and preimage, then moves the
+    structured `Sc002IncidentPreimageV1` containing every applicable kind-specific
+    component, the kind-bearing incident anchor, and complete metadata, then moves the
     metadata-bound currently named inode to the
     typed incident payload address, reopens and verifies it, syncs the payload fd, both
     parents, and every changed ancestor, and append-only publishes `parked`. A replacement
@@ -317,19 +320,25 @@ merge-target registration, merge eligibility, and merge.
     and otherwise `recovery-irreconcilable`; every name is preserved, inspect returns the
     stable id/cause/remediation, and no parked status is fabricated. Recover is offered only
     for the resumable variant. Authenticated apply handles the irreconcilable variant by
-    retaining representable names as durable residue or by publishing a complete frozen
-    primary-evidence census or identity-bearing bounded-failure commitment, then appending
-    the separate resolution. The frozen primary scope excludes every resolution,
-    resolution-evidence, disposition, receipt, and successor leaf, so no digest contains
+    retaining representable names as durable residue or by publishing a complete recursively
+    enumerated frozen primary-evidence census or identity-bearing bounded-failure commitment,
+    then appending
+    the separate resolution.     The frozen primary scope binds every descendant path/content identity plus the canonical
+    failure-path digest and excludes every resolution,
+    resolution-evidence, successor-freeze, disposition-request, disposition, receipt, and successor leaf, so no digest contains
     itself. A raw `01ff` sentinel, copied commitment, or changed primary scope never
     authorizes successor admission. Invalid and unstable census causes remain inspectable and
     actionable through inspect `--json`, signed apply, and fresh-successor admission.
-    Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
+    Before signing, `sc002-disposition-request` durably freezes the clean successor triplet
+    and emits the canonical authority request. Apply and admission rederive that same
+    snapshot triplet and require the same freeze, request, and signed disposition. Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
     nonterminal variant claims a terminal empty census.
-    T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope
+    T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope
     retention guard: it preserves the canonical candidate root and all request, panel-record,
-    evidence-record, receipt, seal, eligibility, merge, incident, disposition, and status
-    history. It never renames, tombstones, or deletes the candidate root or automatically
+    evidence-record, receipt, seal, eligibility, merge, incident preimage/anchor/metadata/
+    payload/residue/status, resolution-evidence/resolution, successor-freeze,
+    disposition-request, disposition, and admission history. Every record repeats the same
+    complete structured preimage and all kind-specific components. It never renames, tombstones, or deletes the candidate root or automatically
     unlinks any candidate descendant. Crash retry may
     reuse only an identical fully revalidated durable leaf; a different existing leaf or
     concurrent wrong-byte/binding input refuses.
@@ -339,7 +348,11 @@ merge-target registration, merge eligibility, and merge.
     over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
     unrelated-sample, wrong-owner/mode, pre-durability record publication, or crash/race case.
     Independent literal fixtures pin the complete receipt, retired-census,
-    primary-evidence-census, source-floor receipt/census, mutation-edge, post-mutation,
-    unit-census, and forbidden-value negative registries. One shared SC-002 domain-hash
+    primary-evidence-census, source-floor 32-id receipt, 20-id issuer-authentication/
+    capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
+    unit-census, and forbidden-value negative registries. Source-floor signature validation
+    returns private nonserializable `AuthenticatedSourceFloorIssuerProvenance` and consumes
+    it into the separate private validated-floor result; copied authority/key digests cannot
+    produce either. One shared nineteen-digest/one-signature SC-002 domain-hash
     golden is the oracle for every typed locator, incident, resolution, and disposition
     digest; raw SHA-256 locator definitions are ineligible.
