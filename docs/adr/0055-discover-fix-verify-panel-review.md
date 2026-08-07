@@ -442,7 +442,7 @@ AssignmentIssuancePrepareState =
       next_prepare_incarnation,
       cancellation_refusal_audit_tuple_digest
     }
-  | PreparedAttemptCancellationControllerReleasePending {
+  | PreparedAttemptCancellationRefusalInstallPending {
       controller_reservation_alias,
       sink_reservation_alias,
       sink_non_creatable_fence_proof_digest,
@@ -502,18 +502,24 @@ tuple, reserves `next_prepare_incarnation`, and enters
 `PreparedAttemptCancellationSinkFencePending`. This is the only cancellation
 edge from a prepared accepted attempt. It advances linearly through
 `PreparedAttemptCancellationSinkProofPending` and
-`PreparedAttemptCancellationControllerReleasePending`. The sink first
+`PreparedAttemptCancellationRefusalInstallPending`. The sink first
 persists a permanent non-creatable fence for the exact prepare identity and
 incarnation, then returns proof that the activated issuance reservation was
-cancelled. Only those two proofs permit one final controller compare-and-swap
-to durably proof-release the matching controller reservation, release the
-evidence reservation, restore the same assignment request to
-`RequestPending` with the reserved strictly greater prepare incarnation, and
-install the canonical
-cancellation refusal and ordinary outbox as a no-effect
-`QuarantinedPendingAudit` tuple. The accepted attempt can terminalize only
-after that refusal event is acknowledged and
-`OrdinaryActivationPending::Generic::CompleteAtomicActivation` completes.
+cancelled. Only those two proofs permit one controller compare-and-swap to
+install the unchanged canonical cancellation refusal and ordinary outbox as a
+no-effect `QuarantinedPendingAudit` tuple. That transaction does not release
+controller capacity, release or restore evidence, restore the assignment
+request, expose the reserved next prepare incarnation, or terminalize the old
+attempt. Those effects remain quarantined through append and durable
+acknowledgement. Only
+`OrdinaryActivationPending::AssignmentIssuanceCancellation` admits the final
+`ActivatePreparedAssignmentIssuanceCancellation` transaction. It atomically
+proof-releases the matching controller reservation, restores the evidence and
+request reservations, returns the same assignment request to `RequestPending`
+with the reserved strictly greater prepare incarnation, exposes that
+fresh-incarnation eligibility,
+makes the replay result available, creates the immutable `AttemptTombstone`,
+and marks the old accepted attempt `Completed`.
 Thus no terminal attempt can coexist with live issuance prepare, evidence,
 controller capacity, or sink capacity. Time, worker loss, a missing
 observation, or a failed resume is not a fence or cancellation proof.
@@ -525,10 +531,14 @@ A crash before the cancellation intent leaves
 fence proof, sink cancellation request, or cancellation proof resumes only
 the exact recorded cancellation state and action. The final controller
 transaction is indivisible: restart observes either
-`CancellationControllerReleasePending` with all reservations still owned or
-the restored `RequestPending` state plus complete refusal tuple, never a
-released resource without newer-incarnation eligibility and the refusal
-outbox.
+`CancellationRefusalInstallPending`, `QuarantinedPendingAudit`,
+`OrdinarySinkAcknowledgementPending`, or the specialized
+`OrdinaryActivationPending`, or one exact
+`AssignmentIssuanceCancellationAuditRepairState`, with all controller,
+evidence, and request reservations still owned, or the completed old attempt
+and restored `RequestPending` state together. It never observes released
+capacity, restored evidence, or fresh-incarnation eligibility before the
+refusal acknowledgement.
 
 Originating evidence is then consumed for authority purposes: it can identify
 and replay the settled assignment but cannot mint another one. Two concurrent
@@ -1183,7 +1193,7 @@ AssignmentIssuancePrepareRecovery =
       cancellation_refusal_audit_tuple_digest,
       next: ProofCancelPreparedAssignmentIssuanceSinkReservation
     }
-  | PreparedAttemptCancellationControllerReleasePending {
+  | PreparedAttemptCancellationRefusalInstallPending {
       issuance_prepare_alias,
       prepare_incarnation,
       canonical_issuance_audit_tuple_digest,
@@ -1192,7 +1202,7 @@ AssignmentIssuancePrepareRecovery =
       cancellation_reason_code,
       next_prepare_incarnation,
       cancellation_refusal_audit_tuple_digest,
-      next: ReleasePreparedAssignmentIssuanceAndInstallRefusal
+      next: InstallPreparedAssignmentIssuanceCancellationRefusal
     }
 
 PreparedAssignmentIssuanceCancellationReasonCode =
@@ -1310,11 +1320,12 @@ eligibility to `Issued` and exposes `Active`. A retry before cancellation
 continues only the same prepare incarnation. A retry restored after the
 permanent non-creatable fence, proof-cancellation, and controller release
 allocates the next incarnation for the same pending request. For the
-prepared-attempt cancellation branch, that restoration and incarnation
-reservation occur in the refusal-install transaction; the old accepted
-attempt then completes only through its refusal audit, and a fresh accepted
-attempt may consume only the restored same request and recorded newer
-incarnation. An old retry
+prepared-attempt cancellation branch, the next incarnation is reserved but
+not eligible when cancellation starts. Request and evidence restoration,
+controller release, fresh-incarnation eligibility, and old-attempt completion
+occur together only in the specialized post-acknowledgement activation
+transaction. A fresh accepted attempt may then consume only the restored same
+request and recorded newer incarnation. An old retry
 after `Issued` returns the issued successor state without minting another
 capability.
 
@@ -1383,11 +1394,11 @@ fresh-evidence prerequisites. Every nested issuance prepare state admits only
 its exact create-or-adopt, sink-activation, ordinary-audit read,
 sink-incarnation fence, proof-cancellation, controller-release,
 prepared-handler resume, prepared-incarnation cancellation fence,
-prepared-reservation proof-cancellation, or atomic
-release-restore-and-refusal-install action. Every nested issuance audit-repair
-state admits only its exact invalidation, invalidation replay,
-unchanged-success rebind, replacement install, or unchanged-success append
-action.
+prepared-reservation proof-cancellation, refusal-install, or specialized
+post-audit activation action. Every nested issuance success or cancellation
+audit-repair state admits only its exact invalidation, invalidation replay,
+unchanged-event rebind, replacement install, replacement append,
+acknowledgement, or specialized post-audit activation action.
 Only the matching ordinary accepted attempt's `OrdinaryActivationPending`
 state admits assignment activation. `InitialAssignmentEligibility` and every
 terminal predecessor's `AssignmentSuccessorEligibility` remain exactly one
@@ -2667,8 +2678,11 @@ controller floor rather than permanent raw response bytes.
 | `AuditConversionTombstone` | Immutable permanent controller audit floor. It binds the attempt identity, old and replacement reservation generations, replacement refusal event id and digest, and the intent, invalidation-proof, and rebind-proof digests. It contains no proof or event bytes. |
 | `MigrationAuditRepairIntent`, migration `AuditSinkInvalidationProof`, and `MigrationAuditSinkRebindProof` | Audit floor and ineligible while migration-specific no-append repair is pending. They preserve the original migration success result, quarantined capacity-switch effect, outbox event id and digest, and `MigrationExecutionReserve` binding. |
 | `MigrationAuditRepairTombstone` | Immutable permanent controller audit floor binding the migration attempt alias, old and replacement reservation generations, unchanged success event alias and digest, and repair intent, invalidation-proof, and rebind-proof digests. It contains no proof, event, result, or authority-effect bytes. |
-| `AssignmentIssuancePrepareState`, its accepted-attempt and canonical-audit binding, prepared-handler recovery, evidence reservation, controller reservation, sink reservation, and sink prepare, activation, non-creatable-fence, or cancellation proof | Current recovery floor while issuance is pending. An exact matching sink reservation is adopted. A non-adoptable incarnation is first made permanently non-creatable at the sink, then proof-cancelled before controller release; its sink fence tombstone is a permanent floor. A prepared-attempt cancellation remains ineligible until the exact incarnation is fenced and proof-cancelled and one transaction releases controller capacity and evidence, restores the request with a newer incarnation, and installs the cancellation refusal outbox. The remaining row becomes eligible only when `OrdinaryActivationPending` atomically installs `Active`, `Issued`, settled evidence, replay result, and attempt tombstone, or after the proof-backed cancellation refusal terminalizes the old attempt. No age-only cleanup is permitted. |
-| `AssignmentIssuanceAuditRepairState`, its unchanged success tuple, invalidation proof, and rebind proof | Audit floor and ineligible while an issuance definite-no-append repair is pending. It retains the prepared assignment effect, evidence, request, and both capacity reservations. Replacement installation compacts the exact proof digests into an immutable `AssignmentIssuanceAuditRepairTombstone`; only acknowledgement of the rebound unchanged success permits assignment activation. |
+| `AssignmentIssuancePrepareState`, its accepted-attempt and canonical-audit binding, prepared-handler recovery, evidence reservation, controller reservation, sink reservation, and sink prepare, activation, non-creatable-fence, or cancellation proof | Current recovery floor while issuance is pending. An exact matching sink reservation is adopted. A non-adoptable incarnation is first made permanently non-creatable at the sink, then proof-cancelled before controller release; its sink fence tombstone is a permanent floor. A prepared-attempt cancellation remains ineligible after the exact incarnation is fenced and proof-cancelled: refusal installation retains controller capacity, evidence, the request reservation, and newer-incarnation eligibility in quarantine. Only durable refusal acknowledgement permits one final transaction to release and restore them, expose the newer incarnation, terminalize the old attempt, and create its attempt tombstone. The success branch becomes eligible only when its post-acknowledgement activation atomically installs `Active`, `Issued`, settled evidence, replay result, and attempt tombstone. No age-only cleanup is permitted. |
+| `AssignmentIssuanceAuditRepairState`, its unchanged success tuple, invalidation proof, rebind proof, and acknowledgement | Audit floor and ineligible while an issuance-success definite-no-append repair is pending. It retains the prepared assignment effect, evidence, request, and both capacity reservations. Replacement installation does not make raw repair proofs eligible. Only the post-acknowledgement activation transaction creates the immutable `AssignmentIssuanceAuditRepairTombstone`, makes raw repair proofs eligible, and activates the assignment. |
+| `AssignmentIssuanceAuditRepairTombstone` | Bounded immutable permanent controller audit floor keyed by the exact `AttemptIdentity`. Its minimal redacted fields bind the issuance prepare identity digest and incarnation, old and replacement reservation generations, unchanged issuance event id and digest, repair-intent digest, invalidation-proof digest, rebind-proof digest, and acknowledgement digest. It contains no raw proof, canonical event bytes, result bytes, evidence, request, assignment capability, or authority effect. |
+| `AssignmentIssuanceCancellationAuditRepairState`, its unchanged canonical cancellation refusal, invalidation proof, rebind proof, and acknowledgement | Audit floor and ineligible while a prepared-cancellation refusal definite-no-append repair is pending. It retains the fenced and proof-cancelled prepare plus quarantined controller capacity, evidence, request reservation, newer-incarnation eligibility, replay result, and old attempt. It can rebind and append only the unchanged canonical cancellation refusal and can never construct `audit-event-flush-failed`. |
+| `AssignmentIssuanceCancellationAuditRepairTombstone` | Bounded immutable permanent controller audit floor keyed by the exact `AttemptIdentity`. It binds the issuance prepare identity digest and incarnation, old and replacement reservation generations, unchanged cancellation-refusal event id and digest, repair-intent digest, invalidation-proof digest, rebind-proof digest, and acknowledgement digest. It contains no raw proof, event bytes, evidence, request, or authority effect. The final cancellation activation creates it before making raw repair proofs eligible. |
 | `AssignmentRevocationAuditState`, its dedicated outbox, sink reservation, invalidation proof, and rebind proof | Audit floor and ineligible while the assignment remains `RevocationPending`. Definite-no-append repair retains the unchanged revocation event and can neither restore `Active` nor create a generic refusal. After acknowledgement and zero reserved uses reach the exact ready state and atomic finalization installs `Revoked`, proof bytes become ordinary audit-period input while the revocation event projection remains at the audit floor. |
 | `AssignmentRevocationCapacityReleaseState`, unused sink cancellation proof, and controller release proof | Recovery state and audit floor while a non-revocation `Complete`, `Expire`, or `Exhaust` terminal intent is pending. The sink proof-cancels its issuance-time reservation before controller capacity is released. Proof bytes become ordinary audit-period input only after atomic terminal install; no age-only cleanup or successor admission is permitted. |
 | `AuditAppendTombstone` | Permanent append-sink idempotency floor for the sink namespace. It contains only audit event id and digest plus the original acknowledgement and has no event payload bytes. Raw sink event bytes remain under the sink's bounded rotation. |
@@ -2735,6 +2749,7 @@ replay-payload eviction, and restart; eviction never makes an id reusable.
 `AuditSinkReservation`, accepted-journal and no-journal proofs,
 `AttemptTombstone`, replay eviction markers, worker leases and recovery state,
 audit-conversion records and tombstones, migration-audit-repair records and
+tombstones, both assignment-issuance audit-repair record families and
 tombstones, audit events, and `ReadProtectedAttemptStatus`. A schema that keys
 any of those records by a
 bare `ProtectedAttemptId` or allows a base and admitted conflict attempt to
@@ -2789,19 +2804,57 @@ The authoritative attempt and append records have closed roles:
   sink generation was invalidated and rebound to one replacement refusal
   event before replacement activation. Its three source-record digests are
   immutable and do not make the protected proof bytes permanent.
+- `AssignmentIssuanceAuditRepairTombstone` is a bounded permanent controller
+  audit-floor record keyed by exact `AttemptIdentity`:
+
+  ```
+  AssignmentIssuanceAuditRepairTombstone = {
+    key: AttemptIdentity,
+    issuance_prepare_identity_digest,
+    prepare_incarnation,
+    old_reservation_generation,
+    replacement_reservation_generation,
+    unchanged_issuance_event_id,
+    unchanged_issuance_event_digest,
+    repair_intent_digest,
+    invalidation_proof_digest,
+    rebind_proof_digest,
+    acknowledgement_digest
+  }
+  ```
+
+  These are its complete fields. It is created only in the final
+  post-acknowledgement assignment-activation transaction. The intent and raw
+  proof bytes remain ineligible until that tombstone is durable.
+- `AssignmentIssuanceCancellationAuditRepairTombstone` is the corresponding
+  bounded permanent controller audit floor for an unchanged canonical
+  prepared-cancellation refusal. It has the same exact key, prepare binding,
+  generation, proof-digest, and acknowledgement-digest shape, substituting
+  `unchanged_cancellation_refusal_event_id` and
+  `unchanged_cancellation_refusal_event_digest`. Its final cancellation
+  activation makes raw repair proofs eligible only after the tombstone is
+  durable.
 - `AuditAppendTombstone` is the append sink's permanent minimal deduplication
   authority. It is sufficient to return the original acknowledgement after
   raw sink event rotation and contains no protected request, response, or event
   payload bytes.
 
-Before authoritative acceptance of an ordinary attempt, the controller reserves one journal slot,
-one outbox slot, one tombstone slot, the maximum two payload-eviction marker
-slots, the bounded request and result budget, and the section 13 recovery
-reserve. A closed operation selector reserves either one generic
-audit-conversion tombstone plus the maximum bounded conversion intent and proof
-bytes, or, only for `MigrateRetentionCapacity`, one
+Before authoritative acceptance of an ordinary attempt, the controller
+reserves one journal slot, one outbox slot, one attempt-tombstone slot, the
+maximum two payload-eviction marker slots, the bounded request and result
+budget, and the section 13 recovery reserve. The permanent controller
+tombstone budget separately includes every
+`AssignmentIssuanceAuditRepairTombstone` and
+`AssignmentIssuanceCancellationAuditRepairTombstone` entry and byte maximum.
+A closed operation selector reserves the maximum complete mutually exclusive
+route: generic conversion and its `AuditConversionTombstone`; for
+`IssueImplementationAssignment`, either generic conversion for a
+non-prepared refusal or one dedicated success or prepared-cancellation repair
+including its permanent repair tombstone and bounded intent and proof bytes;
+or, only for `MigrateRetentionCapacity`, one
 `MigrationAuditRepairTombstone` plus the maximum bounded migration-repair
-intent and proof bytes. The two allocations are disjoint. A closed capacity
+intent and proof bytes. These allocations are disjoint and no selected route
+may borrow another route's tombstone slot. A closed capacity
 selector charges a base ordinary
 attempt to ordinary capacity, an accepted conflict including a status
 operation to
@@ -2859,17 +2912,25 @@ journal the reservation remains until the stable `AuditEventId` has its
 `AuditAppendTombstone`; there is no time-only expiry or orphan guess.
 
 The pending-record, controller tombstone, and append-sink tombstone budgets
-have versioned finite entry and byte maxima. If permanent controller or sink
-tombstone capacity is exhausted, `replay-tombstone-store-full` or
+have versioned finite entry and byte maxima. The permanent controller budget
+counts `AttemptTombstone`, `AuditConversionTombstone`,
+`MigrationAuditRepairTombstone`, `AssignmentIssuanceAuditRepairTombstone`,
+and `AssignmentIssuanceCancellationAuditRepairTombstone` by their exact
+serialized entry and byte maxima. If permanent controller or sink tombstone
+capacity is exhausted, `replay-tombstone-store-full` or
 `audit-append-tombstone-store-full` respectively refuses new acceptance;
 tombstones are never evicted to make room. `MigrateRetentionCapacity` is the
 only capacity escape. It requires a reviewed manifest and a closed reason of
 `ReserveIntegrityRepair` or `VersionedBoundMigration`, copies every permanent
-id and digest, recomputes every recovery reservation, verifies the complete
-set, and atomically switches storage without changing the controller
-namespace. General-store fullness alone does not authorize it. Resetting a
-namespace or dropping an old key is forbidden. This is finite fail-closed
-storage, not unbounded raw response retention.
+id and digest including both assignment-issuance repair tombstone families,
+recomputes every permanent entry and byte maximum and every recovery
+reservation, verifies the complete set, and atomically switches storage
+without changing the controller namespace. A destination schema or reviewed
+manifest that omits either repair tombstone family, its exact
+`AttemptIdentity` key, or its serialized maximum is invalid and cannot switch.
+General-store fullness alone does not authorize it. Resetting a namespace or
+dropping an old key is forbidden. This is finite fail-closed storage, not
+unbounded raw response retention.
 
 An identical retry has one authority behavior before and after full-result
 eviction: it never executes the operation again and never appends another
@@ -3146,6 +3207,13 @@ RetentionBlocker =
     reservation_generation,
     repair: PendingAssignmentIssuanceAuditRepairRetention
   }
+  PendingAssignmentIssuanceCancellationAuditRepair {
+    attempt_identity,
+    issuance_prepare_alias,
+    prepare_incarnation,
+    reservation_generation,
+    repair: PendingAssignmentIssuanceCancellationAuditRepairRetention
+  }
   PendingMigrationAuditRepair {
     migration_attempt_alias,
     reservation_generation,
@@ -3204,9 +3272,49 @@ PendingAssignmentIssuanceAuditRepairRetention =
     }
   | ReplacementTupleInstalled {
       repair_id,
-      repair_tombstone_digest,
       replacement_generation,
       unchanged_success_event_id
+    }
+  | ReplacementSinkAcknowledgementPending {
+      repair_id,
+      replacement_generation,
+      unchanged_success_event_id
+    }
+  | ReplacementAcknowledgedActivationPending {
+      repair_id,
+      replacement_generation,
+      unchanged_success_event_id,
+      acknowledgement_digest
+    }
+
+PendingAssignmentIssuanceCancellationAuditRepairRetention =
+  IntentRecorded { repair_id }
+  | OldGenerationInvalidationPending { repair_id }
+  | OldGenerationInvalidatedRebindPending {
+      repair_id,
+      invalidation_proof_digest
+    }
+  | RefusalGenerationBoundReplacementPending {
+      repair_id,
+      invalidation_proof_digest,
+      rebind_proof_digest,
+      replacement_generation
+    }
+  | ReplacementTupleInstalled {
+      repair_id,
+      replacement_generation,
+      unchanged_cancellation_refusal_event_id
+    }
+  | ReplacementSinkAcknowledgementPending {
+      repair_id,
+      replacement_generation,
+      unchanged_cancellation_refusal_event_id
+    }
+  | ReplacementAcknowledgedActivationPending {
+      repair_id,
+      replacement_generation,
+      unchanged_cancellation_refusal_event_id,
+      acknowledgement_digest
     }
 ```
 
@@ -3232,12 +3340,16 @@ eligible, and advances the blocker to `ReplacementTupleInstalled`. The next
 append transition changes it to `PendingAuditOutbox` under the replacement
 generation. For `IssueImplementationAssignment`, the same
 definite-no-append observation selects
-`PendingAssignmentIssuanceAuditRepair` instead. That blocker retains the
-exact prepared effect, evidence, request, and controller and sink capacity
-bindings and can never be represented as `PendingAuditConversion`. The next
-unchanged-success append moves it to `PendingAuditOutbox` under the
-replacement generation. For `MigrateRetentionCapacity`, the same observation
-selects `PendingMigrationAuditRepair` instead. That blocker is internally
+`PendingAssignmentIssuanceAuditRepair` for a prepared success or
+`PendingAssignmentIssuanceCancellationAuditRepair` for the canonical
+prepared-cancellation refusal. Each retains its exact prepared state,
+evidence, request, and controller and sink capacity bindings and can never be
+represented as `PendingAuditConversion`. The blocker remains specialized
+through replacement append, acknowledgement persistence, and final
+activation. That final transaction creates the exact permanent repair
+tombstone before making intent or proof bytes eligible. For
+`MigrateRetentionCapacity`, the same observation selects
+`PendingMigrationAuditRepair` instead. That blocker is internally
 keyed by the exact migration `AttemptIdentity` and old reservation generation
 but serializes only the safe migration-attempt alias. It retains its sealed
 execution and control reserves and can never be represented as
@@ -3255,9 +3367,11 @@ bounded `RecoveryCapacityReservation` in the same authority transaction. The
 reservation binds the blocker key and variant, blocker digest, schema version,
 exact closed recovery-plan id, and a mechanically generated vector of maximum
 additional record slots and bytes needed for that plan to reach eligibility.
-For `PendingAssignmentIssuanceAuditRepair`, the reservation is bound to and
-preallocated with the issuance prepare before ordinary append authorization;
-the generic conversion reserve cannot be substituted. For
+For `PendingAssignmentIssuanceAuditRepair` and
+`PendingAssignmentIssuanceCancellationAuditRepair`, the reservations are
+bound to and preallocated with the issuance prepare before ordinary append
+authorization, including the applicable permanent repair-tombstone slot; the
+generic conversion reserve cannot be substituted. For
 `PendingMigrationAuditRepair`, that
 `RecoveryCapacityReservation` is a pre-sealed component of the active
 migration's `MigrationControlReserve`; it never allocates from the general
@@ -3321,7 +3435,8 @@ those two closed markers is invalid.
 | `PendingAcceptedAttempt` | `RecoverPendingAcceptedAttempt`, then `RunControllerRetentionCleanup` |
 | `PendingAuditOutbox` | `RestoreProtectedAuditSink`, then `ReplayPendingAuditAppend`, then `RunControllerRetentionCleanup` |
 | `PendingAuditConversion` | `ExecuteNamedPendingAuditConversionPlan`, whose exact next action is selected by its nested state, then `RunControllerRetentionCleanup` |
-| `PendingAssignmentIssuanceAuditRepair` | execute only the exact action nested in `PendingAssignmentIssuanceAuditRepairRetention` until the unchanged success append is acknowledged, then `ActivatePreparedImplementationAssignment`, then `RunControllerRetentionCleanup` |
+| `PendingAssignmentIssuanceAuditRepair` | execute only the exact action nested in `PendingAssignmentIssuanceAuditRepairRetention` through unchanged-success acknowledgement and `ActivatePreparedImplementationAssignment`, then `RunControllerRetentionCleanup` |
+| `PendingAssignmentIssuanceCancellationAuditRepair` | execute only the exact action nested in `PendingAssignmentIssuanceCancellationAuditRepairRetention` through unchanged-refusal acknowledgement and `ActivatePreparedAssignmentIssuanceCancellation`, then `RunControllerRetentionCleanup` |
 | `PendingMigrationAuditRepair` | `Operator.RepairMigrationSinkAppend` by `ProtectedOperator` until append acknowledgement, then `Operator.CompleteMigrationAuditActivation` by `ProtectedOperator`, then `RunControllerRetentionCleanup` |
 
 The named pending-conversion plan is closed and state-specific:
@@ -3353,6 +3468,20 @@ Assignment-issuance audit-repair state is closed and state-specific:
 | `OldGenerationInvalidatedRebindPending` | `BindAssignmentIssuanceSuccessReplacementGeneration` |
 | `SuccessGenerationBoundReplacementPending` | `CommitAssignmentIssuanceSuccessReplacementTuple` |
 | `ReplacementTupleInstalled` | `ReplayAssignmentIssuanceSuccessAppend` |
+| `ReplacementSinkAcknowledgementPending` | `QueryOrReplayAssignmentIssuanceSuccessAppend` |
+| `ReplacementAcknowledgedActivationPending` | `ActivatePreparedImplementationAssignment` |
+
+Prepared-cancellation audit-repair state is closed and state-specific:
+
+| Pending prepared-cancellation repair state | Exact action |
+| --- | --- |
+| `IntentRecorded` | `IssueAssignmentIssuanceCancellationOldGenerationInvalidation` |
+| `OldGenerationInvalidationPending` | `ReplayAssignmentIssuanceCancellationOldGenerationInvalidation` |
+| `OldGenerationInvalidatedRebindPending` | `BindAssignmentIssuanceCancellationRefusalReplacementGeneration` |
+| `RefusalGenerationBoundReplacementPending` | `CommitAssignmentIssuanceCancellationRefusalReplacementTuple` |
+| `ReplacementTupleInstalled` | `ReplayAssignmentIssuanceCancellationRefusalAppend` |
+| `ReplacementSinkAcknowledgementPending` | `QueryOrReplayAssignmentIssuanceCancellationRefusalAppend` |
+| `ReplacementAcknowledgedActivationPending` | `ActivatePreparedAssignmentIssuanceCancellation` |
 
 After the acknowledgement is persisted,
 `Operator.CompleteMigrationAuditActivation` by `ProtectedOperator` performs
@@ -3366,6 +3495,10 @@ present in that one state. No action accepts a caller-supplied generation.
 After an invalidation proof exists, the old generation is represented by a
 non-appendable `InvalidatedReservationGeneration` type; only the proof-bound
 `ReplacementReservationGeneration` can construct a later append action.
+Each assignment-issuance repair action owns the exact `AttemptIdentity`,
+prepare identity and incarnation, unchanged success or cancellation-refusal
+event, and only the generations, proof digests, or acknowledgement digest in
+its nested state. No caller can supply or substitute any of them.
 Each migration repair action instead owns the blocker record's migration
 attempt alias, repair id, unchanged success event alias and digest, and only
 the generations and proof digests present in its exact nested state.
@@ -3390,8 +3523,10 @@ versions, reserved and consumed bounded numerics, and an integrity state. If
 the blocker is `PendingAuditConversion`, its returned blocker is the exact
 nested retention variant above and its plan expands to only that variant's
 exact action; conversion state, generation, proof fields, and action cannot be
-combined independently. `PendingMigrationAuditRepair` has the same exact
-nested-product rule and can render only its two protected operator operations.
+combined independently. Both assignment-issuance repair blockers have the
+same exact nested-product rule and render only their state-owned success or
+cancellation action. `PendingMigrationAuditRepair` has the same rule and can
+render only its two protected operator operations.
 If
 the controller cannot prove that every blocker has the exact generated
 reservation, it enters `RecoveryReserveIntegrityCorrupt`, stops normal
@@ -5386,11 +5521,17 @@ reserve.
 After acceptance, migration is one recoverable nonterminal logical operation
 under the same `AttemptIdentity`. It recomputes all reservations from the old
 and new bounded schemas, proves that every existing blocker has a complete
-route, copies every permanent replay and audit index, verifies the complete
-copy, and atomically changes the capacity generation. An execution, storage,
-or verification fault does not terminally consume the attempt or its one
-emergency route. It durably enters `Paused` with a closed safe reason, bounded
-deadline, owner epoch alias, and exact repair-and-resume action.
+route, copies every permanent replay and audit index including every
+`AssignmentIssuanceAuditRepairTombstone` and
+`AssignmentIssuanceCancellationAuditRepairTombstone` keyed by exact
+`AttemptIdentity`, verifies their entry counts, byte counts, fields, and
+digests against the reviewed destination manifest, and atomically changes the
+capacity generation. The destination permanent-tombstone capacity includes
+the exact serialized maxima of both record types before the switch is
+admissible. An execution, storage, or verification fault does not terminally
+consume the attempt or its one emergency route. It durably enters `Paused`
+with a closed safe reason, bounded deadline, owner epoch alias, and exact
+repair-and-resume action.
 `ReadProtectedAttemptStatus` reports that state. Automatic recovery resumes by
 the deadline only for `PausedSelfClearingWait` and only after its exact
 controller-verified prerequisite clears. Every
@@ -5672,7 +5813,7 @@ epoch and generation. Lease renewal and a deliberate pause are durable
 transitions. A stale worker write is `attempt-worker-fenced` and cannot alter
 the journal, sink authorization, effect, result, outbox, or response.
 
-The two assignment-issuance recovery products are closed:
+The three assignment-issuance recovery products are closed:
 
 ```
 AssignmentIssuancePreparedRecoveryState =
@@ -5701,7 +5842,7 @@ AssignmentIssuancePreparedRecoveryState =
       cancellation_refusal_audit_tuple_digest,
       next: ProofCancelPreparedAssignmentIssuanceSinkReservation
     }
-  | CancellationControllerReleasePending {
+  | CancellationRefusalInstallPending {
       issuance_prepare_alias,
       prepare_incarnation,
       sink_non_creatable_fence_proof_digest,
@@ -5709,7 +5850,7 @@ AssignmentIssuancePreparedRecoveryState =
       cancellation_reason_code,
       next_prepare_incarnation,
       cancellation_refusal_audit_tuple_digest,
-      next: ReleasePreparedAssignmentIssuanceAndInstallRefusal
+      next: InstallPreparedAssignmentIssuanceCancellationRefusal
     }
 
 AssignmentIssuanceAuditRepairState =
@@ -5739,9 +5880,61 @@ AssignmentIssuanceAuditRepairState =
     }
   | ReplacementTupleInstalled {
       repair_id,
-      repair_tombstone_digest,
       replacement_reservation_generation,
       next: ReplayAssignmentIssuanceSuccessAppend
+    }
+  | ReplacementSinkAcknowledgementPending {
+      repair_id,
+      replacement_reservation_generation,
+      next: QueryOrReplayAssignmentIssuanceSuccessAppend
+    }
+  | ReplacementAcknowledgedActivationPending {
+      repair_id,
+      replacement_reservation_generation,
+      acknowledgement_digest,
+      next: ActivatePreparedImplementationAssignment
+    }
+
+AssignmentIssuanceCancellationAuditRepairState =
+  IntentRecorded {
+    repair_id,
+    old_reservation_generation,
+    next: IssueAssignmentIssuanceCancellationOldGenerationInvalidation
+  }
+  | OldGenerationInvalidationPending {
+      repair_id,
+      old_reservation_generation,
+      next: ReplayAssignmentIssuanceCancellationOldGenerationInvalidation
+    }
+  | OldGenerationInvalidatedRebindPending {
+      repair_id,
+      invalidated_reservation_generation,
+      invalidation_proof_digest,
+      next: BindAssignmentIssuanceCancellationRefusalReplacementGeneration
+    }
+  | RefusalGenerationBoundReplacementPending {
+      repair_id,
+      invalidated_reservation_generation,
+      invalidation_proof_digest,
+      replacement_reservation_generation,
+      rebind_proof_digest,
+      next: CommitAssignmentIssuanceCancellationRefusalReplacementTuple
+    }
+  | ReplacementTupleInstalled {
+      repair_id,
+      replacement_reservation_generation,
+      next: ReplayAssignmentIssuanceCancellationRefusalAppend
+    }
+  | ReplacementSinkAcknowledgementPending {
+      repair_id,
+      replacement_reservation_generation,
+      next: QueryOrReplayAssignmentIssuanceCancellationRefusalAppend
+    }
+  | ReplacementAcknowledgedActivationPending {
+      repair_id,
+      replacement_reservation_generation,
+      acknowledgement_digest,
+      next: ActivatePreparedAssignmentIssuanceCancellation
     }
 ```
 
@@ -5780,19 +5973,34 @@ or, only for `IssueImplementationAssignment` after
      authorized_event_id,
      authorized_event_digest
    }
+-> OrdinaryActivationPending {
+     reservation_generation,
+     audit_acknowledgement = Persisted
+   }
 or, only for an issuance success with authenticated definite-no-append:
 -> AssignmentIssuanceAuditRepair {
      unchanged_success_event,
      prepare_incarnation,
      state: AssignmentIssuanceAuditRepairState
    }
--> OrdinarySinkAcknowledgementPending {
-     replacement_reservation_generation,
-     unchanged_success_event
+-> Completed {
+     assignment_issuance_repair_tombstone = Durable,
+     authority_effect = Activated,
+     response = PayloadAvailable,
+     tombstone = Durable
    }
--> OrdinaryActivationPending {
-     reservation_generation,
-     audit_acknowledgement = Persisted
+or, only for a prepared-cancellation refusal with authenticated
+definite-no-append:
+-> AssignmentIssuanceCancellationAuditRepair {
+     unchanged_cancellation_refusal_event,
+     prepare_incarnation,
+     state: AssignmentIssuanceCancellationAuditRepairState
+   }
+-> Completed {
+     assignment_issuance_cancellation_repair_tombstone = Durable,
+     authority_effect = None,
+     response = PayloadAvailable,
+     tombstone = Durable
    }
 or, only for `MigrateRetentionCapacity`:
 -> MigrationSinkAcknowledgementPending {
@@ -5817,7 +6025,8 @@ or, only for `MigrateRetentionCapacity`:
 `AcceptancePreparePending` is non-authoritative; promotion creates
 `AcceptedUnclaimed`. The pause branch is optional. After an authenticated
 definite-no-append result for an ordinary tuple other than a prepared
-assignment-issuance success, one atomic compare-and-swap
+assignment-issuance success or prepared-cancellation refusal, one atomic
+compare-and-swap
 starts conversion from the exact
 `OrdinarySinkAcknowledgementPending { old_reservation_generation,
 authorized_event_id, authorized_event_digest }` state and exact old tuple. It
@@ -5835,13 +6044,15 @@ OrdinarySinkAcknowledgementPending { old_reservation_generation, old_event }
 -> OrdinarySinkAcknowledgementPending { replacement_generation }
 ```
 
-A prepared `IssueImplementationAssignment` success and
-`MigrateRetentionCapacity` are excluded from that conversion by stored
-operation and outcome type. An issuance success enters the
-assignment-issuance repair state above and retains its prepared assignment
-effect. An issuance refusal with no prepared effect remains an ordinary
-no-effect tuple. A migration success atomically starts this nonterminal
-audit-repair branch from the same exact source state and old tuple:
+A prepared `IssueImplementationAssignment` success, its canonical
+prepared-cancellation refusal, and `MigrateRetentionCapacity` are excluded
+from that conversion by stored operation, outcome, and prepared-cancellation
+binding. An issuance success enters its dedicated repair state and retains
+its prepared assignment effect. A prepared-cancellation refusal enters its
+separate dedicated repair state and retains all quarantined release and
+restoration effects. An issuance refusal with no prepared effect remains an
+ordinary no-effect tuple. A migration success atomically starts this
+nonterminal audit-repair branch from the same exact source state and old tuple:
 
 ```
 MigrationSinkAcknowledgementPending {
@@ -5903,6 +6114,20 @@ Thus a successful stateful read's use activation, terminal journal, replay
 availability, and tombstone still commit atomically; its identical retry
 cannot consume again.
 
+A prepared-cancellation refusal uses the
+`AssignmentIssuanceCancellation` nested ordinary activation instead of
+`Generic`. Its matching prepare identity and incarnation, fence and
+cancellation proof digests, reserved next incarnation, and canonical refusal
+tuple digest are carried into
+`ActivatePreparedAssignmentIssuanceCancellation`. That final transaction,
+and no earlier refusal-install, append, or acknowledgement transaction,
+releases controller capacity, restores the evidence and request reservations,
+returns the same request, exposes fresh-incarnation eligibility, makes refusal
+replay available, creates the attempt tombstone, and terminalizes the old
+attempt. Any transaction or storage failure leaves the exact specialized
+activation state unchanged and returns only
+`implementation-assignment-issuance-cancellation-activation-retryable`.
+
 Every nonterminal status is a closed tagged
 `PendingProtectedAttemptStatus`. Each variant owns all and only its safe fields
 and its one exact action:
@@ -5951,6 +6176,13 @@ PendingProtectedAttemptStatus =
       unchanged_success_event_id, unchanged_success_event_digest,
       canonical_issuance_audit_tuple_digest, deadline,
       state: AssignmentIssuanceAuditRepairState
+    }
+  | AssignmentIssuanceCancellationAuditRepair {
+      attempt_identity, issuance_prepare_alias, prepare_incarnation,
+      unchanged_cancellation_refusal_event_id,
+      unchanged_cancellation_refusal_event_digest,
+      cancellation_refusal_audit_tuple_digest, deadline,
+      state: AssignmentIssuanceCancellationAuditRepairState
     }
   | AuditConversionIntentRecorded {
       attempt_identity, conversion_id, old_reservation_generation,
@@ -6004,6 +6236,15 @@ PendingProtectedAttemptStatus =
             sink_activation_proof_digest,
             canonical_issuance_audit_tuple_digest,
             action: ActivatePreparedImplementationAssignment
+          }
+        | AssignmentIssuanceCancellation {
+            issuance_prepare_alias,
+            prepare_incarnation,
+            sink_non_creatable_fence_proof_digest,
+            sink_absence_or_cancellation_proof_digest,
+            next_prepare_incarnation,
+            cancellation_refusal_audit_tuple_digest,
+            action: ActivatePreparedAssignmentIssuanceCancellation
           }
     }
   | MigrationActivationPending {
@@ -6084,24 +6325,33 @@ authenticated audited child commands of the accepted migration, require the
 narrow operator endpoint, and cannot invent a result, activate an effect,
 cancel an accepted attempt, or bypass child audit.
 The ordinary and migration sink-acknowledgement and activation tags are
-different wire variants. The ordinary activation tag owns exactly one nested
-activation variant: no-effect refusals and non-issuance attempts use
-`CompleteAtomicActivation`, while a prepared assignment-issuance success
-carries its prepare incarnation, sink activation proof, canonical audit tuple
-digest, and `ActivatePreparedImplementationAssignment`. An issuance
-cancellation refusal therefore uses only the generic no-effect activation;
-operation type cannot reinterpret it as assignment activation. Neither
+different wire variants. The ordinary activation tag owns exactly one of
+three closed nested activation variants: ordinary no-effect refusals and
+non-issuance attempts use
+`CompleteAtomicActivation`; a prepared assignment-issuance success carries
+its prepare incarnation, sink activation proof, canonical audit tuple digest,
+and `ActivatePreparedImplementationAssignment`; and a prepared-cancellation
+refusal carries its immutable cancellation binding and only
+`ActivatePreparedAssignmentIssuanceCancellation`. The cancellation variant
+cannot expose controller release, evidence or request restoration,
+fresh-incarnation eligibility, replay availability, or old-attempt
+terminalization until durable acknowledgement has constructed that exact
+variant. Operation type cannot reinterpret it as generic or assignment
+activation. Neither
 ordinary variant can address a migration reserve. Migration
 variants own only `RepairMigrationSinkAppend` and
 `CompleteMigrationAuditActivation` through their fixed child slots.
 Operation type is never consulted to reinterpret a generic status tag.
 `AssignmentIssuancePreparedRecovery` and
-`AssignmentIssuanceAuditRepair` likewise own their nested state and exact
-next action. The former can only resume the immutable prepared handler or
-advance the fenced proof-cancellation path. The latter can only invalidate,
-rebind, install, or replay the unchanged issuance success tuple. Neither can
-parse as generic audit conversion, emit `accepted-attempt-crash-before-state`
-or `audit-event-flush-failed`, or carry an action from another nested state.
+both assignment-issuance repair variants likewise own their nested state and
+exact next action. Prepared recovery can only resume the immutable prepared
+handler or advance the fenced proof-cancellation path. Success repair can only
+invalidate, rebind, install, append, acknowledge, or activate the unchanged
+issuance success tuple. Cancellation repair can do the same only for the
+unchanged canonical cancellation refusal, ending in specialized cancellation
+activation. None can parse as generic audit conversion, emit
+`accepted-attempt-crash-before-state` or `audit-event-flush-failed`, or carry
+an action from another nested state.
 Each `Cancellation*` journal projection is atomically joined to the
 corresponding `PreparedAttemptCancellation*` prepare state and identical
 prepare incarnation, reason, proof digests, next incarnation, and refusal
@@ -6132,9 +6382,11 @@ Crash handling is closed at every boundary:
    accepted-attempt, prepare-incarnation, sink-proof, assignment-binding, and
    canonical-audit join resumes the original handler transaction. A closed
    integrity failure advances only through the permanent sink fence,
-   proof-cancellation, controller release, evidence and request release, and
-   newer-incarnation eligibility restoration before it can install its
-   cancellation refusal outbox;
+   proof-cancellation, and cancellation-refusal installation while retaining
+   controller capacity, evidence, the request reservation, and
+   newer-incarnation eligibility in quarantine. Only durable refusal
+   acknowledgement permits the specialized final activation to release and
+   restore them and terminalize the old attempt;
 7. a crash during the handler transaction leaves either the prior processing
    state or the complete quarantined tuple, never a partial effect, result, or
    event;
@@ -6148,9 +6400,13 @@ Crash handling is closed at every boundary:
 10. a crash after acknowledgement persistence leaves
     `OrdinaryActivationPending` or `MigrationActivationPending`; ordinary
     recovery performs the one exact nested activation, with assignment
-    issuance permitted only through
-    `ActivatePreparedImplementationAssignment`, while migration activation is
-    reachable only through
+    issuance success permitted only through
+    `ActivatePreparedImplementationAssignment` and prepared cancellation only
+    through `ActivatePreparedAssignmentIssuanceCancellation`. A dedicated
+    issuance success or cancellation repair instead remains in its exact
+    `ReplacementAcknowledgedActivationPending` state until that same
+    operation-specific activation commits. Migration activation is reachable
+    only through
     the `CompleteMigrationAuditActivation` child command and its fixed
     audit-activation slot;
 11. after completion but before delivery, identical retry returns the stored
@@ -6161,7 +6417,8 @@ Crash handling is closed at every boundary:
 
 Startup and scheduled recovery scan every nonterminal prepare, including
 every assignment issuance prepare, prepared-handler recovery, prepared
-cancellation state, issuance audit-repair intent and proof, journal,
+cancellation state, issuance success and cancellation audit-repair state,
+intent, proof, replacement append, acknowledgement, and activation, journal,
 reservation binding, outbox row, generic conversion intent, invalidation
 proof, and rebind proof, every pending assignment revocation or
 revocation-capacity
@@ -6255,14 +6512,19 @@ enters `AssignmentIssuanceAuditRepair` instead of generic conversion:
    generation to the same issuance event id, digest, and canonical bytes and
    persist the rebind proof;
 4. `CommitAssignmentIssuanceSuccessReplacementTuple` installs the
-   proof-bound replacement tuple and immutable
-   `AssignmentIssuanceAuditRepairTombstone` without changing the prepared
-   effect, result, evidence, request, or capacity; and
-5. `ReplayAssignmentIssuanceSuccessAppend` returns to
-   `OrdinarySinkAcknowledgementPending` on the replacement generation. After
-   durable acknowledgement, the exact
-   `ActivatePreparedImplementationAssignment` transaction installs the
-   assignment as already specified.
+   proof-bound replacement tuple without changing the prepared effect, result,
+   evidence, request, capacity, or proof eligibility;
+5. `ReplayAssignmentIssuanceSuccessAppend` enters
+   `ReplacementSinkAcknowledgementPending` on the replacement generation.
+   `QueryOrReplayAssignmentIssuanceSuccessAppend` can only recover the same
+   append and original acknowledgement; and
+6. persistence of that acknowledgement enters
+   `ReplacementAcknowledgedActivationPending`. The exact
+   `ActivatePreparedImplementationAssignment` transaction atomically creates
+   the immutable `AssignmentIssuanceAuditRepairTombstone` with the
+   acknowledgement digest, makes the raw intent and proof bytes eligible, and
+   installs the assignment, replay result, attempt tombstone, and completed
+   attempt as already specified.
 
 A crash before repair intent leaves the exact old issuance-success
 acknowledgement state. Crashes after intent, invalidation request,
@@ -6276,8 +6538,65 @@ from any other source state returns only
 storage, invalidation, rebind, append, or acknowledgement failure returns only
 `implementation-assignment-issuance-audit-repair-retryable` with the current
 safe repair state. None of those conditions changes the prepared success or
-enters generic conversion. Generic
-`audit-event-flush-failed` is unconstructible for an issuance success.
+enters generic conversion. A tombstone construction or final activation
+failure remains `ReplacementAcknowledgedActivationPending` with every raw
+repair proof ineligible. Generic `audit-event-flush-failed` is unconstructible
+for an issuance success.
+
+For the canonical prepared-cancellation refusal, the authenticated
+definite-no-append proof enters
+`AssignmentIssuanceCancellationAuditRepair` instead of generic conversion:
+
+1. one controller transaction compares the exact
+   `OrdinarySinkAcknowledgementPending` source tuple, accepted
+   `AttemptIdentity`, prepare identity and incarnation, permanent sink-fence
+   and proof-cancellation digests, cancellation reason, reserved next
+   incarnation, and canonical cancellation-refusal event id, digest, and
+   bytes digest. It records
+   `AssignmentIssuanceCancellationAuditRepairState::IntentRecorded` binding
+   the old generation and unchanged refusal. The controller reservation,
+   evidence, request reservation, newer-incarnation eligibility, replay
+   result, and old attempt remain quarantined and nonterminal;
+2. `IssueAssignmentIssuanceCancellationOldGenerationInvalidation` durably
+   enters `OldGenerationInvalidationPending`; the sink invalidates exactly the
+   old ordinary-audit generation, and
+   `ReplayAssignmentIssuanceCancellationOldGenerationInvalidation` persists
+   the proof;
+3. only that proof permits
+   `BindAssignmentIssuanceCancellationRefusalReplacementGeneration` to bind
+   the next generation to the unchanged canonical cancellation-refusal event
+   id, digest, and bytes and persist the rebind proof;
+4. `CommitAssignmentIssuanceCancellationRefusalReplacementTuple` installs
+   only the proof-bound replacement tuple. It does not release, restore,
+   expose eligibility, terminalize, or make raw proofs eligible;
+5. `ReplayAssignmentIssuanceCancellationRefusalAppend` enters
+   `ReplacementSinkAcknowledgementPending`.
+   `QueryOrReplayAssignmentIssuanceCancellationRefusalAppend` can recover only
+   that unchanged append and original acknowledgement; and
+6. persistence of that acknowledgement enters
+   `ReplacementAcknowledgedActivationPending`. The exact
+   `ActivatePreparedAssignmentIssuanceCancellation` transaction atomically
+   creates the immutable
+   `AssignmentIssuanceCancellationAuditRepairTombstone` with the
+   acknowledgement digest, makes raw repair proofs eligible, proof-releases
+   controller capacity, restores the evidence and request reservations,
+   returns the same request with its reserved newer incarnation, exposes
+   fresh-incarnation eligibility, makes
+   refusal replay available, creates the attempt tombstone, and terminalizes
+   the old attempt.
+
+A crash before cancellation-repair intent leaves the exact old refusal
+acknowledgement state. A crash after any intent, invalidation, rebind,
+replacement, append, acknowledgement, or activation boundary resumes only
+the exact nested state and action. A delayed old-generation append is stale.
+A tuple mismatch, invalid source state, or retryable invalidation, rebind,
+append, acknowledgement, tombstone, storage, or activation failure returns
+only its dedicated
+`implementation-assignment-issuance-cancellation-audit-repair-*` refusal and
+current safe state. No such condition releases capacity or evidence, restores
+the request, exposes the newer incarnation, terminalizes the old attempt,
+changes the canonical cancellation refusal, or enters generic conversion.
+Generic `audit-event-flush-failed` is unconstructible for this refusal.
 
 For `MigrateRetentionCapacity`, the same definite-no-append proof enters
 `PendingMigrationAuditRepair` instead:
@@ -6532,14 +6851,18 @@ Only every remaining accepted operation can select
 Definite-no-append selection first requires the exact authorized
 sink-acknowledgement source tuple. It then dispatches by the already stored
 operation and outcome type: a prepared `IssueImplementationAssignment`
-success selects `AssignmentIssuanceAuditRepair`,
-`MigrateRetentionCapacity` selects `PendingMigrationAuditRepair`, and only a
+success selects `AssignmentIssuanceAuditRepair`; the canonical refusal bound
+to `AssignmentIssuancePreparedRecovery` selects
+`AssignmentIssuanceCancellationAuditRepair`;
+`MigrateRetentionCapacity` selects `PendingMigrationAuditRepair`; and only a
 remaining ordinary tuple, including an issuance refusal with no prepared
-effect, selects generic refusal conversion. A tuple mismatch or invalid
-source state is returned before any branch writes an intent. An issuance
-repair failure retains the issuance branch and its unchanged success tuple;
-it cannot fall through to `audit-event-flush-failed`. These precedence joins
-are generated, not an ordered string comparison in a handler.
+effect, selects generic refusal conversion. Prepared-cancellation identity is
+tested before the generic no-effect-refusal predicate. A tuple mismatch or
+invalid source state is returned before any branch writes an intent. An
+issuance success or cancellation repair failure retains its dedicated branch
+and unchanged event; neither can fall through to
+`audit-event-flush-failed`. These precedence joins are generated, not an
+ordered string comparison in a handler.
 
 Completion refusal precedence is also fixed. After endpoint authentication and
 assignment resolution, `RevocationPending` and terminal assignment states
@@ -6665,12 +6988,20 @@ RemedyAction =
   | ResumePreparedAssignmentIssuanceHandler
   | FencePreparedAssignmentIssuanceForCancellation
   | ProofCancelPreparedAssignmentIssuanceSinkReservation
-  | ReleasePreparedAssignmentIssuanceAndInstallRefusal
+  | InstallPreparedAssignmentIssuanceCancellationRefusal
+  | ActivatePreparedAssignmentIssuanceCancellation
   | IssueAssignmentIssuanceOldGenerationInvalidation
   | ReplayAssignmentIssuanceOldGenerationInvalidation
   | BindAssignmentIssuanceSuccessReplacementGeneration
   | CommitAssignmentIssuanceSuccessReplacementTuple
   | ReplayAssignmentIssuanceSuccessAppend
+  | QueryOrReplayAssignmentIssuanceSuccessAppend
+  | IssueAssignmentIssuanceCancellationOldGenerationInvalidation
+  | ReplayAssignmentIssuanceCancellationOldGenerationInvalidation
+  | BindAssignmentIssuanceCancellationRefusalReplacementGeneration
+  | CommitAssignmentIssuanceCancellationRefusalReplacementTuple
+  | ReplayAssignmentIssuanceCancellationRefusalAppend
+  | QueryOrReplayAssignmentIssuanceCancellationRefusalAppend
 ```
 
 Their generated protected command mapping is exact:
@@ -6692,22 +7023,30 @@ Their generated protected command mapping is exact:
 | `RestoreAssignmentIssuanceCapacity { Controller | Sink }` | restore only the named dedicated capacity owner from the exact `AssignmentIssuanceCapacityUnavailable` variant; it cannot create a prepare or assignment |
 | `RetrySamePendingAssignmentIssuance` | `AssignmentIssuance.IssueImplementationAssignment` for the same `RequestPending` request after controller-capacity restoration, or the same `IssuancePending` prepare after sink-capacity restoration; after proof-backed restoration it allocates the next prepare incarnation, never the fenced incarnation, and no fresh request or assignment identity is allowed |
 | `ReadCurrentAssignmentIssuanceRecovery` | `RecoveryRead.ReadAssignmentRecoveryState { context: FreshAssignmentFlow }` for the exact initial partition or terminal predecessor bound to the causing assignment request |
-| `InvokeReturnedAssignmentIssuanceRecoveryAction` | invoke only the action nested in the returned `AssignmentIssuancePreparedRecoveryState` or `AssignmentIssuanceAuditRepairState`; no caller may supply a state or action discriminator |
+| `InvokeReturnedAssignmentIssuanceRecoveryAction` | invoke only the action nested in the returned `AssignmentIssuancePreparedRecoveryState`, `AssignmentIssuanceAuditRepairState`, `AssignmentIssuanceCancellationAuditRepairState`, or specialized assignment-issuance `OrdinaryActivationPending` variant; no caller may supply a state or action discriminator |
 | `CreateOrAdoptAssignmentIssuanceSinkReservation` | create or adopt only the sink reservation bound to `SinkReservationCreateOrAdoptPending`, its exact ordinary accepted attempt, prepare identity and incarnation, assignment binding, and canonical issuance audit tuple |
 | `ActivateAssignmentIssuanceSinkReservation` | activate only the adopted sink reservation owned by `SinkReservationActivationPending` with that same incarnation and binding |
 | `FenceAssignmentIssuanceSinkIncarnation` | durably install the permanent non-creatable sink fence for the exact non-adoptable prepare identity and incarnation before any proof-cancellation action is constructible |
-| `ActivatePreparedImplementationAssignment` | only from the matching ordinary accepted attempt's `OrdinaryActivationPending` after durable audit acknowledgement, atomically install `Active`, the exact `Issued` eligibility state, settled evidence, available replay result, immutable attempt tombstone, and completed attempt |
+| `ActivatePreparedImplementationAssignment` | only from the matching ordinary accepted attempt's `OrdinaryActivationPending::AssignmentIssuance` or issuance-repair `ReplacementAcknowledgedActivationPending` after durable audit acknowledgement; atomically install `Active`, the exact `Issued` eligibility state, settled evidence, available replay result, immutable attempt tombstone, and completed attempt, and on the repair path also create `AssignmentIssuanceAuditRepairTombstone` before raw repair proofs become eligible |
 | `ProofCancelAssignmentIssuanceSinkReservation` | obtain sink absence or cancellation proof only from `SinkReservationProofCancellationPending` with the exact incarnation's durable non-creatable fence proof; time alone cannot satisfy it |
 | `ReleaseAssignmentIssuanceControllerReservation` | release controller capacity and restore the same accepted attempt's request and evidence eligibility only from `ControllerReservationReleasePending` with both sink proofs; its retry must allocate a newer incarnation |
 | `ResumePreparedAssignmentIssuanceHandler` | from only `ResumePreparedHandlerPending`, replay the original ordinary handler transaction with the exact accepted attempt, prepare incarnation, sink activation proof, assignment binding, and canonical issuance audit tuple |
 | `FencePreparedAssignmentIssuanceForCancellation` | from only `CancellationSinkFencePending`, persist the permanent non-creatable fence for the exact prepared incarnation and its recorded cancellation reason |
 | `ProofCancelPreparedAssignmentIssuanceSinkReservation` | from only `CancellationSinkProofPending`, obtain absence or cancellation proof for the exact fenced activated sink reservation |
-| `ReleasePreparedAssignmentIssuanceAndInstallRefusal` | from only `CancellationControllerReleasePending`, atomically proof-release controller capacity and evidence, restore the same request with its recorded newer incarnation, and install the no-effect cancellation refusal and outbox; it never completes the attempt before ordinary refusal acknowledgement |
+| `InstallPreparedAssignmentIssuanceCancellationRefusal` | from only `CancellationRefusalInstallPending`, install the unchanged no-effect cancellation refusal and outbox while retaining controller capacity, evidence, the request reservation, newer-incarnation eligibility, and the old attempt in quarantine |
+| `ActivatePreparedAssignmentIssuanceCancellation` | only from matching `OrdinaryActivationPending::AssignmentIssuanceCancellation` or cancellation-repair `ReplacementAcknowledgedActivationPending` after durable acknowledgement; atomically proof-release controller capacity, restore the evidence and request reservations, return the same request with its recorded newer incarnation, expose fresh-incarnation eligibility, make replay available, create the applicable repair tombstone when repair occurred and the attempt tombstone, and complete the old attempt |
 | `IssueAssignmentIssuanceOldGenerationInvalidation` | from only issuance repair `IntentRecorded`, durably enter invalidation pending and invalidate the exact old ordinary-audit generation |
 | `ReplayAssignmentIssuanceOldGenerationInvalidation` | from only issuance repair `OldGenerationInvalidationPending`, replay the same invalidation and persist its proof |
 | `BindAssignmentIssuanceSuccessReplacementGeneration` | from only issuance repair `OldGenerationInvalidatedRebindPending`, bind the next generation to the unchanged issuance success event and persist the rebind proof |
-| `CommitAssignmentIssuanceSuccessReplacementTuple` | from only issuance repair `SuccessGenerationBoundReplacementPending`, install the proof-bound replacement tuple and repair tombstone without changing issuance effect, evidence, request, or capacity |
+| `CommitAssignmentIssuanceSuccessReplacementTuple` | from only issuance repair `SuccessGenerationBoundReplacementPending`, install the proof-bound replacement tuple without changing issuance effect, evidence, request, capacity, or proof eligibility |
 | `ReplayAssignmentIssuanceSuccessAppend` | from only issuance repair `ReplacementTupleInstalled`, replay the unchanged success event on the replacement generation |
+| `QueryOrReplayAssignmentIssuanceSuccessAppend` | from only issuance repair `ReplacementSinkAcknowledgementPending`, query or replay the unchanged success event on the replacement generation and persist only its original acknowledgement |
+| `IssueAssignmentIssuanceCancellationOldGenerationInvalidation` | from only prepared-cancellation repair `IntentRecorded`, durably enter invalidation pending and invalidate the exact old ordinary-audit generation |
+| `ReplayAssignmentIssuanceCancellationOldGenerationInvalidation` | from only prepared-cancellation repair `OldGenerationInvalidationPending`, replay the same invalidation and persist its proof |
+| `BindAssignmentIssuanceCancellationRefusalReplacementGeneration` | from only prepared-cancellation repair `OldGenerationInvalidatedRebindPending`, bind the next generation to the unchanged canonical cancellation-refusal event and persist the rebind proof |
+| `CommitAssignmentIssuanceCancellationRefusalReplacementTuple` | from only prepared-cancellation repair `RefusalGenerationBoundReplacementPending`, install the proof-bound unchanged refusal tuple without releasing, restoring, terminalizing, or changing proof eligibility |
+| `ReplayAssignmentIssuanceCancellationRefusalAppend` | from only prepared-cancellation repair `ReplacementTupleInstalled`, replay the unchanged canonical cancellation refusal on the replacement generation |
+| `QueryOrReplayAssignmentIssuanceCancellationRefusalAppend` | from only prepared-cancellation repair `ReplacementSinkAcknowledgementPending`, query or replay only that unchanged refusal and persist only its original acknowledgement |
 | every remaining value above | the named internal controller action with all parameters taken from the causing refusal product |
 
 No renderer accepts free-form command text or caller-supplied recovery
@@ -6725,7 +7064,7 @@ The refusal catalog and core plans are closed:
 | `accepted-conflict-budget-exhausted` | exact `AcceptedConflictOperationClass`, including the risk target attempt identity when applicable, capacity generation, used and maximum conflict entries and bytes | `RiskOperation`: return the current exact handle-free `OriginalPeerRiskRecovery` state-and-action variant; only `RecoveryRead.ReadRiskRecoveryState` by `ProtectedOperator` with `FreshForThisRead` returns `ProtectedOperatorRiskRecoveryContext`, with `RequestNewRiskOperationIntent` limited to `ClosedMutationPermitted`; `CallerKeyOperation`: retry the named endpoint operation through its original authorized caller with a fresh caller key |
 | `protected-operation-invalid-state` | lifecycle, operation, current state | `ReadLifecycleStatus`, then `UseStatePermittedOperation` |
 | `accepted-attempt-crash-before-state` | endpoint, non-migration operation, attempt identity; assignment issuance is eligible only when no durable issuance prepare exists | `ReadProtectedAttemptStatus`, then `FollowOperationSpecificProtectedAttemptRecovery` |
-| `audit-event-flush-failed` | endpoint, non-migration ordinary tuple and attempt identity; a prepared assignment-issuance success is excluded | `RestoreProtectedAuditSink`, then `ReadProtectedAttemptStatus`, then `FollowOperationSpecificProtectedAttemptRecovery` |
+| `audit-event-flush-failed` | endpoint, non-migration ordinary tuple and attempt identity; a prepared assignment-issuance success and its canonical prepared-cancellation refusal are excluded | `RestoreProtectedAuditSink`, then `ReadProtectedAttemptStatus`, then `FollowOperationSpecificProtectedAttemptRecovery` |
 | `audit-event-id-conflict` | attempt identity, audit event alias, expected and actual event digests | `RepairAppendSinkIntegrity`, then `ReplayPendingAuditAppend` |
 | `acceptance-prepare-digest-conflict` | sink namespace alias, attempt identity, reservation alias and generation, authoritative and presented prepare digests | `DiscardConflictingAcceptancePrepare`, then `ReplayAuthoritativeAcceptancePrepare` |
 | `audit-append-authorization-invalid` | exact `AuditAppendAuthorizationRefusalProduct::Invalid` | `RequestFreshControllerAuditAppendAuthorization`, then `ReplayPendingAuditAppend` |
@@ -6806,11 +7145,15 @@ The refusal catalog and core plans are closed:
 | `implementation-assignment-revocation-unauthorized` | presented assignment alias and presented principal safe alias | `ReadAssignmentRevocationRecovery` |
 | `implementation-assignment-capability-unavailable` | presented assignment alias and caller declaration `CapabilityUnavailable` or `CapabilityAbandoned` | `ReadAssignmentRevocationRecovery`, then `InvokeReturnedAssignmentRecoveryAction` |
 | `implementation-assignment-issuance-capacity-unavailable` | exact `AssignmentIssuanceCapacityUnavailable::ControllerBeforePrepare` or `SinkAfterPrepare`, with assignment request id, bounded required and available capacity, and issuance prepare alias only for the sink case | `RestoreAssignmentIssuanceCapacity { causing_role }`, then `RetrySamePendingAssignmentIssuance`; no free-form advice, fresh request, fresh prepare, or assignment activation is constructible |
-| `implementation-assignment-issuance-prepared-recovery-retryable` | accepted attempt identity, issuance prepare alias and incarnation, exact `AssignmentIssuancePreparedRecoveryState`, canonical issuance audit tuple digest, and closed fence, cancellation, release, storage, or transaction failure code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
-| `implementation-assignment-issuance-prepared-recovery-cancelled` | accepted attempt identity, assignment request id, issuance prepare alias and fenced incarnation, closed cancellation reason code, canonical cancellation refusal audit tuple digest, and restored next prepare incarnation | `ReadCurrentAssignmentIssuanceRecovery`, then `RetrySamePendingAssignmentIssuance`; the terminal refusal proves sink cancellation, controller release, evidence release, and request restoration and cannot reactivate the fenced incarnation |
+| `implementation-assignment-issuance-prepared-recovery-retryable` | accepted attempt identity, issuance prepare alias and incarnation, exact `AssignmentIssuancePreparedRecoveryState`, canonical issuance audit tuple digest, and closed fence, cancellation, refusal-install, storage, or transaction failure code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
+| `implementation-assignment-issuance-prepared-recovery-cancelled` | accepted attempt identity, assignment request id, issuance prepare alias and fenced incarnation, closed cancellation reason code, canonical cancellation refusal audit tuple digest, and restored next prepare incarnation | `ReadCurrentAssignmentIssuanceRecovery`, then `RetrySamePendingAssignmentIssuance`; constructible only after durable refusal acknowledgement and atomic cancellation activation, so the terminal refusal proves sink cancellation, controller release, evidence and request restoration, fresh-incarnation eligibility, and old-attempt terminalization and cannot reactivate the fenced incarnation |
+| `implementation-assignment-issuance-cancellation-activation-retryable` | accepted attempt identity, issuance prepare alias and incarnation, canonical cancellation refusal audit tuple digest, acknowledgement digest, exact `OrdinaryActivationPending::AssignmentIssuanceCancellation` state, and closed controller-release, evidence-restoration, request-restoration, replay, tombstone, storage, or transaction failure code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction`; retry only the same atomic post-audit activation |
 | `implementation-assignment-issuance-audit-repair-tuple-mismatch` | accepted attempt identity, issuance prepare alias and incarnation, repair state code, old or replacement reservation generation, expected and presented canonical issuance audit tuple digests, and closed field code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
 | `implementation-assignment-issuance-audit-repair-invalid-state` | accepted attempt identity, issuance prepare alias and incarnation, current attempt state code, requested issuance repair action | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
-| `implementation-assignment-issuance-audit-repair-retryable` | accepted attempt identity, issuance prepare alias and incarnation, unchanged issuance event id and digest, exact `AssignmentIssuanceAuditRepairState`, and closed invalidation, rebind, append, acknowledgement, or storage failure code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
+| `implementation-assignment-issuance-audit-repair-retryable` | accepted attempt identity, issuance prepare alias and incarnation, unchanged issuance event id and digest, exact `AssignmentIssuanceAuditRepairState`, and closed invalidation, rebind, append, acknowledgement, tombstone, activation, or storage failure code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
+| `implementation-assignment-issuance-cancellation-audit-repair-tuple-mismatch` | accepted attempt identity, issuance prepare alias and incarnation, repair state code, old or replacement reservation generation, expected and presented canonical cancellation refusal tuple digests, and closed field code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
+| `implementation-assignment-issuance-cancellation-audit-repair-invalid-state` | accepted attempt identity, issuance prepare alias and incarnation, current attempt state code, requested cancellation repair action | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
+| `implementation-assignment-issuance-cancellation-audit-repair-retryable` | accepted attempt identity, issuance prepare alias and incarnation, unchanged cancellation refusal event id and digest, exact `AssignmentIssuanceCancellationAuditRepairState`, and closed invalidation, rebind, append, acknowledgement, tombstone, activation, or storage failure code | `AttemptStatus.ReadProtectedAttemptStatus` by `OriginalAttemptPeerOrProtectedOperator`, then `InvokeReturnedAssignmentIssuanceRecoveryAction` |
 | `implementation-assignment-revocation-audit-capacity-unavailable` | presented assignment alias, active assignment generation, dedicated controller or sink capacity role, bounded required and available capacity | `RestoreAssignmentRevocationAuditCapacity`, then `ReadAssignmentRevocationRecovery` |
 | `implementation-assignment-revocation-pending` | presented assignment alias, pending reason, revocation identity alias, event id, exact audit safe state, and reserved-use count | `ReadAssignmentRevocationRecovery`, then only the exact returned action: audit work resumes, acknowledged live uses wait and reread, or acknowledged zero uses finalize |
 | `implementation-assignment-revocation-audit-retry-failed` | presented assignment alias, revocation identity alias, unchanged event id and digest, exact `AssignmentRevocationAuditWorkSafeState`, and closed append, invalidation, rebind, acknowledgement, or storage failure code | `ResumeAssignmentRevocationAudit`, then `ReadAssignmentRevocationRecovery` |
@@ -7123,10 +7466,11 @@ corpus separately exercises:
   settled evidence, replay availability, the capability, and the attempt
   tombstone remain unconstructible until sink activation is complete, the
   canonical ordinary issuance event is acknowledged durably, and the attempt
-  is in `OrdinaryActivationPending`. Planted direct activation from
-  `PreparedForOrdinaryAudit`, every cancellation state, a different accepted
-  attempt, a mismatched audit tuple, or an unacknowledged ordinary audit
-  fails. The one valid `ActivatePreparedImplementationAssignment` transaction
+  is in   `OrdinaryActivationPending`. Planted direct assignment activation from
+  `PreparedForOrdinaryAudit`, every prepared-cancellation or cancellation
+  repair state, a different accepted attempt, a mismatched audit tuple, or an
+  unacknowledged ordinary audit fails. The one valid
+  `ActivatePreparedImplementationAssignment` transaction
   installs `Active`, the exact `Issued` successor state, settled evidence,
   replay result, tombstone, and completed attempt atomically. The complete
   accepted-attempt crash matrix includes every boundary after
@@ -7137,17 +7481,26 @@ corpus separately exercises:
   One-field integrity-corruption fixtures for each controller-owned join
   operand instead enter the single prepared cancellation graph. Generated
   transitions cover cancellation intent,
-  permanent sink fence, sink proof-cancellation, controller release, evidence
-  and request release, newer-incarnation eligibility restoration, refusal
-  tuple installation, refusal append acknowledgement, and old-attempt
-  terminalization, with a crash and restart before and after every boundary.
+  permanent sink fence, sink proof-cancellation, refusal tuple installation
+  with controller capacity, evidence, request reservation, and the reserved
+  newer incarnation still quarantined, refusal append acknowledgement, and
+  the final atomic controller release, evidence and request restoration,
+  fresh-incarnation eligibility, replay availability, attempt tombstone, and
+  old-attempt terminalization, with a crash and restart before and after every
+  boundary.
   Each case asserts that the old incarnation cannot create, adopt, activate,
-  append, or mint; no terminal old attempt coexists with a live prepare,
-  evidence reservation, controller reservation, or sink reservation; the
-  restored request carries exactly the recorded next incarnation; and no
-  direct edge skips a proof, restoration, refusal audit, or terminal
-  activation. Retryable cancellation failures expose only the exact nested
-  action, while the settled terminal refusal maps only to
+  append, or mint; every pre-acknowledgement state still owns controller
+  capacity, evidence, and the request reservation and exposes no
+  fresh-incarnation eligibility; no terminal old attempt coexists with a live
+  prepare, evidence reservation, controller reservation, or sink reservation;
+  the post-acknowledgement transaction restores the request with exactly the
+  recorded next incarnation; and no direct edge skips a proof, refusal audit,
+  or specialized terminal activation. Planted transactions that release
+  controller capacity, restore evidence or the request, expose the newer
+  incarnation, make replay available, create the attempt tombstone, or
+  terminalize the old attempt before acknowledgement fail atomically.
+  Retryable cancellation failures expose only the exact nested action, while
+  the settled terminal refusal maps only to
   `ReadCurrentAssignmentIssuanceRecovery` followed by retry of that same
   request; the complete
   `Available -> RequestPending -> IssuancePending -> Issued`
@@ -7439,8 +7792,9 @@ corpus separately exercises:
   `OrdinarySinkAcknowledgementPending` tuple and generate every
   `AssignmentIssuanceAuditRepairState` transition and crash boundary:
   intent, invalidation pending, invalidation proof, unchanged-success rebind,
-  replacement installation, replacement append, acknowledgement persistence,
-  and `ActivatePreparedImplementationAssignment`. Every case retains the same
+  replacement installation, replacement append pending, acknowledgement
+  persistence, and `ActivatePreparedImplementationAssignment`. Every case
+  retains the same
   accepted attempt, prepare identity and incarnation, sink activation proof,
   assignment binding, canonical success event and bytes, prepared effect,
   replay result, evidence, request, and controller and sink revocation
@@ -7450,7 +7804,35 @@ corpus separately exercises:
   issuance success cannot enter `PendingAuditConversion`, replace success with
   `audit-event-flush-failed`, release evidence or capacity, activate before
   acknowledgement, replay an invalidated generation, or pair one nested state
-  with another state's action. Separate migration cases prove
+  with another state's action. Exact tombstone fixtures prove
+  `AssignmentIssuanceAuditRepairTombstone` is keyed by the exact
+  `AttemptIdentity`, has only the prepare identity digest and incarnation, old
+  and replacement generations, unchanged event id and digest, repair-intent,
+  invalidation-proof, and rebind-proof digests, and acknowledgement digest, is
+  charged to permanent
+  controller tombstone capacity, and is created atomically with final
+  activation. Raw intent and proof bytes remain ineligible before that commit.
+  Missing, extra, cross-attempt, wrong-incarnation, wrong-generation,
+  wrong-event, wrong-proof-digest, and wrong-acknowledgement fields fail.
+  Separate prepared-cancellation cases start from the exact canonical refusal
+  `OrdinarySinkAcknowledgementPending` tuple and generate every
+  `AssignmentIssuanceCancellationAuditRepairState` and crash boundary:
+  intent, old-generation invalidation pending and proof, unchanged-refusal
+  rebind, replacement installation, replacement append pending,
+  acknowledgement persistence, repair-tombstone creation, and
+  `ActivatePreparedAssignmentIssuanceCancellation`. They assert the refusal
+  event id, digest, and bytes never change; controller capacity, evidence, the
+  request reservation, newer-incarnation eligibility, replay result, and old
+  attempt remain quarantined through acknowledgement; raw repair proofs remain
+  ineligible until the cancellation-repair tombstone is durable; and the
+  final activation releases, restores, exposes eligibility, creates both
+  tombstones, and terminalizes atomically. One-field tuple mutations,
+  wrong-source states, and every nested state/action substitution select only
+  the dedicated cancellation repair refusal and remedy. Generated precedence
+  negatives prove the prepared-cancellation refusal cannot enter
+  `PendingAuditConversion`, become `audit-event-flush-failed`, use the success
+  repair path, replay an invalidated generation, or expose any final effect
+  before acknowledgement. Separate migration cases prove
   `MigrateRetentionCapacity` cannot enter generic conversion or
   `audit-event-flush-failed`; every definite-no-append crash boundary retains
   the same migration attempt, execution, control, and integrity reserves,
@@ -7506,8 +7888,10 @@ corpus separately exercises:
   unavailable partial dispatch, resumable abandoned capsule, unexpired
   approval receipt, unrecorded trusted merge completion, pending acceptance
   prepare, pending accepted attempt, pending outbox, and
-  `PendingAuditConversion`, `PendingAssignmentIssuanceAuditRepair`, and
-  `PendingMigrationAuditRepair` at each of their five nested states. Each
+  `PendingAuditConversion` and `PendingMigrationAuditRepair` at each of their
+  five nested states, plus `PendingAssignmentIssuanceAuditRepair` and
+  `PendingAssignmentIssuanceCancellationAuditRepair` at each of their seven
+  nested states. Each
   asserts its exact serialized blocker and blocker
   digest, recovery plan id, reservation alias and reservation digest, plus the
   configured bounds in the original refusal, then direct execution of that
@@ -7517,7 +7901,12 @@ corpus separately exercises:
   replacement activation; replacement activation atomically creates the
   immutable conversion tombstone digests and makes those bytes eligible; and
   every crash resumes the exact state-specific action without replaying the
-  invalidated generation. Migration repair fixtures prove that status uses
+  invalidated generation. Assignment-issuance repair fixtures prove both
+  blockers remain specialized through replacement append,
+  acknowledgement, and activation; both raw proof sets remain ineligible
+  until their exact post-acknowledgement repair tombstone is durable; and a
+  full general store still admits every pre-reserved repair action and final
+  activation. Migration repair fixtures prove that status uses
   `MigrationIntegrityReserve`, repair uses `MigrationControlReserve`, and both
   preserve the success tuple. From `MigrationActivationPending`,
   `CompleteMigrationAuditActivation` succeeds using only
@@ -7554,7 +7943,15 @@ corpus separately exercises:
   consume every migration
   record class at its serialized maximum, reject a generation whose exclusive
   reserve is one entry or byte short, and reject every attempt by another
-  operation to allocate from that partition. Fixtures completely fill the normal,
+  operation to allocate from that partition. Capacity-generation fixtures
+  include `AssignmentIssuanceAuditRepairTombstone` and
+  `AssignmentIssuanceCancellationAuditRepairTombstone` in permanent
+  controller entry and byte maxima. Migration copies every exact
+  `AttemptIdentity` key and every minimal field and digest for both families,
+  and a
+  reviewed manifest, destination bound, copied count, copied digest, or
+  recovery reservation omitting either family fails before the atomic switch.
+  Fixtures completely fill the normal,
   blocker-recovery, status, and accepted-conflict budgets, then issue
   arbitrarily repeated migration conflicts and status reads and prove that a
   valid non-conflict migration remains admissible from its untouched execution
@@ -7891,9 +8288,12 @@ corpus separately exercises:
   invalidation pending, old
   generation invalidated with rebind pending, refusal generation bound with
   replacement tuple pending, replacement tuple installed, every nested
+  `AssignmentIssuanceAuditRepairState`,
+  `AssignmentIssuanceCancellationAuditRepairState`, and
   `MigrationAuditRepairState`,
   `OrdinarySinkAcknowledgementPending`,
-  `OrdinaryActivationPending`, `MigrationActivationPending`,
+  every `OrdinaryActivationPending` nested variant including prepared
+  cancellation, `MigrationActivationPending`,
   `ControlReserveIntegrityCorrupt`, `MigrationControllerRekeyRequired`,
   `MigrationControllerRekeyWouldCrossThreshold`, and
   `MigrationControllerCounterExhausted`, plus every nested
@@ -7932,8 +8332,12 @@ corpus separately exercises:
   generation, current unbound, and current event-id, event-digest and combined
   event-mismatch append authorization; status-budget and operation-classed
   accepted-conflict-budget exhaustion; every generic conversion source-state
-  and migration audit-repair refusal; and every migration preflight and signal
-  overflow reason. Risk replay conflict and risk conflict-budget exhaustion
+  and migration audit-repair refusal; every issuance-success and
+  prepared-cancellation repair tuple-mismatch, invalid-state, and retryable
+  refusal; the normal prepared-cancellation activation-retryable refusal;
+  multi-fault precedence proving prepared cancellation wins over generic
+  no-effect conversion; and every migration preflight and signal overflow
+  reason. Risk replay conflict and risk conflict-budget exhaustion
   first return one exact handle-free `OriginalPeerRiskRecovery` tag; pending
   contexts reissue only their same protected handle through the
   `ProtectedOperatorRiskRecoveryContext` returned immediately by a fresh
@@ -7980,7 +8384,12 @@ corpus separately exercises:
   conversion, unaudited terminalization of assignment revocation, terminal
   assignment cleanup before unused revocation-capacity cancellation,
   assignment activation before ordinary audit acknowledgement, reuse of a
-  fenced assignment-prepare incarnation, direct final-use installation of
+  fenced assignment-prepare incarnation, prepared-cancellation controller
+  release, evidence or request restoration, fresh-incarnation eligibility, or
+  old-attempt terminalization before durable refusal acknowledgement,
+  generic definite-no-append conversion of the canonical prepared-cancellation
+  refusal, early assignment-repair proof eligibility or a repair tombstone
+  without its acknowledgement digest, direct final-use installation of
   `Exhausted`,
   universal revocation-audit resume, automatic resume of operator-repair
   pauses, telemetry write before the failure latch, healthy-only telemetry
@@ -8071,8 +8480,17 @@ capability or leaving an orphan reservation. A fifth failure is a generic
 accepted-attempt abort or definite-no-append conversion terminalizing issuance
 while its prepare, evidence, or capacity remains live. The
 prepared-handler recovery join, fenced proof-cancellation path, and
-unchanged-success issuance audit repair exclude both generic refusals and make
-their state-action coverage generated.
+dedicated unchanged-success and unchanged-cancellation-refusal audit repairs
+exclude both generic refusals and make their state-action coverage generated.
+A sixth failure is making retry capacity or a newer prepare incarnation
+visible before the canonical cancellation refusal is durably acknowledged.
+The prepared-cancellation refusal-install transaction retains controller
+capacity, evidence, the request reservation, eligibility, and the old attempt
+in quarantine; only its specialized final activation releases and restores
+them atomically. Permanent issuance-repair tombstones bind the exact attempt,
+prepare, generations, unchanged event, repair proof digests, and
+acknowledgement digest before raw proofs become eligible, and reviewed
+capacity migration copies and budgets those floors.
 The completion-specific failure is treating changed assignment bindings under
 one settled evidence identity as replay. Full binding-digest precedence makes
 that a conflict, but the conflict does not prove the existing capability was
