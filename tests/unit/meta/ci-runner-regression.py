@@ -1383,10 +1383,11 @@ printf '%s\n' "$sanitized_line"
         self.assertIn("not binary(video_binary_contract)", driver)
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         self.assertIn("video-binary-contract =", flake)
-        self.assertIn(
-            'D2B_FLAKE_REALIZED_CHECKS="video-binary-contract"',
-            (ROOT / "tests" / "tools" / "flake-check-classes.sh").read_text(encoding="utf-8"),
-        )
+        classes = (
+            ROOT / "tests" / "tools" / "flake-check-classes.sh"
+        ).read_text(encoding="utf-8")
+        for check in (*AARCH64_NATIVE_CHECKS, "video-binary-contract"):
+            self.assertIn(check, classes)
         self.assertIn(
             'd2b_flake_check_is_realized "$D2B_FLAKE_CHECK"',
             (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"),
