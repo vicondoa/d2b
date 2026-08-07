@@ -41,11 +41,11 @@
     },
     {
       "path": "bazel/generated/output-manifest.json",
-      "sha256": "dfd68739b4a3da76d486003c93fe60ead9d2422b8981d342746301161c5360e9"
+      "sha256": "f2fe79ae5eb76bd02d38cf6225f0162ad291a76df5dd3b691325875702253b89"
     },
     {
       "path": "bazel/generated/source-census.json",
-      "sha256": "1f566b6199534f45ec9b67bcdcd38f85408f96b8925d26412a886b922aa25d0e"
+      "sha256": "0b3247f49076e0974aaab37f052d7991efa6ebb80d6736951f73240990591c25"
     }
   ],
   "configuredTargets": {
