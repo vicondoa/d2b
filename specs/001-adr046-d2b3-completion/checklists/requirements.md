@@ -29,26 +29,37 @@
   `EvidenceRecord`; failed operator records import without a receipt but cannot close
 - [x] SC-002 recovery has closed inspect/recover/request/apply/successor transitions for parked,
   resumable, irreconcilable, and `evidence-census-conflict` states; its frozen primary scope
-  uses one absent-root/directory/regular-file grammar and recursively binds every descendant;
-  an incomplete, unstable, unreadable, or over-hard-ceiling scan denies admission; the scope
-  excludes resolution/request/disposition/freeze leaves, and raw `01ff` cannot authorize
+  uses one total injective root-instance/node grammar and recursively binds every absent,
+  directory, file, symlink, device, fifo, socket, mount, other, and unavailable descendant;
+  an incomplete, unstable, unreadable, depth-65, or over-hard-ceiling scan exposes null
+  evidence plus `restore-primary-evidence-coverage` and denies admission; the scope excludes
+  resolution/request/disposition/freeze leaves, and raw `01ff` cannot authorize
 - [x] SC-002 persists one structured incident preimage with every kind-specific component
-  byte-identically in preimage/anchor/metadata/status/resolution/freeze/request/disposition/
-  admission records, and replays the same recursive scope and paths
+  as a complete unnamed-inode/file-synced/linked write-ahead record before every other
+  incident publication, repeats it byte-identically in preimage/anchor/metadata/status/
+  resolution/freeze/request/disposition/admission records, and classifies every crash boundary
 - [x] Successor selection is durably frozen before signing; the canonical authority request,
   signed disposition, apply, and admit all bind the same successor triplet
 - [x] The request has an exact 19-field schema and closed 19-to-22 disposition transform;
-  `--request-out` uses anchored openat2, deterministic create-exclusive temporary state,
-  file and parent sync, no-replace publication, final inode verification, exact replay, and
+  `--request-out` uses anchored openat2, unnamed-inode file sync, linking only a complete
+  deterministic temporary, parent sync, no-replace publication, final inode verification,
+  exact replay, and
   CLOEXEC on every descriptor
 - [x] Cleanup authority is `SidecarCleanupOwner<'guard>` borrowing the exact private
   `CandidateSidecarGuard`, and compile/API seals prevent stale-owner lifetime, fd
   reconstruction, duplication, transfer, serialization, or cross-guard use
-- [x] Every SC-002 cause and host-generation recovery-pending/irreconcilable state has an
-  exact inspect/action/status/successor row, with no daemon recovery owner or new unit
+- [x] Every SC-002 cause and every active or terminal host-generation variant has an exact
+  inspect/state/phase/owner/action/successor tuple; failed transfer and rollback are separate
+  restart variants, terminal selection uses the authenticated current pointer, and there is
+  no daemon recovery owner or new unit
 - [x] Literal expectations pin the 15 mutation edges, all 90 apply-peer ids, all 91
-  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 56 census ids, 25
-  request-output ids, and thirteen recovery redaction rows independently from production
+  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 72 census ids, 26
+  request-output ids, and fifteen recovery redaction rows independently from production
+- [x] Recursive census goldens cover depth 64 success, depth 65 denial, every invalid node
+  kind, unstable denial, `st_uid`/`st_gid`/`st_rdev`, and symlink-target identity
+- [x] Handoff goldens and independent cases pin every valid tuple, exact human/JSON/errors,
+  exits `0|2|3|4`, forbidden inspect inputs, current/terminal pointer selection, and every
+  incomplete rollback-proof member; Type-1 option eval cannot substitute for Type-10 VM proof
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
   lifetime-bound `SidecarCleanupOwner<'guard>`
@@ -139,13 +150,13 @@ clarifications.
 
 Ready for `/speckit-plan`.
 
-**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 27 current checklist rows
+**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 33 current checklist rows
 pass under the completion-program scope reflected by the current specification. The original
-16-item baseline remains fully passing; 11 reconciliation checks were added after that baseline.
+16-item baseline remains fully passing; 17 reconciliation checks were added after that baseline.
 The current shape is **75 functional requirements and 35 buildable success criteria**. The
 earlier 45/26 shape records the end of Iteration 3; it is not the current census.
 
-Lifecycle state: **specification reconciled - plan approval pending**. Passing these 27 current
+Lifecycle state: **specification reconciled - plan approval pending**. Passing these 33 current
 specification-quality checks means the artifacts are ready to request the required analysis
 and plan-review gates. It does not record plan approval, implementation completion, or
 permission to bypass the later exact-C/Q gate before T589.

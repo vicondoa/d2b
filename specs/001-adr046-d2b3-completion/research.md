@@ -244,3 +244,18 @@ formatter, or overlay is introduced (Principle: constitution "Additional Constra
 | RK-4 | Destructive validation on the daily driver | A bad cutover costs the working environment | FR-043 recovery-point attestation is the primary control; rehearse cutover phases on disposable Zone state first |
 | RK-5 | 33 of the current 48 DELETE/REPLACE census rows lack removal proofs | FR-023 requires one per removed path | Author proofs with the removing wave, not at W7 |
 | RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | FR-036 blocks continuation pending an external constitution amendment; if continuation is authorized, SC-021 forces the unwired surfaces to become reachable and re-tests them in anger |
+
+---
+
+## R8: Can unprivileged write-ahead publication link an unnamed inode?
+
+**Observed on 2026-08-07**: an unprivileged same-filesystem probe in the feature filesystem
+opened `O_TMPFILE|O_RDWR|O_CLOEXEC`, wrote and file-synced one byte, then called
+`linkat(AT_EMPTY_PATH)` into the already opened parent directory. It returned
+`linkat_rc=0 errno=0`; the probe link was removed in the same command.
+
+**Decision**: The Wave 5 plan may require the unnamed-inode/file-sync/link protocol for
+incident preimage and request-output write-ahead publication on the validated target
+filesystem. T589 still must test unsupported-open and unsupported-link refusal and must not
+infer support on another filesystem from this observation. No named-partial fallback is
+allowed.

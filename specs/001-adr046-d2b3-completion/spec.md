@@ -561,6 +561,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   eligibility or integrity checks only and MUST NOT independently authorize any mutation.
   No bootstrap unit or fourth root-visible service may exist.
 
+  Handoff inspection MUST serialize only the closed
+  `HostGenerationHandoffStatusV1` variants in `data-model.md`. State, phase, owner, action,
+  and successor arrays are one validated tuple: active/failed source recovery, active/failed
+  target recovery, active/failed transfer-pending, active/failed rollback, and completed or
+  rolled-back terminal variants cannot be cross-combined. The authenticated current-intent
+  pointer, not mtime, directory order, or caller input, selects the active or terminal
+  record. A failed transfer owner MUST project restart of only the existing broker service.
+  A rollback variant MUST NOT exist unless the full immutable prior
+  profile/service/pointer/reference tuple, every applied pre-mutation/outcome pair, and one
+  contiguous reverse plan validate; an incomplete proof is invalid coordinator state with
+  zero mutation. Inspect MUST use the exact five-line/seven-field valid projection and
+  exact error/exit contract from `data-model.md`. Root, selectors, paths, tokens, extra
+  positionals, daemon recovery ownership, and a new unit remain forbidden.
+
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
   has no host-generation handoff operation, and the installed
   `d2b-priv-broker.service` executes the installed generation's `brokerPackage`. A target
@@ -1495,9 +1509,15 @@ carries the object verbatim rather than copying selected fields into the task ro
   observation, and failure tag tables, the all-zero/`u64::MAX` unavailable tuple, and the
   exact two-byte `0x01 0xff` whole-census over-bound sentinel; no implementation-defined
   iteration order, errno, or partial over-bound prefix enters `C`. Raw inode identity is
-  never rendered. Every incident first durably publishes one structured
+  never rendered. Every incident first creates one structured
   `Sc002IncidentPreimageV1` carrying the parked triplet, content digest, and every applicable
-  collision, census/count, or ambiguity component. The preimage, anchor, metadata, every
+  collision, census/count, or ambiguity component as its complete write-ahead record. It
+  MUST file-sync an unnamed inode before linking the deterministic temporary, sync that
+  link's parent, and durably no-replace publish and reopen the final preimage before any
+  anchor, metadata, payload, residue, status, resolution, freeze, request, disposition, or
+  admission publication. A pre-link crash exposes no incident name; a post-link crash
+  exposes only a complete preimage and has the exact resumable/conflict classifier in
+  `data-model.md`. There is no named-partial fallback. The preimage, anchor, metadata, every
   durable primary status or resolution, successor freeze, disposition request, signed
   disposition, and admission record repeat that complete object byte-for-byte. A
   verified-payload terminal requires an immutable preimage-complete anchor and metadata,
@@ -1510,10 +1530,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   for the resumable variant. The irreconcilable variant advances only through an
   authenticated disposition that either retains representable names as durable residue or
   binds the frozen primary-evidence scope through a complete recursively enumerated census or
-  identity-bearing bounded-failure commitment outside that scope. The scanner binds every
-  descendant directory/path/file identity and content under each closed root; bounded
-  failure additionally binds the fixed root, canonical failing-path digest, saturated
-  counts, and before/after recursive identities. The primary-evidence scope excludes every
+  identity-bearing bounded-failure commitment outside that scope. The scanner uses one
+  total, injective recursive grammar for the twelve required root/root-instance pairs and
+  every absent, directory, regular-file, symlink, block-device, character-device, fifo,
+  socket, mount, other, or unavailable observation. It binds raw path bytes, `st_uid`,
+  `st_gid`, `st_rdev`, and symlink-target identity only inside the typed commitment.
+  Admission-capable bounded failure embeds the complete stable ordered node sequence,
+  fixed root-instance, canonical failing-path digest, saturated counts, and equal
+  before/after recursive identities. Unreadable, unstable, depth-65, node-hard-ceiling, or
+  byte-hard-ceiling scope exposes null evidence plus
+  `restore-primary-evidence-coverage` and MUST deny request, apply, and admission until two
+  complete equal walks fit the hard ceiling. The primary-evidence scope excludes every
   resolution, resolution-evidence, successor-freeze, disposition-request, and disposition leaf, so a resolution digest never
   contains itself. A raw `0x01 0xff` sentinel cannot authorize disposition or successor
   admission. Missing, unknown, duplicate, noncontiguous, cross-kind, or mismatched incident
@@ -1564,7 +1591,14 @@ carries the object verbatim rather than copying selected fields into the task ro
   Before signing, `sc002-disposition-request` derives one clean successor triplet from an
   immutable snapshot, durably publishes `Sc002SuccessorFreezeV1`, and emits the exact
   canonical unsigned authority request. Inspect output or a caller-written triplet is not a
-  signing request. `sc002-incident-apply` accepts only the closed canonically encoded and Ed25519-authenticated
+  signing request. Before creating those candidate-internal records it preflights the
+  anchored output parent for unnamed-inode publication. It writes and file-syncs an
+  `O_TMPFILE` inode before linking the deterministic output temporary, syncs that link,
+  renames no-replace, reopens the final inode, and syncs the parent again. A pre-link crash
+  exposes no name; a post-link crash exposes only the complete expected temporary; every
+  boundary replays atomically. Unsupported unnamed-inode publication refuses before the
+  freeze/request and has no named-partial fallback. `sc002-incident-apply` accepts only the
+  closed canonically encoded and Ed25519-authenticated
   `Sc002IncidentDispositionV1` from `data-model.md`. It binds the incident, complete
   structured preimage, parked triplet, successor freeze/request, distinct successor
   triplet, exact accepted delivery-contract Version 2 digest, pinned
@@ -1581,7 +1615,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   frozen-primary-evidence census grammars, complete and identity-bearing bounded-failure
   vectors, persisted structured status preimage with every kind-specific component, the
   distinct deterministic `Sc002IncidentCliStatusV1` JSON projection and
-  remediation table, exact thirteen-line human projection, immutable incident anchor and metadata,
+  six-value remediation table, exact thirteen-line human projection, immutable incident anchor and metadata,
   payload, resolution-evidence, successor-freeze, disposition-request, and append-only
   status/resolution paths, separate
   preimage/anchor/metadata/status/resolution/freeze/request/disposition/CLI schemas,
@@ -1590,8 +1624,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   private nonserializable sidecar-cleanup owner, bounded zero-mutation
   candidate-retention owner, recursive whole-scope retention guard, and validator
   authority. It also owns the shared
-  `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` oracle, the exact receipt and
-  malformed-census negative registries, nineteen-digest SC-002 oracle, and the no-raw-hash
+  `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` oracle, the exact 61 receipt,
+  72 malformed-census, and 26 request-output negative registries, the fifteen-row recovery
+  redaction registry including raw `st_uid` and `st_gid`, the eight-vector recursive-census
+  oracle, nineteen-digest SC-002 oracle, and the no-raw-hash
   receipt locator. The same Version
   2 amendment owns the source-floor canonical JSON policy,
   `SourceGenerationIdentityV1`, complete digest/domain/length-framing and signature registry,

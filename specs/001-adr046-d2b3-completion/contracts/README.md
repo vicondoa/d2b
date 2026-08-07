@@ -315,7 +315,9 @@ merge-target registration, merge eligibility, and merge.
 
     An identity mismatch never unlinks or restores the suspect. It durably publishes the
     structured `Sc002IncidentPreimageV1` containing every applicable kind-specific
-    component, the kind-bearing incident anchor, and complete metadata, then moves the
+    component as a complete unnamed-inode/file-synced write-ahead record before it links or
+    publishes any incident leaf. Only after durable no-replace preimage publication may it
+    publish the kind-bearing incident anchor and complete metadata, then move the
     metadata-bound currently named inode to the
     typed incident payload address, reopens and verifies it, syncs the payload fd, both
     parents, and every changed ancestor, and append-only publishes `parked`. A replacement
@@ -327,9 +329,13 @@ merge-target registration, merge eligibility, and merge.
     enumerated frozen primary-evidence census or identity-bearing bounded-failure commitment,
     then appending
     the separate resolution. The one recursive grammar contains every absent root, directory,
-    and regular-file member. An admission-capable bounded failure must cover every descendant
-    in two equal stable walks within the hard ceiling; unreadable, unstable, incomplete, or
-    over-hard-ceiling scope denies request, apply, and admission until a fresh complete scan.
+    regular-file, symlink, device, fifo, socket, mount, other, and unavailable member under
+    twelve exact root/root-instance pairs. It binds `st_uid`, `st_gid`, `st_rdev`, and
+    symlink-target identity internally without rendering them. An admission-capable bounded
+    failure embeds every descendant in two equal stable walks within the hard ceiling;
+    unreadable, unstable, incomplete, depth-65, or over-hard-ceiling scope has null evidence,
+    projects `restore-primary-evidence-coverage`, and denies request, apply, and admission
+    until a fresh complete scan.
     The frozen primary scope binds every descendant path/content identity plus the canonical
     failure-path digest and excludes every resolution,
     resolution-evidence, successor-freeze, disposition-request, disposition, receipt, and successor leaf, so no digest contains
@@ -339,9 +345,10 @@ merge-target registration, merge eligibility, and merge.
     Before signing, `sc002-disposition-request` durably freezes the clean successor triplet
     and emits the exact 19-field canonical authority request. The authority performs only
     the closed 19-to-22 transformation in `data-model.md`. Candidate request durability
-    precedes anchored openat2, deterministic temporary, file-sync, no-replace, final-inode
-    verification, and parent-sync publication to `--request-out`; exact replay is
-    crash-safe, and every descriptor is CLOEXEC. Apply and admission rederive that same
+    precedes anchored openat2, unnamed-inode file sync, linking of only a complete
+    deterministic temporary, parent sync, no-replace, final-inode verification, and final
+    parent-sync publication to `--request-out`; exact replay is crash-safe at every anonymous,
+    linked-temp, and final boundary, and every descriptor is CLOEXEC. Apply and admission rederive that same
     snapshot triplet and require the same freeze, request, and signed disposition. Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
     nonterminal variant claims a terminal empty census.
     T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope
@@ -361,9 +368,12 @@ merge-target registration, merge eligibility, and merge.
     Independent literal fixtures pin the complete receipt, retired-census,
     primary-evidence-census, source-floor 32-id receipt, 20-id issuer-authentication/
     capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
-    15-id pre-start/root, 27-id unit-census, 25-id request-output, and both forbidden-value
-    registries. The SC-002 census set has 56 ids and includes directory completeness plus
-    full-descendant bounded-failure refusal. Source-floor signature validation
+    15-id pre-start/root, 27-id unit-census, 26-id request-output, and both forbidden-value
+    registries. The SC-002 census set has 72 ids and includes root-instance injectivity,
+    invalid-node totality, depth-64 acceptance, depth-65 denial, directory completeness, and
+    full-descendant bounded-failure refusal. The request-output set has 26 ids, and the
+    recovery redaction set has fifteen rows including raw `st_uid` and `st_gid`.
+    Source-floor signature validation
     returns private nonserializable `AuthenticatedSourceFloorIssuerProvenance` and consumes
     it into the separate private validated-floor result; copied authority/key digests cannot
     produce either. One shared nineteen-digest/one-signature SC-002 domain-hash
@@ -371,10 +381,13 @@ merge-target registration, merge eligibility, and merge.
     digest; raw SHA-256 locator definitions are ineligible.
 16. **Recovery is never a status-only dead end.** Every closed SC-002 cause maps to one
     inspect/action/status/successor row. Incomplete descendant coverage remains inspectable
-    but denies request/apply/admission until a fresh complete scan succeeds. The separate
+    with the exact `restore-primary-evidence-coverage` action and null evidence, and denies
+    request/apply/admission until a fresh complete scan succeeds. The separate
     selector-free `HostGenerationHandoffStatusV1` projection gives each
-    `recovery-pending` and valid `recovery-irreconcilable` handoff state one broker owner,
-    closed action, and exact successor set. Recovery uses only the existing broker unit.
+    active, transfer-pending, recovery, and terminal handoff variant one exact
+    state/phase/owner/action/successor tuple. Active and failed broker owners, including
+    transfer-pending and rollback, are distinct. Terminal selection uses the authenticated
+    current-intent pointer. Recovery uses only the existing broker unit.
     Human/JSON schemas and both redaction registries remain synchronized; no path, fd,
     generation, raw identity, request body, or free-form remediation enters logs, audit,
     metrics, spans, errors, panic, or `Debug`.

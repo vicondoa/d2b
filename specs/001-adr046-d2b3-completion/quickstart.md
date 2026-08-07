@@ -265,7 +265,9 @@ private `SidecarCleanupOwner<'guard>` exclusively borrows the exact
 `CandidateSidecarGuard` that owns the locked OFD; a lock loser cannot fabricate either, and
 the cleanup owner cannot outlive or be paired with another guard. A parked incident is success-shaped only after its
 immutable structured `Sc002IncidentPreimageV1` with every applicable kind-specific
-component, kind-bearing anchor, preimage-complete metadata, exact typed content-addressed
+component is the complete write-ahead record. It is file-synced in an unnamed inode before
+that inode is linked as the deterministic temporary, and it is durably published before the
+kind-bearing anchor, preimage-complete metadata, exact typed content-addressed
 payload, and append-only
 `parked` status are leaf-and-every-ancestor durable. A rename/reopen race is classified as
 exactly `recovery-resumable` or `recovery-irreconcilable`, preserves every still-named leaf,
@@ -278,14 +280,23 @@ and admission record repeats the same structured preimage byte-for-byte. If the 
 identity cannot be recovered, authenticated apply either retains each
 representable currently named leaf by no-replace rename/reopen through durable incident
 residue staging or binds the frozen primary-evidence scope through a complete census or an
-identity-bearing bounded-failure commitment. The scan recursively records every descendant
-directory/path/file identity and content beneath each closed root; the failure form binds
-the fixed root, canonical failing-path digest, saturated counts, and before/after recursive
-identities. That scope excludes every resolution,
+identity-bearing bounded-failure commitment. One byte grammar recursively records every
+required `(root-code, root-instance-code)` pair and every descendant. It encodes absent,
+directory, regular-file, symlink, block-device, character-device, fifo, socket, mount,
+other, and unavailable observations injectively, including owner, group, `st_rdev`, and
+symlink-target payload identity. Invalid kinds remain evidence and never masquerade as
+absent. The failure form embeds the full stable ordered node sequence plus the fixed
+root-instance, canonical failing-path digest, saturated counts, and equal before/after
+recursive identities. That scope excludes every resolution,
 resolution-evidence, successor-freeze, disposition-request, and disposition leaf. A raw `01ff` sentinel never authorizes apply or
 successor admission. Invalid, unstable, or over-bound primary census state remains
-actionable: inspect `--json` exposes only the typed evidence kind and digest needed by the
-external disposition authority; apply publishes and syncs the exact canonical evidence
+actionable. A stable semantic failure with full coverage exposes only the typed evidence
+kind and digest needed by the external disposition authority. Unreadable, unstable,
+depth-65, node-hard-ceiling, or byte-hard-ceiling scope instead exposes null evidence and
+the closed `restore-primary-evidence-coverage` remediation; request exits `4` with the same
+status until read access is restored, the writer is stopped, or an injected unrecognized
+over-ceiling entry is moved outside the immutable candidate scope. Recognized evidence is
+never removed. Apply publishes and syncs only exact admission-capable canonical evidence
 bytes outside the frozen scope; successor admission recursively replays the same scan and
 revalidates those bytes, the current
 scope identity, complete preimage, and incident/parked binding. A stale or copied commitment exits `4` with
@@ -336,10 +347,14 @@ and not a caller-written disposition prefix. The authority substitutes only the 
 kind, copies the semantic fields and freeze digest, omits the verified embedded freeze,
 derives the request digest, inserts the pinned authority/key fields, and signs the exact
 22-field disposition. Candidate-internal freeze/request durability completes first.
-`--request-out` then resolves the output parent with anchored openat2, writes a deterministic
-create-exclusive same-directory temporary, syncs it, renames no-replace, verifies the final
-inode and bytes, and syncs the parent. Every fd is CLOEXEC. Exact replay completes or
-revalidates a pre/post-rename crash without truncating or replacing any foreign leaf.
+`--request-out` then resolves the output parent with anchored openat2, writes and file-syncs
+an unnamed `O_TMPFILE` inode, links only that complete inode at the deterministic
+same-directory temporary, syncs the parent, renames no-replace, verifies the final inode and
+bytes, and syncs the parent again. Every fd is CLOEXEC. A crash before the link exposes no
+name; a crash after the link exposes only the complete expected temporary. Exact replay
+completes or revalidates every pre-link, linked-temp, or post-rename crash without truncating
+or replacing any foreign leaf. Unsupported unnamed-inode publication refuses before the
+candidate-internal freeze/request is created.
 
 The transition is closed and operational:
 
@@ -347,7 +362,7 @@ The transition is closed and operational:
 | --- | --- | --- |
 | `recovery-resumable` | run `sc002-incident-recover` | `parked`, `mismatch-retained`, `disposition-validated`, or `successor-admitted`, whichever is the maximal uniquely reconstructible contiguous branch |
 | `recovery-irreconcilable`, including `evidence-census-conflict`, without a disposition matching the current typed evidence digest | run inspect with `--json`, run `sc002-disposition-request` with the clean successor snapshot, submit that exact request, then run `sc002-incident-apply` with the same snapshot | `disposition-validated` |
-| `recovery-irreconcilable` whose recursive scan cannot cover every descendant stably within the hard ceiling | restore read access or stop the changing writer, then rerun `sc002-disposition-request`; no request is emitted before complete coverage | unchanged until a complete scan yields the request, then `disposition-validated` |
+| `recovery-irreconcilable` whose recursive scan cannot cover every descendant stably within the hard ceiling | follow `restore-primary-evidence-coverage`, then rerun `sc002-disposition-request`; no request is emitted before complete coverage | unchanged with null evidence until two complete equal walks yield the request, then `disposition-validated` |
 | `recovery-irreconcilable` with the matching signed disposition already durable | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
 | `parked` without a matching disposition | freeze the successor and create/submit the canonical request, then run `sc002-incident-apply` with that same successor snapshot | `disposition-validated` |
 | `mismatch-retained` or a crash after disposition publication | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
@@ -358,8 +373,8 @@ If the locked primary-evidence digest changes between inspect and apply, apply e
 returns the new inspect projection, and requires a newly bound disposition. No generic retry,
 force flag, deletion selector, or alternate path is accepted.
 The test contract compares independently authored literal expectations with all 61 receipt,
-56 malformed retired/primary-census, and 25 request-output ids from `data-model.md`, scans all
-thirteen SC-002 recovery redaction canaries, and uses the shared
+72 malformed retired/primary-census, and 26 request-output ids from `data-model.md`, scans all
+fifteen SC-002 recovery redaction canaries, and uses the shared
 nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest copied from
 production is not evidence.
 
@@ -642,19 +657,34 @@ Inspect the sole current-source handoff without an intent selector:
 
 The planned human result is the exact five-line
 `HostGenerationHandoffStatusV1` projection from `data-model.md`; `--json` emits its closed
-seven fields. Every `recovery-pending` state names the live apply peer, source broker, or
-target broker as owner, a wait or restart-existing-broker action, and its exact allowed
-successors. A valid `recovery-irreconcilable` state exists only with a complete
-immutable-audit-backed rollback and advances only to `rolled-back` after the existing broker
-unit resumes. Root inspection, path/token/intent selection, daemon recovery, and a new unit
-are refused. Neither projection exposes an intent, generation, pid, uid, store path, or
+seven fields. It is serialized only from one of the exact validated tuples in
+`data-model.md`, including separate source/target and active/failed broker variants. A failed
+`transfer-pending` source owner projects `restart-existing-broker`, never the active wait
+action. Active rollback projects `wait-for-broker-rollback`; failed rollback projects
+`restart-existing-broker-for-rollback`. A valid `recovery-irreconcilable` state exists only
+with a complete immutable-audit-backed rollback and advances only to `rolled-back`.
+
+Selection uses the coordinator's authenticated current-intent pointer, not mtime or directory
+order. `completed` and `rolled-back` remain selectable terminal projections until a new
+authorization atomically installs the next `authorized-pending` pointer. A missing pointer
+exits `3`; forbidden syntax, selector/path/token input, an extra positional argument, or root
+inspection exits `2`; invalid coordinator state or any incomplete rollback proof exits `4`
+with zero mutation. The exact two-line human and four-field JSON error envelopes are in
+`data-model.md`. Apply or broker recovery that races into a valid concurrent or terminal
+state exits `4` with the same valid five-line or seven-field status through the shared
+renderer. Neither projection exposes an intent, generation, pid, uid, store path, or
 apply-peer identity.
 
 The host acceptance must race two authorization commands and two apply commands, inject an
 otherwise impossible two-pending-intent census, disconnect before and after the first
 mutation, and invoke apply after terminal completion. Exactly one contender may win only
 when one pending intent exists. Every refusal has zero selected and successor mutations, and
-post-mutation recovery resumes only the same durable intent.
+post-mutation recovery resumes only the same durable intent. Hermetic Rust tests own tuple
+validation, exact human/JSON/error goldens, forbidden inspect inputs, pointer selection, and
+each missing/duplicate/reordered rollback-proof member. The Type-1 Nix case proves only
+rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
+`host-generation-handoff.nix` VM test alone proves real broker service failure/restart,
+ownership transfer, mutation, rollback, and terminal selection.
 
 Once the external prerequisite exists, the unprivileged invocation traverses the existing
 public socket and its `SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority

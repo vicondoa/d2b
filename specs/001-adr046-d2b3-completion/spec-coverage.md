@@ -1115,25 +1115,34 @@ coverage has separate 15-edge, 90-case, 15-negative, and fifteen-forbidden-value
 with six pre-first and 84 post-first cases. A separate 15-case pre-start/root registry and
 27-case unit registry close omitted lifecycle boundaries.
 SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
-human/JSON remediation, and closed exits. A verified payload reaches `parked`; an
+human/JSON remediation, and closed exits. The remediation enum has six values, including
+`restore-primary-evidence-coverage` with null evidence for unreadable, unstable, incomplete,
+depth-65, or hard-ceiling scans. A verified payload reaches `parked`; an
 authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
 namespaces; and a raced rename is exactly `recovery-resumable` or
-`recovery-irreconcilable` with every name preserved. One recursive grammar includes absent
-roots, directory nodes, and regular-file members. An irreconcilable bounded failure can
-authorize only after two equal stable walks cover every descendant within the hard ceiling;
-unreadable, unstable, incomplete, or over-hard-ceiling scope remains inspectable but denies
-request, apply, and admission. The scope binds the canonical failing-path digest and excludes
+`recovery-irreconcilable` with every name preserved. One recursive grammar includes twelve
+root/root-instance pairs and total absent, directory, regular-file, symlink, device, fifo,
+socket, mount, other, and unavailable observations. An irreconcilable bounded failure can
+authorize only after two equal stable walks cover every descendant and embeds the complete
+ordered node sequence within the hard ceiling; unreadable, unstable, incomplete, depth-65,
+or over-hard-ceiling scope remains inspectable but denies request, apply, and admission. The
+scope binds the canonical failing-path digest and excludes
 resolution/request/disposition/freeze leaves; raw `01ff`, copied
 commitments, and post-resolution primary changes block admission. One structured incident
-preimage carries every kind-specific component and is repeated by all durable status/path
-records. `SidecarCleanupOwner<'guard>` exclusively borrows the private guard owning the OFD
+preimage carries every kind-specific component and is file-synced in an unnamed inode,
+linked, parent-synced, and final-published as the complete write-ahead record before any
+other incident publication; it is repeated by all durable status/path records.
+`SidecarCleanupOwner<'guard>` exclusively borrows the private guard owning the OFD
 lock, so stale authority cannot survive release. The successor triplet is durably frozen
 before the exact 19-field request; the authority performs only the closed 19-to-22
-transformation, and apply/admit preserve it. Request output is anchored, atomic, crash-safe,
-and CLOEXEC. The shared nineteen-digest typed hash oracle, exact 61 receipt, 56
-malformed-census, 25 request-output, and thirteen-row recovery redaction registries prohibit
+transformation, and apply/admit preserve it. Request output uses unnamed-inode file sync,
+links only a complete temporary, and is anchored, atomic, crash-safe, and CLOEXEC. The
+shared nineteen-digest typed hash oracle, exact 61 receipt, 72 malformed-census, 26
+request-output, and fifteen-row recovery redaction registries prohibit
 a raw locator hash, self-referential resolution digest, or output leak. Every SC-002 cause
-and handoff recovery-pending/irreconcilable state has an inspect/action/status/successor row.
+and handoff active/terminal variant has an exact state/phase/owner/action/successor tuple.
+Handoff terminal selection uses the authenticated current pointer; failed transfer and
+rollback owners are partitioned; incomplete rollback proof is never recovery-capable.
 These refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one

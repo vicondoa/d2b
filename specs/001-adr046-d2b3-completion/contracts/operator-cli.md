@@ -163,19 +163,27 @@ current-source nonterminal intent through the existing public socket. It accepts
 id, generation selector, path, token, or root invocation.
 
 Its exact `HostGenerationHandoffStatusV1` schema and five-line human projection are in
-`data-model.md`. Every `recovery-pending` state identifies only the closed owner class,
-action, and allowed successor states. An active source or target broker recovery owner
+`data-model.md`. It serializes only from that file's closed validated variants; arbitrary
+state/phase/owner/action/successor cross-products refuse. Active source or target recovery
 projects `wait-for-broker-recovery`; a failed existing broker unit projects
-`restart-existing-broker`. A valid `recovery-irreconcilable` state exists only when immutable
-pre-mutation/outcome audit proves one complete rollback, projects
-`restart-existing-broker-for-rollback`, and can advance only to `rolled-back`. No state
-directs daemon repair or a new unit.
+`restart-existing-broker`. Active and failed `transfer-pending` are distinct variants.
+Active rollback projects `wait-for-broker-rollback`; failed rollback projects
+`restart-existing-broker-for-rollback`. A valid `recovery-irreconcilable` state exists only
+when immutable pre-mutation/outcome audit proves the complete prior
+profile/service/pointer/reference tuple and one contiguous rollback. Any missing, duplicate,
+reordered, or mismatched proof member is `invalid-coordinator`, not a recovery variant. No
+state directs daemon repair or a new unit.
 
 Human and JSON output contain no intent, generation, pid, uid, store path, unit path,
 executable identity, or free-form remediation. The apply command and broker recovery return
-the same projection after a valid conflict or concurrent transition. Every state-table row,
-forbidden transition, root refusal, broker live/failed condition, restart, terminal replay,
-and redaction case is independently pinned.
+the same typed projection after a valid conflict, concurrent transition, or terminal handoff.
+The authenticated current-intent pointer selects active and terminal records without mtime
+or caller input. Inspect exits `0` for every valid active or terminal tuple, `2` for root or
+forbidden input, `3` when no current pointer exists, and `4` for invalid coordinator or
+incomplete rollback proof; `data-model.md` pins the exact two-line human and four-field JSON
+error envelopes. Every state-table row, forbidden transition/input, source/target
+active/failed condition, transfer-pending failure, restart, terminal pointer replacement,
+incomplete rollback proof, and redaction case is independently pinned.
 
 ## Retirement register
 
