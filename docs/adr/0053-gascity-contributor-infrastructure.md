@@ -23,7 +23,10 @@
   monotonically increasing control-reserve incarnations, current-state status
   reads, sealed migration-control capacity, and an independent
   migration-integrity reserve,
-  exhaustive protected attempt recovery and pending status,
+  exhaustive ordinary protected-attempt recovery and pending status, with
+  active-migration controls instead modelled as audited fixed-slot child
+  commands and migration recovery status as a coalesced observational read,
+  finite migration counters with separately reserved controller-epoch rekey,
   migration-specific no-append audit repair, generic conversion from the exact
   ordinary sink-acknowledgement-pending tuple, distinct migration
   sink-acknowledgement and activation variants, and re-entrant online
@@ -45,8 +48,9 @@
   capability, and gives every terminal predecessor one linear successor
   eligibility consumed by a fresh orchestrator request plus fresh protected
   evidence,
-  least-authority issue-reader, opaque protected-operator risk-handle
-  recovery, protected attempt-status and narrow recovery-read endpoints, while
+  least-authority issue-reader, caller-disjoint risk recovery that keeps the
+  opaque handle behind fresh protected-operator authentication, protected
+  attempt-status and narrow recovery-read endpoints, while
   protected-operator-only assignment revocation, migration repair,
   migration-control integrity repair, and attempt resume and fencing stay on
   the operator endpoint. It
