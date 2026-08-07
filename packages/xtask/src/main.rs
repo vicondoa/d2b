@@ -472,7 +472,7 @@ fn bazel_repin_with_executable_target(
     let root = if let Some(worktree) = env::var_os("D2B_BAZEL_WORKTREE") {
         fs::canonicalize(worktree)?
     } else {
-        repo_root()?.to_path_buf()
+        fs::canonicalize(repo_root()?)?
     };
     reject_ambient_repin_before_bootstrap()?;
     if let Some(output) = fresh_hub_bootstrap(&root, hub)? {
@@ -539,6 +539,7 @@ fn fresh_hub_bootstrap(
     if selected_exists && !peer_missing {
         return Ok(None);
     }
+    validate_fresh_directories(root, hub)?;
     let before = git_status_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
 
@@ -587,6 +588,27 @@ fn fresh_hub_bootstrap(
         );
     }
     result.map(Some)
+}
+
+fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
+    for (relative, optional) in [
+        (".scratch", true),
+        (".scratch/bazel", true),
+        ("bazel", false),
+        ("bazel/cargo", false),
+    ] {
+        match fs::symlink_metadata(root.join(relative)) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => return Err(fresh_bootstrap_error(hub, "bootstrap directory is not a directory")),
+            Err(error)
+                if optional && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(_) => return Err(fresh_bootstrap_error(hub, "bootstrap directory cannot be inspected")),
+        }
+    }
+    Ok(())
 }
 
 fn fresh_bootstrap_in_workspace(
@@ -673,11 +695,17 @@ fn install_fresh_lock(
         .open(&temporary)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot stage selected lock"))?;
     if file.write_all(bytes).is_err() || file.sync_all().is_err() {
-        let _ = fs::remove_file(&temporary);
+        let cleanup = fs::remove_file(&temporary);
+        if cleanup.is_err() {
+            return Err(fresh_bootstrap_error(hub, "selected lock staging cleanup failed"));
+        }
         return Err(fresh_bootstrap_error(hub, "cannot persist selected lock"));
     }
     if fs::rename(&temporary, &destination).is_err() {
-        let _ = fs::remove_file(&temporary);
+        let cleanup = fs::remove_file(&temporary);
+        if cleanup.is_err() {
+            return Err(fresh_bootstrap_error(hub, "selected lock staging cleanup failed"));
+        }
         return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
     }
     Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
