@@ -152,8 +152,9 @@ Originally 25. Lines 479 and 527 were proved by W5; see section 3.5.
 Thirteen rows above name work items assigned to waves that are already recorded
 as `Merged`: `ADR046-session-001` (W1) owns twelve REPLACE rows and
 `ADR046-identities-002` (W0) owns one DELETE row. Their owning wave cannot
-supply the missing proof retrospectively, because the wave is closed and, per
-the W0 and W1 waiver, was delivered without sealed records in the first place.
+supply the missing proof retrospectively, because the wave is closed and was
+delivered without sealed records in the first place. The FR-034 historical
+record documents that fact but does not authorize later work.
 
 **Resolved by FR-060.** These rows carry no outstanding obligation against
 their closed wave. FR-060 binds the removal proof to the wave that performs the
@@ -166,7 +167,7 @@ which for the superseded realm session and router crates is the destructive
 cutover and superseded-control-plane removal. A path that no wave ever removes
 is not removed at all, so nothing is owed and nothing is silently dropped.
 
-This is a scoping rule and not a second waiver. It moves *which* wave owes the
+This is a scoping rule, not constitutional authorization. It moves *which* wave owes the
 proof; it never removes the requirement that a removal has one. The same is true
 of the single row at line 654 that maps to no work item: it owes a proof if and
 when it is removed, and the wave performing that removal owns it.

@@ -218,7 +218,8 @@ merge-target registration, merge eligibility, and merge.
     the Wave 5 acceptance set - representative Volume, Network, and Device - then removes the Device and
     proves dependency-safe cleanup without disturbing ready Volume, Network, or unrelated
     resources. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance
-    is deferred to the Wave 6 Guest Provider; Guest emission, status, or refusal cannot
+    is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480;
+    Guest emission, status, or refusal cannot
     satisfy this partial US1 production-plane checkpoint. Refusals are
     separate negative cases. The exact
     candidate result is emitted once by T600 as

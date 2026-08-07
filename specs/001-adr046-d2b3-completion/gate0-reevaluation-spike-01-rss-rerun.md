@@ -105,7 +105,7 @@ re-evaluation, the input set here is **not empty**.
 
 | Wave | Delivery state | Disposition |
 | --- | --- | --- |
-| `ADR046-W0`, `ADR046-W1` | Delivered under the written waiver ([`waiver-w0-w1.md`](./waiver-w0-w1.md)) | Unaffected. Their 14 work items are recorded `Merged`; the amendment changes no work item's state. `ADR046-feasibility-001` stays `Merged` on the strength of the proof crate existing, which the amendment does not touch. |
+| `ADR046-W0`, `ADR046-W1` | Delivered without required panel/seal records; historical evidence is retained in [`waiver-w0-w1.md`](./waiver-w0-w1.md) | Unaffected as work-item state only. Their 14 work items are recorded `Merged`; this does not authorize program continuation or satisfy FR-036's external constitution prerequisite. `ADR046-feasibility-001` stays `Merged` on the strength of the proof crate existing, which the amendment does not touch. |
 | `ADR046-W2`, `ADR046-W3`, `ADR046-W4` | Sealed and merged | Unaffected. Each sealed against a snapshot in which the RSS row read MEASURED-FAIL, which was the true state at that time and is preserved verbatim in `RESULTS.md`. None of the three owns a work item whose evidence or validation string changed. |
 | `ADR046-W5` | **Panel request outstanding, no seal** | **Invalidated. Must regather.** See 4.2. |
 | `ADR046-W6`-`ADR046-W8` | Not started | Nothing to regather. |

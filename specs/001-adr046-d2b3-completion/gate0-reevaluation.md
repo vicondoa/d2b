@@ -19,9 +19,12 @@ This change amends three sections of the delivery contract:
 - **§12.3** - the once-per-wave binding ten-role panel and its attestation
   requirements.
 
-The amendment is accompanied by FR-056 (this re-evaluation requirement),
-FR-057 (the entry-evidence versus exit-evidence distinction), and FR-058 (the
-bound on the W0 and W1 waiver's scope).
+The amendment was accompanied by FR-056 (this re-evaluation requirement),
+FR-057 (the ordinary entry-evidence versus exit-evidence distinction), and
+FR-058 (the bound on the W0 and W1 historical record's scope). The later
+2026-08-06 analysis correction supersedes any inference that this Gate 0 record
+authorizes continuation: FR-036 now requires a separate accepted Principle VI
+constitution amendment first.
 
 ## 2. Mechanical half of Gate 0
 

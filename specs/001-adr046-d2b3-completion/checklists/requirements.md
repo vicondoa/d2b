@@ -42,11 +42,11 @@ in:
   against the final candidate, d2b 3.0 tagged from `v3`. Landed as FR-037 and FR-038, a new
   SC-023, and an expanded delivery assumption noting that gating earlier would release a
   candidate a later wave still modifies.
-- **W0/W1 seal gap**: recorded as delivered-without-seal under an explicit one-time written
-  waiver; sealed delivery begins at W2. Landed as FR-034, FR-035, and FR-036, with SC-020
-  amended so the every-wave-sealed criterion scopes to W2 through W8 and explicitly forbids
-  any later wave relying on the waiver. Context section updated so the gap is stated up
-  front rather than buried in a requirement.
+- **W0/W1 seal gap (historical Iteration 2 disposition, superseded)**: Iteration 2 treated a
+  feature-local written record as authority to begin sealed delivery at W2. The 2026-08-06
+  analysis correction rejects that constitutional interpretation. FR-034 now makes the file
+  historical evidence only, and FR-036 requires a separate accepted Principle VI
+  constitution amendment before any implementation, resume, fix, close, merge, or advance.
 
 Final shape: 38 functional requirements, 23 success criteria, 4 prioritized user stories,
 9 key entities, 12 assumptions, explicit Out of Scope. No bracketed placeholder tokens

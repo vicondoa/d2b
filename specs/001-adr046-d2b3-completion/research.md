@@ -206,8 +206,9 @@ that assumes a separate invocation is wrong.
 
 **Also**: all nine `ADR046-delivery-*` work items are still `Planned` even though the tooling
 is landed and reachable. Their state tracks full Destination-plus-Validation verification, not
-existence. They belong to W0 and its dependents, so they are inside the W0/W1 waiver's blast
-radius; FR-035 requires them to reach `Merged` before any wave that owns them can seal.
+existence. They belong to W0 and its dependents, so they are inside the W0/W1 historical
+record's evidence scope; the record authorizes nothing, and FR-035 requires them to reach
+`Merged` before any wave that owns them can seal after FR-036 is satisfied.
 
 ---
 
@@ -237,4 +238,4 @@ formatter, or overlay is introduced (Principle: constitution "Additional Constra
 | RK-3 | W6 is 258 items across 27 crates | Nearly half the program in one wave | The specs guarantee each Provider's hermetic suite compiles without any other Provider; exploit the five file-disjoint families |
 | RK-4 | Destructive validation on the daily driver | A bad cutover costs the working environment | FR-043 recovery-point attestation is the primary control; rehearse cutover phases on disposable Zone state first |
 | RK-5 | 13 of 16 DELETE rows lack removal proofs | FR-023 requires one per path | Author proofs with the removing wave, not at W7 |
-| RK-6 | The W0/W1 waiver hides unverified foundation | Waived waves carry the contracts every later wave builds on | SC-021 forces the unwired surfaces to become reachable, which re-tests them in anger |
+| RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | FR-036 blocks continuation pending an external constitution amendment; if continuation is authorized, SC-021 forces the unwired surfaces to become reachable and re-tests them in anger |

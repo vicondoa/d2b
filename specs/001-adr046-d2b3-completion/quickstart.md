@@ -34,7 +34,10 @@ eval that follows the same path. A forgotten `git add` on a new module is the mo
 
 ### 1. Confirm entry criteria
 
-Entry requires Gate 0 passed, no unresolved contention flag on this wave's destination paths,
+Entry first requires FR-036's separate accepted Principle VI constitution amendment to be an
+ancestor of the exact execution base. The feature-local W0/W1 historical record and W2-W4
+remedial receipts cannot satisfy it. After that external prerequisite, entry requires Gate 0
+passed, no unresolved contention flag on this wave's destination paths,
 the stack proposed against the exact named parent commit rather than a stale `v3`, a free
 heavy-gate semaphore, and a green fast hermetic suite. If the predecessor is not yet merged,
 implementation may start only after at least 5 of its 10 reviews return and integration is
@@ -247,12 +250,14 @@ transitions through the production daemon, and requires a real owned effect and 
 every one of those three representative resources. Refusals are separate negative
 cases. It then removes the Device, deploys the next generation without a manual daemon
 restart, verifies dependency-safe cleanup, and proves the Volume, Network, and unrelated
-resources remain ready and intact. Guest runtime-effect acceptance is deferred to the Wave 6
-Guest Provider; Guest emission, status, or refusal is not a positive Wave 5 result.
+resources remain ready and intact. Guest runtime-effect acceptance is deferred specifically
+to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480; Guest emission, status, or
+refusal is not a positive Wave 5 result.
 This is a partial US1 production-plane checkpoint, not full US1 completion. The acceptance-set
-label does not reassign Network implementation from Wave 4. Full US1 completes only after the
-Wave 6 Guest Provider produces positive Guest runtime-effect acceptance; missing, skipped,
-status-only, or refusal evidence leaves it incomplete.
+label does not reassign Network implementation from Wave 4. Full US1 completes only after
+T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a real Cloud
+Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
+skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
 The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
 `<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
@@ -291,9 +296,10 @@ d2b resource inspect <Type>/<name>
 
 **Expected**: the Volume, Network, and Device are each ready through their owned effect, and
 the removed Device completes dependency-safe cleanup. Actionable refusal coverage runs
-separately and cannot satisfy this positive proof. Guest is not expected to pass until its
-Wave 6 Provider exists. Network remains Wave 4 implementation; Wave 5 accepts it through the
-production plane without taking implementation ownership.
+separately and cannot satisfy this positive proof. Guest is not expected to pass until Wave 6
+`Provider/runtime-cloud-hypervisor` and its T479/T480 exact-F6 acceptance exist. Network
+remains Wave 4 implementation; Wave 5 accepts it through the production plane without taking
+implementation ownership.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. Retry with the explicit target-configuration command above; do

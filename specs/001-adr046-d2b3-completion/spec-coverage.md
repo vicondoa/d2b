@@ -82,8 +82,8 @@ definition.
 
 | Wave | Specs | Work items | Cumulative | Status |
 | --- | --- | --- | --- | --- |
-| W0 | 6 | 8 | 8 | Merged, delivered under waiver (FR-034) |
-| W1 | 2 | 6 | 14 | Merged, delivered under waiver (FR-034) |
+| W0 | 6 | 8 | 8 | Merged; missing panel/seal history recorded, non-authorizing (FR-034/FR-036) |
+| W1 | 2 | 6 | 14 | Merged; missing panel/seal history recorded, non-authorizing (FR-034/FR-036) |
 | W2 | 2 | 19 | 33 | All 19 manifest `Merged`; entry disposition and close tasks remain open |
 | W3 | 1 | 4 | 37 | All 4 manifest `Merged`; serial Provider contract |
 | W4 | 5 | 31 | 68 | All 31 current-wave items manifest `Merged`; entry disposition and close tasks remain open |
@@ -164,6 +164,18 @@ Each spec's work items are listed in the per-wave sections below.
 | `ADR-046-provider-transport-vsock` | W6 | 7 | W6-transport-observability-activation |
 | `ADR-046-provider-volume-local` | W6 | 13 | W6-storage-network-device |
 | `ADR-046-provider-volume-virtiofs` | W6 | 7 | W6-storage-network-device |
+
+The full-US1 Guest acceptance is not a four-family matrix. Its sole family is
+`ADR-046-provider-runtime-cloud-hypervisor` / `Provider/runtime-cloud-hypervisor`. T384
+(`ADR046-ch-001`) owns `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` and
+`tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, its sole `Makefile`
+recipe, and the authoritative real-KVM plus guest-control `make test-host-integration`
+obligation through exact attr
+`vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`;
+T384-T390 bound the complete family file set, including T387's Nix Guest emitter. T479 owns
+the exact-F6 `w6-cloud-hypervisor-guest-acceptance` evidence gate and T480 revalidates that
+same record at every close boundary. The ACA, Azure VM, and qemu-media runtime families
+cannot satisfy this acceptance.
 | `ADR-046-feasibility-and-spikes` | W7 | 11 | W7-closing |
 | `ADR-046-reset-and-cutover` | W7 | 11 | W7-closing |
 | `ADR-046-security-and-threat-model` | W7 | 19 | W7-closing |
@@ -848,7 +860,8 @@ The completion boundary is:
   effect/readiness for the Wave 5 acceptance set - representative Volume, Network, and Device - followed
   by dependency-safe Device cleanup with ready Volume, Network, and unrelated resources
   intact; the label is acceptance scope only and Network implementation remains owned by
-  Wave 4; Guest runtime-effect acceptance remains a Wave 6 Guest Provider obligation and no
+  Wave 4; Guest runtime-effect acceptance remains specifically a Wave 6
+  `Provider/runtime-cloud-hypervisor` T384/T479/T480 obligation and no
   Guest emission, status, or refusal can satisfy this Wave 5 criterion; refusals remain
   separate negative cases;
 - pre-T603 analysis and unanimous plan panel at clean A/P0 authorizing only T603's two
@@ -1041,7 +1054,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-023 | Removal only after successor plus proof, own commit | `current-code-migration-map`, `streamline` | `streamline`, `reuse` |
 | FR-024 | No dual control plane in the release | `reset-and-cutover`, `streamline` | `reset`, `streamline` |
 | FR-025 - FR-033 | Wave gating, seal, evidence, anti-serialization, semaphore, drift, test layers, suite retirement | `validation-and-delivery` | `delivery` |
-| FR-034 - FR-036 | W0/W1 waiver, sealed delivery from W2, entry check | `validation-and-delivery` (§4 entry/exit) | `delivery` |
+| FR-034 - FR-036 | W0/W1 historical evidence, external Principle VI constitution prerequisite, then sealed delivery from W2 | `validation-and-delivery` (§4 entry/exit) plus external constitution amendment | `delivery` |
 | FR-037 - FR-038 | Deliver W2-W8; satisfy the six-condition release gate | `validation-and-delivery` §15 | `delivery` |
 | FR-039 - FR-040 | Companion compatibility as a release blocker | **Locally added** - no ADR-046 owner | none |
 | FR-041 - FR-042 | Parity where a successor was promised; explicit retirement otherwise | `current-code-migration-map` | `streamline`, `reuse` |
@@ -1051,10 +1064,10 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-047 | Conformance to the 129 frozen decisions | `decision-register` | `decisions` |
 | FR-048 - FR-050 | Pipelined implementation start with strict ordered exit | `validation-and-delivery` section 4 | `delivery` |
 | FR-051 - FR-055 | Panel deferral registers and pre-panel review gates | `validation-and-delivery` plus program process | `delivery` |
-| FR-056 - FR-059 | Standing Gate 0, entry/exit distinction, waiver scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
+| FR-056 - FR-059 | Standing Gate 0, entry/exit distinction after the external constitution prerequisite, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication through the locked reviewed `d2b-peer-pidfd` 0.1.0 prerequisite, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, Wave 5 acceptance-set Volume/Network/Device operator Nix activation/effect/cleanup with Network implementation retained by Wave 4 and Guest deferred to its Wave 6 Provider, exact evidence, and receipt/editor-mediated amended-plan resume | **Locally added Wave 5 partial production-plane checkpoint assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `provider-system-core`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `system-core`, `audit` plus T589-T605 |
+| FR-066 - FR-072 | Authenticated production publication through the locked reviewed `d2b-peer-pidfd` 0.1.0 prerequisite, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, Wave 5 acceptance-set Volume/Network/Device operator Nix activation/effect/cleanup with Network implementation retained by Wave 4, and Guest deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480 exact-F6 acceptance | **Locally added Wave 5 partial production-plane checkpoint assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `provider-system-core`, `provider-runtime-cloud-hypervisor`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `system-core`, `ch`, `audit` plus T589-T605 and T479-T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
 
@@ -1069,7 +1082,7 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; pins T593's reviewed `d2b-peer-pidfd` 0.1.0 prerequisite; narrows T604 positive effects to the Wave 5 acceptance-set Volume/Network/Device without moving Network implementation from Wave 4, defers Guest to its Wave 6 Provider, and leaves US1 incomplete until positive Guest runtime-effect acceptance after W6; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires FR-036's external constitution amendment before any authorization, then pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; pins T593's reviewed `d2b-peer-pidfd` 0.1.0 prerequisite; narrows T604 positive effects to the Wave 5 acceptance-set Volume/Network/Device without moving Network implementation from Wave 4; defers Guest specifically to T384's `Provider/runtime-cloud-hypervisor` family and T479/T480 exact-F6 acceptance; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest or 605-task count. |
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
 counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this

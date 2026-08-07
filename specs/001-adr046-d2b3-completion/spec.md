@@ -45,8 +45,20 @@ corrections.
 
 One process gap also carries forward: W0 and W1 merged through reviewed pull requests
 without producing the delivery contract's sealed wave records, so no wave is currently
-sealed. This specification accepts that as a one-time documented waiver and begins sealed
-delivery at W2.
+sealed. The legacy-named `waiver-w0-w1.md` records that historical failure and its weaker
+evidence only. It does not waive Constitution Principle VI, ratify the missing gates, or
+authorize W2 entry.
+
+**Open constitutional prerequisite**: before any ADR-046 phase may dispatch or resume
+implementation, run a convergence or finding-fix lane, request a work panel, seal, merge, or
+advance, a separate amendment to Constitution Principle VI must be accepted outside this
+feature root and committed on the integration lineage. That amendment must expressly address
+both the unpanelled and unsealed W0/W1 history and the already-dispatched W2-W4 work whose
+contemporaneous plan panels are unproven, and must state the conditions under which the
+program may continue. The accepted amendment commit must be an ancestor of the exact
+execution base. Feature-local historical and remedial records are evidence for that external
+decision; none is constitutional authorization. Until the amendment lands, this program is
+blocked after read-only planning and analysis.
 
 ### Approved Wave 5 production-completion amendment (2026-08-06)
 
@@ -172,9 +184,10 @@ needed to satisfy the declared resources, and without performing a host cutover.
 acceptance set is the representative Volume, Network, and Device; "acceptance set" does not
 assign implementation ownership, and Network implementation remains owned by Wave 4. Wave 5
 does not claim a positive Guest runtime effect and therefore cannot complete this story.
-Full US1 completion occurs only after the Wave 6 Guest Provider supplies positive
-runtime-effect acceptance for the declared Guest. Missing, skipped, status-only, or refusal
-evidence leaves US1 incomplete.
+Full US1 completion occurs only after the Wave 6
+`Provider/runtime-cloud-hypervisor` family supplies positive runtime-effect acceptance for
+the declared Guest. Missing, skipped, status-only, fake-boundary, or refusal evidence leaves
+US1 incomplete.
 
 ---
 
@@ -482,8 +495,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   one of those three resources, and removes one declaration with dependency-safe
   cleanup while unrelated resources remain ready and intact. Actionable refusals are separate
   negative cases and cannot satisfy this positive story. Positive Guest runtime-effect
-  acceptance belongs to the Wave 6 Guest Provider and is not a Wave 5 success criterion;
-  Guest bundle emission, ingestion, status, or refusal MUST NOT satisfy FR-072 or SC-034.
+  acceptance belongs specifically to Wave 6 `Provider/runtime-cloud-hypervisor`, owned by
+  T384-T390 and accepted at T479/T480, and is not a Wave 5 success criterion; Guest bundle
+  emission, ingestion, status, or refusal MUST NOT satisfy FR-072 or SC-034.
   This acceptance scope does not reassign implementation: Network remains Wave 4-owned.
   Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and
@@ -811,29 +825,38 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   and MUST NOT introduce a new top-level shell gate.
 - **FR-033**: Superseded test suites MUST be retired once their successor coverage passes,
   so that old and new suites do not run indefinitely.
-- **FR-034**: Waves W0 and W1 MUST be recorded as delivered without the delivery contract's
-  sealed wave records, by way of an explicit written waiver that names the missing artifacts
-  (the ten panel receipts and the seal), states the evidence actually relied upon (all 14
-  assigned work items recorded as merged, merged through reviewed pull requests), and is
-  produced before W2 entry.
-- **FR-035**: Sealed delivery MUST begin at W2. Every wave from W2 through W8 MUST produce a
-  complete seal satisfying FR-026, and the FR-034 waiver MUST NOT be extended, reused, or
-  cited as precedent for any wave from W2 onward.
-- **FR-058**: The FR-034 waiver's scope MUST be read narrowly, and covers **only the absence
+- **FR-034**: Waves W0 and W1 MUST have a historical deviation record that names the missing
+  artifacts (the ten panel receipts and the seal for each wave) and the weaker evidence
+  actually available (all 14 assigned work items recorded as merged through reviewed pull
+  requests). The record is evidence only. It MUST state that it does not waive Constitution
+  Principle VI, cure the missing gates, authorize W2 entry, or permit any later phase to
+  dispatch, resume, close, or advance.
+- **FR-035**: If the external constitutional prerequisite in FR-036 authorizes continuation,
+  sealed delivery MUST begin at W2. Every wave from W2 through W8 MUST then produce a complete
+  seal satisfying FR-026. The FR-034 historical record MUST NOT be extended, reused, or cited
+  as authorization or precedent for any wave.
+- **FR-058**: The FR-034 historical record's scope MUST be read narrowly, and covers **only the absence
   of the W0 and W1 seal artifacts** - the ten panel receipts and the seal record for those
   two waves. It MUST NOT be read as waiving any work item's own completion obligation. In
   particular, the nine `ADR046-delivery-001` through `ADR046-delivery-009` work items are
   recorded as `Planned` and are assigned by the implementation graph to wave **W7**, not to
-  W0 or W1. Their `Planned` state is therefore outside the waiver entirely: each MUST reach
-  `Merged` under W7's own seal, evaluated against W7's snapshot under FR-026, and the waiver
+  W0 or W1. Their `Planned` state is therefore outside the historical record entirely: each MUST reach
+  `Merged` under W7's own seal, evaluated against W7's snapshot under FR-026, and the record
   MUST NOT be cited as evidence for any of them. More generally, a work item owned by a wave
-  later than W1 is never covered by the waiver regardless of its current implementation
-  state, and no work item is recorded as complete on the strength of the waiver alone.
-- **FR-036**: W2 entry MUST NOT be blocked by the absence of W0 and W1 seals. Under FR-048 a
-  wave's implementation may also begin while its predecessor's items are not yet `Merged`;
-  the predecessor-merged condition is enforced at the successor's **exit boundary** - panel
-  request, seal, and merge eligibility (FR-049), not at its implementation start.
-- **FR-057**: The program MUST distinguish **entry evidence** from **exit evidence**, and
+  later than W1 is never covered by the record regardless of its current implementation
+  state, and no work item is recorded as complete on the strength of the record alone.
+- **FR-036**: Before any phase may dispatch or resume implementation, run a convergence or
+  finding-fix lane, request a work panel, seal, merge, or advance, an explicit separate
+  amendment to Constitution Principle VI MUST be accepted and committed outside this feature
+  root. It MUST expressly disposition the W0/W1 missing panel and seal history and the
+  unproven contemporaneous W2-W4 plan panels, and it MUST state the conditions for program
+  continuation. Its commit MUST be an ancestor of the exact execution base. The FR-034
+  historical record, a current remedial plan panel, and a candidate-bound historical-entry
+  remediation record are evidence only and MUST NOT satisfy this prerequisite. Until it is
+  met, every implementation, resume, fix, work-panel, seal, merge, and advance boundary MUST
+  refuse.
+- **FR-057**: After FR-036's external constitutional prerequisite is satisfied, the program
+  MUST distinguish **entry evidence** from **exit evidence**, and
   MUST NOT treat a requirement for one as a requirement for the other. Entry evidence is what
   a wave needs in order to **start implementing**: Gate 0 has passed, its destination paths
   carry no open contention flag, its stack is proposed against the exact named parent commit,
@@ -841,11 +864,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Exit evidence is what a wave needs in order to be **delivered** - sealed and merged: every
   assigned work item recorded as merged, validation evidence imported for the exact snapshot,
   and unanimous ten-role panel sign-off with zero outstanding recommendations against that
-  snapshot. A missing or absent predecessor seal blocks the successor's **exit** and never its
-  **entry**. FR-025's prohibition on partial-wave advance therefore means a wave is never
+  snapshot. For ordinary prospective pipelining after FR-036 is satisfied, a missing or
+  absent predecessor seal blocks the successor's **exit** and not its **entry**. This rule
+  does not make W0/W1's missing seals or W2-W4's late remediation non-blocking before the
+  external amendment. FR-025's prohibition on partial-wave advance therefore means a wave is never
   *delivered* early and its evidence is never *accepted* early; it does not mean implementation
-  must wait. This resolves the apparent conflict between FR-025 and FR-036, and matches the
-  delivery contract's pipelined-start conditions restated in FR-048 through FR-050.
+  must wait. Once FR-036's external prerequisite is satisfied, this matches the delivery
+  contract's ordinary pipelined-start conditions restated in FR-048 through FR-050.
 - **FR-044**: Every wave's work MUST land through pull requests opened against the
   integration lineage and merged only after that wave's gates pass: validation evidence
   imported for the exact snapshot, unanimous panel sign-off, a seal, and an eligible
@@ -1283,8 +1308,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   fixed at 545.
 - **SC-020**: Every wave from W2 through W8 carries a seal bound to its exact snapshot, with
   unanimous ten-role panel sign-off and zero outstanding recommendations. W0 and W1 carry a
-  written delivered-without-seal waiver instead, and no wave from W2 onward relies on that
-  waiver.
+  written delivered-without-seal historical record, not a substitute seal or constitutional
+  waiver. The release is ineligible unless the separate FR-036 constitution amendment is an
+  ancestor of the release candidate and expressly permits continuation under the recorded
+  history.
 - **SC-021**: Zero foundation surfaces remain deliberately unwired from production at
   release: the capabilities delivered in W0 and W1 are reachable through the operator
   surface rather than only through tests.
@@ -1325,30 +1352,29 @@ carries the object verbatim rather than copying selected fields into the task ro
   per-wave phase gate. Every wave retains one unanimous plan review before implementation
   dispatch and one unanimous work review after convergence. For already-dispatched W2-W4,
   the feature artifacts currently prove no contemporaneous plan-review receipt: historical
-  compliance remains unproven, a current remedial plan review may guard only future dispatch,
-  and the later work panel cannot repair or substitute for the missed historical gate.
-  Wave 5's T603 plan review is the mandatory gate for resumed implementation after a valid
-  T072 historical or current remedial entry disposition. W6-W8 must pass their prospective
-  plan gates before their first implementation lane.
+  compliance remains unproven, a current remedial plan review is evidence only until FR-036's
+  external constitution amendment lands, and the later work panel cannot repair or substitute
+  for the missed historical gate. After that amendment, its stated conditions and the
+  feature-local gates apply together. Wave 5's T603 plan review is then the mandatory gate
+  for resumed implementation after a valid T072 historical or current remedial entry
+  disposition. W6-W8 must pass their prospective plan gates before their first implementation
+  lane.
 - The project constitution applies in full, in particular the audited-privilege boundary,
   the isolation-over-convenience rule, contract versioning, test-layer discipline, and the
-  ban on internal process markers in shipped artifacts.
+  ban on internal process markers in shipped artifacts. The feature cannot amend or waive it;
+  FR-036 is therefore an external prerequisite rather than a feature-local exception.
 - Delivery proceeds in the specified wave order W2 through W8. Sealing and merging are
   strictly ordered and no partial-wave advance is permitted, but implementation start is
   pipelined; the entry-evidence versus exit-evidence distinction is stated in FR-057. The
   program terminates at the release of d2b 3.0, not at feature completeness: the release
   gate is evaluated against the final wave's snapshot, because gating earlier would release
   a candidate that a later wave still modifies.
-- Waves W0 and W1 are accepted as delivered under a written waiver rather than being
-  retroactively panelled and sealed. Their binding panel would otherwise have to run against
-  a historical snapshot that no longer exists in a single canonical form. Per FR-057, every
-  prior work item being recorded as merged is an **exit** condition, not an entry condition:
-  it is tested at W2's exit boundary - panel request, seal, and merge eligibility - not at
-  W2's implementation start. That exit
-  condition is already satisfied - all 14 W0 and W1 work items are independently verified as
-  `Merged` - so the waiver removes no check that W2's close would otherwise have to make.
-  The waiver is a one-time, documented exception, not a precedent, and its scope is bounded
-  by FR-058.
+- Waves W0 and W1 are historically recorded as merged without the required panel receipts
+  and seals. Their binding panel cannot now be recreated against one canonical delivered
+  snapshot. All 14 assigned work items are independently recorded as `Merged`, but that fact
+  does not cure Principle VI or authorize W2. The legacy-named `waiver-w0-w1.md` is only the
+  FR-034 evidence record. Program continuation depends on the separate FR-036 constitution
+  amendment, and neither that file nor the W2-W4 late-remediation records may stand in for it.
 - The pre-ADR-046 control plane remains functional for operators throughout W2 through W6.
   It is replaced only by the cutover in W7 and removed under the release gate, so an
   operator's working host is not expected to be broken mid-program.
