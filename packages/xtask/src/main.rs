@@ -480,19 +480,12 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
         command_args: &[String],
         environment: &[(&str, &str)],
     ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
-        let mut corrected_command_args = command_args.to_vec();
-        for argument in &mut corrected_command_args {
-            if argument == "@rules_rust//crate_universe:cargo_bazel" {
-                *argument = "@rules_rust//crate_universe:cargo_bazel_bin".to_owned();
-            }
-        }
-
         let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
         let mut command = Command::new(executable);
         command
             .current_dir(root)
             .args(startup_args)
-            .args(&corrected_command_args)
+            .args(command_args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
