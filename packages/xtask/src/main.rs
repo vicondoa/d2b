@@ -1727,8 +1727,6 @@ fn insert_after_bash_vm_exec_opts(
         .filter(|(start, end)| {
             let line = &block[*start..*end];
             line.trim_start().starts_with("opts=\"")
-                && line.contains("--detach")
-                && line.contains("<VM>")
         })
         .collect::<Vec<_>>();
     if matching_lines.len() != 1 {
@@ -2679,11 +2677,11 @@ printf product-lock > bazel/cargo/product.lock
 
     #[test]
     fn bash_vm_exec_patch_accepts_clap_option_reordering() {
-        let generated = "\
-        d2b__subcmd__vm__subcmd__exec)\n\
-            opts=\"--human --detach <VM> --json --cwd\"\n\
-            COMPREPLY=()\n\
-        d2b__subcmd__vm__subcmd__start)\n";
+        let generated = r#"        d2b__subcmd__vm__subcmd__exec)
+            opts="--human --detach <VM> --json --cwd"
+            COMPREPLY=()
+        d2b__subcmd__vm__subcmd__start)
+"#;
         let patched =
             insert_after_bash_vm_exec_opts(generated.to_owned()).expect("patch reordered opts");
         assert!(patched.contains(
@@ -2695,15 +2693,15 @@ printf product-lock > bazel/cargo/product.lock
     #[test]
     fn bash_vm_exec_patch_refuses_missing_or_duplicate_option_lines() {
         for generated in [
-            "\
-        d2b__subcmd__vm__subcmd__exec)\n\
-            COMPREPLY=()\n\
-        d2b__subcmd__vm__subcmd__start)\n",
-            "\
-        d2b__subcmd__vm__subcmd__exec)\n\
-            opts=\"--detach <VM>\"\n\
-            opts=\"--detach <VM> --json\"\n\
-        d2b__subcmd__vm__subcmd__start)\n",
+            r#"        d2b__subcmd__vm__subcmd__exec)
+            COMPREPLY=()
+        d2b__subcmd__vm__subcmd__start)
+"#,
+            r#"        d2b__subcmd__vm__subcmd__exec)
+            opts="--detach <VM>"
+            opts="--detach <VM> --json"
+        d2b__subcmd__vm__subcmd__start)
+"#,
         ] {
             let error = insert_after_bash_vm_exec_opts(generated.to_owned())
                 .expect_err("invalid option census");
