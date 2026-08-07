@@ -45,7 +45,7 @@ assert_wf() {
   if grep -Eq "$pattern" "$wf"; then
     ok "wiring: $label"
   else
-    fail "wiring: $label - pattern not found in $(basename "$wf"): $pattern"
+    fail "wiring: $label - pattern not found in $(basename "$wf"): $pattern" || true
     rc=1
   fi
 }
@@ -55,17 +55,17 @@ assert_release() {
   if grep -Eq "$pattern" "$release_wf"; then
     ok "release: $label"
   else
-    fail "release: $label - pattern not found in $(basename "$release_wf"): $pattern"
+    fail "release: $label - pattern not found in $(basename "$release_wf"): $pattern" || true
     rc=1
   fi
 }
 
 if [ ! -f "$wf" ]; then
-  fail "missing workflow: $wf"
+  fail "missing workflow: $wf" || true
   exit 1
 fi
 if [ ! -f "$release_wf" ]; then
-  fail "missing release workflow: $release_wf"
+  fail "missing release workflow: $release_wf" || true
   exit 1
 fi
 
@@ -80,7 +80,7 @@ assert_wf "nix-unit discovery exports the partition" 'checks:\s*\$\{\{\s*steps\.
 assert_wf "nix-unit matrix sourced from discovery" 'fromJSON\(needs\.nix-unit-discover\.outputs\.checks\)'
 assert_wf "nix-unit shard invokes make test-nix-unit" 'D2B_NIX_UNIT_CHECK'
 if grep -Eq 'D2B_NIX_UNIT_JOBS' "$wf"; then
-  fail "wiring: retired D2B_NIX_UNIT_JOBS remains in CI"
+  fail "wiring: retired D2B_NIX_UNIT_JOBS remains in CI" || true
   rc=1
 else
   ok "wiring: retired D2B_NIX_UNIT_JOBS is absent"
@@ -100,7 +100,7 @@ assert_release "release builds use the root Cargo manifest" \
 assert_release "release copies the broker from the root target" \
   'packages/target/release/d2b-priv-broker'
 if grep -qF 'packages/d2b-priv-broker/Cargo.toml' "$release_wf"; then
-  fail "release: retired broker manifest path remains"
+  fail "release: retired broker manifest path remains" || true
   rc=1
 else
   ok "release: retired broker manifest path is absent"
@@ -116,7 +116,7 @@ aarch64_block=$(awk '
   in_block && /^  test-drift:/ { exit }
 ' "$wf")
 if grep -q 'smoke-eval-aarch64\.nix' <<<"$aarch64_block"; then
-  fail "wiring: aarch64 smoke evaluation remains instead of native realization"
+  fail "wiring: aarch64 smoke evaluation remains instead of native realization" || true
   rc=1
 else
   ok "wiring: aarch64 smoke evaluation is absent"
@@ -124,25 +124,25 @@ fi
 if grep -qF 'runs-on: ubuntu-24.04-arm' <<<"$aarch64_block"; then
   ok "wiring: aarch64 job uses the native arm runner"
 else
-  fail "wiring: aarch64 job must use ubuntu-24.04-arm"
+  fail "wiring: aarch64 job must use ubuntu-24.04-arm" || true
   rc=1
 fi
 if grep -qF 'timeout-minutes: 60' <<<"$aarch64_block"; then
   ok "wiring: aarch64 job has a 60-minute bound"
 else
-  fail "wiring: aarch64 job must have a 60-minute bound"
+  fail "wiring: aarch64 job must have a 60-minute bound" || true
   rc=1
 fi
 if grep -qF 'make test-rust-supply-chain' <<<"$aarch64_block"; then
   ok "wiring: aarch64 job runs make test-rust-supply-chain"
 else
-  fail "wiring: aarch64 job must run make test-rust-supply-chain"
+  fail "wiring: aarch64 job must run make test-rust-supply-chain" || true
   rc=1
 fi
 if grep -qF 'nix build --no-link' <<<"$aarch64_block"; then
   ok "wiring: aarch64 job realizes checks with nix build"
 else
-  fail "wiring: aarch64 job must realize checks with nix build --no-link"
+  fail "wiring: aarch64 job must realize checks with nix build --no-link" || true
   rc=1
 fi
 for check in \
@@ -156,7 +156,7 @@ do
   if grep -qF ".#checks.aarch64-linux.$check" <<<"$aarch64_block"; then
     ok "wiring: aarch64 realizes $check"
   else
-    fail "wiring: aarch64 six-check realization is missing $check"
+    fail "wiring: aarch64 six-check realization is missing $check" || true
     rc=1
   fi
 done
@@ -168,12 +168,12 @@ do
   if grep -qF "$marker" <<<"$aarch64_block"; then
     ok "wiring: aarch64 stable-head binding includes $marker"
   else
-    fail "wiring: aarch64 stable-head binding is missing $marker"
+    fail "wiring: aarch64 stable-head binding is missing $marker" || true
     rc=1
   fi
 done
 if grep -Eq -- '(^|[[:space:]])--system(=|[[:space:]])|(^|[[:space:]])--builders?(=|[[:space:]])|ssh://|remote-builder' <<<"$aarch64_block"; then
-  fail "wiring: aarch64 job supplies a foreign system or remote builder"
+  fail "wiring: aarch64 job supplies a foreign system or remote builder" || true
   rc=1
 else
   ok "wiring: aarch64 job refuses foreign systems and remote builders"
