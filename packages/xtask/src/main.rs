@@ -680,7 +680,6 @@ impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
                 &format!("--output_user_root={}", output_user_root.display()),
                 &format!("--output_base={}", output_base.display()),
                 "--nohome_rc",
-                "--nosystem_rc",
                 "mod",
                 "deps",
                 "--lockfile_mode=off",
@@ -2451,14 +2450,13 @@ mod fresh_bootstrap_tests {
         fs::write(
             &executable,
             r#"#!/bin/sh
-[ "$1" = "--batch" ] || exit 10
+            [ "$1" = "--batch" ] || exit 10
             [ "${2#--output_user_root=/}" != "$2" ] || exit 11
             [ "${3#--output_base=/}" != "$3" ] || exit 12
             [ "$4" = "--nohome_rc" ] || exit 13
-            [ "$5" = "--nosystem_rc" ] || exit 14
-            [ "$6" = "mod" ] || exit 15
-            [ "$7" = "deps" ] || exit 16
-            [ "$8" = "--lockfile_mode=off" ] || exit 17
+            [ "$5" = "mod" ] || exit 14
+            [ "$6" = "deps" ] || exit 15
+            [ "$7" = "--lockfile_mode=off" ] || exit 16
             [ "$CARGO_BAZEL_REPIN" = "1" ] || exit 18
             [ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 19
             [ -z "$D2B_TEST_HOSTILE" ] || exit 20
