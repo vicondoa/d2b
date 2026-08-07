@@ -10,17 +10,21 @@
   audit ordering only as its new endpoint table, receipt lifetime,
   common base-or-conflict attempt identity for accepted attempts,
   narrow original-peer-or-operator recovery reads, migration-conflict
-  preflight and its isolated bounded signal reserve, reconciliable acceptance
+  preflight and its isolated hard-bounded signal reserve, fixed-cardinality
+  telemetry-health fallback, reconciliable acceptance
   prepare and
   accepted-attempt journal, fenced worker and sink-generation recovery, replay
   result, outbox, immutable permanent replay tombstones, append-only
   payload-eviction markers, durable sink reservation, idempotent append,
   exact redacted completion and append-refusal products,
   recovery-capacity reserve with serialized plan-id binding, exclusive
-  migration execution capacity with a sealed migration-control reserve,
+  migration execution capacity with controller-issued state-bound control
+  identities, sealed migration-control capacity, and an independent
+  migration-integrity reserve,
   exhaustive protected attempt recovery and pending status,
   migration-specific no-append audit repair, generic conversion from the exact
-  sink-acknowledgement-pending tuple, and re-entrant online
+  ordinary sink-acknowledgement-pending tuple, distinct migration
+  sink-acknowledgement and activation variants, and re-entrant online
   capacity-migration rules specify; and
   D21's rejection of a four-level
   severity contract, per-seat `held` and `prior_resolutions` state, rotation,
@@ -34,11 +38,13 @@
   standalone producer without requiring Gas City, while same-uid repository
   helpers remain proposal-only. Its closed endpoint table adds
   candidate-bound reviewer, protected implementation-assignment issuance,
-  exact-origin completion, exact-origin replacement-assignment issuance,
+  exact-origin completion, state-valid assignment recovery that reuses an
+  active capability, and fresh orchestrator request plus fresh protected
+  evidence for any new assignment,
   least-authority issue-reader, protected attempt-status and narrow
   recovery-read endpoints, while protected-operator-only assignment
-  revocation, migration repair, and attempt resume and fencing stay on the
-  operator endpoint. It
+  revocation, migration repair, migration-control integrity repair, and
+  attempt resume and fencing stay on the operator endpoint. It
   assigns lifecycle, ledger proposal and correction, implementation-assignment
   issue, completion and revocation, severity, risk, inspection, recovery
   status and online capacity migration, publication, merge-completion and
