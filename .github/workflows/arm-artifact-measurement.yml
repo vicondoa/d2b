@@ -28,10 +28,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y binutils
       - name: Measure native artifacts
         env:
-          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha }}
+          MEASUREMENT_COMMIT: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$MEASUREMENT_COMMIT"
+          export CANDIDATE_COMMIT
+          CANDIDATE_COMMIT=$(git rev-parse HEAD^)
 
           broker_out=$(nix build --no-link --print-out-paths \
             .#packages.aarch64-linux.d2b-priv-broker)
@@ -39,7 +41,7 @@ jobs:
             .#packages.aarch64-linux.d2b-guest-shell-runner-static)
 
           flake_ref="git+file://$PWD"
-          broker_closure=$(nix build --no-link --print-out-paths --expr "
+          broker_closure=$(nix build --impure --no-link --print-out-paths --expr "
             let
               f = builtins.getFlake \"$flake_ref\";
               pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; };
@@ -48,7 +50,7 @@ jobs:
                 rootPaths = [ f.packages.aarch64-linux.\"d2b-priv-broker\" ];
               }
           ")
-          guest_closure=$(nix build --no-link --print-out-paths --expr "
+          guest_closure=$(nix build --impure --no-link --print-out-paths --expr "
             let
               f = builtins.getFlake \"$flake_ref\";
               pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; };
