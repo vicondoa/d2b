@@ -2295,4 +2295,6 @@ CHK054 is checked only as a specification-quality resolution. Implementation rem
 unchecked. Pre-validator analysis and plan signoff at A/P0 authorize only T603's validator
 paths plus `changelog.d/delivery-resume-reconciliation.md`. After validator-and-fragment V
 becomes B, analysis and the plan panel rerun at B/P; those
-post-validator receipts and T603's exact T073-T218 reconciliation still gate resume.
+post-validator receipts authorize only the exact T073-T218 reconciliation and editor
+transition. Dedicated commit C changes content to Q, so fresh analysis and unanimous plan
+review bound to exact C/Q still gate T589 dispatch.

@@ -1017,7 +1017,9 @@ Run this against `tasks.md` before implementation starts.
       repository-relative B/P reconciliation. T603 accounts for all T073-T218 obligations
       without checking them from code presence, authorizes only the validator-derived P-to-Q
       `/d2b-spec-edit` batch, binds exact child checkbox commit C in the finalized receipt,
-      and leaves descendant final candidate F/tree evidence separate
+      then requires fresh exact-C/Q analysis and unanimous plan review before T589 because
+      the P-to-Q content change invalidates B/P sign-off for dispatch. Descendant final
+      candidate F/tree evidence remains separate
 - [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
       adds the two closed-enum values and owned pre-consumer artifacts, T595 emits them, T599
       reconciles downstream consumers, and T220 reconciles generated manifests and full drift
@@ -1029,7 +1031,8 @@ Run this against `tasks.md` before implementation starts.
       per FR-047)
 - [x] Unordered contended files are integrator-prep and integrator-owned. A contended file may
       instead have explicitly ordered serial slice owners only when the plan names every
-      writer and the dependency edge, as for `transaction.rs` and `packages/Cargo.lock`
+      writer and the dependency edge, as for `transaction.rs`. `packages/Cargo.lock` is not
+      transferred: T592 is its sole owner and T593 consumes the frozen dependency graph
 ---
 
 ## Requirement traceability (FR/SC to ADR-046 owners)

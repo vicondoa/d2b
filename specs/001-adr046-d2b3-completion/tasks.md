@@ -96,16 +96,18 @@ contemporaneous W2-W5 plan panels. `waiver-w0-w1.md`, a remedial plan receipt, a
 this prerequisite. Until it lands, those artifacts are evidence only and all such actions
 refuse. This prerequisite adds no task ID and changes no checkbox.
 
-**W2-W6 host-continuity close gate (FR-075)**: T028, T035, T070, T220/T604, and
-T479 MUST run the existing heavy-gated `make test-host-integration` target against their
-exact proposed candidate, require nonempty enumeration and a successful build of
+**W2-W6 host-continuity close gate (FR-075)**: prospective execution is limited to
+T220/T604 for W5 and T479 for W6. Those tasks MUST run the existing heavy-gated
+`make test-host-integration` target against their exact proposed candidate, require nonempty
+enumeration and a successful build of
 `vmChecks.x86_64-linux.daemon-restart-vm-survival`, and reject every skip. The result must
 prove public `d2b vm` start/status/stop, an explicit `Ready` state before restart, guest
 reachability, `d2bd.service` restart, same runner PID/start-time adoption through a newly
 acquired pidfd, continued reachability, and an explicit `Stopped` state after stop. It must
 enumerate exactly `d2bd.service`, `d2b-priv-broker.socket`, and
 `d2b-priv-broker.service`, with no fourth root-visible framework unit. Historical T028,
-T035, and T070 only inspect retained evidence and own no test edit. T604 is the sole
+T035, and T070 only inspect retained evidence, MUST NOT rerun the target, and own no test
+edit. T604 is the sole
 prospective owner of `tests/host-integration/daemon-restart-vm-survival.nix` and that check's
 discovery/build recipe in `Makefile`; its public target must fail on empty discovery, any
 `SKIP`, a missing build, or a non-x86 result presented as passing. The positive case proves
@@ -442,7 +444,7 @@ contract correction, and evidence, and T603 adds the amended-plan resume reconci
 do not renumber, replace, or complete a manifest item. Dependency order is:
 
 ```text
-T073-T218 obligations -> T603 -> T589 -> {T590,T591,T594}
+T073-T218 obligations -> T603 -> exact C/Q analysis + unanimous plan review -> T589 -> {T590,T591,T594}
 T591 -> T592 -> T593 route -> T605
 {T590,T592,T594,T605} -> T595
 T595 -> {T596,T597,T598,T599,T604} -> T220 -> freeze candidate F
@@ -452,6 +454,9 @@ freeze candidate F -> {T600,T601} -> T602 -> T219
 T603 is the sole direct prerequisite of T589. T589 remains blocked until the external
 reconciliation receipt and editor progress receipt pass, every receipt row is satisfied, and
 T073-T218 plus T603 are checked by the sole authorized `/d2b-spec-edit` progress batch.
+Because that batch changes feature content from P to Q, T589 also requires fresh analysis and
+unanimous plan review bound to exact clean C/Q; the earlier B/P sign-off cannot authorize
+implementation dispatch.
 T590, T591, and T594 are file-disjoint and launch together from the T589 prep commit.
 T592 launches only after T591 because both tasks serially own `transaction.rs`: T591 first
 removes store-side policy interpretation, then T592 becomes the sole audit/replay writer.
@@ -690,6 +695,14 @@ table before the operation exists.
   change. Analysis or panel receipts gathered before that amendment are non-authorizing and
   must be rerun on a descendant base. T072 and `historical-entry-remediation-t072` remain
   evidence only and cannot replace this predecessor.
+
+  **Post-editor plan gate before T589:** dedicated checkbox commit C changes the reviewed
+  feature snapshot from P to Q, so the B/P panel may authorize only the editor transition
+  and is stale for implementation dispatch. After the finalized progress receipt exists,
+  require clean HEAD C/Q, fresh `/speckit-analyze` with no unresolved HIGH or CRITICAL
+  finding, and a fresh unanimous ten-role `/d2b-panel-round plan` review whose records bind
+  exact C and Q. Any later content or history change invalidates this gate. Do not dispatch
+  T589 until all of these conditions pass; no prior sign-off transfers.
 - [ ] T589 [US1] **`adr046w5` INTEGRATOR PREP - freeze the shared production contracts before parallel work.** Depends directly only on T603 and semantically on all T073-T218 obligations reconciled there. Refuse unless the immutable authorization validates at B/P, the finalized progress receipt validates dedicated checkbox commit C with `C^ = B` and snapshot Q, HEAD is clean at C, the receipt has 146 `satisfied` rows, and `tasks.md` shows T073-T218 plus T603 checked. Its immediate contract inputs include T165, T170-T172, T182-T184, T195, and T208-T218. Owned files: `packages/d2b-resource-store/src/lib.rs`, `packages/d2b-resource-api/src/{adapter.rs,client.rs,service.rs,generated/d2b_resource_v3_ttrpc.rs}`, `packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`, `packages/d2b-core-controller/src/runtime.rs`, `packages/d2b-resource-store-redb/src/{audit.rs,transaction.rs}`, `packages/d2b-bus/src/router.rs`, `packages/xtask/src/delivery/{evidence.rs,panel.rs,seal.rs,eligibility.rs}`, `docs/specs/ADR-046-resource-api-and-authorization.md`, `tests/golden/api-surface/{roots.json,capability-api.txt,capability-trait-impls.txt,hidden-public-api.txt,public-api.txt,workspace-metadata.json}`, and the dependency edges in `packages/{d2bd,d2b-bus,d2b-resource-api,d2b-core-controller,d2b-resource-store-redb}/Cargo.toml`. Establish the shared sealed interfaces for registrar-consumed session admission; authenticated post-install policy revision reads; an engine-neutral bounded controller-ledger port; the transactional immutable audit-journal hook and separate export-completion state; aggregate readiness observations; and a typed operation-status store request/result. Define `PolicyBootstrapRead` behind one private sealed issuer with no public constructor, fields, accessors, `Default`, `Clone`, `Copy`, `From`/`TryFrom`, capability conversion/trait implementation, or reconstruction path; register it as a capability root, add defining-crate compiler trait-solver seals, and regenerate the prep API snapshots. Add ResourceService `InspectOperation`, with a bounded request carrying `RequestMeta`, one exact 16-byte operation ID, watch intent, and deadline, and a closed response carrying the same ID plus exactly one of committed-pending-audit status or the stored typed final-result envelope; unknown and wrong-binding remain indistinguishable. Add protobuf `PendingAuditStatus { uint32 mutation_ordinal = 1; ResourceIdentity target = 2; bytes canonical_resource_status_json = 3; }`; add optional `pending_audit_status` fields 8, 8, 4, 4, 4, 5, and 5 respectively to `CreateResponse`, `UpdateSpecResponse`, `UpdateStatusResponse`, `UpdateMetadataResponse`, `UpdateFinalizersResponse`, `DeleteResponse`, and `UpgradeResponse`, and repeated field 5 to `CommitBatchResponse`. The field is absent on ordinary success and carries the exact bounded canonical `ResourceStatus` composite on committed-pending-audit; regenerate both Rust protobuf outputs and require the ResourceService schema fingerprint to change while Resource JSON `apiVersion`/`schemaVersion` stay unchanged. Bump accepted `ADR-046-resource-api-and-authorization` from Version 2 to Version 3 and normatively assign the additive pending-status fields, `InspectOperation`, exact authorization behavior, and generated bindings; T220 coordinates its generated manifest, reference, contract-test, schema, and changelog treatment. Freeze the `transaction.rs` journal/status calls so T591 may change policy-neutral transaction internals and T592, serialized after T591, may own final audit/replay persistence. Implement an `adr046w5` closed-evidence profile in the delivery validator and invoke it from panel-request/panel-attest, seal, and merge-eligibility. Its exact multiset is the five T600 and three T601 `(lane, validation)` pairs in `plan.md`; table-driven tests must reject missing, extra, duplicate, unknown, wrong-lane, and conflated mappings, while the exact eight pass. **Done when** the prep commit compiles every affected crate; capability compiler/API seals and protobuf round-trips include `InspectOperation`, `DeleteResponse`, and batch ordinals; the evidence-profile positive and all six negative classes pass at every named stage; both T603 receipts remain valid by base/transition identity; no interface exposes a subject constructor, reusable bootstrap reader, independent mutation path, raw audit identifier, or production-ready boolean setter; every T590, T591, and T594 branch is cut from that exact commit; T592 remains blocked on T591; and T605 remains blocked on T593.
   **Serialized broker-wire boundary:** T589 does not edit `broker_wire.rs`, the broker
   dispatcher contract, StoreSync DTOs, broker protocol metadata, or their generated
@@ -858,6 +871,9 @@ table before the operation exists.
   nonempty broker-operation/schema policy test must all fail on any omitted handoff row or
   stale output. This is one serialized commit after T591; no other task may land an
   intermediate StoreSync or handoff definition, privilege row, protocol bump, or caller.
+  T592 is the sole owner of both `packages/Cargo.lock` and
+  `packages/d2b-priv-broker/Cargo.lock`. T593 consumes the dependency graph frozen by T592
+  and may not edit, regenerate, or assume transferred ownership of either lockfile.
 
   In that commit, define the typed Zone-audit drain request/response and migrate
   `StoreSyncRequest` and `StoreSyncResponse` together with every repository producer,
@@ -2241,9 +2257,10 @@ These are the only edges that constrain shared files. Honor them as strict order
 The integrator-only rule applies when no explicit serial edge assigns every writer. A
 contended file with named, non-overlapping-in-time owners is permitted: the plan must identify
 all writers, state their order, and block the later branch until the earlier owner merges.
-`transaction.rs` (`T591 -> T592`) and `packages/Cargo.lock` (`T592 -> T593`) are the two
-representative slice-to-slice examples; prep-to-slice ownership transfers are named in
-T589's file map and dependency chain. None is parallel ownership.
+`transaction.rs` (`T591 -> T592`) is the representative slice-to-slice ownership transfer;
+prep-to-slice ownership transfers are named in T589's file map and dependency chain.
+`packages/Cargo.lock` is not transferred: T592 is its sole owner and T593 is a read-only
+consumer of the frozen dependency graph. None is parallel ownership.
 
 `packages/d2b-contracts/src/v3/volume.rs`; the `packages/Cargo.toml` member list; the
 `flake.nix` output list; `nixos-modules/index.nix` and `default.nix`;

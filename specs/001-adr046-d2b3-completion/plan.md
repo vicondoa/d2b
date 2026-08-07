@@ -57,8 +57,10 @@ analysis and, if no HIGH or CRITICAL finding remains, a unanimous plan panel at 
 and feature snapshot P0. Those gates authorize only T603's validator implementation. T603 then
 lands its dedicated validator commit V, freezes resume base B exactly at V, and reruns both
 analysis and the plan panel at B/P before it may create a reconciliation receipt or authorize
-the checkbox transition. T589 remains blocked until that post-validator gate and the
-receipt-bound progress reconciliation both pass.
+the checkbox transition. Because dedicated checkbox commit C changes the reviewed feature
+snapshot from P to Q, the B/P sign-off does not authorize T589. T589 remains blocked until
+the receipt-bound progress reconciliation passes and a fresh cross-artifact analysis plus
+unanimous plan review bind exact clean C/Q.
 
 ## Technical Context
 
@@ -430,6 +432,10 @@ A/P0 `/d2b-panel-round plan` phase review is the plan gate for resumed Wave 5 im
 only after that external prerequisite; it is not historical evidence and creates no delivery
 request or reservation. V changes the implementation base, so B/P receives the required
 nonbinding re-review.
+Dedicated checkbox commit C then changes the reviewed feature snapshot from P to Q. That
+content change invalidates B/P plan sign-off for implementation dispatch even though B/P
+remains the authorization for the exact editor transition. A fresh analysis and unanimous
+plan review bound to clean C/Q are therefore the final pre-T589 plan gate.
 T602 and T219 revalidate the T072 disposition at close, but T219 remains non-authorizing
 until accepted external delivery-contract/tooling disposition of the retained Wave 5 binding
 request. W6-W8 are prospective and their entry
@@ -627,6 +633,11 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | Mechanical evidence convergence | T602 | Revalidates exactly one T072 historical/current remedial disposition without requiring or changing T072's checkbox, then verifies dependency closure, resume identities, clean F, T220's unanimous final phase-panel receipt, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | External disposition and conditional close | T219 | Revalidates the T072 disposition, T603 phase-plan chain, and T220 final nonbinding phase-plan receipt, but those process rounds do not replace or dispose the retained Wave 5 binding delivery request. T219 first requires an accepted external delivery-contract/tooling disposition that identifies the consumed request and preserves its candidate, evidence, and `panel-request.json`. Before that disposition, T219 authorizes no request, attestation, seal, merge-target registration, merge eligibility, or merge. After it, T219 may perform only the close action the disposition expressly authorizes; feature-local prose never grants a second binding request. F and `adr046w5` delivery history stay immutable. |
 
+The T589 row has one additional dispatch guard after T603 completes: fresh analysis with no
+unresolved HIGH or CRITICAL finding and a unanimous ten-role plan review MUST bind exact
+clean C/Q. The P-to-Q checkbox content change invalidates B/P sign-off for implementation
+dispatch, and any later content or history change invalidates the C/Q guard.
+
 The implementation and close dependency chain is exactly:
 
 ```text
@@ -638,7 +649,8 @@ adjudicated W4 history -> {T072 exact historical attestation OR current A/P0 rem
 T072 disposition -> pre-T603 analysis + plan panel at A/P0
 pre-T603 analysis + plan panel at A/P0 -> T603 validator commit V
 V = B -> post-T603 analysis + plan panel at B/P -> receipt/editor transition C
-C -> T589 -> {T590,T591,T594}
+C/Q -> fresh analysis + unanimous plan panel at exact C/Q
+fresh C/Q analysis + plan panel -> T589 -> {T590,T591,T594}
 T591 -> T592
 T592 -> T593 route -> T605
 {T590,T592,T594,T605} -> T595
@@ -712,6 +724,15 @@ its own implementation:
 4. **Receipt/editor transition.** Only the passing post-validator B/P receipts permit T603 to
    create the immutable resume authorization, evaluate the 146 rows, and route the sole
    checkbox change through `/d2b-spec-edit`.
+5. **Post-editor plan gate.** After the integrator creates and finalizes dedicated checkbox
+   commit C, require clean HEAD C and exact feature snapshot Q. Run fresh
+   `/speckit-analyze` against the complete feature artifacts at C/Q and require no unresolved
+   HIGH or CRITICAL finding, then obtain a fresh unanimous ten-role
+   `/d2b-panel-round plan` review whose records bind C and Q. The P-to-Q content change makes
+   every B/P plan sign-off stale for T589 dispatch; B/P remains evidence only for the
+   authorized editor transition. Any content or history change after the C/Q receipts
+   invalidates them and blocks T589. A finding that requires a feature edit returns to a
+   fresh `/d2b-spec-edit` batch and the applicable gate sequence; no prior sign-off transfers.
 
 This sequence implements one reusable hermetic validator in
 `packages/xtask/src/delivery/{mod.rs,resume.rs}` and writes an immutable resume-authorization
@@ -833,8 +854,15 @@ The checkbox transition is a three-step prepare/apply/finalize protocol:
    parent B, P, Q, and the exact changed task-ID set. If the receipt already exists, it is
    reopened and fully revalidated rather than replaced.
 
+The prepare/apply/finalize protocol authorizes only the exact progress transition. Because C
+changes feature content from P to Q, it invalidates B/P plan sign-off for implementation
+dispatch. Before T589, fresh analysis with no unresolved HIGH or CRITICAL finding and a fresh
+unanimous ten-role plan review MUST both bind exact clean C/Q. No panel is run as part of the
+editor transition itself.
+
 T589 starts only with HEAD exactly C, a clean complete worktree, the finalized progress
-receipt, and all 147 checkboxes checked. Later implementation commits do not stale the
+receipt, all 147 checkboxes checked, and valid exact-C/Q analysis and unanimous plan-review
+receipts. Later implementation commits do not stale the
 authorization: T602 validates the immutable receipt against B/P, the finalized transition
 against C/Q, requires C to be the exact child of B and an ancestor of final candidate F, and
 validates T600/T601 separately against F and F's tree. This ancestry-and-snapshot chain is the

@@ -210,7 +210,9 @@ merge-target registration, merge eligibility, and merge.
     repository identity plus a relative feature path. If all rows and post-validator
     analysis/panel identities pass, only the validator-derived P-to-Q `/d2b-spec-edit` batch
     may check T073-T218 and T603. The Wave 5 integrator owns exact child commit C; T589
-    requires finalized progress receipt E, clean HEAD C, and the checked task set. T602 later
+    requires finalized progress receipt E, clean HEAD C, the checked task set, and fresh
+    analysis plus unanimous plan review bound to exact C/Q. The P-to-Q content change makes
+    B/P sign-off stale for T589 dispatch. T602 later
     validates the B-to-C ancestry/snapshots and separate final-candidate F/tree evidence
     (FR-072, SC-034).
 12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix

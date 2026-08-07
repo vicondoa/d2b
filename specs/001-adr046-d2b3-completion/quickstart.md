@@ -73,13 +73,17 @@ T073-T218 and T603. The Wave 5
 integrator stages only that diff and owns dedicated commit C with exact parent B. The
 validator then finalizes `.scratch/autopilot/adr046w5/progress-editor-receipt.json`, binding
 B, C, P, and Q. A retry converges only from exact B/P, B/Q, or C/Q. T589 refuses unless HEAD
-is clean C, the finalized receipt validates, and all 147 checkboxes are checked. T602 later
+is clean C, the finalized receipt validates, all 147 checkboxes are checked, and fresh
+analysis plus unanimous plan sign-off bind exact C/Q. The P-to-Q content change invalidates
+B/P sign-off for implementation dispatch; any later content or history change invalidates
+the C/Q gate. T602 later
 validates C as an ancestor of separate final candidate F rather than requiring R to match F.
 
 C1 is approved and fully assigned under Constitution 2.2.0. Run the pre-T603 analysis and
 plan panel first. Implementation remains pending: after validator V, the post-T603 analysis
-and plan panel must rerun before T603 may reconcile exactly T073-T218; T605 remains future
-work after resume rather than a 147th receipt row.
+and plan panel must rerun before T603 may reconcile exactly T073-T218, then the fresh C/Q
+analysis and plan panel must pass before T589; T605 remains future work after resume rather
+than a 147th receipt row.
 
 ### 2. Launch every ready, file-disjoint slice together
 

@@ -105,6 +105,11 @@ completion-program scope reflected by the current specification. The current sha
 functional requirements and 35 buildable success criteria**. The earlier 45/26 shape records
 the end of Iteration 3; it is not the current census.
 
+Lifecycle state: **specification reconciled - plan approval pending**. Passing these 16
+specification-quality checks means the artifacts are ready to request the required analysis
+and plan-review gates. It does not record plan approval, implementation completion, or
+permission to bypass the later exact-C/Q gate before T589.
+
 This is a technical completion and delivery contract, not a technology-agnostic greenfield
 product brief. Exact APIs, paths, commands, protocol fields, timing bounds, candidate
 bindings, and validation procedures are present where removing them would make an

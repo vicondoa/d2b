@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-29
 
-**Status**: Draft
+**Status**: Specification reconciled - plan approval pending
 
 **Input**: User description: "I want to create a spec for finishing implementation of ADR-046 (docs/adr) - d2b 3.0. W0-W1 have been implemented and merged into the v3 branch. there are detailed specs for it in docs/specs."
 
@@ -114,8 +114,10 @@ two Rust files `packages/xtask/src/delivery/mod.rs` and
 `changelog.d/delivery-resume-reconciliation.md`. T603 then
 lands validator-and-fragment commit V, freezes resume base B
 exactly at V, and MUST rerun analysis and the plan panel at B/P before it may create the
-reconciliation receipt or authorize any checkbox edit. T589 remains gated on those
-post-validator receipts and T603 progress reconciliation.
+reconciliation receipt or authorize any checkbox edit. Dedicated checkbox commit C changes
+the feature snapshot from P to Q, so B/P sign-off is stale for implementation dispatch.
+T589 remains gated on T603 progress reconciliation plus fresh analysis and unanimous plan
+review bound to exact clean C/Q.
 
 ## Clarifications
 
@@ -617,7 +619,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   commit C, whose sole parent MUST be B and whose only diff MUST be P-to-Q. The prepare,
   apply, and finalize protocol MUST resume safely from exact B/P, B/Q, or C/Q and refuse every other
   state. T589 MUST require the finalized progress receipt, clean HEAD C, and those checked
-  boxes. Before F freezes, T589's hermetic closed-profile validator is wired into
+  boxes. Because C changes the reviewed feature content from P to Q, the B/P plan sign-off
+  MUST NOT authorize T589. Before T589 dispatch, fresh cross-artifact analysis with no
+  unresolved HIGH or CRITICAL finding and a fresh unanimous ten-role plan review MUST both
+  bind exact clean C/Q. Any content or history change invalidates that C/Q sign-off and
+  blocks dispatch; prior sign-off never transfers. Before F freezes, T589's hermetic
+  closed-profile validator is wired into
   panel-request/panel-attest, seal, and merge-eligibility and its exact-eight positive plus missing, extra,
   duplicate, unknown, wrong-lane, and conflated negatives pass. T602 later invokes that same
   validator and validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F
@@ -656,9 +663,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   explicit `Stopped` state. It MUST enumerate exactly `d2bd.service`,
   `d2b-priv-broker.socket`, and `d2b-priv-broker.service`, with no additional root-visible
   framework unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
-  cases MUST quarantine without adoption, cleanup, or signal. Historical T028/T035/T070
-  inspect retained results only. T604 is the sole prospective owner of the existing host VM
-  case and its Makefile discovery/build recipe; every current or later close reuses that
+  cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
+  is limited to T220/T604 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
+  results only and MUST NOT rerun the target. T604 is the sole prospective owner of the
+  existing host VM case and its Makefile discovery/build recipe; every current or later close
+  reuses that
   candidate-bound predicate. Passing evidence MUST name the enumerated and successfully built
   attr, command success, and no `SKIP` result. Missing, empty, skipped, stale,
   wrong-candidate, status-only, private-hook, incomplete unit enumeration, missing
@@ -1382,7 +1391,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   plan panel at B/P authorize the sole `/d2b-spec-edit` progress batch. Dedicated checkbox
   commit C has exact parent B and exact P-to-Q diff; prepare/apply/finalize tests converge
   after a crash from B/P, B/Q, or C/Q. T589 refuses until the finalized editor receipt
-  exists, HEAD is clean C, and T073-T218 plus T603 are checked. T605 remains future work and
+  exists, HEAD is clean C, T073-T218 plus T603 are checked, and fresh analysis plus a
+  unanimous ten-role plan review both bind exact C/Q. The P-to-Q content change invalidates
+  B/P sign-off for T589 dispatch, and any later content or history change invalidates the C/Q
+  gate. T605 remains future work and
   does not alter the 146 receipt rows or 147 checkbox transitions. T219 refuses unless C is
   an ancestor of final candidate F frozen after T220 convergence; the exact eight closed
   FR-072 evidence identifiers occur once each at their assigned T600/T601 owner and lane; all
