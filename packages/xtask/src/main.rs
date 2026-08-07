@@ -739,10 +739,9 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
         for (name, value) in environment {
             command.env(name, value);
         }
-        let result = command
+        command
             .status()
-            .map_err(|error| format!("could not start the Bazel child: {error}").into());
-        result
+            .map_err(|error| format!("could not start the Bazel child: {error}").into())
     }
 }
 
