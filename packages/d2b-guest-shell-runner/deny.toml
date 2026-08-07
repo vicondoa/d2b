@@ -12,6 +12,14 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
 ]
+exceptions = [
+    { name = "bindgen", allow = ["BSD-3-Clause"] },
+    { name = "instant", allow = ["BSD-3-Clause"] },
+    { name = "inotify", allow = ["ISC"] },
+    { name = "inotify-sys", allow = ["ISC"] },
+    { name = "libloading", allow = ["ISC"] },
+    { name = "notify", allow = ["CC0-1.0"] },
+]
 confidence-threshold = 0.8
 
 [sources]

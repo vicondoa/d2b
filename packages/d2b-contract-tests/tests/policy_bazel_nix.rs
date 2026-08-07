@@ -612,12 +612,7 @@ test ! -e /proc/self/fd/9
 
     assert!(
         result.status.success(),
-        "host-backed supervisor must succeed: code={:?}, launcher-stderr={:?}, stdout={:?}, stderr={:?}, status={:?}",
-        result.status.code(),
-        String::from_utf8_lossy(&result.stderr),
-        fs::read_to_string(&stdout).unwrap_or_default(),
-        fs::read_to_string(&stderr).unwrap_or_default(),
-        fs::read(&status).unwrap_or_default()
+        "host-backed supervisor must succeed"
     );
     assert_eq!(
         fs::read_to_string(&stdout).expect("stdout capture"),
