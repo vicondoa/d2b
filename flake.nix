@@ -822,16 +822,43 @@
           "reviewRecordSha256"
           "system"
         ];
-        artifactAuthorizationShapeOk = authorization:
+        hexDigest = value:
+          builtins.isString value
+          && builtins.match "[0-9a-fA-F]{64}" value != null;
+        artifactAuthorizationShapeOk = row:
+          let
+            authorization = row.sizeGrowthAuthorization;
+          in
           authorization == null
           || (builtins.isAttrs authorization
             && lib.sort builtins.lessThan (builtins.attrNames authorization)
               == lib.sort builtins.lessThan artifactAuthFields
+            && authorization.system == row.system
+            && authorization.artifact == row.artifact
             && authorization.decision == "approved"
+            && builtins.isInt authorization.priorBinaryBytes
+            && authorization.priorBinaryBytes == row.binaryBytes
+            && builtins.isInt authorization.newBinaryBytes
+            && authorization.newBinaryBytes > authorization.priorBinaryBytes
+            && builtins.isInt authorization.deltaBytes
+            && authorization.deltaBytes
+              == authorization.newBinaryBytes - authorization.priorBinaryBytes
             && builtins.isString authorization.rationalePath
             && !(lib.hasPrefix "/" authorization.rationalePath)
-            && builtins.isString authorization.candidateContentSha256
-            && builtins.isString authorization.reviewRecordSha256);
+            && !(lib.hasPrefix "../" authorization.rationalePath)
+            && !(lib.hasInfix "/../" authorization.rationalePath)
+            && hexDigest authorization.candidateContentSha256
+            && hexDigest authorization.reviewRecordSha256);
+        artifactLinkageShapeOk = row:
+          builtins.isString row.elfType
+          && builtins.isString row.elfMachine
+          && if row.artifact == "broker-host-artifact-contract" then
+            builtins.isString row.interpreter
+            && builtins.isList row.needed
+            && row.needed == lib.sort builtins.lessThan row.needed
+          else
+            (!(row ? interpreter) || row.interpreter == null)
+            && (row.needed or [ ]) == [ ];
         artifactBaselineShapeOk =
           artifactBaselines != null
           && builtins.isAttrs artifactBaselines
@@ -845,15 +872,16 @@
             && builtins.isString row.artifact
             && builtins.isInt row.binaryBytes
             && builtins.isInt row.closureCount
-            && builtins.isString row.closureSha256
+            && hexDigest row.closureSha256
             && builtins.isString row.selectedPolicyDigest
+            && hexDigest row.selectedPolicyDigest
             && builtins.isString row.measurementCommand
             && builtins.isString row.candidateCommit
+            && artifactLinkageShapeOk row
             && !(row ? rowAllowance)
             && !(row ? sizeAllowance)
             && (row ? sizeGrowthAuthorization)
-            && artifactAuthorizationShapeOk
-              row.sizeGrowthAuthorization)
+            && artifactAuthorizationShapeOk row)
             artifactRows;
         storePathMarker = lib.concatStringsSep "/" [ "" "nix" "store" "" ];
         baselineRowFor = artifact:
