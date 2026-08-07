@@ -12,7 +12,8 @@
   receipt lifetime, common base-or-conflict attempt identity, fenced worker
   and sink recovery, reconciliable accepted-attempt records, immutable
   permanent replay floor, append-only payload eviction, durable generation
-  fenced sink reservation, recovery reserve, protected status, and idempotent
+  fenced sink reservation, recovery reserve, migration-conflict preflight,
+  exclusive migration execution capacity, protected status, and idempotent
   append contract below. It also supersedes
   D21's per-seat `held` and `prior_resolutions` state, rotation, rejection of a
   severity ladder, and clean-break refusal to read or admit an earlier
@@ -342,13 +343,56 @@ ImplementationAssignmentState =
 the assignment-completion endpoint. It requires fresh, single-consumption,
 assignment-bound completion evidence from the exact trusted dispatch principal
 or authoritative resolver identity recorded by issuance. That evidence binds
-the controller-private assignment id, lifecycle, candidate, mapping version,
-final issue set, implementer run, completion result, and its own expiry. A
-different resolver, a different assignment, stale evidence, or reused
-completion evidence is refused before state transition. The controller derives
-`AssignmentCompletionEvidenceId` from the evidence kind, originating principal
-identity, controller-private assignment id, and immutable evidence digest, and
-settles it in a single-consumption index atomically with `Completed`.
+the exact originating principal identity, originating assignment-issuance
+evidence identity, controller-private assignment id, lifecycle, candidate,
+mapping version, final issue set, implementer run, closed completion result,
+authoritative issuance time, mandatory finite expiry, and its own declared
+evidence identity. The controller resolves the protected evidence record and
+re-derives every one of those fields; no caller-supplied field establishes a
+binding.
+
+Completion validation uses these closed field codes:
+
+```
+AssignmentCompletionOriginCode =
+  OriginatingPrincipal
+  | OriginatingIssuanceEvidence
+
+AssignmentCompletionBindingFieldCode =
+  AssignmentId
+  | Lifecycle
+  | Candidate
+  | MappingVersion
+  | FinalIssueSet
+  | ImplementerRun
+  | CompletionResult
+  | IssuedAt
+  | ExpiresAt
+  | EvidenceIdentity
+
+AssignmentCompletionFreshnessCode =
+  Stale
+  | Expired
+```
+
+A different originating principal or originating issuance evidence selects
+the exact `AssignmentCompletionOriginCode`. A mismatch in any remaining bound
+field selects the exact `AssignmentCompletionBindingFieldCode`. Evidence that
+is not yet valid or otherwise stale selects `Stale`; evidence past its expiry
+selects `Expired`. Both are a separate refusal. The controller derives
+`AssignmentCompletionEvidenceId`
+from the evidence kind, originating principal identity, originating issuance
+evidence identity, controller-private assignment id, declared evidence
+identity, and domain separator, explicitly excluding the mutable evidence
+digest and bound completion fields. The single-consumption index stores that
+id, the immutable evidence digest, and the complete binding digest atomically
+with `Completed`. Reuse of the same settled identity and digest is replay;
+reuse of one evidence identity with a different immutable or binding digest
+is conflict. Neither case reaches a state transition. Refusals expose only the
+presented assignment alias, safe
+principal alias where applicable, evidence digest, and closed reason or field
+code. They never expose the controller-private assignment id, protected
+principal mapping, or evidence bytes.
 
 `RevokeImplementationAssignment` is not present on either assignment endpoint.
 Only the protected operator endpoint may request revocation. The controller
@@ -1352,6 +1396,8 @@ controller floor rather than permanent raw response bytes.
 | `AttemptTombstone` | Immutable permanent controller audit and replay floor for the lifetime of the controller namespace. It contains endpoint, operation, closed outcome, closed refusal code and safe causing or result identifiers and digests, but no protected request or response bytes and no mutable availability field. |
 | `ReplayPayloadEvictionPrepared` and `ReplayPayloadEvicted` | Append-only monotonic replay-payload records. They never restore availability or alter the base tombstone. |
 | `AuditSinkReservation` | Sink-side durable capacity edge keyed by `AttemptIdentity`, with a monotonic generation that, once appendable, is authorized for exactly one event id and digest. It is ineligible from creation until an append tombstone exists or the controller proves that authoritative acceptance is permanently impossible. |
+| `AuditConversionIntent`, `AuditSinkInvalidationProof`, and `AuditSinkRebindProof` | Audit floor and ineligible while the named audit conversion is pending. The records are keyed by `AttemptIdentity` and the old reservation generation. The replacement-activation transaction compacts their exact digests into an immutable `AuditConversionTombstone`; only then do their protected bytes become eligible round input. |
+| `AuditConversionTombstone` | Immutable permanent controller audit floor. It binds the attempt identity, old and replacement reservation generations, replacement refusal event id and digest, and the intent, invalidation-proof, and rebind-proof digests. It contains no proof or event bytes. |
 | `AuditAppendTombstone` | Permanent append-sink idempotency floor for the sink namespace. It contains only audit event id and digest plus the original acknowledgement and has no event payload bytes. Raw sink event bytes remain under the sink's bounded rotation. |
 | Source and artifact digests, stable ids, source mapping and crosswalk events, dedup and severity events, closed disposition and judgment projections, roster and dispatch bindings, acceptance and revocation projections, lifecycle receipts, seals, and terminal metric records | Audit floor under D17's ordinary audit period unless another row, such as `AttemptTombstone` or `AuditAppendTombstone`, sets a longer lifetime. |
 
@@ -1384,20 +1430,26 @@ AttemptIdentity =
 Changing peer, endpoint, or operation therefore creates a different protected
 attempt even when an idempotency key is reused. A changed request under the
 same protected attempt creates the one `ConflictAttemptId` for that
-conflicting request digest. That request is a distinct accepted and audited
-attempt with `AttemptIdentity::Conflict`; it never reuses the base attempt's
-capacity, journal, reservation, proof, event, result, marker, tombstone,
-worker, audit record, or status. The controller namespace is stable across
-restart and reviewed storage migration. Permanent indexes address the base and
-every conflict tombstone by `AttemptIdentity` across journal compaction,
+conflicting request digest. Except for the migration preflight exception
+below, that request is a distinct accepted and audited attempt with
+`AttemptIdentity::Conflict`; it never reuses the base attempt's capacity,
+journal, reservation, proof, event, result, marker, tombstone, worker, audit
+record, or status. A same-key, different-request
+`MigrateRetentionCapacity` is instead classified before accepted-attempt
+registration. Its conflict id is safe correlation only and is never a durable
+`AttemptIdentity`, accepted attempt, or charge against migration execution
+capacity. The controller namespace is stable across restart and reviewed
+storage migration. Permanent indexes address the base and every admitted
+conflict tombstone by `AttemptIdentity` across journal compaction,
 replay-payload eviction, and restart; eviction never makes an id reusable.
 
 `AttemptIdentity` is the mandatory key for `AcceptancePrepare`,
 `AcceptedAttemptJournal`, `IdempotencyReplayResult`, `AuditOutboxRow`,
 `AuditSinkReservation`, accepted-journal and no-journal proofs,
 `AttemptTombstone`, replay eviction markers, worker leases and recovery state,
-audit events, and `ReadProtectedAttemptStatus`. A schema that keys any of those
-records by a bare `ProtectedAttemptId` or allows a base and conflict attempt to
+audit-conversion records and tombstones, audit events, and
+`ReadProtectedAttemptStatus`. A schema that keys any of those records by a
+bare `ProtectedAttemptId` or allows a base and admitted conflict attempt to
 share one record fails construction.
 
 The authoritative attempt and append records have closed roles:
@@ -1430,6 +1482,10 @@ The authoritative attempt and append records have closed roles:
   Each monotonically increasing appendable reservation generation binds
   exactly one authorized `AuditEventId` and event digest; prepared capacity is
   non-appendable.
+- `AuditConversionTombstone` is the controller's permanent proof that one old
+  sink generation was invalidated and rebound to one replacement refusal
+  event before replacement activation. Its three source-record digests are
+  immutable and do not make the protected proof bytes permanent.
 - `AuditAppendTombstone` is the append sink's permanent minimal deduplication
   authority. It is sufficient to return the original acknowledgement after
   raw sink event rotation and contains no protected request, response, or event
@@ -1437,8 +1493,15 @@ The authoritative attempt and append records have closed roles:
 
 Before authoritative acceptance, the controller reserves one journal slot,
 one outbox slot, one tombstone slot, the maximum two payload-eviction marker
-slots, the bounded request and result budget, and the section 13 recovery
-reserve. Cross-store reservation then uses this reconciliable protocol:
+slots, one audit-conversion tombstone slot, the bounded request and result
+budget, the maximum bounded conversion intent and proof bytes, and the section
+13 recovery reserve. A closed capacity selector charges a base ordinary
+attempt to ordinary capacity, an accepted conflict including a status
+operation to
+`AcceptedConflictReserve`, a base protected status read to
+`ProtectedStatusReserve`, and the one non-conflict migration only to
+`MigrationExecutionReserve`; no class may fall through to another partition.
+Cross-store reservation then uses this reconciliable protocol:
 
 1. In one controller transaction, create a non-authoritative
    `AcceptancePrepare` keyed by `AttemptIdentity`. It binds the base
@@ -1450,7 +1513,8 @@ reserve. Cross-store reservation then uses this reconciliable protocol:
    `AttemptIdentity`, base `ProtectedAttemptId`, controller namespace, prepare
    digest, reservation id, and reservation generation. Repeating the same
    prepare returns the same reservation. A different prepare digest for that
-   identity is refused.
+   identity is `acceptance-prepare-digest-conflict` and creates or changes
+   nothing.
 3. In one controller transaction, compare-and-swap the exact
    `AcceptancePrepare` to `AcceptedAttemptJournal`, binding the sink
    reservation id, digest, and generation. This commit, and no earlier step,
@@ -1510,13 +1574,18 @@ below. It never treats absence of response bytes as permission to execute. A
 same-key, different-request-digest retry selects exactly one conflict variant
 before or after eviction: `risk-operation-replay-conflict` for
 `AcceptMajorRisk` and `RevokeMajorRiskAcceptance`, and
-`protected-operation-replay-conflict` for every other operation. Each
-distinct conflicting request digest uses its
+`protected-operation-replay-conflict` for every other accepted operation.
+Each distinct accepted conflicting request digest uses its
 `AttemptIdentity::Conflict(ConflictAttemptId)` and crosses the same
 acceptance-prepare, sink-reservation, accepted-journal, audit, replay,
-eviction, and tombstone protocol independently. The base attempt is not
-rewritten or charged for that refusal. Repeating those same conflict bytes
-replays that conflict attempt's refusal from its own permanent tombstone.
+eviction, and tombstone protocol independently and charges only the bounded
+`AcceptedConflictReserve`. The base attempt is not rewritten or charged for
+that refusal. Repeating those same conflict bytes replays that conflict
+attempt's refusal from its own permanent tombstone.
+`MigrateRetentionCapacity` is the sole exception: the same-key,
+different-request check is preflight and returns
+`retention-capacity-migration-replay-conflict` without accepted-attempt
+registration or any permanent record allocation.
 
 `ReadProtectedAttemptStatus` authenticates the original stable peer identity
 bound into the named `AttemptIdentity` or a protected operator. Cross-peer
@@ -1524,61 +1593,110 @@ access is `protected-attempt-status-cross-peer` and reveals no outcome or
 result id. Its safe result is reconstructed from the immutable tombstone and
 current authoritative state.
 
-Post-eviction recovery is a closed tagged type:
+Post-eviction recovery is a nested tagged type. Operation, outcome, state, and
+action are never independent fields:
 
 ```
 ProtectedAttemptRecovery =
-  AcceptedResourceOrEvent { operation, safe_ids, current_state }
-  | AcceptedSubmissionOrJudgment { operation, safe_ids, current_status }
-  | RefetchCurrentArtifactOrStatus { operation, safe_ids, action }
-  | ReissueAuthorizedRead { operation, safe_ids, action }
-  | ConsumedIssueView {
-      presented_assignment_alias,
-      consumed_use_ordinal,
-      action: RequestNewImplementationAssignment
-    }
-  | AssignmentOperationState { operation, assignment_alias, current_state, action }
-  | RiskIntentState { intent_id, current_state, action }
-  | RiskAcceptanceState { acceptance_id, current_state, action }
-  | RiskRevocationState { revocation_id, current_state, action }
-  | LifecycleOperationState { operation, lifecycle_ids, current_state, action }
-  | LedgerOperationState { operation, ledger_ids, current_state, action }
-  | SeverityOperationState { operation, source_ids, current_state, action }
-  | RetentionOperationState { operation, plan_ids, current_state, action }
-  | PublisherOperationState { operation, safe_ids, current_state, action }
-  | AttemptControlState { operation, target_attempt_identity, current_state, action }
-  | OriginalRefusal { code, safe_causing_ids, exact_remedy_plan }
+  Success(ProtectedAttemptSuccessRecovery)
+  | OriginalRefusal(ProtectedAttemptOriginalRefusal)
+
+ProtectedAttemptSuccessRecovery =
+  Orchestrator(OrchestratorSuccessRecovery)
+  | Reviewer(ReviewerSuccessRecovery)
+  | Operator(OperatorSuccessRecovery)
+  | AssignmentIssuance(AssignmentIssuanceSuccessRecovery)
+  | AssignmentCompletion(AssignmentCompletionSuccessRecovery)
+  | IssueReader(IssueReaderSuccessRecovery)
+  | AttemptStatus(AttemptStatusSuccessRecovery)
+  | Publisher(PublisherSuccessRecovery)
+
+ProtectedAttemptOriginalRefusal =
+  Orchestrator(OrchestratorOriginalRefusal)
+  | Reviewer(ReviewerOriginalRefusal)
+  | Operator(OperatorOriginalRefusal)
+  | AssignmentIssuance(AssignmentIssuanceOriginalRefusal)
+  | AssignmentCompletion(AssignmentCompletionOriginalRefusal)
+  | IssueReader(IssueReaderOriginalRefusal)
+  | AttemptStatus(AttemptStatusOriginalRefusal)
+  | Publisher(PublisherOriginalRefusal)
 ```
 
-The `operation`, state, status, and action fields above are closed enums.
-`safe_ids` is an operation-specific generated product, never an arbitrary
-map. A successful consumed `ReadImplementerIssueView` cannot be reissued
-because its assignment use settled; its only recovery action is a new
-assignment. An authorized non-consuming read names its exact reissue action.
-Generated artifacts and status reads name the exact refetch action. Risk
-intent, acceptance, and revocation states are distinct and never collapse to a
-generic risk result.
+Each endpoint success enum has one generated wire variant for each valid
+`(operation, closed terminal success outcome)` pair. The variant tag identifies
+both values and owns only the exact safe fields and one exact next action in
+the matrix below. A state with several terminal values generates one variant
+per value; it does not carry a separate `current_state` field. Each endpoint
+refusal enum likewise has one generated variant for each valid
+`(operation, typed refusal)` pair. Its variant owns only that refusal's safe
+causing fields and its exact typed remedy plan. There is no optional field,
+generic `safe_ids`, generic state, generic action, `Other`, or fallback
+variant.
 
-The machine-readable success map is exhaustive and has no wildcard row:
+The following is the complete success-recovery schema input. `Stem<Outcome>`
+means one distinct wire tag for every closed terminal outcome admitted for
+that operation.
 
-| Endpoint | Operations whose terminal success uses this recovery variant |
-| --- | --- |
-| Orchestrator | `ProposeLifecycleStart`, `RequestPanelDispatch` -> `AcceptedResourceOrEvent`; `SubmitCandidateSnapshot`, `SubmitImplementationDisposition`, `SubmitImplementationSelfReviewFinding`, `SubmitValidationManifest` -> `AcceptedSubmissionOrJudgment`; `SubmitLedgerSynthesisProposal` -> `LedgerOperationState`; `RequestImplementationAssignment` -> `AssignmentOperationState`; `RequestGeneratedSeatArtifacts`, `ReadLifecycleStatus` -> `RefetchCurrentArtifactOrStatus` |
-| Reviewer | `SubmitNativeFindingPage`, `SubmitLateFinding`, `SubmitVerificationJudgment`, `SubmitFinalSignoff` -> `AcceptedSubmissionOrJudgment`; `SubmitLegacySourceTriage`, `SubmitLegacySourceTriageVerification`, `SubmitSeverityCorrection`, `SubmitSeverityCorrectionVerification` -> `SeverityOperationState`; `SubmitLedgerMappingConcurrence` -> `LedgerOperationState`; `SubmitRiskAcceptanceVerification` -> `RiskAcceptanceState` |
-| Operator | `SubmitApprovalDecision`, `AbandonLifecycle`, `ResumeLifecycle`, `RescopeLifecycle`, `CreateSameScopeCurrentSchemaSuccessor`, `CreateReverificationSuccessor`, `PermanentlyCloseAbandonedLineage` -> `LifecycleOperationState`; `ApplyLedgerMappingCorrection` -> `LedgerOperationState`; `IssueRiskOperationIntent` -> `RiskIntentState`; `AcceptMajorRisk` -> `RiskAcceptanceState`; `RevokeMajorRiskAcceptance` -> `RiskRevocationState`; `RevokeImplementationAssignment` -> `AssignmentOperationState`; `ResumeProtectedAttempt`, `FenceProtectedAttempt` -> `AttemptControlState`; `ReadLifecycleStatus` -> `RefetchCurrentArtifactOrStatus`; `ReadRetentionRecoveryStatus`, `RunControllerRetentionCleanup`, `MigrateRetentionCapacity` -> `RetentionOperationState` |
-| Assignment issuance | `IssueImplementationAssignment` -> `AssignmentOperationState` |
-| Assignment completion | `CompleteImplementationAssignment` -> `AssignmentOperationState` |
-| Issue reader | `ResolveImplementationAssignment`, `ReadMergeAuthorityMajorIssueView` -> `ReissueAuthorizedRead`; `ReadImplementerIssueView` -> `ConsumedIssueView` |
-| Attempt status | `ReadProtectedAttemptStatus` -> `RefetchCurrentArtifactOrStatus` |
-| Publisher | `ConsumePublicationManifest`, `RecordTrustedMergeCompletion`, `ReadPublicationStatus` -> `PublisherOperationState` |
+| Endpoint | Operation | Generated variant stem and exact owned safe fields | Exact next action |
+| --- | --- | --- | --- |
+| Orchestrator | `ProposeLifecycleStart` | `LifecycleStart<Outcome> { lifecycle_id, lifecycle_event_id }` | `ReadLifecycleStatus` |
+| Orchestrator | `RequestPanelDispatch` | `PanelDispatch<Outcome> { lifecycle_id, dispatch_id, roster_manifest_digest }` | `ReadLifecycleStatus` |
+| Orchestrator | `SubmitCandidateSnapshot` | `CandidateSnapshot<Outcome> { lifecycle_id, candidate_id, snapshot_digest }` | `ReadLifecycleStatus` |
+| Orchestrator | `SubmitLedgerSynthesisProposal` | `LedgerSynthesis<Outcome> { lifecycle_id, candidate_id, mapping_version, ledger_digest }` | `ReadCurrentLedger` |
+| Orchestrator | `RequestImplementationAssignment` | `ImplementationAssignmentRequest<Outcome> { lifecycle_id, candidate_id, assignment_request_id }` | `ReadCurrentImplementationAssignmentState` |
+| Orchestrator | `SubmitImplementationDisposition` | `ImplementationDisposition<Outcome> { lifecycle_id, candidate_id, issue_ids, disposition_event_ids }` | `ReadLifecycleStatus` |
+| Orchestrator | `SubmitImplementationSelfReviewFinding` | `ImplementationSelfReviewFinding<Outcome> { lifecycle_id, candidate_id, source_ids }` | `ReadLifecycleStatus` |
+| Orchestrator | `SubmitValidationManifest` | `ValidationManifest<Outcome> { lifecycle_id, candidate_id, validation_manifest_id, manifest_digest }` | `ReadLifecycleStatus` |
+| Orchestrator | `RequestGeneratedSeatArtifacts` | `GeneratedSeatArtifacts<Outcome> { lifecycle_id, candidate_id, mapping_version, artifact_ids, artifact_digests }` | `RequestGeneratedSeatArtifacts` |
+| Orchestrator | `ReadLifecycleStatus` | `OrchestratorLifecycleStatus<Outcome> { lifecycle_id, status_digest }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitNativeFindingPage` | `NativeFindingPage<Outcome> { lifecycle_id, candidate_id, seat_id, page_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitLateFinding` | `LateFinding<Outcome> { lifecycle_id, candidate_id, seat_id, source_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitVerificationJudgment` | `VerificationJudgment<Outcome> { lifecycle_id, candidate_id, seat_id, issue_ids, judgment_event_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitLegacySourceTriage` | `LegacySourceTriage<Outcome> { lifecycle_id, candidate_id, legacy_source_ids, triage_event_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitLegacySourceTriageVerification` | `LegacySourceTriageVerification<Outcome> { lifecycle_id, candidate_id, legacy_source_ids, verification_event_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitSeverityCorrection` | `SeverityCorrection<Outcome> { lifecycle_id, candidate_id, source_ids, correction_event_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitSeverityCorrectionVerification` | `SeverityCorrectionVerification<Outcome> { lifecycle_id, candidate_id, source_ids, verification_event_ids }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitLedgerMappingConcurrence` | `LedgerMappingConcurrence<Outcome> { lifecycle_id, candidate_id, mapping_version, correction_id, concurrence_event_id }` | `ReadCurrentLedger` |
+| Reviewer | `SubmitRiskAcceptanceVerification` | `RiskAcceptanceVerification<Outcome> { lifecycle_id, candidate_id, acceptance_id, verification_event_id }` | `ReadLifecycleStatus` |
+| Reviewer | `SubmitFinalSignoff` | `FinalSignoff<Outcome> { lifecycle_id, candidate_id, seat_id, signoff_event_id }` | `ReadLifecycleStatus` |
+| Operator | `SubmitApprovalDecision` | `ApprovalDecision<Outcome> { lifecycle_id, candidate_id, approval_event_id }` | `ReadLifecycleStatus` |
+| Operator | `AbandonLifecycle` | `LifecycleAbandonment<Outcome> { lifecycle_id, lineage_id, lifecycle_event_id }` | `ReadLifecycleStatus` |
+| Operator | `ResumeLifecycle` | `LifecycleResume<Outcome> { source_lifecycle_id, successor_lifecycle_id, lifecycle_event_id }` | `ReadLifecycleStatus` |
+| Operator | `RescopeLifecycle` | `LifecycleRescope<Outcome> { source_lifecycle_id, successor_lifecycle_id, lifecycle_event_id }` | `ReadLifecycleStatus` |
+| Operator | `CreateSameScopeCurrentSchemaSuccessor` | `SameScopeSuccessor<Outcome> { source_lifecycle_id, successor_lifecycle_id, logical_successor_import_id }` | `ReadLifecycleStatus` |
+| Operator | `CreateReverificationSuccessor` | `ReverificationSuccessor<Outcome> { source_lifecycle_id, successor_lifecycle_id, lifecycle_event_id }` | `ReadLifecycleStatus` |
+| Operator | `PermanentlyCloseAbandonedLineage` | `PermanentLineageClose<Outcome> { lineage_id, permanent_close_event_id }` | `ReadLifecycleStatus` |
+| Operator | `ApplyLedgerMappingCorrection` | `LedgerMappingCorrection<Outcome> { lifecycle_id, candidate_id, correction_id, mapping_version, ledger_digest }` | `ReadCurrentLedger` |
+| Operator | `IssueRiskOperationIntent` | `RiskOperationIntent<Outcome> { intent_id, candidate_id, intent_event_id }` | `ReadCurrentRiskOperationState` |
+| Operator | `AcceptMajorRisk` | `MajorRiskAcceptance<Outcome> { acceptance_id, candidate_id, issue_ids, acceptance_event_id }` | `ReadCurrentRiskAcceptanceState` |
+| Operator | `RevokeMajorRiskAcceptance` | `MajorRiskRevocation<Outcome> { acceptance_id, revocation_id, revocation_event_id }` | `ReadCurrentRiskAcceptanceState` |
+| Operator | `RevokeImplementationAssignment` | `AssignmentRevocation<Outcome> { presented_assignment_alias, revocation_event_id }` | `ReadCurrentImplementationAssignmentState` |
+| Operator | `ResumeProtectedAttempt` | `ProtectedAttemptResume<Outcome> { target_attempt_identity, attempt_control_event_id }` | `ReadProtectedAttemptStatus` |
+| Operator | `FenceProtectedAttempt` | `ProtectedAttemptFence<Outcome> { target_attempt_identity, attempt_control_event_id }` | `ReadProtectedAttemptStatus` |
+| Operator | `ReadLifecycleStatus` | `OperatorLifecycleStatus<Outcome> { lifecycle_id, status_digest }` | `ReadLifecycleStatus` |
+| Operator | `ReadRetentionRecoveryStatus` | `RetentionRecoveryStatus<Outcome> { capacity_generation, blocker_records, integrity_state }` | `ReadRetentionRecoveryStatus` |
+| Operator | `RunControllerRetentionCleanup` | `RetentionCleanup<Outcome> { capacity_generation, cleanup_event_id, eligible_bytes_reclaimed }` | `ReadRetentionRecoveryStatus` |
+| Operator | `MigrateRetentionCapacity` | `RetentionCapacityMigration<Outcome> { migration_attempt_identity, source_generation, destination_generation, migration_event_id }` | `ReadRetentionRecoveryStatus` |
+| Assignment issuance | `IssueImplementationAssignment` | `ImplementationAssignmentIssued<Outcome> { presented_assignment_alias, assignment_event_id }` | `ReadCurrentImplementationAssignmentState` |
+| Assignment completion | `CompleteImplementationAssignment` | `ImplementationAssignmentCompleted<Outcome> { presented_assignment_alias, completion_event_id }` | `ReadCurrentImplementationAssignmentState` |
+| Issue reader | `ResolveImplementationAssignment` | `ImplementationAssignmentResolved<Outcome> { presented_assignment_alias, assignment_summary_digest }` | `ResolveImplementationAssignment` |
+| Issue reader | `ReadImplementerIssueView` | `ImplementerIssueViewConsumed<Outcome> { presented_assignment_alias, consumed_use_ordinal }` | `RequestNewImplementationAssignment` |
+| Issue reader | `ReadMergeAuthorityMajorIssueView` | `MergeAuthorityMajorIssueView<Outcome> { authority_alias, candidate_id, issue_id, view_digest }` | `ReadMergeAuthorityMajorIssueView` |
+| Attempt status | `ReadProtectedAttemptStatus` | `ProtectedAttemptStatusRead<Outcome> { target_attempt_identity, status_digest }` | `ReadProtectedAttemptStatus` |
+| Publisher | `ConsumePublicationManifest` | `PublicationManifestConsumed<Outcome> { lifecycle_id, candidate_id, publication_manifest_id }` | `ReadPublicationStatus` |
+| Publisher | `RecordTrustedMergeCompletion` | `TrustedMergeCompletionRecorded<Outcome> { lifecycle_id, candidate_id, merge_event_id }` | `ReadPublicationStatus` |
+| Publisher | `ReadPublicationStatus` | `PublicationStatusRead<Outcome> { lifecycle_id, candidate_id, status_digest }` | `ReadPublicationStatus` |
 
-For every operation above, every terminal typed refusal maps to
-`OriginalRefusal` with the refusal's original safe ids and exact remedy. The
-generated matcher is total over
-`(EndpointOperation, TerminalOutcome::{Success, Refusal})`. Adding an
-operation, success outcome, or terminal refusal without a mapping is a schema
-and coverage failure; there is no prose fallback category. The projection
-never returns protected text or only opaque digests plus a generic remedy.
+The generator rejects a row whose owned field can be absent for one of its
+outcomes; that outcome requires another variant with its own exact product.
+The generated matcher is total over every accepted
+`(EndpointOperation, TerminalOutcome::{Success, Refusal})`. Migration
+preflight refusals have no accepted attempt and therefore do not appear in
+this recovery type. Adding an endpoint operation, closed success outcome, or
+terminal refusal without exactly one generated variant is a schema and
+coverage failure. Duplicate rows and wildcard matches also fail generation.
+The projection never returns protected text or only opaque digests plus a
+generic remedy.
 
 Round-input cleanup runs through the controller's single cleanup entrypoint on
 schedule and before admitting new bytes. Full attempt request and response
@@ -1624,6 +1742,28 @@ RetentionBlocker =
   PendingAcceptancePrepare { attempt_identity, prepare_id }
   PendingAcceptedAttempt { attempt_identity }
   PendingAuditOutbox { attempt_identity, audit_event_id }
+  PendingAuditConversion {
+    attempt_identity,
+    reservation_generation,
+    conversion: PendingAuditConversionRetention
+  }
+
+PendingAuditConversionRetention =
+  IntentRecorded { conversion_id }
+  | OldGenerationInvalidationPending { conversion_id }
+  | OldGenerationInvalidatedRebindPending { conversion_id, invalidation_proof_digest }
+  | RefusalGenerationBoundReplacementPending {
+      conversion_id,
+      invalidation_proof_digest,
+      rebind_proof_digest,
+      replacement_generation
+    }
+  | ReplacementTupleInstalled {
+      conversion_id,
+      conversion_tombstone_digest,
+      replacement_generation,
+      replacement_event_id
+    }
 ```
 
 There is no `Other` blocker. Every ineligible round-input record maps to
@@ -1636,7 +1776,15 @@ capsule is never `UnresolvedLifecycle`, a trusted but unrecorded merge is
 `UnexpiredApprovalReceipt`, and an attempt record moves from
 `PendingAcceptancePrepare` to `PendingAcceptedAttempt` only at authoritative
 promotion, then to `PendingAuditOutbox` when its terminal state transaction
-commits. `ActiveLifecycle` covers other nonterminal work actively advancing;
+commits. A durable conversion intent takes precedence over
+`PendingAuditOutbox` and changes that same blocker key to
+`PendingAuditConversion`. Its key is exactly the `AttemptIdentity` and old
+reservation generation. The conversion state advances monotonically through
+the nested variants above. The replacement-activation transaction creates the
+immutable `AuditConversionTombstone`, makes the intent and proof bytes
+eligible, and advances the blocker to `ReplacementTupleInstalled`. The next
+append transition changes it to `PendingAuditOutbox` under the replacement
+generation. `ActiveLifecycle` covers other nonterminal work actively advancing;
 `UnresolvedLifecycle` covers other parked named obligations before terminal
 transition. The section 12 source partial-round bytes are
 `RetryablePartialDispatch` or `UnavailablePartialDispatch` until atomic
@@ -1695,6 +1843,24 @@ those two closed markers is invalid.
 | `PendingAcceptancePrepare` | `CompleteOrCancelNamedAcceptancePrepare`, then `RunControllerRetentionCleanup` |
 | `PendingAcceptedAttempt` | `RecoverPendingAcceptedAttempt`, then `RunControllerRetentionCleanup` |
 | `PendingAuditOutbox` | `RestoreProtectedAuditSink`, then `ReplayPendingAuditAppend`, then `RunControllerRetentionCleanup` |
+| `PendingAuditConversion` | `ExecuteNamedPendingAuditConversionPlan`, whose exact next action is selected by its nested state, then `RunControllerRetentionCleanup` |
+
+The named pending-conversion plan is closed and state-specific:
+
+| Pending conversion state | Exact action |
+| --- | --- |
+| `IntentRecorded` | `IssueNamedOldGenerationInvalidation` |
+| `OldGenerationInvalidationPending` | `ReplayNamedOldGenerationInvalidation` |
+| `OldGenerationInvalidatedRebindPending` | `BindNamedReplacementRefusalGeneration` |
+| `RefusalGenerationBoundReplacementPending` | `CommitNamedReplacementRefusalTuple` |
+| `ReplacementTupleInstalled` | `ReplayNamedReplacementRefusalAppend` |
+
+Each action owns the blocker record's `AttemptIdentity`, old reservation
+generation, conversion id, and any replacement generation or proof digest
+present in that one state. No action accepts a caller-supplied generation.
+After an invalidation proof exists, the old generation is represented by a
+non-appendable `InvalidatedReservationGeneration` type; only the proof-bound
+`ReplacementReservationGeneration` can construct a later append action.
 
 For `UnavailablePartialDispatch`,
 `CreateSameScopeCurrentSchemaSuccessor` means creating a fresh protected
@@ -1710,19 +1876,77 @@ admission is retried.
 
 `ReadRetentionRecoveryStatus` returns only safe blocker ids, plan ids, schema
 versions, reserved and consumed bounded numerics, and an integrity state. If
+the blocker is `PendingAuditConversion`, its returned blocker is the exact
+nested retention variant above and its plan expands to only that variant's
+exact action; conversion state, generation, proof fields, and action cannot be
+combined independently. If
 the controller cannot prove that every blocker has the exact generated
 reservation, it enters `RecoveryReserveIntegrityCorrupt`, stops normal
 admission, and permits only authenticated status, already-reserved recovery,
 and `MigrateRetentionCapacity`. It must not guess, reclaim a reservation, or
 continue on warning.
 
-Each capacity generation separately pre-reserves the bounded permanent
-journal, outbox, sink, tombstone, and response budgets needed by
-recovery-status reads and capacity migration. It also owns one transient
-emergency migration lane. Normal admission and blocker recovery cannot consume
-either reserve. Permanent attempt, replay, and audit records are charged only
-to their separate reserved budgets; they never consume or pin the transient
-lane.
+Each capacity generation owns four disjoint capacity partitions:
+
+1. `MigrationExecutionReserve` is the complete maximum serialized allocation
+   for exactly one executable, non-conflict `MigrateRetentionCapacity`
+   logical operation. It includes its prepare, accepted journal, migration
+   work and pause state, request and replay result, outbox, sink reservation
+   and raw event, acknowledgement, controller and sink tombstones, both
+   payload-eviction markers, and the maximum conversion intent, invalidation
+   proof, rebind proof, and conversion tombstone. It is permanent-record
+   capacity, not an estimate or a transient lane.
+2. `ProtectedStatusReserve` is a separate bounded allocation for
+   `ReadLifecycleStatus`, `ReadProtectedAttemptStatus`,
+   `ReadRetentionRecoveryStatus`, and `ReadPublicationStatus`. Byte-identical
+   retries and concurrent duplicates for one authenticated peer, operation,
+   target, idempotency key, and observed state coalesce onto one accepted
+   status attempt. A distinct status attempt consumes only this partition.
+   Exhaustion is the preflight refusal `protected-status-budget-exhausted`;
+   it never borrows migration or blocker-recovery capacity.
+3. `AcceptedConflictReserve` is the separate bounded permanent-record
+   allocation for audited `AttemptIdentity::Conflict` attempts of every
+   operation except `MigrateRetentionCapacity`. Identical conflict retries
+   coalesce on their tombstone. Exhaustion is the preflight refusal
+   `accepted-conflict-budget-exhausted`; it cannot charge the base attempt,
+   status reserve, recovery reserve, or migration execution reserve.
+4. The transient emergency migration lane holds only preflight ownership and
+   the live execution lease. It creates no substitute for any permanent
+   allocation.
+
+A capacity generation cannot become active unless the schema generator proves
+and the controller transactionally seals the full
+`MigrationExecutionReserve`. Normal admission, blocker recovery, status
+reads, cleanup, migration preflight refusals, and every operation's accepted
+conflict attempts are structurally unable to address it. Migration conflicts
+are not accepted at all. Once a valid non-conflict migration accepts, its
+allocation and transient lane remain bound to the same `AttemptIdentity`
+through every pause, takeover, resume, conversion, and completion. The
+destination generation carries a fresh sealed execution reserve before
+cutover; the source generation retains the completed migration's permanent
+records. Thus any number of conflict requests or status requests can at most
+exhaust their own preflight or status budgets and cannot make a structurally
+valid, authorized, eligible non-conflict migration inadmissible.
+
+`retention-capacity-migration-ineligible` owns this closed detail type:
+
+```
+MigrationIneligibleBlockerDetails =
+  CurrentBlockerDetails {
+    blockers: CompleteSortedRetentionBlockerRecords
+  }
+  | BlockerDetailsRedacted
+  | BlockerDetailsStale
+```
+
+`CompleteSortedRetentionBlockerRecords` is the complete current bounded list
+of `RetentionBlockerRecord` values, including every exact plan id. The
+`CurrentBlockerDetails` remedy directly executes those named plan ids in
+order and runs cleanup. It never reads status first. Only
+`BlockerDetailsRedacted` or `BlockerDetailsStale` renders
+`ReadRetentionRecoveryStatus`, followed by execution of the exact plan ids
+returned by that read and cleanup. No variant renders an unparameterized
+blocker-specific remedy.
 
 `MigrateRetentionCapacity` has a mandatory preflight before
 acceptance-prepare. The controller verifies the authenticated protected
@@ -1738,17 +1962,21 @@ preference, or a desire to avoid a blocker-specific remedy is
 
 For idempotency conflict, the structural, authorization, and domain-eligibility
 checks run first, but conflict classification runs before transient lane
-acquisition. A valid same-key different-request migration therefore becomes
-its own accepted and audited `AttemptIdentity::Conflict` refusal and never
-needs the execution lane. An invalid or unauthorized migration remains a
-preflight refusal as required above.
+or permanent-reserve acquisition. A valid same-key different-request
+migration returns `retention-capacity-migration-replay-conflict` as a
+preflight refusal. It creates no `AcceptancePrepare`, accepted
+`AttemptIdentity::Conflict`, audit outbox, replay result, sink reservation, or
+tombstone. Repetition re-derives the same safe conflict id from the durable
+base request digest and still allocates nothing. An invalid or unauthorized
+migration remains its earlier preflight refusal as required above.
 
-A valid non-conflict request then acquires a transient preflight hold. Missing
-raw destination capacity is
+A valid non-conflict request then atomically acquires the transient preflight
+hold and binds the sealed `MigrationExecutionReserve`. Missing raw destination capacity is
 `retention-capacity-migration-raw-capacity-unavailable`. An accepted migration
 already holding the lane is `retention-capacity-migration-already-active` and
 returns that safe `AttemptIdentity` for status and resume. Either preflight
-refusal releases the caller's transient hold.
+refusal releases the caller's transient hold without charging the execution
+reserve.
 
 After acceptance, migration is one recoverable nonterminal logical operation
 under the same `AttemptIdentity`. It recomputes all reservations from the old
@@ -1762,7 +1990,10 @@ deadline, owner epoch alias, and exact repair-and-resume action.
 the deadline when the condition clears; otherwise lease-expiry takeover or the
 protected operator's audited `ResumeProtectedAttempt` or
 `FenceProtectedAttempt` continues the same accepted attempt. Completion
-releases the transient lane. A preflight refusal also leaves it reusable.
+releases the transient lane after every reserved permanent record is either
+durable or proven unnecessary by the closed terminal path. The completed
+records remain charged only to the source generation's execution allocation.
+A preflight refusal leaves both allocations reusable.
 There is no terminal execution-failure variant that consumes the only
 migration edge and forces a second migration.
 
@@ -1823,9 +2054,11 @@ not claim the exactly-one authoritative audit guarantee. A peer that
 authenticates and submits a bounded request for an absent or unauthorized
 operation is durably registered before that policy check runs; it then
 receives the ordinary exactly-one refusal audit. The sole stricter exception
-is `MigrateRetentionCapacity`: its structural, authorization, eligibility, and
-transient-lane checks are preflight by the re-entrant migration contract above,
-so their refusals are not accepted attempts and consume no emergency lane.
+is `MigrateRetentionCapacity`: its structural, authorization, eligibility,
+same-key conflict, raw-capacity, execution-reserve, and transient-lane checks
+are preflight by the re-entrant migration contract above. Their refusals are
+not accepted attempts and consume neither the execution reserve nor emergency
+lane.
 
 Every authoritative event has:
 
@@ -1858,9 +2091,24 @@ Every appendable `AuditSinkReservation` generation has exactly one authorized
 generation, event id and digest, canonical event bytes, and an unforgeable
 controller `AuditAppendAuthorization` binding that complete tuple to the
 accepted journal. The sink verifies the authorization independently and
-rejects an unbound event, a different digest, an event authorized for another
-`AttemptIdentity`, or an older or future generation without writing bytes.
-`audit-sink-generation-stale` is the closed stale-generation result.
+rejects every invalid tuple without writing bytes. Refusal evaluation is
+ordered and disjoint:
+
+1. a forged, malformed, incorrectly signed, or otherwise unverifiable
+   authorization is `audit-append-authorization-invalid`;
+2. a valid authorization naming an `AttemptIdentity` other than the request
+   is `audit-append-authorization-cross-attempt`;
+3. a valid same-attempt authorization with no exact reservation and event-id
+   binding is `audit-append-authorization-unbound`;
+4. an older or future generation is `audit-sink-generation-stale`; and
+5. only a valid, bound, current-generation tuple with a different event digest
+   is `audit-append-authorization-event-digest-mismatch`.
+
+The invalid case reveals only the authorization digest and closed validation
+reason. Later cases expose only the safe attempt identity, reservation id,
+presented and current generations, event id, and authorized or presented
+digests needed by their catalog row. A higher-precedence predicate cannot
+fall through to a lower one or reveal its expected binding.
 Preparing capacity and binding an accepted journal authorize no append; the
 controller binds the generation's one event only after the complete
 quarantined tuple exists.
@@ -1910,7 +2158,21 @@ AcceptancePreparePending
 ```
 
 `AcceptancePreparePending` is non-authoritative; promotion creates
-`AcceptedUnclaimed`. The pause branch is optional. Capacity migration is the
+`AcceptedUnclaimed`. The pause branch is optional. After an authenticated
+definite-no-append result, the normal edge from `QuarantinedPendingAudit` to
+`SinkAcknowledgementPending` is replaced by this closed conversion branch:
+
+```
+QuarantinedPendingAudit
+-> AuditConversionIntentRecorded
+-> AuditConversionOldGenerationInvalidationPending
+-> AuditConversionOldGenerationInvalidatedRebindPending
+-> AuditConversionRefusalGenerationBoundReplacementPending
+-> AuditConversionReplacementTupleInstalled
+-> SinkAcknowledgementPending { replacement_generation }
+```
+
+Capacity migration is the
 one operation whose execution or storage fault must use it rather than a
 terminal fault result. A handler transaction atomically commits the
 quarantined result, authority effect or none, replay result, exact outbox
@@ -1930,40 +2192,87 @@ use, or response is visible before that final transaction. Thus a successful
 stateful read's use activation, terminal journal, replay availability, and
 tombstone still commit atomically; its identical retry cannot consume again.
 
-Every nonterminal status is a closed `PendingProtectedAttemptStatus`:
+Every nonterminal status is a closed tagged
+`PendingProtectedAttemptStatus`. Each variant owns all and only its safe fields
+and its one exact action:
 
 ```
-PendingProtectedAttemptStatus {
-  attempt_identity,
-  state:
-    AcceptancePreparePending
-    | AcceptedUnclaimed { sink_binding: Prepared | AcceptedBound }
-    | Processing
-    | Paused
-    | QuarantinedPendingAudit
-    | SinkAcknowledgementPending
-    | ActivationPending,
-  safe_pause_reason: None | ClosedPauseReason,
-  owner_epoch_alias: None | WorkerEpochAlias,
-  lease_until: None | Timestamp,
-  deadline: Timestamp,
-  action: PendingAttemptAction
-}
+PendingProtectedAttemptStatus =
+  AcceptancePreparePending {
+    attempt_identity, prepare_id, deadline,
+    action: CompleteOrCancelAcceptancePrepare
+  }
+  | AcceptedUnclaimedPrepared {
+      attempt_identity, reservation_id, reservation_generation, deadline,
+      action: BindAcceptedSinkReservation
+    }
+  | AcceptedUnclaimedAcceptedBound {
+      attempt_identity, reservation_id, reservation_generation, deadline,
+      action: ClaimAcceptedAttempt
+    }
+  | Processing {
+      attempt_identity, owner_epoch_alias, lease_until, deadline,
+      action: WaitForLeaseOrLeaseExpiryTakeover
+    }
+  | Paused {
+      attempt_identity, owner_epoch_alias, lease_until, safe_pause_reason,
+      deadline, action: RepairPauseReasonThenResume
+    }
+  | QuarantinedPendingAudit {
+      attempt_identity, owner_epoch_alias, lease_until,
+      reservation_generation, authorized_event_id, authorized_event_digest,
+      deadline, action: BindAndReplayAuthorizedAuditEvent
+    }
+  | AuditConversionIntentRecorded {
+      attempt_identity, conversion_id, old_reservation_generation,
+      replacement_event_id, replacement_event_digest, deadline,
+      action: IssueNamedOldGenerationInvalidation
+    }
+  | AuditConversionOldGenerationInvalidationPending {
+      attempt_identity, conversion_id, old_reservation_generation,
+      replacement_event_id, replacement_event_digest, deadline,
+      action: ReplayNamedOldGenerationInvalidation
+    }
+  | AuditConversionOldGenerationInvalidatedRebindPending {
+      attempt_identity, conversion_id, invalidated_reservation_generation,
+      invalidation_proof_digest, replacement_event_id,
+      replacement_event_digest, deadline,
+      action: BindNamedReplacementRefusalGeneration
+    }
+  | AuditConversionRefusalGenerationBoundReplacementPending {
+      attempt_identity, conversion_id, invalidated_reservation_generation,
+      invalidation_proof_digest, replacement_reservation_generation,
+      rebind_proof_digest, replacement_event_id, replacement_event_digest,
+      deadline, action: CommitNamedReplacementRefusalTuple
+    }
+  | AuditConversionReplacementTupleInstalled {
+      attempt_identity, conversion_id, conversion_tombstone_digest,
+      replacement_reservation_generation, replacement_event_id,
+      replacement_event_digest, deadline,
+      action: ReplayNamedReplacementRefusalAppend
+    }
+  | SinkAcknowledgementPending {
+      attempt_identity, appendable_reservation_generation,
+      authorized_event_id, authorized_event_digest, deadline,
+      action: QueryOrReplayAuthorizedAuditAppend
+    }
+  | ActivationPending {
+      attempt_identity, appendable_reservation_generation,
+      audit_acknowledgement_digest, deadline,
+      action: CompleteAtomicActivation
+    }
 ```
 
-The exact action mapping is `AcceptancePreparePending` to
-`CompleteOrCancelAcceptancePrepare`; `AcceptedUnclaimed { Prepared }` to
-`BindAcceptedSinkReservation`; `AcceptedUnclaimed { AcceptedBound }` to
-`ClaimAcceptedAttempt`; `Processing` to
-`WaitForLeaseOrLeaseExpiryTakeover`; `Paused` to
-`RepairPauseReasonThenResume`; `QuarantinedPendingAudit` to
-`BindAndReplayAuthorizedAuditEvent`; `SinkAcknowledgementPending` to
-`QueryOrReplayAuthorizedAuditAppend`; and `ActivationPending` to
-`CompleteAtomicActivation`. Fields that do not apply carry `None`; no field is
-omitted or replaced with prose. Every deadline is bounded by a versioned
-maximum. A pause auto-resumes when its closed condition clears, and at its
-deadline either recovery takes over the expired lease or a protected operator
-uses `ResumeProtectedAttempt` or `FenceProtectedAttempt`. Both are ordinary
+There are no optional status fields and no independent state or action
+discriminants. Strict decoding denies an action, lease, pause reason, proof,
+generation, or event field owned by another variant. Every deadline is
+bounded by a versioned maximum. `InvalidatedReservationGeneration` cannot
+convert to `AppendableReservationGeneration`; after invalidation, every
+variant and action owns only the proof-bound replacement generation. It is
+therefore impossible for a status action to replay an invalidated generation.
+A pause auto-resumes when its closed condition clears, and at its deadline
+either recovery takes over the expired lease or a protected operator uses
+`ResumeProtectedAttempt` or `FenceProtectedAttempt`. Both are ordinary
 accepted and audited protected operations, require the narrow operator
 endpoint, bind the target `AttemptIdentity`, and cannot invent a result,
 activate an effect, cancel an accepted attempt, or bypass sink audit.
@@ -2005,11 +2314,12 @@ Crash handling is closed at every boundary:
    execution.
 
 Startup and scheduled recovery scan every nonterminal prepare, journal,
-reservation binding, and outbox row before the controller accepts normal work.
-Each recovery transition is an epoch-and-generation compare-and-swap and
-consumes the record's recovery reservation. A live paused worker is not an
-orphan merely because recovery is running, but its bounded deadline guarantees
-takeover or resume.
+reservation binding, outbox row, conversion intent, invalidation proof, and
+rebind proof before the controller accepts normal work. Each recovery
+transition is an epoch-and-generation compare-and-swap and consumes the
+record's recovery reservation. A live paused worker is not an orphan merely
+because recovery is running, but its bounded deadline guarantees takeover or
+resume.
 
 Timeout, disconnect, or lost acknowledgement is never proof that the sink did
 not append. The controller may convert a quarantined event only after an
@@ -2017,24 +2327,40 @@ authenticated definite-no-append result for its stable `AuditEventId`, digest,
 and reservation generation. Conversion is itself recoverable:
 
 1. the controller durably records `AuditConversionIntent` binding the old
-   generation and the one replacement refusal event and digest;
-2. the sink durably invalidates the old generation and returns an unforgeable
-   invalidation proof; from that commit every delayed old-generation append is
-   `audit-sink-generation-stale`;
-3. only after that proof may the controller authorize a sink rebind to the
-   next monotonic generation and exactly the refusal event and digest;
-4. after the sink durably rebinds, one controller transaction replaces the
+   generation and the one replacement refusal event and digest and installs
+   the `PendingAuditConversion::IntentRecorded` blocker;
+2. before sending the invalidation request, the controller durably enters
+   `OldGenerationInvalidationPending`. The sink then invalidates the exact old
+   generation and returns an unforgeable `AuditSinkInvalidationProof`. From
+   that sink commit every delayed old-generation append is
+   `audit-sink-generation-stale`. Persisting the proof enters
+   `OldGenerationInvalidatedRebindPending`;
+3. only that proof can authorize a sink rebind to the next monotonic
+   generation and exactly the refusal event and digest. The sink returns an
+   unforgeable `AuditSinkRebindProof`; persisting it enters
+   `RefusalGenerationBoundReplacementPending`;
+4. after the sink durably rebinds, one replacement-activation controller
+   transaction replaces the
    quarantined result, effect, assignment-use reservation, replay bytes, and
    outbox with `audit-event-flush-failed`, no effect, no use, and the rebound
-   refusal event; and
-5. normal authorized append and activation continue on the new generation.
+   refusal event. The same transaction creates the immutable
+   `AuditConversionTombstone` from the exact intent, invalidation-proof, and
+   rebind-proof digests; makes the protected intent and proof bytes eligible
+   round input; and enters `ReplacementTupleInstalled`; and
+5. normal authorized append and activation continue only on the replacement
+   generation. Sending that append enters the ordinary
+   `SinkAcknowledgementPending` variant with the replacement generation.
 
-A crash at any conversion boundary resumes from the intent, invalidation
-proof, rebind proof, or replacement tuple. Unknown old append state remains
-pending for idempotent replay and cannot enter conversion. A delayed fenced
-worker that submits the old success after invalidation is rejected by the
-sink; the controller also rejects its stale epoch and fails closed without
-recording that success, acknowledgement, replay result, or effect.
+A crash at any conversion boundary resumes from the exact tagged status and
+the same `PendingAuditConversion` blocker. A crash before intent leaves the
+ordinary pending outbox. A crash after intent, invalidation request,
+invalidation proof, rebind proof, or replacement activation respectively
+replays only that state's exact action. No action after the invalidation proof
+can carry the old generation. Unknown old append state remains pending for
+idempotent replay and cannot enter conversion. A delayed fenced worker that
+submits the old success after invalidation is rejected by the sink; the
+controller also rejects its stale epoch and fails closed without recording
+that success, acknowledgement, replay result, or effect.
 `audit-event-id-conflict` is a fail-closed integrity fault and never activates
 the quarantined effect. Audit is evidence; protected controller state remains
 authority.
@@ -2243,11 +2569,34 @@ expired, or exhausted; a remaining lifecycle, candidate, or mapping mismatch
 is a binding mismatch; and only an otherwise current active assignment can
 reach cross-scope when the caller-supplied issue ids are not a subset of its
 exact set. Cross-scope evaluation does not resolve which other assignment, if
-any, owns an issue. Completion first verifies the exact originating principal,
-then the fresh completion-evidence assignment binding, then evidence
-single-consumption. Revocation first requires the protected operator endpoint;
-an originating issuer or resolver never passes that check merely because it
-issued the assignment.
+any, owns an issue.
+
+Completion refusal precedence is also fixed. After protected evidence
+authentication, the controller first checks the exact originating principal
+and originating issuance evidence and selects the corresponding
+`AssignmentCompletionOriginCode`. It then checks the
+single-consumption index: one evidence identity with a different immutable
+digest is conflict, while the same settled identity and digest is replay.
+Fresh evidence is compared one field at a time in this order:
+`AssignmentId`, `Lifecycle`, `Candidate`, `MappingVersion`, `FinalIssueSet`,
+`ImplementerRun`, `CompletionResult`, `IssuedAt`, `ExpiresAt`, and
+`EvidenceIdentity`. The first mismatch selects exactly that
+`AssignmentCompletionBindingFieldCode`. Only fully bound evidence reaches the
+authoritative freshness check, which selects the separate stale-or-expired
+reason. Only fresh evidence can complete. The generated one-field mutation
+matrix uses fresh unconsumed evidence, so an exact field mismatch cannot be
+masked by replay or conflict. Revocation first requires the protected operator
+endpoint; an originating issuer or resolver never passes that check merely
+because it issued the assignment.
+
+At sink prepare, a missing reservation is created, the same
+`AttemptIdentity` and prepare digest is idempotent, and the same identity with
+a different canonical prepare digest is only
+`acceptance-prepare-digest-conflict`. It cannot fall through to protected
+request replay, orphan-proof, or append-authorization errors. Append
+authorization precedence is the five-step order in section 13: invalid,
+cross-attempt, unbound, stale generation, then event-digest mismatch. Those
+rows are disjoint and no generic sink row overlaps them.
 
 Legacy triage is likewise partitioned: any source without a submitted triage
 selects `legacy-source-triage-missing`; only when that set is empty can a
@@ -2293,14 +2642,21 @@ The refusal catalog and core plans are closed:
 | `protected-authority-unavailable` | authority deployment, producer | `StartOrConfigureProtectedAuthority`, then `RetryProtectedPreflight` |
 | `unauthorized-protected-operation` | endpoint, operation, peer alias | `UseAuthorizedEndpointIdentity`, then `RetryProtectedOperation` |
 | `protected-operation-absent-from-endpoint` | endpoint, operation | `UseOperationOwningEndpoint` |
-| `protected-operation-replay-conflict` | base and conflict attempt identities, endpoint, operation, idempotency-key digest, request digests | `RetrySameProtectedOperationWithFreshIdempotencyKey` |
+| `protected-operation-replay-conflict` | base and conflict attempt identities, accepted non-risk and non-migration endpoint operation, idempotency-key digest, request digests | `RetrySameProtectedOperationWithFreshIdempotencyKey` |
+| `accepted-conflict-budget-exhausted` | endpoint, operation, capacity generation, used and maximum conflict entries and bytes | `MigrateRetentionCapacity { VersionedBoundMigration }`, then `RetrySameProtectedOperationWithFreshIdempotencyKey` |
 | `protected-operation-invalid-state` | lifecycle, operation, current state | `ReadLifecycleStatus`, then `UseStatePermittedOperation` |
 | `accepted-attempt-crash-before-state` | endpoint, operation, attempt identity | `ReadProtectedAttemptStatus`, then `FollowOperationSpecificProtectedAttemptRecovery` |
 | `audit-event-flush-failed` | endpoint, operation, attempt identity | `RestoreProtectedAuditSink`, then `ReadProtectedAttemptStatus`, then `FollowOperationSpecificProtectedAttemptRecovery` |
 | `audit-event-id-conflict` | attempt identity, audit event id, expected and actual event digests | `RepairAppendSinkIntegrity`, then `ReplayPendingAuditAppend` |
+| `acceptance-prepare-digest-conflict` | sink namespace, attempt identity, reservation id and generation, authoritative and presented prepare digests | `DiscardConflictingAcceptancePrepare`, then `ReplayAuthoritativeAcceptancePrepare` |
+| `audit-append-authorization-invalid` | sink namespace, authorization digest and closed validation reason code | `RequestFreshControllerAuditAppendAuthorization`, then `ReplayPendingAuditAppend` |
+| `audit-append-authorization-cross-attempt` | request and authorization attempt identities, reservation id and generation | `UseAttemptBoundAuditAppendAuthorization`, then `ReplayPendingAuditAppend` |
+| `audit-append-authorization-unbound` | attempt identity, reservation id and generation, event id, authorization digest and closed binding code | `BindCurrentReservationGenerationToAuditEvent`, then `RequestFreshControllerAuditAppendAuthorization`, then `ReplayPendingAuditAppend` |
 | `audit-sink-generation-stale` | attempt identity, reservation id, presented and current generations, authorized event id and digest | `StopStaleAttemptWorker`, then `ReadProtectedAttemptStatus` |
+| `audit-append-authorization-event-digest-mismatch` | attempt identity, reservation id and generation, authorized event id, authorized and presented event digests | `RestoreCanonicalOutboxEvent`, then `RequestFreshControllerAuditAppendAuthorization`, then `ReplayPendingAuditAppend` |
 | `idempotency-result-evicted` | attempt identity, endpoint, operation, closed outcome, safe result ids, response and event digests | `ReturnOperationSpecificProtectedAttemptRecovery` |
 | `protected-attempt-status-cross-peer` | attempt identity, presented peer safe alias | `UseOriginalAttemptPeerOrProtectedOperator` |
+| `protected-status-budget-exhausted` | status operation, safe target id, capacity generation, used and maximum status entries and bytes | `MigrateRetentionCapacity { VersionedBoundMigration }`, then `RetryProtectedStatusRead` |
 | `attempt-worker-fenced` | attempt identity, presented and current worker epochs and generations | `StopStaleAttemptWorker` |
 | `audit-sink-reservation-unavailable` | sink namespace, attempt identity, required entries and bytes | `RestoreProtectedAuditSinkCapacity`, then `RetryProtectedPreflight` |
 | `audit-sink-orphan-proof-controller-unavailable` | sink namespace, attempt identity, reservation id and generation | `RestoreProtectedController`, then `RequestNoAcceptedJournalProof`, then `RetrySinkReservationCancellation` |
@@ -2311,7 +2667,8 @@ The refusal catalog and core plans are closed:
 | `recovery-reserve-integrity-corrupt` | capacity generation, affected blocker and reservation ids, integrity reason codes | `MigrateRetentionCapacity { ReserveIntegrityRepair }` |
 | `retention-capacity-migration-structurally-invalid` | manifest digest and closed structural field codes | `InstallReviewedValidMigrationManifest`, then `RetryRetentionCapacityMigrationPreflight` |
 | `retention-capacity-migration-unauthorized` | protected operator endpoint and presented peer safe alias | `UseProtectedOperatorEndpointIdentity`, then `RetryRetentionCapacityMigrationPreflight` |
-| `retention-capacity-migration-ineligible` | requested migration reason, capacity generation, general and recovery bounds | `UseRetentionBlockerSpecificRemedy` |
+| `retention-capacity-migration-replay-conflict` | base attempt identity, safe conflict id, capacity generation, idempotency-key digest, authoritative and presented request digests | `RetryRetentionCapacityMigrationWithFreshIdempotencyKey` |
+| `retention-capacity-migration-ineligible` | requested migration reason, capacity generation, general and recovery bounds, and `MigrationIneligibleBlockerDetails` | `CurrentBlockerDetails`: `ExecuteNamedRetentionRecoveryPlansInOrder` with the carried exact plan ids, then `RunControllerRetentionCleanup`; `BlockerDetailsRedacted` or `BlockerDetailsStale`: `ReadRetentionRecoveryStatus`, then `ExecuteNamedRetentionRecoveryPlansInOrder` with the returned exact plan ids, then `RunControllerRetentionCleanup` |
 | `retention-capacity-migration-already-active` | active migration attempt identity and capacity generation | `ReadProtectedAttemptStatus`, then `FollowReturnedPendingAttemptAction` |
 | `retention-capacity-migration-raw-capacity-unavailable` | requested destination capacity class and bounded required and available numerics | `ProvisionRawMigrationCapacityWithoutControllerAccess`, then `RetryRetentionCapacityMigrationPreflight` |
 | `retention-classification-incomplete` | record id, retention class and state code | `InstallCorrectedRetentionClassifier`, then `RetryProtectedPreflight` |
@@ -2330,9 +2687,11 @@ The refusal catalog and core plans are closed:
 | `issue-view-binding-mismatch` | lifecycle, candidate, mapping version, issue ids and presented non-capability assignment or authority alias | `RequestCurrentCandidateBoundIssueView` |
 | `implementation-assignment-evidence-conflict` | evidence digest and conflicting closed field codes | `RequestFreshProtectedImplementationEvidence` |
 | `implementation-assignment-self-asserted` | issuer endpoint, implementer run alias, supplied claim digest | `RequestTrustedImplementationDispatchOrResolverReceipt` |
-| `implementation-assignment-completion-origin-mismatch` | presented assignment alias, presented principal safe alias and closed origin-mismatch code | `UseOriginatingAssignmentCompletionPrincipal`, then `RetryAssignmentCompletionWithFreshEvidence` |
-| `implementation-assignment-completion-binding-mismatch` | presented assignment alias, completion evidence digest and closed field codes | `RequestFreshAssignmentBoundCompletionEvidence` |
-| `implementation-assignment-completion-evidence-replayed` | presented assignment alias and completion evidence digest | `ReadCurrentImplementationAssignmentState` |
+| `implementation-assignment-completion-origin-mismatch` | presented assignment alias, presented principal safe alias, originating issuance evidence digest and exact `AssignmentCompletionOriginCode` | `UseOriginatingAssignmentCompletionPrincipalAndEvidence`, then `RetryAssignmentCompletionWithFreshEvidence` |
+| `implementation-assignment-completion-binding-mismatch` | presented assignment alias, completion evidence digest and exact `AssignmentCompletionBindingFieldCode` | `RequestFreshAssignmentBoundCompletionEvidence` |
+| `implementation-assignment-completion-evidence-stale-or-expired` | presented assignment alias, completion evidence digest, issuance, expiry and exact `AssignmentCompletionFreshnessCode` | `RequestFreshAssignmentBoundCompletionEvidence`, then `RetryAssignmentCompletion` |
+| `implementation-assignment-completion-evidence-replayed` | presented assignment alias, completion evidence identity and digest | `ReadCurrentImplementationAssignmentState` |
+| `implementation-assignment-completion-evidence-conflict` | presented assignment alias, completion evidence identity, authoritative and presented evidence digests | `RequestFreshAssignmentBoundCompletionEvidence`, then `RetryAssignmentCompletion` |
 | `implementation-assignment-revocation-unauthorized` | presented assignment alias and presented principal safe alias | `UseProtectedOperatorEndpointIdentity`, then `RetryImplementationAssignmentRevocation` |
 | `implementation-assignment-replayed` | presented assignment alias and authenticated implementer peer or run safe alias | `RequestNewImplementationAssignment` |
 | `implementation-assignment-completed` | presented assignment alias and completion event id | `RequestNewImplementationAssignment` |
@@ -2395,9 +2754,14 @@ state-specific concatenation defined in section 13. Its original error already
 carries the exact blocker records and plan ids, so
 `ReadRetentionRecoveryStatus` appears only in a later projection explicitly
 marked redacted or stale. It has no generic raise-the-bound or
-ordinary-abandonment fallback. The capsule row is the only one that offers
-permanent close, and only for an already abandoned resumable lineage. No
-producer context or remedy action can name offline migration, offline
+ordinary-abandonment fallback.
+`retention-capacity-migration-ineligible` uses the same closed detail rule:
+complete current blocker records execute their carried plan ids directly, and
+only `BlockerDetailsRedacted` or `BlockerDetailsStale` reads status before
+executing the returned plan ids. There is no
+unparameterized blocker-remedy action. The capsule row is the only one that
+offers permanent close, and only for an already abandoned resumable lineage.
+No producer context or remedy action can name offline migration, offline
 controller access, or mutation of controller records by a deployment
 administrator.
 
@@ -2566,9 +2930,22 @@ negative is accepted. At minimum, the corpus separately exercises:
   `PrimaryBatch`; and pairwise disjoint `ParallelFixSlice` projections with
   planted overlap, omission and foreign issue failures; completion with fresh
   assignment-bound evidence from the exact originating dispatch principal or
-  resolver; cross-resolver, cross-assignment, stale and replayed completion
-  refusals; protected-operator revocation; refusal of resolver-only revocation;
-  and only the closed candidate, mapping and lifecycle internal invalidations;
+  resolver; cross-resolver, cross-assignment, stale, expired, replayed and
+  conflicting completion-evidence refusals; protected-operator revocation;
+  refusal of resolver-only revocation; and only the closed candidate, mapping
+  and lifecycle internal invalidations;
+- a generated assignment-completion mutation matrix starting from one valid,
+  fresh, unconsumed protected completion-evidence fixture. It mutates exactly
+  one of originating principal, originating issuance evidence, assignment id,
+  lifecycle, candidate, mapping version, final issue set, implementer run,
+  completion result, issuance, expiry, and evidence identity in each case.
+  Every case asserts the exact `AssignmentCompletionOriginCode` or
+  `AssignmentCompletionBindingFieldCode`, no transition to `Completed`, no
+  consumption-index mutation, no private assignment or principal information
+  in error, audit, log, status, or `Debug`, and no masking by another field
+  predicate. Separate precedence cases cover stale or expired otherwise-bound
+  evidence, same-identity same-digest replay, and same-identity
+  different-digest conflict;
 - `ReadImplementerIssueView` use reservation and activation as a quarantined
   authority effect, including audit failure rollback, definite-no-append
   replacement, acknowledgement loss, concurrent final-use reads, and
@@ -2633,7 +3010,10 @@ negative is accepted. At minimum, the corpus separately exercises:
   cases; one base and multiple conflict attempts with independent acceptance
   prepares, journals, sink reservations and proofs, replay results, eviction
   markers, tombstones, worker recovery, audit events and status, with planted
-  key-collision or shared-state constructions refused;
+  key-collision or shared-state constructions refused; and the migration-only
+  exception proving that a same-key different-request migration conflict is a
+  preflight refusal with only a re-derived safe conflict id and no accepted
+  conflict attempt or permanent record;
 - acceptance prepare, accepted-attempt journal, full replay-result, pending
   outbox, immutable controller tombstone, append-only replay-payload eviction
   markers, durable sink reservation and append-sink tombstone retention and
@@ -2648,7 +3028,11 @@ negative is accepted. At minimum, the corpus separately exercises:
   cancellation at each boundary; accepted-journal recovery from a still
   `Prepared` sink state; refusal of time-only cancellation; separate
   controller-unavailable and invalid-proof remedies; and no leaked
-  reservation or accepted attempt without its bound capacity;
+  reservation or accepted attempt without its bound capacity; plus the same
+  `AttemptIdentity` and same prepare digest idempotent case and a conflicting
+  prepare digest that returns only `acceptance-prepare-digest-conflict`,
+  creates or changes nothing, and cannot be masked by a generic replay or
+  orphan-proof refusal;
 - durable acceptance before state processing; epoch-and-generation processing
   claim, renewal, pause and fencing; bounded pause deadlines, automatic resume
   or lease-expiry takeover; audited narrow `ResumeProtectedAttempt` and
@@ -2668,57 +3052,101 @@ negative is accepted. At minimum, the corpus separately exercises:
   acknowledgement; same-id different-bytes conflict; crash after audit
   acknowledgement and before activation or response; one unforgeably
   authorized event id and digest per monotonically increasing sink generation;
-  stale generation, wrong event, wrong digest and forged authorization
-  refusal; definite-no-append invalidation of the old sink generation before
-  refusal-event rebind; crash at every conversion boundary; a delayed fenced
-  worker's stale success append refused and never recorded by the controller;
-  and no duplicate append, success-bytes-plus-refusal-audit state, or
-  conversion of an acknowledged success to refusal;
+  the exact precedence and safe projections for forged or invalid
+  authorization, cross-attempt identity, unbound reservation or event,
+  separately stale generation, and event-digest mismatch; planted
+  multi-fault cases proving the higher-precedence reason cannot leak or be
+  masked by a lower one; definite-no-append invalidation of the old sink
+  generation before refusal-event rebind; intent recorded, old-generation
+  invalidation pending, old generation invalidated with rebind pending,
+  refusal generation bound with replacement tuple pending, replacement tuple
+  installed, replacement append pending, and activation pending crash cases;
+  a delayed fenced worker's stale success append refused and never recorded by
+  the controller; and no duplicate append, replay of an invalidated
+  generation, success-bytes-plus-refusal-audit state, or conversion of an
+  acknowledged success to refusal;
 - `round-input-store-full` fixtures for every closed blocker:
   active lifecycle, unresolved lifecycle, retryable partial dispatch,
   unavailable partial dispatch, resumable abandoned capsule, unexpired
   approval receipt, unrecorded trusted merge completion, pending acceptance
-  prepare, pending accepted attempt and pending outbox. Each asserts its
-  mechanically computed recovery reservation, all safe causing ids and exact
-  named plan ids in the original refusal, then direct execution without an
-  unnecessary status read. Redacted and stale post-eviction projections alone
+  prepare, pending accepted attempt, pending outbox, and
+  `PendingAuditConversion` at each of its five nested conversion states. Each
+  asserts its mechanically computed recovery reservation, all safe causing ids
+  and exact named plan ids in the original refusal, then direct execution
+  without an unnecessary status read. Conversion fixtures prove the blocker
+  key is exactly `AttemptIdentity` plus old reservation generation; intent,
+  invalidation-proof, and rebind-proof bytes remain ineligible before
+  replacement activation; replacement activation atomically creates the
+  immutable conversion tombstone digests and makes those bytes eligible; and
+  every crash resumes the exact state-specific action without replaying the
+  invalidated generation. Redacted and stale post-eviction projections alone
   first use `ReadRetentionRecoveryStatus`. The general store is actually full,
   with planted failures for omitted blockers, reservation use by normal
   admission, generic bound increase and ordinary abandonment;
 - recovery-reserve creation and roll-forward for every blocker-creating
   operation, corrupt and undersized reserve integrity states, fail-closed
-  normal admission, reserved recovery from a full general store, the dedicated
-  status-and-migration emergency edge, refusal of every offline controller
-  mutation, raw-capacity provisioning that cannot read or mutate controller
-  records, and the only reviewed `MigrateRetentionCapacity` reasons for reserve
-  repair and versioned bound migration; structurally invalid, unauthorized,
+  normal admission and reserved recovery from a full general store;
+  schema-maximum accounting and transactional sealing of the exclusive
+  `MigrationExecutionReserve`, including every controller, sink, replay,
+  conversion, marker, tombstone, and bounded work record; a separate bounded
+  and duplicate-coalescing `ProtectedStatusReserve`; a separate bounded
+  `AcceptedConflictReserve` for non-migration audited conflicts; and the
+  distinct transient execution lane. Exact-bound fixtures consume every migration
+  record class at its serialized maximum, reject a generation whose exclusive
+  reserve is one entry or byte short, and reject every attempt by another
+  operation to allocate from that partition. Fixtures completely fill the normal,
+  blocker-recovery, status, and accepted-conflict budgets, then issue
+  arbitrarily repeated migration conflicts and status reads and prove that a
+  valid non-conflict migration remains admissible from its untouched execution
+  reserve. They also prove status attempts cannot borrow that reserve,
+  migration conflicts create no accepted attempt or permanent record, status
+  budget exhaustion is isolated, and only the one accepted migration identity
+  can retain the reserve across pause and resume;
+- refusal of every offline controller mutation, raw-capacity provisioning
+  that cannot read or mutate controller records, and the only reviewed
+  `MigrateRetentionCapacity` reasons for reserve repair and versioned bound
+  migration; structurally invalid, unauthorized, same-key conflicting,
   ineligible, already-active and raw-capacity-unavailable migration preflight
-  refusals create no accepted attempt and leave transient capacity reusable,
-  with already-active returning the live attempt status action and the last
-  rendering only raw provisioning followed by the normal endpoint; an
-  accepted migration pauses on execution and storage faults, reports status,
-  resumes the same `AttemptIdentity`, succeeds, releases transient capacity,
-  and leaves permanent replay and audit records in their separate budgets;
-  repeated bad preflight requests cannot dead-end the emergency route;
+  refusals create no accepted attempt and leave transient and permanent
+  execution capacity reusable, with already-active returning the live attempt
+  status action and the raw-capacity case rendering only raw provisioning
+  followed by the normal endpoint. Migration-ineligible fixtures separately
+  cover complete current sorted blocker records with exact plan ids, which
+  execute directly, and `BlockerDetailsRedacted` and
+  `BlockerDetailsStale`, which alone read retention status before executing the
+  returned plan ids. Strict parsing rejects an unsorted, incomplete, or
+  plan-id-free current list, a marker with blocker fields, both a marker and a
+  current list, and an unknown detail variant. No fixture or renderer contains
+  an unparameterized blocker-specific remedy. An accepted migration pauses on execution and
+  storage faults, reports status, resumes the same `AttemptIdentity`,
+  succeeds, releases the transient lane, and leaves its permanent records only
+  in the source generation's exclusive allocation;
 - post-eviction identical replay and authenticated
   `ReadProtectedAttemptStatus` for the original peer and protected operator,
   cross-peer refusal, and generated exhaustive mapping of every operation in
-  every endpoint for both success and every terminal refusal to exactly one
-  `ProtectedAttemptRecovery` variant. Cases separately cover accepted
-  resources and events with safe ids, accepted submission and judgment
-  status, current generated artifact and status refetch, authorized read
-  reissue, consumed issue view requiring a new assignment, assignment state,
-  risk intent, acceptance and revocation state, lifecycle, ledger, severity,
-  retention and publisher operation state, attempt control, and original
-  refusal with its exact remedy, with protected text absent. Any unmapped,
-  duplicate or wildcard operation or outcome fails coverage;
+  every endpoint for each accepted operation and closed terminal success
+  outcome to exactly one nested operation-specific
+  `ProtectedAttemptRecovery::Success` wire variant, and every operation and
+  typed terminal refusal to exactly one nested `OriginalRefusal` variant with
+  its exact safe fields and remedy. Strict compile and parse negatives cover
+  every cross-operation state, action or field substitution, missing or extra
+  field, unknown outcome, optional-field encoding, generic safe-id map,
+  duplicate mapping, wildcard, and fallback variant. Protected text remains
+  absent, and no operation, state, action, or outcome can be selected
+  independently;
 - `ReadProtectedAttemptStatus` for every nonterminal variant:
   acceptance prepare, accepted unclaimed with sink `Prepared`, accepted
   unclaimed with sink `AcceptedBound`, processing, paused, quarantined pending
-  audit, sink-ack pending and activation pending. Each asserts the safe pause
-  reason, optional owner epoch alias, lease, bounded deadline and exact closed
-  action, plus auto-resume or lease-expiry takeover so no pause is indefinitely
-  unrecoverable;
+  audit, conversion intent recorded, old-generation invalidation pending, old
+  generation invalidated with rebind pending, refusal generation bound with
+  replacement tuple pending, replacement tuple installed, sink-ack pending,
+  and activation pending. Each asserts exactly its owned safe fields, bounded
+  deadline and exact closed action. Generated strict compile and parse
+  negatives cover every action from another state, invalidated generation in a
+  later action, missing or extra lease, pause, proof, generation, event or
+  acknowledgement fields, an optional-field encoding, and an unknown or
+  fallback variant. Auto-resume or lease-expiry takeover keeps every pause
+  recoverable;
 - every top-level `TerminalLifecycleMetricRecord` variant,
   `BeforeDiscovery`, `PartialLegacyObligationsImported`,
   `DiscoveryAdmittedLedgerPending`, and `LedgerAdmitted` progress, the source
@@ -2736,13 +3164,20 @@ negative is accepted. At minimum, the corpus separately exercises:
   partial-round, source-triage, severity-predicate and ledger-correction
   partition; every endpoint-operation/refusal mapping; and both
   producer-context remedy renderings, with mechanical parity between
-  normative refusal sites and catalog rows. Remedy fixtures separately prove
+  normative refusal sites and catalog rows. The corpus has a positive,
+  one-reason negative, and multi-reason precedence case for every assignment
+  completion origin, binding, freshness, replay and conflict reason; conflicting
+  acceptance-prepare digest; invalid, cross-attempt, unbound, stale-generation
+  and event-digest-mismatch append authorization; status-budget and
+  accepted-conflict-budget exhaustion; and every migration preflight reason.
+  Remedy fixtures separately prove
   controller-unavailable orphan recovery restores the controller before
   requesting proof and retrying cancellation, invalid orphan proof repairs the
   controller/sink binding before requesting proof and retrying, current
-  `round-input-store-full` details execute their named plan ids directly, only
-  redacted or stale details trigger a status read, and no context renders an
-  offline migration action.
+  `round-input-store-full` and migration-ineligible complete details execute
+  their named plan ids directly, only redacted or stale details trigger a
+  status read, no unparameterized blocker remedy exists, and no context renders
+  an offline migration action.
 
 Validation selection is derived at implementation time from
 `tests/layer1-jobs.json`; this ADR does not freeze today's job list. A result

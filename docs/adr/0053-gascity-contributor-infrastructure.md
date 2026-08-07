@@ -8,12 +8,14 @@
   final set; D9's publication refusal while any finding stands; D17's closed
   endpoint operation sets, round-input eligibility, and protected-attempt
   audit ordering only as its new endpoint table, receipt lifetime,
-  common base-or-conflict attempt identity, reconciliable acceptance prepare
-  and accepted-attempt journal, fenced worker and sink-generation recovery,
-  replay result, outbox, immutable permanent replay tombstones, append-only
+  common base-or-conflict attempt identity for accepted attempts,
+  migration-conflict preflight, reconciliable acceptance prepare and
+  accepted-attempt journal, fenced worker and sink-generation recovery, replay
+  result, outbox, immutable permanent replay tombstones, append-only
   payload-eviction markers, durable sink reservation, idempotent append,
-  recovery-capacity reserve, exhaustive protected attempt recovery and
-  pending status, and re-entrant online capacity-migration rules specify; and
+  recovery-capacity reserve, exclusive migration execution capacity,
+  exhaustive protected attempt recovery and pending status, and re-entrant
+  online capacity-migration rules specify; and
   D21's rejection of a four-level
   severity contract, per-seat `held` and `prior_resolutions` state, rotation,
   and clean-break refusal to read or admit an earlier schema. It
