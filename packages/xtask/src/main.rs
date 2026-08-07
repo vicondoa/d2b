@@ -1681,17 +1681,7 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
 fn patch_vm_exec_logs_bash_completion(
     generated: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let generated = replace_once(
-        generated,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-"#,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
-                opts="${opts} --stdout-offset --stderr-offset --max-len"
-            fi
-"#,
-        "bash vm exec opts",
-    )?;
+    let generated = insert_after_bash_vm_exec_opts(generated)?;
     replace_once(
         generated,
         r#"                --cwd)
@@ -1710,6 +1700,49 @@ fn patch_vm_exec_logs_bash_completion(
 "#,
         "bash vm exec logs flag values",
     )
+}
+
+fn insert_after_bash_vm_exec_opts(
+    mut generated: String,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let marker = "        d2b__subcmd__vm__subcmd__exec)\n";
+    let block_start = generated
+        .find(marker)
+        .map(|index| index + marker.len())
+        .ok_or("could not patch generated completion: missing bash vm exec case")?;
+    let tail = &generated[block_start..];
+    let block_end = tail
+        .find("\n        d2b__")
+        .or_else(|| tail.find("\n        *)"))
+        .unwrap_or(tail.len());
+    let block = &tail[..block_end];
+    let matching_lines = block
+        .match_indices('\n')
+        .map(|(end, _)| end)
+        .scan(0, |start, end| {
+            let line_start = *start;
+            *start = end + 1;
+            Some((line_start, end))
+        })
+        .filter(|(start, end)| {
+            let line = &block[*start..*end];
+            line.trim_start().starts_with("opts=\"")
+                && line.contains("--detach")
+                && line.contains("<VM>")
+        })
+        .collect::<Vec<_>>();
+    if matching_lines.len() != 1 {
+        return Err("could not patch generated completion: missing bash vm exec opts".into());
+    }
+    let (_, line_end) = matching_lines[0];
+    generated.insert_str(
+        block_start + line_end + 1,
+        r#"            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
+                opts="${opts} --stdout-offset --stderr-offset --max-len"
+            fi
+"#,
+    );
+    Ok(generated)
 }
 
 fn patch_vm_exec_logs_fish_completion(
@@ -2642,5 +2675,39 @@ printf product-lock > bazel/cargo/product.lock
         assert!(!root.join("bazel/cargo/product.lock").exists());
         assert!(!root.join("bazel/cargo/walker.lock").exists());
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn bash_vm_exec_patch_accepts_clap_option_reordering() {
+        let generated = "\
+        d2b__subcmd__vm__subcmd__exec)\n\
+            opts=\"--human --detach <VM> --json --cwd\"\n\
+            COMPREPLY=()\n\
+        d2b__subcmd__vm__subcmd__start)\n";
+        let patched =
+            insert_after_bash_vm_exec_opts(generated.to_owned()).expect("patch reordered opts");
+        assert!(patched.contains(
+            "opts=\"--human --detach <VM> --json --cwd\"\n\
+            if [[ \" ${COMP_WORDS[*]} \" == *\" logs \"* ]] ; then"
+        ));
+    }
+
+    #[test]
+    fn bash_vm_exec_patch_refuses_missing_or_duplicate_option_lines() {
+        for generated in [
+            "\
+        d2b__subcmd__vm__subcmd__exec)\n\
+            COMPREPLY=()\n\
+        d2b__subcmd__vm__subcmd__start)\n",
+            "\
+        d2b__subcmd__vm__subcmd__exec)\n\
+            opts=\"--detach <VM>\"\n\
+            opts=\"--detach <VM> --json\"\n\
+        d2b__subcmd__vm__subcmd__start)\n",
+        ] {
+            let error = insert_after_bash_vm_exec_opts(generated.to_owned())
+                .expect_err("invalid option census");
+            assert!(error.to_string().contains("missing bash vm exec opts"));
+        }
     }
 }
