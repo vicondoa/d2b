@@ -7702,8 +7702,8 @@
       "spawnSiteCount": 4,
       "spawnSiteKeys": [
         "packages/xtask/src/main.rs:1076:27:executable",
-        "packages/xtask/src/main.rs:2367:27:\"false\"",
-        "packages/xtask/src/main.rs:2376:16:\"true\"",
+        "packages/xtask/src/main.rs:2398:27:\"false\"",
+        "packages/xtask/src/main.rs:2407:16:\"true\"",
         "packages/xtask/src/main.rs:711:27:&self.executable"
       ],
       "status": "scanned"
@@ -8988,9 +8988,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2367,
+        "endLine": 2398,
         "startColumn": 27,
-        "startLine": 2367
+        "startLine": 2398
       }
     },
     {
@@ -8999,9 +8999,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 36,
-        "endLine": 2376,
+        "endLine": 2407,
         "startColumn": 16,
-        "startLine": 2376
+        "startLine": 2407
       }
     },
     {
