@@ -505,7 +505,10 @@ fn fresh_hub_bootstrap(
         Err(_) => return Err(fresh_bootstrap_error(hub, "selected lock path cannot be inspected")),
     }
 
-    let guard_path = root.join(".scratch/bazel/fresh-bootstrap.guard");
+    let scratch = root.join(".scratch/bazel");
+    fs::create_dir_all(&scratch)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap scratch space"))?;
+    let guard_path = scratch.join("fresh-bootstrap.guard");
     let guard = OpenOptions::new()
         .write(true)
         .create_new(true)
