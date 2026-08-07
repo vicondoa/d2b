@@ -248,7 +248,7 @@ preserves the consumed request and authorizes a specific non-request close actio
 silently re-attest changed content, waive findings, or infer successor admission. Any
 authorized integration-lineage merge preserves F's tree.
 
-### Recover a parked SC-002 sidecar incident
+### Recover an SC-002 sidecar incident
 
 > **Planned contract, not a command available at this committed base.** T589 owns these
 > delivery subcommands, focused tests, generated help/schema goldens, and the
@@ -264,15 +264,22 @@ the durable incident remains retained. A parked incident is success-shaped only 
 immutable metadata, exact payload at
 `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, and append-only
 `parked` status are file-and-ancestor-directory durable. A rename/reopen race remains
-`recovery-pending`, preserves every name, and exposes no parked status until restart recovery
-finishes that protocol. Recovery is inspect, apply one authenticated external disposition,
-then admit one distinct successor snapshot:
+`recovery-pending`, preserves every still-named leaf, and exposes no parked status until
+restart recovery or the owned recovery command finishes that protocol. It is not a terminal
+cleanup result; only a revalidated durable payload outside both ephemeral namespaces plus
+the append-only `parked` status is terminal. Recovery is inspect, resume the exact incident
+prefix if requested, apply one authenticated external disposition, then admit one distinct
+successor snapshot:
 
 ```bash
 set -eu
 X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
 
 $X sc002-incident-inspect \
+  --snapshot "$PARKED_SNAPSHOT" \
+  --incident-id "$SC002_INCIDENT_ID"
+
+$X sc002-incident-recover \
   --snapshot "$PARKED_SNAPSHOT" \
   --incident-id "$SC002_INCIDENT_ID"
 
@@ -292,7 +299,10 @@ $X sc002-successor-admit \
 Exit `0` means the requested read or transition completed; `2` means invalid syntax or
 malformed input; `3` means an ID was not found; and `4` means stale state, conflict, or
 blocked admission. Repeating the exact already durable apply or successor admission exits
-`0` without a write; changing its binding exits `4`.
+`0` without a write. Recovering an incident already at `parked` or later also exits `0`
+without a write. A recovery that still cannot prove the metadata-bound move exits `4`,
+preserves every name, and leaves publication and close blocked; changing any binding exits
+`4`.
 
 Human output is exactly these twelve lines in this order:
 
@@ -313,16 +323,21 @@ next-command: <NEXT_COMMAND>
 
 The bracketed forms above denote bounded values. Null IDs render exactly `none`.
 `NEXT_COMMAND` is static: `sc002-incident-apply` for either parked remediation,
+`sc002-incident-recover` for `resume-incident-recovery`,
 `sc002-successor-admit` for successor admission, and `none` after admission. It never
 contains flags, IDs, paths, argv, an executable path, a shell fragment, or free-form
 guidance. The equivalent `--json` output is the distinct version-1
 `sc002-incident-cli-status` projection, not the persisted `sc002-incident-status` envelope.
 JSON contains no `nextCommand` or guidance field. Its required final `remediation` field is
-derived from the durable status and locked disposition census and is exactly one of
-`obtain-incident-disposition`,
+derived from the validated metadata/source/payload prefix, durable status, and locked
+disposition census and is exactly one of
+`resume-incident-recovery`, `obtain-incident-disposition`,
 `apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
 field. Persisted status has no remediation field.
 
+`resume-incident-recovery` means run `sc002-incident-recover` with the stable incident id;
+the command accepts no alternate source, payload, identity, disposition, successor, or
+deletion selector.
 `obtain-incident-disposition` means submit the stable incident id to the disposition
 authority/workflow pinned by accepted Version 2 and receive its signed mode-`0600` record;
 no repository command may mint or self-sign that authority record. Then run
@@ -342,7 +357,7 @@ is still required. A consumed ordinary wave stops for its external wave disposit
 command trusts only the Version 2 contract's pinned authority and Ed25519 key, never a key
 selected by the file. The cleanup refusal and each command return the same stable incident
 id as a data field. T589's existing `changelog.d/resource-api-production.md` fragment names
-all three command nouns, exits `0|2|3|4`, the disposition authority, and the fresh-successor
+all four command nouns, exits `0|2|3|4`, the disposition authority, and the fresh-successor
 requirement; T220 verifies and folds that existing fragment rather than creating another.
 
 ---
