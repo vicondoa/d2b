@@ -1748,7 +1748,7 @@
       "manifest": "packages/d2b-guest-shell-runner/Cargo.toml",
       "package": "d2b-guest-shell-runner",
       "path": "packages/d2b-guest-shell-runner/src/main.rs",
-      "sha256": "7cffd5323cbbc4236b91762373c0a60b568daf64b0cc69c1e4cfa80e43a2b5d0",
+      "sha256": "d03d56c390b8d778d911a47fec4eb81333c97515cad142407f259016ddd216cc",
       "targetLabels": [
         "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner",
         "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-aarch64",

@@ -48,7 +48,7 @@
     },
     {
       "path": "bazel/generated/source-census.json",
-      "sha256": "1f566b6199534f45ec9b67bcdcd38f85408f96b8925d26412a886b922aa25d0e"
+      "sha256": "0b3247f49076e0974aaab37f052d7991efa6ebb80d6736951f73240990591c25"
     }
   ],
   "schemaVersion": 1,
