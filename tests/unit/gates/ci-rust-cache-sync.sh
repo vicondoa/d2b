@@ -29,8 +29,10 @@ rc=0
 # critical path cold.
 declared_dirs=(
   "packages -> target"
-  "packages/d2b-priv-broker -> target"
-  "packages/d2b-guest-shell-runner -> target"
+  "packages/d2b-priv-broker/target"
+  "packages/d2b-guest-shell-runner/target"
+  "packages/d2b-priv-broker/target-layer1"
+  "packages/d2b-priv-broker/target-fakebackends"
   "tests/tools/no-bash-ast-walker/target"
   ".scratch/rust-test-cache"
 )
@@ -75,6 +77,56 @@ cached_in_ci=$(
     | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' \
     | sort -u
 )
+
+# The unified product workspace has one Cargo workspace mapping. The isolated
+# broker and guest gate targets are cache directories, never sibling workspace
+# roots. Check both the generated Layer-1 workflow and the release workflow;
+# the latter is the smallest independent consumer of the same cache contract.
+release_wf="$ROOT/.github/workflows/release-host-binaries.yml"
+if [ ! -f "$release_wf" ]; then
+  log "FAIL: missing release workflow: $release_wf"
+  rc=1
+else
+  release_workspace_count=$(grep -cF "packages -> target" "$release_wf" || true)
+  if [ "$release_workspace_count" -ne 1 ]; then
+    log "FAIL: release workflow must declare exactly one packages -> target workspace mapping"
+    rc=1
+  fi
+  for retired in \
+    "packages/d2b-priv-broker -> target" \
+    "packages/d2b-guest-shell-runner -> target"
+  do
+    if grep -qF "$retired" "$release_wf"; then
+      log "FAIL: release workflow retains retired sibling workspace mapping '$retired'"
+      rc=1
+    fi
+  done
+fi
+
+for retired in \
+  "packages/d2b-priv-broker -> target" \
+  "packages/d2b-guest-shell-runner -> target"
+do
+  if grep -qF "$retired" "$wf"; then
+    log "FAIL: Layer-1 workflow retains retired sibling workspace mapping '$retired'"
+    rc=1
+  fi
+done
+for directory in \
+  "packages/d2b-priv-broker/target" \
+  "packages/d2b-priv-broker/target-layer1" \
+  "packages/d2b-priv-broker/target-fakebackends" \
+  "packages/d2b-guest-shell-runner/target"
+do
+  if ! grep -qF "$directory" "$wf"; then
+    log "FAIL: Layer-1 workflow is missing explicit gate target directory '$directory'"
+    rc=1
+  fi
+  if [ -f "$release_wf" ] && ! grep -qF "$directory" "$release_wf"; then
+    log "FAIL: release workflow is missing explicit gate target directory '$directory'"
+    rc=1
+  fi
+done
 
 # --- Check that every declared dir is cached ---
 for dir in "${declared_dirs[@]}"; do
