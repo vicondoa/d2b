@@ -9,13 +9,19 @@
   endpoint operation sets, round-input eligibility, and protected-attempt
   audit ordering only as its new endpoint table, receipt lifetime,
   common base-or-conflict attempt identity for accepted attempts,
-  migration-conflict preflight, reconciliable acceptance prepare and
+  narrow original-peer-or-operator recovery reads, migration-conflict
+  preflight and its isolated bounded signal reserve, reconciliable acceptance
+  prepare and
   accepted-attempt journal, fenced worker and sink-generation recovery, replay
   result, outbox, immutable permanent replay tombstones, append-only
   payload-eviction markers, durable sink reservation, idempotent append,
-  recovery-capacity reserve, exclusive migration execution capacity,
-  exhaustive protected attempt recovery and pending status, and re-entrant
-  online capacity-migration rules specify; and
+  exact redacted completion and append-refusal products,
+  recovery-capacity reserve with serialized plan-id binding, exclusive
+  migration execution capacity with a sealed migration-control reserve,
+  exhaustive protected attempt recovery and pending status,
+  migration-specific no-append audit repair, generic conversion from the exact
+  sink-acknowledgement-pending tuple, and re-entrant online
+  capacity-migration rules specify; and
   D21's rejection of a four-level
   severity contract, per-seat `held` and `prior_resolutions` state, rotation,
   and clean-break refusal to read or admit an earlier schema. It
@@ -28,9 +34,11 @@
   standalone producer without requiring Gas City, while same-uid repository
   helpers remain proposal-only. Its closed endpoint table adds
   candidate-bound reviewer, protected implementation-assignment issuance,
-  exact-origin completion, least-authority issue-reader and protected
-  attempt-status endpoints, while protected-operator-only assignment
-  revocation and attempt resume and fencing stay on the operator endpoint. It
+  exact-origin completion, exact-origin replacement-assignment issuance,
+  least-authority issue-reader, protected attempt-status and narrow
+  recovery-read endpoints, while protected-operator-only assignment
+  revocation, migration repair, and attempt resume and fencing stay on the
+  operator endpoint. It
   assigns lifecycle, ledger proposal and correction, implementation-assignment
   issue, completion and revocation, severity, risk, inspection, recovery
   status and online capacity migration, publication, merge-completion and
