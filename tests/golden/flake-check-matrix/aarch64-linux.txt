@@ -1,11 +1,10 @@
-# Flake-check pin: full names of flake.checks.x86_64-linux.*.
+# Flake-check pin: full names of flake.checks.aarch64-linux.*.
 # The hosted-runner dynamic matrix may intentionally filter this set.
 # Regenerate with: make flake-matrix-pin
 broker-host-artifact-contract
 broker-production-dependency-policy
 broker-production-package-policy
 eval-fixture-contracts
-eval-graphics
 eval-minimal
 eval-multi-env
 eval-multi-env-daemon
