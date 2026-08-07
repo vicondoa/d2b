@@ -2288,6 +2288,7 @@ mod fresh_bootstrap_tests {
     struct FakeFreshExecutor {
         fail: bool,
         calls: usize,
+        mutate_root: Option<PathBuf>,
     }
 
     impl FreshBootstrapExecutor for FakeFreshExecutor {
@@ -2299,6 +2300,9 @@ mod fresh_bootstrap_tests {
             self.calls += 1;
             if self.fail {
                 return Ok(Command::new("false").status()?);
+            }
+            if let Some(root) = &self.mutate_root {
+                fs::write(root.join("MODULE.bazel"), b"unexpected mutation")?;
             }
             fs::write(
                 workspace.join(format!("bazel/cargo/{hub}.lock")),
@@ -2338,6 +2342,7 @@ mod fresh_bootstrap_tests {
         let mut executor = FakeFreshExecutor {
             fail: false,
             calls: 0,
+            mutate_root: None,
         };
         assert_eq!(
             bazel_repin_with_fresh_executor(
@@ -2367,11 +2372,31 @@ mod fresh_bootstrap_tests {
     }
 
     #[test]
+    fn routed_bootstrap_refuses_an_unrelated_content_mutation() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: Some(root.clone()),
+        };
+        let error = bazel_repin_with_fresh_executor(
+            &["--hub".into(), "product".into()],
+            Some(root.clone()),
+            &mut executor,
+        )
+        .expect_err("unrelated mutation");
+        assert!(error.to_string().contains("D2B-BZL-UNEXPECTED-MUTATION"));
+        assert_eq!(executor.calls, 1);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn failed_bootstrap_releases_guard_for_retry() {
         let root = bootstrap_fixture();
         let mut executor = FakeFreshExecutor {
             fail: true,
             calls: 0,
+            mutate_root: None,
         };
         assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
         assert!(!root.join("bazel/cargo/product.lock").exists());
@@ -2389,6 +2414,7 @@ mod fresh_bootstrap_tests {
         let mut executor = FakeFreshExecutor {
             fail: false,
             calls: 0,
+            mutate_root: None,
         };
         assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
         assert_eq!(executor.calls, 0);
