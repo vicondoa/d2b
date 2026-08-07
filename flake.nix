@@ -961,7 +961,7 @@
               dynamic_error="$TMPDIR/dynamic-error"
               ${pkgs.binutils.bintools}/bin/readelf -h "$binary" > "$header" \
                 || fail D2B-BZLARTIFACT-LINKAGE
-              grep -Fq "Machine: ${expectedMachine}" "$header" \
+              grep -Eq "^[[:space:]]*Machine:[[:space:]]+${expectedMachine}$" "$header" \
                 || fail D2B-BZLARTIFACT-LINKAGE
               printf '%s\n' ${lib.escapeShellArg expectedE} > "$TMPDIR/expected-e-machine"
               # Guest artifacts are ET_DYN static PIE and have no PT_INTERP or DT_NEEDED.
