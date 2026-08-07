@@ -2015,6 +2015,7 @@ esac
         for relative in (
             "packages/Cargo.toml",
             "packages/Cargo.lock",
+            "packages/Cargo.guest.lock",
             "packages/deny.toml",
             "packages/d2b-priv-broker/Cargo.toml",
             "packages/d2b-priv-broker/Cargo.lock",
