@@ -5,30 +5,38 @@
 - Proposed partial supersession: [ADR 0055](0055-discover-fix-verify-panel-review.md)
   replaces D7's open-ended review and fix loop and own-findings-only payload;
   D8's undifferentiated blocking treatment of recommendations in an isolated
-  final set; D9's publication refusal while any finding stands; and D21's
-  rejection of a four-level severity contract, per-seat `held` and
-  `prior_resolutions` state, rotation, and clean-break refusal to read or admit
-  an earlier schema. It substitutes one native discovery panel, a shared
-  deduplicated ledger, batch implementation, constrained verification, and an
-  automatic version-dispatched compatibility import that preserves completed
-  legacy review and fix progress. It also narrowly extends D7's operator
-  endpoint and D17's closed operator-operation surface with distinct protected
-  `AcceptMajorRisk` and `RevokeMajorRiskAcceptance` operations; neither is an
-  approval decision or reachable from the orchestrator endpoint. It also
-  narrowly supersedes D21's closed twelve-role pool and version 1 table with a
-  closed thirteen-role pool and version 2 table by adding optional `build`, the
-  Bazel and build-systems expert. D21's seven mandatory seats, ten-seat
-  code-operative floor, eight-seat documentation-only floor,
-  select-every-trigger rule, conservative surface classifier, profiles,
-  deterministic roster mechanics, pinned reviewer identity and digest-bound
-  evidence remain in force. The standard Copilot skill is the first producer
-  and owns no second selector: one repository-owned machine-readable table
-  generates its roster manifest, per-seat artifacts and human guidance. Gas
-  City is not implemented; its future controller must consume the same table,
-  change-surface schema, roster-manifest schema and per-seat artifact contract,
-  and may add protected provenance without forking selection. Dependent
-  prototype and acceptance items change only where they assert the replaced
-  mechanics. ADR 0055 remains Proposed and is not effective until accepted and
+  final set; D9's publication refusal while any finding stands; D17's closed
+  endpoint operation sets and round-input eligibility rules only as its new
+  endpoint table and receipt lifetime specify; and D21's rejection of a
+  four-level severity contract, per-seat `held` and `prior_resolutions` state,
+  rotation, and clean-break refusal to read or admit an earlier schema. It
+  substitutes one native discovery panel, a shared deduplicated ledger, batch
+  implementation, constrained verification, and an automatic
+  version-dispatched compatibility import that preserves completed legacy
+  review and fix progress, including a same-scope successor for a partial
+  pinned round whose unavailable reviewer prevents completion. It reuses D7's
+  protected-principal panel-and-approval controller boundary for the
+  standalone producer without requiring Gas City, while same-uid repository
+  helpers remain proposal-only. Its closed endpoint table adds
+  candidate-bound reviewer and least-authority issue-reader endpoints and
+  assigns lifecycle, ledger proposal and correction, severity, risk,
+  inspection, status, publication, merge-completion and permanent-close
+  operations without exposing approval, risk or mapping mutation to the
+  orchestrator. It also narrowly supersedes D21's closed twelve-role pool and
+  version 1 table with a closed thirteen-role pool and version 2 table by
+  adding optional `build`, the Bazel and build-systems expert. D21's seven
+  mandatory seats, ten-seat code-operative floor, eight-seat
+  documentation-only floor, select-every-trigger rule, conservative surface
+  classifier, profiles, deterministic roster mechanics, pinned reviewer
+  identity and digest-bound evidence remain in force. The standard Copilot
+  skill is the first producer and owns no second selector: one
+  repository-owned machine-readable table generates proposed roster and
+  per-seat artifacts, and the protected authority validates and admits them.
+  Gas City is not implemented; its future controller must use the same
+  authority contract, table, change-surface schema, roster-manifest schema and
+  per-seat artifact contract without forking selection. Dependent prototype
+  and acceptance items change only where they assert the replaced mechanics.
+  ADR 0055 remains Proposed and is not effective until accepted and
   implemented; committed fixed ten-seat behavior remains current.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
