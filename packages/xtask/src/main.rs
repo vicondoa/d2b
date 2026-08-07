@@ -111,6 +111,7 @@ mod semantic_service_schemas;
 mod test_runtime_ledger;
 mod zone_schema;
 
+#[allow(dead_code)]
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 
@@ -789,6 +790,7 @@ fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
         .ok_or_else(|| "cannot locate repo root".into())
 }
 
+#[allow(dead_code)]
 fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let out_dir = repo_root
