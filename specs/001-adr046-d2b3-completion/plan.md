@@ -62,6 +62,17 @@ snapshot from P to Q, the B/P sign-off does not authorize T589. T589 remains blo
 the receipt-bound progress reconciliation passes and a fresh cross-artifact analysis plus
 unanimous plan review bind exact clean C/Q.
 
+**Current Wave 5 resume state:** at this amendment batch's committed input HEAD
+`67f0ba8e32c4f91ebfcb4038aff77821d42b64b1`, the feature root is pre-T603 A/P0.
+None of the 147 T603-authorized checkbox changes has occurred, so C/Q and the finalized
+progress-editor receipt are future artifacts and are not claimed or required by the current
+A/P0 analysis and plan-panel gate. That current gate requires the stated external
+prerequisites and T072 disposition and authorizes only T603's validator-and-fragment commit
+V. C/Q becomes a valid state only after the future V/B implementation, B/P gates,
+reconciliation authorization, authorized editor checkbox transition, dedicated commit C,
+and progress-receipt finalization. Only then does the fresh C/Q analysis and plan panel become
+the T589 dispatch gate.
+
 ## Technical Context
 
 **Language/Version**: Rust 1.94.1 (pinned via `packages/rust-toolchain.toml`, components
@@ -333,7 +344,7 @@ applies without modification.
 | W5 (`adr046w5` delivery address) | 7 | 146 + 17 local completion/resume tasks | 12 manifest groups + the serialized completion graph below | FR-036 external constitution amendment must disposition the unproven Wave 5 historical plan panel first; T072 disposition and fresh descendant-base A/P0 phase-plan review then gate T603, B/P phase-plan re-review follows V, and T220 may iterate nonbinding phase-plan fixes before final F. The retained Wave 5 binding delivery request consumed the once-per-wave request; T219 remains non-authorizing until accepted external disposition and cannot itself issue another. |
 | W6 | 27 | 258 | 5 file-disjoint families | FR-036 external constitution amendment first; T221 plan panel before implementation; T479 requires exact-F6 `Provider/runtime-cloud-hypervisor` Guest acceptance; T480 revalidates it before close |
 | W7 | 5 | 73 | 5 parallel | FR-036 external constitution amendment first; T481 plan panel before implementation; T555 work panel after convergence |
-| W8 | 0 | TBD | friction closure | FR-036 external constitution amendment first; T558 plan panel after triage and before implementation; T565 work panel after convergence |
+| W8 | 0 | determined by T557 at W7 close | friction closure | FR-036 external constitution amendment first; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
 #### W2-W6 host-continuity close gate
 
@@ -703,14 +714,17 @@ its own implementation:
 1. **Pre-validator authorization.** Freeze clean commit A and the exact 28-file feature
    snapshot P0. Run `/speckit-analyze` against the feature artifacts at A/P0. Only a receipt
    with no unresolved HIGH or CRITICAL finding may proceed to the unanimous
-   `/d2b-panel-round plan` review bound to A/P0. These receipts authorize only T603's two
-   source paths; they do not authorize a reconciliation receipt, checkbox edit, T589, or any
+   `/d2b-panel-round plan` review bound to A/P0. These receipts authorize only T603's three
+   owned paths; they do not authorize a reconciliation receipt, checkbox edit, T589, or any
    other Wave 5 implementation.
 2. **Validator implementation.** T603 changes exactly
-   `packages/xtask/src/delivery/{mod.rs,resume.rs}` and its tests within those files. It
-   writes no feature artifact, generated output, source elsewhere, or tracked evidence. The
-   integrator lands one dedicated validator commit V whose sole parent is A and whose diff is
-   limited to those paths.
+   `packages/xtask/src/delivery/{mod.rs,resume.rs}` and its tests within those files and
+   creates the mandatory unique fragment
+   `changelog.d/delivery-resume-reconciliation.md`. It writes no feature artifact, generated
+   output, source elsewhere, or tracked evidence. The integrator lands one dedicated
+   validator-and-fragment commit V whose sole parent is A and whose diff is limited to those
+   three paths. T603 validates the fragment at that exact path and leaves it unfolded; T220
+   alone folds it after later convergence, and no T220 action is a prerequisite of T603.
 3. **Post-validator authorization.** Freeze resume base B exactly at V and recompute feature
    snapshot P. P MUST be byte-identical to P0 because T603 has no feature-file ownership.
    Rerun `/speckit-analyze` over `A..B` plus the complete feature artifacts, then rerun
@@ -898,6 +912,8 @@ requires all fourteen, including T603's exact path, before it reconciles
 version/reference/test/schema treatment, then alone folds all fourteen into the shared
 changelog. T603 is an integrator-owned validator prerequisite, not a slice, and owns exactly
 three repository paths: its two Rust source files plus its mandatory unique fragment;
+T603 completes its fragment obligation by creating and validating that still-unfolded file;
+folding is exclusively T220's later convergence action and is not a T603 dependency.
 T600-T602 and T219 write only external evidence or delivery state, and T220 only folds. A
 missing, duplicate, differently named, or cross-owned fragment blocks both V and T220; prose
 that an amendment has release treatment is not a substitute.
