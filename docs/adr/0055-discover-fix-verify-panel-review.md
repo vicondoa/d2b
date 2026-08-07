@@ -10,17 +10,23 @@
   the separate protected `AcceptMajorRisk` and `RevokeMajorRiskAcceptance`
   operations; and D21's per-seat `held` and `prior_resolutions` state,
   rotation, rejection of a severity ladder, and clean-break refusal to read or
-  admit an earlier delivery schema. D21's controller-owned roster selection,
-  surface classifier, profile binding, reviewer identity, and candidate-bound
+  admit an earlier delivery schema. It also narrowly supersedes D21's closed
+  twelve-role pool and version 1 selection table with the closed thirteen-role
+  pool and version 2 table below, adding only optional `build`. D21's seven
+  mandatory seats, surface-dependent ten-seat and eight-seat floors,
+  select-every-trigger rule, conservative classifier, profile binding,
+  deterministic roster mechanics, reviewer identity, and candidate-bound
   evidence remain in force. D7's three peer-separated endpoints remain in
   force; the new risk operations exist only on the operator endpoint.
 - Related: [ADR 0048](0048-copilot-native-agent-surface.md), whose
   Copilot-native surface, independent read-only reviewers, pinned bindings,
   helper-assembled records, and staged evidence remain in force. This record
-  does not supersede ADR 0048.
-- Scope: Panel review lifecycle, finding and final-verdict semantics,
-  compatibility migration, review evidence, retention, and convergence
-  metrics.
+  does not supersede ADR 0048; and
+  [ADR 0052](0052-bazel-rust-build-and-test.md), whose Bazel build authority is
+  reviewed by the new `build` seat but is not changed here.
+- Scope: Panel pool and roster selection, producer ordering, panel review
+  lifecycle, finding and final-verdict semantics, compatibility migration,
+  review evidence, retention, and convergence metrics.
 - Non-scope: Implementing delivery tooling or changing contributor process
   documentation in this change.
 
@@ -43,8 +49,9 @@ The committed implementation is narrower than both records. At candidate
 ten-role roster, requires `signoff == recommendations.is_empty()`, and admits
 only a unanimous set with no recommendations. `PanelRecord.recommendations`
 contains arbitrary strings with no issue id or severity. That passing code is
-the current behavior. This Proposed record decides a replacement target; it
-does not describe the target as shipped.
+the current behavior. Gas City is not implemented. This Proposed record
+decides a replacement target and its implementation order; neither the
+thirteen-role roster nor the Gas City producer is described as shipped.
 
 The replacement must not strand a panel already in flight at cutover. An old
 complete round and its fixes are completed work, not debris. Compatibility
@@ -59,6 +66,115 @@ and the rule that green tests never waive review. It changes where discovery
 ends, how findings are accounted for, and how old work enters that lifecycle.
 
 ## Decision
+
+### Panel pool, selection guidance, and producer order
+
+This section is the complete narrow supersession of ADR 0053 D21's pool and
+selection table. It does not change D21's substantive remit for an existing
+seat. The closed pool has thirteen seats:
+
+| Class | Seats |
+| --- | --- |
+| Mandatory, on every panel | `software`, `test`, `product`, `docs`, `security`, `observability`, `simplicity` |
+| Optional, selected by trigger or floor fill | `reliability`, `agentic`, `nixos`, `networking`, `kernel`, `build` |
+
+`build` is the single canonical lowercase seat name. It is the Bazel and
+build-systems expert, not a Bazel-only reviewer. Like every other optional
+seat, it is subject to the same candidate binding, pinned reviewer identity,
+lifecycle-roster continuity, deterministic selection reasons, per-seat payload
+digest, and final-roster unanimity rules.
+
+The code or operative-configuration floor remains ten seats: all seven
+mandatory seats and at least three optional seats. The documentation-only
+floor remains eight seats: all seven mandatory seats and at least one optional
+seat. Every optional trigger that fires selects its seat even when the floor
+is already met. The version 2 floor-fill order is
+`reliability`, `agentic`, `nixos`, `networking`, `kernel`, `build`. Appending
+`build` preserves D21's existing fill outcome when no build rule fires. A
+triggered `build` counts toward the floor; it is never displaced by an earlier
+fill seat. Ambiguous classification or matching selects the wider result. An
+over-bound surface selects all thirteen seats and every software profile, then
+retains D21's separate refusal at seal and publication.
+
+Selection is derived from one bounded change surface. It contains both sides
+of every rename, every added and deleted path, added and deleted changed
+lines, and controller or harness facts such as the current interpreter,
+recognized continuous-integration job kind, and generated-artifact kind.
+Path rules inspect both rename sides. Content rules inspect added and deleted
+lines. Except for the explicit normative build-contract rule below, content
+rules run only on paths classified code or operative under D21. An undecidable
+fact over-selects; it never removes a seat.
+
+The following is the normative human selection guidance. Focus text tells an
+always-selected seat what to examine; it is not a relevance escape hatch.
+Optional rows are selected when any listed rule matches.
+
+| Seat | Class | Focus | When selected |
+| --- | --- | --- | --- |
+| `software` | Mandatory | Correctness-first control-flow review, error propagation, structure, local conventions, and measured performance. Apply every controller-bound Rust, Python, shell, and Nix profile. The Rust profile retains unsafe, FFI, public API, Cargo SemVer, and workspace dependency-direction depth; build-graph mechanics belong to `build`. | Always. Changed paths and interpreter facts bind all applicable language profiles, including every profile on a mixed-language diff; they never remove the seat. |
+| `test` | Mandatory | Coverage of new behavior and failure paths, invisible regression risk, planted negatives, gate placement, and whether cited validation actually proves the change. | Always. Use the staged change surface and validation evidence to decide which behaviors and companions require scrutiny. |
+| `product` | Mandatory | Scope and gap analysis, CLI and exit-code behavior, external wire and artifact contracts, schema and version discipline, and operator migration and upgrade experience. | Always. A controller-bound product profile may add contract-specific scope but cannot remove the seat. |
+| `docs` | Mandatory | Diataxis placement, changelog and ADR-index coverage, prose-to-schema drift, process-marker and ASCII-dash rules, intra-document coherence, terminology, ambiguity, and links. | Always. Review documentation impact even when no documentation file changed. |
+| `security` | Mandatory | Adversarial review of capability and authorization boundaries, privilege separation, sandboxing, secrets and PII, audit shape, and concrete exploit paths under a stated attacker model. | Always. Security-sensitive paths or facts deepen the review; they do not control selection. |
+| `observability` | Mandatory | Metric label cardinality, span attributes, log and audit shape, retention, redaction, exporter behavior, and whether failure remains diagnosable. | Always. Review both changed telemetry and observability lost or required by other changes. |
+| `simplicity` | Mandatory | The smallest maintainable code and decision surface, reuse rather than reinvention, deletion where it lowers risk, and avoidance of duplicated contracts, dependency sprawl, or complexity laundering. | Always. Apply the code lens to implementations and the artifact lens to ADRs, specifications, and plans. |
+| `reliability` | Optional | Resource ownership and cleanup on error or crash, restart and adoption, idempotency, cross-component ordering and concurrency, partial failure, degraded state, and on-disk migration. | Select on D21's `reliability-paths` or `reliability-tokens`: delivery, daemon, broker, resource-store, store, lifecycle, state, session, shutdown, restart, pool, adopt, lock, lease, sync, reconcile, supervisor, or cleanup paths; or operative changed lines involving `Drop for`, spawned tasks or threads, synchronization or atomics, unwind handling, rename and fsync durability, temporary-file publication, schema versioning, `deny_unknown_fields`, or `EBUSY`. |
+| `agentic` | Optional | Copilot agents, instructions, prompts, skills, context construction, Gas City formulas and packs, orchestration durability and handoffs, and replacement of prompt-only assurances with mechanical gates. | Select on D21's `agentic-paths`, extended in version 2 for this contract: `.github/agents/**`, prompts, instructions, skills and Copilot instructions; `scripts/copilot/**`; `.gc/**`; any `AGENTS.md`; formula, pack, or prompt-template files; the Copilot and panel contributor pages; ADR 0053 and its prompt-source contract; and ADR 0055. |
+| `nixos` | Optional | NixOS module declarations and types, merge priority and `mkDefault` or `mkForce` semantics, assertions, RFC 42 option structure, activation ordering, and the three-root-unit invariant. General Nix expression quality stays with `software`. | Select on D21's `nix-sources`: any `.nix` path, `flake.lock`, or a change under `nixos-modules/**`, `nix/**`, `pkgs/**`, `templates/**`, or `examples/**`, using both sides of a rename. |
+| `networking` | Optional | Bridge isolation, firewall posture, DHCP and DNS, routing and MTU or MSS invariants, socket exposure, and coexistence with host networking. | Select on D21's `net-paths` or `net-tokens`: network modules and provider, routing, realm-router or transport paths; basenames naming firewall, nftables, bridge, vsock, DHCP, DNS, resolver, route, interface name, egress, MTU, or NetworkManager; or operative changed lines naming the D21 socket, address, bind, listen, route, NAT, forwarding, resolver, gateway, MTU, MSS, or netlink token set. |
+| `kernel` | Optional | Syscall and kernel-interface semantics, pidfd, cgroup v2, namespaces, mounts, signals, ioctl and filesystem behavior, errno handling, and kernel-version assumptions. | Select on D21's `kernel-paths` or `kernel-tokens`: minijail, privileged-broker, or guest-shell-runner paths; or operative changed lines naming pidfd, cgroup, namespace, seccomp, ioctl, `openat2`, resolution or mount flags, procfs, cgroupfs, signals, close-on-exec, locks, mounts, `statx`, `renameat2`, or the D21 errno set. |
+| `build` | Optional | Bazel and build systems: build graphs, scheduler and orchestration behavior, toolchains and target triples, hermeticity, runfiles, sandboxes, cross-target builds, local and remote cache boundaries, remote execution, dependency authority, continuous-integration scheduling, and packaging or build integration. | Select when any version 2 `build-*` rule matches: Bazel files or Starlark (`BUILD`, `BUILD.bazel`, `MODULE.bazel`, `MODULE.bazel.lock`, `WORKSPACE*`, `.bzl`, `.bazelrc`, and registered Bazel module, lock, registry, repository, or vendor surfaces); Make targets or build scheduler and orchestration paths; a harness-derived continuous-integration job fact for a changed job that builds, tests, packages, or publishes; toolchain files, target triples, cross-compilation, Cargo, Bazel, or Nix build-authority and integration paths; runfiles, build sandbox, cache, or remote-execution paths or operative changed-line tokens; dependency-hub or lock generation; packaging, release, or artifact-production paths and facts; or a registered normative ADR, specification, or operative-doc build contract. |
+
+The `build` contract rule is deliberately narrower than a prose search. The
+table registers eligible build-contract paths and marked regions, initially
+the build decisions in ADR 0052 and this section of ADR 0055 plus their
+registered specification surfaces. Within one of those regions, or on another
+ADR or specification path, a changed added or deleted line selects `build`
+only when it contains both a versioned build-contract term and a versioned
+normative operator. A pure rename of a registered build-contract path also
+selects it. Operative documentation uses the ordinary code-operative content
+rule. Path eligibility alone does not select the seat, and a bare mention or
+link containing `Bazel` in non-operative prose does not select it. Deletion
+and rename cases use the same inputs as additions, so deleting a normative
+build contract or renaming a Bazel file cannot evade the seat.
+
+There is one machine-readable authority:
+`.github/skills/d2b-panel-round/selection-table.json`. Version 2 contains the
+pool, classes, floors, fill order, bounds, profiles, exact trigger operands,
+fact enums, registered normative paths, and the human guidance rows above.
+The table is data, not a second implementation hidden in a script. The
+rendered selection-guidance block in
+`.github/skills/d2b-panel-round/SKILL.md` is generated from it or checked
+byte-for-byte against the same rendering. Agent files carry seat-specific
+rubrics; they never choose whether their seat is relevant.
+
+The standard Copilot skill is the first delivery target and the first
+producer. Repository-owned staging derives `change-surface.json` and the
+selected roster without a caller-supplied seat list. It writes a
+`roster-manifest.json` binding the table version and digest, candidate and
+lineage, surface and evidence digests, class, matched rules, selected roster,
+profiles, reviewer identities, and each generated per-seat review-artifact
+digest. Dispatch iterates exactly that manifest and only its selected seats.
+The operator, user, and orchestrating agent have no input that can omit a
+triggered seat, replace the roster with a smaller one, or hand-author a
+per-seat artifact. The orchestrator still synthesizes the shared issue ledger
+and assigns stable `R` identifiers under section 4; selection tooling does not
+assign issue ids.
+
+For the standard skill, the repository-owned staging and delivery helpers are
+the lifecycle and selection authority named `controller` in the sections
+below. They derive identifiers and bindings from admitted repository evidence;
+the interactive orchestrating agent cannot assert them. A future Gas City
+controller assumes the same authority role without changing the artifacts or
+selection result.
+
+Gas City remains deferred and is not a current producer. Its future controller
+must consume the same table bytes, change-surface schema, roster-manifest
+schema, and generated per-seat artifact contract. It may wrap dispatch in
+protected provenance, but it may neither fork a rule nor produce a different
+core roster or core artifact for identical inputs. The standard skill does not
+wait for Gas City, and no Gas City implementation is part of the first
+delivery.
 
 ### 1. Lifecycle, lineage, scope, and candidate identity are controller-owned
 
@@ -102,10 +218,11 @@ implementation.
 
 ### 2. Native discovery is comprehensive, parallel, and exhaustive
 
-The controller selects the discovery roster under ADR 0053 D21. Every selected
-reviewer receives the full candidate, immutable staged evidence and digests,
-applicable validation evidence, its controller-bound profile, and read-only
-repository context.
+The controller selects the discovery roster under ADR 0053 D21 as narrowly
+superseded by the pool and version 2 table above. Every selected reviewer
+receives the full candidate, immutable staged evidence and digests, applicable
+validation evidence, its controller-bound profile, and read-only repository
+context.
 
 Every discovery prompt MUST state all of the following:
 
@@ -544,9 +661,9 @@ nonblocking MINOR or NIT remain visible in the ledger but are not copied into
 blocking recommendations.
 
 Discovery output is evidence, not approval. Final verification remains
-unanimous over the monotonic lifecycle roster selected under ADR 0053 D21.
-Newly selected specialists join verification; no discovery reviewer rotates
-out.
+unanimous over the monotonic lifecycle roster selected under ADR 0053 D21 as
+narrowly superseded by the pool and version 2 table above. Newly selected
+specialists join verification; no discovery reviewer rotates out.
 
 The controller mints a `PanelLifecycleApprovalReceipt` only for `signed_off`.
 It binds the final candidate, scope and lineage, every roster and trusted
@@ -829,19 +946,32 @@ bypassing a gate.
 This ADR does not implement the process. The implementation must update, at
 minimum:
 
+- `.github/skills/d2b-panel-round/selection-table.json` as the sole version 2
+  selection authority, with generated or byte-checked human guidance in the
+  panel skill;
+- the standard Copilot panel staging and dispatch path first, so it derives
+  the change surface, roster manifest and per-seat artifacts and dispatches
+  only the manifest roster without a manual omission surface;
 - `packages/xtask/src/delivery/` for lifecycle, lineage, scope, severity,
   source, ledger, correction, disposition, judgment, acceptance, migration,
-  retention, terminal metric, receipt, seal, and typed remedy contracts;
+  retention, terminal metric, receipt, seal, shared selection-artifact
+  validation, and typed remedy contracts;
 - `.github/skills/d2b-panel-round/` for automatic discovery, compatibility,
   verification, and artifact generation;
 - panel and integrator agents plus `scripts/copilot/check-bindings.mjs` for
-  exhaustive discovery and constrained verification without weakening
-  read-only bindings;
-- Gas City formulas and ADR 0053's controller for protected operations,
-  authority resolution, automatic import, retention, and audit;
+  the closed thirteen-seat pool, including `panel-build`, exhaustive discovery
+  and constrained verification without weakening read-only bindings;
 - generated schemas and fixtures for every new closed type; and
 - contributor and delivery documentation only when implementation lands, so
   current docs continue to describe current behavior until then.
+
+The first delivery is atomic across the standard skill, table, schemas,
+bindings, agents, staging, dispatch and verifier. Until that cutover completes,
+the committed fixed ten-seat behavior remains current. Gas City formulas and
+ADR 0053's controller are a later delivery because Gas City is not implemented.
+That later delivery adds protected operations, authority resolution, automatic
+import, retention and audit around the already-shipped common artifacts; it
+does not add another selector.
 
 The implementation maintains a machine-readable catalog of every invariant
 and refusal in this record. Each catalog row names:
@@ -857,6 +987,48 @@ Coverage fails when a catalog row, positive, or planted negative is missing,
 when the corpus is empty, or when a planted negative is accepted. At minimum,
 the corpus separately exercises:
 
+- exact version 2 table integrity: all seven mandatory seats, all six optional
+  seats including `build`, the ten-seat and eight-seat floors, the appended
+  fill order, every-trigger selection beyond either floor, candidate binding,
+  selected-reviewer identity, and order-independent byte-identical selection;
+- positive `build` selection for Bazel and Starlark files, module and lock
+  files, registered vendor surfaces, build orchestration and Make targets,
+  build, test and package continuous-integration jobs, toolchains and target
+  triples, Cargo, Bazel and Nix authority or integration, runfiles, sandboxes,
+  cache and remote execution, dependency hub and lock generation,
+  cross-compilation, packaging and release artifact production, and normative
+  build-contract changes;
+- planted citation-only negatives where `Bazel` appears in non-operative
+  prose, plus positive and planted-negative pairs for both rename sides,
+  deleted Bazel paths, deleted build-token lines and deleted normative
+  build-contract lines;
+- mixed Rust, shell, Nix and build-system diffs that bind every applicable
+  software profile and select `build`, without letting a profile select a seat
+  or letting `build` replace `software`, `test`, `product`, or `nixos`;
+- code and documentation floor-fill fixtures with no build trigger, with a
+  build trigger below the floor, and with a build trigger after the floor is
+  already met; the exact roster is asserted in every case and every fired
+  optional remains selected;
+- ambiguity and both over-bound limits, with the wider bounded result and the
+  exact all-thirteen over-bound roster asserted before the separate seal and
+  publication refusals;
+- standard-skill staging that writes a candidate- and table-digest-bound
+  roster manifest and all selected per-seat artifacts, dispatches every and
+  only selected seat, and rejects a caller-supplied smaller roster, a removed
+  triggered seat, a substituted reviewer identity, a stale artifact, a
+  hand-edited per-seat artifact, and a manifest or dispatch disagreement;
+- generated or byte-identical selection guidance in `SKILL.md` covering every
+  seat, and a planted agent or skill rule that attempts to self-select or
+  carries guidance that drifts from the table;
+- the first panel fix round after discovery with the same generated ledger,
+  orchestrator-assigned `R` ids, scoped batch fix, verification obligations
+  and final unanimity as the lifecycle sections above; selection staging may
+  change its roster and artifacts but may not skip or restart that round;
+- a reusable identical-input parity fixture for the future Gas City consumer.
+  When Gas City lands, its controller and the standard skill must produce
+  byte-identical core change surfaces, roster manifests and per-seat artifacts
+  for that fixture; a forked rule, smaller roster, reordered core artifact or
+  provenance field inserted into the core schema is a planted failure;
 - one native discovery and refusal of a second;
 - automatic complete ledger generation, duplicate grouping, split, merge, and
   idempotent retry;
@@ -894,15 +1066,9 @@ Fixture-contract coverage is cited from the separate enforcing
 surfaces. An applicability record that omits one of those affected companions
 is incomplete and blocks the receipt.
 
-The ADR index coverage gate remains required. Evidence supplied for this
-revision is:
-
-```
-make test-adr-index-coverage
-PASS: 53 ADR files indexed in README.md
-```
-
-That authoring evidence does not satisfy any future implementation obligation.
+The ADR index coverage gate remains required for this record. Authoring
+validation is recorded in panel evidence and does not satisfy any future
+implementation obligation.
 
 ## Consequences
 
@@ -915,6 +1081,21 @@ The initial panel becomes more demanding. Exhaustiveness cannot be proven.
 Explicit prompts, complete raw-output retention, no truncation, late-finding
 metrics, and the late ledger make misses visible rather than pretending they
 cannot happen.
+
+Build-system changes gain an optional specialist without raising either
+minimum floor. The concrete new failure is a harmless-looking scheduler,
+runfiles, cache, cross-target, dependency-authority, or packaging edit reaching
+the ordinary software and test seats without anyone reviewing the build graph
+that gives it effect. Version 2 build triggers and exact-roster fixtures catch
+that omission. The opposite failure, selecting `build` for a prose citation,
+is bounded by the registered-contract and normative-operator rule and its
+planted negatives.
+
+Shipping the standard skill first creates one usable implementation rather
+than waiting for an absent Gas City. The concrete drift risk is a later Gas
+City controller returning a different roster for the same candidate. Shared
+table bytes, shared schemas, byte-identical core artifacts and the
+identical-input parity fixture make that fork mechanically visible.
 
 The shared ledger and dedup corrections add controller state. Two defects can
 be merged incorrectly or one defect split twice. Immutable sources,
@@ -978,6 +1159,20 @@ reporting seats alone authorize severity correction.
 
 Rejected. Duplicate reports become duplicate obligations with contradictory
 state. One ledger retains every source and reporting-seat obligation.
+
+### Make the new seat Bazel-only
+
+Rejected. Bazel behavior depends on the build graph, toolchains, runfiles,
+cache and remote-execution boundaries, cross-target scheduling, dependency
+authority, and packaging integration around it. A Bazel-only charter would
+split one causal system across seats and miss failures at those seams.
+
+### Let each producer or operator choose its roster
+
+Rejected. Manual relevance turns a triggered specialist into an optional cost
+and gives the future Gas City path a second rule set. One versioned table,
+generated manifests and exact dispatch remove the smaller-roster input while
+leaving issue synthesis and `R` id assignment with the orchestrator.
 
 ### Permit every late finding indefinitely
 

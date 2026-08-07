@@ -14,11 +14,22 @@
   legacy review and fix progress. It also narrowly extends D7's operator
   endpoint and D17's closed operator-operation surface with distinct protected
   `AcceptMajorRisk` and `RevokeMajorRiskAcceptance` operations; neither is an
-  approval decision or reachable from the orchestrator endpoint. D21's
-  controller-owned roster selection, surface classifier, profiles, pinned
-  reviewer identity, and digest-bound evidence remain in force. Dependent
+  approval decision or reachable from the orchestrator endpoint. It also
+  narrowly supersedes D21's closed twelve-role pool and version 1 table with a
+  closed thirteen-role pool and version 2 table by adding optional `build`, the
+  Bazel and build-systems expert. D21's seven mandatory seats, ten-seat
+  code-operative floor, eight-seat documentation-only floor,
+  select-every-trigger rule, conservative surface classifier, profiles,
+  deterministic roster mechanics, pinned reviewer identity and digest-bound
+  evidence remain in force. The standard Copilot skill is the first producer
+  and owns no second selector: one repository-owned machine-readable table
+  generates its roster manifest, per-seat artifacts and human guidance. Gas
+  City is not implemented; its future controller must consume the same table,
+  change-surface schema, roster-manifest schema and per-seat artifact contract,
+  and may add protected provenance without forking selection. Dependent
   prototype and acceptance items change only where they assert the replaced
-  mechanics. ADR 0055 is not effective until accepted.
+  mechanics. ADR 0055 remains Proposed and is not effective until accepted and
+  implemented; committed fixed ten-seat behavior remains current.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
   every optional seat a deterministic trigger table selects, under a
