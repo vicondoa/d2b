@@ -619,7 +619,7 @@ fn fresh_hub_bootstrap(
     if let Err(error) = generated {
         return Err(error);
     }
-    Ok(Some(result.expect("generated output has an installation result")?))
+    Ok(result.expect("generated output has an installation result"))
 }
 
 fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
