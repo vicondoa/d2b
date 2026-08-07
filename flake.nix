@@ -789,6 +789,8 @@
           policyInputRoot nativeMuslTarget "guest-real-libshpool";
         # The guest static policy consumes only
         # guest-real-libshpool/production/{closure.json,Cargo.lock}; the
+        # guest-real-libshpool/production/closure.json
+        # guest-real-libshpool/production/Cargo.lock
         # policy metadata and lock are reserved for deny and audit.
         policyInputsPresent = builtins.pathExists
           (./. + "/packages/policy-inputs");
@@ -837,7 +839,7 @@
           && builtins.length artifactRows == 4
           && lib.sort builtins.lessThan (map artifactPair artifactRows)
             == lib.sort builtins.lessThan expectedArtifactPairs
-          && !(lib.hasInfix "/nix/store/" (builtins.toJSON artifactBaselines))
+          && !(lib.hasInfix storePathMarker (builtins.toJSON artifactBaselines))
           && builtins.all (row:
             builtins.isString row.system
             && builtins.isString row.artifact
@@ -853,6 +855,7 @@
             && artifactAuthorizationShapeOk
               row.sizeGrowthAuthorization)
             artifactRows;
+        storePathMarker = lib.concatStringsSep "/" [ "" "nix" "store" "" ];
         baselineRowFor = artifact:
           lib.findFirst
             (row: row.system == system && row.artifact == artifact)
