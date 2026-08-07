@@ -61,7 +61,7 @@ this program is trying to avoid. Reference, never paraphrase.
 
 ## Wave gate tasks
 
-Every wave carries two distinct panel surfaces. Before implementation dispatch,
+Prospective wave delivery carries two distinct panel surfaces. Before implementation dispatch,
 `/d2b-panel-round plan` must return all ten role records against one exact implementation base
 and feature snapshot, each with `signoff: true` and no recommendations. The same nonbinding
 phase surface handles integrated-candidate finding-fix rounds and may iterate, with
@@ -71,6 +71,15 @@ Only that final immutable candidate may receive the wave's exactly one binding
 cannot be followed by a second binding request for the same or a successor candidate. A
 work-panel receipt is never entry plan-review evidence. Gate tasks are numbered inline with
 the wave they enter or close; these requirements add no task IDs.
+
+W2-W4 are not prospective delivery: external delivery state reports them sealed and merged.
+Their remaining open gate tasks verify/adjudicate that history only and cannot rerun a phase
+or binding panel, create a candidate, attest, seal, or merge. Each requires exact external
+delivery-record confirmation or an accepted external correction. Wave 5 is also exceptional:
+its retained pre-amendment `panel-request.json` consumed the once-per-wave binding request.
+Nonbinding `/d2b-panel-round plan` phase rounds create no delivery request or reservation and
+cannot replace that record. T219 remains non-authorizing until an accepted external
+delivery-contract/tooling disposition expressly resolves the retained request.
 
 **Program-wide external constitution prerequisite (FR-036, open)**: every numbered task and
 every dependency statement below is subordinate to a separately accepted amendment to
@@ -97,40 +106,44 @@ that check's discovery/build recipe in `Makefile`. Its positive case proves fres
 adoption of the original runner; its negative cases inject PID reuse, pidfd/start-identity
 mismatch, and multiple plausible runners and require quarantine with no adoption, signal, or
 cleanup against an unproven process.
-T029, T036, T071, T219, and T480 MUST revalidate that result before panel request, seal,
-merge eligibility, and merge. F2/F3/F4 each carry exactly one candidate-bound `local-host`
-`EvidenceRecord.validation = "pre-adr046-host-continuity"` result; W5 folds the result into the existing
-`operator-nix-activation-cleanup` record; W6 folds it into the existing
+T029, T036, and T071 MUST reopen that result only while verifying the external historical
+close records; they do not rerun it or use it to authorize another panel, seal, or merge.
+T219 revalidates the W5 result only as a precondition to an externally authorized close
+action, and T480 revalidates W6's prospective result before panel request, seal, merge
+eligibility, and merge. Historical F2/F3/F4 records must each contain exactly one
+candidate-bound `local-host`
+`EvidenceRecord.validation = "pre-adr046-host-continuity"` result; W5 folds the result into
+the existing `operator-nix-activation-cleanup` record; W6 folds it into the existing
 `w6-cloud-hypervisor-guest-acceptance` record. Missing, duplicate, empty, skipped,
 wrong-candidate, stale, status-only, private-hook, missing Ready/Stopped, non-fresh-pidfd,
-incomplete unit enumeration, or nonexecuted evidence leaves the corresponding close task
-unchecked. Passing evidence names the exact enumerated and built attr, records command
-success, and contains no `SKIP` result. This adds no task ID and no W5 evidence identifier.
+incomplete unit enumeration, or nonexecuted historical W2-W4 evidence requires external
+correction and leaves adjudication unchecked; it does not schedule a replacement close.
+The same defects block any externally authorized W5 action and W6's prospective close.
+Passing evidence names the exact enumerated and built attr, records command success, and
+contains no `SKIP` result. This adds no task ID and no W5 evidence identifier.
 
 For prospective W6-W8, the entry tasks refuse the first implementation dispatch until the
-plan receipt validates. For already-dispatched W2-W5, no contemporaneous plan-panel receipt
-is cited by these feature artifacts; historical plan-review compliance is unproven. T008,
-T030, T037, and T072 may be checked only by exact retained evidence from the applicable
-first-dispatch base. Otherwise, after FR-036's external amendment expressly dispositions the
-gap and is accepted, and before any further implementation,
-convergence-fix, or panel-fix lane, run a current unanimous plan panel and record the
-wave-specific `w2-plan-review-remediation`, `w3-plan-review-remediation`, or
-`w4-plan-review-remediation` receipt; Wave 5 uses the T603 A/P0 and B/P plan-panel chain after
-its separate `historical-entry-remediation-t072` disposition. Current receipts can guard
-future dispatch only after the external amendment, leave the historical task unchecked, and
-do not rewrite the missed boundary. The corresponding close task
-requires exactly one historical or remedial plan-review disposition and verifies that every
-later implementation head descends from the reviewed base and that the reviewed feature
-snapshot is current; a base or feature change requires another plan review.
+plan receipt validates. For already-delivered W2-W4 and already-dispatched W5, no
+contemporaneous plan-panel receipt is cited by these feature artifacts; historical plan-review
+compliance is unproven. T008, T030, T037, and T072 may be checked only by exact retained
+evidence from the applicable first-dispatch base. W2-W4 do not run remedial plan panels:
+their remaining tasks require exact external delivery-record confirmation or an accepted
+external correction and remain historical verification/adjudication only.
 
-Every ADR046 `SINGLE BINDING WORK GATE` below permits exactly one binding delivery-panel
-request per wave. Before that request, provisional candidates may be replaced, validation may
-be refreshed, and scoped findings may iterate through delta/full-context
-`/d2b-panel-round plan` phase reviews. The final unanimous phase result selects the immutable
-candidate. The binding request pins its exact commit, tree, candidate, request digest, and
-round address. A content change, evidence rewrite, history-only rebase, same-candidate retry,
-or alternate-candidate request after that point is refused at panel-attest, seal, and
-merge-eligibility.
+Wave 5 uses the T603 A/P0 and B/P nonbinding phase-plan chain after its separate
+`historical-entry-remediation-t072` disposition. Those current receipts leave T072 unchecked,
+do not rewrite the missed boundary, create no delivery `panel-request.json` or reservation,
+and cannot dispose the retained binding request. T219 separately requires accepted external
+disposition of that consumed request.
+
+Prospective ADR046 `SINGLE BINDING WORK GATE` tasks beginning with W6 permit exactly one
+binding delivery-panel request per wave. Before that request, provisional candidates may be
+replaced, validation may be refreshed, and scoped findings may iterate through
+delta/full-context `/d2b-panel-round plan` phase reviews. The final unanimous phase result
+selects the immutable candidate. The binding request pins its exact commit, tree, candidate,
+request digest, and round address. A content change, evidence rewrite, history-only rebase,
+same-candidate retry, or alternate-candidate request after that point is refused at
+panel-attest, seal, and merge-eligibility.
 
 A nonunanimous binding result is the failed wave close, not another fix-round input. Preserve
 its request, findings, and records, issue no second binding request for any candidate, and stop
@@ -143,11 +156,11 @@ the historical W2 entry attestation for versioned feature-local contract
 `adr046-candidate-recovery-prerequisite/v1` in `contracts/README.md`: the coordinated external
 ADR/index, validation/delivery spec and generated manifests, delivery tooling, `AGENTS.md`,
 and contributor guidance had to be ancestors of the actual W2 entry base. The unchecked T008
-state cannot now authorize work that was already dispatched. W2-W4 use the accepted external
-v1 behavior at close only after the historical or remedial disposition below passes; they
-never claim T589's later strict storage profile. The generic history-proof reuse path remains
-available only before a candidate's binding request or for delivery programs that do not
-select the strict profile.
+state cannot now authorize work that was already dispatched. W2-W4 may use the accepted
+external v1 behavior only to read and adjudicate retained delivery records or an accepted
+external correction; they do not invoke it to repeat a close and never claim T589's later
+strict storage profile. The generic history-proof reuse path remains available only before a
+candidate's binding request or for delivery programs that do not select the strict profile.
 
 ### Historical entry-attestation adjudication
 
@@ -159,31 +172,36 @@ Preserve each current checkbox. It may be checked only when contemporaneous reta
 proves every stated predicate against the exact historical entry base; current code presence,
 current manifest state, or a successful command rerun is not that proof.
 
-Wave close fails closed unless exactly one of these dispositions exists for its entry task:
+External delivery state also reports W2, W3, and W4 sealed and merged. Therefore T028/T029,
+T035/T036, and T070/T071 are historical close verification/adjudication tasks, not a recovery
+queue. They own no new candidate, phase review, binding request, attestation, seal,
+merge-target registration, merge eligibility, merge, successor rebase, or cleanup action.
+They must not claim that this batch produced a new seal or merge.
 
-1. `historically-attested`: an external receipt names `historicalTask`,
+Historical adjudication fails closed unless exactly one of these external dispositions exists
+for each wave:
+
+1. `delivery-record-confirmed`: exact external delivery records name `historicalTask`,
    `entryBaseCommit`, `entryBaseTree`, `firstDispatchCommit`, `recordedAtUnix`, every required
    prerequisite commit locator, and every original check with its contemporaneous result.
-   The first dispatch commit must descend from the named base, and the receipt must prove the
-   original conditions rather than infer them from the current tree.
-2. `remediated-current`: the historical task stays unchecked and the proposed or frozen wave
-   candidate, at the point its owning gate specifies, carries one passing `EvidenceRecord`
-   with validation
-   `historical-entry-remediation-t008`, `historical-entry-remediation-t030`, or
-   `historical-entry-remediation-t037`. Its external
-   canonical receipt names `historicalTask`, `historicalEntry: "unproven"`, `candidateId`,
-   `candidateCommit`, `candidateTree`, `recordedAtUnix`, prerequisite commit locators, and the
-   exact current requalification checks. All dependent implementation heads must be
-   ancestors of that candidate; the index and worktree must be clean; destinations must be
-   uncontended; predecessor merge and rebase conditions must hold; and every nonempty
-   command set named by the original gate must pass on that candidate.
+   The same record set must identify the actual immutable candidate and tree, the wave's sole
+   binding `panel-request.json`, ten unanimous attestations, seal, merge target, eligibility
+   result, merged pull request, and resulting `v3` commit. Hashes and ancestry must agree; the
+   first dispatch commit must descend from the named base. Current command output cannot fill
+   a missing historical field.
+2. `delivery-record-corrected`: an accepted external delivery-contract/tooling correction
+   identifies the exact inaccurate or missing historical record, preserves the original
+   bytes, and states the authoritative corrected status. The feature task records only that
+   adjudication. It does not reinterpret a current rerun as historical proof or authorize
+   this batch to run another binding panel, seal, or merge.
 
 For either disposition, the imported `EvidenceRecord.output` is the digest and byte count of
 the canonical external receipt and `locator` resolves that receipt without storing command
 output in the repository. Missing, duplicate, malformed, failed, wrong-task, wrong-commit,
-wrong-tree, or current-rerun-presented-as-historical evidence refuses T029, T036, or T071.
-Remediation does not rewrite history or claim that original entry complied; it proves only
-that the already-landed work was requalified fail-closed before wave exit.
+wrong-tree, wrong-candidate, wrong-panel, wrong-seal, wrong-merge, or
+current-rerun-presented-as-historical evidence refuses T029, T036, or T071. An accepted
+correction does not rewrite history or claim a new close; it resolves what the external
+delivery authority says happened.
 
 ---
 
@@ -228,16 +246,17 @@ remain ordered behind predecessor merge and the successor's mandatory rebase.
 - [X] T588 Configure or document review scoping for the `v3` lineage. `detect-changed-files.sh` resolves the default branch to `main` via `origin/HEAD`, but ADR-046 integrates on `v3`, which never merges to `main`. Every wave review MUST pass an explicit diff scope (wave integration branch against its real base) or it will treat the whole v3 divergence as the wave changes
 
 **Checkpoint**: process hygiene is complete. W2 implementation already exists, so entry cannot
-now be declared prospectively met. T008 remains the historical attestation; if it cannot be
-proven from retained contemporaneous evidence, T028/T029 require the candidate-bound remedial
-requalification above before W2 close.
+now be declared prospectively met. T008 remains the historical attestation. Because delivery
+state reports W2 already sealed and merged, missing contemporaneous evidence routes T028/T029
+to accepted external delivery-record correction, not to a remedial panel or replacement
+close.
 
 ---
 ## Wave W2: Primitive resource composition and Zone routing
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 19 | **Parallel groups**: 2
 
-- [ ] T008 [US1] W2 HISTORICAL ENTRY ATTESTATION - determine whether the actual first W2 dispatch base satisfied feature-local prerequisite `adr046-candidate-recovery-prerequisite/v1`. Require retained contemporaneous evidence that the separately accepted external ADR and ADR-index commit, validation/delivery-spec plus generated-manifest commit, delivery-tooling commit, and `AGENTS.md`/contributor-guidance commit were ancestors of that exact base; that the contract's nonempty `candidate_recovery_v1` discovery and test commands plus `make test-adr-index-coverage` and `make test-lint` passed there; that destinations were uncontended, the stack targeted that exact parent, the heavy-gate slot was available, and the fast hermetic suite was green before dispatch; and that a unanimous ten-role plan panel reviewed that exact base and feature snapshot before the first implementation dispatch. No such plan-panel receipt is currently cited, so this predicate is unproven. A current rerun or T029's work panel cannot satisfy this historical task. If any historical predicate is unproven, preserve T008 unchecked, require the `w2-plan-review-remediation` gate before any further implementation or fix dispatch, and require T028/T029's separate `historical-entry-remediation-t008` path at close. Under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is not an entry predicate; it binds at panel request, seal, and merge eligibility (T029).
+- [ ] T008 [US1] W2 HISTORICAL ENTRY ATTESTATION - determine whether the actual first W2 dispatch base satisfied feature-local prerequisite `adr046-candidate-recovery-prerequisite/v1`. Require retained contemporaneous evidence that the separately accepted external ADR and ADR-index commit, validation/delivery-spec plus generated-manifest commit, delivery-tooling commit, and `AGENTS.md`/contributor-guidance commit were ancestors of that exact base; that the contract's nonempty `candidate_recovery_v1` discovery and test commands plus `make test-adr-index-coverage` and `make test-lint` passed there; that destinations were uncontended, the stack targeted that exact parent, the heavy-gate slot was available, and the fast hermetic suite was green before dispatch; and that a unanimous ten-role plan panel reviewed that exact base and feature snapshot before the first implementation dispatch. No such plan-panel receipt is currently cited, so this predicate is unproven. A current rerun or retained work-panel record cannot satisfy this historical task. If any predicate is unproven, preserve T008 unchecked and require T028/T029's accepted external delivery-record correction to retain the gap; do not run a remedial plan panel, create a replacement candidate, or repeat W2 close actions. Under FR-057, T029 only verifies whether the historical records prove predecessor status and rebase ancestry; it authorizes no current panel, seal, or merge.
 
 ### Group `wi:ADR-046-primitive-resource-composition` (3 items)
 
@@ -264,29 +283,15 @@ requalification above before W2 close.
 - [X] T026 [US1] `ADR046-routing-015` - `packages/d2b-provider-toolkit/src/` (adapted in place) (adapt)
 - [X] T027 [US1] `ADR046-routing-016` - `packages/d2b-zone-routing/src/service.rs` (adapt)
 
-- [ ] T028 [US1] W2 CONVERGE + FREEZE - depends on every W2 work-item row, beginning with T009 and ending with T027. Before any remaining implementation, convergence-fix, or recovery lane is dispatched, require exactly one plan-review disposition: exact contemporaneous W2 plan-panel receipts from before first dispatch, or unchecked T008 plus one unanimous `w2-plan-review-remediation` receipt bound to the current clean base and feature snapshot. The latter is late remediation, not historical compliance; any later base or feature change requires re-review. Merge every slice branch into the wave integration branch, run integration tests and CI on the converged tree, resolve every content-changing result, then reconcile and fold all changelog fragments. Before freezing, confirm reference docs landed with behavior (FR-019), no change contradicts the decision register (FR-047), every required removal proof passed (FR-023), and the deferred-findings and friction registers are current (FR-051, FR-052, FR-053). Open or update one PR against `v3`, then freeze its clean HEAD and tree as F2. If T008 remains unchecked, requalify exact F2 under the accepted candidate-recovery prerequisite, rerun its nonempty command set plus the current destination, lineage, cleanliness, and fast-suite checks, prove every W2 implementation head is an ancestor of F2, and import exactly one passing F2-bound `historical-entry-remediation-t008` record. This does not check T008 or assert historical entry compliance. T028 MUST NOT issue a binding work-panel request, panel-attest, or seal. Any content change, slice merge, generated-output change, changelog fold, or rebase after F2 is frozen invalidates F2 and its remedial record and requires T028 to rerun.
-  Before F2 freezes, T028 solely owns any required adaptation of
-  `tests/host-integration/daemon-restart-vm-survival.nix` and only that attr's
-  discovery/build recipe in `Makefile`. Run the exact attr through the public heavy-gated
-  target with nonempty discovery, successful build, and no `SKIP`. The positive case must
-  observe Ready, guest reachability, daemon restart, the same runner PID/start-time adopted
-  through a newly acquired pidfd, continued reachability, Stopped after public stop, and
-  exactly the three ADR-0015 units. PID reuse, pidfd/start-identity mismatch, and
-  multiple-plausible-runner cases must quarantine without adoption, cleanup, or signal.
-  Missing execution evidence means no F2 exists.
-- [ ] T029 [US1] W2 SINGLE BINDING WORK GATE + MERGE - depends on T028. Require HEAD and tree to equal clean F2, exactly one entry disposition (either checked T008 backed by the exact historical receipt, or unchecked T008 plus one passing `historical-entry-remediation-t008` record bound to F2), and exactly one plan-review disposition accepted by T028. Revalidate the plan receipt's ten unanimous records, reviewed base ancestry, and current feature snapshot; T029's work panel is not a substitute. Absence, duplication, mismatch, or a current rerun labeled historical refuses pre-panel dispatch and panel request. Against F2, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F2 and returns to T028 before any binding panel request. Route the defect through scoped fixes and validation, then iterate delta/full-context `/d2b-panel-round plan` phase reviews until the replacement provisional candidate has 10/10 sign-off with zero recommendations. Only that final candidate may receive W2's exactly one binding `/d2b-panel-round work` request; import its validation evidence, panel-request (refused unless every prior-wave work item is Merged, per FR-057), panel-attest (10/10 unanimous), seal (every prior-wave and wave item Merged), register merge-target, pass merge-eligibility, and then merge the already-open PR. A nonunanimous binding result permanently fails the W2 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator escalation naming the external contract or tooling disposition; do not waive findings. From binding panel request through disposition, the final candidate and its tree are immutable: no content edit, slice merge, generated output, changelog fold, rebase, or convergence rerun is permitted. The merge MUST preserve the successful candidate's tree byte-for-byte. After merge, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue.
-  T029 MUST invoke the one accepted `candidate_recovery_v1` validator from
-  `contracts/README.md` before pre-panel dispatch, panel request, panel-attest, seal,
-  merge-target registration, merge eligibility, and merge. The validator, not task-local
-  predicates, checks the exact historical/remedial receipt variant and independently rejects
-  every field, binding, exclusivity, transition-order, and recovery-evidence negative in its
-  asserted case inventory. Empty discovery, an ignored/skipped case, a missing matrix member,
-  or any stage that does not call the same implementation leaves T029 open.
-  At every boundary, T029 also reopens the F2 host-continuity evidence and requires the exact
-  Ready/Stopped, fresh-pidfd, PID reuse/mismatch/ambiguity quarantine, exact-three-unit,
-  enumerated/built-attr, command-success, and no-`SKIP` predicates above.
+- [ ] T028 [US1] W2 HISTORICAL CONVERGENCE VERIFICATION - depends on every W2 work-item row, beginning with T009 and ending with T027. Delivery state reports W2 sealed and merged, so this task verifies the retained external record rather than creating or freezing F2. Require either exact external delivery-record confirmation or an accepted external correction. Confirmation must identify the actual clean F2 commit/tree, prove every W2 implementation head is its ancestor, and reopen the contemporaneous plan-review disposition, integration/CI results, reference/docs/decision/removal-proof/register checks, fragment fold, and candidate-bound `pre-adr046-host-continuity` evidence. That evidence must show nonempty enumeration and successful no-`SKIP` build of `vmChecks.x86_64-linux.daemon-restart-vm-survival`, Ready/reachability/restart/fresh-pidfd adoption/continued-reachability/Stopped, exactly the three ADR-0015 units, and PID-reuse/mismatch/ambiguity quarantine. Missing historical evidence requires the approved-correction path; T028 owns no source, test, feature, candidate, panel, or delivery-state mutation and must not rerun commands, merge slices, freeze a replacement, or open/update a PR.
+- [ ] T029 [US1] W2 HISTORICAL DELIVERY CLOSE ADJUDICATION - depends on T028. Verify, from exact external delivery records, that the retained F2 received W2's sole binding `/d2b-panel-round work` request, ten unanimous attestations, a seal, merge-target registration, merge eligibility, and a byte-identical merge whose resulting `v3` commit descends from the recorded target. Reopen the T008 historical-entry disposition, plan-review receipt, candidate-recovery result, host-continuity evidence, candidate/tree hashes, panel address, seal, PR, and merge ancestry; absence, duplication, or mismatch fails closed. Alternatively require an accepted external correction that identifies and preserves the inaccurate historical record and states the authoritative delivery status. T029 is adjudication only: do not dispatch reviewers, run a phase or binding panel, create a candidate or evidence replacement, attest, seal, register a target, merge, rebase a successor, clean delivery worktrees, or claim that this batch produced a new W2 close.
+  `candidate_recovery_v1` may be invoked only to decode and verify retained historical records
+  or the accepted correction against its asserted field/binding matrix. It is not authority
+  to construct a remedial candidate or repeat any close stage. Empty discovery, an
+  ignored/skipped case, a missing matrix member, or a different interpretation of the
+  historical record leaves T029 open.
 
-**Checkpoint**: W2 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
+**Checkpoint**: W2's reported seal and merge are externally confirmed or authoritatively corrected. This batch performed and claims no new W2 panel, seal, merge, rebase, or cleanup.
 
 ---
 
@@ -294,7 +299,7 @@ requalification above before W2 close.
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 4 | **Parallel groups**: 1
 
-- [ ] T030 [US1] W3 HISTORICAL ENTRY ATTESTATION - determine whether the actual first W3 dispatch base had Gate 0 passed, destinations uncontended, the stack proposed against the exact named parent commit, a heavy-gate slot available, the fast hermetic suite green, and a unanimous ten-role plan panel bound to that exact base and feature snapshot before implementation dispatch. If W2 was not yet merged at first dispatch, require retained contemporaneous evidence of at least 5 of 10 reviews returned and green integration on its converged tree. No historical plan-panel receipt is currently cited. A current rerun or T036's work panel cannot prove those historical predicates. If any predicate is unproven, preserve T030 unchecked, require `w3-plan-review-remediation` before any further implementation or fix dispatch, and require T035/T036's `historical-entry-remediation-t030` path. T036 still refuses panel request, seal, and merge eligibility until W2 is sealed and merged and W3 is rebased onto the updated integration lineage (FR-057).
+- [ ] T030 [US1] W3 HISTORICAL ENTRY ATTESTATION - determine whether the actual first W3 dispatch base had Gate 0 passed, destinations uncontended, the stack proposed against the exact named parent commit, a heavy-gate slot available, the fast hermetic suite green, and a unanimous ten-role plan panel bound to that exact base and feature snapshot before implementation dispatch. If W2 was not yet merged at first dispatch, require retained contemporaneous evidence of at least 5 of 10 reviews returned and green integration on its converged tree. No historical plan-panel receipt is currently cited. A current rerun cannot prove those historical predicates. If any predicate is unproven, preserve T030 unchecked and require the accepted external delivery-record correction used by T035/T036 to record the gap; do not run a remedial plan panel or dispatch more W3 implementation.
 
 ### Group `wi:ADR-046-provider-model-and-packaging` (4 items)
 
@@ -303,14 +308,14 @@ requalification above before W2 close.
 - [X] T033 [P] [US1] `ADR046-provider-003` - `packages/d2b-provider-system-core/` (adapt)
 - [X] T034 [US1] `ADR046-provider-004` - `packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs` (create)
 
-- [ ] T035 [US1] W3 CONVERGE + FREEZE - depends on T031, T032, T033, and T034. Before any remaining implementation, convergence-fix, or recovery lane is dispatched, require exactly one plan-review disposition: exact contemporaneous W3 plan-panel receipts, or unchecked T030 plus one unanimous `w3-plan-review-remediation` receipt bound to the current clean base and feature snapshot. The latter is late remediation, not historical compliance; any later base or feature change requires re-review. After W2 is sealed and merged, rebase W3 onto updated `v3`; merge every slice branch into the wave integration branch, run integration tests and CI on the converged tree, resolve every content-changing result, then reconcile and fold all changelog fragments. Before freezing, confirm reference docs landed with behavior (FR-019), no change contradicts the decision register (FR-047), every required removal proof passed (FR-023), and the deferred-findings and friction registers are current (FR-051, FR-052, FR-053). Open or update one PR against `v3` and identify the clean proposed F3 commit and tree. Before declaring that identity frozen, require exactly one T030 disposition: either checked T030 backed by the exact contemporaneous historical receipt, or unchecked T030 plus one passing proposed-F3-bound `historical-entry-remediation-t030` record that reruns the current Gate 0, destination, lineage, predecessor-merge/rebase, cleanliness, semaphore, fast-suite, integration, and slice-ancestry checks. Absence, duplication, mismatch, or a current rerun labelled historical leaves T035 incomplete and no F3 exists. This remedial record does not check T030 or assert historical entry compliance. Once exactly one disposition validates, freeze that same clean HEAD and tree as F3. T035 MUST NOT issue a binding work-panel request, panel-attest, or seal. Any content change, slice merge, generated-output change, changelog fold, or rebase after F3 is frozen invalidates F3 and its remedial record and requires T035 to rerun.
-- [ ] T036 [US1] W3 SINGLE BINDING WORK GATE + MERGE - depends on T035. Require HEAD and tree to equal clean F3, revalidate exactly one T030 disposition, and revalidate exactly one plan-review disposition accepted by T035, including its ten unanimous records, reviewed-base ancestry, and current feature snapshot. T036's work panel is not a substitute. Recheck those exclusive dispositions before pre-panel dispatch, panel request, panel-attest, seal, merge-target registration, and merge eligibility; absence, duplication, mismatch, or a current rerun labelled historical refuses each stage. Against F3, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F3 and returns to T035 before any binding panel request. Route the defect through scoped fixes and validation, then iterate delta/full-context `/d2b-panel-round plan` phase reviews until the replacement provisional candidate has 10/10 sign-off with zero recommendations. Only that final candidate may receive W3's exactly one binding `/d2b-panel-round work` request; import its validation evidence, panel-request (refused unless every prior-wave work item is Merged and W3 is rebased after the predecessor merge), panel-attest (10/10 unanimous), seal (every prior-wave and wave item Merged), register merge-target, pass merge-eligibility, and then merge the already-open PR. A nonunanimous binding result permanently fails the W3 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator escalation naming the external contract or tooling disposition; do not waive findings. From binding panel request through disposition, the final candidate and its tree are immutable. The merge MUST preserve the successful candidate's tree byte-for-byte. After merge, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue.
-  T036 uses the same canonical `candidate_recovery_v1` validator and the same asserted
-  per-field/per-binding matrix as T029. Invoke it at every boundary named above, including
-  merge. A local W3 predicate copy, a happy-path-only test, or a historical/remedial receipt
-  shape accepted differently from T029 leaves T036 open.
+- [ ] T035 [US1] W3 HISTORICAL CONVERGENCE VERIFICATION - depends on T031, T032, T033, and T034. Delivery state reports W3 sealed and merged, so verify rather than recreate the actual F3. Require exact external delivery records or an accepted external correction identifying F3's clean commit/tree, W2 merge ancestry and W3 rebase, every implementation head's ancestry, the contemporaneous plan-review disposition, integration/CI results, fragment fold, and FR-019/FR-047/FR-023/FR-051/FR-052/FR-053 checks. If T030 is unproven, the correction must retain that fact rather than substitute a current rerun. T035 owns no implementation, fix, candidate, phase-panel, or PR action and must not freeze a replacement F3.
+- [ ] T036 [US1] W3 HISTORICAL DELIVERY CLOSE ADJUDICATION - depends on T035. Verify exact external records binding actual F3 to W3's sole binding `/d2b-panel-round work` request, ten unanimous attestations, seal, merge target, merge eligibility, merged PR, and resulting `v3` commit, including the T030 disposition and predecessor-merge/rebase ancestry. Alternatively require an accepted external correction that preserves the inaccurate record and states authoritative status. T036 must not dispatch reviewers, run a phase or binding panel, create replacement evidence, attest, seal, register a target, merge, rebase W4, clean delivery state, or claim a new W3 close.
+  The canonical `candidate_recovery_v1` validator is read-only adjudication evidence here. It
+  may decode the retained records or accepted correction under the same asserted matrix as
+  T029, but it cannot authorize any repeated close boundary. A local predicate, missing
+  matrix member, or inconsistent historical interpretation leaves T036 open.
 
-**Checkpoint**: W3 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
+**Checkpoint**: W3's reported seal and merge are externally confirmed or authoritatively corrected. This batch performed and claims no new W3 panel, seal, merge, rebase, or cleanup.
 
 ---
 
@@ -318,7 +323,7 @@ requalification above before W2 close.
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 31 | **Parallel groups**: 6
 
-- [ ] T037 [US1] W4 HISTORICAL ENTRY ATTESTATION - determine whether the actual first W4 dispatch base had Gate 0 passed, destinations uncontended, the stack proposed against the exact named parent, a heavy-gate slot available, the fast hermetic suite green, and a unanimous ten-role plan panel bound to that exact base and feature snapshot before implementation dispatch. If W3 was not yet merged at first dispatch, require retained contemporaneous evidence of at least 5 of 10 reviews returned and green integration on its converged tree. No historical plan-panel receipt is currently cited. A current rerun or T071's work panel cannot prove those historical predicates. If any is unproven, preserve T037 unchecked, require `w4-plan-review-remediation` before any further implementation or fix dispatch, and require T070/T071's `historical-entry-remediation-t037` path. T071 still refuses panel request, seal, and merge eligibility until W3 is sealed and merged and W4 is rebased onto the updated integration lineage (FR-057).
+- [ ] T037 [US1] W4 HISTORICAL ENTRY ATTESTATION - determine whether the actual first W4 dispatch base had Gate 0 passed, destinations uncontended, the stack proposed against the exact named parent, a heavy-gate slot available, the fast hermetic suite green, and a unanimous ten-role plan panel bound to that exact base and feature snapshot before implementation dispatch. If W3 was not yet merged at first dispatch, require retained contemporaneous evidence of at least 5 of 10 reviews returned and green integration on its converged tree. No historical plan-panel receipt is currently cited. A current rerun cannot prove those historical predicates. If any is unproven, preserve T037 unchecked and require the accepted external delivery-record correction used by T070/T071 to record the gap; do not run a remedial plan panel or dispatch more W4 implementation.
 
 ### Group `wi:ADR-046-components-processes-and-sandbox` (1 item)
 
@@ -365,47 +370,36 @@ requalification above before W2 close.
 - [X] T067 [US1] `ADR046-network-007` - `Provider/device-usbip` owns one relay Process/Endpoint authority per Network and calls the typed UsbipEffectPort for the shared closed `ApplyNftablesProjection` request with closed action enum `Apply/Remove` (adapt)
 - [X] T068 [US1] `ADR046-network-009` - `packages/d2b-contracts/src/v3/network.rs` external-attachment sharing schema/status (adapt)
 
-The checked T064-T068 rows record accepted implementation history, not permission to close
-W4 with the authoritative Network obligations still open. T070 and T071 are explicit
-close-blocking owners for the unresolved Network set recorded in `implementation-debt.md`
-sections 15.1, 15.3, 16.2, 16.5, 18.2, and 18.3. They may not infer completion from these
-checkboxes. Before W4 can freeze, the authoritative specification/manifest owners must resolve
-the encoding and ownership conflicts those sections name; the production Network effect
-adapter must consume the typed broker operations rather than stop at a hermetic fake; the
-external-NIC authority lease must be acquired and consumed once by the production owner with
-wrong-Zone, wrong-attachment, wrong-parent, wrong-generation, replay, expiry, and duplicate
-consumption denied; and executable repository-routed isolation coverage must exercise mDNS,
-bridge, east-west, nftables, persistent-TAP, macvtap, disruptive external-NIC update, deletion,
-status, and raw-identity exclusion. If the authoritative graph still assigns a required
-adapter or executable scenario only to a later W6 item, W4 remains blocked until an accepted
-external graph/spec amendment rephases that owner; no W4 slice may duplicate or anticipate the
-later item.
+The checked T064-T068 rows record accepted implementation history, while delivery state
+reports W4 sealed and merged despite the unresolved Network set recorded in
+`implementation-debt.md` sections 15.1, 15.3, 16.2, 16.5, 18.2, and 18.3. T070 and T071
+adjudicate that contradiction; they do not reopen implementation or close W4 again. Exact
+external delivery-record confirmation must show how the historical F4 satisfied the encoding
+and ownership conflicts, production typed-broker Network effect, single-consumption
+external-NIC authority lease with all named denials, and executable repository-routed mDNS,
+bridge, east-west, nftables, persistent-TAP, macvtap, disruptive-update, deletion, status,
+and raw-identity-exclusion coverage. If it cannot, an accepted external correction must
+preserve the original record and state the authoritative status. No W4 slice may duplicate or
+anticipate a later W6 owner.
 
-The closure also preserves the accepted Network contract that east-west access requires the
-Network resource and retained Host/site acknowledgement to opt in together. The executable
-matrix must cover all four combinations: Network false/Host false denies, Network false/Host
-true denies, Network true/Host false denies, and Network true/Host true allows. Each case
-must assert both host bridge-port isolation and net-VM forwarding behavior, including the
-derived bridge and owned net-VM for the same Network identity. A single-opt-in assertion, a
-test that covers only the matching pairs, or evidence from the old env surface leaves the
-authoritative conflict open.
+Historical confirmation must also preserve the accepted Network contract that east-west
+access requires the Network resource and retained Host/site acknowledgement to opt in
+together. The retained executable matrix must cover all four combinations: Network
+false/Host false denies, Network false/Host true denies, Network true/Host false denies, and
+Network true/Host true allows. Each case must assert both host bridge-port isolation and
+net-VM forwarding behavior, including the derived bridge and owned net-VM for the same
+Network identity. A single-opt-in assertion, a test covering only matching pairs, or evidence
+from the old env surface cannot confirm the reported close and requires external correction;
+it does not schedule a current rerun.
 
 ### Group `wi:core-config-hub:w4` (1 items)
 
 - [x] T069 [US1] `ADR046-network-008` - `packages/d2b-core-controller/src/configuration.rs`: bundle application (create)
 
-- [ ] T070 [US1] W4 CONVERGE + FREEZE - depends on every current W4 work-item row, beginning with T038 and ending with T069; T039 is now the manifest-authoritative W6 process-provider integration item and is not a W4 prerequisite. Before any remaining implementation, convergence-fix, or recovery lane is dispatched, require exactly one plan-review disposition: exact contemporaneous W4 plan-panel receipts, or unchecked T037 plus one unanimous `w4-plan-review-remediation` receipt bound to the current clean base and feature snapshot. The latter is late remediation, not historical compliance; any later base or feature change requires re-review. After W3 is sealed and merged, rebase W4 onto updated `v3`; merge every slice branch into the wave integration branch, run integration tests and CI on the converged tree, resolve every content-changing result, then reconcile and fold all changelog fragments. Before freezing, confirm reference docs landed with behavior (FR-019), no change contradicts the decision register (FR-047), every required removal proof passed (FR-023), and the deferred-findings and friction registers are current (FR-051, FR-052, FR-053). Open or update one PR against `v3` and identify its clean proposed F4 commit/tree. T064-T068's checked history is insufficient: require every Network gap named immediately above to have an accepted authoritative owner and passing production result, then import one `w4-network-authoritative-closure` record bound to proposed F4. Its nonempty evidence must include the accepted conflict-resolution commit locators, production-adapter and external-NIC authority-lease tests, `make test-flake`, `make test-integration`, and `make test-host-integration`; each command must succeed, discover its required Network cases, execute without skip, and identify the exact candidate. Missing, later-wave-only, declaration-only, fake-adapter, empty, skipped, or advisory evidence leaves T070 open and no F4 exists. Once the record validates, freeze that same clean HEAD and tree as F4. If T037 remains unchecked, rerun Gate 0 and the current destination, lineage, predecessor-merge/rebase, cleanliness, semaphore, and fast-suite checks on exact F4; prove every current W4 implementation head is an ancestor of F4; and import exactly one passing F4-bound `historical-entry-remediation-t037` record. This does not check T037 or assert historical entry compliance. T070 MUST NOT issue a binding work-panel request, panel-attest, or seal. Any content change, slice merge, generated-output change, changelog fold, or rebase after F4 is frozen invalidates F4 and both candidate-bound records and requires T070 to rerun.
-  T070 MUST treat the four-case Network/Host east-west matrix immediately above as part of
-  `w4-network-authoritative-closure`. The record names and executes all four cases through
-  the ResourceType emitter, production controller, broker effect, and net-VM policy; one
-  omitted combination or a Host=false refusal when Network=true means no F4 exists.
-- [ ] T071 [US1] W4 SINGLE BINDING WORK GATE + MERGE - depends on T070. Require HEAD and tree to equal clean F4, exactly one entry disposition (either checked T037 backed by the exact historical receipt, or unchecked T037 plus one passing `historical-entry-remediation-t037` record bound to F4), exactly one plan-review disposition accepted by T070, and exactly one passing `w4-network-authoritative-closure` record bound to F4. Revalidate the plan receipt's ten unanimous records, reviewed-base ancestry, and current feature snapshot; T071's work panel is not a substitute. Reinvoke the same Network closure validator before pre-panel dispatch, panel request, panel-attest, seal, merge-target registration, and merge eligibility; absence, duplication, wrong candidate, a still-open authoritative conflict, missing production adapter or lease consumption, non-executable isolation coverage, empty discovery, or a skipped lane refuses every stage. Against F4, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F4 and returns to T070 before any binding panel request. Route the defect through scoped fixes and validation, then iterate delta/full-context `/d2b-panel-round plan` phase reviews until the replacement provisional candidate has 10/10 sign-off with zero recommendations. Only that final candidate may receive W4's exactly one binding `/d2b-panel-round work` request; import its validation evidence, panel-request (refused unless every prior-wave work item is Merged and W4 is rebased after the predecessor merge), panel-attest (10/10 unanimous), seal (every prior-wave and wave item Merged), register merge-target, pass merge-eligibility, and then merge the already-open PR. A nonunanimous binding result permanently fails the W4 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator escalation naming the external contract or tooling disposition; do not waive findings. From binding panel request through disposition, the final candidate and its tree are immutable. The merge MUST preserve the successful candidate's tree byte-for-byte. After merge, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue.
-  At every named T071 boundary, the Network closure validator must recheck the exact four-case
-  matrix and T071 must also invoke the same canonical `candidate_recovery_v1` validator used
-  by T029 and T036. Missing matrix discovery, a local receipt predicate, or different
-  historical/remedial acceptance at W4 leaves T071 open.
+- [ ] T070 [US1] W4 HISTORICAL CONVERGENCE VERIFICATION - depends on every current W4 work-item row, beginning with T038 and ending with T069; T039 remains the manifest-authoritative W6 process-provider integration item and is not a W4 prerequisite. Verify exact external records or an accepted external correction for the actual F4 commit/tree, W3 merge ancestry and W4 rebase, implementation ancestry, contemporaneous plan-review disposition, integration/CI and fragment fold, FR-019/FR-047/FR-023/FR-051/FR-052/FR-053 checks, and the candidate-bound `w4-network-authoritative-closure`. Retained Network evidence must include the accepted conflict-resolution locators, production adapter, authority-lease negatives, all four Network/Host combinations through the ResourceType emitter/controller/broker/net-VM path, and successful nonempty non-skipped `make test-flake`, `make test-integration`, and `make test-host-integration` results. Missing, later-wave-only, declaration-only, fake-adapter, empty, skipped, or advisory evidence requires external correction and leaves T070 open. T070 owns no implementation, fix, evidence replacement, candidate freeze, phase-panel, rebase, or PR action.
+- [ ] T071 [US1] W4 HISTORICAL DELIVERY CLOSE ADJUDICATION - depends on T070. Verify exact external records binding actual F4 to W4's sole binding `/d2b-panel-round work` request, ten unanimous attestations, seal, merge target, merge eligibility, merged PR, and resulting `v3` commit. Reopen the T037 disposition, predecessor merge/rebase ancestry, `w4-network-authoritative-closure`, exact four-case matrix, and canonical `candidate_recovery_v1` result. Alternatively require an accepted external correction that preserves the inaccurate record and states authoritative status. T071 must not dispatch reviewers, run a phase or binding panel, create replacement evidence, attest, seal, register a target, merge, rebase Wave 5, clean delivery state, or claim a new W4 close. Missing matrix discovery, a local receipt predicate, or inconsistent historical interpretation leaves T071 open.
 
-**Checkpoint**: W4 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
+**Checkpoint**: W4's reported seal and merge are externally confirmed or authoritatively corrected. This batch performed and claims no new W4 panel, seal, merge, rebase, or cleanup.
 
 ---
 
@@ -423,7 +417,7 @@ or claim that implementation, and Guest runtime-effect acceptance remains fail-c
 Wave 6 `Provider/runtime-cloud-hypervisor` completes T384 and T479/T480 accept its exact-F6
 evidence.
 
-- [ ] T072 [US1] `adr046w5` HISTORICAL ENTRY ATTESTATION - determine whether the actual first Wave 5 dispatch base had Gate 0 passed, destinations uncontended, the stack proposed against the exact named parent commit, the heavy-gate semaphore available, the fast hermetic suite green, and an exact contemporaneous unanimous ten-role `/d2b-panel-round plan` receipt with zero recommendations bound to that base and the exact feature snapshot before first implementation dispatch. If W4 was not yet merged at first dispatch, require retained contemporaneous evidence of at least 5 of its 10 reviews returned and green integration on its converged tree. Existing code is not evidence that these predicates passed. No exact Wave 5 historical plan-panel receipt is cited at committed HEAD `e6bece5d9debebef467e0c553a4d911701f6223e`, so the predicate is unproven; do not check T072 unless that retained receipt and every other historical predicate are produced. A current rerun, the T603 A/P0 or B/P plan panel, or T219's binding work panel cannot check T072. If any predicate is unproven, preserve T072 unchecked and require FR-036's external constitution amendment to expressly disposition the Wave 5 gap before any implementation or close action. Then, before T603 analysis, plan review, or source change, import exactly one passing `historical-entry-remediation-t072` record bound to clean A/P0. It reruns the current Gate 0, destination, lineage, cleanliness, semaphore, and fast-suite checks and proves every existing Wave 5 implementation head considered by reconciliation is an ancestor of A, but it does not claim historical plan compliance or any T073-T218 obligation complete. T219 still refuses panel request, seal, and merge eligibility until W4 is sealed and merged and `adr046w5` is rebased onto the updated integration lineage (FR-057).
+- [ ] T072 [US1] `adr046w5` HISTORICAL ENTRY ATTESTATION - determine whether the actual first Wave 5 dispatch base had Gate 0 passed, destinations uncontended, the stack proposed against the exact named parent commit, the heavy-gate semaphore available, the fast hermetic suite green, and an exact contemporaneous unanimous ten-role `/d2b-panel-round plan` receipt with zero recommendations bound to that base and the exact feature snapshot before first implementation dispatch. If W4 was not yet merged at first dispatch, require retained contemporaneous evidence of at least 5 of its 10 reviews returned and green integration on its converged tree. Existing code is not evidence that these predicates passed. No exact Wave 5 historical plan-panel receipt is cited at committed HEAD `e6bece5d9debebef467e0c553a4d911701f6223e`, so the predicate is unproven; do not check T072 unless that retained receipt and every other historical predicate are produced. A current rerun or the T603 A/P0 or B/P nonbinding phase-plan panel cannot check T072, and neither can the retained Wave 5 binding delivery request. If any predicate is unproven, preserve T072 unchecked and require FR-036's external constitution amendment to expressly disposition the Wave 5 gap before any implementation or close action. Then, before T603 analysis, plan review, or source change, import exactly one passing `historical-entry-remediation-t072` record bound to clean A/P0. It reruns the current Gate 0, destination, lineage, cleanliness, semaphore, and fast-suite checks and proves every existing Wave 5 implementation head considered by reconciliation is an ancestor of A, but it does not claim historical plan compliance or any T073-T218 obligation complete. T219 remains non-authorizing until W4's reported close is externally confirmed or corrected and an accepted external delivery-contract/tooling disposition expressly resolves Wave 5's consumed binding request; no feature-local receipt licenses another request, seal, or merge.
 
 **Approved production-completion amendment**: the 12 manifest groups remain authoritative for
 their 146 work items. T589-T602, T604, and T605 add the missing Wave 5 composition, coordinated
@@ -1131,7 +1125,7 @@ table before the operation exists.
   renders the exact safe static `d2b op inspect` guidance from `contracts/operator-cli.md`
   without flags, identifiers, argv, or shell text; machine output retains only the closed
   remediation-action enum and never gains a free-form guidance field.
-- [ ] T220 [US1] `adr046w5` CONVERGE + PHASE-PANEL + FREEZE - depends on T596-T599 and T604. Before any exact-candidate evidence or binding panel, merge every slice branch into the wave integration branch. Reconcile the accepted-spec version changes owned by T589 (`resource-api-and-authorization`), T592 (`resource-store-redb` and `telemetry-audit-and-support`), T593 (`componentsession-and-bus`), T595 (`nix-configuration`), T599 (`cli-and-operations`), and T605 (both system-core governing specs) into the integrator-owned generated spec manifests. Verify each amendment's paired reference, contract/API/DTO test, generated schema or explicit no-schema-impact proof, and migration guidance where applicable. Require the exact fourteen-row owner/path fragment set declared under this wave's dependency map, including T603's `changelog.d/delivery-resume-reconciliation.md`; a missing, duplicate, differently named, or cross-owned path fails closed. Fold those fourteen fragments only after the amendment matrix is complete. Verify T605's API snapshots include T593's sealed registrar surface, and verify T595's emitter and T599's consumers against T605. Run T589's hermetic `adr046w5` evidence-profile suite and require the exact eight-record positive plus missing, extra, duplicate, unknown, wrong-lane, and conflated negatives to prove panel-request, seal, and merge-eligibility all invoke the same validator. Run the typed SC-002 payload suite and prove the same validator is invoked at import, durable reopen, panel-request, seal, and merge-eligibility; require the exact closed three-resource positive and missing, malformed, misordered, stale, progress-free, over-budget, missing-sample, duplicate-sample, mixed-identity, and unrelated-sample negatives. Then, after W4 is sealed and merged, rebase onto the updated `v3` and record that exact `v3` commit as the panel-base eligibility proof. Run integration tests, full `make test-drift`, and CI on the converged tree, and resolve every content-changing result. Open or update one PR against `v3` and identify a clean provisional candidate. Run the nonbinding `/d2b-panel-round plan` phase surface against its exact commit/tree, implementation base, and feature snapshot. A finding routes only its scoped fix through T220, reruns validation, and requires a delta/full-context phase-panel round against the replacement provisional candidate; iterate until all ten roles sign off with zero recommendations. Only then freeze that clean HEAD and tree as final F and retain its unanimous phase receipt. T220 MUST NOT invoke a binding work-panel request, panel-attest, or seal. After F is frozen, any content change or rebase invalidates F and requires T220, the phase review, and T600-T602 to rerun before T219 may issue the wave's one binding panel request.
+- [ ] T220 [US1] `adr046w5` CONVERGE + PHASE-PANEL + FREEZE - depends on T596-T599 and T604. Before exact-candidate evidence, merge every slice branch into the wave integration branch. Reconcile the accepted-spec version changes owned by T589 (`resource-api-and-authorization`), T592 (`resource-store-redb` and `telemetry-audit-and-support`), T593 (`componentsession-and-bus`), T595 (`nix-configuration`), T599 (`cli-and-operations`), and T605 (both system-core governing specs) into the integrator-owned generated spec manifests. Verify each amendment's paired reference, contract/API/DTO test, generated schema or explicit no-schema-impact proof, and migration guidance where applicable. Require the exact fourteen-row owner/path fragment set declared under this wave's dependency map, including T603's `changelog.d/delivery-resume-reconciliation.md`; a missing, duplicate, differently named, or cross-owned path fails closed. Fold those fourteen fragments only after the amendment matrix is complete. Verify T605's API snapshots include T593's sealed registrar surface, and verify T595's emitter and T599's consumers against T605. Run T589's hermetic `adr046w5` evidence-profile suite and require the exact eight-record positive plus missing, extra, duplicate, unknown, wrong-lane, and conflated negatives to prove panel-request, seal, and merge-eligibility all invoke the same validator. Run the typed SC-002 payload suite and prove the same validator is invoked at import, durable reopen, panel-request, seal, and merge-eligibility; require the exact closed three-resource positive and missing, malformed, misordered, stale, progress-free, over-budget, missing-sample, duplicate-sample, mixed-identity, and unrelated-sample negatives. Then, after W4's reported seal and merge are externally confirmed or corrected, rebase the Wave 5 integration branch onto the updated `v3` and record that exact `v3` commit as the panel-base eligibility proof. Run integration tests, full `make test-drift`, and CI on the converged tree, and resolve every content-changing result. Open or update one PR against `v3` and identify a clean provisional candidate. Run the nonbinding `/d2b-panel-round plan` phase surface against its exact commit/tree, implementation base, and feature snapshot. This process review creates no delivery `panel-request.json` and no binding reservation. A finding routes only its scoped fix through T220, reruns validation, and requires a delta/full-context phase-plan round against the replacement provisional candidate; iterate until all ten roles sign off with zero recommendations. Only then freeze that clean HEAD and tree as final F and retain its unanimous phase receipt. T220 MUST NOT invoke a binding `/d2b-panel-round work` request, panel-attest, or seal. After F is frozen, any content change or rebase invalidates F and requires T220, the phase review, and T600-T602 to rerun. Their completion still does not authorize T219; the accepted external disposition of Wave 5's retained binding request remains mandatory.
   T220's coordinated matrix explicitly includes the resource-bundle 4/2 emitter and Rust
   consumer, required top-level audit schema, canonical `{audit,resources}` digest reference,
   generated `resource-bundle.json` schema, old/mixed/future 5/2, 4/3, and 5/3 plus
@@ -1183,11 +1177,23 @@ table before the operation exists.
   each fail at all three stages. The generic pre-request rebase proof and repeatable
   nonbinding phase-panel path still pass before reservation.
 
-- [ ] T219 [US1] `adr046w5` SINGLE BINDING WORK GATE + MERGE - depends on T602. Before either pre-request lane and again before panel request, panel-attest, seal, merge-target, and merge-eligibility, revalidate exactly one T072 historical/current remedial disposition, A-to-B-to-C-to-F ancestry, the T603 A/P0 plus B/P plan-panel chain, and T220's latest unanimous nonbinding phase-panel receipt bound to exact F and the current feature snapshot. T072 may remain unchecked under the remedial path; neither current plan-panel chain nor this binding work panel is historical T072 evidence. First dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, against exact F. If either lane finds a content defect, do not issue the binding request: return to T220, produce a replacement provisional candidate, rerun validation and a delta/full-context `/d2b-panel-round plan` phase round to unanimity, refreeze F, and rerun T600-T602. Only after those prechecks are clear, issue the Wave 5 binding `/d2b-panel-round work` request exactly once at qualified round address `adr046w5-r<n>`, whose ten seats bind `github-copilot` / `gpt-5.6-sol` / `xhigh` / `default`; import exactly the eight closed T600/T601 records, panel-request (refused unless every prior-wave work item is Merged, `adr046w5` is rebased onto the exact updated `v3` commit recorded by T220 after W4 merge, HEAD is F, and no prior Wave 5 binding request exists), panel-attest (10/10 unanimous), seal (every prior-wave and wave item Merged), merge-target, and merge-eligibility. A unanimous result permits seal and merge. A nonunanimous result permanently fails the Wave 5 close: preserve F, its request, findings, and records; issue no second binding request for F or any successor; and stop with an integrator scope escalation naming the external contract or tooling disposition. Never discard findings, mutate F, or re-attest changed bytes under the request. From panel request through merge or failed disposition, F and its tree are immutable: no content edit, generated output, changelog fold, rebase, evidence rewrite, or replacement bytes under F are allowed.
+  In T602's title, "mechanically unblock" means only satisfy T219's internal
+  exact-candidate-evidence dependency. It does not dispose the retained Wave 5 delivery
+  request or authorize T219 to request, attest, seal, or merge. Any reference above to T219
+  closing the partial checkpoint remains conditional on the separate accepted external
+  disposition.
+
+- [ ] T219 [US1] `adr046w5` EXTERNAL DISPOSITION GATE + CONDITIONAL CLOSE - depends on T602 and on an accepted external delivery-contract/tooling disposition of the retained Wave 5 binding request. The disposition must identify candidate `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`, snapshot `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`, its exact `panel-request.json`, and the absence of attestations and seal; preserve those historical bytes; and state the authoritative close action, if any. T219 is non-authorizing before that disposition: do not dispatch pre-request lanes, issue another `/d2b-panel-round work` request, import a replacement request, panel-attest, seal, register a merge target, pass merge eligibility, or merge. The T603 A/P0 and B/P reviews and T220's iterative reviews are nonbinding `/d2b-panel-round plan` phase rounds: they create no delivery request or reservation and cannot replace or relabel the consumed request. After disposition, revalidate exactly one T072 historical/current remedial disposition, A-to-B-to-C-to-F ancestry, T603's phase-plan chain, T220's latest unanimous phase-plan receipt, W2-W4 external delivery adjudications, and all T602 evidence. Perform only a non-request close action the external disposition expressly authorizes. If it authorizes none, or if any required condition would need a second binding request, retain the request/findings/records and stop with the existing integrator external-scope escalation. This feature task never silently deletes, reclassifies, or reissues the consumed request. F and the `adr046w5` candidate/delivery history remain immutable.
 
   Mechanically confirm T603's immutable B/P authorization, exact B-to-C checkbox transition, C-to-F ancestry, unique fragment, and clean exact F identity. Require pidfd-bound registrar/ZoneBus publication through T592's typed `OpenPeerPidfdFromAcceptedSocket` broker operation and approved `sys.rs` FFI quarantine, with fresh restart pidfd and unsupported/missing-or-extra-fd/reuse/mismatch/`ESRCH`/ambiguity denials and no new FFI crate or session fallback; private sealed one-shot policy bootstrap then authenticated revision flow; registered controller endpoint; admitted watch; durable effect/adoption and cleanup ledger; transactional immutable audit authority, separate export completion, replay-binding denials, fixed identifier digests, retention health, and the exact `ResourceStatus` committed-pending-audit composite on every mutation response including delete. Require T604's public declaration/removal switches without manual restart; exact Provider/config and same-resource effect/Ready evidence for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; exact Device cleanup, unresolvable Endpoint, and same-identity TPM state preservation; ready and unrecreated acceptance Volume/Network and unrelated resources; explicit Guest deferral; build/stage/opaque-request-only deployment entrypoint; broker/bootstrap-broker-only audited profile/service/3/1-bootstrap/publication/rollback mutations; target daemon Hello while unready before authenticated publication, durable broker publication before ingestion/readiness, and autonomous rollback resumption through existing daemon reconciliation after entrypoint crash; runnable parameterized migration/rollback procedures; and candidate-bound FR-075 Ready/Stopped, fresh-pidfd, PID reuse/mismatch/ambiguity quarantine, exact-three-unit, no-skip continuity. Reopen the sole SC-002 payload through T589's same import/reopen/panel/seal/eligibility validator and require schema version 1, <=16,384 bytes, exact F/tree binding, the closed three-resource census, same-identity effect/Ready/selected-stop/progress observations, checked elapsed <=2,000,000,000 ns, and 1-32 ordered progress events per sample. Require the coordinated T605 contract, T595 emitter, T599 consumers, fourteen-fragment fold, generated manifests, targeted contract tests, current API snapshots, paired reference, and byte-identical Zone desired-schema result. The readiness projection must contain the exact `Provider/system-core` registration plus exactly one `system-core-host` and one `system-core-user` handler record with phase/timestamp; duplicates, missing/underscore/wrong names, or `ProviderLifecycle` substitution fail. Also confirm per-Zone failure isolation, D106 store neutrality, exact-tip RSS/owner fan-in, current removal proofs, and exact CLI retry/status/reference consistency (FR-066-FR-075, SC-030-SC-035). A fabricable bootstrap reader, readiness flag, numeric-PID-only admission, status-only substitute, direct/fake boundary, disabled audit owner, mutable/missing authoritative row, ordinary success for pending export, unaudited privileged transition, entrypoint rollback dependence, incomplete effect/cleanup/continuity evidence, any missing/duplicate/mixed/unrelated/malformed/misordered/stale/wrong-candidate/progress-free/over-budget SC-002 sample, a Wave 5 Guest-success claim, incomplete coordinated contract evidence, stale receipt/evidence, dirty candidate, or fictitious `ResourceUpdateStatus` phase/code blocks the gate. Confirm docs, decision-register conformance, and removal proofs (FR-019, FR-047, FR-023). Merge only when eligibility confirms F byte-for-byte; then rebase, clean worktrees/branches/targets, run `nix-collect-garbage`, and audit residue. From round 9, LOW/MEDIUM may be deferred; CRITICAL/HIGH never (FR-051, FR-052). At close, review registers and log friction (FR-053).
+  Here "then rebase" means that **W6 rebases its own branch onto updated `v3` only after a
+  successful byte-identical Wave 5 merge**. Final F and the `adr046w5` candidate and delivery
+  history remain immutable and are never rebased.
 
-**Checkpoint `adr046w5`**: converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
+**Checkpoint `adr046w5`**: internal convergence does not close the wave. Close remains blocked
+until the external disposition is accepted and every expressly authorized close condition
+passes. After a successful byte-identical merge, W6 alone rebases onto updated `v3`; this
+checkpoint claims no rebase or mutation of F or `adr046w5` history.
 
 ---
 

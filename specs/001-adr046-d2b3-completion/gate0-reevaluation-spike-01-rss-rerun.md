@@ -106,8 +106,8 @@ re-evaluation, the input set here is **not empty**.
 | Wave | Delivery state | Disposition |
 | --- | --- | --- |
 | `ADR046-W0`, `ADR046-W1` | Delivered without required panel/seal records; historical evidence is retained in [`waiver-w0-w1.md`](./waiver-w0-w1.md) | Unaffected as work-item state only. Their 14 work items are recorded `Merged`; this does not authorize program continuation or satisfy FR-036's external constitution prerequisite. `ADR046-feasibility-001` stays `Merged` on the strength of the proof crate existing, which the amendment does not touch. |
-| `ADR046-W2`, `ADR046-W3`, `ADR046-W4` | Sealed and merged | Unaffected. Each sealed against a snapshot in which the RSS row read MEASURED-FAIL, which was the true state at that time and is preserved verbatim in `RESULTS.md`. None of the three owns a work item whose evidence or validation string changed. |
-| `ADR046-W5` | **Panel request outstanding, no seal** | **Invalidated. Must regather.** See 4.2. |
+| `ADR046-W2`, `ADR046-W3`, `ADR046-W4` | Delivery state reports sealed and merged | Historical status only. Each reportedly sealed against a snapshot in which the RSS row read MEASURED-FAIL, which was the true state at that time and is preserved verbatim in `RESULTS.md`. Before this feature graph relies on those closes, it requires exact external delivery-record confirmation of each historical candidate, binding panel, seal, and merge, or an accepted external correction. It must not schedule a new binding panel, seal, or merge for any of these waves. |
+| `ADR046-W5` | **Binding panel request outstanding, no seal** | **Blocked pending external disposition.** The retained request consumed Wave 5's once-per-wave binding request. The amendment prevents that request from authorizing a seal against changed content, but it does not delete, reclassify, or free the request slot. See 4.2. |
 | `ADR046-W6`-`ADR046-W8` | Not started | Nothing to regather. |
 
 ### 4.2 The W5 finding
@@ -126,21 +126,29 @@ gathered against the superseded conclusion.
 
 The disposition is therefore:
 
-1. That candidate's panel request is superseded. The amendment is content
-   change, and content change invalidates every prior sign-off in the phase.
-   Since zero attestations exist, nothing is being withdrawn - but a panel
-   dispatched against that snapshot must not be counted.
-2. `ADR046-W5` must take a **new** candidate snapshot after this amendment
-   merges, re-import its validation evidence against that snapshot, and issue
-   a fresh ten-role panel request. `redb-rss-spike-observation` in particular
-   must be re-imported so it points at the rerun artifact rather than at the
-   superseded conclusion.
-3. `ADR046-W5` must not seal until that has happened. This document is the
-   Gate 0 pass that unblocks the seal; it is not a substitute for the seal's
-   own conditions.
+1. Retain that candidate, its `panel-request.json`, imported evidence, and
+   exact delivery address as historical binding-delivery state. The request
+   consumed Wave 5's once-per-wave binding request even though it has zero
+   attestations and no seal. Do not delete it, silently relabel it
+   nonbinding, or call it superseded in a way that frees another request.
+2. The amendment is a content change, so the retained request cannot
+   authorize a seal for amended bytes. That invalidation does **not**
+   authorize a new candidate, evidence import, or binding
+   `/d2b-panel-round work` request. Nonbinding `/d2b-panel-round plan` phase
+   reviews are process evidence only: they create no delivery request,
+   consume no request slot, and cannot replace or dispose the retained
+   delivery request.
+3. An explicit disposition from the external delivery-contract/tooling
+   authority must reconcile the consumed request with the amended candidate
+   while preserving the historical record. It must name whether the retained
+   delivery state is confirmed or corrected and what close action, if any, is
+   authorized. Feature-local prose is not that authority.
+4. Until that disposition is accepted, T219 is non-authorizing:
+   `ADR046-W5` must not issue another binding request, attest, seal, register a
+   merge target, pass merge eligibility, or merge.
 
-This is a real cost, and it is the cost FR-056 exists to make visible rather
-than to avoid.
+This is the fail-closed cost FR-056 and the once-per-wave rule jointly make
+visible; this feature batch does not resolve it by rewriting history.
 
 ### 4.3 What the passing rerun does not license
 
