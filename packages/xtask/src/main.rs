@@ -742,17 +742,6 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
         let result = command
             .status()
             .map_err(|error| format!("could not start the Bazel child: {error}").into());
-        #[cfg(unix)]
-        if let Some(root_link) = root_link {
-            let cleanup = fs::remove_file(&root_link);
-            if let Err(error) = cleanup {
-                return Err(format!(
-                    "could not remove temporary peer lock {}: {error}",
-                    root_link.display()
-                )
-                .into());
-            }
-        }
         result
     }
 }
