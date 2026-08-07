@@ -809,55 +809,6 @@ fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io
     Ok(())
 }
 
-#[cfg(test)]
-mod fresh_bootstrap_tests {
-    use super::*;
-
-    #[test]
-    fn isolated_module_contains_only_the_selected_hub() {
-        let root = repo_root().expect("repository root");
-        let workspace = create_exclusive_temp_dir("xtask-fresh-module").expect("workspace");
-        prepare_fresh_workspace(root, &workspace, "product").expect("prepare product workspace");
-        let module = fs::read_to_string(workspace.join("MODULE.bazel")).expect("module");
-        assert!(module.contains("name = \"product\""));
-        assert!(!module.contains("name = \"walker\""));
-        assert!(module.contains("use_repo(crate, \"product\")"));
-        assert!(!workspace.join("MODULE.bazel.lock").exists());
-        fs::remove_dir_all(workspace).expect("cleanup");
-    }
-
-    #[test]
-    fn regular_lock_install_is_idempotent() {
-        let root = create_exclusive_temp_dir("xtask-fresh-lock").expect("root");
-        fs::create_dir_all(root.join("bazel/cargo")).expect("cargo directory");
-        let first = install_fresh_lock(&root, "product", b"lock-v1").expect("first install");
-        assert_eq!(first, vec![PathBuf::from("bazel/cargo/product.lock")]);
-        let second = install_fresh_lock(&root, "product", b"lock-v1").expect("second install");
-        assert!(second.is_empty());
-        assert_eq!(
-            fs::read(root.join("bazel/cargo/product.lock")).expect("lock bytes"),
-            b"lock-v1"
-        );
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn status_filter_allows_only_the_selected_output() {
-        let before = BTreeSet::from(["?? bazel/cargo/product.lock".to_owned()]);
-        let after = BTreeSet::from(["?? bazel/cargo/product.lock".to_owned()]);
-        assert!(!fresh_status_changed_outside_selected(
-            &before, &after, "product"
-        ));
-        let changed = BTreeSet::from([
-            "?? bazel/cargo/product.lock".to_owned(),
-            " M MODULE.bazel".to_owned(),
-        ]);
-        assert!(fresh_status_changed_outside_selected(
-            &before, &changed, "product"
-        ));
-    }
-}
-
 struct ExecutableBazelExecutor;
 
 impl bazel::BazelExecutor for ExecutableBazelExecutor {
@@ -2139,4 +2090,53 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod fresh_bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn isolated_module_contains_only_the_selected_hub() {
+        let root = repo_root().expect("repository root");
+        let workspace = create_exclusive_temp_dir("xtask-fresh-module").expect("workspace");
+        prepare_fresh_workspace(root, &workspace, "product").expect("prepare product workspace");
+        let module = fs::read_to_string(workspace.join("MODULE.bazel")).expect("module");
+        assert!(module.contains("name = \"product\""));
+        assert!(!module.contains("name = \"walker\""));
+        assert!(module.contains("use_repo(crate, \"product\")"));
+        assert!(!workspace.join("MODULE.bazel.lock").exists());
+        fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[test]
+    fn regular_lock_install_is_idempotent() {
+        let root = create_exclusive_temp_dir("xtask-fresh-lock").expect("root");
+        fs::create_dir_all(root.join("bazel/cargo")).expect("cargo directory");
+        let first = install_fresh_lock(&root, "product", b"lock-v1").expect("first install");
+        assert_eq!(first, vec![PathBuf::from("bazel/cargo/product.lock")]);
+        let second = install_fresh_lock(&root, "product", b"lock-v1").expect("second install");
+        assert!(second.is_empty());
+        assert_eq!(
+            fs::read(root.join("bazel/cargo/product.lock")).expect("lock bytes"),
+            b"lock-v1"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn status_filter_allows_only_the_selected_output() {
+        let before = BTreeSet::from(["?? bazel/cargo/product.lock".to_owned()]);
+        let after = BTreeSet::from(["?? bazel/cargo/product.lock".to_owned()]);
+        assert!(!fresh_status_changed_outside_selected(
+            &before, &after, "product"
+        ));
+        let changed = BTreeSet::from([
+            "?? bazel/cargo/product.lock".to_owned(),
+            " M MODULE.bazel".to_owned(),
+        ]);
+        assert!(fresh_status_changed_outside_selected(
+            &before, &changed, "product"
+        ));
+    }
 }
