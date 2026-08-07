@@ -555,15 +555,27 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   daemon recovery owner. This feature does not claim otherwise. T589 and every downstream
   Wave 5 implementation task MUST remain blocked until an accepted external source-generation
   compatibility disposition lands and is installed before the migration under test. That
-  disposition MUST make the installed protocol-4 broker reached only through the existing
-  `d2b-priv-broker.socket` and `d2b-priv-broker.service` the executable bootstrap actor. The
-  installed daemon may only forward exactly one accepted public-socket evidence fd over the
-  authenticated protocol-4 channel. The installed broker MUST consume that fd into the
-  nonfabricable intent-bound capability, pin the target executable and GC root, and pin one
-  exact immutable broker-managed privileged apply object from the installed source
-  generation. Only that installed object may execute under `sudo`; the caller-flake
-  entrypoint never does. The privileged actor receives no flake URI, installable, stable
-  reference, command, or argv to reevaluate. The source broker MUST durably own the
+  disposition MUST atomically install both source daemon/broker peers, numeric protocol 4
+  plus Hello `operation_catalogue_sha256` exactly equal to the `source-handoff-v1`
+  operation-catalogue fingerprint, every
+  matching source wire/privilege schema, catalogue, compatibility disposition, capability/API
+  fingerprint, serialization snapshot, positive/negative fixture, and one immutable
+  broker-managed source apply object. The installed broker reached only through the existing
+  `d2b-priv-broker.socket` and `d2b-priv-broker.service` is the executable bootstrap actor.
+  Bare committed protocol 4 with the field absent, or either source peer advertising another
+  catalogue fingerprint, MUST refuse before fd transfer. Only after both peers match numeric
+  protocol 4 and that exact fingerprint may the installed daemon forward exactly one accepted public-socket
+  evidence fd. The installed broker MUST consume that fd into the nonfabricable intent-bound
+  capability, pin the target executable and GC root, and separately pin the exact immutable
+  broker-managed privileged apply object from trusted installed-source-generation metadata.
+  Only that installed object may execute under `sudo`; the caller-flake entrypoint never
+  does. The privileged actor receives no flake URI, installable, stable reference, target
+  executable, command, or argv to reevaluate. For every apply connection, the broker MUST
+  obtain a peer pidfd directly from the accepted socket, bind the live peer's start identity
+  and current executable store/NAR/digest identity to the apply-object pin, and revalidate
+  them immediately before each mutation. Exit, exec, PID reuse, mismatch, or ambiguity MUST
+  refuse before mutation. The connection-scoped pidfd and executable fds MUST close with the
+  connection and MUST NOT be serialized or persisted. The source broker MUST durably own the
   coordinator before mutation, reopen it from its ordinary `serve` startup after the
   existing unit's `Restart=on-failure`, and transfer ownership exactly once to the
   authenticated target broker. A serialized credential, token, fd number, daemon identity,
@@ -573,9 +585,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   prerequisite.
 
   After that prerequisite is accepted, the exact ordering is:
-  public-socket Admin authorization; durable intent and capability; source-generation
-  compatibility-broker coordinator ownership before the first mutation; exact target and
-  apply-object pin revalidation; stock profile publication; target
+  public-socket Admin authorization; exact source-peer protocol/catalogue negotiation;
+  durable intent and capability; source-generation compatibility-broker coordinator
+  ownership before the first mutation; exact target, apply-object, and apply-peer identity
+  revalidation; stock profile publication; target
   broker transition; durable coordinator ownership transfer to that target broker; target
   daemon transition;
   exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
@@ -718,7 +731,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   canonical `d2b.slice`, sort the remainder, and compare that set for exact equality with the
   required three. No other slice, target, service, socket, timer, path, or template is
   excluded. Querying only those three names is not enumeration and cannot detect an
-  unexpected lifecycle unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
+  unexpected lifecycle unit. The negative matrix MUST inject an unexpected loaded
+  `d2b-unexpected.slice` and, separately, an unexpected loaded
+  `d2b-unexpected.service`; both survive the sole `d2b.slice` exclusion and MUST fail exact
+  equality. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
   cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
   is limited to T220/T604 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
   results only and MUST NOT rerun the target. T604 is the sole prospective owner of the
@@ -1364,10 +1380,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   current-effective-uid `0600`. Publication uses create-exclusive temporary state, file
   `fsync` and `renameat2(RENAME_NOREPLACE)`. Before the ordinary `EvidenceRecord` may be
   published, the importer `fsync`s every held ancestor directory fd from `sha256` through
-  `sc002`, `evidence-sidecars`, and the candidate directory. A no-replace race loser or
-  restart cleanup removes only its verified temporary leaf with fd-relative `unlinkat`,
-  `fsync`s the leaf parent, and proves zero temporary residue before success or refusal. Only
-  after that durable publication and cleanup may the ordinary `EvidenceRecord` be published.
+  `sc002`, `evidence-sidecars`, and the candidate directory. Creation, publication, and
+  cleanup MUST hold one verified candidate-scoped OFD write lock through parent `fsync`, the
+  zero-residue census, and record publication or return. The live importer retains that lock,
+  so loser or restart cleanup MUST NOT inspect or remove its temp; restart cleanup begins only
+  after acquiring the released lock. Under the lock, cleanup MUST atomically move the opened
+  temp into a reserved quarantine name with `renameat2(RENAME_NOREPLACE)`, reopen it, require
+  the same device/inode, owner, mode, link count, digest, and bytes as the pre-move fd, then
+  use fd-relative `unlinkat` and `fsync` the leaf parent. A mismatch MUST be restored and
+  refused, never unlinked. Both reserved temp and quarantine namespaces MUST be empty before
+  success, refusal, record publication, or return. Only after that durable publication and
+  identity-preserving cleanup may the ordinary `EvidenceRecord` be published.
   An identical sidecar
   left by a crash may be reopened and reused only after the complete
   identity/hash/owner/mode check; a different existing leaf refuses. A failed operator record
@@ -1377,7 +1400,8 @@ carries the object verbatim rather than copying selected fields into the task ro
   unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
   stale or wrong canonical outer `candidate_id`/`content_id`/`snapshot_sha256` triplet,
   sidecar content-digest mismatch, a receipt on a failed record, progress-free
-  evidence, or an over-budget sample fails
+  evidence, live-owner cleanup, temp-name/inode swap, residual temp/quarantine state, or an
+  over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than

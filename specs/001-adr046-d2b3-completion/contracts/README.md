@@ -204,7 +204,14 @@ merge-target registration, merge eligibility, and merge.
     (FR-070).
 11. **Amended-plan resume is receipt-bound.** T603 is the sole in-feature direct prerequisite
     of T589; FR-070's accepted and installed source-generation compatibility floor is an
-    additional external dispatch prerequisite. T603's pre-validator analysis and plan panel
+    additional external dispatch prerequisite. That external floor atomically owns both
+    numeric-protocol-4 source peers, exact `source-handoff-v1` catalogue negotiation, every
+    matching source schema/catalogue/fingerprint/snapshot/fixture, and the source installed
+    apply object. Bare protocol 4 refuses. T592 consumes those source artifacts read-only and
+    owns only target-v5 adoption and target outputs. The caller-flake target executable stays
+    unprivileged; only the separately broker-pinned installed apply object runs under `sudo`,
+    and its connection-scoped peer pidfd/executable identity must remain an exact live match
+    through each mutation with no persisted pidfd. T603's pre-validator analysis and plan panel
     at A/P0 authorize only its two validator source
     paths plus `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit
     V becomes B, P remains byte-identical to P0, and analysis
@@ -272,9 +279,13 @@ merge-target registration, merge eligibility, and merge.
     installs the exact bytes beneath held current-effective-uid `0700` candidate dirfds as a
     current-effective-uid `0600` leaf. The importer uses a create-exclusive temp, file
     `fsync`, and `renameat2(RENAME_NOREPLACE)`, then `fsync`s every ancestor directory from
-    `sha256` through the candidate directory before it publishes the `EvidenceRecord`. A
-    no-replace loser or restart cleanup removes only its verified temporary leaf through the
-    held parent fd, `fsync`s that parent, and leaves zero temporary residue. Crash retry may
+    `sha256` through the candidate directory before it publishes the `EvidenceRecord`.
+    Creation, publication, and cleanup hold one verified candidate-scoped OFD lock through
+    record publication or return. A live owner cannot be cleaned; restart cleanup begins only
+    after lock acquisition, moves the opened temp to a reserved quarantine name, reopens and
+    verifies the same device/inode and full identity, then unlinks through the held parent fd
+    and `fsync`s that parent. A mismatch is restored and refused, never unlinked. Every path
+    leaves zero temporary and quarantine residue. Crash retry may
     reuse only an identical fully revalidated durable leaf; a different existing leaf or
     concurrent wrong-byte/binding input refuses.
     T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and

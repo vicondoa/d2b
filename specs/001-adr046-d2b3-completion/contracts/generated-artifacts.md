@@ -58,20 +58,29 @@ artifact and requires a clean `git diff`, fail-closed.
   invocation, the operator must pass the existing
   public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
   one-shot classification into one durably sealed nonfabricable handoff capability bound to
-  the complete intent and emits no authority token. The source broker also pins one exact
-  immutable broker-managed apply object from the installed source generation. Only that
-  object runs under `sudo`; it receives no flake URI, installable, stable-reference path, or
-  caller-flake executable to reevaluate.
+  the complete intent and emits no authority token.   The source broker also pins one exact immutable broker-managed apply object from trusted
+  installed-generation metadata. Only that object runs under `sudo`; it receives no flake
+  URI, installable, stable-reference path, target executable, or caller-flake executable to
+  reevaluate. The broker binds the accepted apply connection's direct peer pidfd and live
+  executable store/NAR/digest identity to that pin, revalidates it before every mutation, and
+  refuses exit, exec, PID reuse, mismatch, or ambiguity. The connection-scoped pidfd and
+  executable fds are never serialized or persisted.
   Capability-authorized broker code exclusively owns stock profile publication,
   broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference publication and
   repair, stock rollback, and source-service restoration. Before transfer that actor must be
-  a source-generation-installed protocol-4 broker running as the ordinary `serve` process of
-  the existing `d2b-priv-broker.service`; after durable transfer it is the target broker.
-  Committed protocol 4 has no handoff operation and the installed service is pinned to its
-  installed `brokerPackage`, so this feature remains blocked until an accepted external
-  disposition installs that compatibility floor before migration. A target-closure-only
-  mode, synthetic starting image, new unit or override, child, mutating entrypoint, or daemon
-  recovery owner is not a substitute.
+  a source-generation-installed broker running as the ordinary `serve` process of the
+  existing `d2b-priv-broker.service`, after both installed source peers negotiate numeric
+  protocol 4 plus Hello `operation_catalogue_sha256` exactly equal to the
+  `source-handoff-v1` operation-catalogue fingerprint; after durable
+  transfer it is the target broker. The accepted external disposition must move both source
+  peers and every matching source wire/privilege schema, catalogue, compatibility
+  disposition, capability/API fingerprint, serialization snapshot and positive/negative
+  fixture atomically with the source installed apply object. Committed protocol 4 has no
+  handoff operation and omits the field or advertises a different catalogue fingerprint, so this feature remains
+  blocked until that external floor is installed before migration. T592 consumes those source
+  outputs read-only and owns only target-v5 adoption plus target artifacts. A
+  target-closure-only mode, synthetic starting image, new unit or override, child, mutating
+  entrypoint, or daemon recovery owner is not a substitute.
 - The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.
   The broker verifies and audits the staged source/target identity. The target daemon starts
   and completes Hello for the exact target broker generation and protocol while unready, then
@@ -109,14 +118,17 @@ artifact and requires a clean `git diff`, fail-closed.
 `make test-drift` is clean; no artifact is hand-edited; no delivery record appears in
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
-coverage starts with a 3/1 source generation that has independently installed the accepted
-external versioned protocol-4 source-daemon/source-broker bridge and its broker-managed
-immutable apply object while still lacking the target v5 operation. Bare committed protocol
-4 without that source-side bridge is a refusal case. The positive case executes the
+coverage starts with a 3/1 source generation that has independently and atomically installed
+both accepted numeric-protocol-4 source peers, exact `source-handoff-v1` catalogue
+negotiation, matching source schemas/catalogues/fingerprints/snapshots/fixtures, and its
+broker-managed immutable apply object while still lacking the target-v5 operation. Bare
+committed protocol 4 and mismatched source-peer fingerprints are refusal cases. The positive case executes the
 parameterized target-closure entrypoint, proves the caller-flake executable runs only
 unprivileged and only validates/builds/stages/authorizes/submits, rejects zero-output and
 multi-output resolution, proves privileged apply uses only the separately pinned installed
-object with no URI or reference to reevaluate,
+object with no URI, reference, or target executable to reevaluate, binds the accepted
+connection's direct peer pidfd and executable identity to that pin, and refuses
+exit/exec/PID-reuse/mismatch/ambiguity with no persisted pidfd,
 proves initial public-socket Admin classification, sealed durable capability,
 broker-before-daemon activation, Hello while unready, phase-attenuated authenticated
 publication request, and durable publication before ingestion/readiness, then injects failure and crash points through
@@ -129,6 +141,7 @@ bytes or absence, 3/1 artifacts, and source service generations are restored tog
 immutable broker audit. Host recovery also executes the post-publication stable-reference and
 parameterized prior-target rollback commands, rejects direct entrypoint/daemon/Nix mutation
 plus missing or malformed values, and proves no sensitive reference value enters diagnostics.
-The nonempty structural/API guard and poison fixture reject a second bundle
+T592's generated evidence owns only target-v5 adoption and target outputs; source peer/output
+atomicity is supplied by the accepted external disposition. The nonempty structural/API guard and poison fixture reject a second bundle
 envelope or alias, version authority, hash implementation/entry point, or re-export through
 the existing policy and fixture-contract gates.

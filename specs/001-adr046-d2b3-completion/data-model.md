@@ -264,21 +264,35 @@ Through the already held candidate-directory fd it creates and verifies current-
 and publishes with `renameat2(RENAME_NOREPLACE)`. Before publishing the `EvidenceRecord`
 carrying the derived locator, it `fsync`s each held ancestor directory fd bottom-up:
 `sha256`, `sc002`, `evidence-sidecars`, then the candidate directory. Namespace creation is
-therefore durable, not only the final leaf rename. A failed no-replace race or restart cleanup
-may inspect only the reserved temporary-name namespace through the held leaf-parent fd. It
-requires a regular single-link current-effective-uid `0600` temp with stable inode identity,
-removes it with `unlinkat`, and `fsync`s that parent before success or refusal. No joined path
-or broad sweep is allowed, and every race loser and recovery path leaves zero temporary
+therefore durable, not only the final leaf rename. Before temp creation or recovery, the
+importer acquires one verified candidate-scoped OFD write lock and retains it through
+publication or cleanup, parent `fsync`, an exact residue census, and `EvidenceRecord`
+publication or return. A live importer owns that lock; a failed no-replace loser or restart
+path cannot inspect or remove the live owner's temp. Restart cleanup begins only after it
+acquires the released lock.
+
+While holding the lock, cleanup may inspect only the reserved temporary and quarantine
+namespaces through the held leaf-parent fd. It opens the candidate temp, requires a regular
+single-link current-effective-uid `0600` leaf, records its device/inode, owner, mode, link
+count, digest, and bytes, and atomically moves the name into a unique reserved quarantine
+name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf and requires all
+recorded identity members to match before `unlinkat`. A mismatch is restored to its original
+name and refused without unlinking either inode. Successful unlink is followed by parent
+`fsync`; before success, refusal, record publication, or return, the still-held lock guards an
+exact empty census of both reserved namespaces. No joined path or broad sweep is allowed,
+and every winner, race loser, refusal, and recovery path leaves zero temporary or quarantine
 residue.
 If a crash leaves the canonical sidecar durable before record publication, retry opens that
 leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
 mode `0600`, link count one, device/inode stability, digest, bytes, decode, and outer binding
 all match; it never replaces the leaf. A different or malformed existing leaf refuses.
-Crash injection covers source open, hash, decode, temp write, file sync, no-replace
-publication, each ancestor-directory sync, race-loser/orphan unlink, cleanup-parent sync, and
-record publication. Synchronized imports cover same-bytes/same-record idempotence and
-different-bytes or wrong-binding races, with no record allowed to reference absent or
-not-yet-durable bytes and no temporary leaf left by a winner or loser.
+Crash injection covers source open, hash, decode, OFD-lock acquisition, temp write, file sync,
+no-replace publication, each ancestor-directory sync, quarantine move/reopen,
+race-loser/orphan unlink, cleanup-parent sync, zero-residue census, and record publication.
+Synchronized imports cover a live owner versus cleanup, temp-name/inode swap,
+same-bytes/same-record idempotence, and different-bytes or wrong-binding races, with no record
+allowed to reference absent or not-yet-durable bytes and no temporary or quarantine leaf left
+by a winner or loser.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -313,7 +327,9 @@ duplicate, mixed, or unrelated resource samples; effect/Ready identity disagreem
 selected-stop/progress identity mismatch; arithmetic overflow or event misordering; stale
 binding; zero progress; more than 32 progress observations; and any over-budget sample all
 refuse. Missing ancestor sync, non-fd-relative cleanup, cleanup outside the reserved temp
-namespace, cleanup-parent sync failure, or any temporary residue after success, refusal, race,
-or restart also refuses. Compatibility tests decode retained schema-v2 `EvidenceRecord` fixtures
+namespace, missing or replaceable candidate OFD lock, cleanup against a live lock owner,
+quarantine identity mismatch, cleanup-parent sync failure, or any temporary/quarantine
+residue after success, refusal, race, or restart also refuses. Compatibility tests decode
+retained schema-v2 `EvidenceRecord` fixtures
 byte-identically, import a failed operator record without a receipt, and prove that the same
 failed record remains ineligible for every close stage.

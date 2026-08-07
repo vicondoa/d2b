@@ -299,14 +299,19 @@ no fixed illustrative target.
 > service's executable before profile publication. Do not run the migration or rollback
 > procedures below until an accepted external source-generation compatibility disposition
 > has been installed on the source 3/1 host. That prerequisite must make the installed
-> protocol-4 broker's ordinary `serve` process under the existing
+> source daemon and broker negotiate numeric protocol 4 plus Hello
+> `operation_catalogue_sha256` exactly equal to the `source-handoff-v1` operation-catalogue
+> fingerprint, and must atomically install both peers,
+> all matching source schemas/catalogues/fingerprints/snapshots/fixtures, and the source apply
+> object. The source broker's ordinary `serve` process under the existing
 > `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
 > public-socket evidence fd, seal the typed authority, pin the target object, and pin one
 > exact broker-managed privileged apply executable from the installed source generation.
 > That immutable apply object, never an executable obtained from the caller's target flake,
 > durably resumes the coordinator and transfers it to the target broker. The accepted external
-> source-generation disposition owns the protocol-4 bridge and source apply object; this
-> feature owns neither. No target-only binary, new unit or override, child, mutating
+> source-generation disposition owns that entire source set; T592 owns only target-v5
+> adoption and target artifacts. Bare committed protocol 4 or a source-peer catalogue
+> mismatch refuses. No target-only binary, new unit or override, child, mutating
 > entrypoint, daemon recovery owner, serialized credential, or root/provenance claim
 > substitutes. This quickstart claims no implementation of that prerequisite.
 
@@ -391,8 +396,10 @@ sudo -- "$D2B_APPLY_EXE" --apply-authorized-handoff ||
 Once the external prerequisite exists, the unprivileged invocation traverses the existing
 public socket and its `SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority
 token. The installed source daemon forwards exactly one accepted-socket evidence fd over the
-authenticated protocol-4 channel, and the installed source broker consumes it into one
-durably sealed nonfabricable handoff capability bound to the staged intent.
+authenticated source channel only after both installed peers negotiate numeric protocol 4
+plus the exact `source-handoff-v1` catalogue fingerprint, and the installed source broker
+consumes it into one durably sealed nonfabricable handoff capability bound to the staged
+intent. Bare protocol 4 or a source-peer fingerprint mismatch refuses.
 It creates and retains the GC root and immutable identity for the exact target store object,
 and separately pins the canonical identity and digest of `D2B_APPLY_EXE` from the installed
 source generation. The caller-flake `D2B_DEPLOY_EXE` is executed only while unprivileged.
@@ -465,8 +472,11 @@ classification, then requires the broker to durably pin the exact executable sto
 before returning success. The shell invokes `sudo` only after that success and only on the
 exact immutable broker-managed apply object from the installed generation. Apply revalidates
 both the target-object and apply-object pins and performs no evaluation or reference lookup.
-An empty, malformed, over-bound, mismatched, changed, unreadable, or nonexistent input exits
-2 with the named remediation and runs no privileged command.
+The broker also binds the accepted apply connection's direct peer pidfd and live executable
+identity to the apply-object pin immediately before each mutation; exit, exec, PID reuse,
+mismatch, or ambiguity refuses, and no pidfd is persisted. An empty, malformed, over-bound,
+mismatched, changed, unreadable, or nonexistent input exits 2 with the named remediation and
+runs no privileged command.
 
 **Expected**: all three exact resources are ready through their owned effects; removal of
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
