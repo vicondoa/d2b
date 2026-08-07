@@ -35,7 +35,7 @@ release_wf="$ROOT/.github/workflows/release-host-binaries.yml"
 if bash "$ROOT/tests/tools/gen-flake-check-matrix-pin.sh" --check; then
   ok "flake-check-matrix name pin in sync"
 else
-  fail "flake-check-matrix name pin drifted (run: make flake-matrix-pin)"
+  fail "flake-check-matrix name pin drifted (run: make flake-matrix-pin)" || true
   rc=1
 fi
 
