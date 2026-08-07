@@ -576,16 +576,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   pre-mutation/outcome audit members, and 15 transition edges MUST be independently pinned;
   every member has missing and mismatch coverage, and unaudited extra mutation,
   unauthenticated pointer, and four independent registry-shrinkage poisons MUST exit `4`
-  with zero mutation. `action: repair-authorized-handoff` MUST map to the selector-free
-  unprivileged `--repair-authorized-handoff` command owned by T595. T592 MUST own typed
+  with zero mutation. Exact-empty pointer absence MUST be the sole exit-`3` `not-found`
+  census. Exactly one fully valid authenticated intent and complete matrix with only its
+  pointer absent MUST have its own exit-`4` `pointer-repair-required` inspect projection.
+  Competing, malformed, unauthenticated, orphaned, unknown, or incomplete censuses MUST be
+  invalid coordinator state. `action: repair-authorized-handoff` MUST map to the
+  selector-free unprivileged `--repair-authorized-handoff` command owned by T595. T592 MUST own typed
   broker op `RepairHostGenerationCurrentIntentV1`, its public-socket Admin-only privilege
   row, coordinator lock, and distinct immutable
   `coordinator-pointer-repair/{pre-mutation,outcome}` audit pair. Launcher, workload, Zone,
   unauthenticated, direct-broker, and root callers MUST be denied.
 
   Clean pointer absence MUST return the existing exit-`3` not-found result without a write;
-  repairable absence MUST prove exactly one authenticated active or terminal intent and a
-  complete immutable matrix. Repair MUST file-sync an unnamed inode, direct-final link the
+  repairable absence MUST prove exactly one fully valid authenticated active or terminal
+  intent and a complete immutable matrix. Repair MUST file-sync an unnamed inode, direct-final link the
   exact pointer no-replace, final-reopen, sync the parent, and sync the outcome audit.
   Restart before link sees absence; restart after link accepts only absence or the exact
   final; pre-only audit resumes; a complete pair replays with zero write; and a conflicting
@@ -594,15 +598,42 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 
   Missing or invalid immutable proof MUST report the bounded closed member and failure class
   with `restore-immutable-audit-backup`. Broker-private
-  `HostGenerationImmutableAuditBackupOwner` MUST append authenticated backup members before
-  covered mutation durability, retain them while current and for 30 days after pointer
-  replacement, and accept only exact signed
-  `HostGenerationImmutableAuditRestorationV1` no-replace restoration under the coordinator
-  lock. An unaudited extra mutation MUST instead report
+  `HostGenerationImmutableAuditBackupOwner` MUST be a private linear, nonconstructible,
+  non-clonable, nonserializable, nonconvertible capability whose coordinator transfer
+  consumes the old wrapper. It MUST append authenticated backup members through the common
+  file-and-directory-durable publication protocol before covered mutation durability.
+  One intent MUST be bounded to 256 members and 16,777,216 encoded bytes, remain unprunable
+  while current, become durably prune-eligible at day 30 after authenticated replacement,
+  and have no retained member after day 90. Prune/bound failures MUST return a typed redacted
+  degraded report and block later mutation.
+
+  T595 MUST own the exact unprivileged
+  `--restore-immutable-audit-backup PATH [--json]` public-socket client, bounded no-follow
+  mode-`0600` input, exits, human/JSON goldens, and response-loss replay. T592 MUST own the
+  shared request/response DTO and `RestoreHostGenerationImmutableAuditMemberV1` broker
+  operation. Restoration MUST be admitted only from the consumed local public-socket
+  `Admin` capability; every other local role, root, `HostShutdown`, nonmember,
+  unauthenticated-local, direct-broker, and remote caller MUST be denied before coordinator
+  access, regardless of signature validity. The exact signed
+  `HostGenerationImmutableAuditRestorationV1` MUST bind domain, key, authority, member,
+  failure class, backup, predecessor, canonical member, and observed member. It MUST append
+  a durable fixed-field pre-mutation record, append-only signed provenance/restored-member
+  supersession, and matching outcome under the coordinator lock without replacing any
+  mismatched, unauthenticated, or noncontiguous original. Every dispatch, repair audit,
+  backup, restoration-pre, provenance, and outcome publication MUST use the one idempotent
+  exact-final protocol and independently test every write/file-sync/link/parent/ancestor-sync
+  boundary, conflict preservation, and response-loss no-write replay. An unaudited extra mutation MUST instead report
   `preserve-and-escalate-audit-integrity-incident` and MUST NOT advertise restoration. No
-  force, generic copy path, daemon recovery ownership, or new unit exists. The exact
-  155-case registry MUST cover all repair inputs, absence classes, conflicts, crash
+  force, generic copy path, daemon recovery ownership, or new unit exists. Every preserve
+  action MUST map to the exact site-security external procedure named in
+  `contracts/operator-cli.md`; artifact acquisition MUST map to
+  `host-generation-immutable-audit-backup-acquisition-v1`. The exact 156-case status
+  registry MUST cover repair projections, inputs, absence classes, conflicts, crash
   boundaries, second-run no-write replay, restoration diagnostics, and integrity escalation.
+  A separate two-row restoration audit-edge fixture and independent 62-case broker registry
+  MUST cover role denial, artifact binding, append-only supersession, conflicts,
+  backup-before-mutation, retention, zero-mutation refusals, every restoration publication
+  boundary, and completed no-write replay.
 
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
   has no host-generation handoff operation, and the installed
@@ -629,7 +660,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   generation; the external validator MUST produce the chained installation, validation, and
   exact-C/Q import receipts. The installed coordinator MUST acquire the one durable origin
   record under a sole exclusive OFD claim into private nonserializable, non-clonable
-  `ProtectedSourceFloorOrigin` without durably consuming it. The validator MUST consume that
+  `ProtectedSourceFloorOrigin` without durably consuming it. The claim MUST use one stable
+  preprovisioned regular root-owned mode-`0600` single-link lock inode beneath an anchored
+  nonreplaceable root-owned namespace. The parent MUST be opened no-follow and
+  `O_CLOEXEC`; the leaf MUST be opened `O_NOFOLLOW|O_CLOEXEC`, identity-checked before and
+  after `F_OFD_SETLK`, and never replaced, renamed, unlinked, duplicated, or transferred.
+  The same description MUST remain held through dispatch final reopen and every
+  parent/ancestor directory sync. Parent/leaf replacement and exec-leak tests MUST prove no
+  independently lockable inode, inherited claim, concurrent capability, or second dispatch.
+  The validator MUST consume that
   process-local owner while authenticating
   all four issuer proofs under disposition-selected keys into private
   `AuthenticatedSourceFloorIssuerProvenance`, then consume the intermediate by value into
@@ -648,8 +687,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `imported-for-exact-C/Q` transition and consumes only the validated-floor result read-only.
   Origin copy/concurrent replay, repeated mint, and later serialized revalidation MUST
   refuse. Fault injection after claim, authentication, semantic validation, final capability
-  creation, and durable publication MUST prove `critical_section_max = 1`, no concurrent
-  capabilities, no permanent pre-publication consumption, and at most one dispatch. The
+  creation, each dispatch write/file-sync/link/parent/ancestor-sync boundary, and durable
+  publication MUST prove `critical_section_max = 1`, no concurrent capabilities, no
+  permanent pre-publication consumption, exact-final no-write response-loss replay, and at
+  most one dispatch. The
   exact five copied-proof, 26 issuer-authentication/capability, 21 hash-vector, 32
   receipt/transition, 91 member-semantic, and four matrix-meta negative registries are
   mutually read-independent from production. No T589-T605 task may
@@ -1526,7 +1567,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   cleanup may once-open and verify a retained legacy name but MUST NOT rename, hardlink, or
   unlink it: the OFD lock does not exclude a same-uid pathname replacer, and Linux has no
   inode-qualified rename or unlink. The private candidate-namespace write owner exposes no
-  existing-name rename or unlink. Parent-boundary loss, source replacement, or
+  existing-name rename or unlink. Compile-fail/API-surface seals MUST reject every current
+  quarantine/retirement rename, existing-name unlink, and name-consuming cleanup hook;
+  historical rename states are observation fixtures only. Parent-boundary loss, source replacement, or
   destination-reopen mismatch MUST return `sc002-namespace-write-ownership-unproven`,
   preserve the complete name census, and permit no later link, rename, or unlink.
 
@@ -1534,8 +1577,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   foreign final MUST leave zero receipt leaf and zero `EvidenceRecord` mutation. A crash
   before the link exposes no leaf; after the link, restart accepts only absence or the exact
   complete final and completes durability. Exact replay after parent durability MUST perform
-  zero write. The eight receipt-import cases are read-independent from the 26 retained
-  preimage/request-output cases in the exact 34-id direct-final publication registry.
+  zero write. A destination replacement/inode mismatch injected after the importer links and
+  before its final reopen MUST refuse, preserve source and observed destination, and publish
+  zero `EvidenceRecord` mutation. The nine receipt-import cases are read-independent from
+  the 26 retained preimage/request-output cases in the exact 35-id direct-final publication
+  registry.
 
   Before any payload or residue evidence copy, cleanup MUST direct-final publish and sync
   the complete incident preimage. It may then copy only from the retained source fd into an
@@ -1559,7 +1605,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   payload plus every changed ancestor. The incident
   digest uses the `identity-ambiguity` domain and binds the closed reopen stage plus ordered
   before/after identity digests. All four kind-specific preimages and their bounded identity
-  and census sub-digests are exactly those in `data-model.md`. In particular,
+  and census sub-digests are exactly those in `data-model.md`. Historical stages `1` and `2`
+  remain decode-compatible; all new legacy named-source observation emits stage `3`.
+  The stage-`3` incident and metadata positive golden plus wrong/unknown/mismatched-stage
+  negatives are mandatory. In particular,
   `CanonicalRetiredCensusV1` is the Version-1 `0x01` grammar with normal body tag `0x00`,
   exact path/record length framing, unsigned-byte path ordering, the closed entry,
   observation, and failure tag tables, the all-zero/`u64::MAX` unavailable tuple, and the
@@ -1579,11 +1628,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   durable primary status or resolution, successor freeze, disposition request, signed
   disposition, and admission record repeat that complete object byte-for-byte. A
   verified-payload terminal requires an immutable preimage-complete anchor and metadata,
-  a same-identity reopen and file sync of the moved payload, and a contiguous append-only
+  a same-identity reopen and file sync of the direct-final copied payload, and a contiguous append-only
   status prefix beginning at `parked`, with every leaf, parent, and changed ancestor synced.
-  A replacement, `ENOENT`, nonidentical `EEXIST`, or post-move identity mismatch is exactly
-  `recovery-resumable` when one metadata-bound continuation remains and otherwise
+  A replacement, nonidentical `EEXIST`, or post-copy identity mismatch is exactly
+  `recovery-resumable` when one metadata-bound continuation with the original legacy source
+  name still retained remains and otherwise
   `recovery-irreconcilable`: every name is preserved and no parked status is published.
+  `ENOENT` for any original legacy source name is always irreconcilable and advances only
+  through authenticated evidence resolution. No `parked` or `mismatch-retained` terminal
+  census is valid unless every original legacy source name remains present at its frozen
+  locator. The authenticated resolution is separate and MUST NOT fabricate a terminal
+  cleanup census.
   Inspect returns the stable id and closed cause in both variants. Recover is offered only
   for the resumable variant. The irreconcilable variant advances only through an
   authenticated disposition that either retains representable names as durable residue or
@@ -1692,7 +1747,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   candidate-retention owner, recursive whole-scope retention guard, and validator
   authority. It also owns the shared
   `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` oracle, the exact 61 receipt,
-  73 malformed-census, and 34 direct-final publication negative registries, the
+  73 malformed-census, and 35 direct-final publication negative registries, the
   seventeen-row recovery
   redaction registry including raw `st_uid`, `st_gid`, `st_rdev`, and symlink-target bytes,
   the eight-vector recursive-census

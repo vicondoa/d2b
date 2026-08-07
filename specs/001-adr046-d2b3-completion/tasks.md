@@ -752,16 +752,33 @@ table before the operation exists.
   retained.
 
   The source coordinator acquires `ProtectedSourceFloorOrigin` under one exclusive OFD
-  claim without consuming the durable origin. Claim, authentication, semantic-validation,
+  claim without consuming the durable origin. The claim uses one preprovisioned stable
+  root-owned mode-`0600` single-link lock inode below an anchored nonreplaceable root-owned
+  namespace. Its parent and leaf are opened no-follow with `O_CLOEXEC`, their identities are
+  checked before and after `F_OFD_SETLK`, and the leaf is never replaced, renamed, unlinked,
+  duplicated, or transferred. The same open file description remains held through dispatch
+  final reopen and every parent/ancestor directory sync. Claim, authentication, semantic-validation,
   and final-capability errors or owner death before dispatch publication release the claim
   and permit exact-origin reacquisition only after proving no durable dispatch exists.
   Durable origin consumption commits only in the one file-and-directory-durable handoff
   dispatch record, which is also the consumption marker;
   restart after publication resumes that dispatch without a second mint. Independently
   injected owner death after
-  claim, authentication, semantic validation, final-capability creation, and publication
+  claim, authentication, semantic validation, final-capability creation, every dispatch
+  write/file-sync/link/parent/ancestor-sync boundary, and publication
   proves `critical_section_max = 1`, no concurrent capabilities, no permanent
-  pre-publication consumption, and no serialized-evidence revalidation.
+  pre-publication consumption, exact-final response-loss no-write replay, and no
+  serialized-evidence revalidation. Parent/lock-path replacement and child-exec tests prove
+  no independently lockable inode and no inherited descriptor retaining the claim after
+  owner death.
+
+  T589 freezes the one `HostGenerationImmutablePublicationV1` contract consumed by the
+  external origin-dispatch owner and T592: unnamed-inode canonical write/file-sync,
+  procfs-fd direct-final no-replace link, final reopen, parent/every-ancestor sync,
+  exact-final replay, and conflict preservation. Dispatch, repair pre/outcome, backup,
+  restoration pre/provenance/outcome, and response-loss tests are independent at every
+  write/file-sync/link/parent/ancestor boundary; no record class may borrow another class's
+  test.
 
   **Pinned independent expected sets:** T589 writes the following closed fixture and shared
   oracle set directly from this task contract. No expected-set fixture may import, call,
@@ -935,18 +952,28 @@ table before the operation exists.
     named check.
 
   - The retained `sc002-request-output-negative-case-ids.txt` filename is the direct-final
-    publication registry and contains exactly the ordered 34 ids in `data-model.md`. A
-    separately authored literal 34-id constant equals it. The importer, path resolver,
+    publication registry and contains exactly the ordered 35 ids in `data-model.md`. A
+    separately authored literal 35-id constant equals it. The importer, path resolver,
     publisher, crash injector, descriptor tracker, and production code read neither
     expectation. Every case reaches only its named openat2, type, owner, mode, link, content,
-    inode, no-replace, durability, replay, or CLOEXEC check. The eight read-independent
+    inode, no-replace, durability, replay, or CLOEXEC check. The nine read-independent
     receipt-import cases cover unsupported `O_TMPFILE`, invalid procfs/mount identity,
     unsupported direct link, foreign `EEXIST`, every direct-final crash boundary, and
-    zero-write exact replay; every refusal has zero receipt leaf and zero `EvidenceRecord`
-    mutation. The named preimage unsupported-open/link cases prove zero incident namespace
+    zero-write exact replay, plus importer post-link/final-reopen inode replacement; every
+    refusal has zero receipt leaf and zero `EvidenceRecord` mutation. The mismatch case
+    preserves source and observed destination and performs no repair/unlink/relink. The named
+    preimage unsupported-open/link cases prove zero incident namespace
     and freeze/request mutation. Request-output unsupported-open and invalid-procfs/mount
     prove zero output namespace and zero freeze/request mutation; unsupported link proves
     zero output namespace and exact retention of the already durable internal pair.
+
+  - `sc002-observation-stage-case-ids.txt` contains exactly the seven ordered ids in
+    `data-model.md`. A separately authored literal seven-id constant equals it. The
+    identity-ambiguity incident and metadata golden MUST use positive stage `3`; stages `1`
+    and `2` remain historical decode-compatible inputs. Zero, unknown stage `4`,
+    preimage/metadata mismatch, and non-identity non-null stage each reach their named
+    refusal before payload or status publication. Production stage selection and metadata
+    validation read neither fixture nor expected constant.
 
   - `sc002-recovery-forbidden-values.tsv` contains exactly the seventeen tab-separated rows
     in `data-model.md`. Inject each literal independently through inspect, recover, request,
@@ -1133,7 +1160,7 @@ table before the operation exists.
   is durable, never truncates, replaces, or name-consumingly renames, verifies final
   inode/bytes, syncs the parent, and replays every pre-link or post-link crash idempotently.
   Unsupported open proves zero freeze/request mutation; unsupported link proves zero output
-  namespace mutation and retains the durable internal pair. All 34 direct-final publication
+  namespace mutation and retains the durable internal pair. All 35 direct-final publication
   cases and all
   seventeen recovery redaction canaries must pass. Every opened descriptor uses `O_CLOEXEC`; every
   received descriptor uses `MSG_CMSG_CLOEXEC`; descriptor-count and exec-leak probes cover
@@ -1192,8 +1219,10 @@ table before the operation exists.
   never replaced, renamed, or unlinked. Successful acquisition yields the sole private
   `CandidateSidecarGuard`, which owns the one locked `OwnedFd` and exposes no raw-fd,
   duplication, transfer, clone, or conversion surface. Cleanup borrows that exact guard into
-  private `SidecarCleanupOwner<'guard>`; every namespace open, publication, census, and return is
-  a method on that owner. The owner has no public fields, constructor, accessors, serde,
+  private `SidecarCleanupOwner<'guard>`; every namespace observation, retained-legacy
+  census, direct-final evidence copy, and return is a method on that owner. Historical
+  quarantine/retirement renames are fixtures only; the current owner exposes no rename,
+  existing-name unlink, or name-consuming hook. The owner has no public fields, constructor, accessors, serde,
   clone/copy/default, conversion, fd reconstruction, independent guard parameter, or
   `'static` path. It cannot outlive or be used after the guard, and a stale owner cannot be
   paired with a freshly opened lock. A loser obtains no guard or owner, and restart obtains
@@ -1550,7 +1579,7 @@ table before the operation exists.
   requires `sc002-namespace-write-ownership-unproven`, preservation of the complete name
   census, and zero later link, rename, or unlink. The separate
   `candidate-namespace-write-owner/existing-name-move-hook-unreachable` poison fails if a
-  current rename hook exists. Newly created sidecar, preimage, and
+  current rename or unlink hook exists. Newly created sidecar, preimage, and
   request-output records link the exact complete opened inode directly to the final
   no-replace name.
 
@@ -1587,9 +1616,10 @@ table before the operation exists.
   crash leaves no output name; a post-link crash exposes only the complete final and is
   exactly replayable. Unsupported open refuses before freeze/request creation. Unsupported
   link is an ordinary output failure that retains the durable internal pair. The independent
-  direct-final publication registry has 34 ids: the retained 26 preimage/request-output
-  cases plus eight read-independent importer unsupported-open, invalid-procfs/mount,
+  direct-final publication registry has 35 ids: the retained 26 preimage/request-output
+  cases plus nine read-independent importer unsupported-open, invalid-procfs/mount,
   unsupported-link, conflict, crash-boundary, and zero-write-replay cases, including
+  `receipt-import/post-link-final-reopen-inode-mismatch` and
   `request-output/crash-after-internal-request-before-final-link`. The incident CLI remediation enum
   has six values, and every valid-ID exit `4` repeats the exact thirteen-line or 17-field
   status. Coverage denial uses the exact
@@ -1607,14 +1637,24 @@ table before the operation exists.
   direct-link outcomes; success observed on another credential, namespace, mount, kernel, or
   filesystem is not transferable evidence.
 
+  T589 additionally owns the shared immutable-publication/restoration contract artifacts:
+  `docs/reference/schemas/delivery/host-generation-immutable-audit-{backup,restoration,restored-member}-v1.schema.json`,
+  `tests/golden/delivery/host-generation-immutable-audit-restoration-edges.tsv`,
+  `tests/golden/delivery/host-generation-immutable-audit-restoration-broker-case-ids.txt`,
+  the restoration human/JSON goldens, and
+  `tests/golden/delivery/sc002-observation-stage-case-ids.txt`. T592 consumes these
+  read-only for broker implementation and T595 consumes them read-only for the client; no
+  overlapping implementation scope may edit them.
+
   `HostGenerationHandoffStatusV1` is a closed validated enum with the exact tuple table,
   current-intent pointer selection, terminal partition, two valid terminal rows, active and
   failed source/target recovery rows, active and failed transfer-pending rows, and active and
   failed rollback rows in `data-model.md`. No arbitrary tuple serializes. The strict
   schema/goldens pin all five-line/seven-field valid outputs and the exact two-line/four-field
   errors for exits `2|3|4`, plus the exact selector-free
-  `--repair-authorized-handoff` success, restart contract, bounded immutable-audit
-  restoration diagnostic, and separate audit-integrity escalation. The independent 155-id
+  `--repair-authorized-handoff` success, distinct repairable-absence inspect projection,
+  restart contract, bounded immutable-audit restoration diagnostic, and separate
+  audit-integrity escalation. The independent 156-id
   case registry covers every tuple and edge,
   forbidden intent/generation/path/token/root/extra-positional inspect input,
   absent/missing/stale/multiple pointer selection, terminal replacement, transfer-pending
@@ -1623,9 +1663,21 @@ table before the operation exists.
   four shrinkage meta-negatives. An
   incomplete rollback proof can produce only `invalid-coordinator` or
   `audit-restoration-required` with zero mutation. Repair independently covers every
-  intent/generation selector, path, token, root, positional, and force input; clean versus
-  repairable absence; foreign-final conflict; pre-audit, unnamed-inode, direct-link,
+  intent/generation selector, path, token, root, positional, and force input; exact-empty
+  clean absence, exactly-one-valid repairable absence, competing/malformed/unauthenticated/
+  orphan/incomplete invalid censuses; foreign-final conflict; pre-audit, unnamed-inode, direct-link,
   parent-sync, and outcome crash boundaries; and second-run zero-write success.
+
+  The 156-id status registry covers projection and pointer repair only. The separate
+  read-independent
+  `host-generation-immutable-audit-restoration-edges.tsv` two-row fixture and
+  `host-generation-immutable-audit-restoration-broker-case-ids.txt` 62-id registry in
+  `data-model.md` close restoration authorization, signed artifact validation,
+  append-only supersession, backup-before-mutation, bounded retention/pruning, conflicts,
+  every restoration pre/provenance/outcome write/file-sync/link/parent/ancestor-sync
+  boundary, completed response-loss no-write replay, and zero-mutation pre-authorization
+  refusals. Each uses a separately authored literal expected set and cannot derive from
+  production or the 156-id fixture.
 
   The SC-002 recovery redaction registry has seventeen rows. Raw `st_uid`, `st_gid`,
   `st_rdev`, and symlink-target bytes join the
@@ -1634,7 +1686,7 @@ table before the operation exists.
   the candidate lock, file-syncs the reopened payload before even creating a parked-status
   temporary, and retains the lock through status and ancestor durability. A dedicated latch
   proves cleanup cannot enter between payload sync and parked publication; removing or
-  reordering that hook fails.   T589 is done only when all 61 receipt, 73 census, 34 publication,
+  reordering that hook fails.   T589 is done only when all 61 receipt, 73 census, 35 publication,
   seventeen recovery-redaction, eight recursive-golden, preimage crash, payload-order, and
   shared contract/status fixtures pass hermetically without source-derived expectations.
 
@@ -1651,27 +1703,57 @@ table before the operation exists.
   `RepairHostGenerationCurrentIntentV1` and
   `RestoreHostGenerationImmutableAuditMemberV1`, their protocol-5 wire/dispatcher rows,
   generated operation and privilege catalogues, Nix-rendered privilege matrix, coordinator
-  lock implementation, and broker filesystem/audit tests. The repair op is admitted only
+  lock implementation, and broker filesystem/audit tests. Within that already assigned
+  wire ownership, T592 also owns the exact bounded
+  `RestoreHostGenerationImmutableAuditMemberRequestV1`/response DTOs from `data-model.md`;
+  T595 consumes them and may not define a second client shape. Both operations are admitted only
   from the existing public socket's consumed `Admin` capability; `Launcher`, workload, Zone,
-  unauthenticated, direct-broker, and root callers are denied before coordinator access.
+  `HostShutdown`, root, nonmember, unauthenticated-local, direct-broker, and remote callers
+  are denied before coordinator access. Signature integrity never authorizes a caller.
   Under the lock it classifies clean versus repairable pointer absence, appends and syncs
   immutable `coordinator-pointer-repair/pre-mutation`, publishes the exact pointer from a
   file-synced unnamed inode directly to its final no-replace name, syncs the parent, and
   appends/syncs the matching outcome. Audit fields are only fixed edge, attempt, intent, and
   matrix digests plus closed prior-state/outcome enums. Pre-audit, inode-sync, direct-link,
   parent-sync, outcome, response-loss, foreign-final, and second-run tests prove exact
-  restart classification, conflict preservation, and no-write completed replay.
+  restart classification, conflict preservation, and no-write completed replay. Clean
+  absence is the exact empty census; repairable absence is exactly one fully valid
+  authenticated intent and complete matrix with only its pointer absent. Competing,
+  malformed, unauthenticated, orphaned, unknown, or incomplete censuses are invalid and
+  never repairable. Inspect has a separate repairable-absence golden.
 
   T592 also implements broker-private `HostGenerationImmutableAuditBackupOwner`, transferred
-  with coordinator ownership. It append-only publishes authenticated
+  with coordinator ownership. The owner is a private linear capability with no public
+  construction/fields, clone/copy/default, serde/serialization, conversion, reconstruction,
+  duplicate transfer, or reuse after transfer; compiler/API seals cover every forbidden
+  surface. It append-only publishes authenticated
   `HostGenerationImmutableAuditBackupV1` before covered mutation durability, enforces
-  retention while the intent is current and for at least 30 days after pointer replacement,
-  and accepts only an exact signed
-  `HostGenerationImmutableAuditRestorationV1` for no-replace append of the displayed missing
-  member under the same lock. Success and every refusal have matching immutable outcome
-  audit. An unaudited extra mutation is the separate integrity-incident result and cannot
-  invoke restoration. No daemon path, generic filesystem copy, force input, partial
-  rollback, or new unit may perform either mutation.
+  a maximum 256-member/16,777,216-byte census, refuses any covered mutation until its backup
+  is file-and-directory durable, never prunes a current intent, and durably prunes replaced
+  members only from day 30 through the hard day-90 deadline. Every prune uses anchored
+  no-follow reopen, `unlinkat`, parent sync, and restart census; unlink/sync/census/clock/
+  count/byte failure emits the typed redacted degraded report and blocks later mutation.
+
+  Restoration accepts only the exact signed
+  `HostGenerationImmutableAuditRestorationV1` for the displayed
+  missing/mismatched/unauthenticated/noncontiguous member under the same lock. After full
+  caller and artifact validation it durably appends the fixed-field
+  `coordinator-immutable-audit-restoration/pre-mutation` record, append-only signed
+  provenance plus restored canonical member, and matching outcome. It never replaces or
+  deletes the original; mismatch/unauthenticated/noncontiguous cases use the exact observed
+  digest as append-only supersession provenance. The shared
+  `HostGenerationImmutablePublicationV1` protocol covers dispatch, repair pre/outcome,
+  backup, restoration pre/provenance/outcome, with independent tests at every
+  write/file-sync/link/parent/ancestor-sync boundary, final conflict, and response loss.
+  Authorization/request/artifact/signature/domain/key/authority/member/failure/predecessor/
+  backup-binding refusals occur before pre-mutation append and prove zero coordinator,
+  backup, restoration, and audit mutation. Once pre-mutation is durable, success or conflict
+  appends exactly one matching outcome; a completed exact chain is no-write replay.
+  The independent two-row restoration audit-edge fixture and 62-id broker registry are
+  mandatory and read-independent from the 156-id status registry. An unaudited extra
+  mutation is the separate integrity-incident result and cannot invoke restoration. No
+  daemon path, generic filesystem copy, force input, partial rollback, or new unit may
+  perform either mutation.
   **Additional T592 resource-bundle ownership and versioning:** T592 also solely owns
   `nixos-modules/{options-zones.nix,zone-resources.nix,zone-resources-json.nix}`,
   `packages/d2b-contracts/src/{generation_bundle.rs,v3/resource_bundle.rs}`,
@@ -2239,7 +2321,8 @@ table before the operation exists.
   that only the fixed error class/remediation appears in every output surface.
   **Handoff recovery projection:** T595 also owns
   `d2b-host-generation-deploy --inspect-authorized-handoff [--json]`,
-  `d2b-host-generation-deploy --repair-authorized-handoff [--json]`, and the exact
+  `d2b-host-generation-deploy --repair-authorized-handoff [--json]`,
+  `d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]`, and the exact
   `HostGenerationHandoffStatusV1` human/JSON contract in `data-model.md`, consuming T589's
   strict schema, human/JSON goldens, and case-id registry read-only. It is an
   unprivileged, public-socket-authorized, selector-free read of the sole current-source
@@ -2250,16 +2333,42 @@ table before the operation exists.
   transfer-pending, active/failed rollback, and both terminal variants preserve the exact
   phase/owner/action/successor tuples. `recovery-irreconcilable` is valid only with the
   complete immutable-audit-backed rollback proof; each incomplete member produces only exit
-  `4` `invalid-coordinator` and zero mutation.
+  `4` `invalid-coordinator` and zero mutation. Exact-empty clean absence is exit `3`;
+  exactly-one-valid repairable absence has its own exit-`4`
+  `pointer-repair-required` projection; competing, malformed, unauthenticated, orphaned,
+  unknown, or incomplete censuses project invalid coordinator and never advertise repair.
+
+  The restoration client opens exactly one path with
+  `O_RDONLY|O_NOFOLLOW|O_CLOEXEC`, requires a regular single-link current-user mode-`0600`
+  file, caps it at 131,072 bytes, and sends the same canonical bytes in T592's shared DTO
+  over the existing public socket. It accepts no member/failure selector, authority/key/token,
+  `--force`, root, or extra positional input. T595 owns the exact success/already-restored,
+  invalid-invocation, unauthorized, closed artifact-failure, and conflict human/JSON
+  goldens and exit codes from `data-model.md`; no output renders the input path, artifact
+  bytes/signature/digest, caller role, uid, pid, or free-form text. Response-loss replay of
+  the same artifact returns `already-restored` with zero write. T595 does not parse a second
+  wire shape or mutate coordinator/audit files locally.
+
+  Every rendered action maps to the public command or exact named external procedure in
+  `contracts/operator-cli.md`: bootstrap, signed backup acquisition plus restoration
+  submission, invalid-coordinator escalation, pointer-conflict escalation,
+  restoration-conflict escalation, and audit-integrity escalation. The acquisition
+  procedure is owned by the disposition-pinned backup authority; preserve-and-escalate
+  procedures are owned by the site security authority and authorize no repair/copy/delete/
+  replace/retry/force action.
 
   Focused hermetic Rust tests own variant validation, exact schema and human/JSON/error
   goldens, all forbidden inspect inputs, and independently pinned repair intent/generation
   selector, path, token, root, extra-positional, and force inputs. They also own all four
-  exits, clean versus repairable absence, pointer selection, foreign-final conflict,
+  exits, exact-empty clean absence, the repairable-absence projection,
+  competing/malformed/unauthenticated invalid censuses, pointer selection, foreign-final conflict,
   terminal replacement/idempotence, pre-audit/inode-sync/direct-link/parent-sync/outcome/
   response-loss crash replay, second-run zero-write success, every incomplete rollback
   proof, bounded member/failure diagnostics, and separate unaudited-extra-mutation
-  integrity escalation. T595 consumes T592's typed broker op and cannot mutate the pointer
+  integrity escalation. Restoration tests independently cover input bounds/mode/link/type,
+  every forbidden option, Admin success, every denied caller projection, all closed artifact
+  failures, conflict preservation, success and already-restored output, and the named
+  acquisition/submission/escalation procedure goldens. T595 consumes T592's typed broker op and cannot mutate the pointer
   locally. The Type-1 `host-generation-rebuild-ref.nix` case remains option grammar only and
   is ineligible for runtime handoff evidence. The Type-10
   `tests/host-integration/host-generation-handoff.nix` leg alone proves the actual existing
@@ -2545,7 +2654,7 @@ that exact `v3` commit as the panel-base eligibility proof. Run integration test
   openat2/zero-capability/procfs-fd/unnamed-write-ahead/file-sync/direct-final-link/
   parent-sync/final-reopen `--request-out` protocol, exact crash replay,
   unsupported-open zero-internal mutation, unsupported-link retained-internal behavior,
-  all-descriptor CLOEXEC, all 34 direct-final publication ids, and all seventeen recovery
+  all-descriptor CLOEXEC, all 35 direct-final publication ids, and all seventeen recovery
   redaction rows,
   including raw `st_uid`, `st_gid`, `st_rdev`, and symlink-target bytes. Each closed
   SC-002 cause must match its exact inspect/action/status/successor row. Every handoff
@@ -2566,7 +2675,7 @@ that exact `v3` commit as the panel-base eligibility proof. Run integration test
   every exact tuple, active/failed transfer and rollback partition, authenticated
   current-pointer terminal selection, all forbidden inspect inputs, all four exits, the
   selector-free `--repair-authorized-handoff` restart path, bounded audit-restoration
-  diagnostic, and separate integrity escalation, and all 155 cases over the independent
+  diagnostic, and separate integrity escalation, and all 156 cases over the independent
   seven rollback members, 32 audit members, and 15 transition edges. Every missing/mismatch
   poison, changed transition, unaudited extra mutation,
   unauthenticated pointer, and shrinkage meta-negative is hermetic and has zero mutation. It
@@ -2607,11 +2716,17 @@ that exact `v3` commit as the panel-base eligibility proof. Run integration test
   retention guard. Every incident first proves anonymous complete-preimage write, file sync, link and
   link-parent durability before any later incident publication; every preimage crash point
   has the exact no-incident/resumable/conflict classification. Identity ambiguity has three terminal shapes: preimage/path-complete
-  metadata plus a fully revalidated and file-synced payload and `parked`; authenticated
+  metadata plus every original legacy source name retained, a fully revalidated and
+  file-synced payload, and `parked`; authenticated
   no-unlink durable residue retention plus `mismatch-retained`; or an authenticated complete
   census or identity-bearing bounded-failure frozen-primary-evidence resolution when zero
   names, anchor/metadata conflict, conflicting primary status, or an invalid/unstable census makes
-  the primary branch irreconcilable. A legacy source-copy/final-reopen race remains
+  the primary branch irreconcilable. Absence of any original legacy source is always
+  `recovery-irreconcilable`, advertises no recover command, and may advance only through the
+  authenticated evidence-resolution branch; it cannot satisfy a `parked` or
+  `mismatch-retained` terminal census. The exact
+  `legacy-source/absent-after-metadata-before-payload-copy` fault case proves that branch.
+  A legacy source-copy/final-reopen race remains
   inspectable as exactly `recovery-resumable` or `recovery-irreconcilable`, preserves all
   names, carries the same stable id plus closed cause/remediation, and blocks publication and
   close until its advertised command reaches terminal disposition or successor. Retired
@@ -2774,7 +2889,8 @@ and Ready observation must name the same sample resource identity. Every selecte
 checked elapsed value, 1-32 progress observations, and <=2,000 ms assertion must validate;
 missing, malformed, misordered, stale, wrong-record, progress-free, over-budget,
 absolute/traversal/URL/symlink/hard-link locator, parent-boundary loss, legacy source
-replacement, destination-reopen mismatch, live-owner cleanup, historical retirement collision/census
+replacement or disappearance, importer post-link/final-reopen inode mismatch,
+destination-reopen mismatch, live-owner cleanup, historical retirement collision/census
 failure, identical-orphan name collision, candidate-root deletion, permanent-history
 mutation, unauthorized retention mutation,
 any writer-cleanup, cleanup-writer, cleanup-cleanup, writer-retention, or retention-writer
@@ -2876,8 +2992,11 @@ health hold; malformed status fields cannot round-trip; and every command passed
   exactly resumable or irreconcilable
   with every still-named leaf preserved. Recover is advertised only for the former; the
   latter uses authenticated residue retention or the frozen-primary-evidence-bound resolution
-  branch, including zero-name, retired-source, anchor/metadata-conflict, and status-conflict
-  cases, and reaches fresh successor without primary mutation. The handoff evidence validates the exact
+  branch, including source-absent/zero-name, retired-source, anchor/metadata-conflict, and
+  status-conflict cases, and reaches fresh successor without primary mutation. Source
+  absence is never resumable and cannot publish a terminal `parked` or
+  `mismatch-retained` census; every terminal cleanup census retains every original legacy
+  source name. The handoff evidence validates the exact
   nonempty 13-member `SourceGenerationCompatibilityFloorV1` census separately from T592's
   target-v5 adoption row and target artifacts.
   It proves the caller-flake target executable ran only unprivileged, the exact installed
@@ -2909,10 +3028,11 @@ health hold; malformed status fields cannot round-trip; and every command passed
   incident. For `operator-nix-activation-cleanup`, the importer must use the exact unnamed
   `O_TMPFILE`, file-sync, zero-capability procfs-fd direct-final no-replace link,
   final-reopen, final-parent-sync, and all-ancestor-sync protocol before `EvidenceRecord`
-  publication. T600 must run all 34 independently pinned direct-final publication cases:
-  the retained 26 preimage/request-output cases plus eight receipt-import cases covering
+  publication.   T600 must run all 35 independently pinned direct-final publication cases:
+  the retained 26 preimage/request-output cases plus nine receipt-import cases covering
   unsupported `O_TMPFILE`, invalid procfs/mount identity, unsupported link, foreign
-  `EEXIST`, every direct-final crash boundary, and zero-write replay. Each importer support
+  `EEXIST`, every direct-final crash boundary, importer post-link/final-reopen inode
+  mismatch, and zero-write replay. Each importer support
   refusal has zero receipt leaf and zero `EvidenceRecord` mutation.
 
   Current publication creates no named temporary or quarantine leaf. Legacy cleanup
@@ -3066,7 +3186,7 @@ Historical validation remains historical and is not reclassified.
   disposition and successor reachability. Inspect must expose the same stable incident id, exact cause,
   state variant, deterministic remediation, and thirteen-line/JSON projection before apply, while successor
   admission remains bound to the authenticated disposition and a fresh distinct triplet.
-  The exact independent 61-id receipt, 73-id malformed-census, and 34-id direct-final
+  The exact independent 61-id receipt, 73-id malformed-census, and 35-id direct-final
   publication registries must match their
   separately literal constants and be visited once each. Invalid/unstable census fixtures
   produce an admission-capable identity-bearing bounded-failure commitment only after every

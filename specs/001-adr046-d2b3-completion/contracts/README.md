@@ -356,8 +356,12 @@ merge-target registration, merge eligibility, and merge.
     has zero internal mutation; unsupported link retains the internal pair. Exact replay is
     crash-safe at every anonymous and direct-final boundary, and every descriptor is
     CLOEXEC. Apply and admission rederive that same
-    snapshot triplet and require the same freeze, request, and signed disposition. Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
-    nonterminal variant claims a terminal empty census.
+    snapshot triplet and require the same freeze, request, and signed disposition. Ordinary
+    direct-final paths leave both ephemeral namespaces empty. Every terminal legacy cleanup
+    census instead retains every original legacy source name at its frozen locator; source
+    absence is irreconcilable and can advance only through authenticated evidence resolution,
+    never by claiming a terminal empty census. Neither nonterminal variant claims terminal
+    cleanup.
     T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope
     retention guard: it preserves the canonical candidate root and all request, panel-record,
     evidence-record, receipt, seal, eligibility, merge, incident preimage/anchor/metadata/
@@ -375,14 +379,18 @@ merge-target registration, merge eligibility, and merge.
     Independent literal fixtures pin the complete receipt, retired-census,
     primary-evidence-census, source-floor 32-id receipt, 26-id issuer-authentication/
     capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
-    15-id pre-start/root, 27-id unit-census, 34-id direct-final publication, and both forbidden-value
+    15-id pre-start/root, 27-id unit-census, 35-id direct-final publication, and both forbidden-value
     registries. The SC-002 census set has 73 ids and includes root-instance injectivity,
     invalid-node totality, depth-64 acceptance, depth-65 denial, directory completeness, and
-    full-descendant bounded-failure refusal. The retained request-output fixture has 34 ids:
-    its original 26 preimage/request-output cases plus eight read-independent receipt-import
+    full-descendant bounded-failure refusal. The retained request-output fixture has 35 ids:
+    its original 26 preimage/request-output cases plus nine read-independent receipt-import
     unsupported-open, invalid-procfs/mount, unsupported-link, conflict, crash-boundary, and
-    zero-write-replay cases. Every importer support refusal proves zero receipt leaf and zero
-    `EvidenceRecord` mutation. The recovery redaction set has seventeen rows including raw
+    zero-write-replay cases. Its importer-specific post-link/final-reopen inode-mismatch
+    case preserves the source and observed destination and publishes zero `EvidenceRecord`
+    mutation. Every importer support refusal proves zero receipt leaf and zero
+    `EvidenceRecord` mutation. The stage-`3` identity-ambiguity incident/metadata golden is
+    mandatory; stages `1` and `2` remain historical decode-compatible inputs, and wrong or
+    unknown stages refuse. The recovery redaction set has seventeen rows including raw
     `st_uid`, `st_gid`, `st_rdev`,
     and symlink-target bytes.
     Source-floor signature validation acquires one private non-clonable
@@ -406,12 +414,20 @@ merge-target registration, merge eligibility, and merge.
     active, transfer-pending, recovery, and terminal handoff variant one exact
     state/phase/owner/action/successor tuple. Active and failed broker owners, including
     transfer-pending and rollback, are distinct. Terminal selection uses the authenticated
-    current-intent pointer. Its 155 independent cases enumerate seven rollback members, 32
+    current-intent pointer. Its 156 independent cases enumerate seven rollback members, 32
     audit members, and 15 transition edges plus mismatch, extra-mutation, pointer-auth,
     repair-input/restart/conflict/no-write, and shrinkage poisons. Selector-free pointer
     repair is the Admin-only typed broker operation with immutable pre/outcome audit,
-    clean/repairable absence classification, bounded member/failure restoration output,
-    authenticated retained backup, and separate unaudited-mutation integrity escalation.
+    exact-empty clean absence, an independently projected exactly-one-valid repairable
+    absence, and invalid competing/malformed/unauthenticated censuses. The separate
+    Admin-only restoration command submits one bounded signed artifact over the public
+    socket. Its two-row audit-edge fixture and 62-case broker registry cover caller denial,
+    signature/domain/key/member/failure/predecessor binding, append-only supersession,
+    backup-before-mutation, retention/pruning limits, conflicts, every publication boundary,
+    and completed no-write replay. Backup retention is bounded by 256 members, 16,777,216
+    bytes, and 30-to-90-day post-replacement retention with typed prune degradation.
+    Pointer/restoration/integrity escalation actions map to named procedures rather than
+    unactionable labels.
     Recovery uses only the existing broker unit.
     Human/JSON schemas and both redaction registries remain synchronized; no path, fd,
     generation, raw identity, request body, or free-form remediation enters logs, audit,

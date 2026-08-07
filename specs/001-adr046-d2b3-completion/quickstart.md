@@ -381,7 +381,7 @@ If the locked primary-evidence digest changes between inspect and apply, apply e
 returns the new inspect projection, and requires a newly bound disposition. No generic retry,
 force flag, deletion selector, or alternate path is accepted.
 The test contract compares independently authored literal expectations with all 61 receipt,
-73 malformed retired/primary-census, and 34 direct-final publication ids from
+73 malformed retired/primary-census, and 35 direct-final publication ids from
 `data-model.md`, scans all
 seventeen SC-002 recovery redaction canaries, and uses the shared
 nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest copied from
@@ -597,8 +597,8 @@ no fixed illustrative target.
 
 After that prerequisite is accepted and installed, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
-post-prerequisite operator contract using the deployment entrypoint from the explicit target
-configuration:
+post-prerequisite operator contract named `host-generation-deploy-bootstrap-v1`, using the
+deployment entrypoint from the explicit target configuration:
 
 ```bash
 set -eu
@@ -703,8 +703,9 @@ with a complete immutable-audit-backed rollback and advances only to `rolled-bac
 
 Selection uses the coordinator's authenticated current-intent pointer, not mtime or directory
 order. `completed` and `rolled-back` remain selectable terminal projections until a new
-authorization atomically installs the next `authorized-pending` pointer. A missing pointer
-exits `3`; forbidden syntax, selector/path/token input, an extra positional argument, or root
+authorization atomically installs the next `authorized-pending` pointer. Only an exact-empty
+pointer census exits `3`; repairable absence and every invalid census exit `4`. Forbidden
+syntax, selector/path/token input, an extra positional argument, or root
 inspection exits `2`; invalid coordinator state or any incomplete rollback proof exits `4`
 with zero mutation. The exact two-line human and four-field JSON error envelopes are in
 `data-model.md`. Apply or broker recovery that races into a valid concurrent or terminal
@@ -712,8 +713,12 @@ state exits `4` with the same valid five-line or seven-field status through the 
 renderer. Neither projection exposes an intent, generation, pid, uid, store path, or
 apply-peer identity.
 
-An invalid coordinator projects `action: repair-authorized-handoff`. Run the exact
-selector-free unprivileged command:
+A missing pointer is not one state. Exact-empty `clean-absence` exits `3` with
+`action: begin-host-generation-deploy`; run the parameterized bootstrap above, named
+`host-generation-deploy-bootstrap-v1`. Exactly one fully valid authenticated intent and
+complete matrix with only its pointer absent is `repairable-absence`; inspect exits `4` with
+`error: pointer-repair-required` and `action: repair-authorized-handoff`. Run the exact
+selector-free unprivileged repair command:
 
 ```bash
 "$D2B_DEPLOY_EXE" --repair-authorized-handoff
@@ -721,8 +726,12 @@ selector-free unprivileged command:
 
 It uses the existing public socket and broker coordinator. It may durably repair only a
 uniquely reconstructible authenticated current-intent pointer and then prints the normal
-five-line status. A clean absence instead returns the same exit-`3` not-found result as
-inspect. Repair accepts only optional `--json`; any selector, path, token, root invocation,
+five-line status. Competing, malformed, unauthenticated, orphaned, unknown, or incomplete
+intent censuses are `invalid-coordinator`, exit `4`, and project
+`action: preserve-and-escalate-invalid-coordinator`; do not run repair. The site security
+authority owns the named external
+`host-generation-invalid-coordinator-escalation-v1` procedure, which preserves the complete
+coordinator/backup set and authorizes no mutation. Repair accepts only optional `--json`; any selector, path, token, root invocation,
 extra positional argument, or `--force` exits `2` with
 `action: repair-without-selectors` and zero mutation.
 
@@ -735,14 +744,53 @@ zero write. A conflicting final is preserved and exits `4` with
 
 If one immutable rollback, audit, transition, or pointer-authentication member is absent or
 mismatched, exit `4` identifies its bounded closed member and failure class with
-`action: restore-immutable-audit-backup`. The broker-private
-`HostGenerationImmutableAuditBackupOwner` retains authenticated append-only backup members
-while the intent is current and for 30 days after pointer replacement. Its exact signed
-`HostGenerationImmutableAuditRestorationV1`, not a filesystem copy, authorizes no-replace
-restoration; then rerun the same repair command. An unaudited extra mutation instead reports
-`action: preserve-and-escalate-audit-integrity-incident`; preserve the coordinator and
-backup artifacts for security adjudication and do not attempt restoration. There is no
-force flag, generic copy procedure, new unit, or daemon recovery owner.
+`action: restore-immutable-audit-backup`.
+
+1. Submit that exact fixed diagnostic to the disposition-pinned backup authority's named
+   external `host-generation-immutable-audit-backup-acquisition-v1` procedure. It returns
+   one canonical signed `HostGenerationImmutableAuditRestorationV1` as a regular single-link
+   current-user mode-`0600` file no larger than 131,072 bytes. Do not edit or copy fields
+   into a new JSON object.
+2. Submit that artifact through the existing public socket as an unprivileged local Admin:
+
+   ```bash
+   "$D2B_DEPLOY_EXE" --restore-immutable-audit-backup "$RESTORATION_ARTIFACT"
+   ```
+
+   The command accepts exactly one path and optional `--json`; it opens the file once
+   no-follow and sends only its bounded canonical bytes. Launcher, workload, Zone,
+   `HostShutdown`, root, nonmember, unauthenticated-local, direct-broker, and remote callers
+   are denied. Signature validity does not authorize them.
+3. Exit `0` prints the fixed restored/already-restored result and
+   `action: rerun-repair-authorized-handoff`. Rerun the repair command above. Response-loss
+   replay of the same artifact is `already-restored` with zero write.
+
+Invalid invocation uses `restore-with-one-artifact` and the command shape above.
+`use-local-admin-public-socket` maps to the site access administrator's named external
+`host-generation-local-admin-session-v1` procedure. A closed artifact failure uses
+`reacquire-immutable-audit-backup` and repeats step 1; a durable conflict uses the named
+security escalation below. None authorizes a force or local file repair.
+
+The broker appends restoration pre-mutation, signed provenance/restored-member, and outcome
+records without replacing an existing mismatched, unauthenticated, or noncontiguous member.
+Every append and the repair/backup/dispatch records share one exact-final restart protocol.
+Conflicting bytes are preserved. Invalid artifact or authorization refusals have zero
+coordinator/audit/provenance mutation; an accepted attempt that later conflicts records only
+its fixed pre/outcome pair. The independent 62-case broker registry covers all caller,
+signature/domain/key/member/failure/predecessor, conflict, backup-order, retention, crash,
+and no-write replay boundaries.
+
+The broker-private linear `HostGenerationImmutableAuditBackupOwner` retains at most 256
+members and 16,777,216 encoded bytes, never prunes the current intent, and durably prunes a
+replaced intent from day 30 through the hard day-90 deadline. A prune or bound failure is a
+typed degraded result that blocks later mutation. An unaudited extra mutation instead
+reports `action: preserve-and-escalate-audit-integrity-incident`; the site security authority
+runs `host-generation-audit-integrity-escalation-v1`, preserves the coordinator and backup
+artifacts, and does not attempt restoration. Pointer and restoration conflicts similarly
+map to `host-generation-pointer-conflict-escalation-v1` and
+`host-generation-audit-restoration-conflict-escalation-v1`. None of these external
+procedures authorizes retry, copy, replace, delete, or force. There is no force flag,
+generic copy procedure, new unit, or daemon recovery owner.
 
 The host acceptance must race two authorization commands and two apply commands, inject an
 otherwise impossible two-pending-intent census, disconnect before and after the first
@@ -751,10 +799,12 @@ when one pending intent exists. Every refusal has zero selected and successor mu
 post-mutation recovery resumes only the same durable intent. Hermetic Rust tests own tuple
 validation, exact human/JSON/error goldens, forbidden inspect and repair inputs, pointer
 selection, and the exact independent seven-member, 32-audit-member, 15-transition-edge
-rollback matrices. Their 155-case registry covers every missing and mismatched member, each
+rollback matrices. Their 156-case registry covers every missing and mismatched member, each
 changed transition edge, unaudited extra mutation, unauthenticated pointer, every repair
 restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exact successful
-pointer-repair, bounded audit-restoration, and integrity-incident goldens. The Type-1 Nix
+pointer-repair, repairable-absence, bounded audit-restoration, and integrity-incident
+goldens. The separate two-row restoration audit-edge fixture and 62-case broker registry
+prove the privileged restoration boundary; the 156-case registry cannot substitute. The Type-1 Nix
 case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
 `host-generation-handoff.nix` VM test alone proves real broker service failure/restart,

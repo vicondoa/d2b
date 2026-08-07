@@ -179,9 +179,12 @@ executable identity, or free-form remediation. The apply command and broker reco
 the same typed projection after a valid conflict, concurrent transition, or terminal handoff.
 The authenticated current-intent pointer selects active and terminal records without mtime
 or caller input. Inspect exits `0` for every valid active or terminal tuple, `2` for root or
-forbidden input, `3` when no current pointer exists, and `4` for invalid coordinator or
-incomplete rollback proof; `data-model.md` pins the exact two-line human and four-field JSON
-error envelopes. Every state-table row, forbidden transition/input, source/target
+forbidden input, `3` only for an exactly empty coordinator census, and `4` for repairable
+pointer absence, invalid coordinator, or incomplete rollback proof. Repairable absence has
+its own exact `pointer-repair-required` human/JSON projection and action
+`repair-authorized-handoff`; it is never rendered as `not-found`. Invalid coordinator uses
+`preserve-and-escalate-invalid-coordinator`, not the repair command. `data-model.md` pins the
+exact human and JSON error envelopes. Every state-table row, forbidden transition/input, source/target
 active/failed condition, transfer-pending failure, restart, terminal pointer replacement,
 incomplete rollback proof, and redaction case is independently pinned.
 
@@ -194,26 +197,89 @@ and root callers are denied. Intent or generation selectors, path or token input
 positional argument, and `--force` each exit `2` with zero mutation and the exact
 `repair-without-selectors` human/JSON refusal from `data-model.md`.
 
-Pointer absence is closed. `clean-absence` has no uniquely eligible authenticated intent,
-so inspect and repair both return the exact exit-`3` not-found envelope without a write.
-`repairable-absence` has exactly one authenticated active or terminal intent and complete
-immutable matrix with only its current pointer missing. Under the broker coordinator lock,
+Pointer absence is closed. `clean-absence` is an exact empty census, so inspect and repair
+both return the exact exit-`3` not-found envelope without a write.
+`repairable-absence` has exactly one fully valid authenticated active or terminal intent,
+one contiguous sequence, and one complete immutable matrix with only its current pointer
+missing. Every competing, malformed, unauthenticated, orphaned, unknown, or incomplete
+census is `invalid-coordinator`. Under the broker coordinator lock,
 repair durably appends the distinct `coordinator-pointer-repair/pre-mutation` audit member,
 publishes the pointer from a file-synced unnamed inode directly to the final no-replace
 name, syncs the final parent, and durably appends the matching outcome. A conflicting final
 is preserved and exits `4`. Restart before the link sees absence; restart after it accepts
 only absence or the exact complete final; a pre-only audit resumes, and a complete pair plus
-exact pointer is second-run success with zero write.
+exact pointer is second-run success with zero write. Dispatch, repair audit, backup, and
+restoration records all use the one `HostGenerationImmutablePublicationV1` restart
+classifier from `data-model.md`; every write/file-sync/link/parent/ancestor-sync boundary and
+response-loss replay is tested independently per record class.
 
 A missing, mismatched, unauthenticated, or noncontiguous immutable member exits `4` and
 reports only its closed member id and failure class with
 `action: restore-immutable-audit-backup`. The binding
 `HostGenerationImmutableAuditBackupOwner` supplies the signed append-only
-`HostGenerationImmutableAuditRestorationV1` for broker no-replace restoration; retention is
-mandatory while the intent is current and for 30 days after pointer replacement. An
+`HostGenerationImmutableAuditRestorationV1`. The named external acquisition procedure is
+`host-generation-immutable-audit-backup-acquisition-v1`; it returns one canonical
+current-user mode-`0600` single-link artifact no larger than 131,072 bytes. Submit it only
+with:
+
+```text
+d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]
+```
+
+The unprivileged T595 client opens the path once no-follow and sends only the bounded
+canonical bytes through the existing public socket. T592 owns the shared
+`RestoreHostGenerationImmutableAuditMemberRequestV1`/response DTO and typed broker op.
+Only the consumed public-socket `Admin` capability is authorized. Launcher, workload, Zone,
+`HostShutdown`, root, nonmember, unauthenticated-local, direct-broker, and remote callers
+are denied before coordinator access; a valid signature is integrity only.
+
+The broker validates the exact signed artifact and authenticated backup, durably appends the
+fixed-field restoration pre-mutation audit, append-only provenance/restored-member record,
+and matching outcome. A mismatched, unauthenticated, or noncontiguous original remains
+preserved and is superseded only by that complete authenticated append-only chain. Completed
+replay, including response loss, returns `already-restored` with zero write. The command
+accepts one path and optional `--json`; selector, authority/key/token, member/failure
+override, `--force`, root, or extra input exits `2`. Unauthorized, invalid artifact, and
+conflict exits are `4` with only the fixed actions and closed failure classes in
+`data-model.md`; success exits `0` and directs the operator to rerun
+`--repair-authorized-handoff`.
+
+The private backup capability has no construction, clone/copy/default, conversion,
+serialization, or post-transfer reuse surface. A set is capped at 256 members and
+16,777,216 encoded bytes, is unprunable while current, and is durably pruned only from day
+30 through the hard day-90 deadline after replacement. Prune/limit failure returns the
+typed redacted degraded report and blocks later mutation. The independent two-edge
+restoration audit fixture and 62-case broker registry own caller denial,
+signature/domain/key/authority/member/failure/predecessor binding, all four restoration
+classes, conflicts, backup-before-mutation, retention boundaries, every publication crash
+boundary, and zero-mutation refusals. The 156-case status registry is not a substitute.
+
+An
 unaudited extra mutation instead returns the separate
 `preserve-and-escalate-audit-integrity-incident` action and is not restoration-eligible.
 No generic copy, force flag, daemon repair path, or new unit exists.
+
+Every action is executable or names one external procedure:
+
+| Action | Owner and exact procedure |
+| --- | --- |
+| `inspect-without-selectors` | T595 command `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` |
+| `begin-host-generation-deploy` | operator runs the parameterized `host-generation-deploy-bootstrap-v1` procedure in `quickstart.md` |
+| `repair-authorized-handoff` | T595 command `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `repair-without-selectors` | rerun the same T595 repair command without any other argument except optional `--json` |
+| `restore-immutable-audit-backup` | external acquisition procedure above, then T595 `--restore-immutable-audit-backup PATH [--json]` |
+| `restore-with-one-artifact` | rerun the T595 restoration command with exactly one artifact path and optional `--json` |
+| `reacquire-immutable-audit-backup` | disposition-pinned backup authority reruns `host-generation-immutable-audit-backup-acquisition-v1`, then the operator resubmits |
+| `rerun-repair-authorized-handoff` | T595 command `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `use-local-admin-public-socket` | site access administrator runs named external `host-generation-local-admin-session-v1`, then the local Admin reruns submission |
+| `preserve-and-escalate-invalid-coordinator` | site security authority runs `host-generation-invalid-coordinator-escalation-v1` |
+| `preserve-and-escalate-pointer-conflict` | site security authority runs `host-generation-pointer-conflict-escalation-v1` |
+| `preserve-and-escalate-audit-restoration-conflict` | site security authority runs `host-generation-audit-restoration-conflict-escalation-v1` |
+| `preserve-and-escalate-audit-integrity-incident` | site security authority runs `host-generation-audit-integrity-escalation-v1` |
+
+Each escalation procedure preserves the coordinator and backup set, accepts only the
+matching fixed error plus authenticated forensic evidence, and authorizes no repair, copy,
+replace, delete, retry, or force action.
 
 ## Retirement register
 

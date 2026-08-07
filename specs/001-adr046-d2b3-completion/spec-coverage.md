@@ -1146,17 +1146,20 @@ transformation, and apply/admit preserve it. Request output prepares and file-sy
 procfs-fd links the exact inode directly to the final no-replace name after candidate
 durability. Unsupported open has zero internal mutation and unsupported link retains the
 internal pair. The shared nineteen-digest typed hash oracle, exact 61 receipt, 73
-malformed-census, 34 direct-final publication, and seventeen-row recovery redaction registries prohibit
+malformed-census, 35 direct-final publication, and seventeen-row recovery redaction registries prohibit
 a raw locator hash, self-referential resolution digest, or output leak. Every SC-002 cause
 and handoff active/terminal variant has an exact state/phase/owner/action/successor tuple.
 Handoff terminal selection uses the authenticated current pointer; failed transfer and
-rollback owners are partitioned. Its 155-case fixture independently covers seven rollback
+rollback owners are partitioned. Its 156-case fixture independently covers seven rollback
 members, 32 audit members, 15 transition edges, unaudited extra mutation, unauthenticated
 pointer, all repair input/restart/conflict/no-write cases, and four shrinkage poisons.
 Selector-free pointer repair is an Admin-only typed broker operation with immutable
-pre/outcome audit, bounded member/failure diagnostics, authenticated retained backup, and a
-separate unaudited-mutation integrity escalation; incomplete rollback proof is never
-recovery-capable.
+pre/outcome audit, exact-empty clean absence, a separate repairable-absence projection, and
+invalid competing/malformed/unauthenticated censuses. The Admin-only bounded restoration
+client, two-edge restoration audit fixture, and independent 62-case broker registry cover
+signed provenance, role denial, artifact binding, backup-before-mutation, bounded
+30-to-90-day retention/pruning, conflicts, every publication boundary, and no-write replay.
+Incomplete rollback proof is never recovery-capable.
 These refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
