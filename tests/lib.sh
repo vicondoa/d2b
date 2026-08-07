@@ -259,11 +259,11 @@ d2b_validate_policy_inventory
 # ---------- assertions ----------
 
 assert_eq() {
-  local actual="$1" expected="$2" msg="${3:-}"
-  if [ "$actual" = "$expected" ]; then
-    ok "${msg:-assert_eq} ('$actual')"
+  local actual_value="$1" expected_value="$2" msg="${3:-}"
+  if [ "$actual_value" = "$expected_value" ]; then
+    ok "${msg:-assert_eq} ('$actual_value')"
   else
-    fail "${msg:-assert_eq}: got '$actual', expected '$expected'"
+    fail "${msg:-assert_eq}: got '$actual_value', expected '$expected_value'"
   fi
 }
 
