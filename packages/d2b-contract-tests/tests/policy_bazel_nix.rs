@@ -208,14 +208,27 @@ fn guest_elf_and_broker_linkage_contract_is_closed_without_store_diagnostics() {
             assert!(row["system"].is_string());
             assert!(row["artifact"].is_string());
             assert!(row["binaryBytes"].is_u64());
+            assert!(row["elfType"].is_string());
+            assert!(row["elfMachine"].is_string());
             assert!(row["closureCount"].is_u64());
-            assert!(row["closureSha256"].is_string());
-            assert!(row["selectedPolicyDigest"].is_string());
+            assert_eq!(row["closureSha256"].as_str().unwrap().len(), 64);
+            assert_eq!(row["selectedPolicyDigest"].as_str().unwrap().len(), 64);
             assert!(row["measurementCommand"].is_string());
             assert!(row["candidateCommit"].is_string());
             assert!(row.get("rowAllowance").is_none());
             assert!(row.get("sizeAllowance").is_none());
             assert!(row["sizeGrowthAuthorization"].is_null());
+            if row["artifact"] == "broker-host-artifact-contract" {
+                assert!(row["interpreter"].is_string());
+                assert!(row["needed"].is_array());
+                let needed = row["needed"].as_array().unwrap();
+                let mut sorted = needed.clone();
+                sorted.sort_by_key(|entry| entry.as_str().unwrap_or_default().to_owned());
+                assert_eq!(*needed, sorted);
+            } else {
+                assert!(row.get("interpreter").is_none() || row["interpreter"].is_null());
+                assert_eq!(row["needed"], serde_json::json!([]));
+            }
         }
     }
 }
@@ -226,6 +239,8 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         system: "x86_64-linux",
         artifact: "guest-static-elf",
         prior_bytes: 100,
+        candidate_digest: "candidate-digest",
+        review_digest: "review-digest",
     };
     assert!(size_authorization_valid(&baseline, 100, None));
     assert!(size_authorization_valid(
@@ -266,15 +281,46 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
             &baseline,
             107,
             Some(&authorization(
-                "aarch64-linux",
+                "x86_64-linux",
+                "guest-static-elf",
+                100,
+                107,
+                7,
+                "reviews/artifact-growth.md",
+                "stale-candidate",
+                "review-digest",
+            )),
+        ),
+        size_authorization_valid(
+            &baseline,
+            107,
+            Some(&authorization(
+                "x86_64-linux",
                 "guest-static-elf",
                 100,
                 107,
                 7,
                 "reviews/artifact-growth.md",
                 "candidate-digest",
-                "review-digest",
+                "stale-review",
             )),
+        ),
+        size_authorization_valid(
+            &baseline,
+            107,
+            Some(
+                &authorization(
+                    "aarch64-linux",
+                    "guest-static-elf",
+                    100,
+                    107,
+                    7,
+                    "reviews/artifact-growth.md",
+                    "candidate-digest",
+                    "review-digest",
+                )
+                .with_extra(),
+            ),
         ),
         size_authorization_valid(
             &baseline,
@@ -369,6 +415,8 @@ struct SizeRow {
     system: &'static str,
     artifact: &'static str,
     prior_bytes: u64,
+    candidate_digest: &'static str,
+    review_digest: &'static str,
 }
 
 struct Authorization {
@@ -378,6 +426,11 @@ struct Authorization {
 impl Authorization {
     fn with_decision(mut self, decision: &str) -> Self {
         self.value["decision"] = Value::String(decision.to_owned());
+        self
+    }
+
+    fn with_extra(mut self) -> Self {
+        self.value["allowanceSource"] = Value::String("row".to_owned());
         self
     }
 }
@@ -416,21 +469,38 @@ fn size_authorization_valid(
         return realized_bytes <= row.prior_bytes;
     };
     let value = &authorization.value;
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let fields = [
+        "system",
+        "artifact",
+        "priorBinaryBytes",
+        "newBinaryBytes",
+        "deltaBytes",
+        "rationalePath",
+        "candidateContentSha256",
+        "reviewRecordSha256",
+        "decision",
+    ];
+    if object.len() != fields.len() || !fields.iter().all(|field| object.contains_key(*field)) {
+        return false;
+    }
     value["system"] == row.system
         && value["artifact"] == row.artifact
         && value["priorBinaryBytes"] == row.prior_bytes
         && value["newBinaryBytes"] == realized_bytes
         && value["deltaBytes"].as_u64() == realized_bytes.checked_sub(row.prior_bytes)
         && realized_bytes > row.prior_bytes
-        && value["rationalePath"]
-            .as_str()
-            .is_some_and(|path| !Path::new(path).is_absolute())
+        && value["rationalePath"].as_str().is_some_and(|path| {
+            !Path::new(path).is_absolute() && !path.starts_with("../") && !path.contains("/../")
+        })
         && value["candidateContentSha256"]
             .as_str()
-            .is_some_and(|digest| !digest.is_empty() && !digest.contains('/'))
+            .is_some_and(|digest| digest == row.candidate_digest)
         && value["reviewRecordSha256"]
             .as_str()
-            .is_some_and(|digest| !digest.is_empty() && !digest.contains('/'))
+            .is_some_and(|digest| digest == row.review_digest)
         && value["decision"] == "approved"
 }
 
