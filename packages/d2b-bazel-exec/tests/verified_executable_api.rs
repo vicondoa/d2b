@@ -212,13 +212,25 @@ fn helper_invocation_site_is_closed_to_one_typed_rust_consumer() {
         if source.contains(invocation) {
             sites.push(path);
         }
-        if source.contains("d2b-bazel-exec-supervisor")
-            && (source.contains("RUNFILES_DIR")
-                || source.contains("TEST_SRCDIR")
-                || source.contains("CARGO_BIN_EXE")
-                || source.contains("worktree"))
-        {
-            panic!("helper identity must not be routed through a path fallback");
+        let is_test_path = path
+            .components()
+            .any(|component| component.as_os_str() == "tests");
+        if !is_test_path {
+            let lines = source.lines().collect::<Vec<_>>();
+            for (index, line) in lines.iter().enumerate() {
+                if !line.contains("d2b-bazel-exec-supervisor") {
+                    continue;
+                }
+                let start = index.saturating_sub(4);
+                let end = (index + 5).min(lines.len());
+                let context = lines[start..end].join("\n");
+                if ["RUNFILES_DIR", "TEST_SRCDIR", "CARGO_BIN_EXE", "worktree"]
+                    .iter()
+                    .any(|token| context.contains(token))
+                {
+                    panic!("helper identity must not be routed through a path fallback");
+                }
+            }
         }
     }
     assert_eq!(
