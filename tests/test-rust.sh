@@ -885,12 +885,14 @@ cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    cargo deny --manifest-path "$manifest_path" check \
+      --config "$config_path" bans licenses sources
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      cargo deny --manifest-path "$manifest_path" check \
+      --config "$config_path" bans licenses sources
     ok "cargo deny check ($label)"
   else
     fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"

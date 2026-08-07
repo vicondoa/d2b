@@ -213,6 +213,11 @@ fn product_context_packages_use_the_single_lock_and_scoped_policy() {
     let main_workspace = read_repo_file("packages/Cargo.toml");
     let flake = read_repo_file("flake.nix");
     let driver = read_repo_file(RUST_DRIVER);
+    let aggregate_deny = driver
+        .split_once("cargo_deny_check() {")
+        .and_then(|(_, rest)| rest.split_once("cargo_deny_policy_check() {"))
+        .map(|(section, _)| section)
+        .expect("aggregate and selected deny helpers must exist");
     let violations = unified_workspace_violations(&main_workspace, &flake, &driver);
     assert!(
         violations.is_empty(),
@@ -242,6 +247,15 @@ fn product_context_packages_use_the_single_lock_and_scoped_policy() {
         );
     }
     assert!(flake.contains("packages/Cargo.lock"));
+    assert_eq!(
+        aggregate_deny.matches("bans licenses sources").count(),
+        2,
+        "both aggregate deny execution branches must exclude advisory ownership"
+    );
+    assert!(
+        !read_repo_file("packages/deny.toml").contains("RUSTSEC-2024-0384"),
+        "the guest-only advisory must not enter the aggregate ignore set"
+    );
 }
 
 fn non_comment_lines(source: &str) -> Vec<&str> {
