@@ -218,6 +218,11 @@ fn product_context_packages_use_the_single_lock_and_scoped_policy() {
         .and_then(|(_, rest)| rest.split_once("cargo_deny_policy_check() {"))
         .map(|(section, _)| section)
         .expect("aggregate and selected deny helpers must exist");
+    let selected_deny = driver
+        .split_once("cargo_deny_policy_check() {")
+        .and_then(|(_, rest)| rest.split_once("cargo_audit_check() {"))
+        .map(|(section, _)| section)
+        .expect("selected deny and audit helpers must exist");
     let violations = unified_workspace_violations(&main_workspace, &flake, &driver);
     assert!(
         violations.is_empty(),
@@ -252,6 +257,14 @@ fn product_context_packages_use_the_single_lock_and_scoped_policy() {
         2,
         "both aggregate deny execution branches must exclude advisory ownership"
     );
+    assert_eq!(
+        selected_deny
+            .matches("cargo deny check --metadata-path \"$metadata_path\"")
+            .count(),
+        2,
+        "both selected deny branches must use the supported command-local metadata option"
+    );
+    assert!(!selected_deny.contains("cargo deny --metadata-path"));
     assert!(
         !read_repo_file("packages/deny.toml").contains("RUSTSEC-2024-0384"),
         "the guest-only advisory must not enter the aggregate ignore set"

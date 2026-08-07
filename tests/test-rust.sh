@@ -904,13 +904,13 @@ cargo_deny_policy_check() {
   local label="$1" metadata_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label; selected policy metadata)"
-    cargo deny --metadata-path "$metadata_path" check \
+    cargo deny check --metadata-path "$metadata_path" \
       --config "$config_path" bans licenses sources
     ok "cargo deny check ($label; selected policy metadata)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label; selected policy metadata via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      cargo deny --metadata-path "$metadata_path" check \
+      cargo deny check --metadata-path "$metadata_path" \
       --config "$config_path" bans licenses sources
     ok "cargo deny check ($label; selected policy metadata)"
   else
