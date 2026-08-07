@@ -2346,7 +2346,7 @@ mod fresh_bootstrap_tests {
                 &mut executor,
             )
             .expect("product"),
-            Some(vec![PathBuf::from("bazel/cargo/product.lock")])
+            vec![PathBuf::from("bazel/cargo/product.lock")]
         );
         assert!(!root.join("bazel/cargo/walker.lock").exists());
         assert!(!root.join("MODULE.bazel.lock").exists());
@@ -2357,7 +2357,7 @@ mod fresh_bootstrap_tests {
                 &mut executor,
             )
             .expect("walker"),
-            Some(vec![PathBuf::from("bazel/cargo/walker.lock")])
+            vec![PathBuf::from("bazel/cargo/walker.lock")]
         );
         assert!(fresh_hub_bootstrap(&root, "product", &mut executor)
             .expect("complete pair")
