@@ -55,8 +55,9 @@ artifact and requires a clean `git diff`, fail-closed.
   stages one immutable transition identity, and submits only an opaque request. It cannot
   publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback.
   Before any privileged invocation, the unprivileged operator must pass the existing
-  public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker durably seals
-  one nonfabricable handoff capability to the complete intent and emits no authority token.
+  public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
+  one-shot classification into one durably sealed nonfabricable handoff capability bound to
+  the complete intent and emits no authority token.
   Capability-authorized typed normal or target-closure bootstrap broker code exclusively owns stock
   profile publication, broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference
   publication and repair, stock rollback, and source-service restoration.
@@ -66,9 +67,12 @@ artifact and requires a clean `git diff`, fail-closed.
   presents a broker-issued phase attenuation in the authenticated publication request.
   Daemon identity, Hello, and bootstrap euid 0 never authorize independently. The broker
   publishes the pointer and reference with file and directory durability before daemon
-  ingestion/readiness. A failed build leaves 3/1 active; a later failure is reopened by the
-  systemd-supervised existing daemon startup/reconciliation DAG, which requests
-  capability-authorized broker restoration of the prior pointer and stable
+  ingestion/readiness.
+- A failed build leaves 3/1 active. Before first mutation the broker durably owns the
+  coordinator; bootstrap ownership transfers exactly once to the target broker before target
+  daemon activation. A later failure is reopened by that broker-owned coordinator. Before
+  transfer only the matching bootstrap owner may resume; after transfer the existing
+  `d2b-priv-broker.service` reopens after restart and restores the prior pointer and stable
   reference bytes or verified absence before broker-owned stock rollback.
   Rollback therefore cannot leave a 4/2 reference on a restored 3/1 host.
 - Nix activation stages immutable input only. Direct activation or daemon creation, repair,
@@ -98,7 +102,8 @@ proves initial public-socket Admin classification, sealed durable capability,
 broker-before-daemon activation, Hello while unready, phase-attenuated authenticated
 publication request, and durable publication before ingestion/readiness, then injects failure and crash points through
 profile/service/bootstrap/publication/reference repair/readiness/rollback. It kills the
-entrypoint and proves the systemd-supervised existing daemon DAG autonomously resumes. Prior reference
+entrypoint and proves the broker-owned coordinator resumes across target broker and daemon
+startup failures, bootstrap-broker crashes, and durable ownership transfer. Prior reference
 bytes or absence, 3/1 artifacts, and source service generations are restored together with
 immutable broker audit. Host recovery also executes the post-publication stable-reference and
 parameterized prior-target rollback commands, rejects direct entrypoint/daemon/Nix mutation

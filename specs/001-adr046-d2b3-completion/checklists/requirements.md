@@ -25,6 +25,15 @@
   and `Device/acceptance-tpm`; each effect and production `Ready` projection is bound to that
   same identity, while Guest runtime-effect acceptance is explicitly deferred to Wave 6
   `Provider/runtime-cloud-hypervisor` T384/T479/T480
+- [x] SC-002 uses a separately versioned typed receipt referenced by an unchanged schema-v2
+  `EvidenceRecord`; failed operator records import without a receipt but cannot close
+- [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
+  durably from bootstrap broker to target broker, survives broker/daemon startup failures
+  through existing units only, and never treats daemon identity or euid 0 as authorization
+- [x] W4/T070/T071/T220 remain blocked on the external Network normative
+  correction/version/migration and all four Network/Host opt-in cases
+- [x] T219 performs only externally authorized historical adjudication, emits an actionable
+  external-disposition refusal, and offers no successor or second-request path
 
 ## Feature Readiness
 

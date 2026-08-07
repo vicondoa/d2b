@@ -105,7 +105,10 @@ T220 -> F -> {T600,T601} -> T602 -> T219`.
 T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
 `SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
 remaining content change before F. T219 remains an external-disposition gate because Wave 5
-already consumed its binding request; it issues no request or successor request.
+already consumed its binding request; it performs no binding action. Until the
+external disposition lands, the actionable refusal is: `adr046w5 binding request already
+consumed; obtain an accepted external delivery-contract/tooling disposition naming the
+retained request and an authorized non-request close action`.
 
 ### 3. Inner loop while implementing
 
@@ -223,8 +226,8 @@ proof passes, and required CI reruns regardless.
 
 Any content change before the binding panel request invalidates validation evidence: converge,
 re-snapshot, and rerun before requesting the panel. For `adr046w5`, the retained historical request already consumed the binding surface. F and
-its evidence identity do not receive a request, and no successor candidate may receive one
-through this feature. T220 may replace provisional candidates only during nonbinding
+its evidence identity do not receive a request, and no candidate receives another one through
+this feature. T220 may replace provisional candidates only during nonbinding
 pre-request phase convergence. After T602, stop until an accepted external disposition
 preserves the consumed request and authorizes a specific non-request close action; never
 silently re-attest changed content, waive findings, or infer successor admission. Any
@@ -330,26 +333,32 @@ sudo nix run "$D2B_HOST_INSTALLABLE" -- --apply-authorized-handoff
 
 The unprivileged invocation traverses the existing public socket and its
 `SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority token. The broker
-durably seals one nonfabricable handoff capability to the staged intent; the privileged
+consumes that one-shot classification into one durably sealed nonfabricable handoff
+capability bound to the staged intent; the privileged
 invocation can only resume that exact authorized intent. Effective uid 0 and daemon identity
 never authorize independently. A capability-authorized typed normal broker, or the target
 closure's one-shot bootstrap-broker mode when the installed protocol-4 broker lacks the
 operation, performs every profile, service, 3/1 bootstrap, publication, and rollback mutation
-with immutable pre-mutation and outcome audit. The durable order is staged intent/capability,
-target broker, target daemon, Hello while unready, phase-attenuated authenticated publication
-request, broker-durable pointer/reference publication, daemon ingestion, then readiness.
+with immutable pre-mutation and outcome audit. The broker durably owns the coordinator before
+the first mutation. Bootstrap ownership transfers exactly once to the authenticated target
+broker before target daemon activation. The durable order is staged intent/capability,
+broker coordinator, target broker, coordinator transfer, target daemon, Hello while unready,
+phase-attenuated authenticated publication request, broker-durable pointer/reference
+publication, daemon ingestion, then readiness.
 
 After the first successful publication, the installed entrypoint may use the stable reference:
 
 ```bash
 set -eu
+fail() { printf '%s\n' "$1" >&2; exit 2; }
 [ "$(id -u)" -ne 0 ] || {
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
 /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
-  --authorize-handoff
+  --authorize-handoff ||
+  fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
   --apply-authorized-handoff
@@ -361,6 +370,13 @@ d2b resource inspect Network/acceptance-net
 d2b resource inspect Device/acceptance-tpm
 ```
 
+For every authorization/apply pair above and below, the unprivileged authorization command is
+the complete preflight: it validates the flake/configuration or stable-reference grammar,
+UTF-8 byte bounds, target identity, existence, immutable digest, and public-socket Admin
+classification before returning success. The shell invokes `sudo` only after that success.
+An empty, malformed, over-bound, mismatched, changed, unreadable, or nonexistent input exits
+2 with the named remediation and runs no privileged command.
+
 **Expected**: all three exact resources are ready through their owned effects; removal of
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
 passes on the same candidate. Actionable refusal coverage runs
@@ -369,10 +385,17 @@ separately and cannot satisfy this positive proof. Guest is not expected to pass
 remains Wave 4 implementation; Wave 5 accepts it through the production plane without taking
 implementation ownership.
 
+This acceptance run fixes `isolation.allowEastWest = false`; it does not prove or introduce
+Host/Network double opt-in. The untouched external Network specification remains sole-opt-in
+canon. W4 adjudication, T070, T071, and T220 stop until an accepted external versioned
+correction/migration binds all four Network/Host cases or preserves sole Network opt-in and
+leaves double opt-in unimplemented. Do not change feature status to bypass that stop.
+
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
-the correct restored state. The systemd-supervised existing `d2bd.service`
-startup/reconciliation DAG resumes rollback after an entrypoint crash; no entrypoint process
-or extra unit must remain alive. Verify the
+the correct restored state. The broker-owned durable coordinator resumes rollback after an
+entrypoint crash. Before durable transfer only the matching one-shot bootstrap owner may
+reopen it; after transfer the existing `d2b-priv-broker.service` reopens it even when target
+daemon startup fails. No entrypoint process or extra unit must remain alive. Verify the
 source state, then retry with the parameterized target command above; do not create the file
 or copy the rolled-back target value into place:
 
@@ -434,20 +457,25 @@ sudo nix run "$D2B_ROLLBACK_INSTALLABLE" -- --apply-authorized-handoff
 The host-integration acceptance executes the parameterized migration and rollback procedures,
 rejects empty, malformed, over-bound, mismatched, and nonexistent flake/configuration inputs
 before public-socket authorization or `sudo`, kills the entrypoint at every post-staging
-crash point, and requires the systemd-supervised existing daemon DAG to finish or roll back.
+crash point, and requires the broker-owned coordinator to finish or roll back. It injects
+target broker startup failure, target daemon startup/reconciliation failure, every
+bootstrap-broker crash boundary, and both sides of durable ownership transfer without adding
+a systemd unit.
 
 ### Story 1 - retire and restart
 
 ```bash
 # Remove one resource from config, reactivate
 set -eu
+fail() { printf '%s\n' "$1" >&2; exit 2; }
 [ "$(id -u)" -ne 0 ] || {
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
 /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
-  --authorize-handoff
+  --authorize-handoff ||
+  fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
   --apply-authorized-handoff

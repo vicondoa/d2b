@@ -222,6 +222,10 @@ merge-target registration, merge eligibility, and merge.
     `Device/acceptance-tpm`, then removes only the Device and proves its state-preserving
     cleanup without disturbing the ready, identity-stable, unrecreated acceptance
     Volume/Network or unrelated resources. Network implementation remains owned by Wave 4.
+    This one denied-east-west sample is not double-opt-in evidence. The untouched external
+    Network specification remains sole-opt-in canon; W4 adjudication, T070, T071, and T220
+    require its accepted versioned correction/migration plus all four Network/Host cases, and
+    no feature-local status can unblock them.
     Guest runtime-effect acceptance
     is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480;
     Guest emission, status, or refusal cannot
@@ -246,18 +250,21 @@ merge-target registration, merge eligibility, and merge.
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
     `cli-reference-conformance`. T602 rejects any unknown, duplicate, missing, extra,
     wrong-lane, or conflated identifier. Wave 5's retained `panel-request.json` has already
-    consumed its binding surface. T219 issues no binding or successor request and may perform
+    consumed its binding surface. T219 performs no binding action and may perform
     only a non-request close action expressly authorized by an accepted external disposition
     that preserves the historical bytes. F and delivery history remain immutable.
-15. **SC-002 evidence is typed and census-closed.** Only
-    `operator-nix-activation-cleanup` carries
-    `EvidencePayload::Sc002ActivationLiveV1`. Its version-1, 16,384-byte-bounded,
-    fixed-redacted payload contains one common monotonic start and exactly one sample for each
+15. **SC-002 evidence is typed and census-closed.** The schema-v2 `EvidenceRecord` remains
+    unchanged. A passing `operator-nix-activation-cleanup` record uses its existing opaque
+    locator to reference exactly one separately versioned `Sc002ActivationReceiptV1`. Its
+    version-1, 16,384-byte-bounded, fixed-redacted receipt contains one common monotonic start
+    and exactly one sample for each
     of `Volume/acceptance-state`, `Network/acceptance-net`, and
     `Device/acceptance-tpm`. Effect, production Ready, selected-stop, and bounded progress
     observations repeat the sample identity, and effect plus Ready must name the same typed
-    resource identity. T589's one validator runs at import, durable reopen,
-    panel-request/panel-attest, seal, and merge-eligibility and rejects every missing,
+    resource identity. A failed operator record remains importable without a receipt but
+    cannot satisfy a close stage; a failed record with a positive receipt is malformed.
+    T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and
+    merge-eligibility and retains schema-v2 decoding while rejecting every missing,
     malformed, unknown-version/field/enum, over-bound, misordered, stale, progress-free,
     over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
     or unrelated-sample case.

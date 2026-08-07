@@ -200,12 +200,19 @@ Owning spec: `ADR-046-validation-and-delivery`.
 
 ---
 
-## 9. Typed SC-002 delivery payload
+## 9. Typed SC-002 delivery receipt
 
-`EvidenceRecord.payload` is a closed enum. Wave 5 adds exactly
-`EvidencePayload::Sc002ActivationLiveV1` for
-`validation = "operator-nix-activation-cleanup"`; that validation requires this payload and
-no other validation may carry it.
+The delivery schema-v2 `EvidenceRecord` remains byte-for-byte unchanged and retains its v2
+decoder. A passing `validation = "operator-nix-activation-cleanup"` record uses its existing
+opaque locator to reference exactly one separately encoded `Sc002ActivationReceiptV1`. No
+field, enum variant, or version is added to `EvidenceRecord`, and no other validation may
+reference this receipt type.
+
+A failed `operator-nix-activation-cleanup` `EvidenceRecord` remains importable with no SC-002
+receipt. It cannot satisfy the closed evidence profile, panel request, seal, or merge
+eligibility. This design chooses no typed failure receipt: a failed record that references a
+positive SC-002 receipt is malformed. Only a passing record must resolve the positive receipt
+at import and every close-stage reopen.
 
 The serialized object rejects unknown fields and has this closed shape:
 
@@ -213,6 +220,12 @@ The serialized object rejects unknown fields and has this closed shape:
 | --- | --- |
 | `schemaVersion` | integer exactly `1` |
 | `kind` | string exactly `sc002-activation-live` |
+| `evidenceRecordSha256` | lowercase 64-hex SHA-256 of the canonical unchanged schema-v2 `EvidenceRecord` bytes |
+| `candidateId` | exact outer-record candidate id |
+| `commit` | exact outer-record commit |
+| `tree` | exact outer-record tree |
+| `validation` | string exactly `operator-nix-activation-cleanup` |
+| `outcome` | string exactly `passed` |
 | `clock` | string exactly `CLOCK_MONOTONIC` |
 | `startTickNs` | unsigned 64-bit monotonic tick |
 | `samples` | exactly three `Sc002ResourceSampleV1` values in canonical Volume, Network, Device order |
@@ -227,21 +240,25 @@ Each sample contains `resourceIdentity`, `effect`, `ready`, `selectedStop`, `ela
 monotonic tick, and using only the closed kind enum `ingestion`, `commit`, `dispatch`,
 `effect`, `status`, or `projection`.
 
-The encoded payload is at most 16,384 bytes; 16,384 is accepted and 16,385 is refused. The
+The encoded receipt is at most 16,384 bytes; 16,384 is accepted and 16,385 is refused. The
 validator requires exactly one sample for each closed identity, every repeated identity to
 match its sample key, effect and Ready ticks
 not earlier than start, selected stop to equal the later effect/Ready tick and its source
 (`ready` wins an exact tie), `elapsedNs` to equal the checked stop-minus-start difference,
 elapsed to be at most 2,000,000,000 ns, and every progress tick to fall in `(start, stop]`.
-The outer `EvidenceRecord` supplies candidate, commit, and tree binding; reopening against
-another binding is stale. `EvidenceRecord`, payload, and validation-error `Debug` output is
-fixed and redacted: it exposes only type/version, sample count, and pass/refuse class, never
-ticks, identities, host data, paths, commands, argv, or free-form text.
+The receipt repeats and must match the unchanged outer `EvidenceRecord` candidate, commit,
+tree, validation, outcome, and record digest; reopening against another binding is stale.
+`EvidenceRecord`, receipt, and validation-error `Debug` output is fixed and redacted: it
+exposes only type/version, sample count, and pass/refuse class, never ticks, identities, host
+data, paths, commands, argv, or free-form text.
 
 T589 owns the type and one validator invoked unchanged at evidence import, durable reopen,
 panel-request/panel-attest, seal, and merge-eligibility. The negative census is closed:
-missing payload, payload on the wrong validation, unknown/malformed version, kind, field,
-enum, or size; missing, duplicate, mixed, or unrelated resource samples; effect/Ready
-identity disagreement; selected-stop/progress identity mismatch; arithmetic overflow or event
-misordering; stale binding; zero progress; more than 32 progress observations; and any
-over-budget sample all refuse.
+passed record with a missing or duplicate receipt; receipt on a failed or wrong-validation
+record; unknown/malformed version, kind, field, enum, locator, digest, or size; missing,
+duplicate, mixed, or unrelated resource samples; effect/Ready identity disagreement;
+selected-stop/progress identity mismatch; arithmetic overflow or event misordering; stale
+binding; zero progress; more than 32 progress observations; and any over-budget sample all
+refuse. Compatibility tests decode retained schema-v2 `EvidenceRecord` fixtures
+byte-identically, import a failed operator record without a receipt, and prove that the same
+failed record remains ineligible for every close stage.

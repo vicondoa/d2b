@@ -49,7 +49,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, expose a typed durable `InspectOperation` method, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-and-fragment V/B with T603's mandatory unique changelog path, rerun B/P analysis/panel, T603's opaque-sentinel B/P authorization, exact atomic-exchange B-to-C editor transition, finalized progress receipt, and fresh exact-C/Q analysis plus unanimous plan review before T589; before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require the exact eight closed evidence identifiers before T219 evaluates the accepted external disposition of Wave 5's consumed request. T219 issues no binding or successor request | FR-072, SC-034 | W5 |
+| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-and-fragment V/B with T603's mandatory unique changelog path, rerun B/P analysis/panel, T603's opaque-sentinel B/P authorization, exact atomic-exchange B-to-C editor transition, finalized progress receipt, and fresh exact-C/Q analysis plus unanimous plan review before T589; before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require the exact eight closed evidence identifiers before T219 evaluates the accepted external disposition of Wave 5's consumed request. T219 performs no binding action | FR-072, SC-034 | W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
 | RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, complete T605 on its owned normative/test/API/reference artifacts, reconcile the T595 emitter and T599 consumers, then reconcile generated manifests/full drift at T220 so all coordinated artifacts and exact-candidate evidence land in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
 
@@ -177,8 +177,10 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   satisfy this partial US1 production-plane checkpoint. Refusals are
   separate negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
   subject, or an older result artifact is ineligible.
-- Before T589, pre-validator analysis and plan panel at A/P0 authorize only T603's two
-  validator source paths. Validator-only commit V becomes B, P remains byte-identical to P0,
+- Before T589, pre-validator analysis and plan panel at A/P0 authorize exactly T603's two
+  validator source paths plus mandatory
+  `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit V becomes B,
+  P remains byte-identical to P0,
   and analysis plus the plan panel rerun at B/P. T603 then writes the closed external
   receipt, accounts for all T073-T218 obligations, and binds opaque project sentinel
   `7f6d0beab0ce4c13a89f6865d5ac42e2`, Git-root-relative
@@ -196,6 +198,10 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   T604's result appears only as `operator-nix-activation-cleanup`; the coordinated T605
   contract, T595 emitter, and T599 consumers appear only as
   `system-core-handler-contract`. Wave 5's retained request already consumed its binding
-  surface. T219 issues no binding or successor request; it may perform only a non-request
+  surface. T219 performs no binding action; it may perform only a non-request
   close action expressly authorized by an accepted external disposition that preserves the
   historical request. F and its delivery history remain immutable.
+  The refusal names the remediation: obtain an accepted external delivery-contract/tooling
+  disposition identifying the retained request and an authorized non-request close action.
+  It never recommends a successor, replacement candidate, second request, or feature-local
+  status edit.

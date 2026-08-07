@@ -218,6 +218,13 @@ candidate generic net-VM system. The exact acceptance resources are:
 | `Network/acceptance-net` | `providerRef = "Provider/network-local"`; `lanCidr = "10.20.0.0/24"`; `uplinkCidr = "192.0.2.0/30"`; `mtu = null`; `mssClamp = false`; `isolation.allowEastWest = false`; `routing.hostBlocklist = ["10.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]`; `dhcp = { domain = null; ignoreClientNames = true; }`; `dns = { forwarders = []; cacheSize = 1000; }`; `externalAttachment = null`; `mdns = { enable = false; reflector = true; dnsmasqLocal = false; dnsmasqLocalPort = 53530; publishWorkstation = false; }`; `netVmNameOverride = null`; `netVmSystemArtifactId = "net-vm-base"`; and `attachments = []` | The production Network controller creates or adopts both derived bridges, reapplies and reads back IPv6 suppression, installs only this Network's firewall ownership projection, and converges its config Volume, owned net-VM, and agent dependencies. The universal resource phase is `Ready`; `FabricReady`, `FirewallReady`, `ConfigVolumeReady`, `NetVmReady`, and `DhcpReady` are true; both bridge status phases are `Ready`. Network-owned Guest dependencies establish only Network readiness and MUST NOT be reported as independent Guest acceptance. |
 | `Device/acceptance-tpm` | `metadata.ownerRef = "Guest/acceptance-vm"`; `providerRef = "Provider/device-tpm"`; `deviceClass = "emulated"`; `arbitration = "exclusive"`; `maxConcurrentClaims = 1`; `inventory.selector = {}`; `provider = { schemaId = "device-tpm.d2bus.org/Device/spec"; schemaVersion = "1.0.0"; settings.logLevel = 20; }` | The production Device controller creates or adopts its controller-managed TPM state Volume, verifies its tamper marker, completes the mandatory pre-start flush, starts the broker-supervised long-lived swtpm Process, and publishes the typed TPM Endpoint. The universal resource phase and Provider phase are `Ready`, `status.update.state` is `Current`, and Device status reports `present = true` and `health = healthy`; a manually assigned phase, refusal, or fake worker is ineligible. |
 
+This single denied-east-west acceptance case does not establish Host/Network double opt-in.
+The untouched external `ADR-046-resources-network` remains sole-opt-in canon. W4
+adjudication, T070, T071, and T220 MUST refuse until an accepted external versioned
+correction and migration either prove all four Network/Host combinations at actual F4 or
+preserve sole Network opt-in and leave double opt-in prospectively unimplemented. A
+feature-local status or test matrix cannot unblock that gate.
+
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
 wait for its terminal phase, delete that Process, delete any non-terminal flush
@@ -527,20 +534,27 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   broker or target-closure one-shot bootstrap broker and MUST have immutable pre-mutation and
   outcome audit. Initial authorization MUST occur while the invoking operator is unprivileged through
   the existing public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker
-  MUST then durably create one sealed, non-serializable, nonfabricable handoff capability
-  bound to the complete staged intent. Every normal or bootstrap-broker phase consumes that
-  capability or a broker-issued phase attenuation. Daemon uid/gid/generation, successful
+  MUST then consume that one-shot classification into one durably sealed, non-serializable,
+  nonfabricable handoff capability bound to the complete staged intent. Every normal or
+  bootstrap-broker phase consumes that capability or a broker-issued phase attenuation.
+  Daemon uid/gid/generation, successful
   Hello, broker-socket credentials, target-closure provenance, and effective uid 0 are
   eligibility or integrity checks only and MUST NOT independently authorize any mutation.
   No bootstrap unit or fourth root-visible service may exist. The exact ordering is:
   public-socket Admin authorization; durable intent and capability; capability-authorized
-  stock profile publication; target broker transition; target daemon transition;
+  broker-coordinator ownership before the first mutation; stock profile publication; target
+  broker transition; durable coordinator ownership transfer to that target broker; target
+  daemon transition;
   exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
   request; broker-durable pointer/reference publication and audit; daemon reopen and
-  ingestion; readiness. The systemd-supervised existing `d2bd.service`
-  startup/reconciliation DAG is the durable owner that reopens and resumes an interrupted
-  rollback after entrypoint crash or exit. The entrypoint is never the recovery supervisor,
-  and no new unit is added.
+  ingestion; readiness. The broker-owned durable coordinator is the recovery owner before
+  any daemon exists. Before ownership transfer, the one-shot bootstrap broker may only reopen
+  or roll back its own durable phase; after transfer, the existing
+  `d2b-priv-broker.service` reopens the coordinator after broker restart and completes or
+  rolls back even when target daemon startup or reconciliation fails. `d2bd.service` may
+  report readiness and submit a capability attenuation, but it never owns or initiates the
+  rollback state machine. The entrypoint is never the recovery supervisor, and no new unit is
+  added.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -587,12 +601,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Findings scope a fix round through T220 and require validation plus a delta/full-context
   phase-panel rerun; that loop may iterate and issues no binding delivery request. Only a
   unanimous phase-panel result may freeze final F for T600-T602. Wave 5's retained
-  `panel-request.json` has already consumed its sole binding request. T219 therefore has no
-  request or successor-request path: it remains non-authorizing until an accepted external
-  delivery-contract/tooling disposition preserves that request and expressly authorizes a
-  non-request close action. No feature-local content, evidence identity, candidate, phase
+  `panel-request.json` has already consumed its sole binding request. T219 performs no binding
+  action and remains non-authorizing until an accepted external delivery-contract/tooling
+  disposition preserves that request and expressly authorizes a non-request close action. A
+  retained-state fixture MUST run unanimous and finding-plus-rerun nonbinding phase sequences
+  and prove byte-identical delivery state with no reservation or request mutation. No
+  feature-local content, evidence identity, candidate, phase
   panel, or replacement candidate may free or replace the request. The integrator MUST stop
-  for the external disposition; findings are never waived. Before
+  with `adr046w5 binding request already consumed; obtain an accepted external
+  delivery-contract/tooling disposition naming the retained request and an authorized
+  non-request close action`; findings are never waived. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
   analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
   authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
@@ -1288,20 +1306,23 @@ carries the object verbatim rather than copying selected fields into the task ro
   every applicable p95 component budget and this end-to-end ceiling MUST pass independently,
   and passing either one cannot excuse failure of the other. T604 owns collection of this
   measurement without taking implementation ownership. Its host-acceptance leg emits exactly
-  one `EvidencePayload::Sc002ActivationLiveV1` in
-  `operator-nix-activation-cleanup`: schema version 1, kind
+  one separately encoded `Sc002ActivationReceiptV1` referenced by the unchanged schema-v2
+  `EvidenceRecord` for `operator-nix-activation-cleanup`: schema version 1, kind
   `sc002-activation-live`, encoded size at most 16,384 bytes, one `CLOCK_MONOTONIC` start
   tick, and exactly one sample keyed by each of `Volume/acceptance-state`,
   `Network/acceptance-net`, and `Device/acceptance-tpm`. Every sample repeats that key on its
   effect, production `Ready`, selected-stop, and 1-32 progress observations; selected stop is
   the later effect/Ready tick; checked elapsed nanoseconds equal stop minus start and are at
   most 2,000,000,000; and progress falls strictly after start and no later than stop. The
-  payload, outer `EvidenceRecord`, and its errors use fixed redacted `Debug` and contain no free-form strings, host
-  identity, path, command, argv, or log text. T589 owns one validator used unchanged at
-  import, durable reopen, panel-request/panel-attest, seal, and merge-eligibility. T600 carries the
-  exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
+  receipt, unchanged outer `EvidenceRecord`, and its errors use fixed redacted `Debug` and
+  contain no free-form strings, host identity, path, command, argv, or log text. T589 owns one
+  validator used unchanged at import, durable reopen, panel-request/panel-attest, seal, and
+  merge-eligibility. A failed operator record remains importable without a receipt and remains
+  ineligible for close; a passing record requires exactly one matching receipt. T600 carries
+  the exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
   unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
-  stale/wrong-candidate binding, progress-free evidence, or an over-budget sample fails
+  stale/wrong-candidate/record-digest binding, a receipt on a failed record, progress-free
+  evidence, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
@@ -1410,7 +1431,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   output. Before F is final, T220 iterates scoped fixes and delta/full-context
   `/d2b-panel-round plan` phase reviews to unanimous convergence without issuing a binding
   delivery request. Because the retained request already consumed Wave 5's binding surface,
-  T219 performs no request and no successor flow. It may execute only a non-request close
+  T219 performs no binding action. It may execute only a non-request close
   action expressly authorized by an accepted external disposition that preserves the
   historical request. F stays immutable; without such authorization the wave remains blocked.
 - **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
