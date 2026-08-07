@@ -637,12 +637,12 @@ set -euo pipefail
         )
         assert_exact_policy_inventory(valid)
 
-        missing = valid.replace("  policy_bazel_nix\n", "")
-        extra = valid.replace(
+        missing = library.replace("  policy_bazel_nix\n", "")
+        extra = library.replace(
             "  policy_bazel_supply_chain\n",
             "  policy_bazel_supply_chain\n  policy_bazel_extra\n",
         )
-        duplicate = valid.replace(
+        duplicate = library.replace(
             "  policy_bazel_toolchain\n",
             "  policy_bazel_toolchain\n  policy_bazel_toolchain\n",
         )
