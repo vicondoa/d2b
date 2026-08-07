@@ -616,9 +616,7 @@ fn fresh_hub_bootstrap(
             "fresh bootstrap cleanup failed; retry the selected hub command",
         ));
     }
-    if let Err(error) = generated {
-        return Err(error);
-    }
+    generated?;
     Ok(result.expect("generated output has an installation result"))
 }
 
