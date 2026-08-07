@@ -540,6 +540,22 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   nonfabricable handoff capability bound to the complete staged intent. Every installed
   source-broker phase before transfer and target-broker phase after transfer consumes that
   capability or a broker-issued phase attenuation.
+  The apply command deliberately carries no intent selector and emits no authority token.
+  Therefore the installed source broker MUST enforce one durable nonterminal handoff intent
+  per source generation. Authorization takes the broker's exclusive coordinator lock and
+  refuses if any authorized, claimed, mutating, recovery-pending, or transfer-pending intent
+  already exists. Apply takes the same lock, selects only the one `authorized-pending`
+  intent, atomically changes it to `apply-claimed`, and binds that claim to the accepted
+  connection's kernel-derived peer pidfd and executable identity. Zero pending intents,
+  multiple pending intents, a second concurrent apply connection, a caller-supplied selector,
+  and any serialized token all refuse before mutation. The connection binding is
+  non-serializable and closes with the connection. A disconnect before the first mutation
+  may return the same intent to `authorized-pending` only after the broker proves zero
+  mutation ordinals and durably clears the claim. After a mutation, only coordinator replay
+  of that same intent may enter `recovery-pending` and accept a replacement connection from
+  the same pinned apply object after proving the old peer dead; an operator invocation never
+  selects or creates a replay target. Terminal completion or rollback leaves no pending
+  intent, and a later apply invocation refuses rather than reapplying or guessing.
   Daemon uid/gid/generation, successful
   Hello, broker-socket credentials, target-closure provenance, and effective uid 0 are
   eligibility or integrity checks only and MUST NOT independently authorize any mutation.
@@ -563,7 +579,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   cross-fingerprint negative fixture, and one immutable broker-managed source apply object.
   Every member MUST bind the same accepted disposition and source generation. An absent,
   duplicate, extra, empty, stale-generation, stale-digest, or cross-disposition member MUST
-  refuse before fd transfer, authorization, or mutation. The installed broker reached only through the existing
+  refuse before fd transfer, authorization, or mutation. The accepted external disposition
+  MUST name the concrete producer/installer owner and the concrete typed import/validation
+  authority defined by `SourceGenerationCompatibilityFloorV1` in `data-model.md`. That
+  external owner MUST emit the versioned manifest and atomically install it in the source
+  generation; the external validator MUST produce the chained installation, validation, and
+  exact-C/Q import receipts. T589 dispatch requires the final
+  `imported-for-exact-C/Q` transition and consumes it read-only. No T589-T605 task may
+  produce, repair, import, or self-accept a source-floor member or receipt.
+  The installed broker reached only through the existing
   `d2b-priv-broker.socket` and `d2b-priv-broker.service` is the executable bootstrap actor.
   Bare committed protocol 4 with the field absent, or either source peer advertising another
   catalogue fingerprint, MUST refuse before fd transfer. Only after both peers match numeric
@@ -661,15 +685,21 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   phase-panel rerun; that loop may iterate and issues no binding delivery request. Only a
   unanimous phase-panel result may freeze final F for T600-T602. Wave 5's retained
   `panel-request.json` has already consumed its sole binding request. T219 performs no binding
-  action and remains non-authorizing until an accepted external delivery-contract/tooling
-  disposition preserves that request and expressly authorizes a non-request close action. A
+  action and remains non-authorizing until the external delivery-contract/tooling owner has
+  landed its contract and validator and that validator imports exactly one
+  `Wave5RetainedRequestDispositionV1` from `data-model.md`. The record preserves the request,
+  binds exact F, and selects only `remain-blocked`, `abandon-without-merge`, or
+  `recover-panel-without-new-request`. Only the final action can reach successful close, and
+  it authorizes no seal or merge until the complete ten-role panel independently returns
+  unanimous F-bound sign-off with no recommendations. The disposition creates no second
+  request and cannot waive, reduce, replace, or satisfy a constitutional panel. A
   retained-state fixture MUST run unanimous and finding-plus-rerun nonbinding phase sequences
   and prove byte-identical delivery state with no reservation or request mutation. No
   feature-local content, evidence identity, candidate, phase
   panel, or replacement candidate may free or replace the request. The integrator MUST stop
   with `adr046w5 binding request already consumed; obtain an accepted external
-  delivery-contract/tooling disposition naming the retained request and an authorized
-  non-request close action`; findings are never waived. Before
+  delivery-contract/tooling disposition naming the retained request, exact F, and one closed
+  action`; findings are never waived. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
   analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
   authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
@@ -741,8 +771,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `microvm*` namespace with `systemctl list-units --all`, extract every returned unit name,
   exclude exactly the canonical `d2b.slice`, sort the remainder, and require exactly these
   three lifecycle units: `d2bd.service`, `d2b-priv-broker.socket`, and
-  `d2b-priv-broker.service`. No additional unit may remain after that sole exclusion. A
-  nonzero `systemctl list-units --all` result MUST refuse before filtering;
+  `d2b-priv-broker.service`. No additional unit may remain after that sole exclusion.
+  Code canon makes the raw matched set four entries on a conforming host: committed
+  `d2b.slice` plus those three service/socket units. Therefore "exactly three" in this
+  requirement always means the sorted post-exclusion comparison, never the raw
+  `systemctl` count asserted by the stale AGENTS.md exit-criterion prose. This feature records
+  that external drift but does not edit AGENTS.md.
+  A nonzero `systemctl list-units --all` result MUST refuse before filtering;
   a later pipeline stage may not turn failed enumeration into an empty or successful census.
   No other slice, target, service, socket, timer, path, or template is excluded. Querying only
   those three names is not enumeration and cannot detect an unexpected lifecycle unit. The

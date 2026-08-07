@@ -106,9 +106,14 @@ T595 may not start until both serialized branches and the other completion slice
 `SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
 remaining content change before F. T219 remains an external-disposition gate because Wave 5
 already consumed its binding request; it performs no binding action. Until the
-external disposition lands, the actionable refusal is: `adr046w5 binding request already
+external delivery-contract/tooling owner lands the contract and typed validator for
+`Wave5RetainedRequestDispositionV1`, and that validator imports one record bound to the
+retained request and exact F, the actionable refusal is: `adr046w5 binding request already
 consumed; obtain an accepted external delivery-contract/tooling disposition naming the
-retained request and an authorized non-request close action`.
+retained request, exact F, and one closed action`. `remain-blocked` stays blocked;
+`abandon-without-merge` cannot advance; and `recover-panel-without-new-request` still requires
+the complete unanimous ten-role exact-F panel before seal or merge. The record creates no
+second request and is never panel sign-off or a constitutional waiver.
 
 ### 3. Inner loop while implementing
 
@@ -303,8 +308,13 @@ no fixed illustrative target.
 > `operation_catalogue_sha256` exactly equal to the `source-handoff-v1` operation-catalogue
 > fingerprint, and must atomically install the exact nonempty 13-member
 > `SourceGenerationCompatibilityFloorV1` census from `data-model.md`. Every closed role occurs
-> once under one disposition and source generation; missing, duplicate, extra, empty, stale,
-> or cross-disposition members refuse. The source broker's ordinary `serve` process under the existing
+> once under one disposition and source generation; `missing`, `duplicate`, `extra`, `empty`,
+> `stale-generation`, `stale-digest`, and `cross-disposition` members refuse. The accepted
+> external disposition must name the producer/installer owner and the typed import/validation
+> authority. Do not continue until its immutable manifest, installation, validation, and
+> exact-C/Q import receipts form the accepted `SourceGenerationCompatibilityFloorV1`
+> append-only chain. T589 and T592 consume that object read-only and no feature task creates
+> or imports it. The source broker's ordinary `serve` process under the existing
 > `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
 > public-socket evidence fd, seal the typed authority, pin the target object, and pin one
 > exact broker-managed privileged apply executable from the installed source generation.
@@ -393,6 +403,25 @@ esac
 sudo -- "$D2B_APPLY_EXE" --apply-authorized-handoff ||
   fail 'authorized host generation handoff failed'
 ```
+
+`--apply-authorized-handoff` intentionally has no intent selector and no authority token.
+Every authorization/apply pair in this quickstart relies on one durable nonterminal intent
+per source generation. Authorization takes the broker coordinator lock and refuses while an
+authorized, claimed, mutating, recovery-pending, or transfer-pending intent exists. Apply
+takes the same lock and atomically claims only the sole `authorized-pending` intent for the
+accepted connection's kernel-derived peer pidfd/executable identity. Zero pending intents,
+two pending intents, and a second concurrent apply connection refuse before mutation; there
+is no oldest/newest fallback. A disconnect before the first mutation may release that exact
+claim only after a durable zero-mutation proof. After any mutation, a replacement connection
+is accepted only by coordinator replay of the same intent and the same pinned apply object
+after the old peer is proven dead. Completion or rollback is terminal, so repeating apply
+with no pending intent refuses and never reapplies.
+
+The host acceptance must race two authorization commands and two apply commands, inject an
+otherwise impossible two-pending-intent census, disconnect before and after the first
+mutation, and invoke apply after terminal completion. Exactly one contender may win only
+when one pending intent exists. Every refusal has zero selected and successor mutations, and
+post-mutation recovery resumes only the same durable intent.
 
 Once the external prerequisite exists, the unprivileged invocation traverses the existing
 public socket and its `SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority
@@ -508,7 +537,10 @@ source state, then retry with the parameterized target command above; do not cre
 or copy the rolled-back target value into place. The census below queries the complete loaded
 `d2b*`/`microvm*` namespace, excludes only canonical `d2b.slice`, and requires exactly the
 three lifecycle units `d2bd.service`, `d2b-priv-broker.socket`, and
-`d2b-priv-broker.service`:
+`d2b-priv-broker.service`. Code canon therefore produces four raw matched entries on a
+conforming host - committed `d2b.slice` plus those three - despite the stale AGENTS.md
+exit-criterion count of three. The comparison below is the canonical FR-075 predicate; this
+feature batch does not edit AGENTS.md:
 
 ```bash
 set -eu

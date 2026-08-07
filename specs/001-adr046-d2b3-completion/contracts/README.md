@@ -206,8 +206,12 @@ merge-target registration, merge eligibility, and merge.
     of T589; FR-070's accepted and installed source-generation compatibility floor is an
     additional external dispatch prerequisite. That external floor atomically owns the exact
     nonempty 13-member `SourceGenerationCompatibilityFloorV1` census in `data-model.md`.
-    Every role occurs once under one accepted disposition and source generation; missing,
-    duplicate, extra, empty, stale, and cross-disposition members refuse. Bare protocol 4
+    Its accepted disposition names the external producer/installer and typed
+    import/validation authorities; the versioned manifest, installation, validation, and
+    exact-C/Q import receipts must form the closed append-only chain before T589. Every role
+    occurs once under one accepted disposition and source generation; `missing`, `duplicate`,
+    `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` members
+    refuse. Bare protocol 4
     refuses. T592 consumes those source artifacts read-only and
     owns only target-v5 adoption and target outputs. The caller-flake target executable stays
     unprivileged; only the separately broker-pinned installed apply object runs under `sudo`,

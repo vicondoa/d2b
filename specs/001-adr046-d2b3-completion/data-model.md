@@ -361,31 +361,193 @@ failed record remains ineligible for every close stage.
 
 ## 10. Installed source-floor evidence
 
-The source-generation compatibility floor is external to this feature, but Wave 5 consumes
-one closed evidence object. `SourceGenerationCompatibilityFloorV1` contains a nonempty exact
-13-member census. Each member carries one accepted external disposition ID, source generation
-identity, canonical artifact identity, and fixed content digest; no member is inferred from a
-directory listing or prose claim.
+The source-generation compatibility floor is an unresolved external prerequisite, not a
+Wave 5 implementation output. The accepted external disposition MUST name one concrete
+source-generation compatibility producer/installer owner and one concrete import/validation
+authority. The producer/installer owner emits the manifest and atomically installs the
+manifested bytes in the source 3/1 generation. The import/validation authority is an
+independently installed typed validator named by that same disposition; it validates the
+installed generation and imports the accepted aggregate for the exact C/Q dispatch base.
+Self-asserted owner names, prose, a directory census, a target-only fixture, or an in-feature
+task are not authority. No task in this feature produces, installs, repairs, imports, or
+accepts this floor. T589 is a read-only consumer at dispatch, and T592 remains a read-only
+consumer during migration.
 
-| Member role | Exact member |
+`SourceGenerationCompatibilityFloorV1` is one immutable aggregate with exactly these
+top-level fields:
+
+| Field | Type and rule |
 | --- | --- |
-| `source-daemon-peer` | installed numeric-protocol-4 daemon peer |
-| `source-broker-peer` | installed numeric-protocol-4 broker peer under the existing broker service |
-| `source-wire-schema` | source handoff wire schema |
-| `source-privilege-schema` | source handoff privilege schema |
-| `source-operation-catalogue` | catalogue containing the source handoff row |
-| `source-operation-catalogue-fingerprint` | exact `source-handoff-v1` `operation_catalogue_sha256` value |
-| `source-compatibility-disposition` | accepted external compatibility disposition |
-| `source-capability-api-fingerprint` | source capability/API fingerprint |
-| `source-serialization-snapshot` | source serialization snapshot |
-| `source-positive-fixture` | exact negotiated source-handoff positive fixture |
-| `source-bare-protocol-negative-fixture` | bare protocol-4 refusal fixture |
-| `source-cross-fingerprint-negative-fixture` | mismatched-peer catalogue refusal fixture |
-| `source-installed-apply-object` | immutable broker-managed privileged apply object |
+| `schemaVersion` | integer `1` |
+| `kind` | literal `source-generation-compatibility-floor` |
+| `manifest` | one `SourceGenerationCompatibilityManifestV1` |
+| `installationReceipt` | one `SourceGenerationCompatibilityInstallationV1` |
+| `validationReceipt` | one `SourceGenerationCompatibilityValidationV1` |
+| `importReceipt` | one `SourceGenerationCompatibilityImportV1` |
 
-The set is exact: an absent, duplicate, extra, empty, stale-generation, stale-digest, or
-cross-disposition member refuses before accepted-socket fd transfer, authorization, or
-mutation. Both installed peers, all eleven remaining members, and the evidence object itself
-must name the same disposition and source generation. T592 and all in-feature tasks consume
-this object read-only; producing or repairing any member remains an external scope
-escalation.
+Every `*Sha256` field below is exactly 32 bytes rendered as 64 lowercase hexadecimal
+characters. A receipt cannot authorize itself: each authority digest is compared with the
+authority binding in the already accepted external disposition.
+
+`SourceGenerationCompatibilityManifestV1` contains exactly:
+
+| Field | Type and rule |
+| --- | --- |
+| `schemaVersion` | integer `1` |
+| `kind` | literal `source-generation-compatibility-manifest` |
+| `dispositionSha256` | digest of the accepted external compatibility disposition |
+| `sourceGenerationSha256` | domain-separated digest of the exact source system closure and its installed daemon/broker generation |
+| `producerAuthoritySha256` | disposition-pinned producer authority |
+| `installerAuthoritySha256` | disposition-pinned installer authority |
+| `importValidatorAuthoritySha256` | disposition-pinned typed import/validation authority |
+| `memberCount` | integer `13` |
+| `members` | exactly 13 `SourceGenerationCompatibilityMemberV1` values in the canonical order below |
+
+Each `SourceGenerationCompatibilityMemberV1` has exactly `role`, `artifactId`,
+`dispositionSha256`, `sourceGenerationSha256`, `byteLength`, and `contentSha256`.
+`byteLength` is an integer in `1..=u64::MAX`; the two binding digests must equal the manifest
+values. `role` and `artifactId` are the closed pair from this table:
+
+| Canonical role order | Exact `artifactId` |
+| --- | --- |
+| `source-daemon-peer` | `source-daemon-peer-v1` |
+| `source-broker-peer` | `source-broker-peer-v1` |
+| `source-wire-schema` | `source-handoff-wire-schema-v1` |
+| `source-privilege-schema` | `source-handoff-privilege-schema-v1` |
+| `source-operation-catalogue` | `source-handoff-operation-catalogue-v1` |
+| `source-operation-catalogue-fingerprint` | `source-handoff-v1` |
+| `source-compatibility-disposition` | `source-compatibility-disposition-v1` |
+| `source-capability-api-fingerprint` | `source-capability-api-fingerprint-v1` |
+| `source-serialization-snapshot` | `source-handoff-serialization-snapshot-v1` |
+| `source-positive-fixture` | `source-handoff-positive-fixture-v1` |
+| `source-bare-protocol-negative-fixture` | `source-bare-protocol-negative-fixture-v1` |
+| `source-cross-fingerprint-negative-fixture` | `source-cross-fingerprint-negative-fixture-v1` |
+| `source-installed-apply-object` | `source-installed-apply-object-v1` |
+
+`SourceGenerationCompatibilityInstallationV1` contains exactly `schemaVersion = 1`,
+`kind = "source-generation-compatibility-installation"`, `manifestSha256`,
+`dispositionSha256`, `sourceGenerationSha256`, `installerAuthoritySha256`, and
+`installedCensusSha256`. The installer computes `installedCensusSha256` from the canonical
+ordered tuples re-read from the immutable installed source generation after the atomic
+installation; it cannot copy the manifest digest into that field without reading the
+installed bytes.
+
+`SourceGenerationCompatibilityValidationV1` contains exactly `schemaVersion = 1`,
+`kind = "source-generation-compatibility-validation"`, `manifestSha256`,
+`installationReceiptSha256`, `dispositionSha256`, `sourceGenerationSha256`,
+`validatorAuthoritySha256`, `validatedCensusSha256`, and `verdict = "accepted"`. The typed
+validator re-reads the installed census, recomputes every member and aggregate digest, and
+requires `validatedCensusSha256` to equal the installation receipt's
+`installedCensusSha256`.
+
+`SourceGenerationCompatibilityImportV1` contains exactly `schemaVersion = 1`,
+`kind = "source-generation-compatibility-import"`, `validatedFloorSha256`, `manifestSha256`,
+`installationReceiptSha256`, `validationReceiptSha256`, `dispositionSha256`,
+`sourceGenerationSha256`, `executionCommitOid`, `featureSnapshotSha256`,
+`validatorAuthoritySha256`, and `verdict = "accepted"`. `validatedFloorSha256` covers the
+canonical manifest, installation receipt, and validation receipt only, avoiding a
+self-referential aggregate digest. `executionCommitOid` is the full Git
+object id of exact clean C and `featureSnapshotSha256` is Q; neither may be abbreviated.
+The external typed import/validation authority emits this receipt only after validating the
+same installed source generation that the migration will use.
+
+Acceptance is a closed append-only transition:
+
+```text
+absent
+  -> manifest-produced
+  -> atomically-installed
+  -> installed-census-validated
+  -> imported-for-exact-C/Q
+```
+
+Only the authority assigned to a transition may append its receipt. A skipped, reordered, or
+repeated transition refuses. Any changed disposition, source generation, member bytes,
+authority binding, receipt, C, or Q makes the aggregate stale and requires a new external
+chain; no receipt is edited in place. T589 dispatch opens only from
+`imported-for-exact-C/Q`, and every later source-side handoff boundary revalidates the same
+aggregate.
+
+The member-census rejection list is closed and always means all seven classes: `missing`,
+`duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and
+`cross-disposition`. Each refuses before accepted-socket fd transfer, authorization, or
+mutation. Unknown versions, kinds, fields, authority bindings, transition order, or malformed
+encodings are structural refusals and never weaken or replace that seven-class census.
+
+---
+
+## 11. Retained Wave 5 request disposition
+
+The retained Wave 5 binding request can be dispositioned only by an external
+delivery-contract/tooling owner. That owner must land an accepted delivery-contract change
+and its typed validator outside this feature before T219 may import anything. The external
+record is evidence of allowed process, not panel sign-off and not a constitutional waiver.
+No in-feature task produces, installs, or validates the authority.
+
+`Wave5RetainedRequestDispositionV1` contains exactly:
+
+| Field | Type and rule |
+| --- | --- |
+| `schemaVersion` | integer `1` |
+| `kind` | literal `adr046w5-retained-request-disposition` |
+| `program` | literal `ADR046` |
+| `wave` | literal `adr046w5` |
+| `authorityDispositionSha256` | digest of the accepted external authority artifact that authorizes this record; it is not a self-digest |
+| `authorityCommitOid` | full commit object id of the accepted external delivery-contract change |
+| `authorityTreeOid` | full tree object id of that change |
+| `validatorArtifactSha256` | digest of the installed external typed validator |
+| `deliveryContractVersion` | nonzero `u32` version accepted by the external change |
+| `toolingVersion` | nonzero `u32` validator/tooling version accepted by the external change |
+| `principleViAmendmentCommitOid` | full commit object id of the accepted FR-036 constitutional predecessor |
+| `t072DispositionSha256` | digest of the one accepted T072 historical/current remedial disposition |
+| `retainedCandidateId` | literal `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4` |
+| `retainedSnapshotSha256` | literal `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a` |
+| `retainedRequestSha256` | digest of the retained binding request envelope |
+| `retainedPanelRequestSha256` | digest of the byte-preserved `panel-request.json` |
+| `retainedAttestationCount` | integer `0` |
+| `retainedSealState` | literal `absent` |
+| `finalCandidateId` | exact F candidate id |
+| `finalCommitOid` | full commit object id of F |
+| `finalTreeOid` | full tree object id of F |
+| `closeAction` | one of `remain-blocked`, `abandon-without-merge`, or `recover-panel-without-new-request` |
+| `requestPolicy` | literal `no-second-request` |
+| `historyPolicy` | literal `preserve-retained-request-bytes` |
+| `panelPolicy` | literal `unanimous-ten-role-exact-final-candidate` |
+
+The installed external validator is the sole import authority. It derives the Git and
+delivery-state identities, verifies the authority and prerequisite commits are ancestors of
+F, once-opens and hashes the retained request, compares every fixed field, rejects unknown
+fields or enum values, and emits one immutable import result bound to the disposition digest
+and F. A caller-supplied statement, feature-local receipt, phase-plan receipt, or self-named
+authority is ineligible.
+
+That `Wave5RetainedRequestDispositionImportV1` result contains exactly
+`schemaVersion = 1`, `kind = "adr046w5-retained-request-disposition-import"`,
+`recordSha256`, `authorityDispositionSha256`, `validatorArtifactSha256`,
+`finalCandidateId`, `finalCommitOid`, `finalTreeOid`, `closeAction`, and
+`verdict = "accepted"`. It is accepted only when every value equals the validated record;
+`recordSha256` is computed over that complete record and is not stored inside it.
+
+Disposition has these closed transitions:
+
+```text
+absent -> externally-accepted -> imported
+imported + remain-blocked -> blocked
+imported + abandon-without-merge -> abandoned-unmerged
+imported + recover-panel-without-new-request -> panel-pending
+panel-pending + exact unanimous ten-role F-bound attestations -> panel-satisfied
+panel-satisfied -> seal-eligible -> merge-eligible -> merged-byte-identical-F
+panel-pending + completed/terminal panel with any missing role, recommendation,
+  disagreement, or stale binding
+  -> panel-refused
+```
+
+`blocked`, `abandoned-unmerged`, and `panel-refused` authorize no seal, merge, successor
+wave, or release. `recover-panel-without-new-request` authorizes only the externally defined
+recovery-attestation surface linked to the retained request; it creates no second request and
+cannot itself satisfy the panel. The validator requires the repository's complete ten-role
+roster, `signoff = true` iff recommendations are empty, identical F/commit/tree/disposition
+bindings, and every constitutional predecessor. No action or field can encode `waived`,
+partial, force, reduced roster, stale-candidate attestation, or panel substitution. A content
+or history change after F, or any failed recovered panel, returns to external escalation
+rather than admitting another feature-local request.

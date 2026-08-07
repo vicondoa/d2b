@@ -16,7 +16,7 @@ artifact and requires a clean `git diff`, fail-closed.
 | `docs/reference/schemas/v3/core.d2bus.org_<Type>.schema.json` | `xtask gen-zone-schemas` | Nix eval, contract tests, companions | NEW; `v2/` remains until its paths retire |
 | `nixos-modules/generated/resource-types.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2 |
 | `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
-| per-Zone `resource-bundle.json` | active chain: `bundle-zones.nix` + `d2b-resource-compiler` + `bundle-artifacts.nix`; compatibility-only legacy input: `zone-resources-json.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}`. `zone-resources-json.nix` cannot emit, version, hash, or publish the active bundle |
+| per-Zone `resource-bundle.json` | sole active chain: `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix`; historical/compatibility-only input: `zone-resources-json.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}`. `zone-resources-json.nix` is not an active generator and cannot emit, version, hash, or publish the active bundle |
 | `docs/reference/schemas/v3/resource-bundle.json` | `xtask gen-zone-schemas` from the active crate-root `ZoneBundle` | compiler, Nix and daemon contract tests, companions | Generated with the 4/2 change; no duplicate full-envelope DTO may generate a competing schema |
 | target-closure `share/d2b/host-generation-rebuild-ref` | `host-daemon.nix` from required `d2b.site.hostGenerationRebuildRef` | Target-closure deployment entrypoint, broker handoff | Immutable trusted input in the target Nix closure; never the stable runtime reference |
 | `/etc/d2b/host-generation-rebuild-ref` | `d2b-priv-broker` from the verified target-closure input | Handoff digest, post-bootstrap operator recovery | Broker-published bounded `<flake-ref>#<configuration-name>` reference; `root:d2bd` mode `0640`; file and directory durable; runtime binds only its digest and never renders the value or path |
@@ -46,8 +46,9 @@ artifact and requires a clean `git diff`, fail-closed.
   or future pairs 5/2, 4/3, or 5/3, and no consumer may synthesize a missing v4 `audit`
   object from defaults.
 - `bundle-zones.nix`, `d2b-resource-compiler`, and `bundle-artifacts.nix` are the only active
-  emission/publication chain. `zone-resources-json.nix` is compatibility-only and cannot be
-  an independent envelope, version, hash, or publication authority.
+  emission/publication chain, in that order. `zone-resources-json.nix` is
+  historical/compatibility-only and cannot be an independent generator, envelope, version,
+  hash, or publication authority.
 - An installed-host migration starts through the target closure's
   `d2bHostGenerationDeploy` entrypoint with an explicit
   `<flake-ref>#<configuration-name>`; the first 3/1-to-4/2 migration never reads a file that
@@ -79,8 +80,11 @@ artifact and requires a clean `git diff`, fail-closed.
   `source-handoff-v1` operation-catalogue fingerprint; after durable
   transfer it is the target broker. The accepted external disposition must atomically install
   the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from
-  `data-model.md`. Every role occurs once under one disposition and source generation;
-  missing, stale, or cross-disposition members refuse. Committed protocol 4 has no
+  `data-model.md`, name its producer/installer and typed import/validation authorities, and
+  complete its manifest, installation, validation, and exact-C/Q import chain. Every role
+  occurs once under one disposition and source generation; `missing`, `duplicate`, `extra`,
+  `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` members refuse.
+  Committed protocol 4 has no
   handoff operation and omits the field or advertises a different catalogue fingerprint, so this feature remains
   blocked until that external floor is installed before migration. T592 consumes those source
   outputs read-only and owns only target-v5 adoption plus target artifacts. A
@@ -118,6 +122,14 @@ artifact and requires a clean `git diff`, fail-closed.
   fixed illustrative target, invokes raw `nixos-rebuild` directly, or asks an operator to edit
   generated state. The value and stable path stay out of runtime diagnostics.
 
+- The apply command carries no intent selector or authority token. The source broker's
+  coordinator lock protects a durable zero-or-one nonterminal-intent invariant and atomically
+  claims only the sole `authorized-pending` intent for the accepted connection. Zero,
+  multiple, concurrent, or terminal selection refuses before mutation. A pre-mutation
+  disconnect releases only after a durable zero-mutation proof; after mutation, only replay
+  of that same intent may bind the same pinned apply object after the old peer is proven
+  dead.
+
 ## Acceptance
 
 `make test-drift` is clean; no artifact is hand-edited; no delivery record appears in
@@ -126,12 +138,18 @@ boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds.
 coverage starts with a 3/1 source generation that has independently and atomically installed
 the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from
 `data-model.md`, with every role once under one disposition and generation, while still
-lacking the target-v5 operation. Missing, stale, and cross-disposition member poisons plus bare
+missing the target-v5 operation. `Missing`, `duplicate`, `extra`, `empty`,
+`stale-generation`, `stale-digest`, and `cross-disposition` member poisons plus bare
 committed protocol 4 and mismatched source-peer fingerprints are refusal cases. The positive case executes the
 parameterized target-closure entrypoint, proves the caller-flake executable runs only
 unprivileged and only validates/builds/stages/authorizes/submits, rejects zero-output and
 multi-output resolution, proves privileged apply uses only the separately pinned installed
-object with no URI, reference, or target executable to reevaluate, binds the accepted
+object with no URI, reference, target executable, intent selector, or authority token to
+reevaluate, races two authorizations and two apply connections, injects a two-pending-intent
+census, disconnects before and after the first mutation, and invokes apply after terminal
+completion. It requires atomic sole-pending selection, zero mutation on
+zero/multiple/concurrent/terminal refusals, durable zero-mutation proof before releasing a
+pre-mutation claim, and same-intent coordinator replay only after mutation. It binds the accepted
 connection's direct peer pidfd and executable identity to that pin, and refuses every identity
 transition before the first mutation and each later mutation edge with no persisted pidfd or
 later mutation. Raw peer PID/start and executable store/NAR identity remains absent from

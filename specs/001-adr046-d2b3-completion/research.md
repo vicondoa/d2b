@@ -173,9 +173,15 @@ Per-Zone runtimes are supervised children, exactly as the current per-VM runners
 `systemd.services.*` declaration enters `nixos-modules/`, and the existing policy test that
 denies retired unit names continues to apply.
 
-**Verification**: the host exit criterion in AGENTS.md - `systemctl list-units` matching
-`^(d2b|microvm)` returns 3 - remains the check, and the map's own removal proof for the
-per-realm family is `systemctl list-units 'd2b-r-*'` returning empty.
+**Verification and code-canon correction**: committed code exposes canonical `d2b.slice` plus
+the three persistent service/socket units `d2bd.service`, `d2b-priv-broker.socket`, and
+`d2b-priv-broker.service`. The AGENTS.md exit-criterion prose that counts three raw
+`d2b*`/`microvm*` matches is therefore stale. FR-075 is the exact canonical comparison:
+enumerate the complete loaded namespace, fail if enumeration fails, exclude only
+`d2b.slice`, sort, and require exactly those three remaining names. Injected unexpected
+slice and service names remain after the sole exclusion and fail equality. This feature batch
+records the drift and keeps committed code; it does not edit AGENTS.md. The map's own removal
+proof for the per-realm family remains `systemctl list-units 'd2b-r-*'` returning empty.
 
 **Alternatives considered**: Declaring per-Zone systemd units for supervision. Rejected -
 directly prohibited by Principle I and ADR 0015, and the specs already chose parent-spawn.
