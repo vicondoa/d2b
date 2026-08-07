@@ -1022,6 +1022,7 @@
           , root
           , package
           , target
+          , feature
           , variant
           , edgeKinds
           , production
@@ -1057,6 +1058,14 @@
                 || fail D2B-BZLPOLICY-ROOT
               grep -Fq '"defaultFeatures": false' "$input" \
                 || fail D2B-BZLPOLICY-FEATURE
+              ${if feature == "" then ''
+                if grep -Fq 'real-libshpool' "$input"; then
+                  fail D2B-BZLPOLICY-FEATURE
+                fi
+              '' else ''
+                grep -Fq 'real-libshpool' "$input" \
+                  || fail D2B-BZLPOLICY-FEATURE
+              ''}
               grep -Fq '"variant": "${variant}"' "$input" \
                 || fail D2B-BZLPOLICY-EDGES
               grep -Fq '"edgeKinds": "${edgeKinds}"' "$input" \
@@ -1650,6 +1659,7 @@
             root = brokerPolicyRoot;
             package = "d2b-priv-broker";
             target = nativeGnuTarget;
+            feature = "";
             variant = "production";
             edgeKinds = "normal,build";
             production = true;
@@ -1661,6 +1671,7 @@
             root = guestPolicyRoot;
             package = "d2b-guest-shell-runner";
             target = nativeMuslTarget;
+            feature = "real-libshpool";
             variant = "policy";
             edgeKinds = "normal,build,dev";
             production = false;
@@ -1672,6 +1683,7 @@
             root = brokerPolicyRoot;
             package = "d2b-priv-broker";
             target = nativeGnuTarget;
+            feature = "";
             variant = "policy";
             edgeKinds = "normal,build,dev";
             production = false;
