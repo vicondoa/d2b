@@ -656,6 +656,8 @@ impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
                 "--batch",
                 &format!("--output_user_root={}", output_user_root.display()),
                 &format!("--output_base={}", output_base.display()),
+                "--nohome_rc",
+                "--nosystem_rc",
                 "mod",
                 "deps",
                 "--lockfile_mode=off",
@@ -692,14 +694,35 @@ fn fresh_bootstrap_in_workspace(
     if !status.success() {
         return Err(fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"));
     }
-    if workspace.join("MODULE.bazel.lock").exists() {
-        return Err(fresh_bootstrap_error(
-            hub,
-            "bootstrap unexpectedly created the module lock",
-        ));
+    match fs::symlink_metadata(workspace.join("MODULE.bazel.lock")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "bootstrap unexpectedly created the module lock",
+            ));
+        }
+        Err(_) => return Err(fresh_bootstrap_error(hub, "module lock output cannot be inspected")),
     }
     let lockfile = workspace.join(format!("bazel/cargo/{hub}.lock"));
-    fs::read(&lockfile).map_err(|_| fresh_bootstrap_error(hub, "selected lock was not generated"))
+    match fs::symlink_metadata(&lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::read(&lockfile)
+                .map_err(|_| fresh_bootstrap_error(hub, "selected lock cannot be read"))
+        }
+        Ok(_) => Err(fresh_bootstrap_error(
+            hub,
+            "selected lock output is not a regular file",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(fresh_bootstrap_error(
+            hub,
+            "selected lock was not generated",
+        )),
+        Err(_) => Err(fresh_bootstrap_error(
+            hub,
+            "selected lock output cannot be inspected",
+        )),
+    }
 }
 
 fn install_fresh_lock(
@@ -2366,11 +2389,14 @@ mod fresh_bootstrap_tests {
             &executable,
             r#"#!/bin/sh
 [ "$1" = "--batch" ] || exit 10
-[ "$4" = "mod" ] || exit 11
-[ "$5" = "deps" ] || exit 12
-[ "$6" = "--lockfile_mode=off" ] || exit 13
-[ "$CARGO_BAZEL_REPIN" = "1" ] || exit 14
-[ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 15
+[ "$4" = "--nohome_rc" ] || exit 11
+[ "$5" = "--nosystem_rc" ] || exit 12
+[ "$6" = "mod" ] || exit 13
+[ "$7" = "deps" ] || exit 14
+[ "$8" = "--lockfile_mode=off" ] || exit 15
+[ "$CARGO_BAZEL_REPIN" = "1" ] || exit 18
+[ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 19
+[ -z "$D2B_TEST_HOSTILE" ] || exit 17
 mkdir -p bazel/cargo
 printf product-lock > bazel/cargo/product.lock
 "#,
