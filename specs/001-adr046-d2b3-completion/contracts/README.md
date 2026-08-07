@@ -271,9 +271,12 @@ merge-target registration, merge eligibility, and merge.
     the source, hashes before decode, derives the locator, validates the outer triplet, then
     installs the exact bytes beneath held current-effective-uid `0700` candidate dirfds as a
     current-effective-uid `0600` leaf. The importer uses a create-exclusive temp, file
-    `fsync`, `renameat2(RENAME_NOREPLACE)`, and destination-directory `fsync` before it
-    publishes the `EvidenceRecord`. Crash retry may reuse only an identical fully revalidated
-    durable leaf; a different existing leaf or concurrent wrong-byte/binding input refuses.
+    `fsync`, and `renameat2(RENAME_NOREPLACE)`, then `fsync`s every ancestor directory from
+    `sha256` through the candidate directory before it publishes the `EvidenceRecord`. A
+    no-replace loser or restart cleanup removes only its verified temporary leaf through the
+    held parent fd, `fsync`s that parent, and leaves zero temporary residue. Crash retry may
+    reuse only an identical fully revalidated durable leaf; a different existing leaf or
+    concurrent wrong-byte/binding input refuses.
     T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and
     merge-eligibility and retains schema-v2 decoding while rejecting every missing,
     malformed, unknown-version/field/enum, over-bound, misordered, stale, progress-free,

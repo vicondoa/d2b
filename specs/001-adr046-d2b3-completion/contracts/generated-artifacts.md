@@ -54,10 +54,14 @@ artifact and requires a clean `git diff`, fail-closed.
   4/2 has not published. The entrypoint builds and verifies the complete target closure,
   stages one immutable transition identity, and submits only an opaque request. It cannot
   publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback.
-  Before any privileged invocation, the unprivileged operator must pass the existing
+  The target-closure entrypoint is executed only while unprivileged. Before any privileged
+  invocation, the operator must pass the existing
   public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
   one-shot classification into one durably sealed nonfabricable handoff capability bound to
-  the complete intent and emits no authority token.
+  the complete intent and emits no authority token. The source broker also pins one exact
+  immutable broker-managed apply object from the installed source generation. Only that
+  object runs under `sudo`; it receives no flake URI, installable, stable-reference path, or
+  caller-flake executable to reevaluate.
   Capability-authorized broker code exclusively owns stock profile publication,
   broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference publication and
   repair, stock rollback, and source-service restoration. Before transfer that actor must be
@@ -76,9 +80,9 @@ artifact and requires a clean `git diff`, fail-closed.
   publishes the pointer and reference with file and directory durability before daemon
   ingestion/readiness.
 - A failed build leaves 3/1 active. Before first mutation the broker durably owns the
-  coordinator; bootstrap ownership transfers exactly once to the target broker before target
+  coordinator; ownership transfers exactly once to the target broker before target
   daemon activation. A later failure is reopened by that broker-owned coordinator. Before
-  transfer only the matching bootstrap owner may resume; after transfer the existing
+  transfer only the matching installed source compatibility actor may resume; after transfer the existing
   `d2b-priv-broker.service` reopens after restart and restores the prior pointer and stable
   reference bytes or verified absence before broker-owned stock rollback.
   Rollback therefore cannot leave a 4/2 reference on a restored 3/1 host.
@@ -88,11 +92,13 @@ artifact and requires a clean `git diff`, fail-closed.
   file and parent-directory sync, fixed-digest audit fields, and the same operation for repair.
 - Runtime version refusal is identifier-free and carries only closed action
   `rebuild-host-generation`; it contains no command or argv. Reference documentation gives
-  parameterized paths: a validated target-closure `--authorize-handoff` then
-  `--apply-authorized-handoff` bootstrap pair for a 3/1 host where the stable reference is
-  absent, the installed `d2b-host-generation-deploy --from-reference`
-  authorization/apply pair with those same flags only after broker publication, and a
-  validated prior-target rollback pair with those same flags. Every preflight validates
+  parameterized paths: an unprivileged validated target-closure `--authorize-handoff`
+  invocation followed by `--apply-authorized-handoff` on the separately pinned installed
+  object for a 3/1 host where the stable reference is absent; an installed
+  `d2b-host-generation-deploy --from-reference ... --authorize-handoff` invocation followed
+  by the same pinned installed object's reference-free `--apply-authorized-handoff` only after
+  broker publication; and the equivalent unprivileged prior-target authorization followed by
+  installed-object apply for rollback. Every preflight validates
   grammar and bounds and stops before public-socket
   authorization or `sudo`; a failed authorization prevents the privileged invocation. No path contains a
   fixed illustrative target, invokes raw `nixos-rebuild` directly, or asks an operator to edit
@@ -104,15 +110,21 @@ artifact and requires a clean `git diff`, fail-closed.
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
 coverage starts with a 3/1 source generation that has independently installed the accepted
-external protocol-4 compatibility actor while still lacking the v5 operation. Committed
-protocol 4 without that source-side operation is a refusal case. The positive case executes the
-parameterized target-closure entrypoint, proves it only validates/builds/stages/authorizes/submits,
+external versioned protocol-4 source-daemon/source-broker bridge and its broker-managed
+immutable apply object while still lacking the target v5 operation. Bare committed protocol
+4 without that source-side bridge is a refusal case. The positive case executes the
+parameterized target-closure entrypoint, proves the caller-flake executable runs only
+unprivileged and only validates/builds/stages/authorizes/submits, rejects zero-output and
+multi-output resolution, proves privileged apply uses only the separately pinned installed
+object with no URI or reference to reevaluate,
 proves initial public-socket Admin classification, sealed durable capability,
 broker-before-daemon activation, Hello while unready, phase-attenuated authenticated
 publication request, and durable publication before ingestion/readiness, then injects failure and crash points through
 profile/service/bootstrap/publication/reference repair/readiness/rollback. It kills the
 entrypoint and proves the broker-owned coordinator resumes across target broker and daemon
-startup failures, bootstrap-broker crashes, and durable ownership transfer. Prior reference
+startup failures, installed source compatibility-actor crashes, and durable ownership
+transfer. Target-executable, apply-object, installed-symlink, and GC-root substitutions
+refuse before mutation. Prior reference
 bytes or absence, 3/1 artifacts, and source service generations are restored together with
 immutable broker audit. Host recovery also executes the post-publication stable-reference and
 parameterized prior-target rollback commands, rejects direct entrypoint/daemon/Nix mutation

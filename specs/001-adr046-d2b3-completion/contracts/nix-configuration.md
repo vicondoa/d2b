@@ -28,7 +28,7 @@ controller-owned effect, and declared-resource removal cleanup.
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration whose closed acceptance-resource identity set is exactly `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`, using each exact spec-pinned Provider/config fixture, through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and that same identity's real owned effect plus production `Ready` projection. Then prove state-preserving Device cleanup with the ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources intact; refusal cases are separate. The acceptance set does not move Network implementation from Wave 4. Guest support objects are prerequisites only: Guest runtime-effect acceptance is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480, and Guest emission, ingestion, status, or refusal cannot satisfy this partial US1 production-plane checkpoint | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | W5 |
 | NIX-7 | The one carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the required top-level `audit` object in that Zone's `resource-bundle.json`, outside every ResourceSpec and the runtime-created empty `Zone.spec`. It carries exactly `retentionDays` (default 30, range 1-3650), `maxRecordsPerSegment` (default 65536, range 1-1000000), and `maxSegmentBytes` (default 67108864, range 1048576-1073741824). This breaking bundle-header change moves the accepted pair from `schemaVersion: 3` / `bundleVersion: 1` to `schemaVersion: 4` / `bundleVersion: 2`; v4 `contentHash` covers the canonical `{audit,resources}` object so an audit-only change creates a new generation identity. T592 owns the typed option, active crate-root `ZoneBundle`, retirement of the duplicate full envelope, compiler entry point and CLI tests, schema generator/output, digest reference, and focused tests; T595 wires the emitter and daemon; T220 coordinates generated artifacts, references, contract tests, and changelog treatment | FR-070, SC-032 | W5 |
-| NIX-8 | Upgrade an installed 3/1 host through the target closure's `system.build.d2bHostGenerationDeploy` entrypoint only after an accepted external compatibility floor is installed in the source generation. The parameterized procedure validates the exact flake/configuration grammar and 2048-byte composition, resolves one exact store executable, discards raw Nix stderr, and stops before public-socket authorization or `sudo` on failure; first migration never reads the absent stable reference. The entrypoint may validate, build, stage, authorize, and submit only. The installed source daemon transfers exactly one accepted public-socket evidence fd over the authenticated protocol-4 channel. The installed source broker, running as ordinary `serve` under the existing socket/service pair, consumes it into the nonfabricable intent-bound capability, pins the target object, durably owns and reopens the coordinator across existing-unit restart, performs audited pre-transfer profile/service/bootstrap/rollback phases, and transfers ownership exactly once to the target broker before target daemon activation. The target broker owns post-transfer phases, requires exact-generation protocol-5 Hello while the daemon is unready, publishes d2b pointer/reference state durably before ingestion/readiness, and restores prior bytes or absence before rollback. Committed protocol 4 without the source-side operation refuses. No target-only bootstrap mode, synthetic starting image, new unit or override, child, entrypoint mutation, daemon recovery owner, serialized credential, daemon identity, euid 0, or provenance claim substitutes. T589 and downstream Wave 5 remain blocked until the external floor is accepted and installed | FR-070, SC-032 | W5 |
+| NIX-8 | Upgrade an installed 3/1 host through the target closure's `system.build.d2bHostGenerationDeploy` entrypoint only after an accepted external compatibility floor is installed in the source generation. The parameterized procedure validates the exact flake/configuration grammar and 2048-byte composition, resolves exactly one target output, discards raw Nix stderr, and stops before public-socket authorization or `sudo` on failure; first migration never reads the absent stable reference. The caller-flake entrypoint may run only unprivileged and may validate, build, stage, authorize, and submit only. The accepted external floor owns a versioned protocol-4 source-daemon/source-broker bridge under the existing socket/service lifecycle. The source daemon transfers exactly one accepted public-socket evidence fd over that authenticated bridge; the source broker's ordinary `serve` process consumes it into the nonfabricable intent-bound capability, pins the target object and one exact broker-managed immutable apply executable from the installed source generation, durably owns and reopens the coordinator across existing-unit restart, performs audited pre-transfer phases, and transfers ownership exactly once. Privileged apply invokes only that installed pinned object, receives no flake URI or reference to reevaluate, and refuses target-output, apply-object, symlink, or GC-root substitution. T592 owns only the versioned protocol-5 target adoption and post-transfer half plus two-sided schema/catalogue/fingerprint/fixture compatibility; it does not implement or install the source bridge. The target broker requires exact-generation protocol-5 Hello while the daemon is unready, publishes d2b pointer/reference state durably before ingestion/readiness, and restores prior bytes or absence before rollback. Bare committed protocol 4 without the external source bridge refuses. No target-only bootstrap mode, synthetic starting image, new unit or override, child, entrypoint mutation, daemon recovery owner, serialized credential, daemon identity, euid 0, or provenance claim substitutes. T589 and downstream Wave 5 remain blocked until the external floor is accepted and installed | FR-070, SC-032 | W5 |
 | NIX-9 | Declare required `d2b.site.hostGenerationRebuildRef` with no default. Its option type is `lib.types.strMatching "^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"` plus an assertion that the UTF-8 encoding is at most 2048 bytes. The grammar is exactly `<flake-ref>#<configuration-name>`: one ASCII `#`; a nonempty ASCII flake ref using only the listed characters; and a 1-64 byte configuration name beginning with an alphanumeric and continuing with alphanumerics, `_`, or `-`. The option description states that it is an opaque rebuild locator, provides no fixed target example, points to the parameterized validated quickstart, and makes missing, empty, 2049-byte, multiline, control-bearing, whitespace-bearing, selector-free, extra-`#`, empty-selector, slash/dot-selector, or overlong-selector values fail evaluation. Nix places the exact validated bytes only in the immutable target closure. The broker publishes `/etc/d2b/host-generation-rebuild-ref` atomically as a regular `root:d2bd` `0640` file, audits only the fixed digest, repairs only through the same typed operation, and restores the prior bytes or absence on rollback. Runtime output never includes the value or stable path | FR-070, SC-032 | W5 |
 
 ## Invariants
@@ -47,18 +47,19 @@ controller-owned effect, and declared-resource removal cleanup.
   publication.
 - Installed-host migration is whole-generation only. No activation may expose a 4/2 daemon
   to a partial or mixed bundle set, and no rollback may feed a 3/1 artifact to 4/2 code. The
-  deployment entrypoint is validation/build/stage/public-socket-authorization/opaque-request-only.
-  Capability-authorized typed normal or
-  bootstrap broker code exclusively owns stock profile publication, broker/daemon service
+  deployment entrypoint is unprivileged
+  validation/build/stage/public-socket-authorization/opaque-request-only. It is never the
+  privileged apply executable. Capability-authorized typed source broker code before transfer
+  and target broker code after transfer exclusively own stock profile publication, broker/daemon service
   transition, 3/1 bootstrap, d2b pointer/reference publication/repair, stock rollback, and
   source-service restoration, with immutable pre-mutation and outcome audit. Target broker
   activation precedes target daemon activation. The daemon completes mandatory Hello while
   unready, then presents a phase attenuation in the authenticated publication request; the
   broker publishes durably before ingestion and readiness. Daemon identity and euid 0 alone
   refuse. The broker consumes initial public-socket Admin classification into the durable
-  handoff capability and owns the coordinator before first mutation. Bootstrap ownership
+  handoff capability and owns the coordinator before first mutation. Coordinator ownership
   transfers exactly once to the target broker before daemon activation. Before transfer only
-  the matching bootstrap owner may resume; after transfer the existing broker service
+  the matching installed source compatibility actor may resume; after transfer the existing broker service
   reopens across broker restart or daemon startup failure. `d2bd` and Nix activation have no
   recovery ownership, direct mutation, or independent
   unit-control path, and no fourth unit is introduced.
@@ -102,14 +103,21 @@ controller-owned effect, and declared-resource removal cleanup.
   ResourceSpec/ZoneSpec placement, and consumer-side silent defaulting. Production tests pin
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
-- Host activation coverage starts from an installed 3/1 generation whose broker advertises
-  protocol 4 and lacks `ApplyHostGenerationHandoff`. It executes the documented parameterized
+- Host activation positive coverage starts from an installed 3/1 generation whose accepted
+  external compatibility floor provides the versioned protocol-4 source-daemon/source-broker
+  bridge and broker-managed immutable apply object under the existing service lifecycle.
+  A separate negative starts from bare committed protocol 4 without that bridge and MUST
+  refuse before authorization or mutation. The positive executes the documented parameterized
   target-closure entrypoint with validated flake/configuration inputs and rejects empty,
-  malformed, over-bound, mismatched, or nonexistent inputs before public-socket authorization
-  or `sudo`. It verifies the unprivileged `--authorize-handoff` and privileged
-  `--apply-authorized-handoff` pair, sealed capability, no emitted authority token, and that
+  malformed, over-bound, mismatched, or nonexistent inputs plus zero-output or multi-output
+  target resolution before public-socket authorization or `sudo`. It verifies the
+  caller-flake executable runs only
+  for unprivileged `--authorize-handoff` and privileged `--apply-authorized-handoff` invokes
+  the independently pinned installed apply object with no URI or reference to reevaluate,
+  sealed capability, no emitted authority token, and that
   daemon identity/euid0 alone refuse. It verifies the entrypoint is
-  validation/build/stage/authorization/request-only, the closed bootstrap-broker selection,
+  unprivileged validation/build/stage/authorization/request-only, the external source actor
+  selection,
   capability-authorized broker-only audited
   profile/service mutation, target broker activation before target daemon activation, daemon
   Hello while unready, phase-attenuated authenticated publication request, and atomic broker publication
@@ -121,10 +129,12 @@ controller-owned effect, and declared-resource removal cleanup.
   broker-owned coordinator and restores matching complete generations and the prior
   reference bytes or verified absence, with one logical ingestion/effect and no unaudited
   profile/service/bootstrap/rollback or d2b artifact transition. It injects target broker
-  startup failure, target daemon startup/reconciliation failure, every bootstrap-broker crash
+  startup failure, target daemon startup/reconciliation failure, every installed source
+  compatibility-actor crash
   boundary, and both sides of durable ownership transfer without a new unit. The same Type-10 test then
   executes the documented
   stable-reference-based entrypoint, rejects raw `nixos-rebuild` as the documented path,
   executes the parameterized prior-target rollback procedure, rejects direct
   entrypoint/daemon/Nix mutation and caller-claimed handoff authority, and proves malformed or
-  absent values fail without rendering their contents.
+  absent values fail without rendering their contents. Independent target-executable,
+  apply-object, installed-symlink, and GC-root substitutions refuse before mutation.

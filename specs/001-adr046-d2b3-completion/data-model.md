@@ -261,16 +261,24 @@ bytes, including the outer candidate/content/snapshot binding, before candidate 
 Through the already held candidate-directory fd it creates and verifies current-effective-uid
 `0700` namespace directories, creates a current-effective-uid `0600` temporary leaf with
 `O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW`, writes the exact validated bytes, `fsync`s the leaf,
-publishes with `renameat2(RENAME_NOREPLACE)`, and `fsync`s the destination directory. Only
-after that directory sync may it publish the `EvidenceRecord` carrying the derived locator.
+and publishes with `renameat2(RENAME_NOREPLACE)`. Before publishing the `EvidenceRecord`
+carrying the derived locator, it `fsync`s each held ancestor directory fd bottom-up:
+`sha256`, `sc002`, `evidence-sidecars`, then the candidate directory. Namespace creation is
+therefore durable, not only the final leaf rename. A failed no-replace race or restart cleanup
+may inspect only the reserved temporary-name namespace through the held leaf-parent fd. It
+requires a regular single-link current-effective-uid `0600` temp with stable inode identity,
+removes it with `unlinkat`, and `fsync`s that parent before success or refusal. No joined path
+or broad sweep is allowed, and every race loser and recovery path leaves zero temporary
+residue.
 If a crash leaves the canonical sidecar durable before record publication, retry opens that
 leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
 mode `0600`, link count one, device/inode stability, digest, bytes, decode, and outer binding
 all match; it never replaces the leaf. A different or malformed existing leaf refuses.
 Crash injection covers source open, hash, decode, temp write, file sync, no-replace
-publication, directory sync, and record publication. Synchronized imports cover
-same-bytes/same-record idempotence and different-bytes or wrong-binding races, with no
-record allowed to reference absent or not-yet-durable bytes.
+publication, each ancestor-directory sync, race-loser/orphan unlink, cleanup-parent sync, and
+record publication. Synchronized imports cover same-bytes/same-record idempotence and
+different-bytes or wrong-binding races, with no record allowed to reference absent or
+not-yet-durable bytes and no temporary leaf left by a winner or loser.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -304,6 +312,8 @@ with different bytes or bindings; missing,
 duplicate, mixed, or unrelated resource samples; effect/Ready identity disagreement;
 selected-stop/progress identity mismatch; arithmetic overflow or event misordering; stale
 binding; zero progress; more than 32 progress observations; and any over-budget sample all
-refuse. Compatibility tests decode retained schema-v2 `EvidenceRecord` fixtures
+refuse. Missing ancestor sync, non-fd-relative cleanup, cleanup outside the reserved temp
+namespace, cleanup-parent sync failure, or any temporary residue after success, refusal, race,
+or restart also refuses. Compatibility tests decode retained schema-v2 `EvidenceRecord` fixtures
 byte-identically, import a failed operator record without a receipt, and prove that the same
 failed record remains ineligible for every close stage.

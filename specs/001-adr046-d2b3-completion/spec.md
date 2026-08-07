@@ -525,18 +525,21 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   disabled audit owner, missing authoritative row, incomplete export, dropped record, or
   unbound record MUST fail closed.
   Installed-host generation handoff is subject to the same broker-only, fail-closed audit
-  posture. The target-closure deployment entrypoint MAY only build and verify the complete
-  closure, durably stage immutable transition bytes, and submit one opaque intent. It MUST
+  posture. The caller-flake target-closure deployment entrypoint MAY run only while
+  unprivileged, build and verify the complete closure, durably stage immutable transition
+  bytes, and submit one opaque intent. It MUST
   NOT publish a profile, control a service, perform 3/1 bootstrap mutation, initiate
   rollback, or select a path, unit, generation, command, or argv. Every system-profile,
   broker/daemon service, bootstrap, d2b-state publication/repair, stock rollback, and
-  source-service restoration mutation MUST run through the capability-authorized typed normal
-  broker or a source-generation-installed compatibility broker and MUST have immutable
+  source-service restoration mutation MUST run through the capability-authorized typed target
+  broker after transfer or a source-generation-installed compatibility broker before
+  transfer and MUST have immutable
   pre-mutation and outcome audit. Initial authorization MUST occur while the invoking operator is unprivileged through
   the existing public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker
   MUST then consume that one-shot classification into one durably sealed, non-serializable,
-  nonfabricable handoff capability bound to the complete staged intent. Every normal or
-  bootstrap-broker phase consumes that capability or a broker-issued phase attenuation.
+  nonfabricable handoff capability bound to the complete staged intent. Every installed
+  source-broker phase before transfer and target-broker phase after transfer consumes that
+  capability or a broker-issued phase attenuation.
   Daemon uid/gid/generation, successful
   Hello, broker-socket credentials, target-closure provenance, and effective uid 0 are
   eligibility or integrity checks only and MUST NOT independently authorize any mutation.
@@ -556,8 +559,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `d2b-priv-broker.socket` and `d2b-priv-broker.service` the executable bootstrap actor. The
   installed daemon may only forward exactly one accepted public-socket evidence fd over the
   authenticated protocol-4 channel. The installed broker MUST consume that fd into the
-  nonfabricable intent-bound capability, pin the target executable and GC root, durably own
-  the coordinator before mutation, reopen it from its ordinary `serve` startup after the
+  nonfabricable intent-bound capability, pin the target executable and GC root, and pin one
+  exact immutable broker-managed privileged apply object from the installed source
+  generation. Only that installed object may execute under `sudo`; the caller-flake
+  entrypoint never does. The privileged actor receives no flake URI, installable, stable
+  reference, command, or argv to reevaluate. The source broker MUST durably own the
+  coordinator before mutation, reopen it from its ordinary `serve` startup after the
   existing unit's `Restart=on-failure`, and transfer ownership exactly once to the
   authenticated target broker. A serialized credential, token, fd number, daemon identity,
   root execution, or target provenance is not authority. The external disposition MUST also
@@ -567,7 +574,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 
   After that prerequisite is accepted, the exact ordering is:
   public-socket Admin authorization; durable intent and capability; source-generation
-  compatibility-broker coordinator ownership before the first mutation; stock profile publication; target
+  compatibility-broker coordinator ownership before the first mutation; exact target and
+  apply-object pin revalidation; stock profile publication; target
   broker transition; durable coordinator ownership transfer to that target broker; target
   daemon transition;
   exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
@@ -706,9 +714,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   explicit `Stopped` state. It MUST enumerate exactly `d2bd.service`,
   `d2b-priv-broker.socket`, and `d2b-priv-broker.service`, with no additional root-visible
   framework unit. Enumeration MUST query the complete loaded `d2b*` and `microvm*` namespace
-  with `systemctl list-units --all`, extract and sort every returned unit name, and compare
-  that set for exact equality with the required three. Querying only those three names is not
-  enumeration and cannot detect an unexpected fourth unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
+  with `systemctl list-units --all`, extract every returned unit name, exclude exactly the
+  canonical `d2b.slice`, sort the remainder, and compare that set for exact equality with the
+  required three. No other slice, target, service, socket, timer, path, or template is
+  excluded. Querying only those three names is not enumeration and cannot detect an
+  unexpected lifecycle unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
   cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
   is limited to T220/T604 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
   results only and MUST NOT rerun the target. T604 is the sole prospective owner of the
@@ -1352,15 +1362,21 @@ carries the object verbatim rather than copying selected fields into the task ro
   before decode, derives the locator, and publishes the exact bytes beneath the held candidate
   dirfd. Candidate directories are current-effective-uid `0700`; the sidecar leaf is
   current-effective-uid `0600`. Publication uses create-exclusive temporary state, file
-  `fsync`, `renameat2(RENAME_NOREPLACE)`, and destination-directory `fsync`; only after that
-  durable publication may the ordinary `EvidenceRecord` be published. An identical sidecar
+  `fsync` and `renameat2(RENAME_NOREPLACE)`. Before the ordinary `EvidenceRecord` may be
+  published, the importer `fsync`s every held ancestor directory fd from `sha256` through
+  `sc002`, `evidence-sidecars`, and the candidate directory. A no-replace race loser or
+  restart cleanup removes only its verified temporary leaf with fd-relative `unlinkat`,
+  `fsync`s the leaf parent, and proves zero temporary residue before success or refusal. Only
+  after that durable publication and cleanup may the ordinary `EvidenceRecord` be published.
+  An identical sidecar
   left by a crash may be reopened and reused only after the complete
   identity/hash/owner/mode check; a different existing leaf refuses. A failed operator record
   remains importable without a receipt and remains
   ineligible for close; a passing record requires exactly one matching receipt. T600 carries
   the exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
   unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
-  stale/wrong-candidate/record-digest binding, a receipt on a failed record, progress-free
+  stale or wrong canonical outer `candidate_id`/`content_id`/`snapshot_sha256` triplet,
+  sidecar content-digest mismatch, a receipt on a failed record, progress-free
   evidence, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a

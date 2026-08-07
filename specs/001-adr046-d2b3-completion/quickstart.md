@@ -301,11 +301,14 @@ no fixed illustrative target.
 > has been installed on the source 3/1 host. That prerequisite must make the installed
 > protocol-4 broker's ordinary `serve` process under the existing
 > `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
-> public-socket evidence fd, seal the typed authority, pin the target object, durably own and
-> restart the coordinator, and transfer it to the target broker. No target-only binary, new
-> unit or override, child, mutating entrypoint, daemon recovery owner, serialized credential,
-> or root/provenance claim substitutes. This quickstart claims no implementation of that
-> prerequisite.
+> public-socket evidence fd, seal the typed authority, pin the target object, and pin one
+> exact broker-managed privileged apply executable from the installed source generation.
+> That immutable apply object, never an executable obtained from the caller's target flake,
+> durably resumes the coordinator and transfers it to the target broker. The accepted external
+> source-generation disposition owns the protocol-4 bridge and source apply object; this
+> feature owns neither. No target-only binary, new unit or override, child, mutating
+> entrypoint, daemon recovery owner, serialized credential, or root/provenance claim
+> substitutes. This quickstart claims no implementation of that prerequisite.
 
 After that prerequisite is accepted and installed, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
@@ -371,10 +374,17 @@ esac
 D2B_DEPLOY_EXE="${D2B_DEPLOY_OUT}/bin/d2b-host-generation-deploy"
 [ -x "$D2B_DEPLOY_EXE" ] ||
   fail 'target deployment store object has no deployment executable'
+D2B_APPLY_EXE="$(readlink -e \
+  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
+  fail 'installed broker-managed apply executable cannot be resolved'
+case "$D2B_APPLY_EXE" in
+  /nix/store/*/bin/d2b-host-generation-deploy) ;;
+  *) fail 'installed broker-managed apply executable is not an immutable store object' ;;
+esac
 
 "$D2B_DEPLOY_EXE" --authorize-handoff ||
   fail 'public-socket administrator authorization failed'
-sudo -- "$D2B_DEPLOY_EXE" --apply-authorized-handoff ||
+sudo -- "$D2B_APPLY_EXE" --apply-authorized-handoff ||
   fail 'authorized host generation handoff failed'
 ```
 
@@ -383,26 +393,31 @@ public socket and its `SO_PEERCRED`/`d2b`-group Admin classification. It emits n
 token. The installed source daemon forwards exactly one accepted-socket evidence fd over the
 authenticated protocol-4 channel, and the installed source broker consumes it into one
 durably sealed nonfabricable handoff capability bound to the staged intent.
-It also creates and retains the GC root and immutable identity for the exact store object and
-executable used above. The privileged command performs no Nix evaluation, build, or
-installable resolution; it can only resume the exact broker-pinned object and intent.
-Substituting a different store executable, changing a symlink after authorization, or
-replaying the same executable for another intent refuses before mutation. Effective uid 0,
-target-closure provenance, daemon identity, broker peer credentials, and caller-supplied role
-claims never authorize independently.
+It creates and retains the GC root and immutable identity for the exact target store object,
+and separately pins the canonical identity and digest of `D2B_APPLY_EXE` from the installed
+source generation. The caller-flake `D2B_DEPLOY_EXE` is executed only while unprivileged.
+The privileged command receives no flake URI, installable, reference path, target executable,
+command, or argv to reevaluate; it can only ask the broker to resume the exact pinned intent.
+Substituting either store executable, replacing the GC root, changing an installed symlink
+after authorization, or replaying either executable for another intent refuses before
+mutation. Effective uid 0, target-closure provenance, daemon identity, broker peer
+credentials, and caller-supplied role claims never authorize independently.
 
-The installed source broker reached through the existing `d2b-priv-broker.service` and
-`d2b-priv-broker.socket` is the sole pre-transfer bootstrap lifecycle owner. Its ordinary
+The installed source compatibility broker reached through the existing
+`d2b-priv-broker.service` and `d2b-priv-broker.socket` is the sole pre-transfer lifecycle
+owner. Its ordinary
 `serve` startup reopens the durable coordinator when the existing restart policy restarts it;
 the entrypoint is never a supervisor. A capability-authorized source or target broker
 performs every profile, service, 3/1 bootstrap, publication, and rollback mutation with
 immutable pre-mutation and outcome audit. The broker durably owns the coordinator before the
 first mutation. Coordinator ownership transfers exactly once to the authenticated target
-broker before target daemon activation. The durable order is staged intent/capability and
-store-object pin, broker coordinator, supervised bootstrap, target broker, coordinator
-transfer, target daemon, Hello while unready, phase-attenuated authenticated publication
+broker before target daemon activation. The durable order is staged intent/capability,
+target-object/GC-root/installed-apply-object pins, broker coordinator, source compatibility
+actor, target broker, coordinator transfer, target daemon, Hello while unready,
+phase-attenuated authenticated publication
 request, broker-durable pointer/reference publication, daemon ingestion, then readiness.
-Killing either entrypoint or bootstrap cannot orphan the coordinator.
+Killing either entrypoint or the installed source compatibility actor cannot orphan the
+coordinator.
 
 The shell sends raw Nix stderr directly to `/dev/null` and emits only the fixed
 stage-specific `fail` literals above; it creates no diagnostic file. The production
@@ -421,19 +436,18 @@ fail() { printf '%s\n' "$1" >&2; exit 2; }
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
-D2B_DEPLOY_EXE="$(readlink -e \
+D2B_APPLY_EXE="$(readlink -e \
   /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
   fail 'installed deployment executable cannot be resolved'
-case "$D2B_DEPLOY_EXE" in
+case "$D2B_APPLY_EXE" in
   /nix/store/*/bin/d2b-host-generation-deploy) ;;
   *) fail 'installed deployment executable is not an immutable store object' ;;
 esac
-"$D2B_DEPLOY_EXE" \
+"$D2B_APPLY_EXE" \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
   --authorize-handoff ||
   fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
-sudo -- "$D2B_DEPLOY_EXE" \
-  --from-reference /etc/d2b/host-generation-rebuild-ref \
+sudo -- "$D2B_APPLY_EXE" \
   --apply-authorized-handoff ||
   fail 'authorized stable-reference handoff failed'
 
@@ -448,8 +462,9 @@ For every authorization/apply pair above and below, the unprivileged authorizati
 the complete preflight: it validates the flake/configuration or stable-reference grammar,
 UTF-8 byte bounds, target identity, existence, immutable digest, and public-socket Admin
 classification, then requires the broker to durably pin the exact executable store object
-before returning success. The shell invokes `sudo` only after that success and passes the
-same canonical store path; apply revalidates the broker pin and performs no evaluation.
+before returning success. The shell invokes `sudo` only after that success and only on the
+exact immutable broker-managed apply object from the installed generation. Apply revalidates
+both the target-object and apply-object pins and performs no evaluation or reference lookup.
 An empty, malformed, over-bound, mismatched, changed, unreadable, or nonexistent input exits
 2 with the named remediation and runs no privileged command.
 
@@ -488,9 +503,9 @@ D2B_EXPECTED_UNITS="$(printf '%s\n' \
   d2b-priv-broker.service \
   d2b-priv-broker.socket | sort -u)"
 D2B_ACTUAL_UNITS="$(systemctl list-units --all --plain --no-legend --no-pager \
-  'd2b*' 'microvm*' | awk '{ print $1 }' | sort -u)"
+  'd2b*' 'microvm*' | awk '$1 != "d2b.slice" { print $1 }' | sort -u)"
 [ "$D2B_ACTUAL_UNITS" = "$D2B_EXPECTED_UNITS" ] ||
-  fail 'unexpected d2b/microvm root unit set; restore the required three-unit generation'
+  fail 'unexpected d2b/microvm lifecycle unit set after excluding d2b.slice; restore the required three-unit generation'
 d2b vm status acceptance-vm
 ```
 
@@ -522,6 +537,13 @@ esac
   fail 'D2B_ROLLBACK_CONFIGURATION exceeds 64 bytes'
 [ "$(id -u)" -ne 0 ] ||
   fail 'run authorization as the unprivileged d2b administrator, not root'
+D2B_APPLY_EXE="$(readlink -e \
+  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
+  fail 'installed broker-managed apply executable cannot be resolved'
+case "$D2B_APPLY_EXE" in
+  /nix/store/*/bin/d2b-host-generation-deploy) ;;
+  *) fail 'installed broker-managed apply executable is not an immutable store object' ;;
+esac
 
 D2B_ROLLBACK_REF="${D2B_ROLLBACK_FLAKE_REF}#${D2B_ROLLBACK_CONFIGURATION}"
 D2B_ROLLBACK_INSTALLABLE="${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.system.build.d2bHostGenerationDeploy"
@@ -556,22 +578,26 @@ D2B_ROLLBACK_EXE="${D2B_ROLLBACK_OUT}/bin/d2b-host-generation-deploy"
 
 "$D2B_ROLLBACK_EXE" --authorize-handoff ||
   fail 'public-socket rollback authorization failed'
-sudo -- "$D2B_ROLLBACK_EXE" --apply-authorized-handoff ||
+sudo -- "$D2B_APPLY_EXE" --apply-authorized-handoff ||
   fail 'authorized rollback handoff failed'
 ```
 
 The host-integration acceptance executes the parameterized migration and rollback procedures,
-rejects empty, malformed, over-bound, mismatched, and nonexistent flake/configuration inputs
+rejects empty, malformed, over-bound, mismatched, and nonexistent flake/configuration inputs,
+and rejects zero-output or multi-output target resolution
 before public-socket authorization or `sudo`, kills the entrypoint at every post-staging
 crash point, and requires the broker-owned coordinator to finish or roll back. It authorizes
-one store executable, then substitutes another executable and changes the installed symlink
-before apply; both substitutions must refuse with no mutation, while the originally pinned
-store executable remains eligible. It injects target broker startup failure, target daemon
-startup/reconciliation failure, entrypoint death, every supervised bootstrap-broker crash
+one target store executable and one broker-managed installed apply executable, then
+substitutes each independently, replaces the GC root, and changes the installed symlink
+before apply; every substitution must refuse with no mutation, while the originally pinned
+objects remain eligible. It injects target broker startup failure, target daemon
+startup/reconciliation failure, entrypoint death, every installed source compatibility-actor crash
 boundary, and both sides of durable ownership transfer. The existing
-`d2b-priv-broker.service` must restart pre-transfer bootstrap work and no systemd unit may be
+`d2b-priv-broker.service` must restart pre-transfer source-actor work and no systemd unit may be
 added. Nix stderr canaries must be absent from every emitted diagnostic, log, audit, span,
-wire response, and `Debug`; only the fixed error class and remediation may appear.
+wire response, and `Debug`; runnable shell examples discard raw Nix stderr without buffering
+it, and production captures at most 16,384 raw bytes in memory, drops them before return, and
+emits only the fixed error class and remediation.
 
 ### Story 1 - retire and restart
 
@@ -583,19 +609,18 @@ fail() { printf '%s\n' "$1" >&2; exit 2; }
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
-D2B_DEPLOY_EXE="$(readlink -e \
+D2B_APPLY_EXE="$(readlink -e \
   /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
   fail 'installed deployment executable cannot be resolved'
-case "$D2B_DEPLOY_EXE" in
+case "$D2B_APPLY_EXE" in
   /nix/store/*/bin/d2b-host-generation-deploy) ;;
   *) fail 'installed deployment executable is not an immutable store object' ;;
 esac
-"$D2B_DEPLOY_EXE" \
+"$D2B_APPLY_EXE" \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
   --authorize-handoff ||
   fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
-sudo -- "$D2B_DEPLOY_EXE" \
-  --from-reference /etc/d2b/host-generation-rebuild-ref \
+sudo -- "$D2B_APPLY_EXE" \
   --apply-authorized-handoff ||
   fail 'authorized stable-reference handoff failed'
 d2b resource list          # retired in dependency-safe order, cleanup visible, others intact
