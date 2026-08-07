@@ -10,16 +10,18 @@
   audit ordering only as its new endpoint table, receipt lifetime,
   common base-or-conflict attempt identity for accepted attempts,
   narrow original-peer-or-operator recovery reads, migration-conflict
-  preflight and its isolated hard-bounded signal reserve, fixed-cardinality
-  telemetry-health fallback, reconciliable acceptance
+  preflight and its isolated hard-bounded signal reserve, separate
+  fixed-cardinality migration-control conflict signals, sticky
+  integrity-checked telemetry-health barriers, reconciliable acceptance
   prepare and
   accepted-attempt journal, fenced worker and sink-generation recovery, replay
   result, outbox, immutable permanent replay tombstones, append-only
   payload-eviction markers, durable sink reservation, idempotent append,
   exact redacted completion and append-refusal products,
   recovery-capacity reserve with serialized plan-id binding, exclusive
-  migration execution capacity with controller-issued state-bound control
-  identities, sealed migration-control capacity, and an independent
+  migration execution capacity with fixed reusable migration-control slots,
+  monotonically increasing control-reserve incarnations, current-state status
+  reads, sealed migration-control capacity, and an independent
   migration-integrity reserve,
   exhaustive protected attempt recovery and pending status,
   migration-specific no-append audit repair, generic conversion from the exact
@@ -38,13 +40,16 @@
   standalone producer without requiring Gas City, while same-uid repository
   helpers remain proposal-only. Its closed endpoint table adds
   candidate-bound reviewer, protected implementation-assignment issuance,
-  exact-origin completion, state-valid assignment recovery that reuses an
-  active capability, and fresh orchestrator request plus fresh protected
-  evidence for any new assignment,
-  least-authority issue-reader, protected attempt-status and narrow
-  recovery-read endpoints, while protected-operator-only assignment
-  revocation, migration repair, migration-control integrity repair, and
-  attempt resume and fencing stay on the operator endpoint. It
+  exact-origin completion, context-specific assignment recovery that reuses an
+  active capability, requires protected revocation for a declared unavailable
+  capability, and gives every terminal predecessor one linear successor
+  eligibility consumed by a fresh orchestrator request plus fresh protected
+  evidence,
+  least-authority issue-reader, opaque protected-operator risk-handle
+  recovery, protected attempt-status and narrow recovery-read endpoints, while
+  protected-operator-only assignment revocation, migration repair,
+  migration-control integrity repair, and attempt resume and fencing stay on
+  the operator endpoint. It
   assigns lifecycle, ledger proposal and correction, implementation-assignment
   issue, completion and revocation, severity, risk, inspection, recovery
   status and online capacity migration, publication, merge-completion and
