@@ -1,0 +1,408 @@
+{
+  "defaultFeatures": false,
+  "edgeKinds": "normal,build,dev",
+  "features": [],
+  "identities": [
+    {
+      "name": "adler2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.0.1"
+    },
+    {
+      "name": "async-trait",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.91"
+    },
+    {
+      "name": "autocfg",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.5.1"
+    },
+    {
+      "name": "bitflags",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.13.1"
+    },
+    {
+      "name": "block-buffer",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.10.4"
+    },
+    {
+      "name": "bytes",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.12.1"
+    },
+    {
+      "name": "cfg-if",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.4"
+    },
+    {
+      "name": "cfg_aliases",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.2.2"
+    },
+    {
+      "name": "cpufeatures",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.2.17"
+    },
+    {
+      "name": "crypto-common",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.7"
+    },
+    {
+      "name": "d2b-contracts",
+      "source": null,
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-core",
+      "source": null,
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-host",
+      "source": null,
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-priv-broker",
+      "source": null,
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-realm-core",
+      "source": null,
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-realm-provider",
+      "source": null,
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "digest",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.10.7"
+    },
+    {
+      "name": "dyn-clone",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.20"
+    },
+    {
+      "name": "errno",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.3.14"
+    },
+    {
+      "name": "fastrand",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.5.0"
+    },
+    {
+      "name": "generic-array",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.14.7"
+    },
+    {
+      "name": "getrandom",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.4.3"
+    },
+    {
+      "name": "hmac",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.12.1"
+    },
+    {
+      "name": "itoa",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.18"
+    },
+    {
+      "name": "lazy_static",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.5.0"
+    },
+    {
+      "name": "libc",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.2.189"
+    },
+    {
+      "name": "linux-raw-sys",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.12.1"
+    },
+    {
+      "name": "linux-raw-sys",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.4.15"
+    },
+    {
+      "name": "log",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.4.33"
+    },
+    {
+      "name": "matchers",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.2.0"
+    },
+    {
+      "name": "memchr",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.8.3"
+    },
+    {
+      "name": "memoffset",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.9.1"
+    },
+    {
+      "name": "miniz_oxide",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.8.9"
+    },
+    {
+      "name": "mio",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.2.2"
+    },
+    {
+      "name": "nix",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.29.0"
+    },
+    {
+      "name": "nu-ansi-term",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.50.3"
+    },
+    {
+      "name": "once_cell",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.21.4"
+    },
+    {
+      "name": "pin-project-lite",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.2.17"
+    },
+    {
+      "name": "proc-macro2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.107"
+    },
+    {
+      "name": "protobuf",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "3.7.2"
+    },
+    {
+      "name": "protobuf-support",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "3.7.2"
+    },
+    {
+      "name": "quote",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.47"
+    },
+    {
+      "name": "regex-automata",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.4.18"
+    },
+    {
+      "name": "regex-syntax",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.8.11"
+    },
+    {
+      "name": "rustix",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.38.44"
+    },
+    {
+      "name": "rustix",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.1.4"
+    },
+    {
+      "name": "schemars",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.8.22"
+    },
+    {
+      "name": "schemars_derive",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.8.22"
+    },
+    {
+      "name": "semver",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.28"
+    },
+    {
+      "name": "serde",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.229"
+    },
+    {
+      "name": "serde_core",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.229"
+    },
+    {
+      "name": "serde_derive",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.229"
+    },
+    {
+      "name": "serde_derive_internals",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.29.1"
+    },
+    {
+      "name": "serde_json",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.151"
+    },
+    {
+      "name": "sha2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.10.9"
+    },
+    {
+      "name": "sharded-slab",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.7"
+    },
+    {
+      "name": "signal-hook-registry",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.4.8"
+    },
+    {
+      "name": "smallvec",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.15.2"
+    },
+    {
+      "name": "subtle",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.6.1"
+    },
+    {
+      "name": "syn",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.0.119"
+    },
+    {
+      "name": "syn",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "3.0.3"
+    },
+    {
+      "name": "tempfile",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "3.27.0"
+    },
+    {
+      "name": "thiserror",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.69"
+    },
+    {
+      "name": "thiserror-impl",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.69"
+    },
+    {
+      "name": "thread_local",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.1.10"
+    },
+    {
+      "name": "tinyvec",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.12.0"
+    },
+    {
+      "name": "tinyvec_macros",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.1"
+    },
+    {
+      "name": "tokio",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.53.1"
+    },
+    {
+      "name": "tokio-macros",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "2.7.2"
+    },
+    {
+      "name": "tracing",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.44"
+    },
+    {
+      "name": "tracing-attributes",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.31"
+    },
+    {
+      "name": "tracing-core",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.36"
+    },
+    {
+      "name": "tracing-log",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.2.0"
+    },
+    {
+      "name": "tracing-subscriber",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.3.23"
+    },
+    {
+      "name": "typenum",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.20.1"
+    },
+    {
+      "name": "unicode-ident",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.24"
+    },
+    {
+      "name": "unicode-normalization",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.1.25"
+    },
+    {
+      "name": "version_check",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "0.9.5"
+    },
+    {
+      "name": "zmij",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.23"
+    }
+  ],
+  "package": "d2b-priv-broker",
+  "root": "d2b-priv-broker",
+  "sourceCensusSha256": "1b43349d41c73a97bd6e9fe11555c3c518dfb24b4415c92f998c736f60ecef01",
+  "system": "x86_64-linux",
+  "target": "x86_64-unknown-linux-gnu",
+  "variant": "policy"
+}
