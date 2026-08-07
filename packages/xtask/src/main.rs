@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env,
     fs::{self, OpenOptions},
     io::Write,
@@ -100,6 +100,7 @@ use d2b_realm_core::{
 
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;
+use sha2::{Digest, Sha256};
 
 mod bazel;
 mod bazel_yanked;
@@ -540,15 +541,15 @@ fn fresh_hub_bootstrap(
         return Ok(None);
     }
     validate_fresh_directories(root, hub)?;
-    let before = git_status_snapshot(root)
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
-
     let scratch = root.join(".scratch/bazel");
     fs::create_dir_all(&scratch)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap scratch space"))?;
     let guard_path = scratch.join("fresh-bootstrap.guard");
     let guard = acquire_fresh_bootstrap_guard(&guard_path)
         .map_err(|_| fresh_bootstrap_error(hub, "another fresh bootstrap is active"))?;
+    reclaim_fresh_staging(root, hub)?;
+    let before = fresh_content_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
     let workspace = scratch.join("fresh-bootstrap-workspace");
     match fs::symlink_metadata(&workspace) {
         Ok(metadata) if metadata.file_type().is_dir() => {
@@ -577,10 +578,10 @@ fn fresh_hub_bootstrap(
         ));
     }
     let result = install_fresh_lock(root, hub, &generated.expect("checked above"));
-    let after = git_status_snapshot(root)
+    let after = fresh_content_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
     drop(guard);
-    if fresh_status_changed_outside_selected(&before, &after, hub) {
+    if fresh_content_changed_outside_selected(&before, &after, hub) {
         return Err(
             bazel::adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
                 .expect("mutation diagnostic is closed")
@@ -684,11 +685,7 @@ fn install_fresh_lock(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(fresh_bootstrap_error(hub, "selected lock path cannot be inspected")),
     }
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| fresh_bootstrap_error(hub, "clock is before the Unix epoch"))?
-        .as_nanos();
-    let temporary = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap-{nonce}"));
+    let temporary = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap"));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -709,6 +706,26 @@ fn install_fresh_lock(
         return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
     }
     Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
+}
+
+fn reclaim_fresh_staging(
+    root: &Path,
+    hub: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let staging = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap"));
+    match fs::symlink_metadata(&staging) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(&staging)
+            .map_err(|_| fresh_bootstrap_error(hub, "stale lock staging cannot be reclaimed")),
+        Ok(_) => Err(fresh_bootstrap_error(
+            hub,
+            "stale lock staging is not a regular file",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(fresh_bootstrap_error(
+            hub,
+            "stale lock staging cannot be inspected",
+        )),
+    }
 }
 
 fn fresh_bootstrap_error(hub: &str, reason: &str) -> Box<dyn std::error::Error> {
@@ -737,31 +754,60 @@ fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, Box<dyn s
     Ok(file)
 }
 
-fn git_status_snapshot(root: &Path) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
-        .output()?;
-    if !output.status.success() {
-        return Err("git status failed".into());
+fn fresh_content_snapshot(
+    root: &Path,
+) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn std::error::Error>> {
+    let mut paths = Vec::new();
+    collect_fresh_files(root, root, &mut paths)?;
+    let mut snapshot = BTreeMap::new();
+    for path in paths {
+        let bytes = fs::read(root.join(&path))?;
+        snapshot.insert(path, Sha256::digest(bytes).into());
     }
-    Ok(String::from_utf8(output.stdout)?
-        .lines()
-        .map(str::to_owned)
-        .collect())
+    Ok(snapshot)
 }
 
-fn fresh_status_changed_outside_selected(
-    before: &BTreeSet<String>,
-    after: &BTreeSet<String>,
+fn collect_fresh_files(
+    root: &Path,
+    current: &Path,
+    paths: &mut Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some(".git" | ".scratch" | "target")) {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            collect_fresh_files(root, &path, paths)?;
+        } else if entry.file_type()?.is_file() {
+            paths.push(
+                path.strip_prefix(root)?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    paths.sort();
+    Ok(())
+}
+
+fn fresh_content_changed_outside_selected(
+    before: &BTreeMap<String, [u8; 32]>,
+    after: &BTreeMap<String, [u8; 32]>,
     hub: &str,
 ) -> bool {
     let selected = format!("bazel/cargo/{hub}.lock");
-    before
-        .symmetric_difference(after)
-        .filter_map(|line| line.get(3..))
-        .map(str::trim)
-        .any(|path| path != selected)
+    let paths = before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    paths
+        .into_iter()
+        .filter(|path| path != &selected)
+        .any(|path| before.get(&path) != after.get(&path))
 }
 
 fn prepare_fresh_workspace(
@@ -2153,18 +2199,18 @@ mod fresh_bootstrap_tests {
     }
 
     #[test]
-    fn status_filter_allows_only_the_selected_output() {
-        let before = BTreeSet::from(["?? bazel/cargo/product.lock".to_owned()]);
-        let after = BTreeSet::from(["?? bazel/cargo/product.lock".to_owned()]);
-        assert!(!fresh_status_changed_outside_selected(
+    fn content_filter_allows_only_the_selected_output() {
+        let before = BTreeMap::from([("bazel/cargo/product.lock".to_owned(), [1_u8; 32])]);
+        let after = BTreeMap::from([("bazel/cargo/product.lock".to_owned(), [2_u8; 32])]);
+        assert!(!fresh_content_changed_outside_selected(
             &before, &after, "product"
         ));
-        let changed = BTreeSet::from([
-            "?? bazel/cargo/product.lock".to_owned(),
-            " M MODULE.bazel".to_owned(),
-        ]);
-        assert!(fresh_status_changed_outside_selected(
-            &before, &changed, "product"
+        let mut changed = after.clone();
+        changed.insert("MODULE.bazel".to_owned(), [3_u8; 32]);
+        assert!(fresh_content_changed_outside_selected(
+            &before,
+            &changed,
+            "product"
         ));
     }
 }
