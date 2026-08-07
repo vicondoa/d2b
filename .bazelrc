@@ -1,0 +1,11 @@
+# Module resolution is part of the committed build input.
+common --lockfile_mode=error
+common --check_direct_dependencies=error
+
+# Keep ordinary local output concise without changing the server identity.
+build --show_timestamps
+test --test_output=errors
+
+# Named configurations are explicit and local; no global Rust channel is set.
+build:dbg --compilation_mode=dbg
+build:opt --compilation_mode=opt
