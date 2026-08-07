@@ -33,7 +33,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$MEASUREMENT_COMMIT"
           export CANDIDATE_COMMIT
-          CANDIDATE_COMMIT=$(git rev-parse HEAD^)
+          CANDIDATE_COMMIT=$(
+            git log -1 --format=%H -- . \
+              ':(exclude).github/workflows/arm-artifact-measurement.yml'
+          )
 
           broker_out=$(nix build --no-link --print-out-paths \
             .#packages.aarch64-linux.d2b-priv-broker)
