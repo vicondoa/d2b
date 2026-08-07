@@ -1103,15 +1103,21 @@ The FR-066 - FR-072 shorthand is refined, not expanded, by the current Wave 5 pl
 contracts. Accepted external delivery Version 2 owns source-floor canonical encoding,
 digest/domain/framing, strict schemas, and exact 15-digest/four-signature vectors; the
 compatibility authorities only produce and validate conforming objects. The independent
-13-row role/artifact fixture, exact 91-id class/role poison product, and five copied-issuer
-cases require valid cardinality, enclosing hashes, and unaffected signatures before their
-semantic or pinned-key refusals. Apply-peer coverage has separate 15-edge, 90-case,
-13-negative, and nine-forbidden-value fixtures, with six pre-first and 84 post-first cases.
+13-row role/artifact fixture, exact 91-id class/role poison product, five copied-issuer
+cases, and 32-id receipt/transition negative registry require valid cardinality, enclosing
+hashes, and unaffected signatures before their semantic or pinned-key refusals. Apply-peer
+coverage has separate 15-edge, 90-case, 13-negative, and fifteen-forbidden-value fixtures,
+with six pre-first and 84 post-first cases.
 SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
 human/JSON remediation, and closed exits. A verified payload reaches `parked`; an
 authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
-namespaces; and a raced rename remains recovery-pending with every name preserved. These
-refinements add no work-item or task id.
+namespaces; and a raced rename is exactly `recovery-resumable` or
+`recovery-irreconcilable` with every name preserved. Irreconcilable invalid or unstable
+primary evidence uses a complete census or identity-bearing bounded-failure commitment whose
+scope excludes resolution leaves; raw `01ff`, copied commitments, and post-resolution
+primary changes block admission. The shared typed hash oracle and exact 61 receipt plus 45
+malformed-census negative registries prohibit a raw locator hash or a self-referential
+resolution digest. These refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
 counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this

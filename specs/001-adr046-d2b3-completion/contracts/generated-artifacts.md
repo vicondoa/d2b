@@ -67,9 +67,10 @@ artifact and requires a clean `git diff`, fail-closed.
   refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests use the independent exact
   registry in `quickstart.md`: six pre-first ids and 84 literal post-first ids over the
   fourteen later members of the closed 15-edge set. Unknown, duplicate, missing, reordered,
-  or unvisited ids fail; the selected edge and all successors remain unexecuted. Raw peer PID/start and executable
-  store/NAR identity remains absent from human, JSON, wire, error, log, span, metric, audit,
-  and `Debug` output. Correlation uses only typed fixed domain-separated digests, and metrics
+  or unvisited ids fail; the selected edge and all successors remain unexecuted. Every raw
+  apply-peer input in the complete fifteen-row registry remains absent from human, JSON,
+  wire, error, log, span, metric, audit, panic, and `Debug` output. Correlation uses only the
+  typed process-instance and executable-identity digests, and metrics
   carry no identity label. The connection-scoped pidfd and executable fds are never
   serialized or persisted.
   Capability-authorized broker code exclusively owns stock profile publication,
@@ -153,9 +154,9 @@ zero/multiple/concurrent/terminal refusals, durable zero-mutation proof before r
 pre-mutation claim, and same-intent coordinator replay only after mutation. It binds the accepted
 connection's direct peer pidfd and executable identity to that pin, and refuses every identity
 transition in the six exact pre-first cases and all 84 exact post-first cases from the
-independent closed edge registry, with no persisted pidfd or later mutation. Raw peer
-PID/start and executable store/NAR identity remains absent from
-every output surface; only typed fixed correlation digests are permitted and metrics carry
+independent closed edge registry, with no persisted pidfd or later mutation. Every raw
+apply-peer input in the complete fifteen-row registry remains absent from every output
+surface; only the typed process-instance and executable-identity digests are permitted and metrics carry
 no identity label. The positive case
 proves initial public-socket Admin classification, sealed durable capability,
 broker-before-daemon activation, Hello while unready, phase-attenuated authenticated

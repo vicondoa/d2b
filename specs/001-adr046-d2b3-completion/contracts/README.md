@@ -221,10 +221,11 @@ merge-target registration, merge eligibility, and merge.
     and its connection-scoped peer pidfd/executable identity must remain an exact live match
     through each mutation with no persisted pidfd. Tests use the independent exact registry:
     six pre-first cases and 84 literal post-first cases across the fourteen later members of
-    the closed 15-edge set; refusal occurs before the selected edge and all successors. Raw peer PID/start and
-    executable store/NAR identity never enters human, JSON, wire, error, log, span, metric,
-    audit, or `Debug` output. Only typed fixed domain-separated correlation digests are
-    permitted, and metrics carry no identity label. T603's pre-validator analysis and plan panel
+    the closed 15-edge set; refusal occurs before the selected edge and all successors. Every
+    raw apply-peer input in the complete fifteen-row registry remains absent from human,
+    JSON, wire, error, log, span, metric, audit, panic, and `Debug` output. Only the typed
+    process-instance and executable-identity correlation digests are permitted outside
+    metrics, and metrics carry no identity. T603's pre-validator analysis and plan panel
     at A/P0 authorize only its two validator source
     paths plus `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit
     V becomes B, P remains byte-identical to P0, and analysis
@@ -288,27 +289,43 @@ merge-target registration, merge eligibility, and merge.
     T604 emits only an external regular single-link receipt owned by the current effective uid
     with mode `0600`. T600 supplies it through T589's explicit
     `wave validate-import --sc002-receipt PATH` input and supplies no locator. T589 once-opens
-    the source, hashes before decode, derives the locator, validates the outer triplet, then
+    the source, computes only the typed domain-separated and length-framed receipt-content
+    digest before decode, derives the typed content-address locator, validates the outer triplet, then
     installs the exact bytes beneath held current-effective-uid `0700` candidate dirfds as a
     current-effective-uid `0600` leaf. The importer uses a create-exclusive temp, file
     `fsync`, and `renameat2(RENAME_NOREPLACE)`, then `fsync`s every ancestor directory from
     `sha256` through the candidate directory before it publishes the `EvidenceRecord`.
-    Every importer and cleanup worker holds the same verified candidate-scoped exclusive OFD
-    lock through record publication or return. A live owner cannot be cleaned; restart
+    Every importer, cleanup worker, incident transition, successor admission, and retention
+    guard holds the same verified candidate-scoped exclusive OFD lock through publication or
+    return. A live owner cannot be cleaned; a nonblocking cleanup loser returns before any
+    namespace open or mutation, and restart
     cleanup begins only after lock acquisition, moves the opened temp to a reserved
     quarantine name, reopens and verifies the same device/inode and full identity, derives
     the candidate/content/device/inode-bound retirement id, and moves the leaf no-replace
     into the bounded `evidence-sidecars/sc002/retired` subtree. It then reopens and
-    revalidates the retired leaf and `fsync`s the leaf plus both directories. No sidecar data
-    leaf is unlinked. An identity mismatch never unlinks or restores the suspect. It durably moves the
-    metadata-bound currently named inode to
-    `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, reopens and
-    verifies it, syncs both parents and every changed ancestor, and append-only publishes
-    `parked` status. Only that preimage-complete metadata/payload/status state is terminal.
-    A replacement or rename/reopen mismatch remains recovery-pending, preserves every name,
-    publishes no parked status, and blocks record publication and every close stage until
-    restart completes the same protocol. Ordinary paths and terminal incidents leave both
-    ephemeral namespaces empty; recovery-pending never claims a terminal empty census.
+    revalidates the retired leaf and `fsync`s the leaf, both parents, and every changed
+    ancestor. No sidecar data leaf is unlinked. Every name-consuming operation is
+    `renameat2(RENAME_NOREPLACE)` followed by an fd-relative reopen and full moved-inode
+    identity check; no check-then-unlink or name-only inode claim exists.
+
+    An identity mismatch never unlinks or restores the suspect. It durably publishes the
+    kind-bearing incident anchor, complete metadata, and preimage, then moves the
+    metadata-bound currently named inode to the
+    typed incident payload address, reopens and verifies it, syncs the payload fd, both
+    parents, and every changed ancestor, and append-only publishes `parked`. A replacement
+    or rename/reopen mismatch is exactly `recovery-resumable` when one continuation remains
+    and otherwise `recovery-irreconcilable`; every name is preserved, inspect returns the
+    stable id/cause/remediation, and no parked status is fabricated. Recover is offered only
+    for the resumable variant. Authenticated apply handles the irreconcilable variant by
+    retaining representable names as durable residue or by publishing a complete frozen
+    primary-evidence census or identity-bearing bounded-failure commitment, then appending
+    the separate resolution. The frozen primary scope excludes every resolution,
+    resolution-evidence, disposition, receipt, and successor leaf, so no digest contains
+    itself. A raw `01ff` sentinel, copied commitment, or changed primary scope never
+    authorizes successor admission. Invalid and unstable census causes remain inspectable and
+    actionable through inspect `--json`, signed apply, and fresh-successor admission.
+    Ordinary paths and terminal incidents leave both ephemeral namespaces empty; neither
+    nonterminal variant claims a terminal empty census.
     T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope
     retention guard: it preserves the canonical candidate root and all request, panel-record,
     evidence-record, receipt, seal, eligibility, merge, incident, disposition, and status
@@ -321,3 +338,8 @@ merge-target registration, merge eligibility, and merge.
     malformed, unknown-version/field/enum, over-bound, misordered, stale, progress-free,
     over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
     unrelated-sample, wrong-owner/mode, pre-durability record publication, or crash/race case.
+    Independent literal fixtures pin the complete receipt, retired-census,
+    primary-evidence-census, source-floor receipt/census, mutation-edge, post-mutation,
+    unit-census, and forbidden-value negative registries. One shared SC-002 domain-hash
+    golden is the oracle for every typed locator, incident, resolution, and disposition
+    digest; raw SHA-256 locator definitions are ineligible.

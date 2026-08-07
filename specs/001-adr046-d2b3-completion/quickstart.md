@@ -261,20 +261,31 @@ authorized integration-lineage merge preserves F's tree.
 
 An identity-ambiguous sidecar is never unlinked. The parked candidate remains ineligible and
 the durable incident remains retained. A parked incident is success-shaped only after its
-immutable metadata, exact payload at
-`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, and append-only
-`parked` status are file-and-ancestor-directory durable. A rename/reopen race remains
-`recovery-pending`, preserves every still-named leaf, and exposes no parked status until
-restart recovery or the owned recovery command finishes that protocol. Inspect still returns
-the stable incident id, one closed cause, deterministic remediation, and the exact
-human/JSON status. Recovery-pending is not a terminal cleanup result. A revalidated durable
-payload outside both ephemeral namespaces plus `parked` is one terminal entry. If the
-expected identity cannot be recovered, the authenticated disposition may instead retain
-each currently named leaf by no-replace rename/reopen through durable incident residue
-staging. Only an empty ephemeral/staging census, exact identity-derived residue census, and
-synced `mismatch-retained` status form the other terminal entry. No path unlinks or restores
-a suspect. Both terminal entries require the same external disposition and one distinct
-successor snapshot:
+immutable kind-bearing anchor, preimage-complete metadata, exact typed content-addressed
+payload, and append-only
+`parked` status are leaf-and-every-ancestor durable. A rename/reopen race is classified as
+exactly `recovery-resumable` or `recovery-irreconcilable`, preserves every still-named leaf,
+and exposes no parked status. Inspect returns the stable incident id, one closed cause,
+deterministic remediation, and the exact human/JSON status for both variants. Recover is
+advertised only when one anchor/metadata-bound next step is uniquely resumable.
+
+If the expected identity cannot be recovered, authenticated apply either retains each
+representable currently named leaf by no-replace rename/reopen through durable incident
+residue staging or binds the frozen primary-evidence scope through a complete census or an
+identity-bearing bounded-failure commitment. That scope excludes every resolution,
+resolution-evidence, and disposition leaf. A raw `01ff` sentinel never authorizes apply or
+successor admission. Invalid, unstable, or over-bound primary census state remains
+actionable: inspect `--json` exposes only the typed evidence kind and digest needed by the
+external disposition authority; apply publishes and syncs the exact canonical evidence
+bytes outside the frozen scope; successor admission revalidates those bytes, the current
+scope identity, and the incident/parked binding. A stale or copied commitment exits `4` with
+a fresh inspect projection and no write.
+
+Only an empty ephemeral/staging census, exact identity-derived residue census, and synced
+`mismatch-retained` status form the residue-backed terminal entry. A resolution-backed
+terminal instead has the exact durable evidence object plus append-only
+`disposition-validated`. No path unlinks or restores a suspect. Every branch requires the
+same external disposition and one distinct successor snapshot:
 
 ```bash
 set -eu
@@ -299,6 +310,26 @@ $X sc002-successor-admit \
   --disposition-id "$SC002_DISPOSITION_ID" \
   --successor-snapshot "$SUCCESSOR_SNAPSHOT"
 ```
+
+The transition is closed and operational:
+
+| Inspect state/cause | Required action | Successful next state |
+| --- | --- | --- |
+| `recovery-resumable` | run `sc002-incident-recover` | `parked`, `mismatch-retained`, `disposition-validated`, or `successor-admitted`, whichever is the maximal uniquely reconstructible contiguous branch |
+| `recovery-irreconcilable`, including `evidence-census-conflict`, without a disposition matching the current typed evidence digest | run inspect with `--json`, obtain the signed disposition, then run `sc002-incident-apply` | `disposition-validated` |
+| `recovery-irreconcilable` with the matching signed disposition already durable | rerun `sc002-incident-apply` | `disposition-validated` |
+| `parked` without a matching disposition | obtain the signed disposition, then run `sc002-incident-apply` | `disposition-validated` |
+| `mismatch-retained` or a crash after disposition publication | rerun `sc002-incident-apply` | `disposition-validated` |
+| `disposition-validated` | run `sc002-successor-admit` with the fresh successor snapshot | `successor-admitted` |
+| `successor-admitted` | inspect only | unchanged idempotent terminal |
+
+If the locked primary-evidence digest changes between inspect and apply, apply exits `4`,
+returns the new inspect projection, and requires a newly bound disposition. No generic retry,
+force flag, deletion selector, or alternate path is accepted.
+The test contract compares independently authored literal expectations with all 61 receipt
+negative ids and all 45 malformed retired/primary-census ids from `data-model.md`, and uses
+the shared sixteen-digest/one-signature SC-002 golden. A generated expected set or a digest
+copied from production is not evidence.
 
 `SC002_INCIDENT_ID` and `SC002_DISPOSITION_ID` are stable lowercase 64-hex typed digests.
 Exit `0` means the requested read or transition completed; `2` means invalid syntax or
@@ -330,8 +361,8 @@ next-command: <NEXT_COMMAND>
 ```
 
 The bracketed forms above denote bounded values. Null IDs render exactly `none`.
-`STATE` is exactly `recovery-pending`, `parked`, `mismatch-retained`,
-`disposition-validated`, or `successor-admitted`. `CAUSE` is one closed
+`STATE` is exactly `recovery-resumable`, `recovery-irreconcilable`, `parked`,
+`mismatch-retained`, `disposition-validated`, or `successor-admitted`. `CAUSE` is one closed
 `Sc002IncidentCauseV1` from `data-model.md`; it is never a path, errno, or free-form
 sentence.
 `NEXT_COMMAND` is static: `sc002-incident-apply` for either parked remediation,
@@ -345,18 +376,22 @@ derived from the validated metadata/source/payload/residue prefix, durable statu
 disposition census and is exactly one of
 `resume-incident-recovery`, `obtain-incident-disposition`,
 `apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
-field. Persisted status has no remediation field.
+field. For an irreconcilable state it also carries nullable
+`resolutionEvidenceKind` and `resolutionEvidenceSha256`; these are bounded typed values, not
+a raw locator or evidence bytes. Persisted status has no remediation field but does persist
+the complete incident-id preimage; CLI output does not expose that preimage.
 
 `resume-incident-recovery` means run `sc002-incident-recover` with the stable incident id;
 the command accepts no alternate source, payload, identity, disposition, successor, or
 deletion selector.
-`obtain-incident-disposition` means submit the stable incident id to the disposition
-authority/workflow pinned by accepted Version 2 and receive its signed mode-`0600` record;
-no repository command may mint or self-sign that authority record. Then run
+`obtain-incident-disposition` means run inspect with `--json`, submit that exact bounded
+projection to the disposition authority/workflow pinned by accepted Version 2, and receive
+its signed mode-`0600` record; no repository command may mint or self-sign that authority
+record. Then run
 `sc002-incident-apply`. `apply-incident-disposition` means run or rerun that command with the
 already obtained record. On a nonrecoverable prefix it retains every current leaf in durable
-incident residue, publishes `mismatch-retained`, and then validates the disposition; it never
-unlinks.
+incident residue and publishes `mismatch-retained`, or publishes the complete census or
+bounded-failure commitment and the separate resolution status; it never unlinks.
 `admit-successor` means run `sc002-successor-admit` with the disposition id and the fresh
 successor snapshot. These are the only operator actions.
 
@@ -445,7 +480,7 @@ no fixed illustrative target.
 > `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical encoding, complete
 > digest/domain/framing registry, strict source-floor schemas, and exact
 > `hash-vectors-v1.json` with 15 digest and four signature vectors. The 13 role/artifact
-> rows, 91 member poisons, and five copied-issuer poisons are
+> rows, 91 member poisons, five copied-issuer poisons, and 32 receipt/transition negatives are
 > independently pinned. A proof is authority only when its authority digest, key digest,
 > actual verifier key, signature domain, and signature all match the accepted disposition;
 > copying expected digests into a chain signed by another valid key refuses after enclosing
@@ -682,15 +717,15 @@ Missing, extra, duplicate, unknown, reordered, dynamically omitted, or unvisited
 edge/transition cases, selected-edge mutation, successor mutation, durable-prefix change,
 or missing first audit fail the matrix.
 
-Outside transient verifier-local kernel handles and bytes, raw peer PID/start and executable
-store path, derivation name, NAR identity/hash, or executable content digest is forbidden in coordinator state,
+Outside transient verifier-local kernel handles and bytes, every raw value in apply-peer
+admission and identity verification is forbidden in coordinator state,
 receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
 name/label/value/exemplar, audit, panic, or `Debug` output. Persisted correlation contains
 only typed fixed domain-separated digests, and metrics carry no raw or digested peer-identity
-label or value. The exact nine-row literal canary registry in `data-model.md` injects pidfd
-number, PID, start identity, proc path, executable store path, executable derivation, NAR
-identity, NAR hash, and executable content digest one at a time. Only that fixture and the
-test's private injection buffer are scan exclusions. Every
+label or value. The exact fifteen-row literal canary registry in `data-model.md` injects
+pidfd number, PID, start identity, socket uid/gid, cgroup/proc paths, executable store path,
+derivation, NAR identity/hash, content digest, and device/inode/mount identity one at a time.
+Only that fixture and the test's private injection buffer are scan exclusions. Every
 literal must be absent from every captured surface while the expected class-specific
 correlation digests remain present where allowed. An empty, malformed,
 over-bound, mismatched, changed, unreadable, or nonexistent input exits 2 with the named

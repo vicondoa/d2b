@@ -27,6 +27,16 @@
   `Provider/runtime-cloud-hypervisor` T384/T479/T480
 - [x] SC-002 uses a separately versioned typed receipt referenced by an unchanged schema-v2
   `EvidenceRecord`; failed operator records import without a receipt but cannot close
+- [x] SC-002 recovery has closed inspect/recover/apply/successor transitions for parked,
+  resumable, irreconcilable, and `evidence-census-conflict` states; its frozen primary scope
+  excludes resolution leaves and raw `01ff` cannot authorize
+- [x] SC-002 persists complete incident preimages in a kind-bearing anchor, metadata, and
+  durable status/resolution, uses one shared typed hash golden, and pins every receipt and
+  malformed-census negative
+- [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
+  retention live owner before namespace access, with no name-check-then-unlink path
+- [x] Source-floor, mutation-edge, post-mutation, unit-census, and complete fifteen-row
+  apply-peer forbidden-value expectations are independently pinned
 - [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization

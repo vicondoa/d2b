@@ -613,12 +613,14 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   remains auditable; the refused edge and all successors have zero mutation count. The
   connection-scoped pidfd and executable fds MUST close with the connection and MUST NOT be
   serialized or persisted.
-  Raw apply-peer numeric PID/start identity and raw executable store path/NAR identity MUST
-  never appear in human, JSON, wire, error, log, span, metric, audit, or `Debug` output. A
-  surface that requires correlation may carry only a typed fixed domain-separated digest;
-  metrics omit this identity rather than creating a digest label. Distinct raw PID, start,
-  store-path, NAR, and executable-digest canaries MUST occur zero times on every output
-  surface. The source broker MUST durably own the
+  Raw apply-peer pidfd number, numeric PID/start identity, socket uid/gid, cgroup/proc path,
+  executable store path/derivation/NAR identity or hashes, and executable
+  device/inode/mount identity MUST never appear in human, JSON, wire, error, log, span,
+  metric, audit, panic, or `Debug` output. A surface that requires correlation may carry only
+  the typed fixed process-instance or executable-identity digest; every other class has no
+  digest projection. Metrics omit all peer identity rather than creating a digest label.
+  Every literal in the complete fifteen-row forbidden-value registry in `data-model.md` MUST
+  occur zero times on every captured surface. The source broker MUST durably own the
   coordinator before mutation, reopen it from its ordinary `serve` startup after the
   existing unit's `Restart=on-failure`, and transfer ownership exactly once to the
   authenticated target broker. A serialized credential, token, fd number, daemon identity,
@@ -1483,17 +1485,25 @@ carries the object verbatim rather than copying selected fields into the task ro
   observation, and failure tag tables, the all-zero/`u64::MAX` unavailable tuple, and the
   exact two-byte `0x01 0xff` whole-census over-bound sentinel; no implementation-defined
   iteration order, errno, or partial over-bound prefix enters `C`. Raw inode identity is
-  never rendered. The sole mismatch terminal requires immutable preimage-complete metadata,
-  a same-identity reopen of the moved payload, and a contiguous append-only status prefix
-  beginning at `parked`, with every leaf, parent, and changed ancestor synced. A replacement,
-  `ENOENT`, nonidentical `EEXIST`, or post-move identity mismatch is recovery-pending rather
-  than terminal: every name is preserved, no parked status is published, and restart retries
-  only the same metadata-bound protocol. Missing, unknown, duplicate, noncontiguous,
-  cross-kind, or mismatched incident state blocks every close stage. Both recovery-pending
-  and terminal incidents block record publication and every close stage, survive restart,
-  and are never automatically unlinked. Ordinary success/refusal and terminal incidents
-  require both ephemeral namespaces empty; recovery-pending never claims that terminal
-  predicate. T589's private `CandidateRetentionOwner` is a zero-mutation
+  never rendered.     A verified-payload terminal requires an immutable preimage-complete anchor and metadata,
+  a same-identity reopen and file sync of the moved payload, and a contiguous append-only
+  status prefix beginning at `parked`, with every leaf, parent, and changed ancestor synced.
+  A replacement, `ENOENT`, nonidentical `EEXIST`, or post-move identity mismatch is exactly
+  `recovery-resumable` when one metadata-bound continuation remains and otherwise
+  `recovery-irreconcilable`: every name is preserved and no parked status is published.
+  Inspect returns the stable id and closed cause in both variants. Recover is offered only
+  for the resumable variant. The irreconcilable variant advances only through an
+  authenticated disposition that either retains representable names as durable residue or
+  binds the frozen primary-evidence scope through a complete census or identity-bearing
+  bounded-failure commitment outside that scope. The primary-evidence scope excludes every
+  resolution, resolution-evidence, and disposition leaf, so a resolution digest never
+  contains itself. A raw `0x01 0xff` sentinel cannot authorize disposition or successor
+  admission. Missing, unknown, duplicate, noncontiguous, cross-kind, or mismatched incident
+  state blocks every close stage. Both nonterminal variants and terminal incidents block
+  record publication and every close stage, survive restart, and are never automatically
+  unlinked. Ordinary success/refusal and terminal incidents require both ephemeral
+  namespaces empty; a nonterminal variant never claims that terminal predicate. T589's
+  private `CandidateRetentionOwner` is a zero-mutation
   whole-scope retention guard, not deletion authority. Under the same lock it requires the
   exact terminal request/reservation/panel/seal/eligibility/merge, incident, external-
   reference, ephemeral, and bounded durable-census predicate in `data-model.md` to pass. It
@@ -1520,6 +1530,15 @@ carries the object verbatim rather than copying selected fields into the task ro
   cleanup, unknown or mismatched incident kind/status, a failed kind-specific incident-id
   golden vector, any durable incident entry, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
+  The kind-bearing anchor path is durable before metadata or payload mutation and lets
+  restart recover the closed kind without trusting conflicting anchor bytes. Every immutable
+  incident status persists the complete kind-specific
+  `incidentIdPreimageHex`; the separate CLI projection omits it. Resolution persists the same
+  preimage, the complete-census or bounded-failure evidence kind, typed digest, derived
+  locator, and nullable failure cause. The canonical evidence bytes are leaf-and-ancestor
+  durable before resolution status. Successor admission reopens those exact bytes and
+  revalidates current scope identity, so a copied
+  over-bound commitment or any post-resolution primary change blocks admission.
   `sc002-incident-apply` accepts only the closed canonically encoded and Ed25519-authenticated
   `Sc002IncidentDispositionV1` from `data-model.md`. It binds the incident, parked and
   distinct successor triplets, exact accepted delivery-contract Version 2 digest, pinned
@@ -1529,14 +1548,19 @@ carries the object verbatim rather than copying selected fields into the task ro
   dispatch, a separate external amendment MUST bump accepted
   `ADR-046-validation-and-delivery` from Version 1 to Version 2, normatively pin the incident
   commands, closed incident-kind enum, four kind-specific domain-separated incident-id
-  preimages and golden vectors, the complete versioned census byte grammar and its
-  normal-empty/normal-sorted-mixed/over-bound golden vectors, persisted status kind, the
-  distinct deterministic `Sc002IncidentCliStatusV1` JSON projection and remediation table,
-  exact twelve-line human projection, immutable incident metadata, payload and append-only
-  status paths, file-and-ancestor-directory durable publication/recovery protocol,
+  preimages and golden vectors, the complete retired-census and frozen-primary-evidence
+  census grammars, complete and identity-bearing bounded-failure vectors, persisted status
+  preimage, the distinct deterministic `Sc002IncidentCliStatusV1` JSON projection and
+  remediation table, exact thirteen-line human projection, immutable incident anchor and metadata,
+  payload, resolution-evidence, and append-only status/resolution paths, separate
+  anchor/metadata/status/resolution/CLI schemas,
+  file-and-every-ancestor-directory durable publication/recovery protocol,
   disposition/signature/schema/golden/negative contract, retirement identity,
   bounded zero-mutation candidate-retention owner, whole-scope retention guard, and validator
-  authority. The same Version 2 amendment owns the source-floor canonical JSON policy,
+  authority. It also owns the shared
+  `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` oracle, the exact receipt and
+  malformed-census negative registries, and the no-raw-hash receipt locator. The same Version
+  2 amendment owns the source-floor canonical JSON policy,
   `SourceGenerationIdentityV1`, complete digest/domain/length-framing and signature registry,
   strict schemas, and checked-in golden vectors; compatibility authorities implement but do
   not redefine them. It must receive the parent ADR's
