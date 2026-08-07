@@ -8107,6 +8107,22 @@ corpus separately exercises:
   exact closed mismatch field, exact state-valid mismatch reason, and exact
   typed refusal, plus byte-for-byte no mutation of controller state, sink
   state, repair workspace, reservations, eligibility, or capacity.
+  The test generator forms a fail-closed cross-product between every mutation
+  above and every transition that derives, stores, carries, verifies, or
+  consumes the corresponding digest. The governed transition manifest is
+  versioned, nonempty, and exact. For the pre-proof digest it includes initial
+  derivation, entry to and recovery of `CancellationSinkFencePending`, carry
+  through `PreparedAttemptCancellationSinkProofPending`, and derivation of the
+  complete activation digest. For the complete activation digest it includes
+  entry to and recovery of `CancellationRefusalInstallPending`, refusal tuple
+  installation, normal
+  `OrdinaryActivationPending::AssignmentIssuanceCancellation`, repair
+  `ReplacementAcknowledgedActivationPending`, and both final activation
+  commands. Every matrix cell asserts the exact refusal and byte-identical
+  controller, sink, workspace, reservation, eligibility, and capacity state.
+  A transition present in code or generated schemas but absent from the
+  manifest, a manifest transition not discovered, an empty discovered set, or
+  a mutation tested against only one producer or consumer fails coverage.
   Each case asserts that the old incarnation cannot create, adopt, activate,
   append, or mint; every pre-acknowledgement state still owns controller
   capacity, evidence, and the request reservation and exposes no
