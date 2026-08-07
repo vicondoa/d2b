@@ -2,6 +2,95 @@
 
 - Status: Accepted
 - Date: 2026-08-02
+- Partially superseded by: [ADR 0055](0055-discover-fix-verify-panel-review.md)
+  replaces D7's open-ended review and fix loop and own-findings-only payload;
+  D8's undifferentiated blocking treatment of recommendations in an isolated
+  final set; D9's publication refusal while any finding stands; D17's closed
+  endpoint operation sets, round-input eligibility, and protected-attempt
+  audit ordering only as its new endpoint table, receipt lifetime,
+  common base-or-conflict attempt identity for accepted attempts,
+  narrow original-peer-or-operator recovery reads, migration-conflict
+  preflight and its isolated hard-bounded signal reserve, separate
+  fixed-cardinality migration-control conflict signals, sticky
+  integrity-checked telemetry-health barriers with a durable pre-barrier
+  failure latch and protected recovery operation, reconciliable acceptance
+  prepare and
+  accepted-attempt journal, fenced worker and sink-generation recovery, replay
+  result, outbox, immutable permanent replay tombstones, append-only
+  payload-eviction markers, durable sink reservation, idempotent append,
+  exact redacted completion and append-refusal products,
+  recovery-capacity reserve with serialized plan-id binding, exclusive
+  migration execution capacity with fixed reusable migration-control slots,
+  monotonically increasing control-reserve incarnations, current-state status
+  reads, sealed migration-control capacity, and an independent
+  migration-integrity reserve,
+  exhaustive ordinary protected-attempt recovery and pending status, with
+  active-migration controls instead modelled as audited fixed-slot child
+  commands with durable audit-capacity prepare and migration recovery status
+  as a serialized per-disclosure audited observational read,
+  exactly six finite migration counters with a counter-independent dedicated
+  controller-epoch rekey state machine, mechanically generated per-counter
+  drain headroom, a representable identity-free would-cross-threshold drain
+  state, an identity-free initial rekey request and alias-only resume,
+  counter-independent migration of live continuations and non-healthy
+  telemetry across epoch install,
+  migration-specific no-append audit repair, generic conversion from the exact
+  ordinary sink-acknowledgement-pending tuple, distinct migration
+  sink-acknowledgement and activation variants, and re-entrant online
+  capacity-migration rules specify; and
+  D21's rejection of a four-level
+  severity contract, per-seat `held` and `prior_resolutions` state, rotation,
+  and clean-break refusal to read or admit an earlier schema. It
+  substitutes one native discovery panel, a shared deduplicated ledger, batch
+  implementation, constrained verification, and an automatic
+  version-dispatched compatibility import that preserves completed legacy
+  review and fix progress, including a same-scope successor for a partial
+  pinned round whose unavailable reviewer prevents completion. It reuses D7's
+  protected-principal panel-and-approval controller boundary for the
+  standalone producer without requiring Gas City, while same-uid repository
+  helpers remain proposal-only. Its closed endpoint table adds
+  candidate-bound reviewer, protected implementation-assignment issuance,
+  a cross-owner issuance prepare that binds complete revocation capacity
+  before assignment activation, exact-origin completion, context-specific
+  assignment recovery that reuses an active capability, requires protected
+  revocation for a declared unavailable capability, keeps completion,
+  exhaustion and both revocation orderings in mandatory intermediates until
+  release or explicit finalization, and gives every terminal predecessor one
+  linear successor eligibility consumed by a fresh orchestrator request plus
+  fresh protected evidence,
+  least-authority issue-reader, caller-disjoint risk recovery that keeps the
+  opaque handle behind fresh protected-operator authentication, protected
+  attempt-status and narrow recovery-read endpoints, while
+  protected-operator-only assignment revocation with dedicated audit recovery
+  and proof-backed release of unused issuance-time controller and sink
+  capacity before non-revocation terminal cleanup,
+  migration repair, migration-control integrity repair, telemetry-health
+  recovery from every non-healthy state with closed audit-settled success and
+  failure outcomes, mandatory deployment-keyed protected-operator audit
+  attribution, exact handle-free original-peer risk recovery, and attempt
+  resume and fencing stay on the operator endpoint. It
+  assigns lifecycle, ledger proposal and correction, implementation-assignment
+  issue, completion and revocation, severity, risk, inspection, recovery
+  status and online capacity migration, publication, merge-completion and
+  permanent-close operations without exposing approval, risk, mapping,
+  assignment-lifecycle or retention mutation to the orchestrator. No offline
+  entrypoint may read or mutate controller authority state. It also
+  narrowly supersedes D21's closed twelve-role pool and
+  version 1 table with a closed thirteen-role pool and version 2 table by
+  adding optional `build`, the Bazel and build-systems expert. D21's seven
+  mandatory seats, ten-seat code-operative floor, eight-seat
+  documentation-only floor, select-every-trigger rule, conservative surface
+  classifier, profiles, deterministic roster mechanics, pinned reviewer
+  identity and digest-bound evidence remain in force. The standard Copilot
+  skill is the first producer and owns no second selector: one
+  repository-owned machine-readable table generates proposed roster and
+  per-seat artifacts, and the protected authority validates and admits them.
+  Gas City is not implemented; its future controller must use the same
+  authority contract, table, change-surface schema, roster-manifest schema and
+  per-seat artifact contract without forking selection. Dependent prototype
+  and acceptance items change only where they assert the replaced mechanics.
+  ADR 0055 is Accepted. Its standard-skill implementation has not landed, so
+  committed fixed ten-seat behavior remains current until that cutover.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
   every optional seat a deterministic trigger table selects, under a
