@@ -241,12 +241,14 @@ make test-rust
 make test-host-integration
 ```
 
-The host leg declares the representative Guest, Volume, Network, and Device, consumes the
+The host leg declares the representative Wave 5-owned Volume, Network, and Device, consumes the
 emitted `zones/<zone>/resource-bundle.json`, activates on startup and deployment-entrypoint
 transitions through the production daemon, and requires a real owned effect and readiness for
-every one of the four supported representative resources. Refusals are separate negative
-cases. It then removes the Guest, deploys the next generation without a manual daemon restart,
-verifies dependency-safe cleanup, and proves the unrelated resources remain ready and intact.
+every one of those three representative resources. Refusals are separate negative
+cases. It then removes the Device, deploys the next generation without a manual daemon
+restart, verifies dependency-safe cleanup, and proves the Volume, Network, and unrelated
+resources remain ready and intact. Guest runtime-effect acceptance is deferred to the Wave 6
+Guest Provider; Guest emission, status, or refusal is not a positive Wave 5 result.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
 The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
 `<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
@@ -278,13 +280,15 @@ After the first successful publication, the installed entrypoint may use the sta
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref
 
-# Every supported representative resource must reach its owned effect and ready state
+# Every Wave 5-owned representative resource must reach its owned effect and ready state
 d2b resource list
 d2b resource inspect <Type>/<name>
 ```
 
-**Expected**: the Guest, Volume, Network, and Device are each ready through their owned effect.
-Actionable refusal coverage runs separately and cannot satisfy this positive proof.
+**Expected**: the Volume, Network, and Device are each ready through their owned effect, and
+the removed Device completes dependency-safe cleanup. Actionable refusal coverage runs
+separately and cannot satisfy this positive proof. Guest is not expected to pass until its
+Wave 6 Provider exists.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. Retry with the explicit target-configuration command above; do

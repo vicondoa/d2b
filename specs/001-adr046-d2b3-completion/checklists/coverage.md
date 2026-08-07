@@ -460,14 +460,18 @@ fields as progress toward reachability but did not define the point at which the
 became production-reachable. The approved Wave 5 completion amendment closes that ambiguity.
 
 FR-066 through FR-072 and contracts/resource-api.md now require one complete path:
-registrar-consumed authenticated ComponentSession, authoritative subject, exact ZoneBus route,
+registrar-consumed authenticated ComponentSession using the locked reviewed vendored
+`d2b-peer-pidfd` 0.1.0 prerequisite, authoritative subject, exact ZoneBus route,
 matching installed policy revision after a one-shot private bootstrap read, registered
 controller endpoint, admitted production watch, durable effect/adoption and audit recovery,
 the exact `Provider/system-core` registration plus both required handler handles, and one
 aggregate readiness projection. T604 adds the original operator boundary from Nix declaration
 and emitted bundle through automatic startup/declaration/removal ingestion, owned effect and
-readiness for every supported representative Guest, Volume, Network, and Device, and
-dependency-safe removal cleanup. Refusals remain separate negative cases. T219 cannot accept
+readiness for the Wave 5-owned representative Volume, Network, and Device, and dependency-safe
+Device cleanup while Volume, Network, and unrelated resources remain ready. Guest
+runtime-effect acceptance is deferred to the Wave 6 Guest Provider; Guest emission, status,
+or refusal cannot satisfy the Wave 5 positive. Refusals remain separate negative cases.
+T219 cannot accept
 a fabricable or reusable bootstrap reader, numeric-PID-only identity, direct service call,
 `ProductionWatchHarness`, fake endpoint, constructed subject, independent readiness bit,
 status-only Provider substitute, disabled audit owner, missing immutable authoritative row,
@@ -489,7 +493,7 @@ CHK048 through CHK053 are closed by normative artifact text in this batch:
 | CHK049 | FR-069/SC-033, plan/tasks, and contracts name `Provider/system-core`, its `d2b-core-controller` registration owner, exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each with phase/timestamp from the live `HostReconciler` or `UserReconciler`; other Wave 6 dossiers are excluded. |
 | CHK050 | T603 is unchecked, precedes T589, and is T589's sole direct prerequisite. Pre-validator A/P0 analysis/panel authorize only its validator paths; validator-only V becomes B; analysis/panel rerun at B/P; only those post-validator receipts permit immutable repository-relative B/P authorization, exact T073-T218 accounting, validator-derived P-to-Q progress, and exact child C. Final F evidence remains separate. |
 | CHK051 | FR-070/SC-032 and contract/task acceptance require transactionally immutable authoritative rows, separate export completion, `CommittedPendingAudit` through the exact `ResourceStatus` layers and additive protobuf field including delete, exact replay binding, fixed digests, retention health, and one export per digest/ordinal. |
-| CHK052 | The Constitution Check and Complexity Tracking name one Principle VI exception and separately retain the FR-043 safety risk and constitution-2.1.0-authorized pipelining rework risk. |
+| CHK052 | The Constitution Check and Complexity Tracking name one Principle VI exception and separately retain the FR-043 safety risk and constitution-2.0.0-authorized pipelining rework risk. |
 | CHK053 | Current plan/task instructions use `adr046w5` and qualified template forms; preserved `ADR046-W5` occurrences are explicitly labeled legacy or historical. |
 
 These are specification-quality transitions only. They do not mark implementation, T219,
@@ -507,3 +511,15 @@ T220, or T603 complete and do not convert historical evidence into current evide
 CHK054 no longer blocks analysis. Run the pre-T603 read-only `/speckit-analyze`; if clean,
 request the unanimous A/P0 plan panel. After validator-only V becomes B, rerun both gates at
 B/P before T603 may create the receipt or authorize progress. Implementation remains pending.
+
+### Committed-HEAD analysis receipt remediation (2026-08-06)
+
+| Finding | Feature-artifact disposition |
+| --- | --- |
+| COV1 | Wave 5 positive operator acceptance now covers only the committed Wave 5-owned Volume, Network, and Device effects. Device is the removal case. Guest runtime-effect acceptance is explicitly deferred to the Wave 6 Guest Provider, and Guest emission, status, or refusal cannot satisfy FR-072, SC-034, T604, T602, or T219. |
+| UND1 | T593 now begins with a dependency-only prerequisite commit for vendored `d2b-peer-pidfd` 0.1.0, with exact crate/workspace lockfile ownership, safe `BorrowedFd`-to-`OwnedFd` API, unsafe inventory, executable fd-cleanup tests, dependency-tree proof, and Rust/security review. The `nix` 0.31.3 wrapper and a local session fallback are ineligible; rejection blocks route implementation. |
+| INC1 | Every source-writing completion slice T589-T599, T604, and T605 has one exact, unique fragment path; T220 requires the closed thirteen-row owner/path set and alone folds it. T603's exact validator-only authorization remains fragment-free, and evidence-only tasks write no repository file. |
+| INC2 | Pipelined implementation-start provenance now cites Constitution 2.0.0 only. Constitution 2.1.0 remains attached only to bounded deferral and delivery memory. |
+
+These dispositions amend planning contracts only. They check no task, claim no implementation
+or validation result, and do not authorize T603 or any later source dispatch.

@@ -42,7 +42,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-4 | Deliver replay and live watch with one global bounded admission budget, typed backpressure, and deterministic slow-watcher eviction with cursor resume | FR-002 | W5 |
 | RA-5 | Enforce exact, subject-bound, revision-bound, Zone-checked routing on every operation | FR-009, SC-008 | W2 |
 | RA-6 | Audit every denial | FR-007 | W2-W5 |
-| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the peer pidfd obtained directly from the accepted socket by `SO_PEERPIDFD`, credential/generation/cgroup/liveness verified against that fd, one private registrar issuer, no public evidence accessor or bootstrap mint, the registrar's authoritative subject propagated internally, and no request subject field | FR-066, SC-030 | W5 |
+| RA-7 | Publish ResourceService only from a registrar-consumed authenticated ComponentSession, with the peer pidfd obtained directly from the accepted socket by `SO_PEERPIDFD` through the locked reviewed vendored `d2b-peer-pidfd` 0.1.0 prerequisite, credential/generation/cgroup/liveness verified against that fd, one private registrar issuer, no public evidence accessor or bootstrap mint, the registrar's authoritative subject propagated internally, and no request subject field; reject the `nix` 0.31.3 wrapper and any local fallback | FR-066, SC-030 | W5 |
 | RA-8 | Install and recover policy under `ZoneResourceRuntime`: consume one private-issuer, compiler/API-sealed, non-fabricable one-shot `PolicyBootstrapRead` for the first exact-revision envelope snapshot, then use authenticated Resource API reads/updates only; keep both stores policy-neutral | FR-067, FR-073 | W5 |
 | RA-9 | Register the production controller endpoint and admit its watch through ResourceService, ZoneBus, the production store, and controller fan-in | FR-068, FR-069 | W5 |
 | RA-10 | Persist every committed effect and cleanup intent before dispatch, replay/adopt it after restart, and complete cleanup only for the same UID and exact nonzero revision | FR-068, SC-031 | W5 |
@@ -69,8 +69,11 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   socket with `SO_PEERPIDFD`; `pidfd_open(SO_PEERCRED.pid)` is forbidden. Credentials,
   generation, cgroup, and liveness are verified against and consumed with that exact fd by one
   registrar-private issuer. Unsupported kernels, numeric-PID reuse, dead fd, mismatch, or
-  ambiguity refuse. Public peer evidence accessors and bootstrap-identity mint paths remain
-  sealed.
+  ambiguity refuse. The only syscall boundary is vendored `d2b-peer-pidfd` 0.1.0, whose
+  `BorrowedFd`-to-`OwnedFd` API, exact `optlen`, no-panic, and returned-fd cleanup contract is
+  locked and reviewed before session-source work; the `nix` 0.31.3 `MaybeUninit`/assert
+  wrapper and any `d2b-session-unix` fallback are ineligible. Public peer evidence accessors
+  and bootstrap-identity mint paths remain sealed.
 - **Zone equality is proven before every capability mint.**
 - **Policy has one lifecycle owner.** `ZoneResourceRuntime` owns install/recovery and
   publication; `NativeAuthorizer` interprets an immutable installed set. Initial install and
@@ -129,8 +132,10 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - A component presenting a self-named subject, a reused admission, or only a public daemon
   peer role is refused before ResourceService. Unsupported `SO_PEERPIDFD`, numeric-only
   identity, PID reuse, dead fd, credential/generation/cgroup mismatch, ambiguity, and a stale
-  pre-restart pidfd are also refused. API-surface/compile-fail checks expose no public issuer,
-  verifier, clone, or peer evidence accessor.
+  pre-restart pidfd are also refused. A missing, unlocked, unreviewed, differently sourced, or
+  rejected `d2b-peer-pidfd` 0.1.0 prerequisite blocks T593 before session-source edits.
+  API-surface/compile-fail checks expose no public issuer, verifier, clone, or peer evidence
+  accessor.
 - Conformance evidence shows a registered backend mutates only through verified admission and
   exposes no independent write path, plus a recorded security review of each registered
   backend. The `adr046w5` seal must not close without both.
@@ -160,9 +165,11 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - All acceptance evidence names one exact candidate and uses production owners. T604 starts
   at the emitted operator Nix declaration/bundle, activates on initial startup and public
   declaration/removal switches without manual daemon restart, observes a real owned effect
-  and readiness for every representative Guest, Volume, Network, and Device, then proves
-  dependency-safe removal without affecting ready unrelated resources. Refusals are separate
-  negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
+  and readiness for the representative Wave 5-owned Volume, Network, and Device, then proves
+  dependency-safe Device removal without affecting ready Volume, Network, or unrelated
+  resources. Guest runtime-effect acceptance remains a Wave 6 Guest Provider obligation;
+  Guest emission, status, or refusal cannot satisfy this Wave 5 positive. Refusals are
+  separate negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
   subject, or an older result artifact is ineligible.
 - Before T589, pre-validator analysis and plan panel at A/P0 authorize only T603's two
   validator source paths. Validator-only commit V becomes B, P remains byte-identical to P0,

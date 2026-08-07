@@ -807,7 +807,8 @@ task total is 605.
 The completion boundary is:
 
 - registrar-consumed, pidfd-bound authenticated ComponentSession and authoritative subject,
-  with fresh restart pidfd and PID-reuse/mismatch/`ESRCH`/ambiguity denials;
+  using the locked reviewed vendored `d2b-peer-pidfd` 0.1.0 prerequisite, with fresh restart
+  pidfd and PID-reuse/mismatch/`ESRCH`/ambiguity denials;
 - matching nonzero Zone policy revision under `ZoneResourceRuntime`, with initial/restart
   installation through one private-issuer, compiler/API-sealed, non-fabricable one-shot
   `PolicyBootstrapRead` limited to exact-revision policy envelopes and every later policy
@@ -844,8 +845,10 @@ The completion boundary is:
 - per-Zone failure isolation;
 - T604 exact-candidate coverage from an operator Nix declaration and emitted bundle through
   startup and public declaration/removal switches without manual restart to a real owned
-  effect/readiness for every representative Guest, Volume, Network, and Device, followed by
-  dependency-safe removal cleanup with ready unrelated resources intact; refusals remain
+  effect/readiness for the representative Wave 5-owned Volume, Network, and Device, followed
+  by dependency-safe Device cleanup with ready Volume, Network, and unrelated resources
+  intact; Guest runtime-effect acceptance remains a Wave 6 Guest Provider obligation and no
+  Guest emission, status, or refusal can satisfy this Wave 5 criterion; refusals remain
   separate negative cases;
 - pre-T603 analysis and unanimous plan panel at clean A/P0 authorizing only T603's two
   validator source paths; validator-only commit V with sole parent A; B exactly V and P
@@ -1050,7 +1053,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction, waiver scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, operator Nix activation/effect/cleanup, exact evidence, and receipt/editor-mediated amended-plan resume | **Locally added Wave 5 completion assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `provider-system-core`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `system-core`, `audit` plus T589-T605 |
+| FR-066 - FR-072 | Authenticated production publication through the locked reviewed `d2b-peer-pidfd` 0.1.0 prerequisite, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, restart/Zone isolation, Wave 5-owned Volume/Network/Device operator Nix activation/effect/cleanup with Guest deferred to its Wave 6 Provider, exact evidence, and receipt/editor-mediated amended-plan resume | **Locally added Wave 5 completion assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `provider-system-core`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `system-core`, `audit` plus T589-T605 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
 
@@ -1065,7 +1068,7 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires pre-validator A/P0 gates, validator-only V/B, post-validator B/P gates, the sole editor checkbox transition and progress receipt; pins T593's reviewed `d2b-peer-pidfd` 0.1.0 prerequisite; narrows T604 positive effects to Wave 5-owned Volume/Network/Device and defers Guest to its Wave 6 Provider; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; blocks T219 on that exact candidate; and does not change the 545-item manifest. |
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
 counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this

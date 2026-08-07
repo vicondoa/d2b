@@ -376,11 +376,19 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    identity accessor, and one registrar-private issuer consumes the complete pidfd evidence.
    The session adapter, descriptor, bus Unix transport, and session seam consume that same
    accepted-socket evidence and expose no caller-supplied verifier or credential constructor.
-   Peer-pidfd acquisition uses only a pinned, reviewed safe dependency implementation. It
-   checks exact kernel-returned `optlen`, returns only `OwnedFd`, closes any fd returned on a
-   short/malformed or later failure, and reports a typed error without assert, panic, or leak.
-   Workspace `unsafe_code = "forbid"` rules out a local syscall fallback in
-   `d2b-session-unix`; absence of a qualifying dependency blocks the slice.
+   Peer-pidfd acquisition uses only the vendored path dependency `d2b-peer-pidfd` version
+   `0.1.0` at `third_party/d2b-peer-pidfd`. Its safe public API accepts `BorrowedFd` and
+   returns only `OwnedFd`; its audited private syscall boundary initializes an invalid
+   sentinel without `MaybeUninit`, denies unsafe operations outside explicit audited blocks,
+   passes and validates the exact kernel-returned `optlen`, adopts any returned fd before
+   later validation, and therefore closes it on short, oversized, malformed, syscall, or
+   later failure without assert, panic, or leak. The `nix` 0.31.3 `PeerPidfd`
+   `MaybeUninit`/assert wrapper is explicitly ineligible. Workspace
+   `unsafe_code = "forbid"` rules out a local syscall fallback in `d2b-session-unix`.
+   T593 begins with a dependency-only prerequisite commit that owns the vendored crate,
+   review inventory, path pin, and lockfile; no session or bus source may change until its
+   locked unit, fd-count, exec-leak, and dependency-tree checks pass and its unsafe inventory
+   is reviewed. Absence or rejection of that prerequisite blocks the remainder of T593.
 4. The admitted ResourceService watch opens through that registered route, replays from the
    durable checkpoint without a replay/live gap, and feeds the registered controller fan-in.
    Before any EffectPort call, the core controller records an outstanding effect in the
@@ -497,7 +505,7 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | --- | --- | --- |
 | Resume reconciliation | T603 | Exactly one valid T072 disposition is required first: exact historical attestation, or unchecked T072 plus one current `historical-entry-remediation-t072` record bound to A/P0 that claims no implementation completion. Pre-T603 analysis and plan panel at A/P0 then authorize only `packages/xtask/src/delivery/{mod.rs,resume.rs}`. T603 lands dedicated validator commit V with sole parent A and no other repository change, freezes B exactly at V and P byte-identical to P0, revalidates the T072 disposition, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
 | Integrator prep | T589 | Its sole direct prerequisite is T603. Candidate-recovery v1 must be accepted on T589's actual base, but T008 is a separate historical W2 attestation and is not retroactively completed by T589. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal hook, mutation-response wire, and typed `InspectOperation` store/API/protobuf contract. It does not edit broker wire, StoreSync DTOs, their callers, broker protocol metadata, schemas, fingerprints, or snapshots. It also owns the `adr046w5` closed-evidence profile and candidate-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace active reservation per program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; one request per immutable candidate; synchronized cross-candidate exclusion; the point-specific zero/zero-or-one/exactly-one crash oracle; durable failed closure before active-slot release; and successor admission only with complete predecessor/program-wave/recommendations/successor-commit-tree/convergence/validation identities. Crash injection covers panel-request publication, closure, release, and successor admission. Post-request moves and retries fail at panel, seal, and eligibility. No implementation slice branches before this commit. |
-| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 is the sole atomic broker-wire and privilege-contract owner: it changes both StoreSync DTOs with every producer/consumer; defines the audit drain and d2b-state handoff op; binds source/target broker/daemon generations and protocol/catalogue digests; makes exact Hello mandatory; adds the broker-verified daemon principal and denies every caller-claimed/admin/launcher/root/HostShutdown/remote path; bumps `PROTOCOL_VERSION` 4 to 5; and updates `d2b-contracts`, `d2b-core` privilege sources, broker protocol/runtime sources, `d2bd` Hello/version sources, `nixos-modules/privileges-json.nix`, `xtask` generators, Rust/Nix parity and policy tests, `wire-protocol.json`, `privileges.json`, daemon/privilege catalogues, fingerprints, snapshots, workspace lockfile, and standalone broker lockfile in one commit. T592 also owns `d2b-audit`; the authoritative `ZoneBundle`; duplicate-envelope retirement; and its nonempty poison guard. T593 owns the accepted-socket evidence path and subsequent workspace lockfile. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots. T592's serialized commit may edit `d2bd/src/lib.rs`; after it lands, ownership transfers to T595. |
+| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 because both own `packages/Cargo.lock`; T605 starts after T593 and regenerates the shared API snapshots. T592 is the sole atomic broker-wire and privilege-contract owner: it changes both StoreSync DTOs with every producer/consumer; defines the audit drain and d2b-state handoff op; binds source/target broker/daemon generations and protocol/catalogue digests; makes exact Hello mandatory; adds the broker-verified daemon principal and denies every caller-claimed/admin/launcher/root/HostShutdown/remote path; bumps `PROTOCOL_VERSION` 4 to 5; and updates `d2b-contracts`, `d2b-core` privilege sources, broker protocol/runtime sources, `d2bd` Hello/version sources, `nixos-modules/privileges-json.nix`, `xtask` generators, Rust/Nix parity and policy tests, `wire-protocol.json`, `privileges.json`, daemon/privilege catalogues, fingerprints, snapshots, workspace lockfile, and standalone broker lockfile in one commit. T592 also owns `d2b-audit`; the authoritative `ZoneBundle`; duplicate-envelope retirement; and its nonempty poison guard. T593 first owns a dependency-only prerequisite commit over `third_party/d2b-peer-pidfd/{Cargo.toml,Cargo.lock,LICENSE,README.md,REVIEW.md,src/lib.rs,tests/peer_pidfd.rs}`, `packages/d2b-session-unix/Cargo.toml`, and the subsequent `packages/Cargo.lock`; only after the locked `d2b-peer-pidfd` 0.1.0 safe API, unsafe inventory, exact-length/fd-cleanup tests, and dependency tree pass review may T593 edit its accepted-socket evidence sources. The `nix` 0.31.3 wrapper and a local session-crate fallback are ineligible. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots. T592's serialized commit may edit `d2bd/src/lib.rs`; after it lands, ownership transfers to T595. |
 | Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, new `d2b/src/bin/d2b-host-generation-deploy.rs`, `d2b/Cargo.toml`, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, the Type-1 `host-generation-rebuild-ref.nix` case, and Type-10 `host-generation-handoff.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, exact 4/2 consumption, the target-closure deployment entrypoint, stock profile/activation/rollback initiation, source-v4 bootstrap, broker-before-daemon unit ordering, and the unprivileged opaque handoff client. The broker alone publishes/repairs the d2b pointer and stable reference from immutable input. The option is required `lib.types.strMatching` with exact `<flake-ref>#<configuration-name>` grammar, 2048-byte total limit, and 64-byte selector limit. `make nix-unit-pin` and Type-1 positive/boundary/missing/malformed/selector cases are required in addition to the VM crash/rollback matrix. No new unit is added. |
 | File-disjoint acceptance and docs | T596-T599, T604 | T599 retains its named CLI/reference ownership. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, and only the host-integration discovery/build recipe in `Makefile`. Its 3/1 leg must use the explicit target-closure entrypoint, then use the stable-reference entrypoint only after broker publication; it exercises the exact profile/broker/daemon/reference crash and rollback ordering plus the resource effect/cleanup story. Its evidence must enumerate and build `vmChecks.x86_64-linux.resource-operator-activation`; skip or empty discovery is ineligible. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
 | Integrator convergence and freeze | T220 | Merges every slice; reconciles generated manifests; verifies coordinated normative/reference/test/schema/changelog treatment, including the authoritative single-owner 4/2 bundle contract/compiler/schema, poison guard, canonical digest, old/mixed/future refusals, replayable installed-host migration/rollback, closed runtime action, and command-only docs; folds fragments; rebases after W4; and records the panel base. It runs the closed-evidence profile plus the point-specific reservation oracle, durable orphan cleanup, concurrent reservation, panel-request/closure/release/successor crash transitions, same-candidate retry, active-alternate-candidate, malformed/stale/cross-candidate/cross-wave recovery-evidence matrix, and post-request movement tests at panel, seal, and eligibility. It then runs integration, CI, and full drift, opens or updates the PR, and freezes F. Any later content/history change invalidates F and restarts T220 plus T600-T602. |
@@ -517,7 +525,7 @@ pre-T603 analysis + plan panel at A/P0 -> T603 validator commit V
 V = B -> post-T603 analysis + plan panel at B/P -> receipt/editor transition C
 C -> T589 -> {T590,T591,T594}
 T591 -> T592
-T592 -> T593 -> T605
+T592 -> T593 dependency prerequisite -> T593 route -> T605
 {T590,T592,T594,T605} -> T595
 T595 -> {T596,T597,T598,T599,T604} -> T220 -> freeze F
 F -> {T600,T601} -> T602 T072-disposition revalidation -> T219 T072-disposition revalidation + work close
@@ -714,6 +722,32 @@ establish the contracts those successors implement. No two parallel tasks own th
 Cargo workspace membership, generated spec manifests, flake outputs, shared changelog, and
 feature artifacts remain integrator-only.
 
+Every source-writing completion slice has disjoint, exact fragment ownership:
+
+| Slice owner | Sole fragment |
+| --- | --- |
+| T589 | `changelog.d/resource-api-production.md` |
+| T590 | `changelog.d/resource-policy-bootstrap.md` |
+| T591 | `changelog.d/store-policy-neutrality.md` |
+| T592 | `changelog.d/resource-bundle-audit-carrier.md` |
+| T593 | `changelog.d/componentsession-peer-admission.md` |
+| T594 | `changelog.d/controller-effect-ledger.md` |
+| T595 | `changelog.d/zone-runtime-production.md` |
+| T596 | `changelog.d/authenticated-publication-acceptance.md` |
+| T597 | `changelog.d/effect-replay-acceptance.md` |
+| T598 | `changelog.d/audit-acceptance.md` |
+| T599 | `changelog.d/cli-operation-recovery.md` |
+| T604 | `changelog.d/operator-resource-activation.md` |
+| T605 | `changelog.d/system-core-handlers.md` |
+
+These paths supplement each task's owned-file list. No other task may write them. T220
+requires all thirteen before it reconciles version/reference/test/schema treatment, then
+alone folds them into the shared changelog. T603 is an integrator-owned validator prerequisite,
+not a slice, and its exact two-source-path authorization permits no fragment; T600-T602 and
+T219 write only external evidence or delivery state, and T220 only folds. A missing,
+duplicate, differently named, or cross-owned fragment blocks T220; prose that an amendment
+has release treatment is not a substitute.
+
 #### Wave 5 validation and evidence
 
 The implementation tasks run focused hermetic tests while writing their files. Before T595,
@@ -741,20 +775,23 @@ Type-10 handoff test; T604 does not replace either. Run the lower legs through
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and `make test-rust`. Because a real
 owned host effect requires systemd, broker mutation, and a booted NixOS system, the canonical
 Type-10 destination is `tests/host-integration/resource-operator-activation.nix`, run only by
-the public heavy-gated `make test-host-integration` target. It declares the representative
-Guest, Volume, Network, and Device through Nix. It starts from an installed protocol-4 3/1
+the public heavy-gated `make test-host-integration` target. It declares the representative Wave 5-owned Volume,
+Network, and Device through Nix. It starts from an installed protocol-4 3/1
 broker, obtains `d2bHostGenerationDeploy` from the explicit target installable, and reaches
 4/2 through that entrypoint without reading an absent stable reference. The new broker must
 start before the new daemon, publish/repair only broker-owned d2b state, and complete exact
 protocol-5 Hello before the daemon becomes ready. Subsequent declaration/removal deployments
 use the stable-reference entrypoint without a manual daemon restart or private reload and
-require every one of those four supported resources to reach its real owned effect and
+require every one of those three resources to reach its real owned effect and
 readiness. The target must discover a
 nonempty `vmChecks` set, enumerate and successfully build
 `vmChecks.x86_64-linux.resource-operator-activation`, and report no skip; skipped or empty
 output is ineligible evidence. Typed refusal cases are separate negative tests and cannot
-satisfy the positive story. The test removes the Guest, switches again, and observes
-dependency-safe cleanup while the unrelated resources remain ready and intact. A direct
+satisfy the positive story. The test removes the Device, switches again, and observes
+dependency-safe cleanup while the Volume, Network, and unrelated resources remain ready and
+intact. Guest runtime-effect ownership is absent from the Wave 5 system-core owner and is
+deferred to the Wave 6 Guest Provider; Guest emission, ingestion, status, or refusal cannot
+satisfy this positive criterion. A direct
 ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed subject, fake
 endpoint, or manually set readiness field may remain useful unit coverage but is explicitly
 ineligible as T219 evidence.
@@ -772,11 +809,11 @@ second validator.
 
 | Closed `validation` identifier | Owner | Delivery lane | Required content |
 | --- | --- | --- | --- |
-| `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial; one accepted-socket evidence object shared by adapter, descriptor, bus Unix transport, and session seam; reviewed safe dependency `SO_PEERPIDFD` implementation with exact-optlen validation, CLOEXEC `OwnedFd`, and returned-fd failure closure; injected short-result fd-count, unsupported/malformed/missing-CLOEXEC/leak/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; workspace unsafe-forbid and no local syscall/raw-fd fallback; no caller-supplied verifier/credential constructor or re-export; private registrar issuance; and a fresh restart peer pidfd |
+| `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial; one accepted-socket evidence object shared by adapter, descriptor, bus Unix transport, and session seam; locked vendored `d2b-peer-pidfd` 0.1.0 dependency with exact `BorrowedFd`-to-`OwnedFd` API, reviewed unsafe inventory, exact-optlen validation, immediate ownership of any returned fd, and failure closure; injected short-result fd-count, unsupported/malformed/missing-CLOEXEC/leak/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; explicit rejection of the `nix` 0.31.3 wrapper; workspace unsafe-forbid and no local syscall/raw-fd fallback; no caller-supplied verifier/credential constructor or re-export; private registrar issuance; and a fresh restart peer pidfd |
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
 | `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
-| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; four representative owned effects/readiness; dependency-safe cleanup; ready unrelated resources; and nonempty host output enumerating and building `vmChecks.x86_64-linux.resource-operator-activation` without skip |
+| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; three representative Volume/Network/Device owned effects and readiness; Device dependency-safe cleanup; ready Volume, Network, and unrelated resources; explicit Guest deferral to the Wave 6 Guest Provider with no Wave 5 Guest-success claim; and nonempty host output enumerating and building `vmChecks.x86_64-linux.resource-operator-activation` without skip |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
@@ -812,9 +849,10 @@ may not use one free-form validation name to satisfy two rows. T600 and T601 the
   mandatory envelope fields, exact ID/exit/DTO schema, and absence of Zone/ID-bearing
   executable remediation; and
 - T604's exact-candidate operator activation-to-effect-and-cleanup result, including the
-  emitted bundle identity, deployment-entrypoint-triggered production daemon entry point, owned
-  effect/readiness for every representative Guest, Volume, Network, and Device, cleanup of
-  the removed resource, and unchanged ready unrelated resources.
+  emitted bundle identity, deployment-entrypoint-triggered production daemon entry point,
+  owned effect/readiness for the representative Volume, Network, and Device, cleanup of the
+  removed Device, and unchanged ready Volume, Network, and unrelated resources. Guest
+  runtime-effect acceptance remains a Wave 6 obligation and is not claimed by this record.
 
 T602's done condition is mechanical: T603, every T589-T599 task, T604, T605, and T220 are complete;
 `tasks.md` shows T073-T218 and T603 checked; the immutable reconciliation receipt validates
@@ -870,6 +908,12 @@ recommendations enter the scoped fix round, which returns through T220 and T600-
 a delta/full-context follow-up panel before a distinct successor receives its one request.
 An external policy/tooling refusal blocks for integrator escalation rather than waiving a
 finding. A successful merge preserves the selected candidate's tree.
+
+### Spec corrections
+
+| Prose drift | Canon kept | Planning correction |
+| --- | --- | --- |
+| Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the Guest Provider is assigned to Wave 6 and absent at this Wave 5 base. | Wave 5 positive operator acceptance covers Volume, Network, and Device. Guest runtime-effect acceptance remains a fail-closed Wave 6 obligation; Guest emission, ingestion, status, or an actionable refusal is not FR-072/SC-034 evidence and cannot close T604, T602, or T219. |
 
 ### Recorded drift
 
@@ -1095,4 +1139,4 @@ These rows are not Constitution Principle VI deviations.
 | Risk | Why Tracked | Guard and Rejected Alternative |
 | --- | --- | --- |
 | FR-043 (recovery-point attestation) is tracked program-local, outside the work-item manifest, so the manifest census alone cannot enforce it | FR-043 is locally added and **stricter** than `ADR-046-reset-and-cutover`, which permits proceeding past the rollback boundary without attestation. Creating a manifest work item would require amending that member spec, which re-opens its validation and panel evidence and re-triggers Gate 0. An unqualified "backup exists" assertion permits a partial, old, wrong-host, or unverifiable point to become success-shaped. | Keep it program-local, but close the safety gap at the W7 exit boundary. T548 owns one hermetic validator used unchanged by T580, T555, and T556. It decodes every timestamp through a bounded integer newtype, uses checked bounded expiration arithmetic, requires `previewed <= captured <= verified <= attested <= verifier-now < expires`, independently varies every receipt field and binding including operator and restore-instruction digests, and fails on listing failure, empty discovery, ignored tests, or skip. Before T580 records evidence, the integrator freezes the clean current W7 candidate and exact preview inventory. T580 accepts only one external version 1 record for a verified full-host snapshot or backup covering boot/system state, the active generation, the preview inventory, and preserved identity state. It binds candidate/commit/tree, preview, daily-driver host, operator, and restore instructions; imports only its digest and opaque locator through the existing `EvidenceRecord`; and rejects negative, fractional, future, out-of-range, overflow, stale, expired, or mismatched values. Every close stage invokes the same validator. Expiry durably fails that candidate and retains its records; T580 creates a distinct successor with fresh attestation and validation, and T555 permits that successor one panel request. No approval transfers. The external operator-owned backup/snapshot and restore mechanism remains outside this feature; no host implementation is claimed. |
-| Pipelined dispatch can create successor rework when a predecessor panel finding invalidates in-flight work | Constitution 2.1.0 expressly authorizes implementation of wave N+1 to begin at 5 of 10 wave-N panel returns plus green integration. It is therefore current policy, not a constitution deviation. | Unanimity, roster, seal ordering, and merge ordering remain unchanged. The successor rebases onto the merged predecessor before its own panel, so no panel reviews a tree built on unreviewed contracts. Strict serialization was rejected because it adds idle time without strengthening the exit gate. FR-050 forbids citing rework as grounds to shorten a panel. |
+| Pipelined dispatch can create successor rework when a predecessor panel finding invalidates in-flight work | Constitution 2.0.0 expressly authorizes implementation of wave N+1 to begin at 5 of 10 wave-N panel returns plus green integration. It is therefore current policy, not a constitution deviation. | Unanimity, roster, seal ordering, and merge ordering remain unchanged. The successor rebases onto the merged predecessor before its own panel, so no panel reviews a tree built on unreviewed contracts. Strict serialization was rejected because it adds idle time without strengthening the exit gate. FR-050 forbids citing rework as grounds to shorten a panel. |

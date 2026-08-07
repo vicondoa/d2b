@@ -33,8 +33,9 @@ This recovery surface requires T599's coordinated amendment of the accepted
 resource-recovery meanings of exits 75 and 76, makes `zoneRef` and `schemaVersion: 2`
 mandatory in every recovery JSON envelope, and pins the ID and remediation contracts below.
 The existing meanings of 75 and 76 for unrelated exec commands remain command-scoped. T599
-owns migration guidance, DTO/schema and contract tests, reference and release treatment;
-T220 reconciles the generated manifests and folds the changelog fragment. The implementation
+owns migration guidance, DTO/schema and contract tests, reference and release treatment plus
+`changelog.d/cli-operation-recovery.md`; T220 reconciles the generated manifests and folds
+that fragment. The implementation
 MUST NOT ship this surface under the accepted Version 1 contract.
 
 The only operator-supplied replay handle is an exact 16-byte operation ID rendered as
@@ -185,8 +186,9 @@ FR-042 explicit retirement list rather than the parity list.
   shell fragment, or free-form JSON remediation. Human output carries only the exact static
   identifier-free guidance above; JSON retains the closed action enum.
 - T599 bumps the accepted CLI specification to Version 2 and owns migration guidance,
-  DTO/schema, contract tests, references, and a changelog fragment. T220 verifies and folds the
-  coordinated version/reference/test/schema/release treatment. Missing or Version 1 envelopes
+  DTO/schema, contract tests, references, and
+  `changelog.d/cli-operation-recovery.md`. T220 verifies and folds the coordinated
+  version/reference/test/schema/release treatment. Missing or Version 1 envelopes
   are never interpreted as Version 2, and arbitrary Version 1 IDs are never silently migrated.
 - Zone readiness names `Provider/system-core` and the actual failing
   `Zone.status.handlers[]` record: `system-core-host` or `system-core-user`, with its `phase`

@@ -345,6 +345,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   private state and propagate that authoritative subject through every Resource API
   operation. Unix peer evidence MUST obtain the process descriptor directly from the accepted
   socket with `SO_PEERPIDFD`; opening a pidfd later from `SO_PEERCRED.pid` is forbidden.
+  Acquisition MUST use the vendored path dependency `d2b-peer-pidfd` version `0.1.0` at
+  `third_party/d2b-peer-pidfd`, whose public API accepts `BorrowedFd` and returns only
+  `OwnedFd`. The `nix` 0.31.3 `PeerPidfd` wrapper is ineligible because its
+  `MaybeUninit`/assert path does not meet the no-panic and returned-fd cleanup contract.
+  Missing, unreviewed, unlocked, or nonconforming dependency bytes MUST block admission
+  implementation; `d2b-session-unix` MUST NOT provide a local syscall fallback.
   Credential, process-generation, cgroup, and liveness evidence MUST be verified against that
   exact `CLOEXEC` fd and consumed by one registrar-private issuer. Unavailable kernel support,
   numeric-PID reuse, dead-fd or evidence mismatch, or ambiguity denies admission. Public peer
@@ -462,12 +468,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
   API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. T604 MUST
   additionally prove on that same candidate that an operator Nix declaration for the
-  representative Guest, Volume, Network, and Device emits the installed per-Zone bundle,
+  representative Wave 5-owned Volume, Network, and Device emits the installed per-Zone bundle,
   activates on initial startup and public declaration/removal NixOS switches without manual
   daemon restart or private reload, reaches a real owned effect and readiness for every
-  supported representative resource, and removes one declaration with dependency-safe
+  one of those three resources, and removes one declaration with dependency-safe
   cleanup while unrelated resources remain ready and intact. Actionable refusals are separate
-  negative cases and cannot satisfy this positive story. Direct `WatchService` calls, fixed
+  negative cases and cannot satisfy this positive story. Positive Guest runtime-effect
+  acceptance belongs to the Wave 6 Guest Provider and is not a Wave 5 success criterion;
+  Guest bundle emission, ingestion, status, or refusal MUST NOT satisfy FR-072 or SC-034.
+  Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and
   historical proof artifacts are not evidence for this gate. T220 MUST converge all slice and
   integrator-owned generated-artifact changes, including T605/T595/T599 reconciliation and
@@ -1150,7 +1159,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   Unix admission obtains a live pidfd directly with `SO_PEERPIDFD` and verifies credentials,
   generation, cgroup, and liveness against that fd; restart obtains a new fd from the newly
   accepted socket, and unavailable support, numeric-only identity, PID reuse, dead fd,
-  mismatch, and ambiguity are denied. API-surface and compile-fail seals expose no public
+  mismatch, and ambiguity are denied. The locked vendored `d2b-peer-pidfd` 0.1.0 dependency
+  passes its exact-optlen, no-panic, returned-fd cleanup, and `OwnedFd` ownership tests; an
+  absent or unreviewed dependency and any local fallback fail the criterion. API-surface and
+  compile-fail seals expose no public
   registrar issuer, peer credential/evidence accessor, or bootstrap-identity mint path.
 - **SC-031**: Crash injection at every boundary from generation commit through effect
   completion leaves zero lost effects and zero lost cleanup intents after restart. Every
@@ -1206,8 +1218,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   an ancestor of final candidate F frozen after T220 convergence; the exact eight closed
   FR-072 evidence identifiers occur once each at their assigned T600/T601 owner and lane; all
   records name F and F's tree; HEAD equals F with no staged, unstaged, or non-ignored
-  untracked state; `operator-nix-activation-cleanup` alone carries T604's all-positive
-  public-switch activation/effect/cleanup result; `system-core-handler-contract` alone
+  untracked state; `operator-nix-activation-cleanup` alone carries T604's positive
+  public-switch activation/effect/cleanup result for Volume, Network, and Device and carries
+  no claim that Guest satisfies Wave 5; `system-core-handler-contract` alone
   carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
   RSS is at or below 24,576 KiB with no baseline subtraction; owner fan-in is singular;
   current removal proofs pass; and checked reference behavior matches emitted CLI and wire
