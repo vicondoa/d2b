@@ -8103,14 +8103,23 @@ corpus separately exercises:
   bytes and each of
   `prepared_cancellation_pre_proof_binding_digest`,
   `sink_non_creatable_fence_proof_digest`, and
-  `sink_absence_or_cancellation_proof_digest`. Every mutation must assert the
-  exact closed mismatch field, exact state-valid mismatch reason, and exact
-  typed refusal, plus byte-for-byte no mutation of controller state, sink
-  state, repair workspace, reservations, eligibility, or capacity.
+  `sink_absence_or_cancellation_proof_digest`.
   The test generator forms a fail-closed cross-product between every mutation
   above and every transition that derives, stores, carries, verifies, or
-  consumes the corresponding digest. The governed transition manifest is
-  versioned, nonempty, and exact. For the pre-proof digest it includes initial
+  consumes the corresponding digest. Each manifest row is closed as
+  `Producer` or `Consumer`; no row may be both or neither. A `Producer` cell
+  mutates the authoritative operands and asserts that the produced digest
+  equals the independent oracle's mutated digest, differs from the baseline
+  when the preimage differs, and uses no caller-supplied expected digest. A
+  planted producer that omits or substitutes the mutated operand fails the
+  oracle assertion; it is not expected to emit a protocol refusal.
+  A `Consumer` cell keeps the authoritative operands fixed and presents or
+  stores the independently mutated digest. It must return the exact closed
+  mismatch field, state-valid mismatch reason, and typed refusal, with
+  byte-for-byte no mutation of controller state, sink state, repair workspace,
+  reservations, eligibility, or capacity.
+  The governed transition manifest is versioned, nonempty, and exact. For the
+  pre-proof digest it includes initial
   derivation, entry to and recovery of `CancellationSinkFencePending`, carry
   through `PreparedAttemptCancellationSinkProofPending`, and derivation of the
   complete activation digest. For the complete activation digest it includes
@@ -8118,8 +8127,8 @@ corpus separately exercises:
   installation, normal
   `OrdinaryActivationPending::AssignmentIssuanceCancellation`, repair
   `ReplacementAcknowledgedActivationPending`, and both final activation
-  commands. Every matrix cell asserts the exact refusal and byte-identical
-  controller, sink, workspace, reservation, eligibility, and capacity state.
+  commands. Every producer and consumer cell applies its role-specific
+  assertion above.
   A transition present in code or generated schemas but absent from the
   manifest, a manifest transition not discovered, an empty discovered set, or
   a mutation tested against only one producer or consumer fails coverage.
