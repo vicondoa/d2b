@@ -92,15 +92,20 @@ use d2b_realm_core::{
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;
 
+mod bazel;
+mod bazel_yanked;
 mod changelog;
 mod delivery;
 mod gen_spec_set;
 mod heavy_gate;
+mod hermeticity;
 mod implementation_graph;
 mod inventory;
+mod package_policy;
 mod process_marker_pin;
 mod provider_crate_policy;
 mod provider_packaging;
+mod schema;
 mod semantic_service_schemas;
 mod test_runtime_ledger;
 mod zone_schema;
@@ -350,7 +355,36 @@ struct RustItem {
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
-        [command] if command == "gen-schemas" => run_task("gen-schemas", gen_schemas),
+        [command, rest @ ..] if command == "gen-schemas" => {
+            run_task("gen-schemas", || schema::gen_schemas_with_args(rest))
+        }
+        [command, rest @ ..] if command == "gen-bazel" => {
+            run_task("gen-bazel", || bazel::gen_bazel(rest))
+        }
+        [command, rest @ ..] if command == "bazel-repin" => {
+            run_task("bazel-repin", || bazel::bazel_repin(rest))
+        }
+        [command] if command == "bazel-module-refresh" => {
+            run_task("bazel-module-refresh", || bazel::bazel_module_refresh(&[]))
+        }
+        [command, rest @ ..] if command == "bazel-module-refresh" => {
+            run_task("bazel-module-refresh", || bazel::bazel_module_refresh(rest))
+        }
+        [command, rest @ ..] if command == "bazel-yanked-refresh" => {
+            run_task("bazel-yanked-refresh", || {
+                bazel_yanked::bazel_yanked_refresh(rest)
+            })
+        }
+        [command, rest @ ..] if command == "bazel-yanked-check" => {
+            run_task("bazel-yanked-check", || {
+                bazel_yanked::bazel_yanked_check(rest)
+            })
+        }
+        [command, rest @ ..] if command == "gen-package-policy-inputs" => {
+            run_task("gen-package-policy-inputs", || {
+                package_policy::gen_package_policy_inputs(rest)
+            })
+        }
         [command] if command == "gen-zone-storage-schema" => {
             run_task("gen-zone-storage-schema", gen_zone_storage_schema)
         }
@@ -414,7 +448,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas [--out-dir <path>]|gen-bazel [--check]|bazel-repin --hub <name>|bazel-module-refresh|bazel-yanked-refresh|bazel-yanked-check|gen-package-policy-inputs [--check]|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-attest|panel-request|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
