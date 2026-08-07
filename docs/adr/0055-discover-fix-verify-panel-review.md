@@ -3,564 +3,1003 @@
 - Status: Proposed
 - Date: 2026-08-06
 - Partially supersedes: [ADR 0053](0053-gascity-contributor-infrastructure.md)
-  D7's open-ended review and fix loop, D8's single blocking treatment of every
-  recommendation in an admitted final set, and the D21 clauses that reject a
-  severity ladder and keep separate per-seat finding state across repeated
-  discovery rounds. D21's
-  controller-owned roster selection, surface classifier, profile binding,
-  reviewer identity, and candidate-bound evidence remain in force.
+  D7's open-ended review and fix loop and own-findings-only dispatch payload;
+  D8's single blocking treatment of every recommendation in an admitted final
+  set; D9's publication refusal while any finding stands; D17's closed
+  `{approve, revise, rescope, abort}` operator-operation surface, only to add
+  the separate protected `AcceptMajorRisk` and `RevokeMajorRiskAcceptance`
+  operations; and D21's per-seat `held` and `prior_resolutions` state,
+  rotation, rejection of a severity ladder, and clean-break refusal to read or
+  admit an earlier delivery schema. D21's controller-owned roster selection,
+  surface classifier, profile binding, reviewer identity, and candidate-bound
+  evidence remain in force. D7's three peer-separated endpoints remain in
+  force; the new risk operations exist only on the operator endpoint.
 - Related: [ADR 0048](0048-copilot-native-agent-surface.md), whose
   Copilot-native surface, independent read-only reviewers, pinned bindings,
   helper-assembled records, and staged evidence remain in force. This record
   does not supersede ADR 0048.
 - Scope: Panel review lifecycle, finding and final-verdict semantics,
-  review evidence, convergence metrics, and migration of panel records.
-- Non-scope: Implementing delivery tooling or rewriting contributor process
+  compatibility migration, review evidence, retention, and convergence
+  metrics.
+- Non-scope: Implementing delivery tooling or changing contributor process
   documentation in this change.
 
 ## Context
 
 The panel currently converges through repeated review, scoped fixes, and
 another review. The first round can find real defects that tests miss, but the
-same open-ended loop also permits each later round to become another discovery
-pass. A candidate can be ready while new MINOR or NIT findings, style
+same open-ended loop permits every later round to become another discovery
+pass. A candidate can be merge-ready while new MINOR or NIT findings, style
 preferences, and optional refactors keep invalidating sign-off.
 
 ADR 0053 D21 improves roster selection and finding continuity. It does not
-change the basic loop: a finding produces another content change, every content
-change invalidates sign-off, and another panel can discover more pre-existing
-findings. Its finding state is also per seat, so duplicate reports are separate
-obligations even when they describe one defect.
+change the basic loop: a finding produces another content change, every
+content change invalidates sign-off, and another panel can discover more
+pre-existing findings. Its finding state is also per seat, so duplicate
+reports are separate obligations even when they describe one defect.
 
-The committed implementation is narrower than ADR 0053 D21. On this date,
-`packages/xtask/src/delivery/panel.rs` still accepts the fixed ten-role roster,
-requires `signoff == recommendations.is_empty()`, and admits only a unanimous
-set with no recommendations. That passing code is the current behavior. This
-record decides the replacement target; it does not describe the target as
-already shipped.
+The committed implementation is narrower than both records. At candidate
+`e4635981`, `packages/xtask/src/delivery/panel.rs` still accepts the fixed
+ten-role roster, requires `signoff == recommendations.is_empty()`, and admits
+only a unanimous set with no recommendations. `PanelRecord.recommendations`
+contains arbitrary strings with no issue id or severity. That passing code is
+the current behavior. This Proposed record decides a replacement target; it
+does not describe the target as shipped.
 
-The supersession boundary is narrow:
+The replacement must not strand a panel already in flight at cutover. An old
+complete round and its fixes are completed work, not debris. Compatibility
+therefore has to be automatic, version-dispatched, and candidate-bound. It
+must preserve exact old bytes without pretending those strings had issue ids
+or severities that did not exist.
 
-- ADR 0053 D7's repeated check, fix, and re-review loop becomes one discovery
-  followed by constrained verification.
-- D8's strict record, binding, provenance, and unanimity rules remain. Its
-  final gate no longer treats every severity as one undifferentiated blocking
-  class and no longer sees only an isolated final record set.
-- D21's roster selection, profiles, controller authority, immutable payload
-  binding, and reviewer identity remain. Its per-seat `held`,
-  `prior_resolutions`, own-findings-only payload, rotation, rejection of a
-  four-level severity contract, and no-cross-version-read clauses are replaced
-  as stated below. Dependent prototype and acceptance items are superseded only
-  where they assert those mechanics.
-- ADR 0048 is not superseded. Its Copilot-native authority, read-only
-  independent seats, pinned observed binding, helper assembly, and staged
-  evidence are unchanged.
-
-The desired process must keep the properties that make the panel trustworthy:
-independent read-only reviewers, controller-owned roster selection, pinned
-binding and observed attestation, immutable candidate evidence, candidate
-digests, reviewer continuity, and the rule that green tests never waive review.
-It must change where discovery ends and verification begins.
+The desired process keeps independent read-only reviewers, controller-owned
+roster selection, pinned binding and observed attestation, immutable candidate
+evidence, exhaustive discovery, reviewer continuity, unanimous final sign-off,
+and the rule that green tests never waive review. It changes where discovery
+ends, how findings are accounted for, and how old work enters that lifecycle.
 
 ## Decision
 
-### 1. One lifecycle has one discovery panel
+### 1. Lifecycle, lineage, scope, and candidate identity are controller-owned
 
-A review lifecycle is identified independently of any one candidate snapshot.
-It begins when a candidate first enters panel review and ends at sign-off,
-abandonment, or supersession by migration. Content changes create new candidate
-snapshots inside that lifecycle; they do not create another discovery phase.
+A panel lifecycle is identified by a controller-issued `ReviewLifecycleId`.
+It belongs to one controller-issued `CandidateLineageId`, one
+`DeclaredScopeDigest`, and a sequence of immutable `CandidateContentId`
+snapshots. None of those values may be asserted by an implementation agent,
+reviewer, integrator, or free-form operator input.
 
-The lifecycle is:
+The declared scope binds the approved deliverable, base and target identities,
+and the bounded change surface. A candidate snapshot binds the exact content
+and evidence under review. Content changes create a new snapshot inside the
+same lifecycle; they do not create a second discovery phase.
+
+A lifecycle ends in exactly one terminal outcome:
+
+- `signed_off`;
+- `abandoned`; or
+- `superseded`.
+
+Terminal state is append-only. Reusing a terminal lifecycle id or attaching a
+new snapshot to it is refused.
+
+For a native current-schema candidate the lifecycle is:
 
 ```
 implementation
 -> implementation self-review
--> discovery panel
--> deduplicated issue ledger
+-> one discovery panel
+-> automatic issue-ledger synthesis
 -> batch implementation
 -> implementation self-verification
--> verification panel
--> batch fix and verification only for blocking failures or regressions
--> sign-off
+-> constrained verification panel
+-> batch fix and verification only for blocking failures
+-> unanimous sign-off
 ```
 
-The discovery panel runs exactly once per lifecycle. A zero-finding discovery
-still proceeds through self-verification and verification; it skips a no-op
-batch implementation.
+The discovery panel runs exactly once. A zero-finding discovery still proceeds
+through self-verification and verification; it skips a no-op batch
+implementation.
 
-### 2. Discovery is comprehensive, parallel, and exhaustive
+### 2. Native discovery is comprehensive, parallel, and exhaustive
 
-The controller selects the discovery roster using ADR 0053 D21. Every selected
-reviewer receives the full candidate, the immutable staged evidence and
-digests, the applicable validation evidence, its controller-bound profile, and
-access to repository context through its read-only tools.
+The controller selects the discovery roster under ADR 0053 D21. Every selected
+reviewer receives the full candidate, immutable staged evidence and digests,
+applicable validation evidence, its controller-bound profile, and read-only
+repository context.
 
-Each discovery prompt MUST say all of the following explicitly:
+Every discovery prompt MUST state all of the following:
 
-- this is the one comprehensive discovery review;
+- this is the lifecycle's one comprehensive discovery review;
 - review the entire candidate, not only the seat's most obvious files;
-- search repository context as needed to test assumptions and local
-  invariants;
-- work exhaustively rather than stopping after the first few findings; and
+- inspect repository context needed to test local invariants;
+- work exhaustively rather than stopping after the first findings; and
 - report every actionable finding the reviewer can reasonably identify.
 
 An actionable finding is grounded in a violated requirement, repository rule,
 correctness property, or concrete maintainability defect. An unsupported style
 preference is not made actionable by labeling it NIT.
 
-There is no lifecycle-wide finding cap. A bounded record format MAY page one
-reviewer's output into multiple digest-bound artifacts, but it MUST NOT
-truncate findings or instruct a reviewer to stop at a count.
+There is no lifecycle-wide finding cap. A bounded record MAY use
+content-addressed pages, but its manifest must prove complete ordered coverage.
+Truncation, sampling, or instructing a reviewer to stop at a count is refused.
 
-### 3. Findings have one four-level severity contract
+### 3. Raw findings and severity are closed, immutable evidence
 
-Every discovery finding has exactly one severity:
+Every native raw finding has exactly one severity:
 
 - `BLOCKER`: merging can cause an unsafe or invalid result, including a
-  security boundary violation, data loss, required-contract failure, or a
-  correctness or reliability failure for which no responsible authority may
-  accept the risk.
+  security-boundary violation, data loss, required-contract failure, or a
+  correctness or reliability failure for which no authority may accept risk.
 - `MAJOR`: a material correctness, security, reliability, product-contract,
-  migration, or test-coverage defect that must be fixed unless the responsible
-  authority explicitly accepts it.
+  migration, or test-coverage defect that must be fixed unless the protected
+  merge authority explicitly accepts it.
 - `MINOR`: a real, bounded defect whose remaining impact does not make the
   candidate unsafe to merge.
 - `NIT`: a concrete, actionable local-quality defect with negligible behavior
   or risk impact. Personal taste and optional redesign are not findings.
 
-Every finding MUST explain its impact and give a concrete recommendation. It
-also carries the reporting seat and enough location or evidence to identify
-the defect. A report missing impact or recommendation is malformed rather than
-silently downgraded.
+A native raw finding carries the reporting seat, impact, concrete
+recommendation, location or evidence, candidate binding, output digest, and
+recommendation ordinal. Missing impact or recommendation is malformed, not a
+reason to downgrade.
 
-### 4. One deduplicated issue ledger is authoritative
+Raw findings are immutable. A correction appends an event and never changes
+the original bytes, severity, seat, or recommendation.
 
-After discovery, all raw findings are merged into one issue ledger. The
-integrator proposes duplicate groups and the controller records them. The
-ledger MUST account for every raw finding exactly once, either as the primary
-report for an item or as a duplicate attribution on that item. A raw finding
-cannot disappear during deduplication.
+The effective severity of an issue is the highest uncorrected severity among
+its sources. It may be lowered only when every seat that supplied a source at
+each higher severity submits a candidate-bound `SeverityCorrection` through
+trusted dispatch and at least one final-roster seat that did not implement the
+candidate submits `severity_correction_verified`. The controller records both
+events and their evidence digests. The integrator, orchestrator, operator, and
+controller cannot originate a correction or lower severity by deduplication.
+A dissenting or missing higher-severity source leaves the higher severity
+effective. Closing a finding as invalid or withdrawn does not rewrite or
+downgrade its historical severity. A content change makes a prior
+severity-correction verification stale; the raw higher severity is effective
+again until the correction is independently verified against the new
+candidate.
 
-Each unique issue receives the next stable lifecycle identifier, `R1`, `R2`,
-and so on. Identifiers are never renumbered, reused, or reassigned. Later
-findings append new identifiers after the highest issued identifier. Duplicate
-reports retain every reviewer attribution and use the highest reported
-severity unless an explicit, audited severity correction records why a lower
-severity is correct.
+### 4. The orchestrator synthesizes one stable issue ledger automatically
 
-Each ledger item contains at least:
+The orchestrating agent, not the operator, automatically assigns the next
+stable identifiers `R1`, `R2`, and so on and synthesizes bounded issue
+descriptions from the raw findings. The operator never copies recommendations,
+chooses ids, or constructs a crosswalk.
 
-- stable issue id and severity;
-- impact and concrete recommendation;
-- location or evidence;
-- all reporting reviewers and all raw-finding references;
+Trusted tooling admits the synthesis only after validating:
+
+- every raw source maps to exactly one effective issue;
+- every issued `R` id is unique, monotonic, never reused, and never
+  renumbered;
+- every issue description is present and bounded;
+- every source recommendation remains reachable from the issue;
+- duplicate attribution is complete;
+- the ledger, source records, scope, lineage, and candidate bindings agree;
+  and
+- the synthesis was produced for the latest admitted source set.
+
+Issue descriptions and recommendation text are protected fields. The ledger
+stores their bounded redacting types and digests; it does not place them in
+public output or generic `Debug` rendering.
+
+The first admitted synthesis fixes the source-to-id mapping. Repeating
+generation over the same input returns the same admitted artifact and digest.
+A retry that proposes different bytes for an already admitted generation is
+`ledger-synthesis-conflict`; it does not silently replace the ledger.
+
+Each issue carries, directly or by digest-bound reference:
+
+- stable issue id and effective severity;
+- protected description, impact, recommendation, and location or evidence;
+- every raw source and reporting reviewer;
 - implementation disposition and justification;
-- verification state and the reviewers that verified it; and
-- any risk-acceptance or deferral reference.
+- all verification judgments and the derived adjudication;
+- validation evidence references;
+- any severity-correction, risk-acceptance, or dedup-correction events; and
+- the ledger version and exact candidate binding.
 
-The ledger and the raw-to-ledger mapping are immutable, append-only evidence.
-Corrections append state transitions; they do not rewrite history.
+#### Deduplication corrections
 
-### 5. Implementation receives the whole ledger once per batch
+Deduplication is a fallible judgment, so its correction is append-only:
+
+- `SplitIssue` leaves the oldest issue id with a declared primary source
+  subset and assigns new, next-monotonic ids to the separated subsets.
+- `MergeIssues` keeps the oldest id as the effective id. Every other id remains
+  a permanent resolvable alias and is never reassigned.
+
+The orchestrator requests either event through the controller's protected
+`ApplyLedgerMappingCorrection` operation. The controller validates exact
+source coverage, candidate binding, monotonic id allocation, and idempotency
+before appending it. Repeating the same correction returns the existing event.
+
+The current effective mapping is derived by replaying mapping events. A source
+maps to exactly one effective issue after every event. A correction invalidates
+all affected implementation dispositions, verification judgments, severity
+correction verifications, and risk acceptances. They must be re-established
+against the corrected mapping and current candidate. Raw findings and their
+historical events remain unchanged.
+
+Terminal metrics count effective issue classes at the terminal ledger version.
+A split can increase and a merge can decrease the unique issue count; aliases
+never count as additional issues. A fixed issue contributes once only if its
+effective terminal issue reaches verified `Fixed` after the last correction.
+Metric records bind the mapping version so a historical count is never
+reinterpreted.
+
+### 5. Implementation dispositions do not adjudicate reviewer truth
 
 The first implementation pass after discovery is one batch over the complete
-ledger, not one fix lane followed by one panel per finding. Parallel fix slices
-remain allowed when their file ownership is disjoint, but they receive the
-same ledger and integrate into one candidate before verification.
+ledger. Parallel fix slices remain allowed when file ownership is disjoint,
+but they receive the same ledger and integrate into one candidate before
+verification.
 
-Before verification, every ledger item MUST have exactly one implementation
+Before verification, every issue has exactly one closed implementation
 disposition:
 
-- `Fixed`, with the implementing delta or commit reference;
-- `Intentionally rejected`, with a concrete explanation of why the finding is
-  incorrect, inapplicable, or not adopted; or
-- `Deferred`, with a concrete explanation and a durable follow-up reference.
+- `Fixed`, with a candidate-bound delta or commit reference;
+- `NoChangeClaimed`, with reason `incorrect` or `inapplicable` and a concrete
+  protected explanation; or
+- `Deferred`, with a protected explanation and durable follow-up reference.
 
-These are implementation responses, not approval states. In particular,
-labeling a BLOCKER `Intentionally rejected` or `Deferred` does not permit
-approval, and a MAJOR in either state still needs explicit risk acceptance.
-No item may be dropped, left blank, or replaced by prose outside the ledger.
+These values state what implementation did. They do not decide whether the
+finding was right, whether a fix works, or whether the candidate may merge.
+In particular, `NoChangeClaimed` is not an invalid-finding adjudication,
+`Deferred` is not risk acceptance, and neither value changes severity.
 
-### 6. Self-verification precedes every verification panel
+Verification judgments are separately closed:
+
+- `resolved`: the defect was applicable and is fixed in the bound candidate;
+- `invalid`: the asserted defect is factually wrong or inapplicable;
+- `withdrawn`: the reporting seat withdraws its own recommendation through
+  trusted dispatch;
+- `unresolved`: the issue remains applicable and unresolved.
+
+Only final-roster panel seats may author those judgments. Implementation
+self-review, the integrator, orchestrator, controller, operator, and merge
+authority are not panel adjudicators.
+
+The controller derives one issue adjudication:
+
+- `verified_resolved`;
+- `verified_invalid`;
+- `verified_withdrawn`; or
+- `open`.
+
+`verified_invalid` requires two agreeing final-roster seats that did not
+implement the candidate. At least one must be a non-reporting seat when one
+exists. If a reporting seat judges it unresolved, the controller issues a
+separate adjudication obligation to two non-dissenting final-roster seats,
+preferring non-reporting seats. A seat that also supplied a duplicate source
+may satisfy that dedicated obligation only when the roster has too few
+non-reporting seats; its new candidate-bound adjudication is recorded
+separately from its raw finding. This fallback keeps an issue reported by the
+whole roster adjudicable without adding an off-roster authority.
+`verified_withdrawn` requires a candidate-bound withdrawal from every
+reporting seat whose source remains on the effective issue and a separately
+recorded independent final-roster verification. `verified_resolved` requires
+the reporting seats and an independent panel verifier to accept the fix; if a
+reporting seat dissents, the same two-seat dedicated adjudication rule may
+independently establish resolution.
+
+All disagreement remains in the ledger. Until one rule above is satisfied the
+adjudication is `open`. Once an invalid or withdrawn adjudication satisfies its
+rule, a historical BLOCKER or MAJOR is clear without severity downgrade or
+risk acceptance. A reviewer may block on evidence that the adjudication rule
+or candidate binding was violated, but not merely by restating the already
+adjudicated raw recommendation.
+
+### 6. Verification coverage is total and independent
 
 Implementation self-verifies the integrated candidate before the first
-verification panel and after every later batch fix. It:
+verification panel and after every later blocking batch fix. It records
+every selected command and result for supported tests, lint, formatting,
+static analysis, and builds, plus every category found inapplicable and the
+concrete reason. It then self-reviews the latest delta and full candidate. It
+cannot mark a required repository gate inapplicable because the gate is
+expensive.
 
-1. selects and runs applicable tests, lint, formatting, static analysis, and
-   build commands from repository-supported entry points;
-2. records every selected command and result;
-3. records each category that was not applicable and why, rather than
-   inventing or requiring a tool the repository does not have;
-4. self-reviews the latest delta and the full candidate against the same
-   rubric the panel receives; and
-5. fixes mistakes introduced by the implementation before dispatching
-   verification.
+Every issue and every implementation disposition receives panel verification:
 
-Applicability is evidence, not an escape hatch. A required repository gate or
-build cannot be marked inapplicable merely because it is expensive. A
-self-review finding discovered after the discovery panel is entered in the
-late-discovery ledger before it is fixed, so discovery quality metrics cannot
-be improved by fixing a miss silently. It is admitted into this lifecycle only
-when it satisfies the same closed late-finding reasons as a reviewer finding;
-otherwise it is filed outside the lifecycle and cannot delay approval.
+1. every original panel reporting seat that remains dispatchable submits a
+   candidate-bound judgment for every issue carrying one of its sources;
+2. at least one final-roster seat that did not implement the candidate
+   verifies the disposition and evidence for every issue;
+3. a finding originating from the reserved
+   `implementation-self-review` source receives at least one final-roster
+   panel judgment, because self-review is not panel review; and
+4. invalid, withdrawn, resolved-with-dissent, severity-correction, and risk
+   acceptance cases satisfy their additional independent coverage rules.
 
-### 7. Verification is resolution and regression review
+An original reporting seat remains accountable even when its source is a
+duplicate. Deduplication never releases its judgment obligation. A retired
+legacy seat follows section 12's explicit accountability-successor rule; its
+source attribution is never relabeled. Missing, duplicate, stale, or
+contradictory coverage blocks approval.
 
-Verification is not a reopened discovery pass. Every verification reviewer
-receives:
+Disposition and adjudication combine as follows:
 
-- the complete prior issue ledger and raw-finding attribution;
-- every implementation disposition and justification;
-- applicable validation and build evidence;
-- the latest fix delta;
-- the full current candidate for context;
-- the late-discovery ledger; and
-- any durable MAJOR risk-acceptance records.
+| Disposition | Adjudication needed to close | Otherwise |
+| --- | --- | --- |
+| `Fixed` | `verified_resolved` | issue stays open |
+| `NoChangeClaimed` | `verified_invalid` or `verified_withdrawn` | issue stays open |
+| `Deferred` | none; panel records `open` and verifies the stated evidence | severity rules decide approval |
 
-This full-ledger payload narrowly supersedes ADR 0053 D21's rule that a seat
-receives only its own open findings. The controller still builds the bounded
-payload and binds its digest into the trusted dispatch record.
+An independently verified unresolved MINOR or NIT has complete verification
+coverage even though it remains open. Verification completeness and issue
+resolution are deliberately different facts.
 
-Reviewers verify ledger resolutions, regressions introduced by fixes,
-`Intentionally rejected` dispositions, `Deferred` dispositions, and MAJOR risk
-acceptances. Every reviewer attributed to an issue MUST record a resolution
-judgment for it. Deduplicated issues reported by several seats therefore retain
-all of their original verification accountability while remaining one ledger
-item.
+### 7. Verification artifacts are generated, complete, and idempotent
 
-Every verification prompt MUST state that it is resolution and
-regression-focused, not another comprehensive discovery review. The prompt
-MUST include the allowed-late-finding rule below verbatim in meaning.
+Trusted tooling automatically generates every per-seat verification artifact.
+No operator, integrator, or orchestrator copies findings into reviewer notes.
+There is no hand-authored reviewer-notes migration surface.
 
-### 8. Late findings are a closed exception
+Every seat dispatched after an admitted discovery or verification round
+automatically receives:
 
-A verification reviewer may add a new finding only when at least one of these
-closed reasons applies:
+- the full prior ledger, or a bounded content-addressed manifest whose chunks
+  are collectively complete;
+- every issue id and protected issue description from the last complete
+  round;
+- prior recommendation sources and reporting seats;
+- implementation dispositions and justifications;
+- verification judgments and current adjudications;
+- applicable validation evidence and its enforcement class;
+- the latest delta and full candidate context; and
+- a seat-specific obligation view naming exactly what that seat must judge.
 
-- `introduced_by_fix`: the implementation or a later fix introduced it;
-- `missed_blocker_or_major`: it was present at discovery and is now assessed
-  as BLOCKER or MAJOR; or
-- `unsafe_to_approve`: correctness, security, data-loss, or reliability risk
-  would make approval unsafe.
+The bounded representation may page or chunk but may not summarize away an
+issue, source, description, disposition, judgment, or evidence reference.
+Manifest coverage, chunk order, and digests are validated before dispatch.
 
-Verification MUST NOT add a pre-existing MINOR or NIT, style preference,
-optional refactor, naming taste, documentation enhancement, theoretical
-out-of-scope edge case, or defect in untouched code. Such an observation may
-be filed outside this lifecycle and cannot delay its approval.
+Artifact identity is a total function of schema version, lifecycle, lineage,
+candidate content, ledger version, verification ordinal, and seat. Retrying
+generation with the same inputs returns byte-identical artifacts. Different
+bytes at the same identity are refused. A retry of one seat neither duplicates
+an admitted judgment nor changes another seat's obligations.
 
-Every admitted late finding receives the next stable `R` identifier and is
-added to both the issue ledger and a late-discovery ledger. The late-discovery
-entry carries issue id, severity, reviewer, verification ordinal, allowed
-reason, and a concrete explanation of why discovery missed it. The reviewer
-field is a panel seat or the reserved `implementation-self-review` value.
-Duplicate late reports merge into the existing item without incrementing the
-unique late-finding metrics, while retaining attribution.
+Reviewers remain read-only and cannot attest their own authored work. Each
+seat's provider, model, effort, prompt digest, and reviewer identity are pinned
+from first dispatch through lifecycle completion. Candidate content, prompts,
+ledger versions, dispositions, validation evidence, risk records, reviewer
+outputs, and the final receipt are digest-bound.
 
-The controller refuses a late finding without one allowed reason. A reviewer
-cannot evade the rule by restating an old MINOR as a new recommendation.
+### 8. Late findings are a closed exception, including unsafe untouched code
 
-### 9. Roster selection and reviewer continuity remain controller-owned
+Verification is resolution and regression review, not reopened discovery. A
+new finding is admitted only under one of these closed reasons:
 
-ADR 0053 D21's pool, mandatory seats, surface classifier, trigger table,
-profile activation, floor, over-selection direction, and no-model-selection
-rules remain binding.
+- `introduced_by_fix`: an implementation or later fix introduced it;
+- `missed_blocker_or_major`: it existed at discovery and is now assessed as
+  BLOCKER or MAJOR; or
+- `unsafe_to_approve`: a correctness, security, data-loss, or reliability risk
+  makes approval unsafe.
 
-The lifecycle roster is monotonic:
+The untouched-code exclusion applies only to an ordinary pre-existing MINOR or
+NIT. `missed_blocker_or_major` and `unsafe_to_approve` override touched status:
+an unsafe finding is admitted even when its code was untouched and outside a
+reviewer's usual seat focus.
 
-```
-lifecycle_roster =
-    discovery_roster
-    union select(each later full candidate)
-    union select(each fix delta)
-```
+A pre-existing MINOR or NIT, style preference, optional refactor, naming
+taste, or merely desirable documentation enhancement is filed outside the
+lifecycle and cannot delay approval. A reviewer cannot evade the closed
+reason by relabeling an old MINOR without evidence for the higher severity.
 
-No discovery reviewer rotates out before sign-off. A specialist newly selected
-because of a fix joins verification under the same restrictions as the other
-reviewers. Each seat's provider, model, effort, prompt digest, and reviewer
-identity are pinned from its first dispatch through lifecycle completion. This
-narrowly replaces D21's release and rotation mechanism; the shared ledger
-replaces per-seat `held` and `prior_resolutions` state.
+Every admitted late source receives the next stable id or maps as a duplicate
+to an existing issue. The late record carries its allowed reason, reviewer or
+reserved `implementation-self-review` source, verification ordinal, and a
+protected explanation of the discovery miss. It then receives the same
+disposition, coverage, correction, and adjudication treatment as every other
+issue.
 
-Reviewers remain read-only and cannot attest their own authored work. Candidate
-content, staged diffs, prompts, ledger versions, implementation responses,
-validation evidence, risk acceptances, reviewer outputs, and final receipt are
-digest-bound. A content change invalidates final verification sign-off, but it
-does not erase the discovery ledger or its stable identifiers.
+### 9. Post-discovery change is ledger-scoped; rescope preserves lineage
 
-### 10. Approval is merge-ready, not perfect
+After discovery, every content change must be mapped to one or more ledger
+issues and may only implement, validate, or correct those issues. A regression
+or self-review defect is entered as an allowed late issue before its fix is
+admitted. An unrelated cleanup, feature, hardening change, or scope expansion
+is refused even if it is useful.
 
-A candidate is approved only when all of these are true:
+A genuine scope change uses the controller's protected `RescopeLifecycle`
+operation. It terminates the source lifecycle as `superseded`, creates one
+successor with a larger or different declared scope, atomically imports all
+raw findings and every unresolved effective issue, and records a stable
+old-id-to-successor-id crosswalk. The successor is a new current-schema
+lifecycle and runs its own one comprehensive discovery panel. Imported
+findings are prior obligations, not a substitute for that discovery.
 
-1. every BLOCKER is `Fixed` and verified resolved;
-2. every MAJOR is either `Fixed` and verified resolved or has a valid explicit
-   risk acceptance;
-3. every ledger item has an implementation disposition and the required
-   verification coverage;
-4. all required applicable validation passes;
-5. the build succeeds where applicable;
-6. verification finds no regression caused by a fix;
-7. the final verification execution introduces no new BLOCKER or MAJOR; and
+`AbandonLifecycle` terminates without deleting findings. A later resume is a
+new successor, never mutation of the abandoned lifecycle. `ResumeLifecycle`
+and repeated `RescopeLifecycle` calls derive successor identity from the
+source lifecycle and protected operation id, so retry returns the same
+successor.
+
+Successor creation, source import, crosswalk publication, and source
+termination are one atomic transition. If complete import cannot commit, no
+successor becomes usable and the source lineage remains terminal or parked.
+There is no state in which a successor exists without all raw findings and
+unresolved items. Abandonment, rescope, retry, or deduplication therefore
+cannot erase an awkward finding.
+
+### 10. MAJOR risk acceptance is a separate protected authority operation
+
+A BLOCKER cannot be risk accepted. A MAJOR may remain open only under a valid
+`MajorRiskAcceptance`.
+
+`AcceptMajorRisk` is a distinct typed protected operation. It is not an
+`approve` decision, cannot close a gate, and cannot be reached from ADR 0053's
+orchestrator or publisher endpoints. It extends only the protected operator
+endpoint. `RevokeMajorRiskAcceptance` is a second distinct operation on that
+same endpoint.
+
+The accepting identity is resolved as current merge authority for the
+protected target from trusted peer evidence and an authoritative
+`MergeAuthorityResolver`. A typed name, uid equality with an agent session,
+environment value, local file, or producer assertion is not authority.
+
+The two admitted evidence forms are:
+
+- `ControllerPeerMergeAuthority`, resolved from the authenticated operator
+  peer by the controller-owned resolver; and
+- `StandaloneProtectedMergeAuthorityReceipt`, an opaque receipt issued by a
+  protected identity separate from the standalone agent or contributor uid
+  and resolved by an authoritative resolver.
+
+There is no same-uid standalone fallback. Without a supported protected
+resolver, standalone work must fix the MAJOR or configure the protected
+authority path before acceptance is available.
+
+Risk-operation recovery is fixed at the contract level:
+
+| Typed refusal | Ordered `RemedyAction` plan |
+| --- | --- |
+| `major-risk-resolver-missing` | `ConfigureProtectedMergeAuthorityResolver`, then `RetryMajorRiskOperation` |
+| `major-risk-peer-unauthorized` | `RequestResolvedMergeAuthority`, then `RetryMajorRiskOperation` |
+| `major-risk-same-uid-standalone` | `ConfigureProtectedMergeAuthorityResolver`, then `RetryMajorRiskOperation` |
+| `major-risk-acceptance-missing` | `RequestNewCandidateBoundRiskAcceptance` |
+| `major-risk-candidate-mismatch` | `RequestNewCandidateBoundRiskAcceptance` |
+| `major-risk-expired` | `RequestNewCandidateBoundRiskAcceptance` |
+| `major-risk-revoked` | `ReturnToScopedBatchFix` |
+| `major-risk-ledger-mapping-stale` | `ReverifyCorrectedIssue`, then `RequestNewCandidateBoundRiskAcceptance` |
+| `blocker-risk-acceptance-forbidden` | `ReturnToScopedBatchFix` |
+| `nonblocking-risk-acceptance-unnecessary` | `ContinueWithDispositionAndVerification` |
+
+The implementation generates producer-specific command text from those
+actions and tests both renderings. It does not substitute a same-uid record,
+severity downgrade, or generic "contact an administrator" message.
+
+An acceptance binds:
+
+- a stable acceptance id and authority alias or digest;
+- lifecycle, lineage, declared scope, target branch, and exact
+  `CandidateContentId`;
+- the effective MAJOR issue ids and ledger mapping version;
+- bounded protected rationale and durable follow-up reference;
+- issue-description, evidence, and validation digests;
+- issuance time and mandatory finite expiry; and
+- the trusted resolver and peer-evidence digests.
+
+Protected identity and rationale mappings stay nonpublic. Public review output
+contains only safe aliases, closed states, expiry class, issue ids, and
+digests.
+
+Revocation is an append-only event. Validity means the acceptance is
+candidate-exact, authority resolution still applies, the mapping version and
+issue set still match, it is unexpired at the checking clock, and no revocation
+event precedes that check. Validity is re-evaluated independently when the
+issue verification receipt is admitted, when the lifecycle approval receipt
+is created, at seal, at publication, and whenever merge eligibility is read.
+An acceptance that expires or is revoked after verification therefore blocks
+the later stage rather than being grandfathered.
+
+Panel reviewers verify the acceptance's binding and current validity. They do
+not accept the risk on the authority's behalf. A valid acceptance leaves the
+issue adjudication `open` and records that this particular candidate may
+proceed despite it; it does not rewrite the finding as resolved.
+
+This section narrowly supersedes ADR 0053 D7 and D17 where their closed
+operator operation set made this separate operation impossible. The
+peer-separated endpoints, controller identity, append-only authority, and
+publication approval remain unchanged.
+
+### 11. Approval is merge-ready, unanimous, and sign-off-only
+
+A candidate is approved only when:
+
+1. every BLOCKER is `verified_resolved`, `verified_invalid`, or
+   `verified_withdrawn`;
+2. every open MAJOR has a currently valid risk acceptance;
+3. every issue has one implementation disposition and complete required panel
+   verification;
+4. all required applicable enforcing validation passes;
+5. applicable builds pass;
+6. no admitted late issue that blocks under these rules remains untreated;
+7. every artifact and acceptance binds the final candidate and current ledger
+   mapping; and
 8. every reviewer on the final lifecycle roster signs off.
 
-Only an unresolved BLOCKER, an unresolved or unaccepted MAJOR, a regression, a
-failed required validation, an applicable build failure, or an incomplete
-ledger obligation causes another batch implementation and verification loop.
-MINOR and NIT items may remain intentionally rejected or deferred when their
-justifications and references satisfy the ledger contract.
+An unresolved or unaccepted BLOCKER or MAJOR, incomplete coverage, failed
+required validation, applicable build failure, stale binding, invalid
+acceptance, or non-unanimity causes another scoped batch fix or refusal.
 
-The responsible authority for accepting a MAJOR is the human who holds merge
-authority for the protected target branch. Reviewers, implementation agents,
-the integrator, and the orchestrator cannot invent or delegate that authority.
-The authority records acceptance through the protected operator decision
-surface: the ADR 0053 controller operator endpoint for a Gas City run, or an
-equivalent operator-owned delivery input for a standalone run.
+MINOR and NIT issues do not create endless verification cycles. Each still
+requires a disposition and independent panel judgment once. They may remain
+open under `Deferred`, or be invalid or withdrawn, without another content
+change or verification execution. A MINOR or NIT introduced by a fix is
+admitted and measured, but its severity does not become blocking merely
+because its origin is a regression.
 
-A MAJOR risk-acceptance record is durable and auditable. It binds the human
-authority identity, timestamp, candidate and lifecycle ids, issue ids, scope,
-rationale, follow-up reference, and an expiry or an explicit statement that no
-expiry applies. It is digested into the final receipt and rendered in the
-trusted review block. Reviewers validate that the record exists, matches the
-issue and candidate, and does not claim broader authority than it carries.
-They do not approve the risk on the authority's behalf.
-
-Approval means the candidate is safe and complete enough to merge under these
-criteria. It does not mean every possible improvement has been made.
-
-### 11. Record-level sign-off stays exact; lifecycle approval gains a receipt
-
-The record invariant is retained with ledger-state filtering:
+The record invariant remains exact:
 
 ```
 PanelRecord.signoff == PanelRecord.recommendations.is_empty()
 ```
 
-Final verification remains unanimous over the selected lifecycle roster. The
-meaning of `recommendations` in a verification record is narrowed to an
-unsatisfied merge-blocking condition under section 10 or a new finding allowed
-by section 8. A resolved item, a validly accepted MAJOR, and a justified
-non-blocking MINOR or NIT stay visible in the ledger and are not copied into
-final blocking recommendations merely to keep them open forever.
+In final verification, `recommendations` contains only an unsatisfied
+merge-blocking condition under this section, an allowed new finding, or a
+contract failure in evidence or adjudication. A resolved issue, a verified
+invalid or withdrawn issue, a validly accepted MAJOR, and a completely judged
+nonblocking MINOR or NIT remain visible in the ledger but are not copied into
+blocking recommendations.
 
-Discovery output is evidence, not approval. A discovery record with no
-findings does not sign off the candidate; its empty finding list only states
-that the reviewer found none during discovery.
+Discovery output is evidence, not approval. Final verification remains
+unanimous over the monotonic lifecycle roster selected under ADR 0053 D21.
+Newly selected specialists join verification; no discovery reviewer rotates
+out.
 
-The final attestable object is a controller-derived panel lifecycle receipt.
-It can exist only after a unanimous final verification and binds:
+The controller mints a `PanelLifecycleApprovalReceipt` only for `signed_off`.
+It binds the final candidate, scope and lineage, every roster and trusted
+dispatch, all source records and ledger events, dispositions, judgments,
+validation evidence, migration origin, risk records, terminal metrics, and
+final per-seat records. Abandonment and supersession mint terminal metric
+records but never an approval receipt. Green tests are evidence in the receipt
+and never substitute for panel approval.
 
-- the final candidate digests and lifecycle id;
-- every roster and trusted dispatch record;
-- discovery and verification prompt and payload digests;
-- raw discovery records and the deduplicated issue ledger;
-- implementation responses and verification judgments;
-- validation and build evidence;
-- late-discovery records and metrics;
-- MAJOR risk-acceptance records; and
-- the final per-seat records.
+The seal, publication gate, and merge-eligibility reader validate the
+lifecycle receipt rather than an isolated final record set. This supersedes
+ADR 0053 D8 and D9 only where they see an isolated final set and refuse
+publication while any finding of any severity exists.
 
-The seal and publication gate validate the receipt, not an isolated final set
-that has lost its discovery history. Green tests remain evidence inside this
-receipt and never substitute for panel approval.
+### 12. Cutover uses an automatic version-dispatched compatibility adapter
 
-This supersedes ADR 0053 D8 only where D8 gives every recommendation in the
-admitted final set one undifferentiated blocking meaning and where the gate
-sees no lifecycle. It preserves strict deserialization, closed enums, distinct
-provenance, candidate binding, observed provider/model/effort checks, no
-producer-asserted authority, and unanimous final sign-off.
+The first implementation bumps the delivery schema and declares a cutover
+revision. A native lifecycle first created at or after cutover uses the current
+schema and exactly one native discovery panel. Compatibility does not add a
+second discovery to a native lifecycle.
 
-### 12. Metrics have fixed counting semantics
+The reader envelope version-dispatches before strict schema parsing:
 
-The lifecycle receipt records:
+- current artifacts use the current strict reader;
+- each supported historical schema uses its own strict historical reader; and
+- unknown versions fail with a typed version error and generated remedy.
 
-- `initial_findings`: count of unique issue-ledger items originating in the
-  discovery panel after deduplication;
-- `late_findings`: count of unique issue-ledger items first entered after
-  discovery, regardless of whether self-review or verification found them;
-- `late_blocker_count`: late findings whose admitted severity is BLOCKER;
-- `late_major_count`: late findings whose admitted severity is MAJOR;
-- `review_iterations`: one for the admitted discovery panel plus one for each
-  admitted verification panel execution, including an execution that blocks
-  and excluding preflight failures or retries needed only to complete one
-  roster's record set;
-- `implementation_iterations`: each post-discovery batch that produces an
-  integrated candidate delta and enters self-verification, excluding the
-  original implementation and excluding a skipped no-op batch for an empty
-  ledger; and
-- `average_issues_fixed_per_implementation_iteration`: the number of unique
-  ledger items that first reach verified `Fixed` state divided by
-  `implementation_iterations`.
+Historical readers preserve and digest exact bytes. Their diagnostics and
+renderers use schema-specific redacting projections, never raw arbitrary
+strings or generic `Debug`.
 
-An issue is counted once in each origin and severity metric even when several
-reviewers report it. If `implementation_iterations` is zero, the average is
-defined as `0.0`; it is never NaN, infinity, null, or omitted. Re-fixing a
-reopened item does not increment the numerator again.
+#### Completed and in-flight legacy rounds
 
-These are process-quality signals, not approval thresholds. In particular, a
-late BLOCKER or MAJOR forces correction and is measured, not suppressed to
-protect the metric.
+A compatibility import uses the latest complete legacy round for the active
+candidate lineage:
 
-### 13. Cutover is clean for authority and compatible for audit
+- If a completed legacy round already exists and fixes are underway, the
+  adapter ingests it immediately. Existing fix content is not discarded. A
+  disposition may cite an already-produced candidate delta when immutable
+  orchestration evidence maps it automatically. Otherwise the code remains
+  intact and the generated ledger is sent through the ordinary implementation
+  disposition step. The operator never supplies the source crosswalk.
+- If a legacy dispatch is already in flight, every seat in that dispatch may
+  finish that one complete round under the old schema. The adapter ingests it
+  only after the whole roster is complete.
+- A partial legacy round is never discovery evidence and never a ledger
+  source. Missing or invalid seats remain retry state for that same pinned old
+  dispatch. No new old-schema round may be started after cutover.
 
-The implementation that first supports this ADR bumps the delivery schema and
-declares a cutover revision. A candidate whose first panel lifecycle request is
-created at or after that revision uses Discover -> Fix -> Verify. No new panel
-request may be created under the old round workflow after cutover.
+Retrying missing seats does not mix schemas inside one round. If the old
+dispatch cannot complete, the lifecycle stays in `legacy-round-retry`; an
+operator is not asked to throw away a completed round or hand-build migration
+state. A protected rescope may create a current-schema successor only through
+section 9's atomic import rules.
 
-An in-flight candidate with old round records does not continue mixing record
-semantics. Its old lifecycle is closed as `legacy-superseded`, its exact bytes
-and digests are retained, and a new lifecycle starts with one discovery panel
-against the latest candidate. Every unresolved legacy recommendation is
-imported as a source into the new deduplication input, with an explicit
-old-id-to-new-`R` crosswalk, so migration cannot erase a finding.
+The imported complete round is the lifecycle's migration discovery input. It
+does not claim to be a native current-schema discovery panel. The terminal
+receipt records `discovery_origin = legacy_imported`; native lifecycles record
+`native`.
 
-Completed historical reviews remain valid evidence for the candidate they
-sealed and are never reopened, renumbered, or rewritten. Current tooling MUST
-provide an audit-only, version-dispatched reader for historical request,
-record, attestation, and round-history artifacts. Legacy artifacts may be
-rendered and digest-checked; they may not satisfy a new-schema lifecycle or
-seal. This audit-only compatibility narrowly supersedes ADR 0053 D21's claim
-that no cross-version record is readable, while preserving its prohibition on
-cross-version admission.
+#### Legacy source identity, ids, descriptions, and severity
 
-No historical record receives invented severities, metrics, ledger ids, or
-acceptance state. Missing fields render as not recorded under that historical
-schema.
+Legacy `PanelRecord.recommendations` are arbitrary strings with no id or
+severity. For each recommendation the adapter creates:
 
-### 14. Implementation obligations and affected surfaces
+```
+LegacySourceId =
+  digest(
+    "d2b:panel:legacy-source:v1",
+    immutable_record_digest,
+    seat,
+    recommendation_ordinal
+  )
+```
+
+The ordinal is its zero-based position in the immutable legacy array. Exact
+record bytes are retained under the retention rules below. Equal strings in
+one or several seats remain distinct raw sources because their record digest,
+seat, or ordinal differs.
+
+The orchestrator automatically groups those sources, assigns new stable `R`
+ids in deterministic group order, and synthesizes issue descriptions. For a
+single-source group the legacy string is copied mechanically into the
+protected source view; for a duplicate group every original string remains
+available beside the synthesized description. No operator transcribes text or
+constructs an old-to-new crosswalk.
+
+Trusted tooling refuses admission until every source maps exactly once, every
+description exists, ids are unique and monotonic, the immutable source digest
+matches, and the legacy candidate and current lineage bindings agree.
+Duplicate recommendations may map to one `R` id but never disappear.
+
+A legacy reporting role remains immutable source attribution. If that role is
+still in the current pool, it retains the normal reporting-seat judgment
+obligation. If D21 retired it, the adapter applies a versioned deterministic
+accountability-successor table without relabeling the source. The initial table
+maps legacy `rust` to current `software` with the Rust profile D21 assigns it.
+The successor submits the reporting obligation and a second non-reporting
+final-roster seat supplies independent coverage. A legacy source cannot be
+withdrawn on behalf of a retired seat; a false source is closed through the
+independent `verified_invalid` rule instead.
+
+No legacy severity is invented. Every imported issue begins
+`severity_origin = migration_untriaged`. Before implementation disposition can
+satisfy approval, trusted dispatch obtains an explicit current-schema
+re-triage and at least one independent final-roster verification of the
+assigned severity. The resulting value is
+`severity_origin = migration_assigned`; it is a current migration judgment,
+not historical fact. Until every imported source participates in a verified
+re-triage, the lifecycle fails closed.
+
+Generation is idempotent. The same complete round, candidate, and accepted
+grouping return the same source ids, `R` ids, descriptions, crosswalk, and
+artifact digests. A changed grouping after admission is a dedup correction,
+not regeneration. Repeated ingestion appends no duplicate sources, judgments,
+metrics, or audit events.
+
+After import, section 7 automatically generates every seat's verification
+artifact with the full imported ledger and seat obligations. Legacy strings
+are never hand-copied into reviewer notes.
+
+### 13. Retention, redaction, audit, and terminal metrics are explicit
+
+Every new artifact is in one ADR 0053 D17 retention class.
+
+| Artifact | D17 class |
+| --- | --- |
+| Exact native and legacy reviewer bytes, prompts, generated per-seat bundles, full protected ledger pages, issue descriptions, source text, validation-output bytes, private acceptance rationale, protected authority mappings, and migration work records | Round input |
+| Source and artifact digests, stable ids, source mapping and crosswalk events, dedup and severity events, closed disposition and judgment projections, roster and dispatch bindings, acceptance and revocation projections, lifecycle receipts, seals, and terminal metric records | Audit floor |
+
+Round inputs retain D17's 30-day or 2-GiB bound after they become eligible.
+Nothing belonging to an active lifecycle, an unresolved lifecycle, a partial
+legacy round, or an unexpired merge-eligible receipt is eligible for eviction.
+If the cap is reached and only protected ineligible records remain, admission
+of new round bytes is refused. The implementation does not evict active state,
+drop descriptions, or degrade to an incomplete reviewer payload.
+
+All new durable and observable surfaces use declared bounded redacting types,
+closed identifiers, closed enums, safe aliases, or digests:
+
+- protected ledger and prompt views may reveal bounded issue text only to the
+  dispatched seat;
+- protected identity and rationale mappings are never public;
+- public review and publication projections contain only safe aliases, issue
+  ids, severities, closed dispositions and outcomes, bounded numerics,
+  timestamps, and digests;
+- logs and errors do not render raw recommendations, rationales, legacy
+  strings, paths, branch names, user identities, run handles, or evidence
+  bytes; and
+- no governed type exposes those values through derived or handwritten
+  `Debug`.
+
+The generic root-owned append sink receives one digest-only typed event for
+each lifecycle transition, ledger correction, severity correction,
+adjudication, risk operation, migration admission, receipt decision, seal,
+publication check, and merge-eligibility check. It retains ADR 0053 D17's
+append-only, write-once, daily-rotated, bounded, synchronously flushed shape.
+The audit event is evidence; protected controller state remains authority.
+
+Every terminal lifecycle writes exactly one typed
+`TerminalLifecycleMetricRecord` with:
+
+- outcome `signed_off`, `abandoned`, or `superseded`;
+- completeness `complete` or `degraded`;
+- discovery origin `native` or `legacy_imported`;
+- final candidate, lineage, scope, ledger, and mapping digests;
+- initial, late, severity, iteration, disposition, and adjudication counts;
+- dedup split, merge, and alias counts;
+- legacy source, imported issue, re-triaged issue, partial-round retry, and
+  migration retry counts; and
+- closed degraded-reason codes when completeness is `degraded`.
+
+`signed_off` requires `complete`. `abandoned` and `superseded` still emit a
+record even when evidence is incomplete; for them `degraded` identifies a
+closed reason such as `partial_legacy_round`, `missing_verification`, or
+`terminal_before_retriage`. Degraded state never satisfies approval.
+
+Metric counting is fixed:
+
+- `initial_findings` is the number of terminal effective issue classes whose
+  earliest source is in the native or imported discovery input;
+- `late_findings` is the number of terminal effective issue classes whose
+  earliest source was admitted after discovery;
+- `late_blocker_count` and `late_major_count` use those late classes and their
+  terminal effective severities;
+- native and migration-assigned severities are counted in separate fields, so
+  no chart implies a legacy string carried historical severity;
+- `review_iterations` counts the one native discovery execution or one
+  imported complete legacy round, plus each admitted verification execution;
+- partial rounds, missing-seat retries, preflight failures, and idempotent
+  regeneration do not increment review iterations;
+- `implementation_iterations` counts each post-discovery batch that produces a
+  candidate delta and enters self-verification;
+- average issues fixed divides effective issues first reaching terminal
+  verified `Fixed` after the latest mapping correction by implementation
+  iterations, and is `0.0` when the denominator is zero; and
+- every unique issue is counted once at the terminal effective mapping,
+  regardless of source count or aliases.
+
+The approval receipt remains sign-off-only. Terminal metric records for
+abandonment and supersession are not approval receipts and cannot be presented
+to seal, publication, or merge eligibility.
+
+### 14. Refusals have typed causes and deterministic recovery
+
+Every refusal introduced by this record is a closed error variant carrying the
+safe causing identifiers: applicable lifecycle, candidate, issue, source,
+seat, acceptance, ledger version, or validation job ids. It never carries the
+protected text those ids address.
+
+Recovery is generated by a total function:
+
+```
+remedies(error, producer_context) -> RemedyPlan
+```
+
+`producer_context` is closed as `GasCity { stage }` or
+`Standalone { operation }`. `RemedyPlan` is an ordered sequence of closed
+`RemedyAction` values. Callers cannot populate free-form advice. Gas City
+actions name the deterministic stage retry or protected controller operation;
+standalone actions name the corresponding standalone operation. Exact CLI
+spelling may remain implementation-defined, but it must be generated from the
+typed action, tested, and actionable.
+
+The refusal catalog and core plans are closed:
+
+| Typed refusal | Causing ids | Ordered core `RemedyAction` plan |
+| --- | --- | --- |
+| `discovery-already-admitted` | lifecycle, discovery receipt | `ReturnToExistingLifecycle` |
+| `terminal-lifecycle-reused` | lifecycle, terminal event | `CreateSuccessorWithAtomicImport` |
+| `candidate-binding-stale` | lifecycle, expected and actual candidate | `RegenerateBoundArtifacts` |
+| `artifact-binding-mismatch` | candidate, artifact | `RegenerateBoundArtifacts` |
+| `raw-source-unmapped` | lifecycle, source ids | `RegenerateAutomaticLedger` |
+| `raw-source-multiply-mapped` | source ids, issue ids | `RequestProtectedLedgerCorrection` |
+| `issue-id-duplicate` | lifecycle, issue ids | `RegenerateAutomaticLedger` |
+| `issue-id-reassigned` | issue id, old and proposed source digests | `RequestProtectedLedgerCorrection` |
+| `ledger-synthesis-conflict` | lifecycle, ledger version, artifact digests | `ReturnToAdmittedLedger` |
+| `ledger-correction-invalid` | correction, source ids, issue ids | `RetryProtectedAtomicLedgerOperation` |
+| `ledger-correction-stale` | correction, expected and actual ledger version | `RegenerateLedgerCorrection`, then `RetryProtectedAtomicLedgerOperation` |
+| `successor-import-incomplete` | source and successor lifecycle, source ids | `RetryProtectedAtomicLineageOperation` |
+| `post-discovery-scope-expansion` | lifecycle, candidate, scope digest | `RequestProtectedRescope` |
+| `issue-disposition-missing` | lifecycle, issue ids | `CompleteIssueDisposition` |
+| `verification-coverage-incomplete` | candidate, issue ids, seat ids | `RedispatchVerificationObligations` |
+| `verification-judgment-conflict` | candidate, issue ids, seat ids | `RedispatchDedicatedAdjudication` |
+| `severity-correction-unauthorized` | candidate, issue ids, reporting seat ids | `RedispatchReportingSeatCorrection` |
+| `severity-correction-unverified` | candidate, issue ids | `RedispatchIndependentVerifier` |
+| `late-finding-ineligible` | candidate, source id, submitted reason | `FileFindingOutsideLifecycle` |
+| `required-validation-missing` | candidate, validation job ids | `RunRequiredEnforcingValidation` |
+| `required-validation-failed` | candidate, validation job ids | `ReturnToScopedBatchFix`, then `RunRequiredEnforcingValidation` |
+| `advisory-validation-used-as-evidence` | candidate, validation job ids | `RunRequiredEnforcingValidation` |
+| `required-validation-marked-inapplicable` | candidate, validation job ids | `RunRequiredEnforcingValidation` |
+| `companion-validation-missing` | candidate, companion ids | `RunExplicitCompanionValidation` |
+| `legacy-round-partial` | dispatch, missing seat ids | `CompletePinnedLegacyRound` |
+| `legacy-source-unmapped` | lifecycle, legacy source ids | `RegenerateAutomaticLedger` |
+| `legacy-retriage-incomplete` | lifecycle, issue ids, seat ids | `RedispatchLegacyRetriage` |
+| `legacy-schema-version-unsupported` | artifact digest, found and supported versions | `InstallSupportedVersionDispatcher`, then `RetryLegacyImport` |
+| `legacy-regeneration-conflict` | lifecycle, import and artifact digests | `ReturnToAdmittedLegacyImport` |
+| `blocker-open` | candidate, issue ids | `ReturnToScopedBatchFix` |
+| `round-input-store-full` | active lifecycle ids, configured bound | `ResolveRetentionCapacity` |
+| `redaction-contract-violation` | artifact id, field code | `RegenerateBoundedRedactedArtifact` |
+| `final-verification-nonunanimous` | candidate, seat ids | `RedispatchFinalVerification` |
+| `lifecycle-receipt-invalid` | candidate, receipt id, failed invariant ids | `SatisfyReceiptPrerequisites`, then `RegenerateLifecycleReceipt` |
+
+The risk-operation variants use section 10's more specific table and are part
+of this same closed catalog. `ResolveRetentionCapacity` is itself a closed
+choice over `CloseOrAbandonNamedLifecycles` and
+`RaiseReviewedRetentionBound`; it never deletes ineligible records.
+
+After the core plan, a Gas City renderer appends
+`RetryGasCityStage { stage }` only when the core action makes retry safe. A
+standalone renderer analogously appends
+`RerunStandaloneOperation { operation }`. A protected action remains first in
+both contexts and cannot be replaced by a local edit. No remedy suggests
+editing generated reviewer artifacts, hand-writing a migration crosswalk,
+lowering severity, accepting BLOCKER risk, deleting protected records, or
+bypassing a gate.
+
+### 15. Validation and implementation obligations are mechanically covered
 
 This ADR does not implement the process. The implementation must update, at
 minimum:
 
-- `packages/xtask/src/delivery/` for lifecycle identity, severity and ledger
-  types, raw-finding coverage, deduplication evidence, roster continuity,
-  late-finding admission, metrics, final receipt, historical audit reading,
-  seal validation, and typed actionable errors;
-- `.github/skills/d2b-panel-round/` for distinct discovery and verification
-  staging, generated prompts, observed records, and no-truncation handling;
-- `.github/agents/panel-*.agent.md` and
-  `scripts/copilot/check-bindings.mjs` for the shared comprehensive-discovery
-  and resolution-focused-verification prompt contracts without weakening
+- `packages/xtask/src/delivery/` for lifecycle, lineage, scope, severity,
+  source, ledger, correction, disposition, judgment, acceptance, migration,
+  retention, terminal metric, receipt, seal, and typed remedy contracts;
+- `.github/skills/d2b-panel-round/` for automatic discovery, compatibility,
+  verification, and artifact generation;
+- panel and integrator agents plus `scripts/copilot/check-bindings.mjs` for
+  exhaustive discovery and constrained verification without weakening
   read-only bindings;
-- `.github/agents/d2b-integrator.agent.md` and delivery/autopilot skills for
-  batch implementation, applicability-driven self-verification, ledger
-  dispositions, and the restricted re-verification loop;
-- the ADR 0053 controller and Gas City formulas for trusted lifecycle,
-  payload, risk-acceptance, and receipt ownership; and
-- `AGENTS.md`, `docs/contributing/panel-review.md`,
-  `docs/contributing/copilot-agents.md`, ADR 0046 delivery specifications, and
-  generated schemas or fixtures that describe the implemented contract.
+- Gas City formulas and ADR 0053's controller for protected operations,
+  authority resolution, automatic import, retention, and audit;
+- generated schemas and fixtures for every new closed type; and
+- contributor and delivery documentation only when implementation lands, so
+  current docs continue to describe current behavior until then.
 
-Tooling MUST mechanically refuse:
+The implementation maintains a machine-readable catalog of every invariant
+and refusal in this record. Each catalog row names:
 
-- a second discovery panel for one lifecycle;
-- a raw finding absent from the ledger mapping;
-- a duplicate or renumbered `R` identifier;
-- a ledger item without one implementation disposition;
-- verification without recorded applicability decisions and required passing
-  evidence;
-- an ineligible late finding;
-- a final receipt with unresolved approval criteria, missing verification
-  coverage, non-unanimous final records, or stale digests; and
-- a legacy artifact presented as current authority.
+- the enforcing code path;
+- at least one positive test;
+- at least one planted negative that reaches the intended typed refusal rather
+  than failing parse first;
+- the validation job that executes those tests; and
+- any explicit companion command required outside the normal harness.
 
-Contributor documentation must continue to describe current implemented
-behavior until the tooling lands. The ADR may carry these future process
-markers; shipped docs must not claim the process exists early.
+Coverage fails when a catalog row, positive, or planted negative is missing,
+when the corpus is empty, or when a planted negative is accepted. At minimum,
+the corpus separately exercises:
+
+- one native discovery and refusal of a second;
+- automatic complete ledger generation, duplicate grouping, split, merge, and
+  idempotent retry;
+- false BLOCKER and MAJOR invalidation, withdrawal, severity correction,
+  reporting-seat dissent, and missing independent coverage;
+- every disposition and judgment combination, including
+  `implementation-self-review`;
+- automatic full-ledger per-seat artifacts, missing chunk, stale chunk,
+  duplicate chunk, conflicting regeneration, and no hand-authored substitute;
+- touched and untouched late findings for every allowed reason, plus refused
+  pre-existing MINOR and NIT controls;
+- ledger-scoped fixes, unrelated scope expansion, atomic rescope, crash and
+  retry, abandonment, and successor import;
+- every merge-authority evidence form, same-uid standalone refusal, acceptance
+  issue and revocation, expiry at each of verification receipt, lifecycle
+  receipt, seal, publication, and merge eligibility, and candidate or mapping
+  mismatch;
+- completed, in-flight, partial, retried, duplicate, malformed, and
+  already-ingested legacy rounds with arbitrary recommendation strings;
+- exact legacy-byte preservation, deterministic source ids, complete automatic
+  crosswalk, migration re-triage, and no invented historical severity;
+- active-retention refusal, both D17 bounds, digest-only synchronous audit,
+  redaction and `Debug` controls, and all three terminal outcomes in complete
+  and permitted degraded shapes;
+- merge-ready MINOR and NIT treatment, unresolved blocking states, final
+  unanimity, and green validation without panel approval; and
+- every typed error and both producer-context remedy renderings.
+
+Validation selection is derived at implementation time from
+`tests/layer1-jobs.json`; this ADR does not freeze today's job list. A result
+whose manifest entry is advisory cannot be cited as evidence.
+Fixture-contract coverage is cited from the separate enforcing
+`test-fixture-contracts` job rather than a Rust shard. Affected doctests and
+`harness = false` companions run explicitly because they are not nextest
+surfaces. An applicability record that omits one of those affected companions
+is incomplete and blocks the receipt.
+
+The ADR index coverage gate remains required. Evidence supplied for this
+revision is:
+
+```
+make test-adr-index-coverage
+PASS: 53 ADR files indexed in README.md
+```
+
+That authoring evidence does not satisfy any future implementation obligation.
 
 ## Consequences
 
-The expected gain is fewer panel executions: discovery happens once, fixes are
-batched, implementation catches its own mistakes before reviewers return, and
-verification cannot reopen the candidate for ordinary pre-existing MINOR and
-NIT findings.
+The expected gain is fewer panel executions: native discovery happens once,
+legacy work is imported instead of discarded, fixes are batched,
+implementation catches mistakes before reviewers return, and ordinary
+pre-existing MINOR and NIT findings cannot reopen discovery.
 
-The initial panel becomes more demanding. Reviewers must inspect the whole
-candidate and repository context in one pass, which increases prompt size and
-cognitive load. Exhaustiveness cannot be proven mechanically. The controls are
-an explicit prompt, no truncation, complete raw-output retention, late-finding
-metrics, and a late ledger that makes misses visible rather than hiding them.
+The initial panel becomes more demanding. Exhaustiveness cannot be proven.
+Explicit prompts, complete raw-output retention, no truncation, late-finding
+metrics, and the late ledger make misses visible rather than pretending they
+cannot happen.
 
-Batching findings can create interacting fixes and a larger fix delta. The
-applicability-driven self-verification and regression-focused verification
-exist for that concrete failure. They do not make a large batch safe by
-assertion.
+The shared ledger and dedup corrections add controller state. Two defects can
+be merged incorrectly or one defect split twice. Immutable sources,
+append-only correction events, stable aliases, invalidation of dependent
+judgments, and complete source mapping catch that failure without rewriting
+history.
 
-The shared ledger adds controller state and a human deduplication judgment.
-Two genuinely different defects could be merged incorrectly. The guard is the
-raw-to-ledger mapping, retained reviewer attribution, highest-severity default,
-and verification by every attributed reviewer.
+Independent invalid adjudication can overrule a reporting reviewer. That is
+intentional: otherwise a factually wrong BLOCKER becomes permanent unless the
+reporter saves face. Two independent panel judgments, a non-reporting-seat
+requirement, retained dissent, and unanimous review of the adjudication
+provide the guard. The integrator and operator never adjudicate the technical
+truth.
 
-The late-finding restriction deliberately leaves some real MINOR and NIT
-defects for later work. That is the cost of defining merge-ready rather than
-perfect. The unsafe-to-approve exception prevents convergence policy from
-silencing a correctness, security, data-loss, or reliability risk.
+Automatic compatibility is more machinery than a clean break. The concrete
+failure it prevents is an active operator having to discard completed review
+and fix progress. Exact old bytes, deterministic source identities, verified
+re-triage, complete automatic crosswalks, and idempotent generation bound that
+machinery.
 
-Human MAJOR acceptance is powerful and can normalize debt if used casually.
-Binding it to the protected-branch merge authority, the exact candidate and
-issue ids, a durable rationale and follow-up, and the trusted publication block
-makes the decision visible and attributable. It does not make the accepted risk
-smaller.
+Human MAJOR acceptance remains powerful. A protected authority resolver,
+separate typed operation, exact candidate binding, mandatory expiry,
+revocation, and repeated validity checks make it attributable and
+non-transferable. They do not make the accepted risk smaller.
 
-Keeping the lifecycle roster monotonic costs reviewer sessions after an
-irrelevant seat could previously rotate out. It prevents the cheaper and more
-dangerous outcome: changing the surface or deduplicating a finding until the
-reviewer who raised it disappears.
+The retention exception for active and unresolved work can fill the store.
+The deliberate result is denial of new admission, not eviction of the only
+evidence capable of closing existing work.
 
-Historical audit support adds a read-only compatibility surface. It is
-deliberately separate from admission so old records remain understandable
-without becoming an authority over the new gate.
-
-The concrete failure this design makes possible is an integrator silently
-omitting an awkward finding while constructing the shared ledger. The
-raw-finding coverage check catches it before implementation begins. The
-concrete convergence failure it prevents is a verification reviewer adding a
-pre-existing MINOR or NIT and forcing another full batch; the closed late-reason
-enum and controller admission reject that finding from the lifecycle.
+The late-finding restriction leaves some real MINOR and NIT defects for later
+work. That is the cost of merge-ready rather than perfect. Unsafe findings
+remain admissible regardless of touched status, so convergence policy cannot
+silence a release-blocking risk.
 
 ## Alternatives considered
 
 ### Keep repeated open-ended discovery rounds
 
-Rejected. It preserves the simplest record model, but every fix reopens the
-entire discovery surface. Peripheral findings can indefinitely move the gate
-after the requested candidate is merge-ready.
+Rejected. Every fix reopens the entire discovery surface, so peripheral
+findings can indefinitely move the gate after the candidate is merge-ready.
 
-### Run only one panel and merge after its fixes
+### Cut over by discarding every in-flight old round
 
-Rejected. A fix can be incomplete or introduce a regression. Self-review is
-not independent evidence, so one verification panel is the minimum safe close
-of a batched implementation.
+Rejected. It is operationally avoidable data loss. A complete old round can be
+identified, preserved, re-triaged, and imported without pretending it already
+had the new schema.
+
+### Ask the operator to assign ids or copy reviewer notes
+
+Rejected. Manual copying is incomplete, non-idempotent, and makes the operator
+the accidental author of reviewer evidence. The orchestrator synthesizes and
+trusted tooling validates.
+
+### Let the integrator adjudicate a false finding or lower its severity
+
+Rejected. The party implementing the fix cannot be the independent authority
+that declares the finding false. Final-roster judgments clear false findings;
+reporting seats alone authorize severity correction.
 
 ### Keep per-seat independent ledgers
 
-Rejected. Duplicate reports become duplicate obligations with different ids
-and can receive contradictory dispositions. One deduplicated ledger retains
-all attribution while giving implementation and the final gate one state to
-account for.
+Rejected. Duplicate reports become duplicate obligations with contradictory
+state. One ledger retains every source and reporting-seat obligation.
 
 ### Permit every late finding indefinitely
 
-Rejected. That is the current open-ended model under a different name. The
-closed exception admits fix regressions, missed BLOCKER and MAJOR findings, and
-unsafe risks while refusing the classes that do not justify delaying approval.
+Rejected. That recreates open-ended discovery. The closed reasons admit fix
+regressions, missed BLOCKER and MAJOR findings, and unsafe risks, including in
+untouched code.
 
 ### Let MINOR and NIT findings block until fixed
 
-Rejected. It would make "merge-ready, not perfect" false and preserve the
-iteration problem. They remain durable ledger items and require an explicit
-disposition; they do not vanish merely because they do not block.
+Rejected. It makes merge-ready false and preserves the convergence failure.
+They remain durable, disposed, and independently judged without forcing a
+content loop.
 
-### Let reviewers accept MAJOR risk
+### Accept MAJOR risk from a same-uid standalone session
 
-Rejected. Reviewers identify and validate risk; they do not own the protected
-branch decision. Giving any reviewer unilateral acceptance authority would
-make roster composition an accidental authorization policy and would leave no
-durable human accountability.
+Rejected. A session that can author the candidate cannot authenticate itself
+as independent merge authority by writing another local record. Without a
+protected resolver the MAJOR is fixed, not accepted.
 
 ### Replace unanimous sign-off with a majority vote
 
-Rejected. The process change narrows what verification may block; it does not
-weaken the final panel. Every selected reviewer must still report no
-merge-blocking recommendation, and the controller independently checks the
-ledger and validation criteria.
+Rejected. This decision narrows what verification may block; it does not
+weaken the final panel. Every selected reviewer still signs off, and the
+controller independently checks ledger, validation, acceptance, and lineage
+criteria.
