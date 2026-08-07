@@ -5,6 +5,7 @@
     "x86_64-linux",
     "aarch64-linux"
   ],
+  "derivationSha256Method": "raw-drv-file-sha256",
   "source": {
     "path": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
     "sha256": "d58d1b00ae2f8564cd7fa63d30328a6099b4a1f9769aef720ea6d9f7f9553f0e",

@@ -48,6 +48,7 @@ staticPkgs.stdenv.mkDerivation {
     runHook postInstall
   '';
   passthru = {
+    derivationSha256Method = "raw-drv-file-sha256";
     protocolVersion = 1;
     protocol = {
       privateExecutableFd = 9;

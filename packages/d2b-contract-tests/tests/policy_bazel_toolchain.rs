@@ -17,6 +17,7 @@ const PLANT: &str = "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c
 const TOOLCHAIN_GOLDEN: &str = "tests/golden/bazel-toolchain.json";
 const SUPERVISOR_GOLDEN: &str = "tests/golden/bazel-exec-supervisor.json";
 const RUNBOOK: &str = "docs/contributing/critical-subsystems.md";
+const DERIVATION_SHA256_METHOD: &str = "raw-drv-file-sha256";
 
 fn json(path: &str) -> Value {
     serde_json::from_str(&read_repo_file(path))
@@ -50,6 +51,14 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
+fn assert_no_zero_sha256_placeholder(value: &Value, label: &str) {
+    let zero_sha256 = "0".repeat(64);
+    assert!(
+        !value.to_string().contains(&zero_sha256),
+        "{label} contains a zero SHA-256 placeholder"
+    );
+}
+
 #[test]
 fn every_toolchain_input_is_present_and_anchored() {
     for path in [
@@ -64,7 +73,10 @@ fn every_toolchain_input_is_present_and_anchored() {
         "flake.nix",
         RUNBOOK,
     ] {
-        assert!(repo_path_exists(path), "missing governed toolchain input {path}");
+        assert!(
+            repo_path_exists(path),
+            "missing governed toolchain input {path}"
+        );
     }
 }
 
@@ -164,9 +176,11 @@ fn policy_is_closed_no_network_and_constant_ptrace() {
             "PTRACE_EVENT_EXEC"
         ])
     );
-    assert!(array_strings(&policy, "/ptrace/forbiddenRequests")
-        .iter()
-        .any(|entry| entry == "PTRACE_ATTACH"));
+    assert!(
+        array_strings(&policy, "/ptrace/forbiddenRequests")
+            .iter()
+            .any(|entry| entry == "PTRACE_ATTACH")
+    );
 }
 
 #[test]
@@ -334,7 +348,10 @@ fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
         "manual-release",
         "prohibited=reboot",
     ] {
-        assert!(patch.contains(forbidden), "missing quarantine prohibition {forbidden}");
+        assert!(
+            patch.contains(forbidden),
+            "missing quarantine prohibition {forbidden}"
+        );
     }
 }
 
@@ -403,6 +420,8 @@ fn runbook_has_ordered_live_monitor_quarantine_steps() {
 fn golden_identity_records_are_redacted_and_native_scoped() {
     let toolchain = json(TOOLCHAIN_GOLDEN);
     let supervisor = json(SUPERVISOR_GOLDEN);
+    assert_no_zero_sha256_placeholder(&toolchain, TOOLCHAIN_GOLDEN);
+    assert_no_zero_sha256_placeholder(&supervisor, SUPERVISOR_GOLDEN);
     for value in [&toolchain, &supervisor] {
         assert_eq!(value["schemaVersion"], 1);
         assert_eq!(
@@ -415,6 +434,14 @@ fn golden_identity_records_are_redacted_and_native_scoped() {
         assert!(!text.contains("pid="));
         assert!(!text.contains("run_id"));
     }
+    assert_eq!(
+        string(&toolchain, "/derivationSha256Method"),
+        DERIVATION_SHA256_METHOD
+    );
+    assert_eq!(
+        string(&supervisor, "/derivationSha256Method"),
+        DERIVATION_SHA256_METHOD
+    );
     for path in [
         "/source/sha256",
         "/patch/sha256",
@@ -423,18 +450,50 @@ fn golden_identity_records_are_redacted_and_native_scoped() {
         "/output/executableSha256",
         "/capabilityAbi/sha256",
     ] {
-        assert_eq!(string(&toolchain, path).len(), 64, "{path} must be hex digest");
+        assert_eq!(
+            string(&toolchain, path).len(),
+            64,
+            "{path} must be hex digest"
+        );
     }
     for system in ["x86_64-linux", "aarch64-linux"] {
         let row = &toolchain["nativeOutputs"][system];
         for path in ["/derivationSha256", "/narSha256", "/executableSha256"] {
-            assert_eq!(
-                row.pointer(path).and_then(Value::as_str).unwrap().len(),
-                64,
-                "{system}{path} must be hex digest"
+            let digest = row
+                .pointer(path)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{system}{path} must be a string"));
+            assert_eq!(digest.len(), 64, "{system}{path} must be hex digest");
+            assert_ne!(
+                digest,
+                "0".repeat(64),
+                "{system}{path} must not be a zero placeholder"
             );
         }
     }
+    assert_eq!(
+        string(&toolchain, "/nativeOutputs/x86_64-linux/derivationSha256"),
+        "5c00bb451a0851f096f4a396bc4efd0bed2deedaf1c37ac649ee3a988c03116d"
+    );
+    assert_eq!(
+        string(&toolchain, "/nativeOutputs/aarch64-linux/derivationSha256"),
+        "84a3d3df481794798afbdd9459073cb6e8c2ff845b028066bceb01687574b9e5"
+    );
+    assert_eq!(
+        string(&toolchain, "/nativeOutputs/aarch64-linux/narSha256"),
+        "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91"
+    );
+    assert_eq!(
+        string(&toolchain, "/nativeOutputs/aarch64-linux/executableSha256"),
+        "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb"
+    );
+    assert_eq!(
+        string(
+            &toolchain,
+            "/nativeOutputs/aarch64-linux/startupProbe/filterLoad"
+        ),
+        "observed"
+    );
     for path in [
         "/source/sha256",
         "/expression/sha256",
@@ -443,13 +502,35 @@ fn golden_identity_records_are_redacted_and_native_scoped() {
         "/output/executableSha256",
         "/output/staticElfSha256",
     ] {
-        assert_eq!(string(&supervisor, path).len(), 64, "{path} must be hex digest");
+        assert_eq!(
+            string(&supervisor, path).len(),
+            64,
+            "{path} must be hex digest"
+        );
+    }
+    for system in ["x86_64-linux", "aarch64-linux"] {
+        let row = &supervisor["nativeOutputs"][system];
+        for path in ["/derivationSha256", "/narSha256", "/executableSha256"] {
+            let digest = row
+                .pointer(path)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{system}{path} must be a string"));
+            assert_eq!(digest.len(), 64, "{system}{path} must be hex digest");
+            assert_ne!(
+                digest,
+                "0".repeat(64),
+                "{system}{path} must not be a zero placeholder"
+            );
+        }
     }
     assert_eq!(supervisor["protocol"]["version"], 1);
     assert_eq!(supervisor["protocol"]["privateExecutableFd"], 9);
     assert_eq!(supervisor["protocol"]["statusFd"], 8);
     assert_eq!(supervisor["protocol"]["status"]["retainedBufferBytes"], 27);
-    assert_eq!(supervisor["protocol"]["status"]["noStatusOverlongProbe"], true);
+    assert_eq!(
+        supervisor["protocol"]["status"]["noStatusOverlongProbe"],
+        true
+    );
     assert_eq!(supervisor["linuxMinimum"], "3.19");
     assert_eq!(supervisor["yama"]["capSysPtrace"], false);
     assert_eq!(

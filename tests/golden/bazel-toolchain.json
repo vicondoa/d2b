@@ -6,6 +6,7 @@
     "x86_64-linux",
     "aarch64-linux"
   ],
+  "derivationSha256Method": "raw-drv-file-sha256",
   "source": {
     "url": "https://github.com/bazelbuild/bazel/releases/download/8.6.0/bazel-8.6.0-dist.zip",
     "sha256": "5b6d9e0742331cd65edf1685f0064e9144c30a2737357932a5da920d8eb54aed",
@@ -36,7 +37,7 @@
   },
   "nativeOutputs": {
     "x86_64-linux": {
-      "derivationSha256": "e2cb0fd6fe98ccbe4f2c6f24947854bbf4372bb2a0496a7ce686819af396c08d",
+      "derivationSha256": "5c00bb451a0851f096f4a396bc4efd0bed2deedaf1c37ac649ee3a988c03116d",
       "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
       "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a",
       "nativeExecutable": "bazel-8.6.0-linux-x86_64",
@@ -47,13 +48,13 @@
       }
     },
     "aarch64-linux": {
-      "derivationSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "narSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "executableSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "derivationSha256": "84a3d3df481794798afbdd9459073cb6e8c2ff845b028066bceb01687574b9e5",
+      "narSha256": "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91",
+      "executableSha256": "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb",
       "nativeExecutable": "bazel-8.6.0-linux-aarch64",
       "startupProbe": {
         "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
-        "filterLoad": "native-required",
+        "filterLoad": "observed",
         "fixedDenial": "EACCES"
       }
     }

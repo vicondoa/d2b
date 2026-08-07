@@ -13,6 +13,20 @@ let
     (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch");
   supervisorText = builtins.readFile
     (flakeRoot + "/tests/tools/d2b-bazel-exec-supervisor/supervisor.c");
+  golden = builtins.fromJSON (builtins.readFile
+    (flakeRoot + "/tests/golden/bazel-toolchain.json"));
+  supervisorGolden = builtins.fromJSON (builtins.readFile
+    (flakeRoot + "/tests/golden/bazel-exec-supervisor.json"));
+  zeroSha256 = builtins.concatStringsSep "" (builtins.genList (_: "0") 64);
+  supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+  nativeDigestsAreNonzero = record:
+    builtins.all (nativeSystem:
+      let output = record.nativeOutputs.${nativeSystem};
+      in builtins.all (digest: digest != zeroSha256) [
+        output.derivationSha256
+        output.narSha256
+        output.executableSha256
+      ]) supportedSystems;
   toolchain = bazel.passthru.d2bSeccomp;
 in
 {
@@ -48,7 +62,7 @@ in
 
   "bazel-toolchain-policy-load-boundary" = {
     expr = {
-      inherit (toolchain) loadPoint noNetwork noFallback;
+      inherit (toolchain) loadPoint noNetwork noFallback derivationSha256Method;
       policyName = toolchain.policyName;
       policyFile = builtins.match ".*seccomp-policy\\.json.*" bazelText != null;
       patchFile =
@@ -57,6 +71,18 @@ in
         builtins.match ".*D2B_BAZEL_SECCOMP_POLICY.*" bazelText != null;
       sourcePatchLoad =
         builtins.match ".*D2BPrepareActionPolicy\\(\\).*" patchText != null;
+      goldenDerivationSha256Method = golden.derivationSha256Method;
+      goldenNativeDigestsAreNonzero = nativeDigestsAreNonzero golden;
+      supervisorNativeDigestsAreNonzero =
+        nativeDigestsAreNonzero supervisorGolden;
+      nativeOutputs = map (nativeSystem:
+        let output = golden.nativeOutputs.${nativeSystem};
+        in {
+          derivationSha256 = output.derivationSha256;
+          narSha256 = output.narSha256;
+          executableSha256 = output.executableSha256;
+          filterLoad = output.startupProbe.filterLoad;
+        }) supportedSystems;
       sandboxDiagnosticCodes = map (diagnostic: diagnostic.code)
         toolchain.diagnostics;
     };
@@ -64,11 +90,35 @@ in
       loadPoint = "after-sandbox-construction-before-action-command-exec";
       noNetwork = true;
       noFallback = true;
+      derivationSha256Method = "raw-drv-file-sha256";
       policyName = "d2b-bazel-action-seccomp-v1";
       policyFile = true;
       patchFile = true;
       policyEnv = true;
       sourcePatchLoad = true;
+      goldenDerivationSha256Method = "raw-drv-file-sha256";
+      goldenNativeDigestsAreNonzero = true;
+      supervisorNativeDigestsAreNonzero = true;
+      nativeOutputs = [
+        {
+          derivationSha256 =
+            "5c00bb451a0851f096f4a396bc4efd0bed2deedaf1c37ac649ee3a988c03116d";
+          narSha256 =
+            "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba";
+          executableSha256 =
+            "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a";
+          filterLoad = "observed";
+        }
+        {
+          derivationSha256 =
+            "84a3d3df481794798afbdd9459073cb6e8c2ff845b028066bceb01687574b9e5";
+          narSha256 =
+            "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91";
+          executableSha256 =
+            "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb";
+          filterLoad = "observed";
+        }
+      ];
       sandboxDiagnosticCodes = [
         "D2B-BZLEXEC-SANDBOX-NAMESPACE"
         "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY"
@@ -118,6 +168,8 @@ in
 
   "bazel-toolchain-supervisor-contract" = {
     expr = {
+      derivationSha256Method =
+        supervisor.passthru.derivationSha256Method;
       protocolVersion = supervisor.passthru.protocolVersion;
       privateExecutableFd =
         supervisor.passthru.protocol.privateExecutableFd;
@@ -134,6 +186,7 @@ in
         builtins.match ".*PTRACE_DETACH.*" supervisorText != null;
     };
     expected = {
+      derivationSha256Method = "raw-drv-file-sha256";
       protocolVersion = 1;
       privateExecutableFd = 9;
       statusFd = 8;

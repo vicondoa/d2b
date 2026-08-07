@@ -29,6 +29,7 @@ pkgs.bazel_8.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
     d2bSeccomp = {
       inherit policy sandboxPatch;
+      derivationSha256Method = "raw-drv-file-sha256";
       policyName = "d2b-bazel-action-seccomp-v1";
       capabilityAbi = "d2b-bazel-seccomp-abi-v1";
       sourceUrl = "https://github.com/bazelbuild/bazel/releases/download/8.6.0/bazel-8.6.0-dist.zip";
