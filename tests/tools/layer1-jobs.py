@@ -789,7 +789,7 @@ def flake_aarch64_native_job(job: dict[str, Any]) -> str:
           EXPECTED_HEAD: ${{{{ github.event.pull_request.head.sha || github.sha }}}}
         run: |
           set -euo pipefail
-          actual=$(git rev-parse --verify HEAD)
+          actual=$(git rev-parse HEAD)
           test "$actual" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
           printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"
@@ -798,7 +798,7 @@ def flake_aarch64_native_job(job: dict[str, Any]) -> str:
           D2B_STABLE_HEAD: ${{{{ steps.stable-head.outputs.commit }}}}
         run: |
           set -euo pipefail
-          test "$(git rev-parse --verify HEAD)" = "$D2B_STABLE_HEAD"
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
           nix build --no-link \\
 {checks}
       - name: Run native aarch64 supply-chain gate
@@ -806,7 +806,7 @@ def flake_aarch64_native_job(job: dict[str, Any]) -> str:
           D2B_STABLE_HEAD: ${{{{ steps.stable-head.outputs.commit }}}}
         run: |
           set -euo pipefail
-          test "$(git rev-parse --verify HEAD)" = "$D2B_STABLE_HEAD"
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
           make test-rust-supply-chain"""
 
 
