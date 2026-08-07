@@ -1128,12 +1128,126 @@ fn bazel_prep_crates_are_registered_with_dependency_leaf_ownership() {
 }
 
 #[test]
-fn xtask_does_not_route_to_absent_generator_modules() {
+fn xtask_generator_modules_and_public_routes_are_fail_closed() {
     let main = read_repo_file("packages/xtask/src/main.rs");
-    for module in ["bazel", "hermeticity", "schema", "package_policy"] {
-        assert!(
-            !main.contains(&format!("mod {module};")),
-            "not-yet-present generator module {module} must not be declared"
-        );
+    let mut violations = Vec::new();
+
+    for module in [
+        "bazel",
+        "bazel_yanked",
+        "hermeticity",
+        "schema",
+        "package_policy",
+    ] {
+        let declaration = format!("mod {module};");
+        if !main.contains(&declaration) {
+            violations.push(format!(
+                "xtask is missing generator module declaration `{declaration}`"
+            ));
+        }
     }
+
+    for (command, route) in [
+        (
+            "gen-schemas",
+            &[
+                r#"[command, rest @ ..] if command == "gen-schemas" =>"#,
+                r#"run_task("gen-schemas", || schema::gen_schemas_with_args(rest))"#,
+            ][..],
+        ),
+        (
+            "gen-bazel",
+            &[
+                r#"[command, rest @ ..] if command == "gen-bazel" =>"#,
+                r#"run_task("gen-bazel", || bazel::gen_bazel(rest))"#,
+            ][..],
+        ),
+        (
+            "bazel-repin",
+            &[
+                r#"[command, rest @ ..] if command == "bazel-repin" =>"#,
+                r#"run_task("bazel-repin", || bazel_repin_with_executable_target(rest))"#,
+            ][..],
+        ),
+        (
+            "bazel-module-refresh without arguments",
+            &[
+                r#"[command] if command == "bazel-module-refresh" =>"#,
+                r#"run_task("bazel-module-refresh", || bazel::bazel_module_refresh(&[]))"#,
+            ][..],
+        ),
+        (
+            "bazel-module-refresh with arguments",
+            &[
+                r#"[command, rest @ ..] if command == "bazel-module-refresh" =>"#,
+                r#"run_task("bazel-module-refresh", || bazel::bazel_module_refresh(rest))"#,
+            ][..],
+        ),
+        (
+            "bazel-yanked-refresh",
+            &[
+                r#"[command, rest @ ..] if command == "bazel-yanked-refresh" =>"#,
+                r#"run_task("bazel-yanked-refresh", || {"#,
+                "bazel_yanked::bazel_yanked_refresh(rest)",
+            ][..],
+        ),
+        (
+            "bazel-yanked-check",
+            &[
+                r#"[command, rest @ ..] if command == "bazel-yanked-check" =>"#,
+                r#"run_task("bazel-yanked-check", || {"#,
+                "bazel_yanked::bazel_yanked_check(rest)",
+            ][..],
+        ),
+        (
+            "gen-package-policy-inputs",
+            &[
+                r#"[command, rest @ ..] if command == "gen-package-policy-inputs" =>"#,
+                r#"run_task("gen-package-policy-inputs", || {"#,
+                "package_policy::gen_package_policy_inputs(rest)",
+            ][..],
+        ),
+    ] {
+        if !ordered_contains(&main, route) {
+            violations.push(format!(
+                "xtask public command `{command}` is missing its exact generator route"
+            ));
+        }
+    }
+
+    let dispatch = main.split("fn main()").nth(1).unwrap_or_default();
+    for (alias, route) in [
+        ("retired `main` hub", r#"command == "main""#),
+        ("retired `broker` hub", r#"command == "broker""#),
+        ("retired `guest` hub", r#"command == "guest""#),
+        (
+            "ambient `CARGO_BAZEL_REPIN` control",
+            r#"command == "CARGO_BAZEL_REPIN""#,
+        ),
+        ("ambient `REPIN` control", r#"command == "REPIN""#),
+        (
+            "ambient `CARGO_BAZEL_REPIN_ONLY` control",
+            r#"command == "CARGO_BAZEL_REPIN_ONLY""#,
+        ),
+        (
+            "retired local schema-generator route",
+            r#"run_task("gen-schemas", gen_schemas)"#,
+        ),
+        (
+            "retired direct Bazel repin route",
+            "bazel::bazel_repin(rest)",
+        ),
+    ] {
+        if dispatch.contains(route) {
+            violations.push(format!(
+                "xtask must not expose the {alias} as a public command alias"
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "xtask generator integration drifted:\n{}",
+        violations.join("\n")
+    );
 }
