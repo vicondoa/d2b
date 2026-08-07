@@ -199,7 +199,7 @@ than 1,048,576 retired bytes, or an invalid retired census routes the source to 
 transition instead of overwriting, reusing, deleting, or growing the set. An identity
 mismatch never restores the temp. It first durably publishes immutable preimage-complete
 metadata, moves the metadata-bound currently named suspect no-replace into
-`evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, syncs the old
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, syncs the old
 parent, payload parent, and every changed ancestor, reopens and verifies the moved inode, and
 then append-only publishes and syncs `parked` status. Only that fully verified quarantine is
 terminal. A replacement, `ENOENT`, nonidentical `EEXIST`, or post-move identity mismatch

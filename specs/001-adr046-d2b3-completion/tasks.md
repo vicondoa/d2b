@@ -861,7 +861,7 @@ table before the operation exists.
   temporary namespace or treat a mismatched retired name as verified. Publish and sync the
   preimage-complete immutable metadata, atomically move the metadata-bound currently named
   suspect with `renameat2(RENAME_NOREPLACE)` into durable candidate-relative
-  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, outside both
+  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, outside both
   ephemeral namespaces, `fsync` the old and payload parents plus every changed ancestor,
   reopen the payload, and prove the moved identity/digest/bytes before append-only publishing
   and syncing `parked` status. A replacement before rename, mismatch after rename, `ENOENT`,
@@ -1914,7 +1914,7 @@ overwrite, reuse, or deletion. T589's private candidate-retention owner performs
 exact zero-mutation terminal whole-scope retention guard; retired leaves and the canonical
 candidate root remain retained. Identity ambiguity
 moves the metadata-bound currently named suspect no-replace to durable
-`evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, syncs both parents
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, syncs both parents
 and every changed ancestor, reopens and verifies the moved inode, then append-only publishes
 and syncs `parked` status. Only that state is terminal. A rename/reopen race remains
 `recovery-pending`, preserves every name, publishes no parked status, and blocks publication

@@ -362,7 +362,7 @@ suspect name to the temporary namespace or treat the retired name as verified. I
 identity digest of the currently named leaf, derives the incident id, and atomically moves
 that name with `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident
 payload namespace
-`evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, outside both
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, outside both
 ephemeral reserved namespaces. It then reopens the payload and proves that the moved
 device/inode, owner, mode, link count, digest, and bytes are the exact recorded current
 identity before it can publish `parked` status. The rename is the name-consuming operation;

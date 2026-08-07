@@ -302,7 +302,7 @@ merge-target registration, merge eligibility, and merge.
     revalidates the retired leaf and `fsync`s the leaf plus both directories. No sidecar data
     leaf is unlinked. An identity mismatch never unlinks or restores the suspect. It durably moves the
     metadata-bound currently named inode to
-    `evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, reopens and
+    `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, reopens and
     verifies it, syncs both parents and every changed ancestor, and append-only publishes
     `parked` status. Only that preimage-complete metadata/payload/status state is terminal.
     A replacement or rename/reopen mismatch remains recovery-pending, preserves every name,

@@ -1472,7 +1472,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   metadata-bound currently named suspect with
   `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident payload
   namespace
-  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, outside both
+  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, outside both
   ephemeral reserved namespaces, and `fsync` the incident directory, old leaf parent, and
   every changed ancestor. The incident
   digest uses the `identity-ambiguity` domain and binds the closed reopen stage plus ordered
