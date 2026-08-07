@@ -8,10 +8,13 @@
   final set; D9's publication refusal while any finding stands; D17's closed
   endpoint operation sets, round-input eligibility, and protected-attempt
   audit ordering only as its new endpoint table, receipt lifetime,
-  accepted-attempt journal, replay result, outbox, permanent replay
-  tombstones, and idempotent append-sink rules specify; and D21's rejection of a
-  four-level severity contract, per-seat `held` and `prior_resolutions` state,
-  rotation, and clean-break refusal to read or admit an earlier schema. It
+  controller-derived attempt identity, accepted-attempt journal, fenced worker
+  recovery, replay result, outbox, immutable permanent replay tombstones,
+  append-only payload-eviction markers, durable sink reservation, idempotent
+  append, recovery-capacity reserve, protected attempt status, and reviewed
+  capacity-migration rules specify; and D21's rejection of a four-level
+  severity contract, per-seat `held` and `prior_resolutions` state, rotation,
+  and clean-break refusal to read or admit an earlier schema. It
   substitutes one native discovery panel, a shared deduplicated ledger, batch
   implementation, constrained verification, and an automatic
   version-dispatched compatibility import that preserves completed legacy
@@ -21,11 +24,13 @@
   standalone producer without requiring Gas City, while same-uid repository
   helpers remain proposal-only. Its closed endpoint table adds
   candidate-bound reviewer, protected implementation-assignment issuer, and
-  least-authority issue-reader endpoints and assigns lifecycle, ledger
-  proposal and correction, implementation assignment, severity, risk,
-  inspection, status, publication, merge-completion and permanent-close
-  operations without exposing approval, risk or mapping mutation to the
-  orchestrator. It also narrowly supersedes D21's closed twelve-role pool and
+  least-authority issue-reader and protected attempt-status endpoints and
+  assigns lifecycle, ledger proposal and correction, implementation-assignment
+  issue, completion and revocation, severity, risk, inspection, recovery
+  status and capacity migration, publication, merge-completion and
+  permanent-close operations without exposing approval, risk, mapping,
+  assignment-lifecycle or retention mutation to the orchestrator. It also
+  narrowly supersedes D21's closed twelve-role pool and
   version 1 table with a closed thirteen-role pool and version 2 table by
   adding optional `build`, the Bazel and build-systems expert. D21's seven
   mandatory seats, ten-seat code-operative floor, eight-seat
