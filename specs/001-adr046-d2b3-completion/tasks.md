@@ -455,12 +455,19 @@ their 146 work items. T589-T602, T604, and T605 add the missing Wave 5 compositi
 contract correction, and evidence, and T603 adds the amended-plan resume reconciliation; they
 do not renumber, replace, or complete a manifest item. Dependency order is:
 
-**Current state for this task graph:** at this amendment batch's committed input HEAD
-`67f0ba8e32c4f91ebfcb4038aff77821d42b64b1`, the feature root is pre-T603 A/P0.
-None of the 147 authorized checkbox changes has occurred. C/Q and the finalized
-`progress-editor-receipt.json` are future artifacts, not current state, and neither the
-reconciliation receipt nor the progress-editor receipt is required by the current A/P0
-analysis and plan-panel gate. The C/Q edges below become active only after T603's future V/B
+**Current state for this task graph:**
+`67f0ba8e32c4f91ebfcb4038aff77821d42b64b1` is a historical amendment input, not
+the current pre-T603 A/P0 identity. `2c7195d07e665705edfc63d17c2cd64531d56850`
+is the clean committed input to this repair batch and the base of the analysis receipt that
+required this feature edit; the resulting snapshot change makes that input ineligible to
+authorize T603 afterward. Once this batch is committed, freeze A as the exact clean resulting
+commit and P0 as the digest of the exact 28-file feature snapshot defined in `plan.md`.
+Require both the pre-T603 analysis and unanimous plan-panel receipts to name that same A/P0;
+otherwise the gate fails and T603 remains blocked. This A/P0 is pre-validator authorization
+only and is not V/B, C/Q, F, or a delivery candidate. None of the 147 authorized checkbox
+changes has occurred. C/Q and the finalized `progress-editor-receipt.json` remain future
+artifacts, and neither the reconciliation receipt nor the progress-editor receipt is required
+by the A/P0 gate. The C/Q edges below become active only after T603's future V/B
 implementation, B/P gates, reconciliation authorization, authorized editor transition,
 dedicated checkbox commit C, and receipt finalization.
 

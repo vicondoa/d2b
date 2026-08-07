@@ -63,16 +63,23 @@ the receipt-bound progress reconciliation passes, a fresh cross-artifact analysi
 unanimous plan review bind exact clean C/Q, and the externally accepted compatibility floor
 has been installed in the source 3/1 generation.
 
-**Current Wave 5 resume state:** at this amendment batch's committed input HEAD
-`67f0ba8e32c4f91ebfcb4038aff77821d42b64b1`, the feature root is pre-T603 A/P0.
+**Current Wave 5 resume state:** `67f0ba8e32c4f91ebfcb4038aff77821d42b64b1`
+is a historical amendment input, not the current pre-T603 A/P0 identity.
+`2c7195d07e665705edfc63d17c2cd64531d56850` is the clean committed input to this
+repair batch and the base of the analysis receipt that required this feature edit; because
+this batch changes the feature snapshot, that input commit and snapshot cannot authorize
+T603 afterward. Once this batch is committed, the integrator MUST freeze A as the exact clean
+resulting commit and P0 as the digest of the exact 28-file feature snapshot defined below.
+The pre-T603 analysis and unanimous plan-panel receipts MUST both name that same A commit and
+P0 digest; any mismatch or later content or history change fails the gate and blocks T603.
+A/P0 is solely a pre-validator authorization state, not V/B, C/Q, F, or a delivery candidate.
 None of the 147 T603-authorized checkbox changes has occurred, so C/Q and the finalized
-progress-editor receipt are future artifacts and are not claimed or required by the current
-A/P0 analysis and plan-panel gate. That current gate requires the stated external
-prerequisites and T072 disposition and authorizes only T603's validator-and-fragment commit
-V. C/Q becomes a valid state only after the future V/B implementation, B/P gates,
-reconciliation authorization, authorized editor checkbox transition, dedicated commit C,
-and progress-receipt finalization. Only then does the fresh C/Q analysis and plan panel become
-the T589 dispatch gate.
+progress-editor receipt remain future artifacts. The A/P0 gate also requires the stated
+external prerequisites and T072 disposition and authorizes only T603's
+validator-and-fragment commit V. C/Q becomes valid only after the future V/B implementation,
+B/P gates, reconciliation authorization, authorized editor checkbox transition, dedicated
+commit C, and progress-receipt finalization. Only then does the fresh C/Q analysis and plan
+panel become the T589 dispatch gate.
 
 **Current installed-host bootstrap state: BLOCKED.** Committed protocol 4 has no
 host-generation handoff operation, while committed `nixos-modules/host-broker.nix` makes the
