@@ -7701,10 +7701,10 @@
       "source": "packages/xtask/src/main.rs",
       "spawnSiteCount": 4,
       "spawnSiteKeys": [
-        "packages/xtask/src/main.rs:1030:27:executable",
-        "packages/xtask/src/main.rs:2321:27:\"false\"",
-        "packages/xtask/src/main.rs:2330:16:\"true\"",
-        "packages/xtask/src/main.rs:679:27:&self.executable"
+        "packages/xtask/src/main.rs:1076:27:executable",
+        "packages/xtask/src/main.rs:2367:27:\"false\"",
+        "packages/xtask/src/main.rs:2376:16:\"true\"",
+        "packages/xtask/src/main.rs:711:27:&self.executable"
       ],
       "status": "scanned"
     },
@@ -8977,9 +8977,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 1030,
+        "endLine": 1076,
         "startColumn": 27,
-        "startLine": 1030
+        "startLine": 1076
       }
     },
     {
@@ -8988,9 +8988,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2321,
+        "endLine": 2367,
         "startColumn": 27,
-        "startLine": 2321
+        "startLine": 2367
       }
     },
     {
@@ -8999,9 +8999,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 36,
-        "endLine": 2330,
+        "endLine": 2376,
         "startColumn": 16,
-        "startLine": 2330
+        "startLine": 2376
       }
     },
     {
@@ -9010,9 +9010,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 57,
-        "endLine": 679,
+        "endLine": 711,
         "startColumn": 27,
-        "startLine": 679
+        "startLine": 711
       }
     },
     {

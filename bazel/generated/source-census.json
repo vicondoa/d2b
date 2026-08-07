@@ -4689,7 +4689,7 @@
       "manifest": "packages/d2b-test-locator/Cargo.toml",
       "package": "d2b-test-locator",
       "path": "packages/d2b-test-locator/src/lib.rs",
-      "sha256": "5a82a73baa97a7557ccf7ada69850c4e1c916f25e7390750d91741d98f86477d",
+      "sha256": "fbe73886c6f6b47b8919cfaa77949b036f6b91b4b56122d0a3d371d7a4ce5305",
       "targetLabels": [
         "//packages/d2b-test-locator:d2b-test-locator"
       ]
@@ -5715,7 +5715,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/main.rs",
-      "sha256": "e7ffe06a31ea6177f03425d655a994908ae210644dc7b3411947c85841c80f3f",
+      "sha256": "0671449b31e03970a511300b8ba8ed049f97da13ea5b087de86d31a48ee43c80",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
