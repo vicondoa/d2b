@@ -747,11 +747,14 @@ def validate_aarch64_job(job: dict[str, Any]) -> None:
         raise SystemExit(
             f"{MANIFEST}: test-flake-aarch64 must remain enforcing"
         )
-    for field in ("system", "nativeSystem"):
-        if field in job and job[field] != AARCH64_NATIVE_SYSTEM:
-            raise SystemExit(
-                f"{MANIFEST}: test-flake-aarch64 has a foreign native system"
-            )
+    if job.get("nativeSystem") != AARCH64_NATIVE_SYSTEM:
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 has a missing or foreign native system"
+        )
+    if "system" in job and job["system"] != AARCH64_NATIVE_SYSTEM:
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 has a foreign native system"
+        )
     for field in ("builders", "remoteBuilder", "remoteBuilders"):
         if job.get(field):
             raise SystemExit(
