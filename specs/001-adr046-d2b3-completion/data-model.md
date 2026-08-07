@@ -2828,27 +2828,58 @@ and no serialized-evidence revalidation.
 Every immutable single-use host-generation publication uses one
 `HostGenerationImmutablePublicationV1` protocol: the origin-consuming handoff dispatch,
 coordinator-pointer repair pre-mutation and outcome records, immutable backup members, and
-restoration pre-mutation, provenance, and outcome records. Under the one owning lock, the
-publisher creates and syncs any missing directory and every changed ancestor, prepares the
-complete canonical bytes in an unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the final
-parent, writes, file-syncs, and revalidates that inode, procfs-fd links it directly to the
-final no-replace name, final-reopens and verifies the same inode and exact bytes, then syncs
-the final parent and every changed ancestor. No named temporary, replacement, truncation,
-rename, or unlink is a publication step.
+restoration private evidence, pre-mutation, provenance, and outcome records, plus backup-prune
+pre-mutation and outcome records. Activation durably preprovisions one nonreplaceable
+root-owned mode-`0700` publication root. Every operation holds that stable root dirfd and
+revalidates its mount/device/inode identity before and after publication. Every descendant
+is resolved fd-relative with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV)`;
+every name passed to `mkdirat`, `linkat`, `openat2`, or `unlinkat` is one validated
+single-component leaf, and every opened descriptor carries `O_CLOEXEC`.
 
-Restart classification is identical for every record class. A crash before file sync or
+Under the one owning lock, hierarchy replay walks from the stable root. For each missing
+component it calls `mkdirat` on the held parent, opens the result with the same `openat2`
+policy and `O_DIRECTORY|O_CLOEXEC`, verifies the expected root ownership, mode, mount,
+device, inode, and parent binding, syncs the new directory, then syncs its parent before
+descending. An already present component is reopened and revalidated identically. A crash
+after `mkdirat` but before either sync therefore leaves no ambiguous state: replay reopens
+the partial hierarchy from the stable root, rejects any identity or posture mismatch, and
+repeats the child and parent syncs. No record inode write begins until the complete final
+parent hierarchy has been reopened, identity-revalidated, and synced bottom-up.
+
+The publisher then prepares complete canonical bytes in an unnamed
+`O_TMPFILE|O_RDWR|O_CLOEXEC` inode opened from the held final-parent dirfd, writes,
+file-syncs, and revalidates that inode, procfs-fd links it fd-relative directly to the final
+no-replace single-component name, final-reopens it fd-relative with
+`O_RDONLY|O_NOFOLLOW|O_CLOEXEC`, verifies the same inode and exact bytes, then syncs the
+final parent and every changed ancestor through held dirfds. No joined path, named
+temporary, replacement, truncation, rename, or unlink is a publication step.
+
+Restart classification is identical for every record class. A crash during hierarchy
+creation replays the reopen/revalidate/sync procedure above. A crash before file sync or
 after file sync but before link leaves no authoritative name and replay starts with a fresh
-unnamed inode. A crash after link but before parent or ancestor sync accepts only absence or
-the exact complete final: absence restarts publication and an exact final completes the
-remaining directory syncs. A nonidentical, wrong-inode, wrong-binding, or wrong-predecessor
-final is a typed conflict and is preserved without replacement. After all directory syncs,
-exact-final replay advances to the next ordered record or returns the previously committed
-response with zero write. Response loss after a complete terminal record is therefore
-completed no-write replay, not a second append. Independently authored fault tests exercise
-after-write/before-file-sync, after-file-sync/before-link, after-link/before-parent-sync,
-after-parent-sync/before-ancestor-sync, after-final-directory-sync, and response-loss for
-each dispatch, repair-audit, backup, restoration-pre, restoration-provenance, and
-restoration-outcome class; a test for one class cannot satisfy another.
+unnamed inode. A crash after link but before final reopen, parent sync, or ancestor sync
+accepts only absence or the exact complete final: absence restarts publication and an exact
+final is reopened, identity-revalidated, and completes the remaining directory syncs. A
+nonidentical, wrong-inode, wrong-binding, wrong-predecessor, parent-replaced, symlink,
+magic-link, or cross-mount final is a typed conflict and is preserved without replacement.
+After all directory syncs, exact-final replay advances to the next ordered record or returns
+the previously committed response with zero write. Response loss after a complete terminal
+record is therefore completed no-write replay, not a second append.
+
+Independently authored fault tests exercise after-hierarchy-`mkdirat`/before-sync,
+after-hierarchy-sync/before-inode-write, after-write/before-file-sync,
+after-file-sync/before-link, after-link/before-final-reopen,
+after-final-reopen/before-parent-sync, after-parent-sync/before-ancestor-sync,
+after-final-directory-sync, and response-loss for each dispatch, repair-audit, backup,
+restoration-private-evidence, restoration-pre, restoration-provenance,
+restoration-outcome, prune-pre, and prune-outcome class; a test for one class cannot satisfy
+another. Parent replacement, symlink ancestor, procfs magic-link substitution, cross-device
+mount, final-reopen identity change, and child-exec descriptor inheritance are independent
+negative axes for both publication and pruning. Every `mkdirat`, open, write, `fsync`,
+link, reopen, `unlinkat`, and directory-sync failure has an injected case; a separately
+pinned record-class/boundary visitor and shrinkage poisons make a skipped class or boundary
+fail before any case can count.
 
 Validation order is canonical/schema/framing and enclosing-digest reconstruction, then
 disposition/key selection and all four issuer signatures, then transition and member
@@ -3454,23 +3485,83 @@ unless the exact backup final and its parent/ancestor durability have completed 
 `HostGenerationImmutablePublicationV1`.
 
 One intent's retained backup set admits at most 256 members and at most 16,777,216 encoded
-bytes. A prospective 257th member or byte 16,777,217 refuses before backup append or covered
-mutation; 256 members and 16,777,216 bytes are accepted boundaries. No backup for the
-current intent is prune-eligible. After authenticated pointer replacement, each member has
-an exact 30-day minimum and 90-day maximum retention measured from the durable replacement
-audit time. At 30 days it becomes prune-eligible; broker reconciliation durably prunes
-eligible members oldest first, and no member may remain after 90 days. Prune opens the
-anchored backup parent, revalidates the exact leaf, uses `unlinkat`, and syncs the parent
-before reducing the durable census. Pruning before eligibility is a refusal. An unlink,
-parent-sync, census, clock, count, or byte-limit enforcement failure returns the typed
-degraded report
-`HostGenerationImmutableAuditBackupRetentionDegradedV1` with only
-`schemaVersion = 1`, `kind = "host-generation-immutable-audit-backup-retention-degraded"`,
-and closed `failureClass = unlink | parent-sync | census | clock | count-limit | byte-limit`;
-it blocks the next handoff mutation and emits no path, member bytes, errno, uid, pid, or
-free-form value. Tests pin day 29 refusal, day 30 eligibility, day 90 mandatory absence,
-256/257 members, 16,777,216/16,777,217 bytes, unlink failure, parent-sync failure, and
-restart after unlink before parent sync.
+bytes. Across the stable publication root, all current and replaced retained sets together
+admit at most 64 intents, 4,096 members, and 268,435,456 encoded bytes. The exact accepted
+and refused boundaries are therefore 256/257 members and 16,777,216/16,777,217 bytes per
+intent, plus 64/65 intents, 4,096/4,097 members, and
+268,435,456/268,435,457 bytes at the root. Before a handoff can append its first backup, the
+broker durably reserves the exact prospective set's intent/member/encoded-byte counts under the
+coordinator lock. A failed reservation is a typed zero-mutation refusal; a reservation is
+released only after the corresponding set is durably pruned or the handoff proves by an
+immutable zero-mutation outcome that no backup or covered mutation became durable. Restart
+reconstructs reservations from the immutable census before admitting another handoff.
+
+No backup for the current intent is prune-eligible. Immediately after authenticated pointer
+replacement is durable, the broker privately publishes one non-observable immutable
+`HostGenerationImmutableAuditBackupRetentionEpochV1`. Its fields are exactly
+`schemaVersion = 1`,
+`kind = "host-generation-immutable-audit-backup-retention-epoch"`,
+`replacementAuditSha256`, `intentSha256`, `epochSequence`, `clock = "CLOCK_REALTIME"`, and
+`epochUnixSeconds`. The timestamp is sampled only after the replacement audit is durable;
+a crash before epoch publication leaves the set non-pruneable and replay samples and
+publishes one epoch. A root-owned durable clock watermark stores the greatest accepted
+`CLOCK_REALTIME` second. Every eligibility calculation uses checked unsigned addition for
+2,592,000 seconds (30 days) and 7,776,000 seconds (90 days), first refusing if current time
+is below either the epoch or watermark. Rollback, overflow, an invalid epoch, or an
+unpersistable watermark is typed degradation and can never make a member eligible early.
+At 30 days a member becomes prune-eligible; no member may remain after day 90.
+
+Pruning is the typed broker operation
+`PruneHostGenerationImmutableAuditBackupsV1`. It is not callable by the daemon, a public
+role, root, or a direct broker client as a privileged mutation. A selector-free Admin
+retention-reconciliation request may only wake the broker's coordinator; the broker's
+sealed coordinator owner must still attenuate one nonserializable, lifetime-bound prune
+permit and consume it at dispatch. No digest, wire field, request, or caller claim can
+reconstruct the permit. Under that capability and the same coordinator lock, pruning
+reserves and append-only publishes
+`coordinator-immutable-audit-backup-prune/pre-mutation` before `unlinkat`. The pre record
+contains only the fixed edge id, `pruneAttemptSha256`, `retentionEpochSha256`,
+`backupMemberSha256`, `priorCensusSha256`, and closed `eligibility = day-30-through-day-89 |
+day-90-mandatory`. It then reopens the exact leaf from the stable root by the common
+fd-relative `openat2` policy, revalidates identity, calls `unlinkat` with a
+single-component leaf, syncs the held parent dirfd, durably commits the reduced census, and
+append-only publishes the matching outcome. The outcome repeats those fields and adds only
+`outcome = pruned | already-pruned | degraded` and nullable
+`failureClass = unlink | directory-sync | census | audit-publication`; the failure class is
+null unless the outcome is `degraded`.
+
+Restart classifies pre-only, unlinked-but-unsynced, synced-but-old-census,
+new-census-without-outcome, and complete prefixes. It never repeats an already reflected
+unlink, never reduces the census before parent durability, and appends exactly one matching
+outcome. Loss of the completed response is no-write replay. If outcome publication itself
+cannot become durable, the operation remains typed `pending-settlement`; restart settles
+the immutable prefix before another handoff mutation. A prune, clock, capacity, or
+settlement failure blocks the next handoff mutation.
+
+`HostGenerationImmutableAuditBackupRetentionDegradedV1` contains exactly
+`schemaVersion = 1`, `kind =
+"host-generation-immutable-audit-backup-retention-degraded"`, `failureClass`, and `action`.
+The closed failure classes and actions are:
+
+| `failureClass` | Exact `action` |
+| --- | --- |
+| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit` | `reconcile-immutable-audit-retention` |
+| `clock-rollback`, `clock-watermark`, `epoch-invalid` | `repair-retention-clock-rollback` |
+| `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |
+| `unlink`, `directory-sync` | `repair-retention-storage-and-reconcile` |
+| `census` | `repair-retention-census-and-reconcile` |
+| `audit-publication`, `pending-settlement` | `repair-retention-audit-and-reconcile` |
+
+The sealed private epoch state is the only wall-clock carrier. No response or audit
+projection carries a path, member bytes, artifact bytes, wall-clock value, errno, uid, pid,
+or free-form value. Tests use a hermetic injected clock and pin day 29 refusal, day 30
+eligibility, day 90 mandatory absence, restart-stable
+epochs, invalid-epoch, watermark-persistence, rollback, and overflow refusal, every
+per-intent and root aggregate limit,
+reservation before handoff, sealed prune-capability admission, immutable pre/outcome audit,
+every unlink/directory-sync/census/audit failure, every crash prefix, completed
+response-loss replay, parent/symlink/magic-link/cross-device/final-identity races, descriptor
+exec-leak absence, exactly-once outcomes, and redacted reports.
 
 Restoration requires a signed `HostGenerationImmutableAuditRestorationV1` from the
 disposition-pinned backup authority. Its canonical fields are exactly, in order,
@@ -3498,7 +3589,8 @@ unprivileged parser and public-socket client. It opens `PATH` once with
 file, reads at most 131,073 bytes, rejects overflow and noncanonical bytes, and sends the
 same opened bytes. `PATH` is never sent to the daemon or rendered. The command accepts
 exactly one path and optional `--json`; member/failure selectors, authority/key/token
-arguments, `--force`, an extra positional argument, and root invocation are invalid.
+arguments, `--force`, and an extra positional argument are invalid. Root invocation is the
+distinct authorization refusal defined below, not the misleading one-artifact shape error.
 
 T592 owns the shared wire DTO and broker operation
 `RestoreHostGenerationImmutableAuditMemberV1`. Its request is exactly
@@ -3506,59 +3598,130 @@ T592 owns the shared wire DTO and broker operation
 kind = "restore-host-generation-immutable-audit-member", operationId,
 restorationArtifactBytes }`, where `operationId` is the first 16 bytes of
 `SHA-256("d2b:host-generation:audit-restoration-request:v1\0" ||
-artifact_sha256[32])` and the artifact byte string is 1 through 131,072 bytes. The response
-is exactly `RestoreHostGenerationImmutableAuditMemberResponseV1 { schemaVersion = 1,
-kind = "restore-host-generation-immutable-audit-member-result", operationId, member,
-outcome }`, with `outcome = restored | already-restored`. No request field carries a path,
-selector, uid, pid, authority token, member override, failure override, or free-form value.
+artifact_sha256[32])` and the artifact byte string is 1 through 131,072 bytes. Unknown
+fields are denied. No request field carries a path, selector, uid, pid, authority token,
+member override, failure override, or free-form value.
+
+The response is the closed enum
+`RestoreHostGenerationImmutableAuditMemberResponseV1` with exactly two variants:
+
+- `Completed { schemaVersion = 1, kind =
+  "restore-host-generation-immutable-audit-member-result", operationId, member, outcome }`,
+  where `outcome = restored | already-restored`; or
+- `Error { schemaVersion = 1, kind =
+  "restore-host-generation-immutable-audit-member-error", operationId, error,
+  failureClass }`. `operationId` is null only when the request did not contain one valid
+  16-byte id. `error` is exactly `invalid-request | unauthorized | artifact-invalid |
+  conflict | retention-capacity | retention-degraded | publication-degraded |
+  publication-pending`.
+
+`failureClass` is null only for `unauthorized`; otherwise it is from the error's closed
+domain. `invalid-request` uses exactly `missing-schema-version | wrong-schema-version |
+missing-kind | wrong-kind | unknown-field | missing-operation-id | operation-id-length |
+operation-id-digest-mismatch | missing-artifact-bytes | empty-artifact-bytes |
+over-limit-artifact-bytes | path-field | selector-field | uid-field | pid-field |
+authority-token-field | member-override-field | failure-override-field | free-form-field`.
+`artifact-invalid` uses exactly `canonical | size | signature | domain | key | authority |
+member | failure-class | predecessor | backup-binding | observed-member-binding`; `conflict` uses
+exactly `provenance | member | operation-id | duplicate-supersession`;
+`retention-capacity` and `retention-degraded` use the applicable classes in the retention
+table above; and the publication errors use exactly `hierarchy | write | file-sync | link |
+reopen | directory-sync | outcome-publication`. This operation never falls back to
+`BrokerErrorResponse.message`, another free-form broker error string, or an unrecognized
+enum. The renderer maps wire `size` to public `input-size`; its local pre-wire input checks
+alone produce `input-type`, `input-owner`, `input-mode`, or `input-link-count`. The generated
+strict JSON schema, wire snapshot, shared CLI renderer, human/JSON
+goldens, and schema-drift tests must all carry this same closed enum.
+
 The operation is admitted exclusively from the existing public socket's consumed `Admin`
 capability. Every other local role, including `Launcher`, workload, Zone, and
 `HostShutdown`, plus root, nonmember, unauthenticated-local, direct-broker-socket, and remote
 callers is denied before coordinator or backup access. Signature verification cannot
 upgrade any denied caller.
 
-After authorization and complete artifact/backup validation, the broker takes the
-coordinator lock and appends a durable
-`coordinator-immutable-audit-restoration/pre-mutation` record before any restored-member
-publication. It then append-only publishes one
-`HostGenerationImmutableAuditRestoredMemberV1` provenance record with fields exactly, in
-order, `schemaVersion = 1`,
-`kind = "host-generation-immutable-audit-restored-member"`,
-`restorationAttemptSha256`, `member`,
-`failureClass`, `canonicalMemberSha256`, `canonicalMemberBytes`, `backupMemberSha256`,
-`predecessorSha256`, `observedMemberSha256`, `restorationArtifactSha256`, and
-`restorationArtifact`. The canonical member bytes are loaded from the authenticated backup;
-the embedded artifact is the complete signed object and must hash to its named digest. The
-original mismatched, unauthenticated, or noncontiguous member is never replaced or deleted;
-the effective audit view accepts the provenance record as its single append-only
-supersession only when the whole pre/provenance/outcome chain validates. Missing uses a null
-observed digest. Multiple or conflicting supersessions are invalid coordinator state.
-Finally the broker appends the matching
-`coordinator-immutable-audit-restoration/outcome` record and returns. Every append uses
-`HostGenerationImmutablePublicationV1`.
+Before taking the coordinator lock, the broker may perform only state-independent request
+framing, canonical decoding, size checks, digest reconstruction, and restoration signature
+verification. It may not accept a coordinator identity, backup member, predecessor,
+observed state, capacity reservation, or artifact-to-backup binding there. Under the lock it
+reopens the stable coordinator root and every required backup leaf through the common
+fd-relative policy, revalidates coordinator and backup mount/device/inode identities,
+rehashes the exact request bytes, validates member/failure/predecessor/observed-state and
+artifact-to-backup bindings, and reserves retention capacity immediately before the first
+mutation. Any state change between preparse and lock acquisition refuses with zero
+coordinator, backup, restoration, or audit mutation. A latch race replaces the coordinator
+or backup after signature verification and proves this under-lock revalidation is
+mandatory.
+
+After that under-lock validation, the broker first append-only publishes one broker-private,
+non-observable `HostGenerationImmutableAuditRestorationEvidenceV1` preparatory record. That private
+record contains the authenticated `canonicalMemberBytes` and complete signed
+`restorationArtifact` plus their named digests. It is readable only by the broker's sealed
+restoration/replay owner, is never exported as audit, and has no public accessor,
+serialization response, `Debug`, `Display`, log, metric, or span projection. By itself it
+authorizes and changes nothing in the coordinator, backup census, effective audit view, or
+restored member. The broker then appends the durable
+`coordinator-immutable-audit-restoration/pre-mutation` audit record before any provenance or
+effective restored-member publication. A crash after private evidence but before pre audit
+reuses only the exact evidence after full under-lock revalidation; a nonidentical evidence
+final is preserved as conflict.
+
+The separate audit provenance record is
+`HostGenerationImmutableAuditRestoredMemberV1` with fields exactly, in order,
+`schemaVersion = 1`, `kind = "host-generation-immutable-audit-restored-member"`,
+`restorationAttemptSha256`, `member`, `failureClass`, `canonicalMemberSha256`,
+`backupMemberSha256`, `predecessorSha256`, `observedMemberSha256`,
+`restorationArtifactSha256`, and `privateEvidenceSha256`. It contains no member or artifact
+body. The original mismatched, unauthenticated, or noncontiguous member is never replaced
+or deleted; the effective audit view accepts the private evidence plus fixed-digest
+provenance as its single append-only supersession only when the complete
+evidence/pre/provenance/outcome chain validates. Missing uses a null observed digest.
+Multiple or conflicting supersessions are invalid coordinator state. Finally the broker
+appends the matching `coordinator-immutable-audit-restoration/outcome` record. Every append
+uses `HostGenerationImmutablePublicationV1`.
 
 The restoration pre-mutation record contains exactly the fixed edge id,
 `restorationAttemptSha256`, `member`, `failureClass`, `backupMemberSha256`,
 `canonicalMemberSha256`, `predecessorSha256`, closed
 `observedState = absent | mismatch | unauthenticated | noncontiguous`, nullable
 `observedMemberSha256`, and `restorationArtifactSha256`. The outcome repeats every field and
-adds only `outcome = restored | provenance-conflict | member-conflict`. The attempt digest
-is the domain-separated hash of the fixed-width member/failure tags and all listed digests;
-no serializer output, path, raw member bytes, caller identity, errno, or free-form text
+adds `outcome = restored | provenance-conflict | member-conflict |
+provenance-publication-degraded` and nullable
+`publicationFailureClass = write | file-sync | link | reopen | directory-sync`.
+`publicationFailureClass` is null
+for `restored` and both conflicts. The attempt digest is the domain-separated hash of the
+fixed-width member/failure tags and all listed digests; no serializer output, path, raw
+member bytes, artifact bytes, caller identity, wall-clock value, errno, or free-form text
 enters it. Authorization, input-shape, signature/domain/key/authority, member/failure,
-predecessor, backup-binding, and size refusals occur before pre-mutation append and have zero
-coordinator, backup, restoration, or audit mutation. Once pre-mutation is durable, every
-success or conflict gets exactly one matching outcome. Signed provenance remains
-append-only for the lifetime of the coordinator history.
+predecessor, backup-binding, state-race, capacity, and size refusals occur before
+pre-mutation append and have zero coordinator, backup, restoration, or audit mutation.
 
-Restart classifies every pre/provenance/outcome write, file-sync, link, final-reopen,
-parent-sync, and ancestor-sync boundary through the shared publication protocol. A durable
-pre-only prefix resumes only with the byte-identical artifact and observed-state binding. A
-durable provenance without outcome appends only the matching outcome. An existing exact
-complete chain returns `already-restored` with zero write, including response-loss replay.
-A nonidentical final or same operation id with different artifact bytes is preserved and
-returns conflict. Independent crash tests cover all four failure classes, every record
-boundary, provenance/member conflict, and completed no-write replay.
+An evidence-publication failure occurs before pre audit, returns the closed redacted
+`publication-degraded` error, and changes no coordinator, audit, backup census, provenance,
+or effective member. Once pre-mutation is durable, every success, conflict, or provenance syscall
+failure gets exactly one matching outcome when storage permits. If provenance or the
+outcome append cannot complete, the broker returns the closed `publication-pending`
+error without inventing a success or free-form error. Restart settles a pre-only,
+evidence-plus-pre, or provenance-only prefix to one byte-identical degraded or success outcome
+before accepting another mutation. A durable degraded outcome returns
+`publication-degraded`; repair followed by resubmission of the same artifact performs
+no duplicate append and returns the settled result. Signed private evidence and fixed-digest
+provenance remain append-only for the lifetime of coordinator history.
+
+Restart classifies every hierarchy, evidence/pre/provenance/outcome write, file-sync, link,
+final-reopen, parent-sync, ancestor-sync, final-directory-sync, and response-loss boundary
+through the shared publication protocol. A durable evidence-only prefix revalidates the
+byte-identical artifact and all under-lock state before appending pre audit. A durable
+evidence-plus-pre prefix requires no caller-supplied body to settle. Durable provenance
+without outcome appends only the matching outcome.
+An existing exact complete chain returns `already-restored` with zero write, including
+response-loss replay. A nonidentical final or same operation id with different artifact
+bytes is preserved and returns conflict. Independent fault tests cover all four restoration
+failure classes, every record/boundary pair, every write/`fsync`/link/reopen/directory-sync
+failure after pre-mutation, provenance/member conflict, pending and degraded settlement,
+exactly-one outcomes, and completed no-write replay. Distinct canary member bytes and
+artifact bytes must be absent from response, human/JSON output, error, `Display`, audit,
+log, trace/span, metric, panic, and `Debug`; the bounded request frame and private evidence
+record are the only intentional body carriers.
 
 Successful human output is exactly
 `host generation handoff immutable audit restoration complete\noutcome: <RESTORED_OR_ALREADY_RESTORED>\nmember: <CLOSED_MEMBER>\naction: rerun-repair-authorized-handoff\n`; the outcome token is lowercase
@@ -3568,21 +3731,40 @@ Both outcomes exit `0`. Invalid invocation exits `2` with
 `host generation handoff audit restoration refused\naction: restore-with-one-artifact\n`
 or exact JSON
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"invalid-invocation","action":"restore-with-one-artifact"}`.
+Root invocation exits `4` with
+`host generation handoff audit restoration requires unprivileged local Admin\naction: use-unprivileged-local-admin-restoration-session\n`
+or exact JSON
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-root-refused","action":"use-unprivileged-local-admin-restoration-session"}`.
 Authorization refusal exits `4` with
 `host generation handoff audit restoration unauthorized\naction: use-local-admin-public-socket\n` or exact JSON
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-unauthorized","action":"use-local-admin-public-socket"}`.
 Artifact refusal exits `4`, exposes only closed
 `failureClass = input-type | input-owner | input-mode | input-link-count | input-size |
 canonical | signature | domain | key | authority | member | failure-class | predecessor |
-backup-binding`, and is exactly
+backup-binding | observed-member-binding`, and is exactly
 `host generation handoff audit restoration artifact invalid\nfailure-class: <CLOSED_FAILURE_CLASS>\naction: reacquire-immutable-audit-backup\n` or
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-artifact-invalid","failureClass":"<CLOSED_FAILURE_CLASS>","action":"reacquire-immutable-audit-backup"}`.
 A durable conflict exits `4` with exactly
 `host generation handoff audit restoration conflict\naction: preserve-and-escalate-audit-restoration-conflict\n` or
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-conflict","action":"preserve-and-escalate-audit-restoration-conflict"}`.
-All human and JSON
-forms have dedicated goldens and expose no path, bytes, signature, digest, uid, pid, role,
-or free-form value.
+A retention-capacity refusal exits `4` with exactly
+`host generation handoff immutable audit retention capacity unavailable\nfailure-class: <CLOSED_RETENTION_CAPACITY_CLASS>\naction: reconcile-immutable-audit-retention\n`
+or
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-capacity","failureClass":"<CLOSED_RETENTION_CAPACITY_CLASS>","action":"reconcile-immutable-audit-retention"}`.
+A retention degradation exits `4` with exactly
+`host generation handoff immutable audit retention degraded\nfailure-class: <CLOSED_RETENTION_DEGRADED_CLASS>\naction: <ACTION_FROM_RETENTION_TABLE>\n`
+or
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-degraded","failureClass":"<CLOSED_RETENTION_DEGRADED_CLASS>","action":"<ACTION_FROM_RETENTION_TABLE>"}`.
+A restoration publication that has no durable outcome yet exits `4` with exactly
+`host generation handoff immutable audit restoration settlement pending\nfailure-class: <CLOSED_PUBLICATION_CLASS>\naction: resubmit-same-restoration-artifact\n`
+or
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-publication-pending","failureClass":"<CLOSED_PUBLICATION_CLASS>","action":"resubmit-same-restoration-artifact"}`.
+A durable degraded restoration outcome exits `4` with exactly
+`host generation handoff immutable audit restoration degraded\nfailure-class: <CLOSED_PUBLICATION_CLASS>\naction: repair-restoration-storage-and-resubmit\n`
+or
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-publication-degraded","failureClass":"<CLOSED_PUBLICATION_CLASS>","action":"repair-restoration-storage-and-resubmit"}`.
+All human and JSON forms have dedicated goldens and expose no path, member or artifact
+bytes, signature, digest, uid, pid, role, wall-clock value, errno, or free-form value.
 
 After restoration the operator reruns `--repair-authorized-handoff`. The separate
 audit-integrity incident preserves the coordinator and backup artifacts for security
@@ -3594,17 +3776,31 @@ adjudication and never advertises restoration as remediation. The named external
 authority. Each accepts only the matching fixed human/JSON error plus an authenticated
 forensic acquisition performed outside this CLI, preserves all coordinator/backup bytes,
 and authorizes no repair, copy, delete, replace, retry, or force operation.
+The site access administrator owns
+`host-generation-unprivileged-local-admin-restoration-session-v1` for the root refusal. The
+site backup administrator owns
+`host-generation-immutable-audit-retention-reconciliation-v1`,
+`host-generation-retention-clock-rollback-repair-v1`,
+`host-generation-retention-storage-repair-v1`,
+`host-generation-retention-census-repair-v1`,
+`host-generation-retention-audit-repair-v1`, and
+`host-generation-restoration-storage-repair-v1`. Each accepts only its matching fixed
+error, performs no direct filesystem mutation, and reaches pruning or settlement only
+through the typed broker op and sealed coordinator capability. Clock overflow uses the
+site-security-owned `host-generation-retention-clock-overflow-escalation-v1`.
 
 T589 owns the strict schema plus
 `tests/golden/delivery/host-generation-handoff-status-v1.{json,txt}` and the independent
 `host-generation-handoff-status-case-ids.txt`, plus the read-independent
 `host-generation-handoff-{rollback-members,audit-members,transition-edges}.tsv` fixtures,
 the strict
-`host-generation-immutable-audit-{backup,restoration}-v1.schema.json` schemas, and matching
+`host-generation-immutable-audit-{backup,restoration,restoration-evidence}-v1.schema.json`
+schemas, the
+`host-generation-immutable-audit-backup-retention-epoch-v1.schema.json` schema, and matching
 read-independent JSON goldens, the
 `host-generation-immutable-audit-restored-member-v1.schema.json` schema, restoration
-human/JSON goldens, the two-row restoration-audit edge fixture, and the independent
-restoration broker-case registry;
+wire success/error schema and snapshot, human/JSON goldens, the two-row restoration-audit
+edge fixture, and the independent restoration broker-case registry;
 T595 owns the private variant constructors, current-pointer classifier, shared renderer,
 focused hermetic tests, and the dedicated Type-10 `host-generation-handoff.nix` VM test that
 proves real service failure/restart and rollback effects. T604 later exercises the public
@@ -3870,7 +4066,7 @@ rollback-proof check; an early generic decode failure cannot count.
 
 The 156-case handoff-status registry closes projection and pointer-repair behavior only; it
 does not count as broker restoration authorization, artifact, backup, retention, or
-publication coverage. Those boundaries use two read-independent fixtures.
+publication coverage. Those boundaries use three read-independent fixtures.
 `tests/golden/delivery/host-generation-immutable-audit-restoration-edges.tsv` contains
 exactly:
 
@@ -3886,8 +4082,20 @@ Production edge code, the fixture, and a separately authored literal two-row con
 mutually read-independent. Missing, duplicate, reordered, unknown, or predecessor-substituted
 rows fail before a restoration case may count.
 
+`tests/golden/delivery/host-generation-immutable-audit-prune-edges.tsv` contains exactly:
+
+```text
+coordinator-immutable-audit-backup-prune/pre-mutation	origin
+coordinator-immutable-audit-backup-prune/outcome	coordinator-immutable-audit-backup-prune/pre-mutation
+```
+
+Here `origin` is one sealed-capability, epoch-validated prune attempt. Production prune-edge
+code, this fixture, and a separately authored literal two-row constant are mutually
+read-independent. Missing, duplicate, reordered, unknown, or predecessor-substituted rows
+fail before any retention case may count.
+
 `tests/golden/delivery/host-generation-immutable-audit-restoration-broker-case-ids.txt`
-contains exactly these 62 newline-terminated ids in order:
+contains exactly these 145 newline-terminated ids in order:
 
 ```text
 restoration/authorization/local-launcher-denied
@@ -3899,6 +4107,25 @@ restoration/authorization/local-nonmember-denied
 restoration/authorization/local-unauthenticated-denied
 restoration/authorization/direct-broker-denied
 restoration/authorization/remote-denied
+restoration/request/missing-schema-version-denied
+restoration/request/wrong-schema-version-denied
+restoration/request/missing-kind-denied
+restoration/request/wrong-kind-denied
+restoration/request/unknown-field-denied
+restoration/request/missing-operation-id-denied
+restoration/request/operation-id-length-denied
+restoration/request/operation-id-digest-mismatch-denied
+restoration/request/missing-artifact-bytes-denied
+restoration/request/empty-artifact-bytes-denied
+restoration/request/over-limit-artifact-bytes-denied
+restoration/request/path-field-denied
+restoration/request/selector-field-denied
+restoration/request/uid-field-denied
+restoration/request/pid-field-denied
+restoration/request/authority-token-field-denied
+restoration/request/member-override-field-denied
+restoration/request/failure-override-field-denied
+restoration/request/free-form-field-denied
 restoration/artifact/noncanonical-denied
 restoration/artifact/over-limit-denied
 restoration/artifact/signature-denied
@@ -3918,7 +4145,6 @@ restoration/conflict/provenance-preserved
 restoration/conflict/member-preserved
 restoration/conflict/operation-id-different-artifact
 restoration/conflict/duplicate-supersession
-restoration/replay/completed-response-loss-no-write
 restoration/backup/absent-before-covered-mutation
 restoration/backup/not-durable-before-covered-mutation
 restoration/backup/durable-before-covered-mutation
@@ -3926,48 +4152,124 @@ restoration/retention/current-intent-prune-denied
 restoration/retention/day-29-prune-denied
 restoration/retention/day-30-prune-eligible
 restoration/retention/day-90-prune-mandatory
+restoration/retention/epoch-restart-stable
+restoration/retention/epoch-invalid-degraded
+restoration/retention/clock-watermark-degraded
+restoration/retention/clock-rollback-degraded
+restoration/retention/clock-overflow-degraded
 restoration/retention/count-256-accepted
 restoration/retention/count-257-refused
 restoration/retention/bytes-16777216-accepted
 restoration/retention/bytes-16777217-refused
+restoration/retention/root-intents-64-accepted
+restoration/retention/root-intents-65-refused
+restoration/retention/root-members-4096-accepted
+restoration/retention/root-members-4097-refused
+restoration/retention/root-bytes-268435456-accepted
+restoration/retention/root-bytes-268435457-refused
+restoration/retention/reservation-before-handoff
+restoration/retention/reservation-released-after-durable-prune
+restoration/retention/sealed-prune-capability-required
+restoration/retention/pre-audit-before-unlink
+restoration/retention/success-outcome-exactly-once
 restoration/retention/unlink-failure-degraded
 restoration/retention/parent-sync-failure-degraded
+restoration/retention/census-failure-degraded
+restoration/retention/audit-publication-failure-pending
+restoration/retention/crash-after-pre-before-unlink
 restoration/retention/crash-after-unlink-before-parent-sync
+restoration/retention/crash-after-parent-sync-before-census
+restoration/retention/crash-after-census-before-outcome
+restoration/retention/completed-response-loss-no-write
+restoration/retention/parent-replacement-denied
+restoration/retention/symlink-ancestor-denied
+restoration/retention/magiclink-ancestor-denied
+restoration/retention/cross-device-denied
+restoration/retention/exec-descriptor-leak-denied
+restoration/retention/final-reopen-identity-mismatch-denied
 restoration/retention/degraded-report-redacted
-restoration/crash/pre-after-write-before-file-sync
-restoration/crash/pre-after-file-sync-before-link
-restoration/crash/pre-after-link-before-parent-sync
-restoration/crash/pre-after-parent-sync-before-ancestor-sync
-restoration/crash/provenance-after-write-before-file-sync
-restoration/crash/provenance-after-file-sync-before-link
-restoration/crash/provenance-after-link-before-parent-sync
-restoration/crash/provenance-after-parent-sync-before-ancestor-sync
-restoration/crash/outcome-after-write-before-file-sync
-restoration/crash/outcome-after-file-sync-before-link
-restoration/crash/outcome-after-link-before-parent-sync
-restoration/crash/outcome-after-parent-sync-before-ancestor-sync
+restoration/publication/backup/hierarchy-after-mkdir-before-sync
+restoration/publication/backup/hierarchy-after-sync-before-inode-write
+restoration/publication/backup/after-write-before-file-sync
+restoration/publication/backup/after-file-sync-before-link
+restoration/publication/backup/after-link-before-final-reopen
+restoration/publication/backup/after-final-reopen-before-parent-sync
+restoration/publication/backup/after-parent-sync-before-ancestor-sync
+restoration/publication/backup/after-final-directory-sync
+restoration/publication/backup/completed-response-loss-no-write
+restoration/publication/evidence/hierarchy-after-mkdir-before-sync
+restoration/publication/evidence/hierarchy-after-sync-before-inode-write
+restoration/publication/evidence/after-write-before-file-sync
+restoration/publication/evidence/after-file-sync-before-link
+restoration/publication/evidence/after-link-before-final-reopen
+restoration/publication/evidence/after-final-reopen-before-parent-sync
+restoration/publication/evidence/after-parent-sync-before-ancestor-sync
+restoration/publication/evidence/after-final-directory-sync
+restoration/publication/evidence/completed-response-loss-no-write
+restoration/publication/pre/hierarchy-after-mkdir-before-sync
+restoration/publication/pre/hierarchy-after-sync-before-inode-write
+restoration/publication/pre/after-write-before-file-sync
+restoration/publication/pre/after-file-sync-before-link
+restoration/publication/pre/after-link-before-final-reopen
+restoration/publication/pre/after-final-reopen-before-parent-sync
+restoration/publication/pre/after-parent-sync-before-ancestor-sync
+restoration/publication/pre/after-final-directory-sync
+restoration/publication/pre/completed-response-loss-no-write
+restoration/publication/provenance/hierarchy-after-mkdir-before-sync
+restoration/publication/provenance/hierarchy-after-sync-before-inode-write
+restoration/publication/provenance/after-write-before-file-sync
+restoration/publication/provenance/after-file-sync-before-link
+restoration/publication/provenance/after-link-before-final-reopen
+restoration/publication/provenance/after-final-reopen-before-parent-sync
+restoration/publication/provenance/after-parent-sync-before-ancestor-sync
+restoration/publication/provenance/after-final-directory-sync
+restoration/publication/provenance/completed-response-loss-no-write
+restoration/publication/outcome/hierarchy-after-mkdir-before-sync
+restoration/publication/outcome/hierarchy-after-sync-before-inode-write
+restoration/publication/outcome/after-write-before-file-sync
+restoration/publication/outcome/after-file-sync-before-link
+restoration/publication/outcome/after-link-before-final-reopen
+restoration/publication/outcome/after-final-reopen-before-parent-sync
+restoration/publication/outcome/after-parent-sync-before-ancestor-sync
+restoration/publication/outcome/after-final-directory-sync
+restoration/publication/outcome/completed-response-loss-no-write
 restoration/audit/missing-pre-refused
 restoration/audit/outcome-without-provenance-refused
 restoration/audit/mismatched-outcome-fields-refused
 restoration/audit/unknown-outcome-refused
 restoration/meta/fixture-member-removed
 restoration/meta/poison-visitor-removed
+restoration/meta/request-shape-member-removed
+restoration/meta/publication-record-class-removed
+restoration/meta/publication-boundary-removed
+restoration/meta/retention-boundary-removed
 ```
 
-A separately authored literal 62-id constant equals the file before any case runs.
+A separately authored literal 145-id constant equals the file before any case runs.
 Production authorization, signature verification, publication, backup, pruning, and
-restoration registries read neither expectation. The first twenty denial/artifact cases and
-every request-shape refusal assert zero coordinator, audit, backup, provenance, and member
-mutation. Conflict cases may append only their exact pre/outcome pair after full
-authorization and artifact validation, preserve every original and conflicting final, and
-append no restored provenance member. The four restoration classes independently prove
-exact predecessor/member/failure binding and append-only supersession. Backup-order cases
-prove no covered mutation precedes a file-and-directory-durable backup. Retention and crash
-cases prove the exact limits, durable prune, typed degradation, every restoration
-write/file-sync/link/parent/ancestor boundary, and response-loss no-write replay. Each case
-must reach its named check; early generic refusal, a dynamically generated expectation,
-missing visit, duplicate, reorder, skip, or production-derived list fails the enforcing
-runner.
+restoration registries read neither expectation. The nine authorization cases, nineteen
+request-shape cases, and eleven artifact cases assert zero coordinator, audit, backup,
+private-evidence, provenance, and member mutation. Conflict cases may append only their
+exact pre/outcome pair after authorization and under-lock state revalidation, preserve every
+original and conflicting final, and append no restored provenance member. The four
+restoration classes independently prove exact predecessor/member/failure binding and
+append-only supersession. Backup-order cases prove no covered mutation precedes a
+file-and-directory-durable backup.
+
+The 40 retention cases prove the exact per-intent and root aggregate limits, durable
+reservation, typed epoch/clock arithmetic, sealed prune capability, fixed pre/outcome audit,
+durable prune ordering, every restart prefix, exactly-once settlement, fd-relative path
+posture, and redacted degradation. The 45 publication cases are the literal Cartesian
+result of five independently named record classes (`backup`, `evidence`, `pre`,
+`provenance`, `outcome`) and nine independently named boundaries, but neither the fixture
+nor its expected constant may generate that product at runtime. Each class has separate
+hierarchy creation/sync, inode write/file-sync/link/final-reopen,
+parent/ancestor/final-directory-sync, and response-loss cases. Four family-specific
+shrinkage poisons supplement the retained fixture-member and visitor poisons, so removing a
+request refusal, record class, publication boundary, or retention boundary fails before a
+case can run. Each case must reach its named check; early generic refusal, a dynamically
+generated expectation, missing visit, duplicate, reorder, skip, or production-derived list
+fails the enforcing runner.
 
 ---
 

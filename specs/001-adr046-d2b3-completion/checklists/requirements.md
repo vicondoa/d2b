@@ -70,10 +70,12 @@
   audit members, 15 transition edges, mismatches, extra mutation, pointer authentication,
   and shrinkage; Type-1 option eval cannot substitute for Type-10 VM proof
 - [x] Restoration has an exact bounded T595 client, a T592 shared DTO and Admin-only broker
-  op, fixed pre/provenance/outcome audit, append-only supersession, bounded durable backup
-  retention/pruning, named acquisition/escalation procedures, and an independent two-edge/
-  62-case negative matrix covering caller, signature, binding, conflict, crash, replay, and
-  zero-mutation refusal boundaries
+  op, closed typed errors, private evidence with fixed pre/provenance/outcome audit,
+  append-only supersession, bounded durable per-intent/root backup retention and sealed
+  pruning, named acquisition/repair/escalation procedures, a pinned Type-3 real-binary test,
+  and independent two-edge restoration/two-edge prune fixtures plus a 145-case negative
+  matrix covering caller, request shape,
+  signature, binding, conflict, crash, replay, and zero-mutation refusal boundaries
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
   lifetime-bound `SidecarCleanupOwner<'guard>`; named legacy state is never renamed or

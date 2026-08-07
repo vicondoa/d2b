@@ -603,9 +603,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   consumes the old wrapper. It MUST append authenticated backup members through the common
   file-and-directory-durable publication protocol before covered mutation durability.
   One intent MUST be bounded to 256 members and 16,777,216 encoded bytes, remain unprunable
-  while current, become durably prune-eligible at day 30 after authenticated replacement,
-  and have no retained member after day 90. Prune/bound failures MUST return a typed redacted
-  degraded report and block later mutation.
+  while current, and the root MUST be bounded to 64 retained intents, 4,096 members, and
+  268,435,456 encoded bytes with a durable reservation before handoff. A checked durable
+  retention epoch MUST make replaced members prune-eligible at day 30 and absent after day
+  90 while denying rollback and overflow. Pruning MUST use a sealed typed broker op,
+  immutable fixed-field pre/outcome audit, fd-relative durable unlink/census settlement, and
+  exactly-once restart replay. Prune/bound/clock/settlement failures MUST return a typed
+  redacted actionable report and block later mutation.
 
   T595 MUST own the exact unprivileged
   `--restore-immutable-audit-backup PATH [--json]` public-socket client, bounded no-follow
@@ -617,12 +621,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   access, regardless of signature validity. The exact signed
   `HostGenerationImmutableAuditRestorationV1` MUST bind domain, key, authority, member,
   failure class, backup, predecessor, canonical member, and observed member. It MUST append
-  a durable fixed-field pre-mutation record, append-only signed provenance/restored-member
-  supersession, and matching outcome under the coordinator lock without replacing any
-  mismatched, unauthenticated, or noncontiguous original. Every dispatch, repair audit,
-  backup, restoration-pre, provenance, and outcome publication MUST use the one idempotent
-  exact-final protocol and independently test every write/file-sync/link/parent/ancestor-sync
-  boundary, conflict preservation, and response-loss no-write replay. An unaudited extra mutation MUST instead report
+  broker-private non-observable preparatory signed evidence, then a durable fixed-field
+  pre-mutation record before digest/enum-only effective audit provenance/restored-member
+  supersession and matching outcome under the coordinator lock, without replacing any
+  mismatched, unauthenticated, or noncontiguous original. Private evidence alone MUST alter
+  no coordinator, audit view, census, or member. Only state-independent parsing/signature
+  work may precede the lock; coordinator,
+  backup, observed-state, and artifact bindings MUST be reopened and revalidated under lock
+  immediately before mutation. The shared response MUST use closed authorization,
+  request/artifact, conflict, retention, and publication pending/degraded variants with no
+  free-form broker-message fallback. Every dispatch, repair audit, backup,
+  restoration-private-evidence/pre/provenance/outcome, and prune-audit publication MUST use
+  the one idempotent exact-final protocol and independently test hierarchy creation plus
+  every write/file-sync/link/final-reopen/parent/ancestor/final-directory-sync boundary,
+  conflict preservation, and per-record response-loss no-write replay. An unaudited extra mutation MUST instead report
   `preserve-and-escalate-audit-integrity-incident` and MUST NOT advertise restoration. No
   force, generic copy path, daemon recovery ownership, or new unit exists. Every preserve
   action MUST map to the exact site-security external procedure named in
@@ -630,10 +642,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `host-generation-immutable-audit-backup-acquisition-v1`. The exact 156-case status
   registry MUST cover repair projections, inputs, absence classes, conflicts, crash
   boundaries, second-run no-write replay, restoration diagnostics, and integrity escalation.
-  A separate two-row restoration audit-edge fixture and independent 62-case broker registry
-  MUST cover role denial, artifact binding, append-only supersession, conflicts,
-  backup-before-mutation, retention, zero-mutation refusals, every restoration publication
-  boundary, and completed no-write replay.
+  Separate two-row restoration and two-row prune audit-edge fixtures plus an independent
+  145-case broker registry
+  MUST cover role denial, every request-shape refusal, artifact binding, private evidence
+  with digest-only audit provenance, append-only supersession, conflicts,
+  backup-before-mutation, per-intent and root retention capacity, durable clock epochs,
+  sealed prune pre/outcome audit, zero-mutation refusals, every per-record hierarchy and
+  publication boundary, and completed no-write replay.
 
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
   has no host-generation handoff operation, and the installed
@@ -687,7 +702,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `imported-for-exact-C/Q` transition and consumes only the validated-floor result read-only.
   Origin copy/concurrent replay, repeated mint, and later serialized revalidation MUST
   refuse. Fault injection after claim, authentication, semantic validation, final capability
-  creation, each dispatch write/file-sync/link/parent/ancestor-sync boundary, and durable
+  creation, each dispatch hierarchy/write/file-sync/link/final-reopen/parent/ancestor/
+  final-directory-sync boundary, and durable
   publication MUST prove `critical_section_max = 1`, no concurrent capabilities, no
   permanent pre-publication consumption, exact-final no-write response-loss replay, and at
   most one dispatch. The

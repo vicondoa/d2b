@@ -773,12 +773,18 @@ table before the operation exists.
   owner death.
 
   T589 freezes the one `HostGenerationImmutablePublicationV1` contract consumed by the
-  external origin-dispatch owner and T592: unnamed-inode canonical write/file-sync,
-  procfs-fd direct-final no-replace link, final reopen, parent/every-ancestor sync,
-  exact-final replay, and conflict preservation. Dispatch, repair pre/outcome, backup,
-  restoration pre/provenance/outcome, and response-loss tests are independent at every
-  write/file-sync/link/parent/ancestor boundary; no record class may borrow another class's
-  test.
+  external origin-dispatch owner and T592: one durably preprovisioned stable root dirfd;
+  single-component fd-relative `mkdirat` hierarchy replay with child/parent sync before
+  inode writing; `openat2` with
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`;
+  `O_CLOEXEC` on every descriptor; unnamed-inode canonical write/file-sync; procfs-fd
+  direct-final no-replace link; fd-relative final reopen; parent/every-ancestor sync;
+  exact-final replay; and conflict preservation. Dispatch, repair pre/outcome, backup,
+  restoration private-evidence/pre/provenance/outcome, prune pre/outcome, and response-loss
+  tests are independent at every hierarchy-creation/write/file-sync/link/final-reopen/
+  parent/ancestor/final-directory boundary; no record class may borrow another class's test.
+  Parent replacement, symlink, magic-link, cross-device, final-identity, and exec-leak
+  negatives cover publication and pruning.
 
   **Pinned independent expected sets:** T589 writes the following closed fixture and shared
   oracle set directly from this task contract. No expected-set fixture may import, call,
@@ -1638,8 +1644,10 @@ table before the operation exists.
   filesystem is not transferable evidence.
 
   T589 additionally owns the shared immutable-publication/restoration contract artifacts:
-  `docs/reference/schemas/delivery/host-generation-immutable-audit-{backup,restoration,restored-member}-v1.schema.json`,
-  `tests/golden/delivery/host-generation-immutable-audit-restoration-edges.tsv`,
+  `docs/reference/schemas/delivery/host-generation-immutable-audit-{backup,restoration,restoration-evidence,restored-member}-v1.schema.json`,
+  `docs/reference/schemas/delivery/host-generation-immutable-audit-backup-retention-epoch-v1.schema.json`,
+  the strict restoration broker success/error response schema and wire snapshot,
+  `tests/golden/delivery/host-generation-immutable-audit-{restoration,prune}-edges.tsv`,
   `tests/golden/delivery/host-generation-immutable-audit-restoration-broker-case-ids.txt`,
   the restoration human/JSON goldens, and
   `tests/golden/delivery/sc002-observation-stage-case-ids.txt`. T592 consumes these
@@ -1671,13 +1679,18 @@ table before the operation exists.
   The 156-id status registry covers projection and pointer repair only. The separate
   read-independent
   `host-generation-immutable-audit-restoration-edges.tsv` two-row fixture and
-  `host-generation-immutable-audit-restoration-broker-case-ids.txt` 62-id registry in
+  `host-generation-immutable-audit-prune-edges.tsv` two-row fixture plus the
+  `host-generation-immutable-audit-restoration-broker-case-ids.txt` 145-id registry in
   `data-model.md` close restoration authorization, signed artifact validation,
-  append-only supersession, backup-before-mutation, bounded retention/pruning, conflicts,
-  every restoration pre/provenance/outcome write/file-sync/link/parent/ancestor-sync
-  boundary, completed response-loss no-write replay, and zero-mutation pre-authorization
-  refusals. Each uses a separately authored literal expected set and cannot derive from
-  production or the 156-id fixture.
+  all nineteen request-shape refusals, private non-observable evidence plus digest-only
+  audit provenance, append-only supersession, backup-before-mutation, per-intent and
+  root-level retained-intent/member/byte limits, durable retention epoch/checked clock,
+  sealed typed prune op with immutable pre/outcome audit, conflicts, and all five
+  backup/evidence/pre/provenance/outcome record classes at every hierarchy, write,
+  file-sync, link, final-reopen, parent/ancestor/final-directory-sync, and per-record
+  response-loss boundary. Each uses a separately authored literal expected set and cannot
+  derive from production or the 156-id fixture. Request, publication-class,
+  publication-boundary, and retention-boundary shrinkage poisons are mandatory.
 
   The SC-002 recovery redaction registry has seventeen rows. Raw `st_uid`, `st_gid`,
   `st_rdev`, and symlink-target bytes join the
@@ -1728,32 +1741,71 @@ table before the operation exists.
   duplicate transfer, or reuse after transfer; compiler/API seals cover every forbidden
   surface. It append-only publishes authenticated
   `HostGenerationImmutableAuditBackupV1` before covered mutation durability, enforces
-  a maximum 256-member/16,777,216-byte census, refuses any covered mutation until its backup
-  is file-and-directory durable, never prunes a current intent, and durably prunes replaced
-  members only from day 30 through the hard day-90 deadline. Every prune uses anchored
-  no-follow reopen, `unlinkat`, parent sync, and restart census; unlink/sync/census/clock/
-  count/byte failure emits the typed redacted degraded report and blocks later mutation.
+  a maximum 256-member/16,777,216-byte per-intent census and root-wide 64-intent,
+  4,096-member, 268,435,456-byte census. Before handoff it durably reserves prospective
+  capacity; restart reconstructs reservations and capacity refusal has zero mutation. It
+  refuses any covered mutation until its backup is file-and-directory durable, never prunes
+  a current intent, and publishes one typed durable `CLOCK_REALTIME` retention epoch only
+  after replacement audit durability. Checked 30/90-day arithmetic plus a durable high-water
+  mark denies rollback, overflow, invalid epoch, and restart ambiguity. Pruning is typed op
+  `PruneHostGenerationImmutableAuditBackupsV1`, admitted only by a consumed
+  broker-private sealed coordinator attenuation. It publishes fixed redacted immutable
+  prune pre/outcome audit, uses the common stable root dirfd and fd-relative
+  `openat2`/single-component `unlinkat`/directory-sync protocol, and reduces the census only
+  after directory durability. Pre-only, unlinked, directory-synced, census-committed, and
+  response-loss restart prefixes settle exactly once; every unlink/directory-sync/census/
+  audit/clock/capacity failure emits the closed typed report/action in `data-model.md` and
+  blocks later mutation.
 
   Restoration accepts only the exact signed
   `HostGenerationImmutableAuditRestorationV1` for the displayed
-  missing/mismatched/unauthenticated/noncontiguous member under the same lock. After full
-  caller and artifact validation it durably appends the fixed-field
-  `coordinator-immutable-audit-restoration/pre-mutation` record, append-only signed
-  provenance plus restored canonical member, and matching outcome. It never replaces or
-  deletes the original; mismatch/unauthenticated/noncontiguous cases use the exact observed
-  digest as append-only supersession provenance. The shared
+  missing/mismatched/unauthenticated/noncontiguous member. Before locking, only framing,
+  canonical bytes, size, digest, and signature checks are allowed. Under the same
+  coordinator lock, immediately before mutation, it reopens and identity-revalidates the
+  stable coordinator root and backup leaves, rehashes the exact request bytes, and
+  revalidates member/failure/predecessor/observed-state/artifact-to-backup bindings plus
+  capacity. A coordinator-or-backup replacement latch between preparse and lock must refuse
+  with zero mutation. It then durably publishes private non-observable append-only
+  preparatory restoration evidence carrying the two required bodies; that evidence alone
+  changes no coordinator, audit view, census, or member. It next appends the fixed-field
+  `coordinator-immutable-audit-restoration/pre-mutation` audit record before
+  digest/enum-only effective audit provenance and the matching outcome. No audit record contains
+  `canonicalMemberBytes`, `restorationArtifact`, or another request body. It never replaces
+  or deletes the original; mismatch/unauthenticated/noncontiguous cases use the exact
+  observed digest as append-only supersession provenance. The shared
   `HostGenerationImmutablePublicationV1` protocol covers dispatch, repair pre/outcome,
-  backup, restoration pre/provenance/outcome, with independent tests at every
-  write/file-sync/link/parent/ancestor-sync boundary, final conflict, and response loss.
+  backup, private evidence, restoration pre/provenance/outcome, and prune pre/outcome. It
+  begins at one preprovisioned stable root dirfd; creates each missing hierarchy component
+  with single-component `mkdirat`; fd-relative reopens with
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`; revalidates
+  identity; syncs child then parent; and sets `O_CLOEXEC` on every descriptor. Independent
+  tests cover directory-creation replay, every write/file-sync/link/final-reopen/
+  parent/ancestor/final-directory-sync boundary, parent/symlink/magic-link/cross-device/
+  identity races, child exec, final conflict, and per-record response loss.
   Authorization/request/artifact/signature/domain/key/authority/member/failure/predecessor/
-  backup-binding refusals occur before pre-mutation append and prove zero coordinator,
-  backup, restoration, and audit mutation. Once pre-mutation is durable, success or conflict
-  appends exactly one matching outcome; a completed exact chain is no-write replay.
-  The independent two-row restoration audit-edge fixture and 62-id broker registry are
+  backup-binding/state-race/capacity refusals occur before pre-mutation append and prove zero
+  coordinator, backup, restoration, and audit mutation. Once pre-mutation is durable,
+  success, conflict, every post-pre provenance write/`fsync`/link/reopen/directory-sync
+  failure, and restart settlement append exactly one matching fixed outcome. Evidence
+  publication failure is pre-audit, typed, redacted, and zero-effective-mutation. An outcome
+  publication failure returns typed pending and is settled before another mutation; a
+  completed exact chain is no-write replay.
+
+  Within T592's already assigned `packages/d2b-contracts` ownership, replace the
+  success-only restoration response in `src/broker_wire.rs` with the closed completed/error
+  enum from `data-model.md`; authorization, request-shape, artifact, conflict, retention,
+  publication-degraded, and publication-pending classes have no fallback through
+  `BrokerErrorResponse.message`. Make compiler-generated broker schema/wire output
+  byte-identical to T589's frozen strict response schema, snapshot, renderer inputs, and
+  error/success goldens; T592 updates only its already assigned generated operation/
+  privilege catalogue outputs and consumes the T589 fixtures read-only. The independent
+  two-row restoration and two-row prune audit-edge fixtures plus the 145-id broker registry are
   mandatory and read-independent from the 156-id status registry. An unaudited extra
   mutation is the separate integrity-incident result and cannot invoke restoration. No
   daemon path, generic filesystem copy, force input, partial rollback, or new unit may
-  perform either mutation.
+  perform either mutation. Distinct artifact/member canaries must remain absent from
+  response, human/JSON, error, `Display`, audit, log, trace/span, metric, panic, and every
+  `Debug`.
   **Additional T592 resource-bundle ownership and versioning:** T592 also solely owns
   `nixos-modules/{options-zones.nix,zone-resources.nix,zone-resources-json.nix}`,
   `packages/d2b-contracts/src/{generation_bundle.rs,v3/resource_bundle.rs}`,
@@ -2144,6 +2196,23 @@ table before the operation exists.
 - [ ] T594 [P] [US1] **Bind controller fan-in, effects, and cleanup to the durable replay/adoption ledger.** Depends on T589. Owned files: `packages/d2b-core-controller/src/{runtime.rs,resource_store.rs,provider_effects.rs,cleanup.rs,watches.rs,controllers.rs}`, `packages/d2b-controller-toolkit/src/{context.rs,runner.rs}`, and their existing focused unit tests. Register the production endpoint, consume admitted watch frames into the bounded fan-in, and record every post-commit effect intent before `EffectPort`. Bind each ledger entry to Zone, controller generation, resource UID, committed revision, operation id, and effect ordinal; reuse that key for idempotent dispatch/adoption. On restart relist and adopt/replay pending entries before cleanup. Complete cleanup only by compare-and-set on the same UID and exact nonzero expected revision. **Done when** unit crash-window tests prove no effect before commit or ledger durability, replay/adoption after every later crash point, no lost cleanup intent, and denial of stale, zero, wrong-UID, wrong-generation, or ambiguous completion.
 - [ ] T605 [US1] **Correct and pin the system-core Zone handler contract.** Depends on T593. Sole writable ownership: `packages/d2b-contracts/src/v3/zone.rs`; compiler-regenerated public and private snapshots under `tests/golden/api-surface/`, regenerated only with `make api-surface-pin`; the existing lowest-layer guard `packages/d2b-contract-tests/tests/policy_contracts.rs`; governing normative specifications `docs/specs/providers/ADR-046-provider-system-core.md` and `docs/specs/ADR-046-resources-zone-control.md`; and paired reference page `docs/reference/resource-plane-runtime.md` (adapt). Add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`; the one exact serialized spelling is `system-core-host` and `system-core-user`, matching the committed kebab-case rule. Bump both governing specification `Version` values and state explicitly that internal/telemetry `handler` labels remain `system_core_host` and `system_core_user` while those underscore values are forbidden in serialized `Zone.status.handlers[]`. The Zone status-handler contract MUST accept exactly one record with each serialized name, phase, and `lastReconciledAt`, reject duplicate or missing records, underscore/wrong-name substitution, and preserve `ZoneHandlerName::ProviderLifecycle` as a distinct allowed value that cannot substitute for either. Treat `packages/xtask/src/zone_schema.rs`, `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json`, downstream T595/T599 consumers, and integrator-owned generated spec manifests as read-only inputs: because `ZoneSpec` is unchanged, generator execution MUST leave the committed desired-state schema byte-identical. **Done when** focused `d2b-contracts` tests prove both exact wire round-trips, underscore rejection, exactly-one-each list acceptance, duplicate/missing/wrong-name rejection, and `ProviderLifecycle` preservation/non-substitution; both normative specs and version metadata, the targeted guard, paired reference page, and public/private API snapshots pin the same pre-consumer distinction plus T593's removal of public peer/bootstrap issuance and evidence access after `make api-surface-pin`; the Zone desired schema is byte-identical before and after its existing generator; and the targeted contract plus `make test-rust-api-surface` pass. T605 does not wait for or attest to T595/T599 output and does not run the full `make test-drift`; T595 owns the emitter, T599 owns later consumer reconciliation, and T220 owns generated-manifest reconciliation plus the final drift gate.
 - [ ] T595 [US1] **Compose the production Zone runtime and one readiness projection.** Depends explicitly on T590, T592, T594, and T605; T591 and T593 are transitive prerequisites through T592 and T605. It also refuses unless FR-070's external source-generation compatibility floor was accepted and installed before T589; T595's target `host-broker.nix` edit cannot retroactively supply the source service's executable. Sole owned files: `packages/d2bd/src/resource_runtime.rs`, `packages/d2bd/src/lib.rs`, `packages/d2bd/Cargo.toml`, new `packages/d2b/src/bin/d2b-host-generation-deploy.rs`, `packages/d2b/Cargo.toml`, `nixos-modules/{bundle-zones.nix,host-daemon.nix,host-broker.nix,options-site.nix}`, new `tests/unit/nix/cases/host-generation-rebuild-ref.nix`, new `tests/host-integration/host-generation-handoff.nix`, accepted normative specification `docs/specs/ADR-046-nix-configuration.md`, and focused unit tests inside `resource_runtime.rs`. Replace hard-coded mutable revision identities and independent booleans with the recovered store metadata and owned handles from T590-T594. On daemon startup, ingest every installed `zones/<zone>/resource-bundle.json` generation before publication. Publish a deterministic bundle path/content trigger from `bundle-zones.nix`. `d2bd` requests only T592's typed handoff phases and never writes a system profile, generation pointer, stable reference, systemd unit, or rollback target directly. The target-closure deployment entrypoint may only validate parameterized inputs, resolve and verify exactly one target store output and executable while unprivileged, build and verify the complete closure, durably stage immutable transition bytes, transfer the accepted public-socket authorization evidence only after the externally installed source peers negotiate numeric protocol 4 plus the exact `source-handoff-v1` catalogue fingerprint, require the broker-managed GC root plus separate target-object and installed-apply-object pins, probe capability, and submit one opaque intent. The caller-flake target executable performs only the unprivileged authorization. Privileged apply invokes only the separately broker-resolved immutable apply object from trusted installed-generation metadata and performs no Nix eval, build, `nix run`, installable resolution, or symlink lookup. It receives no flake URI, installable, reference, target executable, command, or argv to reevaluate, and `--apply-authorized-handoff` carries no intent selector or authority token. Under the coordinator lock, the broker permits exactly zero or one durable nonterminal intent per source generation, refuses a second authorization while one exists, and atomically claims only the sole `authorized-pending` intent for one accepted apply connection. Zero, multiple, already-claimed, concurrent, and terminal intent selection refuses before mutation. A pre-mutation disconnect may return that same intent to pending only after a durable zero-mutation proof; after mutation, only coordinator replay of the same intent may bind a replacement connection from the same pinned apply object after proving the old peer dead. The broker binds the accepted apply connection's direct peer pidfd and live executable store/NAR/digest identity to that pin and revalidates liveness, start identity, and current executable immediately before every mutation; peer exit, exec, PID reuse, mismatch, or ambiguity refuses, and the connection-scoped pidfd is never persisted. The entrypoint captures at most 16,384 Nix evaluator/builder stderr bytes in memory and never writes them to a file; exceeding that ceiling is a fail-closed stage failure. It drops all raw bytes before return after deriving only a fixed internal digest/size if needed and emits the closed identifier-free typed stage error with remediation `rebuild-host-generation`; no raw line reaches human, JSON, wire, log, audit, metric, span, or `Debug`. It contains no profile publication, service control, 3/1 bootstrap mutation, or rollback code and is never a rollback initiator. Before transfer, the externally installed source-generation compatibility broker performs every privileged profile, service, bootstrap, publication, repair, and rollback phase by consuming the matching sealed durable handoff capability and both exact pins; after transfer, T592's target broker owns the remaining phases. Both emit immutable pre-mutation and outcome audit. Daemon identity, bootstrap euid 0, target-closure provenance, broker credentials, and caller claims never authorize independently. Target broker activation precedes target daemon activation. The target daemon performs a fresh exact-generation protocol-5 Hello while explicitly unready, then presents only its broker-issued phase attenuation with the opaque authenticated publish request; broker publication and its audit are file-and-directory durable before daemon ingestion and readiness. The externally installed source broker's durable coordinator exists before the first mutation and records `d2b-priv-broker.service` as the sole lifecycle owner. That existing service starts/restarts its installed source broker before transfer; ownership then transfers exactly once to the target broker before daemon activation. Before transfer only that compatibility owner may reopen it; after transfer the existing target broker service reopens it across broker restart or target-daemon startup failure. `d2bd.service` reports readiness and presents an attenuation but never owns or initiates recovery; the entrypoint is never a supervisor. It remains unready until one complete source or target generation tuple is durable. No new unit, timer, path unit, runtime override, or singleton service is added. Establish the verified Unix ComponentSession through the registrar using the pidfd returned by T592's typed broker operation for the accepted socket; after daemon restart rediscover the peer and acquire a new peer pidfd rather than opening one from or accepting a persisted numeric PID. Consume `PolicyBootstrapRead` for the first `NativeAuthorizer` install, switch all later policy access to the authenticated Resource API, register ResourceService and controller endpoints, admit the watch cursor, expose T589's typed `InspectOperation` through the production daemon/client path, start authoritative-journal export and retention enforcement, recover controller effects, and only then publish the Zone. Bump accepted `ADR-046-nix-configuration` from Version 2 to Version 3 and normatively pin the parameterized validation and public-socket authorization step, separate target-object and installed-apply-object pins, private Nix-stderr handling, build/stage/request-only entrypoint, capability-authorized source/target broker mutation ownership, existing-unit pre-transfer supervision, broker-before-daemon ordering, durable-intent/Hello-unready/authenticated-request/durable-publication/ingestion ordering, broker-owned coordinator recovery, stable-reference ownership, plus T592's bounded `audit.retentionDays`, `audit.maxRecordsPerSegment`, and `audit.maxSegmentBytes` option/compiler schema; T220 coordinates generated manifests, reference pages, tests, schemas, and changelog treatment. Consume T605's exact `system-core-host` and `system-core-user` variants to project exactly one record of each from the live owned `HostReconciler` and `UserReconciler` health handles for the `d2b-core-controller`-owned `Provider/system-core` registration. `ProviderLifecycle` is distinct and cannot satisfy either record. Do not wait for other Wave 6 Provider dossiers. Public resource and operation-status requests must traverse that session/router path and must never promote `SO_PEERCRED` role to a Resource API subject. Refactor startup and shutdown to visit every Zone and return a per-Zone report: a failed Zone stays unpublished and actionable, while unrelated Zones continue; close aggregates errors and never drops later runtimes. **Done when** initial boot and a deployment-entrypoint switch that adds, changes, or removes a resource bundle cause ingestion without a manual restart/reload; identical deployments produce no duplicate effect; same-ID operation inspection reaches T592's durable backend and wrong-binding remains unobservable; no public path constructs a subject; restart obtains fresh accepted-socket-derived peer pidfds; `require_ready` derives every member from live owned production handles rather than a boolean; invalid audit configuration or retention/prune health blocks only the affected Zone; duplicate/missing/wrong-name required records or `ProviderLifecycle` substitution degrade only that Zone; partial readiness is impossible; advanced revisions reopen; one Zone's open/close failure does not abort or discard another; and source-policy tests prove that the entrypoint only validates/builds/stages/authorizes/submits, privileged handoff mutations exist only in the capability-authorized externally installed source broker before transfer and T592's target broker after transfer, target/apply/GC-root substitutions, apply-peer identity failures, and raw-Nix-stderr canaries refuse without leakage, euid0/daemon identity/provenance/caller claims alone refuse, the existing broker service is the only pre-transfer lifecycle owner, and the broker-owned coordinator is the sole durable rollback-resume initiator before and after its exact ownership transfer.
+  **R26 T595 Type-3 ownership correction:** add sole writable ownership of new
+  `packages/d2b/tests/host_generation_restoration_cli.rs` and
+  `tests/golden/pinned/host-generation-restoration-cli.txt`; this narrowly extends, and does
+  not otherwise change, the sole-owned-file sentence above. The Type-3 test must spawn the
+  real `d2b-host-generation-deploy` binary through
+  `env!("CARGO_BIN_EXE_d2b-host-generation-deploy")`, point `D2B_PUBLIC_SOCKET` at a
+  hermetic AF_UNIX server, traverse the production parser/public-socket transport/shared
+  wire DTO, and assert success, every closed typed broker error projection, exact
+  human/JSON bytes and exits, root's distinct unprivileged-Admin remediation, response-loss
+  replay, and artifact/member redaction. A source-local unit test, direct renderer call,
+  fake CLI function, or VM-only path cannot satisfy this Type-3 obligation. The pin lists
+  every new test id literally; regenerate it from
+  `(cd packages && cargo nextest list -p d2b --message-format oneline)`, then run
+  `make test-rust` and
+  `bash tests/tools/assert-pinned-tests.sh
+  tests/golden/pinned/host-generation-restoration-cli.txt`. This adds no task or dependency.
+
   **Additional T595 source-floor and apply-peer closure:** consume only the exact nonempty
   13-member `SourceGenerationCompatibilityFloorV1` census and refuse every `missing`,
   `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and
@@ -2342,12 +2411,17 @@ table before the operation exists.
   `O_RDONLY|O_NOFOLLOW|O_CLOEXEC`, requires a regular single-link current-user mode-`0600`
   file, caps it at 131,072 bytes, and sends the same canonical bytes in T592's shared DTO
   over the existing public socket. It accepts no member/failure selector, authority/key/token,
-  `--force`, root, or extra positional input. T595 owns the exact success/already-restored,
-  invalid-invocation, unauthorized, closed artifact-failure, and conflict human/JSON
-  goldens and exit codes from `data-model.md`; no output renders the input path, artifact
-  bytes/signature/digest, caller role, uid, pid, or free-form text. Response-loss replay of
-  the same artifact returns `already-restored` with zero write. T595 does not parse a second
-  wire shape or mutate coordinator/audit files locally.
+  `--force`, or extra positional input. Root has the distinct exit-`4`
+  `use-unprivileged-local-admin-restoration-session` result, never
+  `restore-with-one-artifact`. T595 owns the exact success/already-restored,
+  invalid-invocation, root, unauthorized, closed artifact-failure, conflict,
+  retention-capacity/degraded, and restoration-publication pending/degraded human/JSON
+  goldens, actions, and exit codes from `data-model.md`. It renders only T592's closed
+  response enum; a free-form broker message is unreachable. No output renders the input
+  path, artifact/member bytes, signature/digest, caller role, uid, pid, clock value, errno,
+  or free-form text. Response-loss replay of the same artifact returns `already-restored`
+  with zero write. T595 does not parse a second wire shape or mutate coordinator/audit files
+  locally.
 
   Every rendered action maps to the public command or exact named external procedure in
   `contracts/operator-cli.md`: bootstrap, signed backup acquisition plus restoration
@@ -2355,7 +2429,10 @@ table before the operation exists.
   restoration-conflict escalation, and audit-integrity escalation. The acquisition
   procedure is owned by the disposition-pinned backup authority; preserve-and-escalate
   procedures are owned by the site security authority and authorize no repair/copy/delete/
-  replace/retry/force action.
+  replace/retry/force action. Every retention class maps to the exact reconciliation,
+  clock, storage, census, audit, or overflow procedure in `contracts/operator-cli.md`;
+  restoration publication pending/degraded and root refusal likewise map to one exact
+  owner procedure.
 
   Focused hermetic Rust tests own variant validation, exact schema and human/JSON/error
   goldens, all forbidden inspect inputs, and independently pinned repair intent/generation
@@ -2365,11 +2442,15 @@ table before the operation exists.
   terminal replacement/idempotence, pre-audit/inode-sync/direct-link/parent-sync/outcome/
   response-loss crash replay, second-run zero-write success, every incomplete rollback
   proof, bounded member/failure diagnostics, and separate unaudited-extra-mutation
-  integrity escalation. Restoration tests independently cover input bounds/mode/link/type,
-  every forbidden option, Admin success, every denied caller projection, all closed artifact
-  failures, conflict preservation, success and already-restored output, and the named
-  acquisition/submission/escalation procedure goldens. T595 consumes T592's typed broker op and cannot mutate the pointer
-  locally. The Type-1 `host-generation-rebuild-ref.nix` case remains option grammar only and
+  integrity escalation. The focused source-local restoration tests cover pure parser and
+  renderer units only. The separately owned pinned Type-3
+  `packages/d2b/tests/host_generation_restoration_cli.rs` must use
+  `CARGO_BIN_EXE_d2b-host-generation-deploy` and a hermetic `D2B_PUBLIC_SOCKET` to prove the
+  real binary's input bounds/mode/link/type, every forbidden option, Admin success, every
+  denied caller and closed broker-error projection, conflict preservation,
+  success/already-restored, retention and publication actions, response-loss replay, and
+  acquisition/submission/repair/escalation goldens. T595 consumes T592's typed broker op and
+  cannot mutate the pointer locally. The Type-1 `host-generation-rebuild-ref.nix` case remains option grammar only and
   is ineligible for runtime handoff evidence. The Type-10
   `tests/host-integration/host-generation-handoff.nix` leg alone proves the actual existing
   broker service active/failed restart, source-to-target ownership transfer, crash replay,

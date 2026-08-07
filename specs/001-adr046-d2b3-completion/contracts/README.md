@@ -421,14 +421,20 @@ merge-target registration, merge eligibility, and merge.
     exact-empty clean absence, an independently projected exactly-one-valid repairable
     absence, and invalid competing/malformed/unauthenticated censuses. The separate
     Admin-only restoration command submits one bounded signed artifact over the public
-    socket. Its two-row audit-edge fixture and 62-case broker registry cover caller denial,
-    signature/domain/key/member/failure/predecessor binding, append-only supersession,
-    backup-before-mutation, retention/pruning limits, conflicts, every publication boundary,
-    and completed no-write replay. Backup retention is bounded by 256 members, 16,777,216
-    bytes, and 30-to-90-day post-replacement retention with typed prune degradation.
+    socket. Its two-row restoration and two-row prune audit-edge fixtures plus the 145-case
+    broker registry cover caller denial,
+    all nineteen request-shape refusals, signature/domain/key/member/failure/predecessor
+    binding, private evidence plus digest-only audit provenance, append-only supersession,
+    backup-before-mutation, retention/pruning limits, conflicts, every per-record
+    publication boundary, and completed no-write replay. Backup retention is bounded per
+    intent by 256 members and 16,777,216 bytes and at the root by 64 intents, 4,096 members,
+    and 268,435,456 bytes. A durable checked epoch governs 30-to-90-day retention; pruning
+    is a sealed typed broker op with immutable pre/outcome audit and typed degradation.
     Pointer/restoration/integrity escalation actions map to named procedures rather than
     unactionable labels.
     Recovery uses only the existing broker unit.
-    Human/JSON schemas and both redaction registries remain synchronized; no path, fd,
-    generation, raw identity, request body, or free-form remediation enters logs, audit,
-    metrics, spans, errors, panic, or `Debug`.
+    Human/JSON schemas and both redaction registries remain synchronized. The bounded
+    restoration request frame and broker-private append-only evidence are the only body
+    carriers; audit/provenance contains fixed digests/enums only. No path, fd, generation,
+    raw identity, canonical member bytes, restoration artifact bytes, or free-form
+    remediation enters responses, logs, audit, metrics, spans, errors, panic, or `Debug`.

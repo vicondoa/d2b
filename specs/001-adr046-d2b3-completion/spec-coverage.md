@@ -1156,9 +1156,12 @@ pointer, all repair input/restart/conflict/no-write cases, and four shrinkage po
 Selector-free pointer repair is an Admin-only typed broker operation with immutable
 pre/outcome audit, exact-empty clean absence, a separate repairable-absence projection, and
 invalid competing/malformed/unauthenticated censuses. The Admin-only bounded restoration
-client, two-edge restoration audit fixture, and independent 62-case broker registry cover
-signed provenance, role denial, artifact binding, backup-before-mutation, bounded
-30-to-90-day retention/pruning, conflicts, every publication boundary, and no-write replay.
+client, two-edge restoration and two-edge prune audit fixtures, and independent 145-case
+broker registry cover
+private evidence and digest-only provenance, role denial, every request-shape refusal,
+artifact binding, backup-before-mutation, bounded per-intent/root retained capacity, checked
+30-to-90-day epochs, sealed typed pruning with immutable audit, conflicts, every per-record
+publication boundary, and no-write replay.
 Incomplete rollback proof is never recovery-capable.
 These refinements add no work-item or task id.
 

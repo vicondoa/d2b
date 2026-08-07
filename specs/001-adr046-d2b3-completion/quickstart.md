@@ -765,25 +765,35 @@ mismatched, exit `4` identifies its bounded closed member and failure class with
    `action: rerun-repair-authorized-handoff`. Rerun the repair command above. Response-loss
    replay of the same artifact is `already-restored` with zero write.
 
-Invalid invocation uses `restore-with-one-artifact` and the command shape above.
+Zero/multiple paths or forbidden options use `restore-with-one-artifact` and the command
+shape above. Root instead uses `use-unprivileged-local-admin-restoration-session`; the site
+access administrator runs
+`host-generation-unprivileged-local-admin-restoration-session-v1`, then the resulting
+unprivileged local Admin reruns the same command with one artifact.
 `use-local-admin-public-socket` maps to the site access administrator's named external
 `host-generation-local-admin-session-v1` procedure. A closed artifact failure uses
 `reacquire-immutable-audit-backup` and repeats step 1; a durable conflict uses the named
 security escalation below. None authorizes a force or local file repair.
 
-The broker appends restoration pre-mutation, signed provenance/restored-member, and outcome
-records without replacing an existing mismatched, unauthenticated, or noncontiguous member.
-Every append and the repair/backup/dispatch records share one exact-final restart protocol.
-Conflicting bytes are preserved. Invalid artifact or authorization refusals have zero
-coordinator/audit/provenance mutation; an accepted attempt that later conflicts records only
-its fixed pre/outcome pair. The independent 62-case broker registry covers all caller,
-signature/domain/key/member/failure/predecessor, conflict, backup-order, retention, crash,
-and no-write replay boundaries.
+The broker publishes broker-private non-observable preparatory signed evidence, then appends
+restoration pre-mutation audit before digest/enum-only effective audit
+provenance/restored-member and outcome records without
+replacing an existing mismatched, unauthenticated, or noncontiguous member. Every append and
+the repair/backup/dispatch/prune-audit records share one exact-final restart protocol.
+Conflicting bytes are preserved. Invalid request, artifact, authorization, state-race, or
+capacity refusals have zero coordinator/audit/provenance mutation; an accepted attempt that
+later fails or conflicts records exactly one fixed outcome or remains typed pending until
+restart settlement. The independent 145-case broker registry covers all callers, nineteen
+request shapes, signature/domain/key/member/failure/predecessor binding, conflict,
+backup-order, root/per-intent retention, clock and prune audit, each per-record hierarchy
+and publication boundary, and no-write replay.
 
 The broker-private linear `HostGenerationImmutableAuditBackupOwner` retains at most 256
-members and 16,777,216 encoded bytes, never prunes the current intent, and durably prunes a
-replaced intent from day 30 through the hard day-90 deadline. A prune or bound failure is a
-typed degraded result that blocks later mutation. An unaudited extra mutation instead
+members and 16,777,216 encoded bytes per intent and at most 64 intents, 4,096 members, and
+268,435,456 bytes at the root. It reserves capacity before handoff, never prunes the current
+intent, and uses a checked durable clock epoch plus sealed typed prune op and immutable
+pre/outcome audit from day 30 through the hard day-90 deadline. A prune, bound, clock, or
+settlement failure is a typed actionable degraded result that blocks later mutation. An unaudited extra mutation instead
 reports `action: preserve-and-escalate-audit-integrity-incident`; the site security authority
 runs `host-generation-audit-integrity-escalation-v1`, preserves the coordinator and backup
 artifacts, and does not attempt restoration. Pointer and restoration conflicts similarly
@@ -803,7 +813,8 @@ rollback matrices. Their 156-case registry covers every missing and mismatched m
 changed transition edge, unaudited extra mutation, unauthenticated pointer, every repair
 restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exact successful
 pointer-repair, repairable-absence, bounded audit-restoration, and integrity-incident
-goldens. The separate two-row restoration audit-edge fixture and 62-case broker registry
+goldens. The separate two-row restoration and two-row prune audit-edge fixtures plus the
+145-case broker registry
 prove the privileged restoration boundary; the 156-case registry cannot substitute. The Type-1 Nix
 case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
