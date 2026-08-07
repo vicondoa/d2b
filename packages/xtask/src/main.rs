@@ -1,6 +1,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -362,7 +363,7 @@ fn main() -> std::process::ExitCode {
             run_task("gen-bazel", || bazel::gen_bazel(rest))
         }
         [command, rest @ ..] if command == "bazel-repin" => {
-            run_task("bazel-repin", || bazel::bazel_repin(rest))
+            run_task("bazel-repin", || bazel_repin_with_executable_target(rest))
         }
         [command] if command == "bazel-module-refresh" => {
             run_task("bazel-module-refresh", || bazel::bazel_module_refresh(&[]))
@@ -452,6 +453,54 @@ fn main() -> std::process::ExitCode {
             );
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+fn bazel_repin_with_executable_target(
+    args: &[String],
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let hub = bazel::parse_repin(args)?;
+    let root = if let Some(worktree) = env::var_os("D2B_BAZEL_WORKTREE") {
+        fs::canonicalize(worktree)?
+    } else {
+        repo_root()?.to_path_buf()
+    };
+    let mut executor = ExecutableBazelExecutor;
+    bazel::bazel_repin_with_executor(&root, hub, &mut executor)
+}
+
+struct ExecutableBazelExecutor;
+
+impl bazel::BazelExecutor for ExecutableBazelExecutor {
+    fn run(
+        &mut self,
+        root: &Path,
+        startup_args: &[String],
+        command_args: &[String],
+        environment: &[(&str, &str)],
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+        let mut corrected_command_args = command_args.to_vec();
+        for argument in &mut corrected_command_args {
+            if argument == "@rules_rust//crate_universe:cargo_bazel" {
+                *argument = "@rules_rust//crate_universe:cargo_bazel_bin".to_owned();
+            }
+        }
+
+        let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+        let mut command = Command::new(executable);
+        command
+            .current_dir(root)
+            .args(startup_args)
+            .args(&corrected_command_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        command
+            .status()
+            .map_err(|error| format!("could not start the Bazel child: {error}").into())
     }
 }
 
