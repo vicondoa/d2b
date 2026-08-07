@@ -619,10 +619,10 @@ ledger-regen:
 nix-unit-pin:
 	bash tests/tools/gen-nix-unit-pins.sh
 
-## flake-matrix-pin - regenerate the fail-closed CI flake-check-matrix pin
-## (tests/golden/flake-check-matrix/<system>.txt) after adding/removing a flake
-## check. The drift gate (run by `make test-drift`) fails closed until this is
-## rerun, so the sharded x86 CI matrix can't silently change coverage.
+## flake-matrix-pin - regenerate both fail-closed native flake-check pins
+## (tests/golden/flake-check-matrix/{x86_64-linux,aarch64-linux}.txt) after
+## adding or removing a check. The drift gate (run by `make test-drift`) fails
+## closed until this is rerun, so neither native CI inventory changes silently.
 flake-matrix-pin:
 	bash tests/tools/gen-flake-check-matrix-pin.sh
 
