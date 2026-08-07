@@ -125,12 +125,13 @@ clarifications.
 
 Ready for `/speckit-plan`.
 
-**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 16 items pass under the
-completion-program scope reflected by the current specification. The current shape is **75
-functional requirements and 35 buildable success criteria**. The earlier 45/26 shape records
-the end of Iteration 3; it is not the current census.
+**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 27 current checklist rows
+pass under the completion-program scope reflected by the current specification. The original
+16-item baseline remains fully passing; 11 reconciliation checks were added after that baseline.
+The current shape is **75 functional requirements and 35 buildable success criteria**. The
+earlier 45/26 shape records the end of Iteration 3; it is not the current census.
 
-Lifecycle state: **specification reconciled - plan approval pending**. Passing these 16
+Lifecycle state: **specification reconciled - plan approval pending**. Passing these 27 current
 specification-quality checks means the artifacts are ready to request the required analysis
 and plan-review gates. It does not record plan approval, implementation completion, or
 permission to bypass the later exact-C/Q gate before T589.

@@ -96,24 +96,23 @@ not recover 640 KiB, the design changes again rather than the gate moving.
 
 ## R3: Which desktop companions block the release, and what does each consume?
 
-**Decision**: Five companions form the release-blocking set required by FR-039 and FR-040.
-There is **no canonical inventory in the repository today**; the set below was reconstructed
-from README, AGENTS.md, reference docs, ADRs 0035/0040/0041/0042/0043, and `nixos-modules/`.
-Publishing that inventory is itself a deliverable.
+**Decision**: Four companions form the current release-blocking set required by FR-039 and
+FR-040. `docs/reference/companion-contracts.md` revision 2 is the canonical inventory. The
+original reconstruction from README, AGENTS.md, reference docs, ADRs
+0035/0040/0041/0042/0043, and `nixos-modules/` established publication as a deliverable;
+revision 2 records the negative determination that excludes `weezterm`.
 
 | Companion | d2b surface consumed | Blocking risk |
 | --- | --- | --- |
 | `d2b-toolkit` | Shared client DTOs, public-socket framing, Wayland color parsing, Waybar helpers. Other companions build on it. | **Highest** - it is the shared substrate; it must adapt first or the rest cannot |
-| `d2b-wlterm` | Public socket `ShellOp` family (`List`/`Attach`/`Detach`/`Kill`), capability discovery via `runtime.operationCapabilities.guest.shell`, launcher metadata, `d2b-wayland-proxy` package | High - `d2b shell` and launcher metadata both change shape at 3.0 |
+| `d2b-wlterm` | Qualified ShellSession Resource lifecycle, ProcessAttachClient named streams, provider-neutral launcher metadata, canonical Host/Guest execution references, and the `d2b-wayland-proxy` package. The retired public-socket `ShellOp` family is unsupported. | High - the shell and launcher integration moves to the v3 replacement surfaces |
 | `d2b-wlcontrol` | Public socket only; `/etc/d2b/ui-colors.{json,css}`; `d2b audio status --json`; security-key state via `WlcontrolSkStatus`/`WlcontrolAction`; graceful-stop semantics | High - deepest contract surface of any companion |
 | `d2b-clip-picker` | Versioned newline-delimited JSON picker protocol over an inherited `socketpair()` fd; realm target names and accent colors | Medium - protocol is versioned and d2b-clipd-owned, but target naming changes |
-| `weezterm` | **None.** Supplies the terminal binary the wlterm launcher invokes; follows only nixpkgs | Low - no d2b runtime contract |
 
-**Rationale for treating this as a deliverable, not a lookup**: two of the five most
-contract-coupled companions (`d2b-wlcontrol`, `d2b-clip-picker`) are absent from the AGENTS.md
-sibling-flake section entirely, and README names them only in one prose line. A release gate
-that depends on "every companion" needs the set written down and versioned, or the gate is
-unenforceable.
+**Rationale for treating this as a deliverable, not a lookup**: `AGENTS.md` names no companion,
+and README names only three of the four current members in one prose line under non-canonical
+short names. A release gate that depends on "every companion" needs the set written down and
+versioned, or the gate is unenforceable.
 
 **Decision detail**: The companion inventory MUST be published as a reference document naming
 each companion, the exact surface it consumes, and its verification status. The natural home is

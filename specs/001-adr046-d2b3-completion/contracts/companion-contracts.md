@@ -25,10 +25,12 @@ decide who is in the set and what counts as verified.
 | Companion | Surface consumed | Adaptation risk |
 | --- | --- | --- |
 | `d2b-toolkit` | Client DTOs, public-socket framing, Wayland color parsing, Waybar helpers | **Highest** - shared substrate the others build on; must adapt first |
-| `d2b-wlterm` | Public socket `ShellOp` family; capability discovery via `runtime.operationCapabilities.guest.shell`; launcher metadata; `d2b-wayland-proxy` package | High |
+| `d2b-wlterm` | Qualified ShellSession Resource lifecycle; ProcessAttachClient named streams; provider-neutral launcher metadata; canonical Host/Guest execution references; `d2b-wayland-proxy` package | High |
 | `d2b-wlcontrol` | Public socket; `/etc/d2b/ui-colors.{json,css}`; `d2b audio status --json`; security-key state DTOs; graceful-stop semantics | High - deepest surface |
 | `d2b-clip-picker` | Versioned newline-delimited JSON picker protocol over an inherited socketpair fd; realm target naming; accent colors | Medium |
-| `weezterm` | None - supplies the terminal binary the launcher invokes | Low |
+
+`weezterm` is an excluded candidate, not a fifth companion. Revision 2 records the negative
+determination that it consumes no FR-064 limb-2 surface.
 
 `entrablau.nix` is an identity sibling composed per-Guest, not a desktop companion.
 `wl-proxy` is an upstream crate dependency, not a companion.
@@ -37,7 +39,7 @@ decide who is in the set and what counts as verified.
 
 | # | Obligation | Wave | Status |
 | --- | --- | --- | --- |
-| CO-1 | Publish the companion inventory as a versioned reference document naming each companion, its exact consumed surface, and its verification status | W5 | **Done** - `docs/reference/companion-contracts.md`, revision 1, landed at `b72b205f` |
+| CO-1 | Publish the companion inventory as a versioned reference document naming each companion, its exact consumed surface, and its verification status | W5 | **Done** - `docs/reference/companion-contracts.md`, revision 2; the original revision 1 landed at `b72b205f` |
 | CO-2 | Publish replacement contracts early enough for companions to adapt, given no preview release may be published (FR-045) | W5 | **Done** - `docs/reference/zone-cli-contract.md`, revision 1, landed at `b72b205f` |
 | CO-3 | Verify each companion by exercising it against the release candidate on a live host - not by version number or source inspection | W8 | Open |
 | CO-4 | Hold the release while any companion lacks a verified compatible version | W8 | Open |
@@ -133,10 +135,11 @@ for the mechanical test:
   Waybar, wlcontrol, wlterm, clip-picker, and Wayland rails use the same
   host/realm/workload/state colors."
 
-That single line gets three of the five published members under non-canonical short names
+That single line gets three of the four revision-2 members under non-canonical short names
 (`wlcontrol`, `wlterm`, `clip-picker` rather than `d2b-wlcontrol`, `d2b-wlterm`,
 `d2b-clip-picker`), adds two upstream projects that are **not** members (`niri`, `Waybar`), and
-omits `d2b-toolkit` and `weezterm` entirely. Prose may raise a candidate. It cannot settle one.
+omits `d2b-toolkit`. Revision 2 records `weezterm` separately as an excluded candidate after a
+negative surface-consumption determination. Prose may raise a candidate. It cannot settle one.
 
 ### Limb 1: discovery sources, closed
 
@@ -202,11 +205,12 @@ convenient when someone looked.
 
 ### Still true: nothing external has been verified
 
-FR-064 says how to decide membership and FR-065 says what passing means. Neither has been
-applied to any repository. No candidate has been discovered from host flake inputs, no revision
-has been pinned, no negative determination has been recorded, and no companion has been
-exercised. All five published rows remain **Pending live-host verification**, and the five-row
-inventory itself remains an unverified starting set that FR-064 will confirm or change at W8.
+FR-064 says how to decide membership and FR-065 says what passing means. No inventory row has
+been discovered from host flake inputs, no in-set companion revision has been pinned, and no
+in-set companion has been exercised. Revision 2 records only the negative surface-consumption
+determination that excludes `weezterm`; that is not compatibility verification. All four
+published rows remain **Pending live-host verification**, and the four-row inventory itself
+remains an unverified starting set that FR-064 will confirm or change at W8.
 
 ## Partial adaptation: the classification that decides the release
 
@@ -217,17 +221,15 @@ called degradation.
 
 ### Conformance is not degradation
 
-`runtime.operationCapabilities` is a committed manifest field, emitted by
-`nixos-modules/lib.nix` and pinned in `docs/reference/manifest-schema.json`.
-`docs/reference/zone-cli-contract.md` already binds the shell client to "check
-`runtime.operationCapabilities.guest.shell` before offering a shell action", and requires
-`PoolUnavailable` and `FeatureDisabled` to render as distinct states.
+The revision-2 inventory binds `d2b-wlterm` to the qualified ShellSession Resource lifecycle
+and ProcessAttachClient named streams. It explicitly excludes the retired public-socket
+`ShellOp` family, while the persistent-shell and v3 replacement references define the typed
+unavailability and refusal states for the replacement surfaces.
 
-A companion that reads that key, finds it false, and declines the action is **doing what the
-contract instructs**. Calling that a defect would hold the release on a companion for obeying
-d2b, and would make the capability surface it obeys pointless. Capability discovery is the
-sanctioned way an operator's desktop shrinks: it is configuration-driven, operator-visible,
-and typed.
+A companion that receives one of those published states and declines the action with the
+required remediation is **doing what the contract instructs**. Calling that a defect would
+hold the release on a companion for obeying d2b. Typed refusal is the sanctioned way an
+operator's desktop shrinks: it is configuration-driven, operator-visible, and actionable.
 
 Degradation is the other case, and it is the one SC-024 names: the surface is available, and
 the companion cannot use it. That is "an operator's desktop degraded by adopting 3.0", and it

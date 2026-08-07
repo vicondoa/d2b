@@ -1002,8 +1002,9 @@ All six release-gate conditions, evaluated against the **final** candidate:
 Plus this program's own additions:
 
 ```bash
-# Companion verification - exercise each against the release candidate on a live host
-# d2b-toolkit, d2b-wlterm, d2b-wlcontrol, d2b-clip-picker  (weezterm consumes no contract)
+# Companion verification - exercise all four revision-2 rows on a live host
+# d2b-toolkit, d2b-wlterm, d2b-wlcontrol, d2b-clip-picker
+# weezterm is excluded by a recorded negative surface-consumption determination
 ```
 
 **Expected**: every companion works, or the release holds (FR-039, SC-024).

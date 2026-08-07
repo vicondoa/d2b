@@ -365,7 +365,7 @@ in `contracts/companion-contracts.md`: a specific companion, a specific surface,
 reason the published contract is insufficient to implement against. Absent that, the constraint
 stands, and FR-061 makes the amendment path the only lawful way to change it.
 
-**No external repository was verified, and nothing here claims otherwise.** All five rows of the
+**No external repository was verified, and nothing here claims otherwise.** All four rows of the
 published inventory read "Pending live-host verification". CO-1 and CO-2 are recorded as done
 because the documents are committed and reachable; CO-3 and CO-4 are open, and they are the ones
 that carry the compatibility claim.
@@ -391,13 +391,12 @@ credit; a row with one Blocked surface is Blocked.
 **What changed is the boundary, not the strictness.** Two different things were being called
 degradation, and separating them is the whole content of the decision:
 
-- A companion that reads a published capability key, finds it false, and declines the action is
-  **conforming to the contract**. `runtime.operationCapabilities` is a committed manifest field
-  emitted by `nixos-modules/lib.nix`, and `docs/reference/zone-cli-contract.md` already binds
-  the shell client to check `runtime.operationCapabilities.guest.shell` before offering a shell
-  action, with `PoolUnavailable` and `FeatureDisabled` as distinct required states. Classifying
-  that as a defect would hold the release on a companion for obeying d2b and would make the
-  capability surface pointless.
+- A companion that receives a published typed unavailability or refusal state and declines the
+  action with the required remediation is **conforming to the contract**. The revision-2
+  inventory binds `d2b-wlterm` to the qualified ShellSession Resource lifecycle and
+  ProcessAttachClient named streams, and explicitly excludes the retired public-socket
+  `ShellOp` family. Classifying an actionable refusal on those replacement surfaces as a defect
+  would hold the release on a companion for obeying d2b.
 - **Degradation** is the other case: the surface is available and the companion cannot use it.
   That is what SC-024 names, and it blocks.
 
@@ -455,11 +454,11 @@ operator rather than by the gate. The asymmetry only points one way.
 kind of claim that should not be asserted. `AGENTS.md` names no companion at all - there is no
 sibling-flake section, contrary to what `contracts/companion-contracts.md` previously stated.
 `README.md` names them exactly once, at line 38, inside a sentence about colour output: it lists
-three of the five published members under non-canonical short names (`wlcontrol`, `wlterm`,
+three of the four revision-2 members under non-canonical short names (`wlcontrol`, `wlterm`,
 `clip-picker`), adds two upstream projects that are not members (`niri`, `Waybar`), and omits
-`d2b-toolkit` and `weezterm`. One line, three of five, two false positives, two omissions. That
-is the evidence for a mechanical test, and the stale claim in the contract file was corrected in
-the same pass.
+`d2b-toolkit`. Revision 2 separately records `weezterm` as excluded. One line, three of four,
+two false positives, one member omission. That is the evidence for a mechanical test, and the
+stale claim in the contract file was corrected in the same pass.
 
 **One negative rule that does real work.** Reading a private bundle artifact is **not**
 membership; it is a defect to report. `docs/reference/manifest-bundle.md` fixes the
@@ -468,10 +467,12 @@ consumer to the inventory would record an unauthorised read as a supported contr
 convert a security finding into a compatibility obligation.
 
 **No external repository was verified, and nothing here implies otherwise.** FR-064 says how to
-decide membership and FR-065 says what passing means; neither has been applied. No candidate has
-been discovered from host flake inputs, no revision pinned, no negative determination recorded,
-and no companion exercised. All five published rows remain Pending, and the five-row inventory
-is itself an unverified starting set that FR-064 will confirm or change at W8.
+decide membership and FR-065 says what passing means. No inventory row has been discovered from
+host flake inputs, no in-set companion revision has been pinned, and no in-set companion has
+been exercised. Revision 2 records only the negative surface-consumption determination that
+excludes `weezterm`; that is not compatibility verification. All four published rows remain
+Pending, and the four-row inventory is itself an unverified starting set that FR-064 will
+confirm or change at W8.
 
 **Companion family status: closed.** CHK018, CHK022, CHK025, CHK033, and CHK044 are all
 resolved. The remaining open items in this checklist belong to other families.

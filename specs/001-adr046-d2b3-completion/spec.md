@@ -1230,12 +1230,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   **First, the distinction the classification rests on.** A companion that reads a published
   capability key, finds the capability false, and declines to offer the action is **conforming
   to the contract**, not degrading. Capability discovery is the sanctioned way an operator's
-  desktop shrinks: `runtime.operationCapabilities` is a committed manifest field, and
-  `docs/reference/zone-cli-contract.md` already binds the shell client to check
-  `runtime.operationCapabilities.guest.shell` before offering a shell action. Treating that as
-  a defect would block the release on a companion doing exactly what d2b told it to do, and
-  would make the capability surface pointless. **Degradation** is the different case: the
-  surface is available and the companion cannot use it.
+  desktop shrinks: the revision-2 companion inventory binds `d2b-wlterm` to the qualified
+  ShellSession Resource lifecycle and ProcessAttachClient named streams, and the replacement
+  references define typed unavailability and refusal states for those surfaces. Treating an
+  actionable refusal in one of those published states as a defect would block the release on
+  a companion doing exactly what d2b told it to do. **Degradation** is the different case: the
+  replacement surface is available and the companion cannot use it.
 
   | Outcome | Condition | Effect on the release |
   | --- | --- | --- |
@@ -1289,9 +1289,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 
   Prose in `README.md` or `AGENTS.md` MAY raise a candidate but MUST NOT settle membership,
   because it is measurably unreliable: `AGENTS.md` names no companion at all, and `README.md`
-  names them once, in a sentence about colour output, listing three of the five published
+  names them once, in a sentence about colour output, listing three of the four revision-2
   members under non-canonical short names alongside two upstream projects that are not members,
-  and omitting two members entirely.
+  and omitting `d2b-toolkit`. Revision 2 separately records the negative determination that
+  excludes `weezterm`; it is not a fifth member.
 
   **Limb 2 - consumed public surface.** The candidate consumes at least one surface from this
   closed list of public operator surfaces:

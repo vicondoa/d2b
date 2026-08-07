@@ -364,7 +364,7 @@ specs/001-adr046-d2b3-completion/
 │   ├── generated-artifacts.md
 │   └── companion-contracts.md
 |-- checklists/
-|   |-- requirements.md  # Spec quality checklist (16/16 passing)
+|   |-- requirements.md  # Spec quality checklist (27/27 passing)
 |   \-- coverage.md      # Upstream coverage gate; CHK054 closes only the C1
 |                        #   specification-quality ambiguity, not implementation
 \-- tasks.md             # Phase 2 output - NOT created by /speckit-plan
