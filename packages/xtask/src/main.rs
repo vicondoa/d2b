@@ -623,13 +623,13 @@ fn install_fresh_lock(
     bytes: &[u8],
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let destination = root.join(format!("bazel/cargo/{hub}.lock"));
-    if let Ok(metadata) = fs::symlink_metadata(&destination) {
-        if !metadata.file_type().is_file() {
-            return Err(fresh_bootstrap_error(
-                hub,
-                "selected lock path became occupied during bootstrap",
-            ));
-        }
+    if let Ok(metadata) = fs::symlink_metadata(&destination)
+        && !metadata.file_type().is_file()
+    {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "selected lock path became occupied during bootstrap",
+        ));
     }
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
