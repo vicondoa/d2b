@@ -292,9 +292,13 @@ merge-target registration, merge eligibility, and merge.
     the source, computes only the typed domain-separated and length-framed receipt-content
     digest before decode, derives the typed content-address locator, validates the outer triplet, then
     installs the exact bytes beneath held current-effective-uid `0700` candidate dirfds as a
-    current-effective-uid `0600` leaf. The importer uses a create-exclusive temp, file
-    `fsync`, and `renameat2(RENAME_NOREPLACE)`, then `fsync`s every ancestor directory from
-    `sha256` through the candidate directory before it publishes the `EvidenceRecord`.
+    current-effective-uid `0600` leaf. The importer opens an unnamed
+    `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the final parent, writes/file-syncs/revalidates it,
+    and uses a validated zero-capability procfs-fd `linkat(..., AT_SYMLINK_FOLLOW)` to link
+    that exact inode directly to the final no-replace leaf. It final-reopens the same inode,
+    syncs the final parent, then `fsync`s every ancestor directory through the candidate
+    directory before it publishes the `EvidenceRecord`. It uses no named temporary,
+    `AT_EMPTY_PATH`, or name-consuming publication rename.
     Every importer, cleanup worker, incident transition, successor admission, and retention
     guard holds the same verified candidate-scoped exclusive OFD lock through publication or
     return. Successful acquisition yields one private `CandidateSidecarGuard` that solely
@@ -302,27 +306,27 @@ merge-target registration, merge eligibility, and merge.
     `SidecarCleanupOwner<'guard>`. Every namespace open or cleanup mutation is a method on
     that borrow, so it cannot outlive, be paired with a later guard, or remain usable after
     lock release. Neither type exposes construction, raw-fd extraction, duplication,
-    transfer, serialization, clone, conversion, or `'static` storage. A live owner cannot be cleaned; a nonblocking cleanup loser returns before any
-    namespace open or mutation, and restart
-    cleanup begins only after lock acquisition, moves the opened temp to a reserved
-    quarantine name, reopens and verifies the same device/inode and full identity, derives
-    the candidate/content/device/inode-bound retirement id, and moves the leaf no-replace
-    into the bounded `evidence-sidecars/sc002/retired` subtree. It then reopens and
-    revalidates the retired leaf and `fsync`s the leaf, both parents, and every changed
-    ancestor. No sidecar data leaf is unlinked. Every name-consuming operation is
-    `renameat2(RENAME_NOREPLACE)` followed by an fd-relative reopen and full moved-inode
-    identity check; no check-then-unlink or name-only inode claim exists.
+    transfer, serialization, clone, conversion, or `'static` storage. A live owner cannot be
+    cleaned; a nonblocking cleanup loser returns before any namespace open or mutation.
+    Restart cleanup begins only after lock acquisition. Named temporary and quarantine
+    namespaces are legacy-observation-only: current publication never creates them, and
+    cleanup never renames, hardlinks, or unlinks an existing sidecar name because the OFD
+    lock cannot exclude a same-uid pathname replacer. A retained legacy name enters the
+    identity-ambiguity path after its direct-final write-ahead preimage is durable. Payload
+    and residue evidence are immutable direct-final copies from the retained source fd; the
+    original name remains in the frozen recursive census. The retired subtree is retained
+    read-only compatibility evidence.
 
     An identity mismatch never unlinks or restores the suspect. It durably publishes the
     structured `Sc002IncidentPreimageV1` containing every applicable kind-specific
     component as a complete unnamed-inode/file-synced write-ahead record before it
     capability-free procfs-fd links that exact opened inode directly to the final
-    no-replace preimage or publishes any other incident leaf. Only after durable preimage publication may it
-    publish the kind-bearing incident anchor and complete metadata, then move the
-    metadata-bound currently named inode to the
-    typed incident payload address, reopens and verifies it, syncs the payload fd, both
-    parents, and every changed ancestor, and append-only publishes `parked`. A replacement
-    or rename/reopen mismatch is exactly `recovery-resumable` when one continuation remains
+    no-replace preimage or publishes any other incident leaf. Only after durable preimage
+    publication may it direct-final publish the kind-bearing incident anchor and complete
+    metadata, then copy from the metadata-bound retained source fd into the direct-final
+    typed incident payload, reopen and verify it, sync the payload fd and every changed
+    ancestor, and append-only direct-final publish `parked`. A source replacement or
+    copy/final-reopen mismatch is exactly `recovery-resumable` when one continuation remains
     and otherwise `recovery-irreconcilable`; every name is preserved, inspect returns the
     stable id/cause/remediation, and no parked status is fabricated. Recover is offered only
     for the resumable variant. Authenticated apply handles the irreconcilable variant by
@@ -371,17 +375,24 @@ merge-target registration, merge eligibility, and merge.
     Independent literal fixtures pin the complete receipt, retired-census,
     primary-evidence-census, source-floor 32-id receipt, 26-id issuer-authentication/
     capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
-    15-id pre-start/root, 27-id unit-census, 26-id request-output, and both forbidden-value
+    15-id pre-start/root, 27-id unit-census, 34-id direct-final publication, and both forbidden-value
     registries. The SC-002 census set has 73 ids and includes root-instance injectivity,
     invalid-node totality, depth-64 acceptance, depth-65 denial, directory completeness, and
-    full-descendant bounded-failure refusal. The request-output set has 26 ids, and the
-    recovery redaction set has seventeen rows including raw `st_uid`, `st_gid`, `st_rdev`,
+    full-descendant bounded-failure refusal. The retained request-output fixture has 34 ids:
+    its original 26 preimage/request-output cases plus eight read-independent receipt-import
+    unsupported-open, invalid-procfs/mount, unsupported-link, conflict, crash-boundary, and
+    zero-write-replay cases. Every importer support refusal proves zero receipt leaf and zero
+    `EvidenceRecord` mutation. The recovery redaction set has seventeen rows including raw
+    `st_uid`, `st_gid`, `st_rdev`,
     and symlink-target bytes.
-    Source-floor signature validation
-    consumes one private non-clonable `ProtectedSourceFloorOrigin` through private
-    `AuthenticatedSourceFloorIssuerProvenance` into one validated-floor result. Later
-    boundaries borrow/attenuate it; copied authority/key digests, origin replay, repeated
-    mint, and serialized revalidation cannot produce authority. One shared
+    Source-floor signature validation acquires one private non-clonable
+    `ProtectedSourceFloorOrigin` under a sole OFD claim, carries it through private
+    `AuthenticatedSourceFloorIssuerProvenance` into one validated-floor result, and commits
+    durable origin consumption only with the atomic durable dispatch publication. Failure
+    or pre-publication owner death releases the claim and permits exact-origin reacquisition;
+    post-publication restart resumes the durable dispatch without another mint. Later
+    boundaries borrow/attenuate it; copied authority/key digests, concurrent origin replay,
+    repeated mint, and serialized revalidation cannot produce authority. One shared
     nineteen-digest/one-signature SC-002 domain-hash
     golden is the oracle for every typed locator, incident, resolution, and disposition
     digest; raw SHA-256 locator definitions are ineligible.
@@ -395,10 +406,13 @@ merge-target registration, merge eligibility, and merge.
     active, transfer-pending, recovery, and terminal handoff variant one exact
     state/phase/owner/action/successor tuple. Active and failed broker owners, including
     transfer-pending and rollback, are distinct. Terminal selection uses the authenticated
-    current-intent pointer. Its 135 independent cases enumerate seven rollback members, 30
-    audit members, and 15 transition edges plus mismatch, extra-mutation, pointer-auth, and
-    shrinkage poisons. Selector-free pointer repair is distinct from immutable-audit
-    restoration escalation. Recovery uses only the existing broker unit.
+    current-intent pointer. Its 155 independent cases enumerate seven rollback members, 32
+    audit members, and 15 transition edges plus mismatch, extra-mutation, pointer-auth,
+    repair-input/restart/conflict/no-write, and shrinkage poisons. Selector-free pointer
+    repair is the Admin-only typed broker operation with immutable pre/outcome audit,
+    clean/repairable absence classification, bounded member/failure restoration output,
+    authenticated retained backup, and separate unaudited-mutation integrity escalation.
+    Recovery uses only the existing broker unit.
     Human/JSON schemas and both redaction registries remain synchronized; no path, fd,
     generation, raw identity, request body, or free-form remediation enters logs, audit,
     metrics, spans, errors, panic, or `Debug`.

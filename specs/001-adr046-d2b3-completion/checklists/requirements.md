@@ -57,22 +57,26 @@
   restart variants, terminal selection uses the authenticated current pointer, and there is
   no daemon recovery owner or new unit
 - [x] Literal expectations pin the 15 mutation edges, all 90 apply-peer ids, all 91
-  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 73 census ids, 26
-  request-output ids, and seventeen recovery redaction rows independently from production
+  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 73 census ids, 34
+  direct-final publication ids, and seventeen recovery redaction rows independently from
+  production
 - [x] Recursive census goldens cover depth 64 success, depth 65 denial, every invalid node
   kind, unstable denial, `st_uid`/`st_gid`/`st_rdev`, and symlink-target identity
 - [x] Handoff goldens and independent cases pin every valid tuple, exact human/JSON/errors,
   exits `0|2|3|4`, forbidden inspect inputs, current/terminal pointer selection, selector-free
-  pointer repair and immutable-audit escalation, and the exact 135 cases over seven rollback
-  members, 30 audit members, 15 transition edges, mismatches, extra mutation, pointer
-  authentication, and shrinkage; Type-1 option eval cannot substitute for Type-10 VM proof
+  pointer repair restart/conflict/no-write behavior, bounded immutable-audit diagnostics,
+  separate integrity escalation, and the exact 155 cases over seven rollback members, 32
+  audit members, 15 transition edges, mismatches, extra mutation, pointer authentication,
+  and shrinkage; Type-1 option eval cannot substitute for Type-10 VM proof
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
-  lifetime-bound `SidecarCleanupOwner<'guard>`
+  lifetime-bound `SidecarCleanupOwner<'guard>`; named legacy state is never renamed or
+  unlinked
 - [x] Source-floor issuer validation returns private nonserializable authenticated
-  provenance only after consuming one non-clonable protected origin into one final
-  validated-floor result; copied digests, origin replay, repeated mint, and serialized
-  revalidation cannot mint authority
+  provenance from one non-clonable OFD-claimed protected origin, commits durable consumption
+  only with dispatch publication, and permits exact-origin reacquisition after
+  pre-publication owner death; copied digests, concurrent origin replay, repeated mint, and
+  serialized revalidation cannot mint authority
 - [x] Source-floor 32/26/21 and 91-case, mutation-edge 15/90 plus post-mutation,
   pre-start/root, unit-census, SC-002 output/census, and both forbidden-value expectations
   are independently pinned

@@ -270,7 +270,8 @@ that exact opened inode is capability-free linked through a validated procfs fd 
 the final no-replace name, and it is durably published before the kind-bearing anchor,
 preimage-complete metadata, exact typed content-addressed
 payload, and append-only
-`parked` status are leaf-and-every-ancestor durable. A rename/reopen race is classified as
+`parked` status are leaf-and-every-ancestor durable. A legacy source-copy or final-reopen
+race is classified as
 exactly `recovery-resumable` or `recovery-irreconcilable`, preserves every still-named leaf,
 and exposes no parked status. Inspect returns the stable incident id, one closed cause,
 deterministic remediation, and the exact human/JSON status for both variants. Recover is
@@ -278,9 +279,9 @@ advertised only when one preimage/anchor/metadata-bound next step is uniquely re
 
 Every durable anchor, metadata, status, resolution, successor freeze, request, disposition,
 and admission record repeats the same structured preimage byte-for-byte. If the expected
-identity cannot be recovered, authenticated apply either retains each
-representable currently named leaf by no-replace rename/reopen through durable incident
-residue staging or binds the frozen primary-evidence scope through a complete census or an
+identity cannot be recovered, authenticated apply leaves each representable currently named
+leaf in place, direct-final publishes immutable incident residue copies, and binds every
+retained name in the frozen primary-evidence scope; otherwise it uses a complete census or an
 identity-bearing bounded-failure commitment. One byte grammar recursively records every
 required `(root-code, root-instance-code)` pair and every descendant. It encodes absent,
 directory, regular-file, symlink, block-device, character-device, fifo, socket, mount, and
@@ -380,7 +381,8 @@ If the locked primary-evidence digest changes between inspect and apply, apply e
 returns the new inspect projection, and requires a newly bound disposition. No generic retry,
 force flag, deletion selector, or alternate path is accepted.
 The test contract compares independently authored literal expectations with all 61 receipt,
-73 malformed retired/primary-census, and 26 request-output ids from `data-model.md`, scans all
+73 malformed retired/primary-census, and 34 direct-final publication ids from
+`data-model.md`, scans all
 seventeen SC-002 recovery redaction canaries, and uses the shared
 nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest copied from
 production is not evidence.
@@ -567,14 +569,18 @@ no fixed illustrative target.
 > actual verifier key, signature domain, and signature all match the accepted disposition;
 > copying expected digests into a chain signed by another valid key refuses after enclosing
 > hashes and unaffected proofs validate and cannot produce private authority. The installed
-> source coordinator atomically consumes the exact origin record into one nonserializable,
-> non-clonable `ProtectedSourceFloorOrigin`. The disposition-pinned validator consumes that
-> owner while creating private `AuthenticatedSourceFloorIssuerProvenance`, then consumes the
+> source coordinator acquires the exact origin record under one exclusive OFD claim into one
+> nonserializable, non-clonable `ProtectedSourceFloorOrigin` without durable consumption.
+> The disposition-pinned validator consumes that process-local owner while creating private
+> `AuthenticatedSourceFloorIssuerProvenance`, then consumes the
 > intermediate by value to create the separate private
 > `ValidatedSourceGenerationCompatibilityFloor`; direct DTO decode, copied digest tuples,
-> serialization, clone/copy, origin replay, or a repeated validator call cannot create
-> another result. Later handoff boundaries borrow and attenuate that one result and never
-> revalidate serialized floor evidence.
+> serialization, clone/copy, concurrent origin replay, or a repeated validator call cannot
+> create another result. Durable consumption commits only with atomic durable dispatch
+> publication. Failure or owner death before publication permits exact-origin reacquisition
+> after proving no dispatch exists; restart after publication resumes without another mint.
+> Later handoff boundaries borrow and attenuate that one result and never revalidate
+> serialized floor evidence.
 > The source producer/installer and typed import/validation authority must conform to those
 > artifacts; they may not redefine them in the compatibility disposition. The source
 > broker's ordinary `serve` process under the existing
@@ -715,24 +721,41 @@ selector-free unprivileged command:
 
 It uses the existing public socket and broker coordinator. It may durably repair only a
 uniquely reconstructible authenticated current-intent pointer and then prints the normal
-five-line status. If any immutable rollback member, audit pair, transition edge, or pointer
-authentication is absent or mismatched, it exits `4` with
-`action: restore-immutable-audit-backup` and zero mutation. That is an escalation to the
-accepted external backup owner for the exact matrix member; after restoration, rerun the
-same command. There is no force flag, generic copy procedure, new unit, or daemon recovery
-owner.
+five-line status. A clean absence instead returns the same exit-`3` not-found result as
+inspect. Repair accepts only optional `--json`; any selector, path, token, root invocation,
+extra positional argument, or `--force` exits `2` with
+`action: repair-without-selectors` and zero mutation.
+
+The broker records immutable `coordinator-pointer-repair` pre-mutation and outcome audit
+members around direct-final no-replace pointer publication. A crash before the direct link
+leaves the pointer absent; after it, restart accepts only absence or the exact complete
+final and completes parent/audit durability. Repeating a completed repair is success with
+zero write. A conflicting final is preserved and exits `4` with
+`action: preserve-and-escalate-pointer-conflict`.
+
+If one immutable rollback, audit, transition, or pointer-authentication member is absent or
+mismatched, exit `4` identifies its bounded closed member and failure class with
+`action: restore-immutable-audit-backup`. The broker-private
+`HostGenerationImmutableAuditBackupOwner` retains authenticated append-only backup members
+while the intent is current and for 30 days after pointer replacement. Its exact signed
+`HostGenerationImmutableAuditRestorationV1`, not a filesystem copy, authorizes no-replace
+restoration; then rerun the same repair command. An unaudited extra mutation instead reports
+`action: preserve-and-escalate-audit-integrity-incident`; preserve the coordinator and
+backup artifacts for security adjudication and do not attempt restoration. There is no
+force flag, generic copy procedure, new unit, or daemon recovery owner.
 
 The host acceptance must race two authorization commands and two apply commands, inject an
 otherwise impossible two-pending-intent census, disconnect before and after the first
 mutation, and invoke apply after terminal completion. Exactly one contender may win only
 when one pending intent exists. Every refusal has zero selected and successor mutations, and
 post-mutation recovery resumes only the same durable intent. Hermetic Rust tests own tuple
-validation, exact human/JSON/error goldens, forbidden inspect inputs, pointer selection, and
-the exact independent seven-member, 30-audit-member, 15-transition-edge rollback matrices.
-Their 135-case registry covers every missing and mismatched member, each changed transition
-edge, unaudited extra mutation, unauthenticated pointer, and all four shrinkage
-meta-negatives, plus exact successful pointer-repair and audit-restoration-escalation
-goldens. The Type-1 Nix case proves only
+validation, exact human/JSON/error goldens, forbidden inspect and repair inputs, pointer
+selection, and the exact independent seven-member, 32-audit-member, 15-transition-edge
+rollback matrices. Their 155-case registry covers every missing and mismatched member, each
+changed transition edge, unaudited extra mutation, unauthenticated pointer, every repair
+restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exact successful
+pointer-repair, bounded audit-restoration, and integrity-incident goldens. The Type-1 Nix
+case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
 `host-generation-handoff.nix` VM test alone proves real broker service failure/restart,
 ownership transfer, mutation, rollback, and terminal selection.

@@ -185,6 +185,36 @@ error envelopes. Every state-table row, forbidden transition/input, source/targe
 active/failed condition, transfer-pending failure, restart, terminal pointer replacement,
 incomplete rollback proof, and redaction case is independently pinned.
 
+The paired mutation command is exactly
+`d2b-host-generation-deploy --repair-authorized-handoff [--json]`. It is unprivileged,
+selector-free, and traverses the same public socket. T595 owns the CLI and T592 owns the
+typed `RepairHostGenerationCurrentIntentV1` broker operation. Only the accepted-socket
+`Admin` capability is admitted; launcher, workload, Zone, unauthenticated, direct-broker,
+and root callers are denied. Intent or generation selectors, path or token input, an extra
+positional argument, and `--force` each exit `2` with zero mutation and the exact
+`repair-without-selectors` human/JSON refusal from `data-model.md`.
+
+Pointer absence is closed. `clean-absence` has no uniquely eligible authenticated intent,
+so inspect and repair both return the exact exit-`3` not-found envelope without a write.
+`repairable-absence` has exactly one authenticated active or terminal intent and complete
+immutable matrix with only its current pointer missing. Under the broker coordinator lock,
+repair durably appends the distinct `coordinator-pointer-repair/pre-mutation` audit member,
+publishes the pointer from a file-synced unnamed inode directly to the final no-replace
+name, syncs the final parent, and durably appends the matching outcome. A conflicting final
+is preserved and exits `4`. Restart before the link sees absence; restart after it accepts
+only absence or the exact complete final; a pre-only audit resumes, and a complete pair plus
+exact pointer is second-run success with zero write.
+
+A missing, mismatched, unauthenticated, or noncontiguous immutable member exits `4` and
+reports only its closed member id and failure class with
+`action: restore-immutable-audit-backup`. The binding
+`HostGenerationImmutableAuditBackupOwner` supplies the signed append-only
+`HostGenerationImmutableAuditRestorationV1` for broker no-replace restoration; retention is
+mandatory while the intent is current and for 30 days after pointer replacement. An
+unaudited extra mutation instead returns the separate
+`preserve-and-escalate-audit-integrity-incident` action and is not restoration-eligible.
+No generic copy, force flag, daemon repair path, or new unit exists.
+
 ## Retirement register
 
 Populate as each is retired. `d2b host migrate-storage` is already classified: it served the

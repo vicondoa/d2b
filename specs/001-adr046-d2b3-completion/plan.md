@@ -954,9 +954,9 @@ source for test case enumeration.
 
 #### Serial dependencies and file ownership
 
-**Round 22 correction to the long external-amendment row below:** its current
-SC-002 counts are six closed remediation values, exact 61/73/26
-receipt/census/request-output registries, and seventeen recovery-redaction rows. The external
+**Round 24 correction to the long external-amendment row below:** its current
+SC-002 counts are six closed remediation values, exact 61/73/34
+receipt/census/direct-final-publication registries, and seventeen recovery-redaction rows. The external
 owner must also adopt the complete
 preimage/request unnamed-inode protocols, total root-instance/node grammar, coverage-repair
 projection, and handoff contract assigned below. The row remains one external prerequisite;
@@ -979,8 +979,8 @@ no task or ownership edge is added.
 
 The T589 ownership row is refined by the SC-002/source-floor closure in `tasks.md`.
 Its older SC-002 and unit-count shorthand is superseded by the closed registries in
-`data-model.md` and `tasks.md`: 61 receipt ids, 73 malformed-census ids, 26 request-output
-ids, seventeen SC-002 recovery redaction rows, fifteen pre-start/root ids, and twenty-seven
+`data-model.md` and `tasks.md`: 61 receipt ids, 73 malformed-census ids, 34 direct-final
+publication ids, seventeen SC-002 recovery redaction rows, fifteen pre-start/root ids, and twenty-seven
 unit-census ids. Version 2 must additionally pin the exact 19-field disposition request,
 closed 19-to-22 authority transformation, complete preimage write-ahead publication,
 candidate-first zero-capability procfs-fd exact-inode direct-final request-output protocol,
@@ -1037,12 +1037,29 @@ preimage/payload-or-residue/status-or-resolution/id kind agreement, every
 temporary-leaf/file/no-replace/reopen/payload-file/parent/ancestor sync boundary, and
 idempotent recovery or resolution before F may freeze.
 
+**R24 ownership-table correction:** In the external-amendment and T589 rows above, every
+named temporary, publication rename, quarantine/retirement/source-to-payload move,
+existing-name rename/reopen, and immediate durable source-origin consumption clause is
+superseded and non-authorizing. Every new SC-002 immutable record uses unnamed-inode
+zero-capability procfs-fd direct-final publication. Legacy names are retained and censused;
+payload/residue evidence is copied direct-final only after the incident preimage is durable.
+The exact publication registry is 34 ids. `CandidateNamespaceWriteOwner` exposes no rename
+or unlink and has separate parent-boundary, source-replacement, and destination-reopen
+runtime negatives. T592 owns the Admin-only typed pointer-repair and audit-restoration broker
+ops, 32-member audit fixture, coordinator lock, backup owner/retention, and pre/outcome
+audit; T595 owns the CLI. The handoff registry is 155 ids over seven rollback members, 32
+audit members, and 15 transition edges. No task dependency changes.
+
 The external source-floor row now requires issuer-authenticated canonical receipts, strict
 schemas/golden vectors at the external-owner paths in `data-model.md`, and a
-single-use `ProtectedSourceFloorOrigin` that the disposition-pinned validator consumes
-through private authenticated issuer provenance into one private nonserializable
-validated-floor result. Later boundaries borrow/attenuate that result and never revalidate
-serialized evidence. The exact
+single-use `ProtectedSourceFloorOrigin` acquired under one exclusive OFD claim without
+durable consumption. The disposition-pinned validator carries that claim through private
+authenticated issuer provenance into one private nonserializable validated-floor result.
+Durable consumption commits only with atomic durable dispatch publication; pre-publication
+failure or owner death permits exact-origin reacquisition after proving no dispatch exists,
+while post-publication restart resumes without another mint. Later boundaries
+borrow/attenuate that result and never revalidate serialized evidence. Fault injection
+covers claim, authentication, semantic, final-capability, and publication boundaries. The exact
 15-digest/four-signature vector file independently reconstructs every domain byte, length
 frame, payload, preimage, digest, verifier key, and signature. The independent 13-row
 role/artifact matrix and 91-case poison matrix visit all roles for all seven classes with
@@ -1074,8 +1091,9 @@ The private retention owner performs only the
 recursive whole-scope retention guard and proves the canonical candidate root, every
 permanent delivery-history namespace, and every complete kind-specific preimage copy remain
 immutable. Overlap tests latch both orderings for every
-writer/cleanup and writer/retention pair and recover two identical orphan leaves without
-collision. The exact 61 receipt, 73 malformed-census, 26 request-output, 32 source-floor receipt, 26 issuer-authentication/
+writer/cleanup and writer/retention pair and preserve every legacy source name without
+existing-name mutation. The exact 61 receipt, 73 malformed-census, 34 direct-final
+publication, 32 source-floor receipt, 26 issuer-authentication/
 capability, and 21 hash-vector negative registries are independent of production and their
 poison builders. T595/T604 own the independent closed 15-edge registry, six
 pre-first transition cases, exact 84-case post-first cross-product, and closed 15-case
@@ -1451,8 +1469,9 @@ The T589 ownership-table row's older incident-path shorthand is superseded by
 `data-model.md` and `tasks.md`: a durable structured preimage contains every kind-specific
 component, every preimage/anchor/metadata/status/resolution/freeze/request/disposition/
 admission record repeats it byte-identically, incident metadata is preimage-complete, and every immutable
-publication uses temporary write, leaf sync, no-replace rename, final reopen, parent sync,
-and sync of every changed ancestor through the candidate directory. The receipt address uses
+publication uses an unnamed `O_TMPFILE`, leaf sync, zero-capability procfs-fd direct-final
+no-replace link, final reopen, parent sync, and sync of every changed ancestor through the
+candidate directory. The receipt address uses
 the exact typed domain-separated, length-framed canonical receipt hash. A revalidated and
 file-synced expected payload reaches `parked`. Every nonterminal census is exactly
 `recovery-resumable` or `recovery-irreconcilable`, with the same stable incident id, one
@@ -1460,9 +1479,12 @@ closed cause, deterministic human/JSON remediation, and exit behavior. Recover i
 only for a uniquely resumable prefix. Before signing,
 `sc002-disposition-request` freezes the clean successor triplet and emits the canonical
 19-field authority request; the authority performs only the exact 19-to-22 transformation,
-and request output uses the anchored openat2/create-exclusive/file-sync/no-replace/reopen/
-parent-sync replay protocol. Apply and admission both rederive that exact binding. Authenticated apply either retains each representable
-name through the closed residue slots and publishes `mismatch-retained`, or binds the
+and request output uses the anchored openat2/unnamed-inode/file-sync/procfs-fd-direct-final/
+reopen/parent-sync replay protocol. Apply and admission both rederive that exact binding.
+Named temporary/quarantine state is legacy-observation-only; current publication never
+creates it, and cleanup never renames, hardlinks, or unlinks an existing name. Authenticated
+apply retains each representable name in place, direct-final publishes immutable evidence
+copies through the closed residue slots, and publishes `mismatch-retained`, or binds the
 complete recursively enumerated frozen primary-evidence census or identity-bearing
 bounded-failure commitment in a
 separate append-only resolution branch when names, metadata, primary status, or census
@@ -1477,8 +1499,8 @@ correction gives cleanup one private `CandidateSidecarGuard` owning the sole loc
 one lifetime-bound nonserializable `SidecarCleanupOwner<'guard>`, expands the
 overlap matrix to every importer/cleanup/incident/successor/retention live-owner pair;
 pins literal source-floor and mutation-edge constants independently from fixtures and
-production; adds the exact 32/26/21 source-floor, 15-case mutation-edge, 61/73/26 SC-002
-receipt/census/request-output negative registries, seventeen-row recovery redaction registry,
+production; adds the exact 32/26/21 source-floor, 15-case mutation-edge, 61/73/34 SC-002
+receipt/census/direct-final-publication negative registries, seventeen-row recovery redaction registry,
 and shared SC-002 hash oracle;
 adds shrink/hook meta-poisons; and closes the fifteen-row apply-peer raw-value registry. No
 task dependency changes; T589's owned fixture and schema lists expand as stated
@@ -1502,7 +1524,7 @@ or hard-ceiling scans. The coverage output includes exact failure/root classes, 
 owner repair procedure, and advertises no disposition request until coverage returns. It
 also owns unnamed-inode direct-final atomic request-output replay and the raw
 `st_uid`/`st_gid`/`st_rdev`/symlink-target redaction ban. The exact current registries are 61
-receipt ids, 73 census ids, 26 request-output ids, and seventeen SC-002 recovery-redaction
+receipt ids, 73 census ids, 34 direct-final publication ids, and seventeen SC-002 recovery-redaction
 rows.
 
 T589 solely adds the shared
@@ -1520,10 +1542,12 @@ Validation is tier-exact. T589's hermetic suite proves preimage and request-outp
 replay, total census encoding and eight vectors, depth 64/65, unstable/hard-ceiling denial,
 payload-file-sync-before-status ordering, cleanup exclusion, and all closed registries.
 T595's hermetic Rust suite proves handoff tuple validation, schema/human/JSON/error goldens,
-forbidden inspect inputs, current-pointer and terminal selection, all four exits, the
-selector-free pointer repair and immutable-audit escalation paths, and all 135 independent
-cases over seven rollback members, 30 audit members, 15 transition edges, mismatch,
-unaudited-extra-mutation, unauthenticated-pointer, and shrinkage poisons. The Type-1 Nix case proves only rebuild-reference option
+forbidden inspect and repair inputs, current-pointer and terminal selection, all four exits,
+clean versus repairable absence, selector-free pointer repair restart/conflict/no-write
+paths, bounded immutable-audit diagnostics, separate integrity escalation, and all 155
+independent cases over seven rollback members, 32 audit members, 15 transition edges,
+mismatch, unaudited-extra-mutation, unauthenticated-pointer, and shrinkage poisons. The
+Type-1 Nix case proves only rebuild-reference option
 grammar. It cannot satisfy service ownership, restart, transfer, rollback, or terminal
 selection. Those effects require T595's dedicated no-skip Type-10 handoff VM evidence and
 T604's separate exact-candidate operator VM evidence through
@@ -1641,6 +1665,13 @@ second validator.
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
+
+In the `operator-nix-activation-cleanup` row, the earlier
+quarantine/reopen/retirement clause is superseded and non-authorizing. Required evidence is
+the 34-case unnamed-inode procfs-fd direct-final importer/preimage/request publication
+matrix, zero receipt-leaf/`EvidenceRecord` mutation on importer support refusal, legacy-only
+named-state preservation with no rename/unlink, direct-final payload/residue copies after
+write-ahead preimage durability, and the three named namespace-owner runtime negatives.
 
 The five T600 identifiers and three T601 identifiers are exclusive ownership. A record may
 contain several test cases only when all cases belong to that row's required-content cell; it
@@ -1795,7 +1826,8 @@ immutable.
 | The accepted external `ADR-046-validation-and-delivery` contract remains Version 1 and therefore does not yet own the complete Wave 5 incident/source-floor byte contract. | Feature-local planning artifacts can specify the required shape but cannot amend the accepted external normative contract, generated manifests, schemas, source, or tests. | External scope escalation: Version 2 must pin the thirteen-line cause/remediation projection; distinct resumable/irreconcilable variants; inspect/request/apply/successor convergence for `evidence-census-conflict`; a pre-signing durable successor freeze and canonical authority request whose exact triplet persists through apply/admit; structured durable incident preimages containing every kind-specific component and repeated across all status/path records; recursively enumerated frozen primary-evidence and retention scopes with identity-bearing bounded-failure replay and raw `01ff` non-authorizing; typed receipt locator plus the nineteen-digest SC-002 hash golden; payload-file plus all-ancestor durability; one-lock cleanup exclusion plus private `SidecarCleanupOwner`; residue-backed `mismatch-retained`; one non-clonable protected source-floor origin consumed through authenticated issuer provenance into one private validated-floor result with copied-digest, replay, repeated-mint, and serialized-revalidation rejection; exact receipt, malformed-census, source-floor 32/26/21, 15-case post-mutation, and unit negative registries; and the complete fifteen-row apply-peer registry. Its approvals, regenerated manifests, Gate 0 receipt, and ancestor binding remain pre-T589 prerequisites. Feature `spec.md`, `data-model.md`, `quickstart.md`, `contracts/README.md`, and `tasks.md` now agree on that planned requirement, but do not supply external acceptance or implementation authority. |
 | Earlier feature planning left the disposition request as a prose prefix transform, retained a second flat primary-census grammar, allowed partial bounded-failure traversal authority, did not tie cleanup authority to the OFD guard lifetime, and described request output as merely create-exclusive. | The accepted external Version 1 contract, source, tests, schemas, normative/reference docs, and panel artifacts remain unchanged and cannot be silently amended by this feature-only batch. | External scope escalation: Version 2 must add the exact 19-field request and 19-to-22 transformation; successor-freeze and request-digest continuity; one recursive absent-root/directory/regular-file grammar; full-descendant coverage or admission denial with hard work ceilings; `CandidateSidecarGuard` plus `SidecarCleanupOwner<'guard>` lifetime/API seals; all-descriptor CLOEXEC and exec-leak proof; anchored openat2, deterministic temp, file-sync, no-replace, final-inode verification, parent-sync, and exact replay for `--request-out`; every cause and handoff recovery-pending/irreconcilable inspect/action/status/successor row; the literal 15-edge, 90-case, and 91-case matrices; the 15 pre-start/root and 27 unit cases; 56 census and 25 output ids; and the thirteen-row SC-002 redaction registry. External schemas, reference/status prose, tests, source, Nix, changelog, contributor guidance, and panel artifacts must move only in their owning workflow before T589. |
 | Round 22 found that incomplete/hard-ceiling SC-002 scans still projected an unusable signing action; named partial preimage/request temporaries could poison replay; recursive node encoding did not injectively represent source-slot roots, symlinks, or devices; handoff status remained a constructible tuple with no terminal-pointer rule or failed-transfer partition; and raw `st_uid`/`st_gid` lacked canaries. | No committed source/test/schema or accepted external Version 1 normative artifact implements the planned correction, so feature prose cannot claim it does. The daemon-only three-unit architecture, broker-only recovery, no-unlink evidence rule, and existing 605 task ids remain binding. | The Round 22 batch added complete unnamed-inode write-ahead publication, six remediation values with null-evidence coverage repair, twelve root/root-instance pairs and total node encoding, full-sequence stable bounded failures, exact depth 64/65, its then-current 72 census and 26 output ids, fifteen recovery canaries, payload-sync-before-status ordering under the candidate lock, and a closed handoff variant/current-pointer/error contract split across T589/T595/T604. The concrete failures were a linked partial record authorizing replay, a symlink/device aliasing absence, a failed transfer projecting wait forever, or incomplete rollback being labeled recoverable. External Version 2, source, tests, schemas, normative/reference docs, ADRs, constitution, contributor guidance, changelog, and panel artifacts remained escalated to their owners and unedited by that batch. |
-| Round 23 found that `AT_EMPTY_PATH` requires capability unavailable to the privilege-dropped target; request-output support refusal conflicted with candidate-first durability; replaceable names weakened cleanup/publication identity; unavailable nodes could enter a serialized bounded body; source-floor bytes could mint repeated capabilities; coverage and coordinator recovery labels advertised unrealizable actions; handoff, redaction, and remediation matrices were incomplete. | No committed source/test/schema or accepted external Version 1 normative artifact implements these corrections. The daemon-only three-unit architecture, broker-only recovery, no-unlink rule, 605 task ids, and all external non-authorizing dispositions remain binding. | Current planning uses zero-effective-capability procfs-fd exact-inode direct-final linking with no `AT_EMPTY_PATH`, linked temporary, or create-and-unlink probe; preserves request candidate-first durability and treats unsupported link as retained-internal output failure; requires a guarded namespace write owner for existing-name cleanup moves; rejects serialized unavailable nodes; consumes one protected source-floor origin into one validated capability with borrow-only attenuation; exposes bounded coverage failure/root classes with exact owner procedures and no signing command until repair; defines selector-free coordinator pointer repair plus immutable-audit escalation; pins 61/73/26 SC-002 registries, seventeen recovery canaries, all six remediation rows, and the exact 135-case handoff registry over seven rollback members, 30 audit members, and 15 transitions. External Version 2, source, tests, schemas, normative/reference docs, ADRs, constitution, contributor guidance, changelog, and panel artifacts remain escalated to their owners and unedited by this batch. |
+| Round 23 found that `AT_EMPTY_PATH` requires capability unavailable to the privilege-dropped target; request-output support refusal conflicted with candidate-first durability; replaceable names weakened cleanup/publication identity; unavailable nodes could enter a serialized bounded body; source-floor bytes could mint repeated capabilities; coverage and coordinator recovery labels advertised unrealizable actions; handoff, redaction, and remediation matrices were incomplete. | No committed source/test/schema or accepted external Version 1 normative artifact implements these corrections. The daemon-only three-unit architecture, broker-only recovery, no-unlink rule, 605 task ids, and all external non-authorizing dispositions remain binding. | Round 23 planning used zero-effective-capability procfs-fd exact-inode direct-final linking with no `AT_EMPTY_PATH`, linked temporary, or create-and-unlink probe; preserved request candidate-first durability and treated unsupported link as retained-internal output failure; required a guarded namespace write owner for existing-name cleanup moves; rejected serialized unavailable nodes; consumed one protected source-floor origin into one validated capability with borrow-only attenuation; exposed bounded coverage failure/root classes with exact owner procedures and no signing command until repair; defined selector-free coordinator pointer repair plus immutable-audit escalation; and pinned its then-current 61/73/26 SC-002 registries, seventeen recovery canaries, all six remediation rows, and exact 135-case handoff registry over seven rollback members, 30 audit members, and 15 transitions. External Version 2, source, tests, schemas, normative/reference docs, ADRs, constitution, contributor guidance, changelog, and panel artifacts remained escalated to their owners and unedited by that batch. |
+| Round 24 found that live importer/preimage/request publication still conflicted with direct-final rules; cleanup relied on same-uid-cooperative name moves; source-floor claims could be consumed before fallible validation; pointer repair lacked restart, privilege, audit, and backup contracts; and live registry counts omitted importer and repair cases. | Committed source, tests, accepted external Version 1 artifacts, external blockers, and non-authorizing dispositions remain unchanged. The daemon-only three-unit architecture, broker-only privileged mutation, fail-closed defaults, and exact 605 task ids remain binding. | Current planning uses unnamed-inode zero-capability procfs-fd direct-final publication for every new SC-002 immutable record, treats named cleanup state as legacy-only, performs no existing-name rename/unlink, and pins 34 publication cases including importer support/crash/replay. Source-origin consumption commits only with durable dispatch and is reacquirable after pre-publication owner death under one OFD claim. T592 owns Admin-only typed pointer repair/restoration broker ops, coordinator lock, 32 closed audit members, immutable pre/outcome audit, and authenticated retained backup; T595 owns the CLI. Clean/repairable absence, every crash boundary, conflict, second-run no-write, forbidden inputs, bounded restoration output, and separate integrity escalation expand the handoff registry to 155 cases while transition edges remain 15. External Version 2 and every other external owner/disposition remain escalated and unmodified. |
 
 ### Recorded drift
 

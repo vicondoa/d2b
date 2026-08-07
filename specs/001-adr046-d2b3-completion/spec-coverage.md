@@ -1106,8 +1106,10 @@ contracts. Accepted external delivery Version 2 owns source-floor canonical enco
 digest/domain/framing, strict schemas, and exact 15-digest/four-signature vectors; the
 compatibility authorities only produce and validate conforming objects. The independent
 13-row role/artifact fixture, exact 91-id class/role poison product, five copied-issuer
-cases, one non-clonable protected origin consumed through private authenticated issuer
-provenance into one validated-floor result with later borrow-only attenuation, and exact
+cases, one non-clonable protected origin acquired under an OFD claim and consumed only with
+durable dispatch publication through private authenticated issuer provenance into one
+validated-floor result with restart-safe exact-origin reacquisition before publication and
+later borrow-only attenuation, and exact
 32-id receipt/transition, 26-id
 issuer-authentication/capability, and 21-id hash-vector negative registries require valid
 cardinality, enclosing hashes, and unaffected signatures before their semantic or pinned-key
@@ -1121,8 +1123,8 @@ human/JSON remediation, and closed exits. The remediation enum has six values, i
 depth-65, or hard-ceiling scans. Those states expose the bounded failure/root class, map to
 one exact owner repair procedure, and render no disposition-request command until a later
 inspect proves coverage. A verified payload reaches `parked`; an
-authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
-namespaces; and a raced rename is exactly `recovery-resumable` or
+authenticated no-unlink residue census reaches `mismatch-retained` with every legacy name
+retained in the frozen census; and a raced source copy/final reopen is exactly `recovery-resumable` or
 `recovery-irreconcilable` with every name preserved. One recursive grammar includes twelve
 root/root-instance pairs and total absent, directory, regular-file, symlink, device, fifo,
 socket, mount, and other observations. Unavailable state is private denied scope only and an
@@ -1144,14 +1146,17 @@ transformation, and apply/admit preserve it. Request output prepares and file-sy
 procfs-fd links the exact inode directly to the final no-replace name after candidate
 durability. Unsupported open has zero internal mutation and unsupported link retains the
 internal pair. The shared nineteen-digest typed hash oracle, exact 61 receipt, 73
-malformed-census, 26 request-output, and seventeen-row recovery redaction registries prohibit
+malformed-census, 34 direct-final publication, and seventeen-row recovery redaction registries prohibit
 a raw locator hash, self-referential resolution digest, or output leak. Every SC-002 cause
 and handoff active/terminal variant has an exact state/phase/owner/action/successor tuple.
 Handoff terminal selection uses the authenticated current pointer; failed transfer and
-rollback owners are partitioned. Its 135-case fixture independently covers seven rollback
-members, 30 audit members, 15 transition edges, unaudited extra mutation, unauthenticated
-pointer, and four shrinkage poisons. Selector-free pointer repair is distinct from immutable
-audit restoration escalation; incomplete rollback proof is never recovery-capable.
+rollback owners are partitioned. Its 155-case fixture independently covers seven rollback
+members, 32 audit members, 15 transition edges, unaudited extra mutation, unauthenticated
+pointer, all repair input/restart/conflict/no-write cases, and four shrinkage poisons.
+Selector-free pointer repair is an Admin-only typed broker operation with immutable
+pre/outcome audit, bounded member/failure diagnostics, authenticated retained backup, and a
+separate unaudited-mutation integrity escalation; incomplete rollback proof is never
+recovery-capable.
 These refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one

@@ -286,15 +286,17 @@ final parent, sets and verifies current-effective-uid ownership and mode `0600`,
 exact validated bytes, and `fsync`s and revalidates the opened inode. Through one validated
 procfs `/proc/self/fd` directory fd it capability-free links that exact opened inode directly
 to the final no-replace leaf with `linkat(..., AT_SYMLINK_FOLLOW)`. It uses no
-`AT_EMPTY_PATH`, linked temporary, or name-consuming publication rename. Before publishing the `EvidenceRecord`
-carrying the derived locator, it `fsync`s each held ancestor directory fd bottom-up:
-`sha256`, `sc002`, `evidence-sidecars`, then the candidate directory. Namespace creation is
-therefore durable, not only the final leaf rename. Before temp creation or recovery, every
+`AT_EMPTY_PATH`, linked temporary, or name-consuming publication rename. Before publishing
+the `EvidenceRecord` carrying the derived locator, it final-reopens and matches the same
+device/inode and exact bytes, `fsync`s the final parent, then `fsync`s each held ancestor
+directory fd bottom-up: `sc002`, `evidence-sidecars`, and the candidate directory. Namespace
+creation is therefore durable, not merely the final link. Before unnamed-inode creation or
+recovery, every
 importer and every cleanup worker acquires the same verified candidate-scoped exclusive OFD
 write lock and retains it through publication or cleanup, parent `fsync`, the applicable
 census, and `EvidenceRecord` publication or return. There is no second cleanup lock or
 lock-free orphan path. A live importer owns that lock; a failed no-replace loser or restart
-path cannot inspect, rename, or remove the live owner's temp. Restart cleanup begins only
+path cannot inspect, rename, or remove the live owner's unnamed inode. Restart cleanup begins only
 after it acquires the released lock. The lock is one fixed candidate-relative regular
 single-link current-effective-uid `0600` leaf opened with `O_CLOEXEC`. Every actor verifies
 the same device/inode before taking `F_OFD_SETLK`; the leaf is never replaced, renamed, or
@@ -302,29 +304,49 @@ unlinked. A nonblocking lock attempt returning `EAGAIN` or `EACCES` proves a liv
 requires zero namespace inspection or mutation before the caller returns the typed
 `sc002-sidecar-owner-live` refusal.
 
-While holding the lock, cleanup may inspect only the reserved temporary and quarantine
-namespaces through the held leaf-parent fd. It opens the candidate temp, requires a regular
-single-link current-effective-uid `0600` leaf, records its device/inode, owner, mode, link
-count, digest, and bytes, and atomically moves the name into a unique reserved quarantine
-name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf. Cleanup never
-calls `unlinkat` on a sidecar data leaf: Linux has no inode-qualified unlink, so a final
-name check followed by `unlinkat` would retain a name/inode race.
+The importer classifier is namespace- and inode-derived. Unsupported `O_TMPFILE`, invalid
+procfs or target-mount identity, and unsupported procfs-fd direct linking return a typed
+refusal with zero receipt leaf and zero `EvidenceRecord` mutation. A crash before inode
+`fsync`, or after inode `fsync` but before the direct link, exposes no receipt leaf. A crash
+after the direct link but before final-parent `fsync` may recover either absence or the exact
+complete final inode. Restart either creates a fresh unnamed inode or final-reopens, verifies,
+and syncs that exact final. A nonidentical `EEXIST` is a conflict and preserves the existing
+leaf. An exact final whose parent and ancestors are durable is replay success with zero
+write. No classifier admits a named temporary, a linked pre-final name, or process memory as
+authority.
 
-Every move of an existing sidecar name additionally requires a private
-`CandidateNamespaceWriteOwner<'guard>`. It can be borrowed only from the same
-`SidecarCleanupOwner<'guard>` after verifying that the source and destination directories
-are the expected single-link current-effective-uid `0700` directories on the expected
-mount, that their device/inode identities still match the held candidate-relative fds, and
-that the candidate lock excludes every d2b writer. This is the write-ownership boundary for
-name-consuming `renameat2`: the mover reopens the source immediately before the rename,
-matches it to the retained source fd, performs the no-replace rename, and reopens the
-destination before any further mutation. Loss of the directory boundary, a changed source
-name, or a destination reopen mismatch returns
-`sc002-namespace-write-ownership-unproven`, preserves every currently named leaf, and
-blocks without another rename or unlink. The owner has no public constructor, fields,
-accessors, serde, clone, copy, conversion, fd extraction, or lifetime independent of the
-candidate guard. Newly created complete records do not use this name-consuming exception:
-their exact opened inode is linked directly to its final no-replace name as specified below.
+The reserved temporary and quarantine namespaces are legacy-observation surfaces only.
+The direct-final importer, incident publisher, and request-output publisher never create a
+named temporary or quarantine leaf. While holding the lock, cleanup may inspect a retained
+legacy name through the held parent fd, once-open it, and record its device/inode, owner,
+mode, link count, digest, and bytes. It never renames or unlinks that name. A same-uid
+process can replace a candidate pathname without honoring the OFD lock, and Linux provides
+no inode-qualified rename or unlink, so an advisory lock plus pre/post reopen cannot prove
+kernel-enforced sole ownership. Every observed legacy name therefore enters the
+identity-ambiguity incident path before any other sidecar namespace mutation. The complete
+incident preimage is direct-final durable first; later payload or residue evidence is a
+direct-final immutable copy from the retained source fd, and the original legacy name
+remains frozen in the recursive evidence census. This is legacy-only recovery, never a
+publication path for new records.
+
+`CandidateNamespaceWriteOwner<'guard>` is a private negative authority borrowed only from
+the same `SidecarCleanupOwner<'guard>`. It proves that existing-name consumption is
+forbidden, not that an OFD lock excludes same-uid writers. Its only publication method may
+prepare an unnamed inode from a retained source fd and direct-link that new inode to a final
+no-replace evidence name after source and destination parent identities, the source-name
+binding, procfs, mount, and final-leaf absence all validate. It exposes no `renameat2` or
+`unlinkat` operation. Parent-boundary loss, source-name replacement, or destination-reopen
+mismatch returns `sc002-namespace-write-ownership-unproven`, performs no later link, rename,
+or unlink, and preserves every name not changed by the fault injector. The owner has no
+public constructor, fields, accessors, serde, clone, copy, conversion, fd extraction, or
+lifetime independent of the candidate guard. Independently pinned hermetic cases
+`candidate-namespace-write-owner/parent-boundary-loss`,
+`candidate-namespace-write-owner/source-replacement`, and
+`candidate-namespace-write-owner/destination-reopen-mismatch` exercise all three failures
+at the method boundary and assert the typed refusal, the complete before/after name census,
+and zero subsequent link/rename/unlink calls. A separate
+`candidate-namespace-write-owner/existing-name-move-hook-unreachable` poison fails if any
+current rename hook exists.
 
 The candidate lock serializes every cleanup worker, not only importer against cleanup.
 Cleanup of the same leaf, cleanup of different leaves under the same candidate, incident
@@ -359,7 +381,8 @@ a namespace. Compile-fail/API-surface tests must reject owner return as `'static
 beyond the guard, construction from any fd, guard extraction, guard replacement, fd
 duplication, and use after guard drop.
 
-If every recorded identity member matches, cleanup derives one `Sc002RetirementIdV1` as
+For every retained legacy retirement record, validation derives one
+`Sc002RetirementIdV1` as
 
 ```text
 SHA-256(
@@ -372,37 +395,27 @@ SHA-256(
 where every named digest is decoded from its canonical lowercase 64-hex representation
 before hashing. Only the resulting lowercase 64-hex retirement id is rendered; raw device
 and inode values never enter an error, record, path component, or observability surface.
-Cleanup moves the still-named leaf with `renameat2(RENAME_NOREPLACE)` into
-`evidence-sidecars/sc002/retired/sha256/<content-digest>/<retirement-id>.bin`, reopens and
-revalidates the same device/inode, owner, mode, link count, digest, bytes, candidate binding,
-and path-derived retirement id. Before the rename, it durably precreates every missing
-`retired`, `sha256`, and content-digest directory and `fsync`s each new directory plus every
-changed ancestor bottom-up through the candidate directory. After the reopen it `fsync`s the
-retired payload fd, both immediate source/destination parent fds, and every changed ancestor
-of both parents bottom-up through the candidate directory. Failure at any payload or
-directory sync leaves a retryable nonterminal prefix and cannot report durable retirement.
-Two
-single-link orphan files with identical bytes have distinct device/inode identities and
-therefore distinct retirement ids and durable names. A crash after the retirement rename is
-recovered from the retired census; it is never recreated from a missing source name.
+The retired subtree is read-only compatibility evidence: the new direct-final protocol
+creates no named orphan and cleanup creates no new retired leaf. Existing retired leaves are
+once-opened, fully revalidated against their path-derived id, and retained. A retained
+legacy temporary or quarantine name is never moved into this subtree, even when its bytes
+match an existing retired leaf.
 
-`EEXIST` at the retirement destination is not an idempotent-success signal while the source
-name still exists. Cleanup opens and validates the existing destination without following
-links, preserves both names, and moves the source to the incident path below with the fixed
-`sc002-retirement-id-collision` refusal and
-`Sc002IncidentKindV1 = "retirement-id-collision"`. The incident id binds the separately
-observed source and existing-destination identity digests; it never treats the destination
-as the source's second observation. Cleanup never overwrites, reuses, or unlinks either
-leaf. The ordinary two-identical-orphan test must retire both leaves under different ids; a
-forced retirement-id collision must take this incident transition, persist its typed status,
-and block publication and close.
+`EEXIST` at a retained retirement destination is never an idempotent-success signal for a
+separately named source. Validation preserves both names and classifies an already durable
+historical collision as `Sc002IncidentKindV1 = "retirement-id-collision"` using its complete
+direct-final preimage. A newly observed legacy source instead takes
+`Sc002IncidentKindV1 = "identity-ambiguity"` before any existing-name mutation because sole
+namespace ownership is unprovable. Tests retain historical collision and distinct-id census
+validation, but independently prove that the current protocol emits no quarantine rename,
+retirement rename, or sidecar-data unlink.
 
-The retired census is bounded to at most 64 regular single-link current-effective-uid
+The retained retired census is bounded to at most 64 regular single-link current-effective-uid
 `0600` leaves and at most 1,048,576 total encoded bytes beneath `retired/sha256`, with no
 unknown directory level, leaf, or name. Every leaf must be at most 16,384 bytes and must
-revalidate against both path digests and the candidate binding. Before adding a 65th leaf,
-exceeding the byte bound, or accepting a malformed census, cleanup preserves the current
-source through the incident transition and returns the fixed
+revalidate against both path digests and the candidate binding. No current path adds a
+member. Encountering a 65th retained leaf, a byte-bound breach, or a malformed census
+preserves every name and returns the fixed
 `sc002-retirement-census-exhausted` or `sc002-retirement-census-invalid` refusal. It never
 grows an unbounded retirement set. Exhaustion persists
 `Sc002IncidentKindV1 = "retirement-census-exhausted"` and binds the verified source
@@ -410,7 +423,8 @@ identity, the valid pre-add census digest, and the current and prospective leaf/
 A malformed census persists
 `Sc002IncidentKindV1 = "retirement-census-invalid"` and binds the verified source identity
 and the bounded observed-census digest. Neither path invents a second identity tuple. A valid
-retired orphan is immutable, non-authorizing residue and does not block retry or close.
+retired orphan is immutable, non-authorizing compatibility residue and does not block retry
+or close.
 
 The sole candidate-retention guard is T589's private
 `packages/xtask/src/delivery/storage.rs::CandidateRetentionOwner`; no importer, restart
@@ -420,8 +434,10 @@ zero-mutation whole-scope retention check. The full delivery-state census must p
 the following: the candidate is terminal `merged` or `abandoned-unmerged`; every request,
 reservation, panel, seal, eligibility, and merge transition is terminal; every SC-002
 incident is absent or has exact primary or resolution `successor-admitted`; every retained external reference to the
-candidate remains resolvable; both ephemeral namespaces are empty; and the receipt, retired,
-incident, disposition, status, and resolution namespaces are exact, bounded, and valid. The guard also
+candidate remains resolvable; both ephemeral namespaces are empty for every direct-final
+ordinary path, while a terminal legacy incident has only the exact names bound by its frozen
+recursive census; and the receipt, retired, incident, disposition, status, and resolution
+namespaces are exact, bounded, and valid. The guard also
 proves that the candidate root remains at its canonical address and that all request,
 reservation, panel-request, panel-record, evidence-record, receipt, seal, eligibility,
 merge, incident preimage, anchor, metadata, payload, residue-staging, residue, primary
@@ -443,41 +459,44 @@ disposition request later consumed by apply and admission. A top-level directory
 opaque `incidentIdPreimageHex`, or status count cannot stand in for that recursive
 path-and-content check.
 
-Before ordinary success or an ordinary refusal returns, the still-held lock guards an exact
-empty census of both ephemeral reserved namespaces and the bounded durable census above. No
-joined path or broad sweep is allowed.
+Before direct-final ordinary success or an ordinary refusal with no legacy residue returns,
+the still-held lock guards an exact empty census of both ephemeral reserved namespaces and
+the bounded durable census above. A terminal legacy incident instead binds every retained
+legacy name in its frozen recursive census. No joined path or broad sweep is allowed.
 
-Identity ambiguity has one different, attainable terminal state. If the quarantine reopen or
-the post-retirement reopen does not prove the recorded inode, cleanup MUST NOT restore the
-suspect name to the temporary namespace or treat the retired name as verified. It records the
-identity digest of the currently named leaf, derives the incident id, and atomically moves
-that name with `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident
-payload namespace
-`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, outside both
-ephemeral reserved namespaces. It then reopens the payload and proves that the moved
-device/inode, owner, mode, link count, digest, and bytes are the exact recorded current
-identity before it can publish `parked` status. The rename is the name-consuming operation;
-there is no check-then-`unlinkat` and no inode claim based only on the pre-rename lookup.
-The incident digest is a fixed domain-separated digest of the candidate binding and both
-observed identity tuples for
+Identity ambiguity has one different, attainable terminal state. A retained legacy
+temporary or quarantine name is ambiguous even when two observations match, because the
+candidate OFD lock does not exclude a same-uid replacer. Cleanup MUST NOT move, restore, or
+unlink that name. It records the before and after identity digests, derives the incident id,
+and first direct-final publishes and syncs the complete incident preimage. It then copies
+the exact bytes from the retained source fd into a new unnamed inode, file-syncs it, and
+capability-free procfs-fd links that new inode directly to the durable candidate-relative
+incident payload
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin` no-replace. Final reopen
+must prove the copied digest, bytes, owner, mode, and incident binding before `parked` may
+publish. The source name remains frozen and recursively censused; there is no existing-name
+rename, hardlink, or unlink. The incident digest is a fixed domain-separated digest of the
+candidate binding and both observed identity tuples for
 `Sc002IncidentKindV1 = "identity-ambiguity"`; raw device/inode values never enter an error
 or observability surface.
 
-A same-name replacement before the rename, a different identity after the rename, `ENOENT`,
-or a nonidentical `EEXIST` never authorizes success or unlink. It leaves the stable incident
-in exactly one classified nonterminal recovery variant, preserves every still-named leaf,
-publishes no `parked` status, and blocks record publication and close. An exact
-metadata-bound continuation is `recovery-resumable`; identity loss, conflict, or ambiguity
-is `recovery-irreconcilable`. Neither is a durable primary status or terminal cleanup result.
-Restart recovery repeats only an exact resumable move under the same lock; irreconcilable
-state requires the authenticated resolution path below.
+A same-name replacement before the copy, source identity loss, `ENOENT`, or a nonidentical
+payload `EEXIST` never authorizes success or unlink. The already durable write-ahead
+preimage leaves the stable incident in exactly one classified nonterminal recovery variant,
+preserves every still-named leaf, publishes no `parked` status, and blocks record publication
+and close. An exact metadata-bound source-fd-to-payload continuation is
+`recovery-resumable`; identity loss, conflict, or ambiguity is
+`recovery-irreconcilable`. Neither is a durable primary status or terminal cleanup result.
+Restart recovery repeats only the exact direct-final copy under the same lock;
+irreconcilable state requires the authenticated resolution path below.
 
 There are two terminal incident entry states. A fully revalidated expected payload, with the
-old ephemeral source absent and all required directory updates durable, publishes `parked`.
+original legacy source retained in the frozen census and all required directory updates
+durable, publishes `parked`.
 When the expected identity can no longer be proved, an authenticated external disposition
-may instead drive the no-unlink mismatch-retention protocol. That protocol moves every
-still-named sidecar data leaf out of the temporary and cleanup-quarantine namespaces through
-the fixed durable staging namespace
+may instead drive the no-unlink mismatch-retention protocol. That protocol leaves every
+still-named sidecar data leaf at its observed name and direct-final publishes an immutable
+evidence copy through the fixed durable staging namespace
 `evidence-sidecars/sc002/incidents/residue-staging/sha256/<incident-id>/<source-slot>.bin`.
 `source-slot` is the closed value `temporary`, `cleanup-quarantine`, `payload`,
 `retired-source`, or `retired-existing-destination`. The two retired slots are derived only
@@ -488,9 +507,9 @@ its recorded temporary, cleanup-quarantine, retired-source, or payload locator; 
 admits its recorded source plus the one recorded retired existing destination; either census
 kind admits its one recorded source. No kind admits a second leaf under one slot. The slot is
 selected from the held source-parent authority and immutable metadata, never accepted from a
-caller. Each move is
-`renameat2(RENAME_NOREPLACE)`, followed by a no-follow fd-relative reopen. The reopened
-identity, not the pre-rename lookup, derives
+caller. Each evidence copy is prepared in an unnamed inode from the retained source fd,
+file-synced, procfs-fd linked directly to the staging final no-replace, and no-follow
+final-reopened. The reopened copied content plus the retained source identity derives
 
 ```text
 Sc002ResidueIdV1 =
@@ -501,20 +520,20 @@ Sc002ResidueIdV1 =
   )
 ```
 
-and the same held authority then moves the staging leaf no-replace to
+and the same held authority then direct-final copies the staging bytes to
 `evidence-sidecars/sc002/incidents/residue/sha256/<incident-id>/<residue-id>.bin`, reopens
-it, and proves the path-derived id and exact moved identity. A replacement at either rename
-is retained in staging, reported as `recovery-resumable`, and retried from its current durable
-name; it is never restored or unlinked. Only when both ephemeral namespaces and the staging
-namespace are empty, every retained residue revalidates, and the sorted residue-id census is
+it, and proves the path-derived id and exact copied bytes. A source replacement or final
+conflict is reported as `recovery-resumable` only when one exact copy continuation remains;
+otherwise it is irreconcilable. Original and staging names are never restored, renamed, or
+unlinked. Only when every retained source and staging name is present in the frozen
+recursive census, every residue revalidates, and the sorted residue-id census is
 file-and-directory durable may the protocol append `mismatch-retained`. This is the coherent
-terminal cleanup-mismatch state outside the ephemeral namespaces. It remains permanently
+terminal cleanup-mismatch state with retained legacy names. It remains permanently
 ineligible, blocks its parked candidate's record publication and every close stage, survives
 restart, and can advance only through the same authenticated external disposition and a
 fresh successor. No SC-002 cleanup or incident path calls `unlinkat` on a sidecar data leaf.
-Every name-consuming rename is followed by an fd-relative reopen through the same held
-parent-directory authority and a full identity check; a pre-rename lookup never authorizes
-removal, terminal status, or success.
+No SC-002 cleanup or incident path performs a name-consuming rename. A pathname observation
+never authorizes removal, terminal status, or success.
 
 `Sc002IncidentKindV1` is the closed enum
 `retirement-id-collision | retirement-census-exhausted |
@@ -633,8 +652,8 @@ AT_SYMLINK_FOLLOW)`. This capability-free procfs-fd form links the exact opened 
 directly at
 `evidence-sidecars/sc002/incidents/preimages/<incident-kind>/sha256/<incident-id>.json`;
 it never uses `AT_EMPTY_PATH`, a deterministic temporary, or a name-consuming rename. The
-link is no-replace. The publisher then `fsync`s the preimage parent, final-reopens and
-matches the same device/inode, and leaf/parent/every-ancestor syncs it.
+link is no-replace. The publisher then final-reopens and matches the same device/inode,
+`fsync`s the preimage parent, and syncs every changed ancestor.
 
 There is no create-and-unlink capability probe and no named-partial fallback. Unsupported
 `O_TMPFILE` or unsupported procfs-fd linking refuses with no incident name, sidecar-data
@@ -694,9 +713,10 @@ identity-ambiguity =
   )
 ```
 
-`observation_stage` is closed to `1 = quarantine-reopen` and
-`2 = retirement-reopen`. Source/destination order, before/after order, kind domains, and
-stage codes are not interchangeable. The census paths intentionally have one source
+`observation_stage` retains historical `1 = quarantine-reopen` and
+`2 = retirement-reopen`, and adds `3 = legacy-named-source-unsealed`.
+Source/destination order, before/after order, kind domains, and stage codes are not
+interchangeable. The census paths intentionally have one source
 identity plus census evidence instead of a fabricated second identity. Raw device/inode,
 uid, mode, link-count, name, and census bytes never enter an error or observability surface.
 
@@ -707,15 +727,13 @@ canonical JSON records exactly, in order, `schemaVersion = 1`,
 `parkedSnapshotSha256`, and `contentDigest`. It is at most 16,384 bytes and uses the same
 canonical JSON rules as metadata below. The complete preimage must recompute the id, kind,
 parked triplet, and content digest, and both preimage representations must equal the exact
-durable `Sc002IncidentPreimageV1` bytes. This anchor is create-exclusively published,
-final-reopened, and leaf/parent/every-ancestor synced before metadata publication or any
-source-to-payload rename. Every restart classifier begins from it. A partial anchor
-temporary with the exact source still present is `recovery-resumable`; a nonidentical final
-anchor is `recovery-irreconcilable`; the exact expected temporary is retained as primary
-evidence and never unlinked, so the disposition workflow can validate the complete expected
-preimage without trusting the conflicting final leaf. A missing or changed expected
-temporary is itself an invalid primary-evidence cause and is identity-bound by the
-bounded-failure commitment rather than repaired or fabricated.
+durable `Sc002IncidentPreimageV1` bytes. This anchor uses the unnamed-inode procfs-fd
+direct-final protocol, is final-reopened, and is leaf/parent/every-ancestor synced before
+metadata or payload-copy publication. Every restart classifier begins from it. An exact
+anchor final with interrupted parent durability is `recovery-resumable`; a nonidentical
+final anchor is `recovery-irreconcilable`. There is no anchor temporary. A missing expected
+final is reconstructed only from the durable preimage, while a conflicting final is
+identity-bound by the bounded-failure commitment rather than repaired or fabricated.
 No durable incident status or resolution may omit or disagree with the exact anchor
 preimage.
 
@@ -1045,56 +1063,55 @@ identity-bound.
 
 The exact canonical evidence bytes are durably published before the resolution status at
 `evidence-sidecars/sc002/incidents/resolution-evidence/sha256/<incident-id>/<typed-digest>.bin`.
-This path is outside the frozen primary-evidence scope. The publisher create-exclusively
-writes and `fsync`s the leaf, performs the no-replace rename, reopens and revalidates the
-typed digest, and `fsync`s the parent plus every changed ancestor through the candidate
-directory. Only then may the resolution record embed the same typed digest.
+This path is outside the frozen primary-evidence scope. The publisher writes and `fsync`s an
+unnamed `O_TMPFILE`, capability-free procfs-fd links that exact inode directly to the final
+no-replace name, reopens and revalidates the typed digest and inode, and `fsync`s the parent
+plus every changed ancestor through the candidate directory. Only then may the resolution
+record embed the same typed digest.
 
 Incident publication is one closed, idempotent protocol under the candidate lock:
 
-1. Open or create and verify every required preimage, anchor, metadata, payload, status, resolution,
-   resolution-evidence, residue-staging, and residue directory beneath the held candidate fd. `fsync` each newly created directory
-   and every changed ancestor bottom-up through the candidate directory before a child name
-   may become authoritative.
-2. Publish the canonical incident preimage with its unnamed-inode write-ahead protocol
-   above. Only a complete file-synced preimage is linked into the namespace. After its
-   linked temporary and parent are durable, rename it with `RENAME_NOREPLACE`, reopen the
-   final leaf, and `fsync` its parent plus every ancestor through the candidate directory.
-   Publish the anchor through the ordinary same-directory temporary-leaf protocol only
-   after that final preimage revalidates. A linked expected preimage temporary is
-   `preimage-publication-pending`; a nonidentical preimage final is
-   `preimage-final-conflict`. Neither authorizes anchor, metadata, or payload publication.
-3. Create-exclusively publish the canonical metadata through a same-directory temporary
-   leaf, `fsync` the complete leaf, rename it with `RENAME_NOREPLACE`, reopen the final leaf,
-   and `fsync` the metadata parent plus every ancestor through the candidate directory. A
-   partial or nonidentical temporary or final leaf is a named recovery prefix, never an
-   overwrite or an `unlinkat` target.
+1. Open or create and verify every required preimage, anchor, metadata, payload, status,
+   resolution, resolution-evidence, residue-staging, and residue directory beneath the held
+   candidate fd. `fsync` each newly created directory and every changed ancestor bottom-up
+   through the candidate directory before a child name may become authoritative.
+2. Publish the canonical incident preimage with the common direct-final protocol: prepare
+   the complete canonical bytes in an unnamed `O_TMPFILE`, file-sync and revalidate the
+   opened inode, capability-free procfs-fd link that exact inode directly to the final
+   no-replace name, final-reopen and match it, then sync the parent and every changed
+   ancestor. A crash before the direct link exposes no preimage name. After the link, restart
+   accepts only absence or that exact complete final inode and finishes durability; a
+   nonidentical final is `preimage-final-conflict`. There is no linked temporary,
+   `preimage-publication-pending`, or publication rename.
+3. Only after the final preimage is durable, publish the canonical anchor and metadata
+   independently with the same unnamed-inode/procfs-fd direct-final protocol. An interrupted
+   parent sync is `anchor-final-durability-pending` or
+   `metadata-final-durability-pending`; a nonidentical final is
+   `anchor-final-conflict` or `metadata-final-conflict`. No partial named leaf exists.
 4. Durably precreate every missing payload ancestor and sync each new directory plus every
-   changed ancestor bottom-up through the candidate directory. Move the metadata-bound
-   source name to the payload with
-   `renameat2(RENAME_NOREPLACE)`, `fsync` both the old source parent and payload parent, then
-   `fsync` every changed ancestor of both parents through the candidate directory, reopen the
-   payload, verify the exact metadata-bound identity, digest, and bytes, and `fsync` that
-   reopened payload fd. A payload-sync failure cannot publish `parked` and remains a
-   resumable prefix. The publisher does not create the `parked` status temporary before
-   this payload `fsync` succeeds. It retains the candidate OFD lock through payload sync,
-   status file and ancestor durability, and final revalidation, so cleanup cannot observe or
-   move the payload between payload sync and parked-status publication.
-5. Create-exclusively publish `parked.json`, or complete the residue protocol and publish
-   `mismatch-retained.json`, through the same temporary-leaf, file-`fsync`, no-replace
-   rename, final reopen, parent-`fsync`, and all-ancestor-`fsync` protocol before returning
-   the typed refusal.
+   changed ancestor bottom-up through the candidate directory. For a legacy named source,
+   copy only from its retained verified fd into an unnamed inode and direct-final publish the
+   payload; never rename, hardlink, or unlink the source name. Reopen the payload, verify the
+   exact metadata-bound digest and bytes, and `fsync` it. A payload-sync failure cannot
+   publish `parked` and remains a resumable prefix. The publisher does not create any status
+   inode before this payload `fsync` succeeds. It retains the candidate OFD lock through
+   payload sync, status and ancestor durability, and final revalidation.
+5. Direct-final publish `parked.json`, or complete the no-move residue-copy protocol and
+   direct-final publish `mismatch-retained.json`, before returning the typed refusal. Every
+   immutable status, residue, freeze, request, disposition, and admission record uses the
+   same unnamed-inode, file-sync, procfs-fd direct-final no-replace, final-reopen,
+   parent-sync, and all-ancestor-sync protocol.
 6. Publish each later primary status or irreconcilable resolution transition as the next
-   immutable state file with that same protocol. Never replace, truncate, remove, or skip an
-   earlier state.
+   immutable state file with that same protocol. Never replace, truncate, remove, rename, or
+   skip an earlier state.
 
 An existing metadata, payload, or state path is idempotent success only after an fd-relative
 reopen through the same held directory authority proves exact bytes and binding. Recovery
 has two distinct closed nonterminal variants:
 
 - `recovery-resumable` proves one exact preimage/anchor/metadata-bound next step: a complete
-  file-synced linked preimage temporary, an incomplete anchor or metadata temporary with the
-  exact source still present; exact metadata with source present and
+  direct-final preimage, anchor, or metadata final whose parent or ancestor durability is
+  interrupted; exact metadata with a retained source present and
   payload absent; exact metadata plus source absent and exact payload whose file or
   directories still require sync; an exact authenticated residue-staging/residue prefix; or
   individually exact primary status leaves with one uniquely reconstructible missing
@@ -1122,12 +1139,10 @@ and reconstructs the incident id from every common and kind-specific component. 
 primary record is malformed, only a signed disposition request/disposition carrying the
 same complete object plus the frozen recursive primary-evidence commitment can drive the
 resolution branch. A crash cannot move a state from irreconcilable back to resumable. The
-classifier runs before and after anonymous preimage create/write/file-`fsync`, linked
-temporary publication and parent sync, final preimage no-replace publication and reopen,
-and at every later directory-create, temporary-create/write, leaf-`fsync`, no-replace
-publish, rename, payload-file-`fsync`, old-parent-`fsync`, new-parent-`fsync`,
-ancestor-`fsync`, reopen, residue transition, primary-status publication, and resolution
-publication crash point for all four incident kinds.
+classifier runs before and after every unnamed-inode create/write/file-`fsync`,
+direct-final procfs-fd link, final reopen, parent sync, and ancestor sync, and at every later
+directory-create, payload-copy, payload-file-`fsync`, residue-copy, primary-status
+publication, and resolution publication crash point for all four incident kinds.
 
 Payload or residue census, metadata, the maximal contiguous status, frozen primary-evidence
 commitment, and incident-id kind
@@ -1260,9 +1275,9 @@ unknown-field, create-exclusive, leaf-sync, no-replace, final-reopen, parent-syn
 all-ancestor-sync rules as primary status and is at most 32,768 bytes.
 
 `Sc002IncidentCauseV1` is closed to the four `Sc002IncidentKindV1` spellings plus
-`preimage-publication-pending`, `preimage-final-conflict`,
-`anchor-publication-pending`, `anchor-final-conflict`,
-`metadata-publication-pending`, `metadata-final-conflict`,
+`preimage-final-durability-pending`, `preimage-final-conflict`,
+`anchor-final-durability-pending`, `anchor-final-conflict`,
+`metadata-final-durability-pending`, `metadata-final-conflict`,
 `source-present-payload-absent`, `payload-file-sync-pending`,
 `payload-present-status-absent`, `source-payload-conflict`, `incident-names-absent`,
 `payload-identity-mismatch`, `payload-destination-conflict`,
@@ -1339,11 +1354,11 @@ inspect/action/status/successor path:
 | `retirement-census-exhausted` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
 | `retirement-census-invalid` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
 | `identity-ambiguity` | `parked` | request and apply the exact disposition | primary `disposition-validated` | admit the freeze/request-bound successor |
-| `preimage-publication-pending` | `recovery-resumable` | run incident recover | complete durable preimage, then `parked` or the next exact prefix | continue its projected request/apply/admit action |
+| `preimage-final-durability-pending` | `recovery-resumable` | run incident recover | complete durable preimage, then `parked` or the next exact prefix | continue its projected request/apply/admit action |
 | `preimage-final-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence while retaining both expected and conflicting bytes | resolution `disposition-validated` | admit the same frozen successor |
-| `anchor-publication-pending` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
+| `anchor-final-durability-pending` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
 | `anchor-final-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence | resolution `disposition-validated` | admit the same frozen successor |
-| `metadata-publication-pending` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
+| `metadata-final-durability-pending` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
 | `metadata-final-conflict` | `recovery-irreconcilable` | request/apply against complete recursive evidence | resolution `disposition-validated` | admit the same frozen successor |
 | `source-present-payload-absent` | `recovery-resumable` | run incident recover | `parked` | request/apply, then admit |
 | `payload-file-sync-pending` | `recovery-resumable` | run incident recover and replay every required sync | `parked` | request/apply, then admit |
@@ -1388,10 +1403,10 @@ there is no force flag. Only a later inspect projection with
 
 The `parked` row's cause is its incident kind. Every locked incident census maps to exactly
 one row. Invalid CLI syntax or a noncanonical caller-supplied ID exits `2`; an absent
-canonical stable id exits `3`. A partial metadata temporary is
-`metadata-publication-pending`; a partial anchor is `anchor-publication-pending`; a
-complete directly linked preimage final whose parent durability was interrupted is
-`preimage-publication-pending`; a nonidentical final preimage is
+canonical stable id exits `3`. A complete direct-final metadata or anchor whose parent or
+ancestor durability was interrupted is `metadata-final-durability-pending` or
+`anchor-final-durability-pending`; a complete directly linked preimage final in that state is
+`preimage-final-durability-pending`; a nonidentical final preimage is
 `preimage-final-conflict`; a nonidentical final anchor is
 `anchor-final-conflict`; a nonidentical final metadata leaf is `metadata-final-conflict`;
 individually exact status leaves with one uniquely
@@ -1482,7 +1497,7 @@ successor snapshot. Under the candidate lock, the command derives the successor
 candidate/content/snapshot triplet from that exact immutable snapshot, rejects equality with
 the parked candidate, and recursively proves that it contains no copied SC-002 receipt,
 retired, preimage, anchor, metadata, payload, residue, status, resolution, freeze, request,
-or disposition bytes. It then create-exclusively publishes one canonical
+or disposition bytes. It then direct-final publishes one canonical
 `Sc002SuccessorFreezeV1` at
 `evidence-sidecars/sc002/incidents/successor-freezes/sha256/<incident-id>/<freeze-sha256>.json`.
 The freeze contains exactly, in order, `schemaVersion = 1`,
@@ -1590,10 +1605,10 @@ Sc002DispositionRequestDigestV1 =
   an unsupported-link case cannot both occur after candidate durability and prove zero
   freeze/request mutation.
 
-  After a successful direct link, the command `fsync`s the output parent, reopens the final
-  leaf with `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires the same device/inode as the still-open
-  unnamed file description plus exact owner/mode/link/digest/bytes, and `fsync`s the parent
-  again. Before returning, it re-resolves the canonical parent components from the same
+  After a successful direct link, the command reopens the final leaf with
+  `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires the same device/inode as the still-open unnamed
+  file description plus exact owner/mode/link/digest/bytes, and `fsync`s the output parent.
+  Before returning, it re-resolves the canonical parent components from the same
   root/cwd anchor with the same openat2 policy and requires the same mount/device/inode. A
   renamed or replaced parent is a conflict even though all data remains preserved. It never
   truncates, replaces, follows, or name-consumingly renames an output.
@@ -1696,10 +1711,10 @@ validates from those same bytes. T589 owns one private, nonserializable
 `Copy`, `Default`, serde implementation, or conversion from the decoded DTO. Apply also
 once-opens `--successor-snapshot PATH`, derives its triplet, and requires it to equal the
 durable freeze, request, and signed disposition before consuming that result by value.
-While holding the candidate lock, it publishes the exact authenticated
-bytes create-exclusively at
+While holding the candidate lock, it direct-final publishes the exact authenticated bytes at
 `evidence-sidecars/sc002/dispositions/sha256/<disposition-id>.json` through the same
-temporary-leaf, file-sync, no-replace, reopen, parent-sync, and all-ancestor-sync protocol.
+unnamed-inode, file-sync, procfs-fd no-replace link, final-reopen, parent-sync, and
+all-ancestor-sync protocol.
 From `parked` it may then transition directly. From `recovery-irreconcilable` with
 representable named evidence it must first complete and sync the residue protocol and append
 `mismatch-retained`; from zero-residue or unusable primary anchor/metadata/status it instead
@@ -1833,34 +1848,33 @@ If a crash leaves the canonical sidecar durable before record publication, retry
 leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
 mode `0600`, link count one, device/inode stability, digest, bytes, decode, and outer binding
 all match; it never replaces the leaf. A different or malformed existing leaf refuses.
-Crash injection covers source open, hash, decode, OFD-lock acquisition, temp write, file sync,
-no-replace publication, each ancestor-directory sync, quarantine move/reopen, verified
-retirement move/reopen, every incident namespace create/sync, preimage, anchor, and metadata
-temporary create/write/file-sync/no-replace/final-reopen and every parent/ancestor sync, payload move,
-old-parent sync, payload-parent sync, every changed ancestor sync, payload reopen, each
-payload-file sync, residue staging/final move and reopen, resolution-evidence publication
-and reopen, each append-only status or resolution temporary/publication/reopen, every
-resolution-evidence/status/resolution parent/ancestor sync, successor-freeze and
-disposition-request publication/reopen/sync, recursive scope walk/replay,
-cleanup-parent sync,
+Crash injection covers source open, hash, decode, OFD-lock acquisition, every incident
+namespace create/sync, and every preimage, anchor, metadata, payload-copy, residue-copy,
+resolution-evidence, status, resolution, successor-freeze, request, disposition, and
+admission unnamed-inode create/write/file-sync/direct-final-link/final-reopen/parent-sync/
+ancestor-sync boundary, including unsupported procfs and link outcomes after an earlier
+durable write-ahead record. It also covers recursive scope walk/replay, cleanup-parent sync,
 ephemeral-residue census, and record publication.
+It also injects parent-boundary loss, source replacement, and destination-reopen mismatch
+before the legacy-source evidence-copy boundary. No current hook performs a quarantine
+rename, retirement rename, payload rename, residue rename, or sidecar-data unlink.
 Synchronized tests cover the complete candidate-writer/cleanup/retention actor matrix below,
-temp replacement before quarantine move, quarantine replacement before reopen, replacement
-before and after each retirement or incident move/reopen, same-bytes/same-record
-idempotence, two identical orphan leaves retiring to distinct retirement ids, forced
-retirement `EEXIST`, retirement-census exhaustion/corruption, and different-bytes or
-wrong-binding races. Each overlap uses two independently opened descriptions of the same
+legacy source replacement before evidence copy, parent-boundary loss,
+destination-reopen mismatch, same-bytes/same-record idempotence, retained historical
+retirement collision/census validation, and different-bytes or wrong-binding races. Each
+overlap uses two independently opened descriptions of the same
 verified lock inode and the named latch/owner orderings below. The loser must
 receive the live-owner refusal before namespace access; after release, exactly one retry may
 advance only after reopening and recensoring every namespace; it may not retain a pre-lock
-leaf fd or identity observation. Every case proves bounded completion with no deadlock, no
-sidecar-data unlink, and an exact final census within 64 leaves and 1,048,576 bytes. An
-ordinary winner or loser leaves both ephemeral namespaces empty.
+leaf fd or identity observation. Every case proves bounded completion with no deadlock, no existing-name rename, no
+sidecar-data unlink, and an exact final census within 64 leaves and 1,048,576 bytes. A
+direct-final ordinary winner or loser leaves both ephemeral namespaces empty; a legacy
+incident retains only names included in its frozen recursive census.
 Every identity-ambiguous verified terminal case proves the exact
-preimage/anchor/metadata/payload/parked-status prefix is durable outside both ephemeral namespaces. Every
-terminal cleanup-mismatch case proves preimage plus anchor and metadata, an empty ephemeral and residue-staging
-census, exact durable residue ids, and `mismatch-retained` outside those namespaces. A
-replacement-raced case is classified exactly once as `recovery-resumable` or
+preimage/anchor/metadata/payload/parked-status prefix is durable and every legacy source
+name is retained. Every terminal cleanup-mismatch case proves preimage plus anchor and
+metadata, a complete frozen census of retained ephemeral and staging names, exact durable
+residue ids, and `mismatch-retained`. A replacement-raced case is classified exactly once as `recovery-resumable` or
 `recovery-irreconcilable`, with every still-named leaf preserved and no false terminal status
 until its advertised recovery or authenticated disposition path completes. Zero-residue,
 retired-source, malformed-metadata, conflicting-status, invalid-census, and unstable-census
@@ -1875,11 +1889,11 @@ The serialization oracle uses the closed writer set `importer`, `cleanup`,
 `retention-guard/writer` pair; same-input and different-input fixtures are present where the
 pair admits both. This explicitly serializes cleanup against every live owner rather than
 testing importer ownership as a proxy. It covers first-actor and second-actor lock ownership
-and latches at `temp-created`,
-`temp-file-synced`, `quarantine-renamed`, `retirement-renamed`,
+and latches at `unnamed-inode-created`,
+`unnamed-inode-file-synced`, `direct-final-linked`,
 `incident-preimage-published`, `incident-anchor-published`, `incident-metadata-published`,
-`incident-payload-renamed`,
-`incident-payload-file-synced-before-status-temp`,
+`incident-payload-copied`,
+`incident-payload-file-synced-before-status-inode`,
 `incident-residue-staged`, `incident-residue-finalized`, and
 `incident-status-published`, `resolution-evidence-published`,
 `incident-resolution-published`, `successor-freeze-published`,
@@ -1897,11 +1911,10 @@ a pre-lock namespace fd, inspecting a live owner's namespace, or constructing,
 serializing, cloning, returning beyond its guard, pairing with another guard, or
 reconstructing `SidecarCleanupOwner<'guard>` from an fd.
 
-The exact latch `incident-payload-file-synced-before-status-temp` fires only after the
-reopened payload fd has completed `fsync` and its identity still matches metadata, while the
-parked-status temporary namespace has been censused empty. Creating any parked-status
-temporary before that latch, firing the latch before payload `fsync` completes, or observing
-a parked-status temporary at the latch fails the ordering oracle.
+The exact latch `incident-payload-file-synced-before-status-inode` fires only after the
+reopened payload fd has completed `fsync` and its content still matches metadata, while no
+parked-status unnamed inode has been created. Creating any parked-status inode before that
+latch or firing the latch before payload `fsync` completes fails the ordering oracle.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -2137,7 +2150,9 @@ separate post-resolution mutation case changes a primary name after a valid boun
 commitment and must block successor admission; it is a state-transition negative, not a
 malformed encoding and therefore is not conflated with the 73 malformed census ids.
 
-`tests/golden/delivery/sc002-request-output-negative-case-ids.txt` contains exactly these 26
+The retained filename
+`tests/golden/delivery/sc002-request-output-negative-case-ids.txt` is the closed direct-final
+publication registry. It contains exactly these 34
 newline-terminated ids in order:
 
 ```text
@@ -2151,6 +2166,14 @@ request-output/parent-replaced
 request-output/leaf-symlink
 preimage-publication/unsupported-open
 preimage-publication/unsupported-proc-fd-link
+receipt-import/unsupported-open
+receipt-import/proc-fd-mount-invalid
+receipt-import/unsupported-proc-fd-link
+receipt-import/foreign-eexist
+receipt-import/crash-before-inode-fsync
+receipt-import/crash-after-inode-fsync-before-final-link
+receipt-import/crash-after-final-link-before-parent-fsync
+receipt-import/exact-replay-after-parent-fsync
 request-output/unsupported-open
 request-output/unsupported-proc-fd-link
 request-output/proc-fd-mount-invalid
@@ -2169,15 +2192,20 @@ request-output/exact-replay-after-parent-fsync
 request-output/descriptor-exec-leak
 ```
 
-A separately authored literal 26-id constant equals this file before any output test runs.
-The path resolver, output publisher, crash injector, descriptor tracker, and production code
-read neither expectation. Every case reaches only its named openat2, ownership, mode, link,
-content, inode, no-replace, durability, replay, or CLOEXEC check. The exact replay case is a
-positive idempotence oracle and must perform zero writes after full final-leaf and parent
-durability verification. Missing, duplicate, reordered, skipped, early-failing, or
-production-derived cases fail the enforcing runner.
+A separately authored literal 34-id constant equals this file before any publication test
+runs. The importer, path resolver, output publisher, crash injector, descriptor tracker, and
+production code read neither expectation. Every case reaches only its named openat2,
+ownership, mode, link, content, inode, no-replace, durability, replay, or CLOEXEC check. Each
+exact replay case is a positive idempotence oracle and must perform zero writes after full
+final-leaf and parent durability verification. Missing, duplicate, reordered, skipped,
+early-failing, or production-derived cases fail the enforcing runner.
 
 The two preimage refusal cases prove no incident name, sidecar mutation, freeze, or request.
+The eight receipt-import cases are read-independent from the request-output cases.
+Unsupported open, invalid procfs/mount identity, and unsupported direct link prove zero
+receipt leaf and zero `EvidenceRecord` mutation. The crash cases prove no visible leaf before
+the link, only absence or the exact complete final after the link, conflict preservation,
+and zero-write replay after final-parent durability.
 The request-output unsupported-open and invalid-procfs cases run before internal
 publication and prove zero output namespace plus zero freeze/request mutation. The
 request-output unsupported-link case runs only after the candidate-internal freeze/request
@@ -2706,26 +2734,42 @@ approval, generated-manifest update, and Gate 0 receipt are external to this fea
 separate source-generation producer/installer and import/validation authorities implement
 and install objects conforming to those accepted schemas and vectors; they do not own or
 silently redefine the repository contract artifacts. T589 does not deserialize a floor and
-decide for itself. The installed source coordinator first atomically consumes the one
-durable unclaimed origin record for the exact source generation, C, Q, and import-receipt
-identity into one private `ProtectedSourceFloorOrigin`. That owner holds the validated
-installed-generation fd anchors and the single-use origin claim. It has no public fields,
+decide for itself. The installed source coordinator acquires one exclusive OFD claim on the
+durable unconsumed origin record for the exact source generation, C, Q, and import-receipt
+identity and returns one private `ProtectedSourceFloorOrigin`. Acquisition does not consume
+the durable origin. The owner holds the validated installed-generation fd anchors, the sole
+locked open file description, and a claim-incarnation digest. It has no public fields,
 constructor, accessor, serde implementation, `Clone`, `Copy`, `Default`, conversion, byte
-importer, fd extraction, or reconstruction from a digest or serialized chain. Reopening the
-same origin while its claim is live, replaying it after consumption, or copying its fields
-cannot produce another owner.
+importer, fd extraction, or reconstruction from a digest or serialized chain. A concurrent
+open cannot obtain the OFD claim. After owner death the kernel releases the sole claim; a
+new coordinator may reacquire only the same exact origin after proving no durable dispatch
+publication consumed it. Copying fields or replaying serialized evidence cannot produce an
+owner.
 
-The exact disposition-pinned validator consumes that protected origin by value while
+The exact disposition-pinned validator consumes that process-local protected owner by value while
 authenticating all four issuer proofs against the keys selected only by the accepted
 disposition and returns one private `AuthenticatedSourceFloorIssuerProvenance` by value.
-That intermediate result carries the consumed origin ownership forward and has the same
+That intermediate result carries the live origin claim forward and has the same
 closed surface. It binds the exact manifest, installation, validation, and import
 canonical-byte digests, all four signature domains, the disposition, source generation, C,
 and Q. The semantic floor validator consumes it by value and only then may return one
 private, nonserializable `ValidatedSourceGenerationCompatibilityFloor` result by value. The
 final type has the same closed surface and additionally binds the validated aggregate floor
-digest and exact 13-member census. One protected origin can therefore produce at most one
-validated-floor capability.
+digest and exact 13-member census. One live claim can therefore produce at most one
+validated-floor capability at a time.
+
+Durable consumption occurs only when that final capability is consumed into the one
+create-exclusive, file-and-directory-durable handoff dispatch publication. That same record
+is also the origin-consumed marker; no second file or split transaction exists. A
+canonical/schema, issuer-authentication, semantic, C/Q, or
+final-capability-construction error drops the process-local owner and leaves the origin
+unconsumed. A crash after claim acquisition, after issuer authentication, after semantic
+validation, or after final capability creation but before commit publication releases the
+OFD claim and permits exact-origin reacquisition after owner death. A crash after the commit
+replays that durable dispatch and never mints another validated-floor capability.
+Independently pinned fault-injection cases cover every boundary and assert
+`critical_section_max = 1`, one durable dispatch at most, no permanent pre-publication
+consumption, no concurrent capabilities, and no serialized-evidence revalidation.
 
 Validation order is canonical/schema/framing and enclosing-digest reconstruction, then
 disposition/key selection and all four issuer signatures, then transition and member
@@ -2754,8 +2798,10 @@ repeated transition refuses. Any changed disposition, source generation, member 
 authority binding, receipt, C, or Q makes the aggregate stale and requires a new external
 chain; no receipt is edited in place. T589 dispatch opens only from
 `imported-for-exact-C/Q` after the disposition-pinned validator returns the nonserializable
-typed result. Every later source-side handoff boundary borrows and attenuates that exact
-result; it never revalidates the serialized aggregate or mints another capability.
+typed result and the same claimed owner atomically commits origin consumption with the
+durable dispatch publication. Every later source-side handoff boundary borrows and
+attenuates that exact result until publication consumes it; restart continues only from the
+durable dispatch. It never revalidates the serialized aggregate or mints another capability.
 
 The member-census rejection list is closed and always means all seven classes: `missing`,
 `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and
@@ -3197,28 +3243,137 @@ Apply or broker recovery encountering a valid concurrent or terminal state exits
 renders that same valid five-line or seven-field status rather than an error envelope.
 
 The action maps to the exact selector-free unprivileged command
-`d2b-host-generation-deploy --repair-authorized-handoff`. It traverses the existing public
-socket, acquires the coordinator lock, authenticates the current pointer or its absence and
-every immutable matrix member below, and may repair only a uniquely reconstructible
-authenticated `current-intent` pointer. It writes that pointer create-exclusive,
-file-syncs it, publishes no-replace, directory-syncs it, and returns the normal five-line
-status. It cannot rewrite an intent, audit member, service observation, profile, reference,
-or mutation outcome.
+`d2b-host-generation-deploy --repair-authorized-handoff`. T595 owns its CLI/parser and
+public-socket client. T592 owns the typed broker operation
+`RepairHostGenerationCurrentIntentV1`, coordinator mutation, privilege row, and audit edge.
+The CLI traverses the existing public socket and consumes only its accepted-socket `Admin`
+capability. `Launcher`, workload, Zone, unauthenticated, direct broker-socket, and root
+invocations are denied before coordinator access. The broker acquires the one coordinator
+lock, authenticates the current pointer or its absence and every immutable matrix member,
+and may repair only a uniquely reconstructible authenticated `current-intent` pointer. It
+cannot rewrite an intent, audit member, service observation, profile, reference, or mutation
+outcome.
 
-If the immutable proof is missing, mismatched, unauthenticated, noncontiguous, or contains
-an unaudited extra mutation, repair exits `4` with zero mutation. Human output is exactly
-`host generation handoff immutable audit restoration required\n` followed by
-`action: restore-immutable-audit-backup\n`; JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-required","action":"restore-immutable-audit-backup"}`.
-That action is an escalation procedure, not a repository command: restore the exact
-matrix-identified immutable audit member through the accepted external backup owner, then
-rerun `--repair-authorized-handoff`. No generic filesystem copy, force flag, daemon-owned
-recovery path, new unit, or partial rollback is advertised.
+Pointer absence has two disjoint classifications. `clean-absence` means no authenticated
+active or terminal intent is eligible for selection; inspect and repair both exit `3` with
+the existing exact `not-found` envelope and perform no write.
+`repairable-absence` means the pointer alone is absent and exactly one authenticated active
+or terminal intent, sequence, complete transition matrix, and no-competing-intent census
+reconstruct the final pointer bytes. Any ambiguity is `invalid-coordinator`, never
+repairable absence.
+
+Repair publishes only from `repairable-absence`. Under the lock, the broker first appends
+and durably syncs the immutable
+`coordinator-pointer-repair/pre-mutation` audit member. It then writes the exact pointer
+bytes to an unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the final pointer directory,
+file-syncs and revalidates it, procfs-fd links that exact inode directly to the final
+no-replace name, final-reopens and matches it, and syncs the final parent. There is no named
+temporary or name-consuming rename. It then appends and durably syncs the matching
+`coordinator-pointer-repair/outcome` member before returning the normal five-line status.
+The pre/outcome records contain only the fixed edge id, a domain-separated attempt digest,
+the selected intent digest, the immutable-matrix digest, the closed prior-pointer state,
+and the closed outcome; no path, intent bytes, generation, uid, pid, errno, or free-form
+value appears. Prior-pointer state is the literal `absent`; outcome is exactly
+`published | pointer-conflict`. The pre row omits outcome and the outcome row
+repeats every digest and prior-state field before appending its one outcome. Fixtures cover
+published success, completed no-write replay from that existing pair, and conflict failure;
+missing, duplicate,
+reordered, mismatched, or unknown repair audit members refuse.
+
+```text
+HostGenerationCoordinatorRepairAttemptDigestV1 =
+  SHA-256(
+    "d2b:host-generation:coordinator-pointer-repair-attempt:v1\0" ||
+    selected_intent_digest[32] || immutable_matrix_digest[32]
+  )
+```
+
+Both inputs are decoded from canonical lowercase 64-hex typed digests before hashing. No
+serializer bytes, display member, native-width integer, or caller value enters the preimage.
+
+Restart classification is exact. Before the pre-mutation audit is durable, no repair
+started. After that audit but before the direct link, the final is absent and replay creates
+a fresh unnamed inode. After the link but before parent sync, restart accepts only final
+absence or the exact complete inode; it recreates or reopens and syncs accordingly. After
+parent sync but before outcome audit, the exact final is retained and replay appends only
+the matching outcome. A nonidentical final is `pointer-repair-conflict`, preserves it, exits
+`4`, and appends the failure outcome without pointer mutation. After the complete audit pair,
+a second run final-reopens the exact pointer and returns the normal status with zero pointer,
+audit, or coordinator write. A crash after the outcome and before response has the same
+no-write replay. An already exact authenticated pointer created by the ordinary handoff path
+likewise returns normal status with zero write after its existing publication audit
+provenance validates; it does not fabricate a coordinator-repair pair. No classifier uses
+process memory.
+
+`pointer-repair-conflict` human output is exactly
+`host generation handoff pointer repair conflict\naction: preserve-and-escalate-pointer-conflict\n`.
+Its JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"pointer-repair-conflict","action":"preserve-and-escalate-pointer-conflict"}`.
+It never suggests retry, force, replacement, or deletion.
+
+Repair accepts only optional `--json`. An intent or generation selector, path, authority
+token, root invocation, extra positional argument, or `--force` exits `2`, performs zero
+public-socket or coordinator mutation, and emits exactly
+`host generation handoff repair refused\naction: repair-without-selectors\n` in human mode
+or
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"invalid-invocation","action":"repair-without-selectors"}`
+in JSON.
+
+If one immutable member is missing, mismatched, unauthenticated, or noncontiguous, repair
+exits `4` with zero pointer mutation and identifies only the bounded closed member id and
+failure class. Human output is exactly:
+
+```text
+host generation handoff immutable audit restoration required
+member: <CLOSED_MEMBER>
+failure-class: <MISSING_OR_MISMATCH_OR_UNAUTHENTICATED_OR_NONCONTIGUOUS>
+action: restore-immutable-audit-backup
+```
+
+JSON contains exactly, in order, `schemaVersion = 1`,
+`kind = "host-generation-handoff-error"`,
+`error = "audit-restoration-required"`, `member`, `failureClass`, and
+`action = "restore-immutable-audit-backup"`. `member` is the first failing member in the
+independently pinned canonical rollback/audit/transition order, never a caller-selected or
+free-form value; one rerun may expose the next failure only after authenticated restoration
+of the displayed member. An unaudited extra mutation is not restoration
+eligible. It exits `4` with zero mutation and human output exactly
+`host generation handoff audit integrity incident\nfailure-class: unaudited-extra-mutation\naction: preserve-and-escalate-audit-integrity-incident\n`;
+JSON contains exactly `schemaVersion`, `kind`, `error = "audit-integrity-incident"`,
+`failureClass = "unaudited-extra-mutation"`, and
+`action = "preserve-and-escalate-audit-integrity-incident"` in that order.
+
+The binding backup owner is the broker-private
+`HostGenerationImmutableAuditBackupOwner`, transferred with coordinator ownership and never
+held by the daemon. Before any covered mutation becomes durable, it append-only publishes
+one authenticated `HostGenerationImmutableAuditBackupV1` member containing exactly, in
+order, `schemaVersion = 1`, `kind = "host-generation-immutable-audit-backup"`, `member`,
+`canonicalMemberSha256`, `canonicalMemberBytes`, `predecessorSha256`, `authoritySha256`,
+`verificationKeySha256`, and `signatureEd25519`. The disposition pins the backup authority
+and verification key. The backup set remains retained while its intent is
+current and for at least 30 days after authenticated pointer replacement; pruning earlier
+is a broker refusal. Restoration requires a signed
+`HostGenerationImmutableAuditRestorationV1` from that same owner, exact member/failure
+match, predecessor continuity, and broker no-replace append under the coordinator lock.
+Its canonical fields are exactly, in order, `schemaVersion = 1`,
+`kind = "host-generation-immutable-audit-restoration"`, `member`, `failureClass`,
+`backupMemberSha256`, `predecessorSha256`, `authoritySha256`,
+`verificationKeySha256`, and `signatureEd25519`; the disposition selects the verifier.
+The operator requests that exact artifact from the named backup owner, then an unprivileged
+Admin submits it through the existing public-socket path for broker verification and
+no-replace append; no generic filesystem copy, force flag, daemon recovery path, new unit,
+or partial rollback is accepted. After restoration the operator reruns
+`--repair-authorized-handoff`. The separate
+audit-integrity incident preserves the coordinator and backup artifacts for security
+adjudication and never advertises restoration as remediation.
 
 T589 owns the strict schema plus
 `tests/golden/delivery/host-generation-handoff-status-v1.{json,txt}` and the independent
 `host-generation-handoff-status-case-ids.txt`, plus the read-independent
-`host-generation-handoff-{rollback-members,audit-members,transition-edges}.tsv` fixtures;
+`host-generation-handoff-{rollback-members,audit-members,transition-edges}.tsv` fixtures,
+the strict
+`host-generation-immutable-audit-{backup,restoration}-v1.schema.json` schemas, and matching
+read-independent JSON goldens;
 T595 owns the private variant constructors, current-pointer classifier, shared renderer,
 focused hermetic tests, and the dedicated Type-10 `host-generation-handoff.nix` VM test that
 proves real service failure/restart and rollback effects. T604 later exercises the public
@@ -3243,8 +3398,9 @@ current-pointer
 current-reference
 ```
 
-`host-generation-handoff-audit-members.tsv` contains exactly 30 rows, one independently
-enumerated pre-mutation/outcome pair member for each closed edge:
+`host-generation-handoff-audit-members.tsv` contains exactly 32 rows: one independently
+enumerated pre-mutation/outcome pair member for each of the 15 handoff transition edges plus
+the distinct out-of-band coordinator pointer-repair audit edge:
 
 ```text
 source-bootstrap-publish/pre-mutation
@@ -3265,6 +3421,8 @@ target-pointer-repair/pre-mutation
 target-pointer-repair/outcome
 target-reference-repair/pre-mutation
 target-reference-repair/outcome
+coordinator-pointer-repair/pre-mutation
+coordinator-pointer-repair/outcome
 rollback-target-daemon-service/pre-mutation
 rollback-target-daemon-service/outcome
 rollback-pointer-restore/pre-mutation
@@ -3301,7 +3459,7 @@ rollback-source-broker-service	rollback-profile-publish
 rollback-source-daemon-service	rollback-source-broker-service
 ```
 
-The case-id file contains exactly these 135 newline-terminated ids in order:
+The case-id file contains exactly these 155 newline-terminated ids in order:
 
 ```text
 handoff-status/authorized-pending
@@ -3333,6 +3491,13 @@ handoff-status/inspect-path
 handoff-status/inspect-authority-token
 handoff-status/inspect-root
 handoff-status/inspect-extra-positional
+handoff-status/repair-intent-id
+handoff-status/repair-generation-selector
+handoff-status/repair-path
+handoff-status/repair-authority-token
+handoff-status/repair-root
+handoff-status/repair-extra-positional
+handoff-status/repair-force
 handoff-status/selection-absent-pointer
 handoff-status/selection-missing-record
 handoff-status/selection-multiple-nonterminal
@@ -3371,6 +3536,8 @@ handoff-status/rollback-missing-audit/target-pointer-repair/pre-mutation
 handoff-status/rollback-missing-audit/target-pointer-repair/outcome
 handoff-status/rollback-missing-audit/target-reference-repair/pre-mutation
 handoff-status/rollback-missing-audit/target-reference-repair/outcome
+handoff-status/rollback-missing-audit/coordinator-pointer-repair/pre-mutation
+handoff-status/rollback-missing-audit/coordinator-pointer-repair/outcome
 handoff-status/rollback-missing-audit/rollback-target-daemon-service/pre-mutation
 handoff-status/rollback-missing-audit/rollback-target-daemon-service/outcome
 handoff-status/rollback-missing-audit/rollback-pointer-restore/pre-mutation
@@ -3401,6 +3568,8 @@ handoff-status/rollback-mismatch-audit/target-pointer-repair/pre-mutation
 handoff-status/rollback-mismatch-audit/target-pointer-repair/outcome
 handoff-status/rollback-mismatch-audit/target-reference-repair/pre-mutation
 handoff-status/rollback-mismatch-audit/target-reference-repair/outcome
+handoff-status/rollback-mismatch-audit/coordinator-pointer-repair/pre-mutation
+handoff-status/rollback-mismatch-audit/coordinator-pointer-repair/outcome
 handoff-status/rollback-mismatch-audit/rollback-target-daemon-service/pre-mutation
 handoff-status/rollback-mismatch-audit/rollback-target-daemon-service/outcome
 handoff-status/rollback-mismatch-audit/rollback-pointer-restore/pre-mutation
@@ -3433,23 +3602,35 @@ handoff-status/rollback-reordered-audit
 handoff-status/rollback-noncontiguous
 handoff-status/rollback-unaudited-extra-mutation
 handoff-status/selection-pointer-unauthenticated
+handoff-status/repair-clean-absence-not-found
 handoff-status/repair-pointer-positive
+handoff-status/repair-pointer-conflict
+handoff-status/repair-crash-after-pre-audit
+handoff-status/repair-crash-after-inode-fsync
+handoff-status/repair-crash-after-final-link
+handoff-status/repair-crash-after-parent-fsync
+handoff-status/repair-crash-after-outcome-audit
+handoff-status/repair-second-run-no-write
 handoff-status/repair-audit-restoration-required
+handoff-status/repair-audit-integrity-incident
 handoff-status/meta-production-member-removed
 handoff-status/meta-fixture-member-removed
 handoff-status/meta-transition-edge-removed
 handoff-status/meta-poison-visitor-removed
 ```
 
-A separately authored literal 135-id test constant equals the file before any case runs.
+A separately authored literal 155-id test constant equals the file before any case runs.
 Production variant and pointer registries, the fixture, the human/JSON goldens, and the
 literal constant are mutually read-independent. Each of the seven rollback members and each
-of the 30 audit members has independent missing and mismatch poison. Each transition edge
+of the 32 audit members has independent missing and mismatch poison. Each transition edge
 has its own mismatch poison that changes its edge or predecessor cell while every other row
 remains exact. The unaudited-extra-mutation and unauthenticated-pointer cases
-are independent and require exit `4`, the exact invalid-coordinator or audit-restoration
-output, and zero mutation. The two repair cases prove the exact selector-free successful
-pointer repair and incomplete-audit escalation goldens. The four meta-negatives remove one production member, fixture
+are independent and require exit `4`, the exact integrity-incident or invalid-coordinator
+output, and zero mutation. The repair cases independently prove all seven forbidden inputs,
+clean versus repairable absence, exact selector-free success, foreign-final conflict, every
+pre-audit/unnamed-inode/direct-link/parent-sync/outcome crash boundary, second-run no-write
+success, bounded audit-restoration diagnostics, and separate unaudited-mutation escalation.
+The four meta-negatives remove one production member, fixture
 member, transition edge, or poison visit independently; shrinking a shared registry or
 expected count cannot false-green. Each poison reaches its named tuple, selection, input, or
 rollback-proof check; an early generic decode failure cannot count.
