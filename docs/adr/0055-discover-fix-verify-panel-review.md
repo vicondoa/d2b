@@ -7,8 +7,10 @@
   Gas-City-specific use of the protected panel-and-approval controller; D8's
   single blocking treatment of every recommendation in an admitted final set;
   D9's publication refusal while any finding stands; and D17's closed
-  endpoint operation sets and round-input eligibility rules, only as replaced
-  by the closed endpoint table and receipt lifetime below. It also supersedes
+  endpoint operation sets, round-input eligibility rules, and accepted-attempt
+  replay and audit ordering, only as replaced by the closed endpoint table,
+  receipt lifetime, authoritative attempt records, permanent replay floor, and
+  idempotent append contract below. It also supersedes
   D21's per-seat `held` and `prior_resolutions` state, rotation, rejection of a
   severity ladder, and clean-break refusal to read or admit an earlier
   delivery schema. It narrowly supersedes D21's closed twelve-role pool and
@@ -19,9 +21,9 @@
   reviewer identity, and candidate-bound evidence remain in force. D7's
   protected-principal, peer-separated, append-only authority boundary remains
   in force. This record generalizes that boundary for the standalone producer,
-  adds two least-authority endpoints, and replaces only the closed operation
-  sets named below. Approval and risk operations remain absent from the
-  orchestrator endpoint.
+  adds protected reviewer, assignment-issuer, and least-authority issue-reader
+  endpoints, and replaces only the closed operation sets named below. Approval
+  and risk operations remain absent from the orchestrator endpoint.
 - Related: [ADR 0048](0048-copilot-native-agent-surface.md), whose
   Copilot-native surface, independent read-only reviewers, pinned bindings,
   helper-assembled records, and staged evidence remain in force. This record
@@ -191,11 +193,12 @@ The authority called `controller` in this record is the protected
 panel-and-approval controller boundary from ADR 0053 D7, generalized so the
 standalone skill can use it without Gas City. It runs as a principal distinct
 from the contributor or agent uid and owns authoritative lifecycle, roster,
-ledger, severity, approval and retention state. A deployment may expose
-peer-authenticated Unix sockets or resolve opaque receipts from a protected
-principal, but same-uid repository files, helper output and self-asserted
-identity are never authoritative. If neither protected form is available, the
-producer returns `protected-authority-unavailable` and does not dispatch.
+ledger, implementation-assignment, severity, approval, accepted-attempt,
+replay, outbox and retention state. A deployment may expose peer-authenticated
+Unix sockets or resolve opaque receipts from a protected principal, but
+same-uid repository files, helper output and self-asserted identity are never
+authoritative. If neither protected form is available, the producer returns
+`protected-authority-unavailable` and does not dispatch.
 
 This table narrowly replaces D7 and D17's closed endpoint operation sets. Each
 endpoint has its own request enum and authentication policy. An operation
@@ -204,10 +207,11 @@ request bytes.
 
 | Endpoint | Authorized caller | Complete operation set |
 | --- | --- | --- |
-| Orchestrator | Candidate-bound standalone or future Gas City producer peer | `ProposeLifecycleStart`, `RequestPanelDispatch`, `SubmitCandidateSnapshot`, `SubmitLedgerSynthesisProposal`, `SubmitImplementationDisposition`, `SubmitImplementationSelfReviewFinding`, `SubmitValidationManifest`, `RequestGeneratedSeatArtifacts`, `ReadLifecycleStatus` |
+| Orchestrator | Candidate-bound standalone or future Gas City producer peer | `ProposeLifecycleStart`, `RequestPanelDispatch`, `SubmitCandidateSnapshot`, `SubmitLedgerSynthesisProposal`, `RequestImplementationAssignment`, `SubmitImplementationDisposition`, `SubmitImplementationSelfReviewFinding`, `SubmitValidationManifest`, `RequestGeneratedSeatArtifacts`, `ReadLifecycleStatus` |
 | Reviewer | One controller-issued, candidate-bound trusted dispatch for the named seat | `SubmitNativeFindingPage`, `SubmitLateFinding`, `SubmitVerificationJudgment`, `SubmitLegacySourceTriage`, `SubmitLegacySourceTriageVerification`, `SubmitSeverityCorrection`, `SubmitSeverityCorrectionVerification`, `SubmitLedgerMappingConcurrence`, `SubmitRiskAcceptanceVerification`, `SubmitFinalSignoff` |
 | Operator | Protected operator identity resolved from peer evidence | `SubmitApprovalDecision`, `AbandonLifecycle`, `ResumeLifecycle`, `RescopeLifecycle`, `CreateSameScopeCurrentSchemaSuccessor`, `CreateReverificationSuccessor`, `PermanentlyCloseAbandonedLineage`, `ApplyLedgerMappingCorrection`, `IssueRiskOperationIntent`, `AcceptMajorRisk`, `RevokeMajorRiskAcceptance`, `ReadLifecycleStatus` |
-| Issue reader | A current candidate-bound implementation assignment or resolved merge authority | `ReadImplementerIssueView`, `ReadMergeAuthorityMajorIssueView` |
+| Assignment issuer | Controller-owned trusted implementation-dispatch issuer or authoritative opaque-receipt resolver | `IssueImplementationAssignment` |
+| Issue reader | Authenticated implementer peer presenting an opaque assignment handle, or resolved merge authority | `ResolveImplementationAssignment`, `ReadImplementerIssueView`, `ReadMergeAuthorityMajorIssueView` |
 | Publisher | Protected publisher identity | `ConsumePublicationManifest`, `RecordTrustedMergeCompletion`, `ReadPublicationStatus` |
 
 `SubmitApprovalDecision` retains D17's closed
@@ -231,18 +235,60 @@ authorization and independent verification in section 3 are both present.
 `SubmitLegacySourceTriageVerification` analogously cause an internal
 `legacy_source_triage_admitted` transition only as section 12 permits.
 Reviewer concurrence is accepted only through the trusted reviewer endpoint.
+`RequestImplementationAssignment` is likewise a proposal. Only
+`IssueImplementationAssignment`, authenticated as the controller-owned trusted
+dispatch issuer or an authoritative opaque-receipt resolver, can cause the
+controller's internal `implementation_assignment_issued` transition.
 Every request frame carries an idempotency key, every operation is
 candidate-bound where a candidate exists, and every endpoint uses the audit
 and idempotency contract in section 13. Risk intents use the stronger
 controller-issued-key rule in section 10.
 
+The controller owns every `ImplementationAssignment`. The orchestrator may
+request one but cannot supply, edit, or attest the assignment that results.
+Issuance accepts exactly one protected evidence variant:
+
+- `TrustedImplementationDispatch`, resolved from a controller-owned dispatch
+  record; or
+- `OpaqueImplementationResolverReceipt`, resolved by an authoritative
+  resolver whose principal is distinct from the contributor or agent uid.
+
+Both variants bind the authoritative dispatch or resolver digest, authenticated
+implementer run identity, lifecycle, candidate, current ledger mapping version,
+exact issue set, assignment kind, issuance and expiry, and a controller-bounded
+use limit. The closed assignment kinds are:
+
+- `PrimaryBatch`, whose exact issue set is the complete current ledger and
+  whose issue view may contain that complete ledger; and
+- `ParallelFixSlice`, whose exact issue set and file-ownership digest are one
+  disjoint projection of a controller-validated partition.
+
+Every slice in one partition is pairwise issue-disjoint and file-disjoint.
+The union of the slices is exactly the issue set the primary batch delegated.
+An overlap, omission, or issue outside the primary assignment is refused
+before any slice assignment is issued.
+
+An assignment is either single-use or carries a closed use limit no greater
+than the versioned controller maximum. Resolution authenticates and binds the
+handle but does not consume a use. One successful distinct
+`ReadImplementerIssueView` consumes one use atomically; a byte-identical
+transport retry returns its stored result and does not consume another use.
+Expiry, revocation, candidate change, mapping change, exhaustion, or
+completion makes a new use invalid. No uid equality, local file, environment
+value, run name, caller-provided issue set, or self-asserted assignment claim
+is evidence.
+
 The issue-reader endpoint is read-only and least-authority:
 
-- `ReadImplementerIssueView` requires a current implementation assignment and
-  returns only the assigned issue ids, protected descriptions, evidence,
-  recommendations, and disposition obligations needed to fix that candidate.
-  It cannot enumerate another assignment, obtain authority or identity
-  mappings, or mutate ledger state.
+- `ResolveImplementationAssignment` consumes the opaque handle plus
+  authenticated implementer peer evidence and returns only a safe assignment
+  summary. It never returns the trusted-dispatch or resolver mapping.
+- `ReadImplementerIssueView` requires the resolved current assignment and
+  returns the complete ledger for `PrimaryBatch`, or only the exact assigned
+  issue projection for `ParallelFixSlice`, including the protected
+  descriptions, evidence, recommendations, and disposition obligations needed
+  for that candidate. It cannot enumerate another assignment, widen a slice,
+  obtain authority or identity mappings, or mutate ledger state.
 - `ReadMergeAuthorityMajorIssueView` requires a current
   `MergeAuthorityResolver` result and returns only the requested effective
   MAJOR issue, its protected rationale, evidence, validation references,
@@ -250,8 +296,10 @@ The issue-reader endpoint is read-only and least-authority:
   cannot inspect unrelated issues or perform acceptance.
 
 Both reads refuse a lifecycle, candidate, mapping-version, issue, assignment
-or authority binding mismatch as `issue-view-binding-mismatch`. Public,
-generic status, log and audit views retain the redacted projections in
+or authority binding mismatch as `issue-view-binding-mismatch`.
+Assignment self-assertion, a new use after consumption or exhaustion, and
+access through another assignment are distinct typed refusals in section 14.
+Public, generic status, log and audit views retain the redacted projections in
 section 13.
 
 ### 1. Lifecycle, lineage, scope, and candidate identity are controller-owned
@@ -364,12 +412,19 @@ The integrator, orchestrator, operator, and controller cannot originate a
 correction or lower severity by deduplication. A dissenting or missing
 higher-severity source leaves the higher severity effective.
 
+The authorization predicates are disjoint. The generic
+`severity-correction-unauthorized` predicate accepts and reports only a native
+`SourceId`. Every `LegacySourceId`, whether its historical role is current or
+retired, is evaluated only by
+`legacy-source-severity-correction-unauthorized`. A source cannot be
+reclassified between those predicates to obtain the other remedy.
+
 Closing a finding as invalid or withdrawn does not rewrite or downgrade its
 historical severity. A content change makes a prior severity-correction
 verification stale; the source's preceding current severity is effective
 again until the correction is independently verified against the new
 candidate. A split or merge replays source severity and correction events
-without re-triage because source identity is unchanged.
+without repeating source triage because source identity is unchanged.
 
 ### 4. The orchestrator synthesizes one stable issue ledger automatically
 
@@ -434,10 +489,12 @@ and that reviewer's affected source ids. The protected operator then invokes
 validates protected operator authorization, complete candidate-bound
 concurrence from every affected reporting reviewer, exact source coverage,
 candidate binding, monotonic id allocation, and idempotency before appending
-the event. Missing concurrence is `ledger-mapping-concurrence-missing`,
-dissent is `ledger-correction-invalid`, and stale concurrence is
-`ledger-mapping-concurrence-stale`. Repeating the identical correction returns
-the existing event; a conflicting replay is
+the event. Missing concurrence is `ledger-mapping-concurrence-missing`, an affected
+reporter's explicit dissent is `ledger-correction-reporter-dissent`, and stale
+concurrence is `ledger-mapping-concurrence-stale`. A proposed event whose
+source partition, alias, monotonic-id, or exact-coverage structure is invalid
+is `ledger-correction-structurally-invalid`. Repeating the identical correction
+returns the existing event; a conflicting replay is
 `protected-operation-replay-conflict`.
 
 The current effective mapping is derived by replaying mapping events. A source
@@ -447,12 +504,11 @@ changed: verification and adjudication judgments over the old grouping, and
 risk or lifecycle approval state that named the old mapping. Those items must
 be re-established against the corrected mapping and current candidate. Raw
 findings, legacy source triage, source-level severity corrections and
-implementation-disposition history replay unchanged. A split projects its
-existing disposition onto each resulting source subset. A merge is admitted
-only when the source issues have the same current disposition and
-candidate-evidence digest; otherwise it is `ledger-correction-invalid` until
-implementation submits compatible dispositions before the protected
-correction.
+implementation-disposition history replay unchanged. A split projects its existing disposition onto each resulting source subset.
+A merge is admitted only when the source issues have the same current
+disposition and candidate-evidence digest; otherwise it is
+`ledger-correction-dispositions-incompatible` until implementation submits
+compatible dispositions before the protected correction.
 
 Terminal metrics count effective issue classes at the terminal ledger version.
 A split can increase and a merge can decrease the unique issue count; aliases
@@ -464,9 +520,11 @@ reinterpreted.
 ### 5. Implementation dispositions do not adjudicate reviewer truth
 
 The first implementation pass after discovery is one batch over the complete
-ledger. Parallel fix slices remain allowed when file ownership is disjoint,
-but they receive the same ledger and integrate into one candidate before
-verification.
+ledger. Its controller-issued `PrimaryBatch` assignment may expose that
+complete ledger. Parallel fix slices remain allowed when file ownership is
+disjoint, but each receives only its controller-issued `ParallelFixSlice`
+projection. A slice cannot read the rest of the ledger or another slice's
+issues. The disjoint slices integrate into one candidate before verification.
 
 Before verification, every issue has exactly one closed implementation
 disposition:
@@ -737,10 +795,12 @@ same endpoint.
 
 The controller issues the idempotency key for each risk-operation intent
 before it accepts the operation bytes. For either operation, the same key and
-byte-identical request returns the original event and response; the same key
-with different request bytes is `risk-operation-replay-conflict`. A lost
-response or crash after durable admission therefore cannot create a second
-live acceptance or a second revocation.
+byte-identical request returns the original event and response while full
+result bytes remain, and section 13's deterministic digest-only eviction
+result afterwards; neither path re-executes. The same key with different
+request bytes is `risk-operation-replay-conflict`. A lost response or crash
+after durable admission therefore cannot create a second live acceptance or a
+second revocation.
 
 The accepting identity is resolved as current merge authority for the
 protected target from trusted peer evidence and an authoritative
@@ -870,10 +930,10 @@ specialists join verification; no discovery reviewer rotates out.
 The controller mints a `PanelLifecycleApprovalReceipt` only for `signed_off`.
 It binds the final candidate, scope and lineage, every roster and trusted
 dispatch, all source records and ledger events, dispositions, judgments,
-validation evidence, migration origin, risk records, terminal metrics, and
-final per-seat records. Abandonment and supersession mint terminal metric
-records but never an approval receipt. Green tests are evidence in the receipt
-and never substitute for panel approval.
+validation evidence, the closed `TerminalDiscoveryOutcome`, risk records,
+terminal metrics, and final per-seat records. Abandonment and supersession mint
+terminal metric records but never an approval receipt. Green tests are evidence
+in the receipt and never substitute for panel approval.
 
 Every approval receipt has mandatory finite expiry. The versioned constant is
 `APPROVAL_RECEIPT_MAX_AGE = 7 days`, and
@@ -941,20 +1001,43 @@ candidate lineage:
   `legacy-round-start-after-cutover`.
 
 Retrying missing seats does not mix schemas inside one round. If the pinned
-old round is incomplete, admission returns `legacy-round-partial`. If it
-cannot complete because a reviewer is unavailable, the protected operator may
-invoke `CreateSameScopeCurrentSchemaSuccessor`. This is not
-`RescopeLifecycle`: declared scope and candidate stay exact, and completed
-seats are not discarded or rerun merely to make the old round complete.
+old round is incomplete and every missing pinned reviewer remains
+dispatchable, admission returns `legacy-round-partial-retryable`. Its only
+linear remedy is to complete that pinned round. If protected dispatch
+resolution proves at least one missing pinned reviewer unavailable, admission
+instead returns `legacy-round-reviewer-unavailable`. Its only linear remedy is
+`CreateSameScopeCurrentSchemaSuccessor`; retrying the unchanged old dispatch
+is not offered. This is not `RescopeLifecycle`: declared scope and candidate
+stay exact, and completed seats are not discarded or rerun merely to make the
+old round complete.
 
-The transition retains every partial-round byte for audit, deterministically
-creates a `LegacySourceId` for every recommendation in every well-formed
-completed-seat record, and imports those sources as prior obligations. It
-never labels the partial round discovery and never imports a malformed or
-incomplete seat. The current-schema successor then runs exactly one fresh
-native discovery over its selected roster. Native discovery findings and
-imported legacy obligations enter the same proposed ledger synthesis without
-losing either source identity.
+While the round is `legacy-round-partial-retryable`, every source
+partial-round byte is ineligible for cleanup. The bytes remain ineligible
+after `legacy-round-reviewer-unavailable` until the same-scope successor
+transition commits. That transition reads those exact bytes,
+deterministically creates a `LegacySourceId` for every recommendation in every
+well-formed completed-seat record, and imports the protected source views as
+prior obligations into the successor's admitted ledger state. It never labels
+the partial round discovery and never imports a malformed or incomplete seat.
+The current-schema successor then runs exactly one fresh native discovery.
+Native discovery findings and imported legacy obligations enter the same
+proposed ledger synthesis without losing either source identity.
+
+The successor's initial roster is the union of:
+
+- the normal version 2 native roster selected for its unchanged candidate; and
+- every current-pool role that reported an imported completed-seat source, or
+  that role's versioned accountability successor when the role is retired.
+
+The union is controller-derived, de-duplicated, and monotonic. Thus an imported
+`networking` or `kernel` source keeps that role on the successor even when
+native selection would omit it. A fresh agent instance dispatched for a
+current role may satisfy the reporting-role obligation when the old pinned run
+is unavailable; continuity binds the role and immutable source attribution,
+not the unavailable agent process. The controller binds the current versioned
+role profile, reviewer identity, and trusted dispatch to every such
+accountability seat. A retired role uses only the versioned accountability
+successor table and never relabels the historical source.
 
 Successor creation, completed-seat source import, old-to-new lifecycle and
 issue crosswalks, source lifecycle termination, and the fresh-discovery
@@ -966,12 +1049,21 @@ same key is `same-scope-successor-conflict`; a crash exposes neither a partial
 successor nor a partially imported source set. This escape does not require a
 genuine scope change and does not erase the completed seats.
 
+At the same atomic commit, the source lifecycle becomes terminal
+`superseded`. Its partial-round byte objects then become eligible immediately
+for ordinary D17 round-input cleanup; they do not wait for the successor to
+sign off. The successor no longer references those source objects. Everything
+needed to continue is in its admitted protected source views and ledger state,
+and later in its `SuccessorImportCapsule` if it is abandoned. Permanent
+audit-floor digests bind the source dispatch, completed-seat set, imported
+source ids, successor, and crosswalk. If the atomic import fails, the source
+remains retryable, its bytes remain ineligible, and no successor is usable.
+
 The imported complete round is the lifecycle's migration discovery input. It
-does not claim to be a native current-schema discovery panel. The terminal
-receipt records `discovery_origin = legacy_imported`; native lifecycles record
-`native`. A same-scope successor from a partial legacy round also records
-`discovery_origin = native`, because its only discovery is fresh, and separately
-records `migration_origin = partial_legacy_prior_obligations`.
+does not claim to be a native current-schema discovery panel. A same-scope
+successor from a partial legacy round has native discovery plus imported prior
+obligations. Section 13's `TerminalDiscoveryOutcome` sum type records these
+cases without independent origin fields.
 
 #### Legacy source identity, ids, descriptions, and severity
 
@@ -1022,7 +1114,9 @@ one `SubmitLegacySourceTriageVerification` by a final-roster seat that neither
 reports that source nor implemented the candidate. The resulting source value is
 `severity_origin = migration_assigned`; it is a current migration judgment,
 not historical fact. Until every imported source has verified triage, no
-implementation disposition can satisfy approval.
+implementation disposition can satisfy approval, and the controller returns
+`legacy-source-triage-incomplete` with the exact unverified `LegacySourceId`
+values.
 
 Effective issue severity is then derived from the current mapping and the
 current severity of each mapped source under section 3. A split or merge
@@ -1048,11 +1142,14 @@ metrics, or audit events.
 
 For a same-scope successor from a partial round, generation uses the completed
 seat digest set as an additional identity input. The same set returns the same
-legacy sources, successor and atomic crosswalk. It records
-`legacy_partial_successor_count = 1`,
-`legacy_partial_completed_seat_count`, and
-`legacy_partial_imported_source_count`; missing-seat retries and response-loss
-retries do not increment any of them.
+legacy sources, successor and atomic crosswalk. Its
+`TerminalDiscoveryOutcome::NativeDiscovery` payload records one imported
+partial-legacy prior-obligation set with the exact completed-seat,
+`LegacySourceId`, imported-effective-issue, and verified source-triage counts.
+`partial_round_retry_count` counts distinct admitted missing-seat redispatches,
+and `migration_retry_count` counts distinct admitted import attempts.
+Byte-identical request replay, response loss, and idempotent regeneration do
+not increment either count or any source, seat, issue, or successor count.
 
 After import, section 7 automatically generates every seat's verification
 artifact with the full imported ledger and seat obligations. Legacy strings
@@ -1060,23 +1157,141 @@ are never hand-copied into reviewer notes.
 
 ### 13. Retention, redaction, audit, and terminal metrics are explicit
 
-Every new artifact is in one ADR 0053 D17 retention class.
+Every new artifact is in one ADR 0053 D17 retention class. This section
+narrowly replaces D17 where accepted-attempt replay requires a permanent
+controller floor rather than permanent raw response bytes.
 
-| Artifact | D17 class |
+| Artifact or authoritative record | D17 class and cleanup |
 | --- | --- |
-| Exact native and legacy reviewer bytes, prompts, generated per-seat bundles, full protected ledger pages, issue descriptions, source text, validation-output bytes, private acceptance rationale, protected authority mappings, migration work records, and `SuccessorImportCapsule` bytes | Round input |
-| Source and artifact digests, stable ids, source mapping and crosswalk events, dedup and severity events, closed disposition and judgment projections, roster and dispatch bindings, acceptance and revocation projections, lifecycle receipts, seals, and terminal metric records | Audit floor |
+| Exact native and legacy reviewer bytes, prompts, generated per-seat bundles, full protected ledger pages, issue descriptions, source text, validation-output bytes, private acceptance rationale, protected authority mappings, migration work records, `SuccessorImportCapsule` bytes, and full protected accepted-request or response bytes | Round input. Retain for 30 days or within the 2-GiB bound after eligibility, whichever binds first. |
+| `AcceptedAttemptJournal` | Audit floor while pending and ineligible. After terminal audit acknowledgement is persisted, compact its safe identity and digests into the permanent `AttemptTombstone`; any separate protected request bytes are ordinary eligible round input. |
+| `IdempotencyReplayResult` | Its bounded full protected response bytes are round input. Its closed outcome, response digest, safe result ids, and expiry or eviction state are copied into the permanent `AttemptTombstone`. |
+| Pending `AuditOutboxRow` | Audit floor and ineligible until the append sink's original acknowledgement is persisted by the controller. Then compact its event id, event digest, and acknowledgement digest into the permanent `AttemptTombstone`; the sink owns its separately bounded audit copy. |
+| `AttemptTombstone` | Permanent controller audit and replay floor for the lifetime of the controller namespace. It contains no protected request or response bytes and has no cleanup path that permits the protected operation to execute again. |
+| `AuditAppendTombstone` | Permanent append-sink idempotency floor for the sink namespace. It contains only audit event id and digest plus the original acknowledgement and has no event payload bytes. Raw sink event bytes remain under the sink's bounded rotation. |
+| Source and artifact digests, stable ids, source mapping and crosswalk events, dedup and severity events, closed disposition and judgment projections, roster and dispatch bindings, acceptance and revocation projections, lifecycle receipts, seals, and terminal metric records | Audit floor under D17's ordinary audit period unless another row, such as `AttemptTombstone` or `AuditAppendTombstone`, sets a longer lifetime. |
 
-Round inputs retain D17's 30-day or 2-GiB bound after they become eligible.
-Nothing belonging to an active lifecycle, an unresolved lifecycle, a partial
-legacy round, an unexpired merge-eligible receipt, or a resumable abandoned
-lineage's `SuccessorImportCapsule` is eligible for eviction. Section 11's
-trusted merge-completion event or receipt expiry determines eligibility for
-terminal round inputs. Permanent close determines capsule eligibility. If the
-cap is reached and only protected ineligible records remain, admission of new
-round bytes is refused. The implementation does not evict active state, drop
-descriptions, claim ordinary abandonment freed capacity, or degrade to an
-incomplete reviewer payload.
+The five authoritative attempt and append records have closed roles:
+
+- `AcceptedAttemptJournal` is the controller's durable statement that an
+  authenticated request crossed the acceptance boundary. It binds the
+  protected attempt identity, endpoint, operation, authenticated peer digest,
+  idempotency-key digest, request digest, acceptance time, reserved capacity,
+  and one linear state.
+- `IdempotencyReplayResult` is the bounded terminal response record. It binds
+  the result kind, safe result ids, exact protected response digest, and, only
+  while retained, the full protected response bytes.
+- `AuditOutboxRow` is the exact canonical audit event awaiting the generic
+  append sink. It binds `AuditEventId`, event kind, exact event bytes and
+  digest, and the sink acknowledgement once known.
+- `AttemptTombstone` is the permanent minimal replay authority. It binds the
+  attempt and request digests, terminal result kind and digest, audit event id
+  and digest, original acknowledgement digest, and whether full response bytes
+  remain. It is sufficient to refuse re-execution and conflicting reuse but
+  is not a reconstruction of protected response bytes.
+- `AuditAppendTombstone` is the append sink's permanent minimal deduplication
+  authority. It is sufficient to return the original acknowledgement after
+  raw sink event rotation and contains no protected request, response, or event
+  payload bytes.
+
+The controller reserves one journal slot, one outbox slot, one tombstone slot,
+one append-sink tombstone reservation, and the bounded request and result
+budget before durable acceptance. The accepted journal binds that sink
+reservation. The pending-record, controller tombstone, and append-sink
+tombstone budgets have versioned finite entry and byte maxima. If reservation
+fails, the front door does not register an accepted attempt. It returns a
+preflight capacity refusal and records only non-authoritative transport
+telemetry. If permanent controller or sink tombstone capacity is exhausted,
+`replay-tombstone-store-full` or `audit-append-tombstone-store-full`
+respectively refuses new acceptance until a reviewed capacity migration
+installs more bounded storage; tombstones are never evicted to make room. This
+is finite fail-closed storage, not unbounded raw response retention.
+Either capacity migration copies every tombstone, verifies the complete id and
+digest set, and atomically switches namespaces; resetting the namespace or
+dropping old keys is forbidden.
+An unbound preflight reservation may expire under a short fixed lease; once an
+`AcceptedAttemptJournal` binds it, it is ineligible until the sink creates the
+`AuditAppendTombstone`.
+
+An identical retry has one authority behavior before and after full-result
+eviction: it never executes the operation again and never appends another
+audit event. Response-byte availability is the only difference.
+Before eviction, the controller returns the byte-identical stored response and
+original append acknowledgement. After eviction, it returns the deterministic
+typed `idempotency-result-evicted` replay result containing only the safe
+attempt id, terminal result kind, response digest, event id, and original
+acknowledgement digest. That result directs the caller to read current
+authoritative state or request a new operation intent where the operation
+permits one; it never treats absence of response bytes as permission to
+execute. A same-key, different-request-digest retry is always
+`protected-operation-replay-conflict`, before or after eviction. Each distinct
+conflicting request digest has one deterministic conflict-attempt identity;
+repeating those same conflict bytes replays that conflict refusal.
+
+Round-input cleanup runs through the controller's single cleanup entrypoint on
+schedule and before admitting new bytes. Full attempt request and response
+bytes become eligible only after the attempt is terminal, its sink
+acknowledgement is persisted, and its tombstone is durable. A pending
+`AcceptedAttemptJournal` or `AuditOutboxRow` is ineligible at every age. The
+cleanup first compacts acknowledged terminal records, then applies the
+30-day and 2-GiB rules only to eligible bytes, and finally records the safe
+eviction state in the tombstone. It cannot delete or rewrite a tombstone.
+The sink's own cleanup may rotate eligible raw event bytes but cannot delete
+or rewrite an `AuditAppendTombstone`.
+
+Other round inputs retain D17's 30-day or 2-GiB bound after they become
+eligible. The ineligible-record classification is a closed sum type:
+
+```
+RetentionBlocker =
+  ActiveLifecycle { lifecycle_id }
+  UnresolvedLifecycle { lifecycle_id, obligation_ids }
+  RetryablePartialDispatch { lifecycle_id, dispatch_id, missing_seat_ids }
+  UnavailablePartialDispatch { lifecycle_id, dispatch_id, missing_seat_ids }
+  ResumableAbandonedCapsule { lineage_id, capsule_id }
+  UnexpiredApprovalReceipt { lifecycle_id, receipt_id, expires_at }
+  UnrecordedTrustedMergeCompletion { lifecycle_id, receipt_id, merge_event_id }
+  PendingAcceptedAttempt { attempt_id }
+  PendingAuditOutbox { attempt_id, audit_event_id }
+```
+
+There is no `Other` blocker. Every ineligible round-input record maps to
+exactly one variant; a record that does not is
+`retention-classification-incomplete` and stops admission. Atomic lineage
+transitions expose no durable half-import record. Specialized variants take
+precedence: a partial dispatch is never also `ActiveLifecycle`, a resumable
+capsule is never `UnresolvedLifecycle`, a trusted but unrecorded merge is
+`UnrecordedTrustedMergeCompletion` rather than
+`UnexpiredApprovalReceipt`, and an accepted attempt moves from
+`PendingAcceptedAttempt` to `PendingAuditOutbox` when its terminal state
+transaction commits. `ActiveLifecycle` covers other nonterminal work actively
+advancing; `UnresolvedLifecycle` covers other parked named obligations before
+terminal transition. The section 12 source partial-round bytes are
+`RetryablePartialDispatch` or `UnavailablePartialDispatch` until atomic
+successor import, then become eligible immediately. Section 11's trusted
+merge-completion event or receipt expiry makes receipt-bound terminal inputs
+eligible. Permanent close makes a resumable capsule eligible.
+
+`round-input-store-full` carries the complete sorted list of these blocker
+values with all listed safe ids and the configured bound. Its closed remedy
+plan is generated per blocker state:
+
+| Blocker | Ordered capacity remedy |
+| --- | --- |
+| `ActiveLifecycle` | `ContinueNamedLifecycleToTerminalEligibility`, then `RunControllerRetentionCleanup` |
+| `UnresolvedLifecycle` | `ResolveNamedLifecycleObligations`, then `RunControllerRetentionCleanup` |
+| `RetryablePartialDispatch` | `CompletePinnedLegacyRound`, then `RunControllerRetentionCleanup` |
+| `UnavailablePartialDispatch` | `CreateSameScopeCurrentSchemaSuccessor`, then `RunControllerRetentionCleanup` |
+| `ResumableAbandonedCapsule` | `ChooseResumableLineageDisposition { resume, supersede, permanently_close }`, then `ApplyChosenResumableLineageDisposition`, then `RunControllerRetentionCleanup` |
+| `UnexpiredApprovalReceipt` | `WaitForApprovalReceiptExpiry`, then `RunControllerRetentionCleanup` |
+| `UnrecordedTrustedMergeCompletion` | `RecordResolvedTrustedMergeCompletion`, then `RunControllerRetentionCleanup` |
+| `PendingAcceptedAttempt` | `RecoverPendingAcceptedAttempt`, then `RunControllerRetentionCleanup` |
+| `PendingAuditOutbox` | `RestoreProtectedAuditSink`, then `ReplayPendingAuditAppend`, then `RunControllerRetentionCleanup` |
+
+The error never defaults to a reviewed bound increase or ordinary
+abandonment. It does not evict active state, drop descriptions, or degrade to
+an incomplete reviewer payload. Every blocker must name its own remedy before
+admission is retried.
 
 All new durable and observable surfaces use declared bounded redacting types,
 closed identifiers, closed enums, safe aliases, or digests:
@@ -1093,75 +1308,201 @@ closed identifiers, closed enums, safe aliases, or digests:
 - no governed type exposes those values through derived or handwritten
   `Debug`.
 
-Every protected-operation attempt that reaches an endpoint produces exactly
-one digest-only typed audit event, whether it succeeds or is refused. A
-byte-identical transport retry with the same idempotency key is the same
-logical attempt and returns the original result without duplicating the
-event. A same-key, different-bytes request is a distinct typed conflict
-attempt with its own deterministic conflict-attempt identity and exactly one
-refusal event. Authentication refusal, endpoint-operation absence, stale
-binding, read refusal, lifecycle transition, ledger or severity operation,
-adjudication, risk operation, migration operation, receipt decision, seal,
-publication check and merge-eligibility check all use this rule.
+The exactly-one authoritative audit boundary is durable accepted-attempt
+registration, not socket accept and not state mutation. The protected front
+door first authenticates the peer, parses the bounded envelope, checks
+the endpoint and operation discriminants are syntactically bounded, reserves
+capacity, and resolves enough trusted identity to name the attempt. It then
+durably creates `AcceptedAttemptJournal` in
+`AcceptedPendingState` before invoking operation processing. From that commit,
+the accepted attempt must recover to exactly one typed success or refusal
+event even if the caller never retries.
 
-The controller uses a transactional outbox or an equivalent proven ordering.
-For a mutating request, authoritative state and one pending audit event commit
-atomically; no effect or success response becomes externally visible until the
-generic root-owned append sink has synchronously flushed that event. Read and
-refusal responses likewise wait for their event to flush. Recovery replays a
-pending event before publishing the stored result. A crash before the state
-transaction commits leaves neither effect nor event; a crash after it commits
-but before flush exposes neither effect nor response; a crash after flush but
-before response returns the stored response on retry without another event.
-If audit flush cannot complete, the operation remains externally uncommitted
-and any proposed authority effect remains quarantined. Recovery discards that
-effect, finalizes the still-unflushed pending event as the one
-`audit-event-flush-failed` refusal, and flushes it before returning the typed
-failure. It does not append a second event for the same attempt.
+A connection failure, malformed frame, authentication failure, unavailable
+front door, or capacity failure before durable accepted-attempt registration
+is a transport or preflight event. It has no authoritative effect, is not an
+accepted endpoint attempt, does not enter terminal attempt metrics, and does
+not claim the exactly-one authoritative audit guarantee. A peer that
+authenticates and submits a bounded request for an absent or unauthorized
+operation is durably registered before that policy check runs; it then
+receives the ordinary exactly-one refusal audit.
 
-The protected front door remains able to audit
-`protected-authority-unavailable` when its state worker or authoritative
-resolver is unavailable. A connection failure before the protected front door
-accepts an authenticated request is a producer preflight failure and cannot
-have an authoritative effect. The append sink retains ADR 0053 D17's
-append-only, write-once, daily-rotated, bounded, synchronously flushed shape.
+Every authoritative event has:
+
+```
+AuditEventId =
+  digest(
+    "d2b:panel:audit-event:v1",
+    protected_attempt_identity,
+    audit_event_kind
+  )
+```
+
+The event kind is a closed success or refusal variant. A conflict attempt uses
+its deterministic conflict-attempt identity, so it cannot collide with the
+original accepted attempt. Event bytes are canonical and digest-only.
+
+The append sink retains ADR 0053 D17's root-owned, append-only, write-once,
+daily-rotated, bounded, synchronously flushed shape and adds atomic idempotent
+append. In one durable operation it records the canonical event and an index
+from `AuditEventId` to event digest, location, and original
+`AuditAppendAcknowledgement`, creates the permanent `AuditAppendTombstone`,
+then fsyncs before returning that acknowledgement. The same id and
+byte-identical event returns the original acknowledgement without appending,
+even after raw event rotation. The same id with different bytes is
+`audit-event-id-conflict` and appends nothing.
+
+The controller uses a transactional outbox. A mutating operation commits its
+quarantined authority effect, terminal replay result, terminal journal state,
+and one pending `AuditOutboxRow` atomically. A read or refusal commits the same
+records without an authority effect. Nothing is externally acknowledged, and
+no quarantined mutation is visible to another operation, until the append
+sink acknowledgement is persisted by the controller. The controller then
+activates the effect and response, compacts the journal and outbox into the
+tombstone, and may return the response.
+
+Crash states are closed:
+
+1. `BeforeAcceptedRegistration`: no accepted attempt exists. Recovery may
+   retain transport telemetry but creates no authoritative effect or event.
+2. `AcceptedPendingState`: the journal committed but no operation state
+   transaction committed. Recovery, without waiting for a caller retry,
+   atomically terminalizes it as
+   `accepted-attempt-crash-before-state`, creates its one refusal outbox row,
+   and flushes that event before exposing the refusal.
+3. `TerminalStatePendingAudit`: the state transaction committed and any
+   mutation is quarantined. Recovery replays the exact pending outbox event.
+4. `SinkFsyncedAckUnpersisted`: the sink may have fsynced but the controller
+   did not persist the acknowledgement. The outbox remains pending. Recovery
+   sends the identical id and bytes; the sink returns the original
+   acknowledgement. It neither appends a duplicate nor converts a successful
+   operation to `audit-event-flush-failed`.
+5. `AuditAckPersistedResponsePending`: the acknowledgement and activation
+   committed but the response was not delivered. An identical retry replays
+   the stored result and acknowledgement without another event.
+6. `TerminalResultEvicted`: the tombstone remains. An identical retry returns
+   `idempotency-result-evicted` and never re-executes.
+
+Startup and scheduled recovery scan every nonterminal journal and outbox row
+before the controller accepts new work, so state 2 reaches its refusal even
+when the original caller never reconnects.
+
+Timeout, disconnect, or lost acknowledgement is never proof that the sink did
+not append. The controller may replace a still-unappended proposed event with
+the single `audit-event-flush-failed` refusal only after an authenticated
+definite-no-append sink result. It must discard any quarantined effect in the
+same controller transaction before queuing that refusal. An unknown sink
+result stays pending for idempotent replay. `audit-event-id-conflict` is a
+fail-closed integrity fault and never activates the quarantined effect.
 Audit is evidence; protected controller state remains authority.
 
 Every terminal lifecycle writes exactly one typed
-`TerminalLifecycleMetricRecord` with:
+`TerminalLifecycleMetricRecord`. It contains outcome `signed_off`,
+`abandoned`, or `superseded`; completeness `complete` or `degraded`; final
+candidate, lineage and scope digests; closed degraded-reason codes; and
+exactly one closed discovery value. Ledger and mapping digests plus late,
+severity, iteration, disposition, adjudication, split, merge and alias counts
+live in `AdmittedDiscoveryMetrics`, which exists only on a variant with
+admitted discovery:
 
-- outcome `signed_off`, `abandoned`, or `superseded`;
-- completeness `complete` or `degraded`;
-- discovery origin `native` or `legacy_imported`;
-- migration origin `none`, `complete_legacy_discovery`, or
-  `partial_legacy_prior_obligations`;
-- final candidate, lineage, scope, ledger, and mapping digests;
-- initial, late, severity, iteration, disposition, and adjudication counts;
-- dedup split, merge, and alias counts;
-- legacy source, imported issue, re-triaged issue, partial-round retry, and
-  migration retry counts;
-- same-scope partial-successor, completed legacy seat, and imported partial
-  legacy source counts; and
-- closed degraded-reason codes when completeness is `degraded`.
+```
+AdmittedDiscoveryMetrics {
+  final_ledger_digest,
+  final_mapping_digest,
+  late_and_severity_counts,
+  review_and_implementation_iteration_counts,
+  disposition_and_adjudication_counts,
+  split_merge_and_alias_counts
+}
 
-`signed_off` requires `complete`. `abandoned` and `superseded` still emit a
-record even when evidence is incomplete; for them `degraded` identifies a
-closed reason such as `partial_legacy_round`, `missing_verification`, or
-`terminal_before_retriage`. Degraded state never satisfies approval.
+TerminalDiscoveryOutcome =
+  NativeDiscovery {
+    admitted: AdmittedDiscoveryMetrics,
+    native_source_count,
+    native_initial_effective_issue_count,
+    imported_partial_legacy: None | {
+      source_lifecycle_id,
+      completed_seat_count,
+      imported_legacy_source_count,
+      imported_effective_issue_count,
+      prior_obligation_effective_issue_count,
+      verified_legacy_source_triage_count,
+      partial_round_retry_count,
+      migration_retry_count
+    }
+  }
+  | CompleteLegacyDiscoveryImport {
+      admitted: AdmittedDiscoveryMetrics,
+      source_lifecycle_id,
+      completed_seat_count,
+      legacy_source_count,
+      imported_effective_issue_count,
+      verified_legacy_source_triage_count,
+      migration_retry_count
+    }
+  | NoAdmittedDiscovery {
+      reason: SourcePartialLegacyLifecycle {
+        dispatch_id,
+        completed_seat_count,
+        completed_recommendation_count,
+        retry_count
+      } | LifecycleTerminatedBeforeDiscovery
+    }
+```
+
+There are no independent discovery-origin, migration-origin, legacy-source,
+imported-issue, partial-successor, completed-seat, or issue-level retriage
+fields. The enum payload owns every count that can exist only for its variant,
+so a native lifecycle cannot claim complete legacy discovery and a lifecycle
+with no admitted discovery cannot claim imported issues.
+Generated code uses private constructors over this tagged enum, and strict
+deserialization denies unknown, missing, or cross-variant fields. Contradictory
+combinations therefore fail construction or parsing rather than reaching
+metric emission.
+
+`signed_off` requires `complete` and either `NativeDiscovery` or
+`CompleteLegacyDiscoveryImport`. `abandoned` and `superseded` still emit a
+record when evidence is incomplete. A source partial lifecycle that is
+superseded into a same-scope successor records
+`NoAdmittedDiscovery::SourcePartialLegacyLifecycle`; it never counts its
+partial round as discovery. The successor records `NativeDiscovery` with
+`imported_partial_legacy` populated. A lifecycle terminated before any
+discovery admission records
+`NoAdmittedDiscovery::LifecycleTerminatedBeforeDiscovery`. Degraded state
+never satisfies approval.
+
+For a signed-off complete legacy import,
+`verified_legacy_source_triage_count == legacy_source_count`. For a signed-off
+native successor with imported partial obligations, that verified count equals
+`imported_legacy_source_count`. Earlier terminal outcomes record the exact
+verified subset without converting it to an issue count.
 
 Metric counting is fixed:
 
-- `initial_findings` is the number of terminal effective issue classes whose
-  earliest source is in the native or imported discovery input;
-- `prior_obligation_findings` is the number whose earliest source came from a
-  completed seat of a partial legacy round; those sources are not counted as
-  discovery or late findings;
+- `initial_findings` is a derived projection, not an independent serialized
+  field. It is the number of terminal effective issue classes whose earliest
+  source is in the native or complete imported discovery input:
+  `native_initial_effective_issue_count` for `NativeDiscovery`, or
+  `imported_effective_issue_count` for
+  `CompleteLegacyDiscoveryImport`;
+- `prior_obligation_findings` is likewise derived from
+  `prior_obligation_effective_issue_count`. It counts classes whose earliest
+  source came from a completed seat of a partial legacy round; those sources
+  are not counted as discovery or late findings;
 - `late_findings` is the number of terminal effective issue classes whose
   earliest source was admitted after discovery;
 - `late_blocker_count` and `late_major_count` use those late classes and their
   terminal effective severities;
 - native and migration-assigned severities are counted in separate fields, so
   no chart implies a legacy string carried historical severity;
+- `verified_legacy_source_triage_count` is the number of distinct exact
+  `LegacySourceId` values with an admitted triage and independent verification
+  at the terminal candidate and mapping. It is never an issue count, and there
+  is no `re-triaged issue` metric;
+- partial-round and migration retry counts include only distinct accepted
+  retry attempt identities that reached their named stage. Identical request
+  replay, response loss, preflight refusal, and idempotent regeneration do not
+  increment them;
 - `review_iterations` counts the one native discovery execution or one
   imported complete legacy round, plus each admitted verification execution;
 - a partial legacy successor counts its one fresh native discovery and never
@@ -1210,7 +1551,13 @@ The refusal catalog and core plans are closed:
 | `protected-operation-absent-from-endpoint` | endpoint, operation | `UseOperationOwningEndpoint` |
 | `protected-operation-replay-conflict` | endpoint, operation, idempotency-key digest, request digests | `IssueNewProtectedOperationIntent` |
 | `protected-operation-invalid-state` | lifecycle, operation, current state | `ReadLifecycleStatus`, then `UseStatePermittedOperation` |
-| `audit-event-flush-failed` | endpoint, operation, attempt id | `RestoreProtectedAuditSink`, then `RetryProtectedOperation` |
+| `accepted-attempt-crash-before-state` | endpoint, operation, attempt id | `ReadCurrentAuthoritativeState`, then `IssueNewProtectedOperationIntent` |
+| `audit-event-flush-failed` | endpoint, operation, attempt id | `RestoreProtectedAuditSink`, then `IssueNewProtectedOperationIntent` |
+| `audit-event-id-conflict` | attempt id, audit event id, expected and actual event digests | `RepairAppendSinkIntegrity`, then `ReplayPendingAuditAppend` |
+| `idempotency-result-evicted` | attempt id, result and response digests, audit event id | `ReadCurrentAuthoritativeState` |
+| `replay-tombstone-store-full` | controller namespace, used and maximum entries and bytes | `InstallReviewedTombstoneCapacity`, then `RetryProtectedPreflight` |
+| `audit-append-tombstone-store-full` | append-sink namespace, used and maximum entries and bytes | `InstallReviewedAppendTombstoneCapacity`, then `RetryProtectedPreflight` |
+| `retention-classification-incomplete` | record id, retention class and state code | `InstallCorrectedRetentionClassifier`, then `RetryProtectedPreflight` |
 | `selection-surface-over-bound` | candidate, measured path or byte count, table version | `SplitCandidateOrInstallReviewedSelectionTable` |
 | `discovery-already-admitted` | lifecycle, discovery receipt | `ReturnToExistingLifecycle` |
 | `discovery-page-incomplete` | lifecycle, seat, page-manifest and page ids, reason enum | `RedispatchCompleteDiscoveryPages` |
@@ -1224,12 +1571,19 @@ The refusal catalog and core plans are closed:
 | `verification-artifact-identity-conflict` | candidate, artifact identity, expected and actual digests | `ReturnToAuthorityGeneratedArtifact` |
 | `manual-per-seat-artifact-substitution` | lifecycle, seat, expected and supplied artifact digests | `RegenerateAuthoritySeatArtifact` |
 | `issue-view-binding-mismatch` | lifecycle, candidate, mapping version, issue, assignment or authority ids | `RequestCurrentCandidateBoundIssueView` |
+| `implementation-assignment-self-asserted` | issuer endpoint, implementer run alias, supplied claim digest | `RequestTrustedImplementationDispatchOrResolverReceipt` |
+| `implementation-assignment-replayed` | assignment, implementer run alias, used and maximum use counts | `RequestNewImplementationAssignment` |
+| `implementation-assignment-expired` | assignment, implementer run alias, expiry | `RequestNewImplementationAssignment` |
+| `implementation-assignment-cross-access` | presented assignment, requested issue ids, owning assignment | `UseOwningImplementationAssignment` |
+| `implementation-assignment-partition-invalid` | primary assignment, slice proposal ids, overlapping, omitted or foreign issue ids | `RegenerateDisjointImplementationPartition`, then `RequestImplementationAssignments` |
 | `raw-source-unmapped` | lifecycle, source ids | `RegenerateAutomaticLedger` |
 | `raw-source-multiply-mapped` | source ids, issue ids | `RequestProtectedLedgerCorrection` |
 | `issue-id-duplicate` | lifecycle, issue ids | `RegenerateAutomaticLedger` |
 | `issue-id-reassigned` | issue id, old and proposed source digests | `RequestProtectedLedgerCorrection` |
 | `ledger-synthesis-conflict` | lifecycle, ledger version, artifact digests | `ReturnToAdmittedLedger` |
-| `ledger-correction-invalid` | correction, source ids, issue ids | `RetryProtectedAtomicLedgerOperation` |
+| `ledger-correction-reporter-dissent` | correction, affected source ids and dissenting reporting seat ids | `ReviseProposedMappingAfterReporterDissent`, then `CollectAffectedReporterConcurrence`, then `RetryProtectedAtomicLedgerOperation` |
+| `ledger-correction-dispositions-incompatible` | correction, source issue ids and disposition digests | `SubmitCompatibleImplementationDispositions`, then `RetryProtectedAtomicLedgerOperation` |
+| `ledger-correction-structurally-invalid` | correction, source ids, issue ids and structural reason codes | `RegenerateStructurallyValidLedgerCorrection`, then `CollectAffectedReporterConcurrence`, then `RetryProtectedAtomicLedgerOperation` |
 | `ledger-correction-stale` | correction, expected and actual ledger version | `RegenerateLedgerCorrection`, then `RetryProtectedAtomicLedgerOperation` |
 | `ledger-mapping-concurrence-missing` | correction, affected source and reporting seat ids | `CollectAffectedReporterConcurrence`, then `RetryProtectedAtomicLedgerOperation` |
 | `ledger-mapping-concurrence-stale` | correction, candidate, expected and actual mapping versions | `RedispatchMappingConcurrence`, then `RetryProtectedAtomicLedgerOperation` |
@@ -1241,10 +1595,10 @@ The refusal catalog and core plans are closed:
 | `issue-disposition-missing` | lifecycle, issue ids | `CompleteIssueDisposition` |
 | `verification-coverage-incomplete` | candidate, issue ids, seat ids | `RedispatchVerificationObligations` |
 | `verification-judgment-conflict` | candidate, issue ids, seat ids | `RedispatchDedicatedAdjudication` |
-| `severity-correction-unauthorized` | candidate, source and reporting seat or successor ids | `RedispatchSourceAuthorizedSeverityCorrection` |
+| `severity-correction-unauthorized` | candidate, native `SourceId` and native reporting seat id | `RedispatchNativeReportingSeatSeverityCorrection` |
 | `severity-correction-unverified` | candidate, source ids | `RedispatchIndependentVerifier` |
 | `legacy-source-severity-unassigned` | lifecycle, legacy source ids | `RedispatchLegacySourceTriage` |
-| `legacy-source-severity-correction-unauthorized` | candidate, legacy source, historical seat and successor ids | `DispatchVersionedAccountabilitySuccessor`, then `RedispatchIndependentVerifier` |
+| `legacy-source-severity-correction-unauthorized` | candidate, `LegacySourceId`, historical role and current accountability role | `DispatchLegacySourceAuthorizedSeverityCorrection`, then `RedispatchIndependentVerifier` |
 | `late-finding-ineligible` | candidate, source id, submitted reason | `FileFindingOutsideLifecycle` |
 | `required-validation-missing` | candidate, validation job ids | `RunRequiredEnforcingValidation` |
 | `required-validation-failed` | candidate, validation job ids | `ReturnToScopedBatchFix`, then `RunRequiredEnforcingValidation` |
@@ -1252,9 +1606,10 @@ The refusal catalog and core plans are closed:
 | `required-validation-marked-inapplicable` | candidate, validation job ids | `RunRequiredEnforcingValidation` |
 | `companion-validation-missing` | candidate, companion ids | `RunExplicitCompanionValidation` |
 | `legacy-round-start-after-cutover` | dispatch, cutover revision, schema version | `StartCurrentSchemaLifecycle` |
-| `legacy-round-partial` | dispatch, completed and missing seat ids | `CompletePinnedLegacyRound`, then on `reviewer_unavailable` `CreateSameScopeCurrentSchemaSuccessor` |
+| `legacy-round-partial-retryable` | lifecycle, dispatch, completed and missing seat ids | `CompletePinnedLegacyRound` |
+| `legacy-round-reviewer-unavailable` | lifecycle, dispatch, completed and unavailable seat ids | `CreateSameScopeCurrentSchemaSuccessor` |
 | `legacy-source-unmapped` | lifecycle, legacy source ids | `RegenerateAutomaticLedger` |
-| `legacy-retriage-incomplete` | lifecycle, legacy source ids, seat ids | `RedispatchLegacySourceTriage` |
+| `legacy-source-triage-incomplete` | lifecycle, exact unverified `LegacySourceId` values and seat ids | `RedispatchLegacySourceTriage` |
 | `legacy-schema-version-unsupported` | artifact digest, found and supported versions | `InstallSupportedVersionDispatcher`, then `RetryLegacyImport` |
 | `legacy-regeneration-conflict` | lifecycle, import and artifact digests | `ReturnToAdmittedLegacyImport` |
 | `risk-operation-replay-conflict` | operation, acceptance or revocation id, idempotency-key and request digests | `RequestNewRiskOperationIntent` |
@@ -1262,17 +1617,18 @@ The refusal catalog and core plans are closed:
 | `blocker-open` | candidate, issue ids | `ReturnToScopedBatchFix` |
 | `approval-receipt-expired` | lifecycle, candidate, receipt id and expiry | `CreateReverificationSuccessor` |
 | `merge-completion-binding-mismatch` | receipt, expected and actual target and candidate ids | `ResolveTrustedMergeCompletion`, then `RetryRecordMergeCompletion` |
-| `round-input-store-full` | active and resumable lineage ids, configured bound | `ResolveRetentionCapacity` |
+| `round-input-store-full` | complete sorted `RetentionBlocker` values and configured bound | Concatenate the section 13 blocker-specific plans in blocker order |
+| `terminal-metric-variant-invalid` | metric record id, variant and forbidden or missing field codes | `RegenerateTerminalMetricFromLifecycleReplay` |
 | `redaction-contract-violation` | artifact id, field code | `RegenerateBoundedRedactedArtifact` |
 | `final-verification-nonunanimous` | candidate, seat ids | `RedispatchFinalVerification` |
 | `lifecycle-receipt-invalid` | candidate, receipt id, failed invariant ids | `SatisfyReceiptPrerequisites`, then `RegenerateLifecycleReceipt` |
 
 The section 10 risk variants are rows in this same closed catalog, not a
-separate open extension. `ResolveRetentionCapacity` is itself a closed choice
-over `ResumeNamedAbandonedLineage`, `SupersedeNamedLineage`,
-`PermanentlyCloseNamedAbandonedLineage`, and
-`RaiseReviewedRetentionBound`. It never claims ordinary abandonment freed
-state and never deletes ineligible records.
+separate open extension. The `round-input-store-full` plan is the exact
+state-specific concatenation defined in section 13; it has no generic
+raise-the-bound or ordinary-abandonment fallback. The capsule row is the only
+one that offers permanent close, and only for an already abandoned resumable
+lineage.
 
 Every normative refusal site in this record names exactly one catalog row,
 including every operation in the endpoint table. A machine-readable
@@ -1305,9 +1661,10 @@ minimum:
   generalized ADR 0053 panel-and-approval controller contract, with the closed
   endpoints above and no Gas City dependency;
 - `packages/xtask/src/delivery/` for lifecycle, lineage, scope, severity,
-  source, ledger, correction, disposition, judgment, acceptance, migration,
-  retention, terminal metric, receipt, seal, shared selection-artifact
-  validation, and typed remedy contracts;
+  source, ledger, correction, implementation assignment, disposition,
+  judgment, acceptance, migration, accepted-attempt journal, idempotency
+  result, outbox, tombstone, retention, terminal metric, receipt, seal, shared
+  selection-artifact validation, and typed remedy contracts;
 - `.github/skills/d2b-panel-round/` for automatic discovery, compatibility,
   verification, and artifact generation;
 - panel and integrator agents plus `scripts/copilot/check-bindings.mjs` for
@@ -1391,9 +1748,13 @@ planted negative is accepted. At minimum, the corpus separately exercises:
 - `SubmitLedgerSynthesisProposal` with orchestrator-assigned ids, duplicate
   grouping, controller admission, identical retry, conflicting replay, split,
   merge, affected-reporting-reviewer concurrence, protected operator
-  authorization, and refusal of an orchestrator mapping mutation;
+  authorization, refusal of an orchestrator mapping mutation, and separate
+  reporter-dissent, incompatible-disposition and structural-invalidity
+  correction refusals whose remedies establish their prerequisites before
+  retry;
 - false BLOCKER and MAJOR invalidation, withdrawal, severity correction,
-  reporting-seat dissent, retired-legacy-seat accountability succession, and
+  reporting-seat dissent, the native-only and `LegacySourceId`-only
+  unauthorized predicates, retired-legacy-seat accountability succession, and
   missing independent coverage;
 - every disposition and judgment combination, including
   `implementation-self-review`, disposition supersession by invalid or
@@ -1401,14 +1762,21 @@ planted negative is accepted. At minimum, the corpus separately exercises:
   staleness;
 - automatic full-ledger per-seat artifacts, missing chunk, stale chunk,
   duplicate chunk, conflicting identity regeneration, no hand-authored
-  substitute, least-authority implementer and merge-authority issue views, and
-  every issue-view binding mismatch;
+  substitute, least-authority implementer and merge-authority issue views,
+  every issue-view binding mismatch, and controller-owned
+  `ImplementationAssignment` request, issue and resolve operations;
+- assignment self-assertion, stale or replayed use, expiry, use exhaustion and
+  cross-assignment access; authoritative trusted-dispatch and opaque-resolver
+  issuance; binding to implementer run, lifecycle, candidate, mapping version
+  and exact issue set; a full-ledger `PrimaryBatch`; and pairwise disjoint
+  `ParallelFixSlice` projections with planted overlap, omission and foreign
+  issue failures;
 - touched and untouched late findings for every allowed reason, plus refused
   pre-existing MINOR and NIT controls;
 - ledger-scoped fixes, unrelated scope expansion, atomic rescope, crash and
   retry, abandonment, bounded `SuccessorImportCapsule`, refusal over its bound,
   resume while ineligible for eviction, atomic successor import, permanent
-  close, permanent-closed-lineage reuse refusal, and each capacity remedy;
+  close, and permanent-closed-lineage reuse refusal;
 - every merge-authority evidence form, same-uid standalone refusal, acceptance
   issue and revocation, controller-issued idempotency key, identical retry,
   conflicting replay, response loss at every durable boundary, prohibited
@@ -1417,23 +1785,63 @@ planted negative is accepted. At minimum, the corpus separately exercises:
   mismatch;
 - completed, in-flight, partial, retried, duplicate, malformed, and
   already-ingested legacy rounds with arbitrary recommendation strings,
-  refusal to start an old-schema round after cutover, unavailable-reviewer
-  same-scope succession, completed-seat prior-obligation import, one fresh
-  native discovery, atomic crosswalk, response-loss retry, and exact metrics;
+  refusal to start an old-schema round after cutover, the separate retryable
+  and reviewer-unavailable partial states and their linear remedies,
+  unavailable-reviewer same-scope succession, completed-seat prior-obligation
+  import, one fresh native discovery, atomic crosswalk, response-loss retry,
+  and exact metrics;
+- a partial legacy round whose completed optional `networking` and `kernel`
+  reporting roles are omitted by normal native selection, proving the
+  successor roster is their union, that fresh current-role agent instances
+  receive bound profiles and trusted dispatch, and that the roster remains
+  monotonic;
+- source partial-round bytes ineligible while retryable, an atomic same-scope
+  import failure that leaves them ineligible, immediate ordinary D17
+  eligibility after successful import and source supersession, and continuation
+  from successor ledger or capsule state after those source bytes are evicted;
 - exact legacy-byte preservation, deterministic source ids, complete automatic
   crosswalk, per-source migration triage, source-triage replay through split
-  and merge, retired-seat correction, and no invented historical severity;
+  and merge, exact verified `LegacySourceId` triage counts, retired-seat
+  correction, and no invented historical severity;
 - approval-receipt seven-day cap, tighter MAJOR-acceptance cap, trusted merge
   completion, receipt-expiry merge refusal, terminal-input eligibility,
   eviction to audit-floor projections, and mandatory re-verification;
-- active-retention refusal, both D17 bounds, exact one-event auditing of every
-  protected success and refusal, transactional-outbox recovery and crashes
-  before state commit, after state commit, after audit flush and before
-  response, retry without audit duplication, redaction and `Debug` controls,
-  and all three terminal outcomes in complete and permitted degraded shapes;
+- accepted-attempt journal, full replay-result, pending outbox and permanent
+  controller and append-sink tombstone retention and cleanup; both D17
+  round-input bounds; terminal full-result and raw sink-event eviction
+  followed by identical-request no-reexecution and same-key
+  conflicting-request refusal; finite tombstone-capacity refusals; and proof
+  that cleanup never deletes either replay tombstone;
+- durable acceptance before state processing, a crash after acceptance and
+  before the state transaction with no caller retry that recovers exactly one
+  `accepted-attempt-crash-before-state` event, and pre-registration transport,
+  parse, authentication and capacity failures that create no authoritative
+  attempt or effect;
+- exact one-event auditing of every accepted protected success and refusal;
+  deterministic `AuditEventId`; transactional-outbox recovery after state
+  commit; crash after sink fsync but before controller acknowledgement
+  persistence; idempotent same-id same-bytes replay returning the original
+  acknowledgement; same-id different-bytes conflict; crash after audit
+  acknowledgement and before response; and no duplicate append or conversion
+  of an acknowledged success to refusal;
+- `round-input-store-full` fixtures for every closed blocker:
+  active lifecycle, unresolved lifecycle, retryable partial dispatch,
+  unavailable partial dispatch, resumable abandoned capsule, unexpired
+  approval receipt, unrecorded trusted merge completion, pending accepted
+  attempt and pending outbox. Each asserts all safe causing ids and its exact
+  state-specific remedy, with planted failures for omitted blockers, generic
+  bound increase and ordinary abandonment;
+- every `TerminalDiscoveryOutcome` variant, the source partial lifecycle and
+  its native successor as separate records, complete-legacy exact source and
+  verified-source-triage counts, and compile-time construction or strict parse
+  refusal for every contradictory origin or variant-payload combination;
+- redaction and `Debug` controls, and all three terminal outcomes in complete
+  and permitted degraded shapes;
 - merge-ready MINOR and NIT treatment, unresolved blocking states, final
   unanimity, and green validation without panel approval; and
-- every typed error, every endpoint-operation/refusal mapping, and both
+- every typed error, including every new assignment, audit, retention,
+  partial-round, source-triage, severity-predicate and ledger-correction
+  partition; every endpoint-operation/refusal mapping; and both
   producer-context remedy renderings, with mechanical parity between
   normative refusal sites and catalog rows.
 
@@ -1458,9 +1866,9 @@ implementation catches mistakes before reviewers return, and ordinary
 pre-existing MINOR and NIT findings cannot reopen discovery.
 
 The initial panel becomes more demanding. Exhaustiveness cannot be proven.
-Explicit prompts, complete raw-output retention, no truncation, late-finding
-metrics, and the late ledger make misses visible rather than pretending they
-cannot happen.
+Explicit prompts, complete raw output while a lifecycle needs it, bounded
+cleanup after eligibility, no truncation, late-finding metrics, and the late
+ledger make misses visible rather than pretending they cannot happen.
 
 Build-system changes gain an optional specialist without raising either
 minimum floor. The concrete new failure is a harmless-looking scheduler,
@@ -1497,8 +1905,8 @@ truth.
 Automatic compatibility is more machinery than a clean break. The concrete
 failure it prevents is an active operator having to discard completed review
 and fix progress. Exact old bytes, deterministic source identities, verified
-re-triage, complete automatic crosswalks, and idempotent generation bound that
-machinery.
+source triage, complete automatic crosswalks, and idempotent generation bound
+that machinery.
 
 Human MAJOR acceptance remains powerful. A protected authority resolver,
 separate typed operation, exact candidate binding, mandatory expiry,
@@ -1506,11 +1914,14 @@ revocation, and repeated validity checks make it attributable and
 non-transferable. They do not make the accepted risk smaller.
 
 The retention exception for active and unresolved work can fill the store.
-The deliberate result is denial of new admission, not eviction of the only
-evidence capable of closing existing work. Resumable abandonment has the same
-cost: its bounded capsule remains protected until resume, supersession or
-explicit permanent close, so abandonment cannot be misreported as reclaimed
-capacity.
+The deliberate result is denial of new admission with every safe blocker id
+and a state-specific remedy, not eviction of the only evidence capable of
+closing existing work. Resumable abandonment has the same cost: its bounded
+capsule remains protected until resume, supersession or explicit permanent
+close, so ordinary abandonment cannot be misreported as reclaimed capacity.
+Attempt response bytes remain bounded; only minimal replay tombstones are
+permanent, and their finite reserved store refuses before acceptance rather
+than evicting the fact that an operation already ran.
 
 The late-finding restriction leaves some real MINOR and NIT defects for later
 work. That is the cost of merge-ready rather than perfect. Unsafe findings
@@ -1527,8 +1938,8 @@ findings can indefinitely move the gate after the candidate is merge-ready.
 ### Cut over by discarding every in-flight old round
 
 Rejected. It is operationally avoidable data loss. A complete old round can be
-identified, preserved, re-triaged, and imported without pretending it already
-had the new schema.
+identified, preserved, given verified current source triage, and imported
+without pretending it already had the new schema.
 
 ### Ask the operator to assign ids or copy reviewer notes
 

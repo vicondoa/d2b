@@ -6,8 +6,10 @@
   replaces D7's open-ended review and fix loop and own-findings-only payload;
   D8's undifferentiated blocking treatment of recommendations in an isolated
   final set; D9's publication refusal while any finding stands; D17's closed
-  endpoint operation sets and round-input eligibility rules only as its new
-  endpoint table and receipt lifetime specify; and D21's rejection of a
+  endpoint operation sets, round-input eligibility, and protected-attempt
+  audit ordering only as its new endpoint table, receipt lifetime,
+  accepted-attempt journal, replay result, outbox, permanent replay
+  tombstones, and idempotent append-sink rules specify; and D21's rejection of a
   four-level severity contract, per-seat `held` and `prior_resolutions` state,
   rotation, and clean-break refusal to read or admit an earlier schema. It
   substitutes one native discovery panel, a shared deduplicated ledger, batch
@@ -18,8 +20,9 @@
   protected-principal panel-and-approval controller boundary for the
   standalone producer without requiring Gas City, while same-uid repository
   helpers remain proposal-only. Its closed endpoint table adds
-  candidate-bound reviewer and least-authority issue-reader endpoints and
-  assigns lifecycle, ledger proposal and correction, severity, risk,
+  candidate-bound reviewer, protected implementation-assignment issuer, and
+  least-authority issue-reader endpoints and assigns lifecycle, ledger
+  proposal and correction, implementation assignment, severity, risk,
   inspection, status, publication, merge-completion and permanent-close
   operations without exposing approval, risk or mapping mutation to the
   orchestrator. It also narrowly supersedes D21's closed twelve-role pool and
