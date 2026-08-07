@@ -665,7 +665,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   nonreplaceable root-owned namespace. The parent MUST be opened no-follow and
   `O_CLOEXEC`; the leaf MUST be opened `O_NOFOLLOW|O_CLOEXEC`, identity-checked before and
   after `F_OFD_SETLK`, and never replaced, renamed, unlinked, duplicated, or transferred.
-  The same description MUST remain held through dispatch final reopen and every
+  The same open file description MUST remain held through dispatch final reopen and every
   parent/ancestor directory sync. Parent/leaf replacement and exec-leak tests MUST prove no
   independently lockable inode, inherited claim, concurrent capability, or second dispatch.
   The validator MUST consume that
