@@ -144,7 +144,102 @@ fn generator_preview_is_the_only_generation_side_effect() {
             .collect::<std::collections::BTreeSet<_>>()
     });
     let outputs = bazel::gen_bazel(&[]).expect("generator preview");
-    assert!(!outputs.is_empty());
+    let approved = [
+        ".bazelignore",
+        "bazel/generated/BUILD.bazel",
+        "bazel/generated/action-network-policy.json",
+        "bazel/generated/configured-targets.json",
+        "bazel/generated/evidence-sink-policy.json",
+        "bazel/generated/no-shell-inventory.json",
+        "bazel/generated/output-manifest.json",
+        "bazel/generated/package-policy-targets.bzl",
+        "bazel/generated/product-targets.bzl",
+        "bazel/generated/source-census.json",
+    ];
+    assert_eq!(outputs.len(), approved.len());
+    let preview_root = PathBuf::from(".scratch/bazel/generated-preview");
+    let actual = outputs
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&preview_root)
+                .expect("preview path is rooted in the scratch census")
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, approved);
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|path| fs::metadata(root.join(path)).is_ok_and(|metadata| metadata.is_file()))
+            .count(),
+        approved.len()
+    );
+    let no_shell: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            root.join(&preview_root)
+                .join("bazel/generated/no-shell-inventory.json"),
+        )
+        .expect("no-shell inventory"),
+    )
+    .expect("no-shell JSON");
+    let governed = no_shell["governedSources"]
+        .as_array()
+        .expect("governed source set");
+    let declared = no_shell["declaredInputs"]
+        .as_array()
+        .expect("declared input set");
+    assert!(!governed.is_empty());
+    assert_eq!(governed, declared);
+    assert_eq!(
+        no_shell["scanResults"]
+            .as_array()
+            .expect("scan results")
+            .len(),
+        governed.len()
+    );
+    assert_eq!(
+        no_shell["spawnSites"]
+            .as_array()
+            .expect("spawn sites")
+            .iter()
+            .filter(|site| site["shellInvocation"].as_bool() == Some(true))
+            .count(),
+        0
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            root.join(&preview_root)
+                .join("bazel/generated/output-manifest.json"),
+        )
+        .expect("output manifest"),
+    )
+    .expect("output manifest JSON");
+    assert_eq!(manifest["outputCount"], 10);
+    assert!(manifest["selfDigest"].is_null());
+    assert_eq!(
+        manifest["outputs"]
+            .as_array()
+            .expect("manifest digests")
+            .len(),
+        9
+    );
+    assert!(
+        fs::read_to_string(
+            root.join(&preview_root)
+                .join("bazel/generated/product-targets.bzl")
+        )
+        .expect("product targets")
+        .contains("PRODUCT_TARGETS")
+    );
+    assert!(
+        fs::read_to_string(
+            root.join(&preview_root)
+                .join("bazel/generated/package-policy-targets.bzl")
+        )
+        .expect("package policy targets")
+        .contains("PACKAGE_POLICY_TARGETS")
+    );
     assert!(outputs.iter().all(|path| path.starts_with(".scratch")));
     let nested_workspace_build = PathBuf::from("packages").join("BUILD.bazel");
     assert!(
@@ -174,6 +269,19 @@ fn generator_preview_is_the_only_generation_side_effect() {
     );
     let checked = bazel::gen_bazel(&["--check".to_owned()]).expect("generator check");
     assert_eq!(outputs, checked);
+
+    let stale = root.join("bazel/generated/obsolete-inventory.json");
+    fs::create_dir_all(stale.parent().expect("generated parent")).expect("generated directory");
+    fs::write(&stale, b"obsolete\n").expect("plant stale generated output");
+    let stale_result = bazel::gen_bazel(&["--check".to_owned()]);
+    fs::remove_file(&stale).expect("remove stale generated output");
+    assert!(
+        stale_result
+            .expect_err("stale committed output must fail the check")
+            .to_string()
+            .contains("obsolete-inventory.json")
+    );
+
     let after = fs::read_dir(root.join(".scratch")).ok().map(|entries| {
         entries
             .filter_map(Result::ok)

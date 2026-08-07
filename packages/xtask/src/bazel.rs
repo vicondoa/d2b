@@ -31,6 +31,31 @@ const HUBS: &[(&str, &str, &str)] = &[
 const STABLE_TOOLCHAIN: &str = "1.97.0";
 const NIGHTLY_TOOLCHAIN: &str = "nightly-2026-02-16";
 const PREVIEW_ROOT: &str = ".scratch/bazel/generated-preview";
+const OUTPUT_MANIFEST_PATH: &str = "bazel/generated/output-manifest.json";
+
+const APPROVED_OUTPUT_PATHS: &[&str] = &[
+    ".bazelignore",
+    "bazel/generated/BUILD.bazel",
+    "bazel/generated/action-network-policy.json",
+    "bazel/generated/configured-targets.json",
+    "bazel/generated/evidence-sink-policy.json",
+    "bazel/generated/no-shell-inventory.json",
+    OUTPUT_MANIFEST_PATH,
+    "bazel/generated/package-policy-targets.bzl",
+    "bazel/generated/product-targets.bzl",
+    "bazel/generated/source-census.json",
+];
+
+const APPROVED_GENERATED_EXPORTS: &[&str] = &[
+    "action-network-policy.json",
+    "configured-targets.json",
+    "evidence-sink-policy.json",
+    "no-shell-inventory.json",
+    "output-manifest.json",
+    "package-policy-targets.bzl",
+    "product-targets.bzl",
+    "source-census.json",
+];
 
 const RETIRED_HUB_MESSAGES: &[(&str, &str)] = &[
     (
@@ -224,7 +249,8 @@ pub(crate) fn gen_bazel(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>>
     let root = repo_root()?;
     let model = generate_model(&root)?;
     model.validate()?;
-    let rendered = model.render();
+    let rendered = model.render()?;
+    validate_rendered_outputs(&rendered)?;
     let paths = rendered.keys().map(PathBuf::from).collect::<Vec<_>>();
 
     match mode {
@@ -233,6 +259,10 @@ pub(crate) fn gen_bazel(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>>
             // integrator owns generated BUILD files, inventories, pins, and
             // goldens, so a contributor command must not silently create one.
             let preview_root = root.join(PREVIEW_ROOT);
+            if preview_root.exists() {
+                fs::remove_dir_all(&preview_root)?;
+            }
+            fs::create_dir_all(&preview_root)?;
             for (relative, contents) in rendered {
                 let path = preview_root.join(&relative);
                 if let Some(parent) = path.parent() {
@@ -246,6 +276,7 @@ pub(crate) fn gen_bazel(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>>
                 .collect())
         }
         GenBazelMode::Check => {
+            validate_committed_output_census(&root, &rendered)?;
             for (relative, expected) in rendered {
                 let path = root.join(&relative);
                 if path.is_file() {
@@ -531,12 +562,14 @@ impl Census {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GeneratedModel {
-    builds: Vec<GeneratedBuild>,
-    governed_sources: Vec<String>,
-    harness_free: Census,
-    doctests: Census,
     bazelignore: Vec<String>,
-    hermeticity: String,
+    action_network_policy: String,
+    configured_targets: String,
+    evidence_sink_policy: String,
+    no_shell_inventory: String,
+    package_policy_targets: String,
+    product_targets: String,
+    source_census: String,
 }
 
 impl GeneratedModel {
@@ -545,78 +578,79 @@ impl GeneratedModel {
         {
             return Err("generated .bazelignore must be nonempty and cover .scratch/".into());
         }
-        let mut paths = BTreeSet::new();
-        for build in &self.builds {
-            if !is_generator_owned(&build.path) || !paths.insert(&build.path) {
-                return Err(format!("generated BUILD ownership is invalid: {}", build.path).into());
-            }
-        }
-        if self.governed_sources.is_empty() {
-            return Err("generated governed Rust source inventory is empty".into());
-        }
-        if self.harness_free.executed.is_empty() {
-            return Err("generated harness-free census is empty".into());
-        }
         hermeticity::validate_action_network_inventory(
             &hermeticity::complete_action_network_inventory(),
         )
         .map_err(|error| format!("action-network inventory is invalid: {error}"))?;
+        for (name, contents) in [
+            ("action-network-policy.json", &self.action_network_policy),
+            ("configured-targets.json", &self.configured_targets),
+            ("evidence-sink-policy.json", &self.evidence_sink_policy),
+            ("no-shell-inventory.json", &self.no_shell_inventory),
+            ("source-census.json", &self.source_census),
+        ] {
+            let value: Value = serde_json::from_str(contents)
+                .map_err(|error| format!("generated {name} is not valid JSON: {error}"))?;
+            if !value.is_object() {
+                return Err(format!("generated {name} must be a JSON object").into());
+            }
+        }
+        if self.package_policy_targets.trim().is_empty() || self.product_targets.trim().is_empty() {
+            return Err("generated target definitions must be nonempty".into());
+        }
         Ok(())
     }
 
-    fn render(&self) -> BTreeMap<String, String> {
+    fn render(&self) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
         let mut outputs = BTreeMap::new();
-        let mut builds = self.builds.clone();
-        builds.sort_by(|left, right| left.path.cmp(&right.path));
-        for build in builds {
-            outputs.insert(build.path, build.content);
-        }
-
-        let mut sources = self.governed_sources.clone();
-        sources.sort();
-        sources.dedup();
-        let mut governed = String::from(
-            "# Generated by cargo xtask gen-bazel. Do not edit.\n\nGOVERNED_RUST_SOURCES = [\n",
-        );
-        for source in sources {
-            governed.push_str("    ");
-            governed.push_str(&bazel_string(&source));
-            governed.push_str(",\n");
-        }
-        governed.push_str("]\n");
-        outputs.insert(
-            "bazel/generated/governed-rust-sources.bzl".to_owned(),
-            governed,
-        );
-        outputs.insert(
-            "bazel/generated/harness-free-census.json".to_owned(),
-            self.harness_free.json(),
-        );
-        outputs.insert(
-            "bazel/generated/doctest-census.json".to_owned(),
-            self.doctests.json(),
-        );
-        outputs.insert(
-            hermeticity::GENERATED_ARTIFACT_PATH.to_owned(),
-            self.hermeticity.clone(),
-        );
-        outputs.insert(
-            "bazel/generated/action-network-inventory.json".to_owned(),
-            serde_json::to_string_pretty(&hermeticity::complete_action_network_inventory())
-                .expect("action-network inventory is serializable")
-                + "\n",
-        );
-
-        let mut ignores = self.bazelignore.clone();
-        ignores.sort();
-        ignores.dedup();
-        let mut bazelignore = String::new();
-        for entry in ignores {
-            bazelignore.push_str(entry.trim_end_matches('/'));
-            bazelignore.push_str("/\n");
-        }
-        outputs.insert(".bazelignore".to_owned(), bazelignore);
-        outputs
+        insert_output(
+            &mut outputs,
+            ".bazelignore",
+            render_bazelignore(&self.bazelignore),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/BUILD.bazel",
+            generated_build_file(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/action-network-policy.json",
+            self.action_network_policy.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/configured-targets.json",
+            self.configured_targets.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/evidence-sink-policy.json",
+            self.evidence_sink_policy.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/no-shell-inventory.json",
+            self.no_shell_inventory.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/package-policy-targets.bzl",
+            self.package_policy_targets.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/product-targets.bzl",
+            self.product_targets.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/source-census.json",
+            self.source_census.clone(),
+        )?;
+        let manifest = output_manifest(&outputs);
+        insert_output(&mut outputs, OUTPUT_MANIFEST_PATH, manifest)?;
+        Ok(outputs)
     }
 }
 
@@ -650,68 +684,1211 @@ struct DependencyInfo {
     proc_macro: BTreeSet<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TargetRow {
+    label: String,
+    package: String,
+    manifest: String,
+    kind: String,
+    cargo_context: String,
+    system: Option<String>,
+    cargo_target: Option<String>,
+    policy_input: Option<String>,
+    source_files: Vec<String>,
+    direct_first_party_deps: Vec<String>,
+    direct_product_deps: Vec<String>,
+    cfgs: Vec<String>,
+    features: Vec<String>,
+    closure_configured_targets: Vec<String>,
+    closure_external_identities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SpawnSite {
+    source: String,
+    start_line: usize,
+    start_column: usize,
+    end_line: usize,
+    end_column: usize,
+    program_expression: String,
+    shell_invocation: bool,
+}
+
+type PolicyTargetContext = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+);
+
+const POLICY_TARGET_CONTEXTS: &[PolicyTargetContext] = &[
+    (
+        "broker-production",
+        "d2b-priv-broker",
+        "x86_64-linux",
+        "x86_64-unknown-linux-gnu",
+        "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production",
+        &[],
+    ),
+    (
+        "broker-production",
+        "d2b-priv-broker",
+        "aarch64-linux",
+        "aarch64-unknown-linux-gnu",
+        "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production",
+        &[],
+    ),
+    (
+        "guest-real-libshpool",
+        "d2b-guest-shell-runner",
+        "x86_64-linux",
+        "x86_64-unknown-linux-musl",
+        "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
+        &["real-libshpool"],
+    ),
+    (
+        "guest-real-libshpool",
+        "d2b-guest-shell-runner",
+        "aarch64-linux",
+        "aarch64-unknown-linux-musl",
+        "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool",
+        &["real-libshpool"],
+    ),
+];
+
+fn ordered_object(fields: impl IntoIterator<Item = (String, Value)>) -> Value {
+    let fields = fields.into_iter().collect::<BTreeMap<_, _>>();
+    Value::Object(fields.into_iter().collect())
+}
+
+fn json_array(values: impl IntoIterator<Item = Value>) -> Value {
+    Value::Array(values.into_iter().collect())
+}
+
+fn json_string_array(values: &[String]) -> Value {
+    json_array(values.iter().cloned().map(Value::String))
+}
+
+fn pretty_json(value: &Value) -> String {
+    serde_json::to_string_pretty(value).expect("generated JSON is serializable") + "\n"
+}
+
+fn insert_output(
+    outputs: &mut BTreeMap<String, String>,
+    relative: &str,
+    contents: String,
+) -> Result<(), Box<dyn Error>> {
+    if !is_generator_owned(relative) {
+        return Err(format!("generator attempted to emit an unowned path: {relative}").into());
+    }
+    if outputs.insert(relative.to_owned(), contents).is_some() {
+        return Err(format!("generator emitted a duplicate path: {relative}").into());
+    }
+    Ok(())
+}
+
+fn render_bazelignore(entries: &[String]) -> String {
+    let mut entries = entries.to_vec();
+    entries.sort();
+    entries.dedup();
+    entries
+        .into_iter()
+        .map(|entry| format!("{}/\n", entry.trim_end_matches('/')))
+        .collect()
+}
+
+fn generated_build_file() -> String {
+    let mut content = String::from(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         # First-party target definitions live in the consolidated .bzl files.\n\n\
+         package(default_visibility = [\"//visibility:public\"])\n\n\
+         exports_files([\n",
+    );
+    for file in APPROVED_GENERATED_EXPORTS {
+        content.push_str("    ");
+        content.push_str(&bazel_string(file));
+        content.push_str(",\n");
+    }
+    content.push_str("])\n");
+    content
+}
+
+fn output_manifest(outputs: &BTreeMap<String, String>) -> String {
+    let output_paths = APPROVED_OUTPUT_PATHS
+        .iter()
+        .map(|path| Value::String((*path).to_owned()))
+        .collect::<Vec<_>>();
+    let output_digests = outputs
+        .iter()
+        .map(|(path, contents)| {
+            ordered_object([
+                ("path".to_owned(), Value::String(path.clone())),
+                (
+                    "sha256".to_owned(),
+                    Value::String(sha256_hex(contents.as_bytes())),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+    pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("manifestPath".to_owned(), json!(OUTPUT_MANIFEST_PATH)),
+        ("selfDigest".to_owned(), Value::Null),
+        ("outputCount".to_owned(), json!(APPROVED_OUTPUT_PATHS.len())),
+        ("outputPaths".to_owned(), Value::Array(output_paths)),
+        ("outputs".to_owned(), Value::Array(output_digests)),
+    ]))
+}
+
+fn validate_rendered_outputs(outputs: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    let expected = APPROVED_OUTPUT_PATHS
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<BTreeSet<_>>();
+    let actual = outputs.keys().cloned().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(format!(
+            "generated output census differs: expected {:?}, found {:?}",
+            expected, actual
+        )
+        .into());
+    }
+    if outputs.values().any(String::is_empty) {
+        return Err("generated output census contains an empty output".into());
+    }
+    if outputs.keys().any(|path| {
+        path.contains("action-network-inventory")
+            || path.contains("hermeticity-inventory")
+            || path.contains("governed-rust-sources")
+            || path.contains("harness-free-census")
+            || path.contains("doctest-census")
+            || path.ends_with("/BUILD.bazel") && path.starts_with("packages/")
+    }) {
+        return Err("generated output census contains an obsolete output".into());
+    }
+    validate_json_schema(
+        "action-network-policy.json",
+        &outputs["bazel/generated/action-network-policy.json"],
+        &[
+            "action_network",
+            "aquery_actions",
+            "bazel_archive_sha256",
+            "bazel_source_sha256",
+            "capability_abi",
+            "configured_targets",
+            "coverage_targets",
+            "declared_inputs",
+            "denied_syscalls",
+            "derivation_sha256_method",
+            "executable_sha256",
+            "fallback_strategies",
+            "fixed_policy",
+            "hermeticity",
+            "inherited_descriptor_plants",
+            "load_point",
+            "native_outputs",
+            "output_nar_sha256",
+            "patch_sha256",
+            "policy_sha256",
+            "ptrace_requests",
+            "repository_fetches_outside_actions",
+            "sandbox_provider",
+            "schema_version",
+            "socket_plants",
+            "strategy_inventory",
+        ],
+    )?;
+    validate_json_schema(
+        "configured-targets.json",
+        &outputs["bazel/generated/configured-targets.json"],
+        &[
+            "actionKinds",
+            "coverageTargets",
+            "hubs",
+            "schemaVersion",
+            "targets",
+        ],
+    )?;
+    validate_json_schema(
+        "evidence-sink-policy.json",
+        &outputs["bazel/generated/evidence-sink-policy.json"],
+        &["measured", "rows", "schemaVersion", "status"],
+    )?;
+    validate_json_schema(
+        "no-shell-inventory.json",
+        &outputs["bazel/generated/no-shell-inventory.json"],
+        &[
+            "declaredInputs",
+            "governedSources",
+            "scanResults",
+            "schemaVersion",
+            "spawnSites",
+        ],
+    )?;
+    validate_json_schema(
+        "source-census.json",
+        &outputs["bazel/generated/source-census.json"],
+        &["schemaVersion", "sources"],
+    )?;
+    validate_json_schema(
+        "output-manifest.json",
+        &outputs[OUTPUT_MANIFEST_PATH],
+        &[
+            "manifestPath",
+            "outputCount",
+            "outputPaths",
+            "outputs",
+            "schemaVersion",
+            "selfDigest",
+        ],
+    )?;
+    validate_output_manifest(outputs)?;
+    Ok(())
+}
+
+fn validate_json_schema(
+    name: &str,
+    contents: &str,
+    expected_keys: &[&str],
+) -> Result<(), Box<dyn Error>> {
+    let value: Value = serde_json::from_str(contents)
+        .map_err(|error| format!("{name} is not valid JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{name} must be a JSON object"))?;
+    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = expected_keys.iter().copied().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(format!(
+            "{name} schema is not closed: expected {:?}, found {:?}",
+            expected, actual
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_output_manifest(outputs: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    let value: Value = serde_json::from_str(&outputs[OUTPUT_MANIFEST_PATH])?;
+    let object = value
+        .as_object()
+        .ok_or("output manifest is not an object")?;
+    if object.get("schemaVersion") != Some(&json!(1))
+        || object.get("manifestPath").and_then(Value::as_str) != Some(OUTPUT_MANIFEST_PATH)
+        || object.get("outputCount").and_then(Value::as_u64)
+            != Some(APPROVED_OUTPUT_PATHS.len() as u64)
+        || !object.get("selfDigest").is_some_and(Value::is_null)
+    {
+        return Err("output manifest header is invalid".into());
+    }
+    let paths = object
+        .get("outputPaths")
+        .and_then(Value::as_array)
+        .ok_or("output manifest paths are missing")?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "output manifest contains a non-string path".into())
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    let expected_paths = APPROVED_OUTPUT_PATHS
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<Vec<_>>();
+    if paths != expected_paths {
+        return Err("output manifest path census is not exact and sorted".into());
+    }
+    let entries = object
+        .get("outputs")
+        .and_then(Value::as_array)
+        .ok_or("output manifest digest entries are missing")?;
+    if entries.len() != APPROVED_OUTPUT_PATHS.len() - 1 {
+        return Err("output manifest digest census has the wrong size".into());
+    }
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let entry = entry
+            .as_object()
+            .ok_or("output manifest digest entry is not an object")?;
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("output manifest digest entry has no path")?;
+        let digest = entry
+            .get("sha256")
+            .and_then(Value::as_str)
+            .ok_or("output manifest digest entry has no sha256")?;
+        let expected_digest = outputs
+            .get(path)
+            .map(|contents| sha256_hex(contents.as_bytes()))
+            .ok_or_else(|| format!("output manifest names an unknown path: {path}"))?;
+        if path == OUTPUT_MANIFEST_PATH
+            || !seen.insert(path.to_owned())
+            || digest != expected_digest
+        {
+            return Err(format!("output manifest digest is invalid for {path}").into());
+        }
+    }
+    let expected_digest_paths = expected_paths
+        .into_iter()
+        .filter(|path| path != OUTPUT_MANIFEST_PATH)
+        .collect::<BTreeSet<_>>();
+    if seen != expected_digest_paths {
+        return Err("output manifest digest paths are not exact".into());
+    }
+    Ok(())
+}
+
+fn validate_committed_output_census(
+    root: &Path,
+    expected: &BTreeMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
+    let mut actual = BTreeSet::new();
+    for path in [".bazelignore"] {
+        if root.join(path).is_file() {
+            actual.insert(path.to_owned());
+        }
+    }
+    let generated = root.join("bazel/generated");
+    if generated.exists() {
+        if !generated.is_dir() {
+            return Err("bazel/generated is not a directory".into());
+        }
+        for entry in fs::read_dir(&generated)? {
+            let entry = entry?;
+            let relative = format!("bazel/generated/{}", entry.file_name().to_string_lossy());
+            if !entry.file_type()?.is_file() {
+                return Err(format!("stale generated path: {relative}").into());
+            }
+            actual.insert(relative);
+        }
+    }
+    let mut package_builds = Vec::new();
+    collect_named_files(&root.join("packages"), "BUILD.bazel", &mut package_builds)?;
+    for path in package_builds {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| "package BUILD path escaped repository root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        actual.insert(relative);
+    }
+    let expected_paths = expected.keys().cloned().collect::<BTreeSet<_>>();
+    let extras = actual
+        .difference(&expected_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !extras.is_empty() {
+        return Err(format!(
+            "{}\nStale paths: {}",
+            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+                .expect("generator diagnostic is closed"),
+            extras.join(", ")
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn target_row_value(row: &TargetRow) -> Value {
+    ordered_object([
+        ("label".to_owned(), Value::String(row.label.clone())),
+        ("native".to_owned(), json!(true)),
+        ("package".to_owned(), Value::String(row.package.clone())),
+        ("manifest".to_owned(), Value::String(row.manifest.clone())),
+        ("kind".to_owned(), Value::String(row.kind.clone())),
+        (
+            "cargoContext".to_owned(),
+            Value::String(row.cargo_context.clone()),
+        ),
+        (
+            "system".to_owned(),
+            row.system.clone().map_or(Value::Null, Value::String),
+        ),
+        (
+            "cargoTarget".to_owned(),
+            row.cargo_target.clone().map_or(Value::Null, Value::String),
+        ),
+        (
+            "policyInput".to_owned(),
+            row.policy_input.clone().map_or(Value::Null, Value::String),
+        ),
+        (
+            "sourceFiles".to_owned(),
+            json_string_array(&row.source_files),
+        ),
+        (
+            "directFirstPartyDeps".to_owned(),
+            json_string_array(&row.direct_first_party_deps),
+        ),
+        (
+            "directProductDeps".to_owned(),
+            json_string_array(&row.direct_product_deps),
+        ),
+        ("cfgs".to_owned(), json_string_array(&row.cfgs)),
+        ("features".to_owned(), json_string_array(&row.features)),
+        (
+            "closureCensus".to_owned(),
+            ordered_object([
+                (
+                    "configuredTargets".to_owned(),
+                    json_string_array(&row.closure_configured_targets),
+                ),
+                (
+                    "externalIdentities".to_owned(),
+                    json_string_array(&row.closure_external_identities),
+                ),
+            ]),
+        ),
+    ])
+}
+
+fn configured_targets_json(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    let mut rows = rows.to_vec();
+    rows.sort_by(|left, right| left.label.cmp(&right.label));
+    if rows.windows(2).any(|pair| pair[0].label == pair[1].label) {
+        return Err("configured-target census contains a duplicate label".into());
+    }
+    let mut action_kinds = hermeticity::GOVERNED_ACTION_KINDS
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
+    action_kinds.sort();
+    let mut coverage_targets = hermeticity::CONFIGURED_COVERAGE_TARGETS
+        .iter()
+        .map(|target| (*target).to_owned())
+        .collect::<Vec<_>>();
+    coverage_targets.sort();
+    let value = ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        (
+            "hubs".to_owned(),
+            json_array(
+                ["product", "walker"]
+                    .into_iter()
+                    .map(|hub| Value::String(hub.to_owned())),
+            ),
+        ),
+        (
+            "targets".to_owned(),
+            json_array(rows.iter().map(target_row_value)),
+        ),
+        (
+            "coverageTargets".to_owned(),
+            json_string_array(&coverage_targets),
+        ),
+        ("actionKinds".to_owned(), json_string_array(&action_kinds)),
+    ]);
+    Ok(pretty_json(&value))
+}
+
+fn product_targets_bzl(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    let mut product_rows = rows
+        .iter()
+        .filter(|row| row.system.is_none())
+        .map(target_row_value)
+        .collect::<Vec<_>>();
+    product_rows.sort_by_key(|row| {
+        row.get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    });
+    if product_rows.is_empty() {
+        return Err("product target definitions are empty".into());
+    }
+    Ok(format!(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         # Native first-party targets; third-party dependencies remain in @product.\n\n\
+         PRODUCT_TARGETS = {}\n",
+        starlark_value(&Value::Array(product_rows), 0)
+    ))
+}
+
+fn package_policy_targets_bzl(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    let mut policy_rows = rows
+        .iter()
+        .filter(|row| row.system.is_some())
+        .map(target_row_value)
+        .collect::<Vec<_>>();
+    policy_rows.sort_by_key(|row| {
+        row.get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    });
+    if policy_rows.len() != POLICY_TARGET_CONTEXTS.len() {
+        return Err(format!(
+            "package-policy target census must contain exactly {} contexts",
+            POLICY_TARGET_CONTEXTS.len()
+        )
+        .into());
+    }
+    Ok(format!(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         # Native package-policy targets are selected from the root product lock.\n\n\
+         PACKAGE_POLICY_TARGETS = {}\n",
+        starlark_value(&Value::Array(policy_rows), 0)
+    ))
+}
+
+fn starlark_value(value: &Value, indent: usize) -> String {
+    match value {
+        Value::Null => "None".to_owned(),
+        Value::Bool(value) => value
+            .to_string()
+            .replace("true", "True")
+            .replace("false", "False"),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => bazel_string(value),
+        Value::Array(values) => {
+            if values.is_empty() {
+                return "[]".to_owned();
+            }
+            let mut output = String::from("[\n");
+            for value in values {
+                output.push_str(&" ".repeat(indent + 4));
+                output.push_str(&starlark_value(value, indent + 4));
+                output.push_str(",\n");
+            }
+            output.push_str(&" ".repeat(indent));
+            output.push(']');
+            output
+        }
+        Value::Object(values) => {
+            if values.is_empty() {
+                return "{}".to_owned();
+            }
+            let mut output = String::from("{\n");
+            for (key, value) in values {
+                output.push_str(&" ".repeat(indent + 4));
+                output.push_str(&bazel_string(key));
+                output.push_str(": ");
+                output.push_str(&starlark_value(value, indent + 4));
+                output.push_str(",\n");
+            }
+            output.push_str(&" ".repeat(indent));
+            output.push('}');
+            output
+        }
+    }
+}
+
+fn direct_dependency_sets(
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> (Vec<String>, Vec<String>) {
+    let mut first_party = Vec::new();
+    let mut product = Vec::new();
+    for name in &package.normal {
+        if let Some(local) = dependencies
+            .values()
+            .find(|candidate| candidate.package_name == *name && candidate.hub == "product")
+        {
+            first_party.push(format!("//{}:{}", local.package_dir, local.package_name));
+        } else if package.hub == "product" {
+            product.push(format!("@product//:{}", name));
+        } else {
+            product.push(format!("@walker//:{}", name));
+        }
+    }
+    first_party.sort();
+    first_party.dedup();
+    product.sort();
+    product.dedup();
+    (first_party, product)
+}
+
+fn target_cfgs(system: &str, cargo_target: &str) -> Vec<String> {
+    let arch = system.strip_suffix("-linux").unwrap_or(system);
+    let environment = cargo_target
+        .rsplit_once('-')
+        .map(|(_, environment)| environment)
+        .unwrap_or("gnu");
+    let mut cfgs = vec![
+        format!("target_arch=\"{arch}\""),
+        "target_os=\"linux\"".to_owned(),
+        format!("target_env=\"{environment}\""),
+    ];
+    cfgs.sort();
+    cfgs
+}
+
+fn configured_target_rows(
+    root: &Path,
+    manifests: &[ManifestInfo],
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> Result<Vec<TargetRow>, Box<dyn Error>> {
+    let mut rows = Vec::new();
+    for manifest in manifests {
+        let package = dependencies
+            .get(&manifest.relative)
+            .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+        let source_files = package_source_paths(root, &manifest.package_dir)?;
+        let (direct_first_party_deps, direct_product_deps) =
+            direct_dependency_sets(package, dependencies);
+        let kind = if source_files
+            .iter()
+            .any(|path| path == &format!("{}/src/lib.rs", manifest.package_dir))
+        {
+            "rust_library"
+        } else {
+            "rust_binary"
+        };
+        let label = format!("//{}:{}", manifest.package_dir, manifest.package_name);
+        rows.push(TargetRow {
+            label: label.clone(),
+            package: manifest.package_name.clone(),
+            manifest: manifest.relative.clone(),
+            kind: kind.to_owned(),
+            cargo_context: "main".to_owned(),
+            system: None,
+            cargo_target: None,
+            policy_input: None,
+            source_files: source_files.clone(),
+            direct_first_party_deps: direct_first_party_deps.clone(),
+            direct_product_deps: direct_product_deps.clone(),
+            cfgs: Vec::new(),
+            features: Vec::new(),
+            closure_configured_targets: vec![label],
+            closure_external_identities: direct_product_deps.clone(),
+        });
+    }
+
+    for (context, package_name, system, cargo_target, policy_input, features) in
+        POLICY_TARGET_CONTEXTS
+    {
+        let manifest = manifests
+            .iter()
+            .find(|manifest| manifest.package_name == *package_name)
+            .ok_or_else(|| format!("package-policy package is missing: {package_name}"))?;
+        let package = dependencies
+            .get(&manifest.relative)
+            .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+        let source_files = package_source_paths(root, &manifest.package_dir)?;
+        let (direct_first_party_deps, direct_product_deps) =
+            direct_dependency_sets(package, dependencies);
+        let system_suffix = system.strip_suffix("-linux").unwrap_or(system);
+        let label = format!(
+            "//{}:{}-{}-{}",
+            manifest.package_dir, manifest.package_name, context, system_suffix
+        );
+        let mut requested_features = features
+            .iter()
+            .map(|feature| (*feature).to_owned())
+            .collect::<Vec<_>>();
+        requested_features.sort();
+        rows.push(TargetRow {
+            label: label.clone(),
+            package: manifest.package_name.clone(),
+            manifest: manifest.relative.clone(),
+            kind: "rust_test".to_owned(),
+            cargo_context: format!("{context}-{system_suffix}"),
+            system: Some((*system).to_owned()),
+            cargo_target: Some((*cargo_target).to_owned()),
+            policy_input: Some((*policy_input).to_owned()),
+            source_files,
+            direct_first_party_deps,
+            direct_product_deps: direct_product_deps.clone(),
+            cfgs: target_cfgs(system, cargo_target),
+            features: requested_features,
+            closure_configured_targets: vec![label],
+            closure_external_identities: direct_product_deps,
+        });
+    }
+    rows.sort_by(|left, right| left.label.cmp(&right.label));
+    if rows.windows(2).any(|pair| pair[0].label == pair[1].label) {
+        return Err("configured target definitions contain duplicate labels".into());
+    }
+    Ok(rows)
+}
+
+fn package_source_paths(root: &Path, package_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let prefix = format!("{package_dir}/src/");
+    let mut paths = tracked_paths(root)?
+        .into_iter()
+        .filter(|path| path.starts_with(&prefix) && path.ends_with(".rs"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Err(
+            format!("first-party package has no tracked Rust sources: {package_dir}").into(),
+        );
+    }
+    Ok(paths)
+}
+
+fn first_party_source_paths(
+    root: &Path,
+    manifests: &[ManifestInfo],
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut paths = BTreeSet::new();
+    for manifest in manifests {
+        paths.extend(package_source_paths(root, &manifest.package_dir)?);
+    }
+    if paths.is_empty() {
+        return Err("source census is empty".into());
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn source_census_json(
+    root: &Path,
+    manifests: &[ManifestInfo],
+    rows: &[TargetRow],
+    source_paths: &[String],
+) -> Result<String, Box<dyn Error>> {
+    let mut sources = Vec::new();
+    for path in source_paths {
+        let manifest = manifests
+            .iter()
+            .find(|manifest| path.starts_with(&format!("{}/", manifest.package_dir)))
+            .ok_or_else(|| format!("source is outside first-party manifests: {path}"))?;
+        let mut target_labels = rows
+            .iter()
+            .filter(|row| row.source_files.iter().any(|source| source == path))
+            .map(|row| row.label.clone())
+            .collect::<Vec<_>>();
+        target_labels.sort();
+        target_labels.dedup();
+        if target_labels.is_empty() {
+            return Err(format!("source is not bound to a configured target: {path}").into());
+        }
+        sources.push(ordered_object([
+            ("path".to_owned(), Value::String(path.clone())),
+            (
+                "manifest".to_owned(),
+                Value::String(manifest.relative.clone()),
+            ),
+            (
+                "package".to_owned(),
+                Value::String(manifest.package_name.clone()),
+            ),
+            (
+                "sha256".to_owned(),
+                Value::String(sha256_hex(&fs::read(root.join(path))?)),
+            ),
+            ("targetLabels".to_owned(), json_string_array(&target_labels)),
+        ]));
+    }
+    Ok(pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("sources".to_owned(), Value::Array(sources)),
+    ])))
+}
+
+fn no_shell_inventory_json(root: &Path, source_paths: &[String]) -> Result<String, Box<dyn Error>> {
+    if source_paths.is_empty() {
+        return Err("no-shell-inventory-empty".into());
+    }
+    let mut all_sites = Vec::new();
+    let mut scan_results = Vec::new();
+    for source in source_paths {
+        let contents = fs::read_to_string(root.join(source))
+            .map_err(|error| format!("no-shell-inventory-missing-entry: {source}: {error}"))?;
+        let sites = scan_spawn_sites(source, &contents)?;
+        if sites.iter().any(|site| site.shell_invocation) {
+            return Err("no-shell-inventory-planted-shell".into());
+        }
+        let keys = sites.iter().map(spawn_site_key).collect::<Vec<_>>();
+        scan_results.push(ordered_object([
+            ("source".to_owned(), Value::String(source.clone())),
+            ("status".to_owned(), json!("scanned")),
+            ("spawnSiteCount".to_owned(), json!(sites.len())),
+            ("spawnSiteKeys".to_owned(), json_string_array(&keys)),
+        ]));
+        all_sites.extend(sites);
+    }
+    all_sites.sort_by_key(spawn_site_key);
+    if all_sites
+        .windows(2)
+        .any(|pair| spawn_site_key(&pair[0]) == spawn_site_key(&pair[1]))
+    {
+        return Err("no-shell-inventory-extra-entry".into());
+    }
+    let governed = source_paths
+        .iter()
+        .map(|path| ordered_object([("path".to_owned(), Value::String(path.clone()))]))
+        .collect::<Vec<_>>();
+    let spawn_sites = all_sites
+        .iter()
+        .map(|site| {
+            ordered_object([
+                ("source".to_owned(), Value::String(site.source.clone())),
+                (
+                    "span".to_owned(),
+                    ordered_object([
+                        ("startLine".to_owned(), json!(site.start_line)),
+                        ("startColumn".to_owned(), json!(site.start_column)),
+                        ("endLine".to_owned(), json!(site.end_line)),
+                        ("endColumn".to_owned(), json!(site.end_column)),
+                    ]),
+                ),
+                (
+                    "programExpression".to_owned(),
+                    Value::String(site.program_expression.clone()),
+                ),
+                ("shellInvocation".to_owned(), json!(site.shell_invocation)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    Ok(pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("governedSources".to_owned(), Value::Array(governed.clone())),
+        ("declaredInputs".to_owned(), Value::Array(governed)),
+        ("scanResults".to_owned(), Value::Array(scan_results)),
+        ("spawnSites".to_owned(), Value::Array(spawn_sites)),
+    ])))
+}
+
+fn scan_spawn_sites(source: &str, contents: &str) -> Result<Vec<SpawnSite>, Box<dyn Error>> {
+    let masked = mask_rust_source(contents);
+    let marker = "Command::new(";
+    let mut sites = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = masked[cursor..].find(marker) {
+        let marker_start = cursor + relative;
+        let alias_start = marker_start
+            .checked_sub(5)
+            .filter(|start| &masked[*start..marker_start] == "Tokio");
+        if alias_start.is_none()
+            && marker_start > 0
+            && is_identifier_byte(masked.as_bytes()[marker_start - 1])
+        {
+            cursor = marker_start + marker.len();
+            continue;
+        }
+        let open = marker_start + marker.len() - 1;
+        let close = matching_paren(&masked, open)
+            .ok_or_else(|| format!("no-shell-inventory-missing-entry: {source}"))?;
+        let expression = contents[open + 1..close].trim().to_owned();
+        if expression.is_empty() {
+            return Err(format!("no-shell-inventory-unguarded-spawn: {source}").into());
+        }
+        let call_start = alias_start.unwrap_or(marker_start);
+        let (start_line, start_column) = line_column(contents, call_start);
+        let (end_line, end_column) = line_column(contents, close + 1);
+        sites.push(SpawnSite {
+            source: source.to_owned(),
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+            shell_invocation: shell_program_expression(&expression),
+            program_expression: expression.split_whitespace().collect::<Vec<_>>().join(" "),
+        });
+        cursor = close + 1;
+    }
+    sites.sort_by_key(spawn_site_key);
+    Ok(sites)
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn mask_rust_source(contents: &str) -> String {
+    let bytes = contents.as_bytes();
+    let mut masked = bytes.to_vec();
+    let mut index = 0;
+    let mut block_depth = 0usize;
+    while index < bytes.len() {
+        if block_depth > 0 {
+            if bytes[index..].starts_with(b"/*") {
+                masked[index] = b' ';
+                if index + 1 < masked.len() {
+                    masked[index + 1] = b' ';
+                }
+                block_depth += 1;
+                index += 2;
+            } else if bytes[index..].starts_with(b"*/") {
+                masked[index] = b' ';
+                if index + 1 < masked.len() {
+                    masked[index + 1] = b' ';
+                }
+                block_depth -= 1;
+                index += 2;
+            } else {
+                if masked[index] != b'\n' {
+                    masked[index] = b' ';
+                }
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"//") {
+            masked[index] = b' ';
+            if index + 1 < masked.len() {
+                masked[index + 1] = b' ';
+            }
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                masked[index] = b' ';
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"/*") {
+            masked[index] = b' ';
+            if index + 1 < masked.len() {
+                masked[index + 1] = b' ';
+            }
+            block_depth = 1;
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'r' {
+            let mut quote = index + 1;
+            while quote < bytes.len() && bytes[quote] == b'#' {
+                quote += 1;
+            }
+            if quote < bytes.len() && bytes[quote] == b'"' {
+                let hashes = quote - index - 1;
+                for byte in &mut masked[index..=quote] {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+                index = quote + 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'"' && bytes[index + 1..].starts_with(&vec![b'#'; hashes]) {
+                        masked[index] = b' ';
+                        for offset in 0..hashes {
+                            masked[index + 1 + offset] = b' ';
+                        }
+                        index += hashes + 1;
+                        break;
+                    }
+                    if masked[index] != b'\n' {
+                        masked[index] = b' ';
+                    }
+                    index += 1;
+                }
+                continue;
+            }
+        }
+        if bytes[index] == b'"' {
+            masked[index] = b' ';
+            index += 1;
+            while index < bytes.len() {
+                let escaped = index > 0 && bytes[index - 1] == b'\\';
+                if bytes[index] == b'"' && !escaped {
+                    masked[index] = b' ';
+                    index += 1;
+                    break;
+                }
+                if masked[index] != b'\n' {
+                    masked[index] = b' ';
+                }
+                index += 1;
+            }
+            continue;
+        }
+        let is_char_literal = bytes[index] == b'\''
+            && (bytes.get(index + 1) == Some(&b'\\') || bytes.get(index + 2) == Some(&b'\''));
+        if is_char_literal {
+            masked[index] = b' ';
+            index += 1;
+            while index < bytes.len() {
+                let escaped = index > 0 && bytes[index - 1] == b'\\';
+                if bytes[index] == b'\'' && !escaped {
+                    masked[index] = b' ';
+                    index += 1;
+                    break;
+                }
+                if masked[index] != b'\n' {
+                    masked[index] = b' ';
+                }
+                index += 1;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    String::from_utf8(masked).expect("source was valid UTF-8")
+}
+
+fn matching_paren(masked: &str, open: usize) -> Option<usize> {
+    let bytes = masked.as_bytes();
+    let mut depth: usize = 0;
+    for (index, byte) in bytes.iter().enumerate().skip(open) {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn line_column(contents: &str, offset: usize) -> (usize, usize) {
+    let prefix = &contents[..offset.min(contents.len())];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit_once('\n')
+        .map_or(prefix.len() + 1, |(_, line)| line.len() + 1);
+    (line, column)
+}
+
+fn shell_program_expression(expression: &str) -> bool {
+    let normalized = expression.trim().trim_matches('"').to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "sh" | "bash"
+            | "/bin/sh"
+            | "/bin/bash"
+            | "/usr/bin/sh"
+            | "/usr/bin/bash"
+            | "/usr/bin/env sh"
+            | "/usr/bin/env bash"
+    ) || normalized.contains("sh -c")
+        || normalized.contains("bash -c")
+}
+
+fn spawn_site_key(site: &SpawnSite) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        site.source, site.start_line, site.start_column, site.program_expression
+    )
+}
+
+fn evidence_sink_policy_json() -> String {
+    let rows = [
+        (
+            "evidence-v1",
+            "execution-evidence",
+            30,
+            262_144,
+            32,
+            "workflow-and-head-digest",
+        ),
+        (
+            "exporter-diagnostic-v1",
+            "exporter-diagnostic",
+            7,
+            32_768,
+            64,
+            "workflow-and-head-digest",
+        ),
+        ("junit-v1", "junit", 14, 65_536, 128, "slice-output-root"),
+        (
+            "test-log-v1",
+            "test-log",
+            14,
+            65_536,
+            128,
+            "slice-output-root",
+        ),
+    ];
+    let rows = rows
+        .iter()
+        .map(
+            |(retention_class, sink_kind, max_age_days, max_bytes, max_records, scope)| {
+                ordered_object([
+                    (
+                        "retentionClass".to_owned(),
+                        Value::String((*retention_class).to_owned()),
+                    ),
+                    (
+                        "sinkKind".to_owned(),
+                        Value::String((*sink_kind).to_owned()),
+                    ),
+                    ("maxAgeDays".to_owned(), json!(max_age_days)),
+                    ("maxBytes".to_owned(), json!(max_bytes)),
+                    ("maxRecords".to_owned(), json!(max_records)),
+                    ("scope".to_owned(), Value::String((*scope).to_owned())),
+                    (
+                        "permittedFields".to_owned(),
+                        json_array(
+                            [
+                                "sinkKind",
+                                "retentionClass",
+                                "testVerdict",
+                                "evidenceStatus",
+                            ]
+                            .into_iter()
+                            .map(|field| Value::String(field.to_owned())),
+                        ),
+                    ),
+                    (
+                        "truncationCode".to_owned(),
+                        json!("D2B-BZLEVIDENCE-TRUNCATED"),
+                    ),
+                ])
+            },
+        )
+        .collect::<Vec<_>>();
+    pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("status".to_owned(), json!("w0-seed")),
+        ("measured".to_owned(), json!(false)),
+        ("rows".to_owned(), Value::Array(rows)),
+    ]))
+}
+
+fn action_network_policy_json(hermeticity: &str) -> Result<String, Box<dyn Error>> {
+    let inventory = hermeticity::complete_action_network_inventory();
+    hermeticity::validate_action_network_inventory(&inventory)
+        .map_err(|error| format!("action-network inventory is invalid: {error}"))?;
+    let hermeticity: Value = serde_json::from_str(hermeticity)
+        .map_err(|error| format!("hermeticity inventory is not valid JSON: {error}"))?;
+    let mut policy = serde_json::to_value(inventory)?;
+    let object = policy
+        .as_object_mut()
+        .ok_or("action-network inventory did not serialize as an object")?;
+    object.insert("schema_version".to_owned(), json!(1));
+    object.insert("hermeticity".to_owned(), hermeticity);
+    Ok(pretty_json(&policy))
+}
+
 fn generate_model(root: &Path) -> Result<GeneratedModel, Box<dyn Error>> {
     validate_generator_inputs(root)?;
-    let hermeticity = hermeticity_artifact(root)?;
     let manifests = discover_manifests(root)?;
     if manifests.is_empty() {
         return Err("no Cargo package manifests were discovered".into());
     }
     let dependencies = dependency_graph(root)?;
-
-    let mut builds = Vec::new();
-    let mut harness_executed = Vec::new();
-    let mut harness_out = Vec::new();
-    let mut doctest_executed = Vec::new();
-    let mut doctest_out = Vec::new();
-    for manifest in &manifests {
-        if manifest.relative != "tests/tools/no-bash-ast-walker/Cargo.toml" {
-            builds.push(render_build(manifest, root, &dependencies)?);
-        }
-        for target in &manifest.tests {
-            let entry = format!("{}#{}", manifest.relative, target.name);
-            if target.harness && !target.required_features {
-                continue;
-            }
-            if target.harness && target.required_features {
-                continue;
-            }
-            if target.required_features {
-                harness_out.push((
-                    entry,
-                    "required features are not enabled by the Cargo gate selector".to_owned(),
-                ));
-            } else {
-                harness_executed.push(entry);
-            }
-        }
-        for target in &manifest.benches {
-            if !target.harness {
-                harness_out.push((
-                    format!("{}#{}", manifest.relative, target.name),
-                    "bench targets are not selected by the harness-free test selector".to_owned(),
-                ));
-            }
-        }
-        match manifest.lib_doctest {
-            Some(true) => doctest_executed.push(manifest.relative.clone()),
-            Some(false) => doctest_out.push((
-                manifest.relative.clone(),
-                "the Cargo manifest disables doctests for this library".to_owned(),
-            )),
-            None => {}
-        }
+    let product_manifests = manifests
+        .iter()
+        .filter(|manifest| manifest.relative.starts_with("packages/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if product_manifests.is_empty() {
+        return Err("no first-party product manifests were discovered".into());
     }
-
-    let governed_sources = governed_source_inventory(root)?;
+    let target_rows = configured_target_rows(root, &product_manifests, &dependencies)?;
+    if target_rows.is_empty() {
+        return Err("configured first-party target census is empty".into());
+    }
+    let source_paths = first_party_source_paths(root, &product_manifests)?;
+    let source_census = source_census_json(root, &product_manifests, &target_rows, &source_paths)?;
+    let no_shell_inventory = no_shell_inventory_json(root, &source_paths)?;
+    let hermeticity = hermeticity_artifact(root)?;
+    let action_network_policy = action_network_policy_json(&hermeticity)?;
+    let configured_targets = configured_targets_json(&target_rows)?;
+    let product_targets = product_targets_bzl(&target_rows)?;
+    let package_policy_targets = package_policy_targets_bzl(&target_rows)?;
+    let evidence_sink_policy = evidence_sink_policy_json();
     let bazelignore = bazelignore_entries(root, &manifests)?;
     Ok(GeneratedModel {
-        builds,
-        governed_sources,
-        harness_free: Census::new(harness_executed, harness_out),
-        doctests: Census::new(doctest_executed, doctest_out),
         bazelignore,
-        hermeticity,
+        action_network_policy,
+        configured_targets,
+        evidence_sink_policy,
+        no_shell_inventory,
+        package_policy_targets,
+        product_targets,
+        source_census,
     })
 }
 
@@ -1980,9 +3157,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn is_generator_owned(path: &str) -> bool {
-    path == ".bazelignore"
-        || path.starts_with("bazel/generated/")
-        || (path.ends_with("/BUILD.bazel") && path.starts_with("packages/"))
+    APPROVED_OUTPUT_PATHS.contains(&path)
 }
 
 fn tracked_paths(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
@@ -2141,47 +3316,30 @@ mod tests {
     #[test]
     fn generator_models_have_stable_order_and_exact_ownership() {
         let model = GeneratedModel {
-            builds: vec![
-                GeneratedBuild {
-                    path: "packages/z/BUILD.bazel".into(),
-                    content: "z".into(),
-                },
-                GeneratedBuild {
-                    path: "packages/a/BUILD.bazel".into(),
-                    content: "a".into(),
-                },
-            ],
-            governed_sources: vec![
-                "packages/z/src/lib.rs".into(),
-                "packages/a/src/lib.rs".into(),
-            ],
-            harness_free: Census::new(
-                vec!["packages/z#test".into(), "packages/a#test".into()],
-                vec![],
-            ),
-            doctests: Census::new(vec!["packages/a".into()], vec![]),
             bazelignore: vec!["target/".into(), ".scratch/".into()],
-            hermeticity: "{}\n".into(),
+            action_network_policy: "{}\n".into(),
+            configured_targets: "{}\n".into(),
+            evidence_sink_policy: "{}\n".into(),
+            no_shell_inventory: "{}\n".into(),
+            package_policy_targets: "PACKAGE_POLICY_TARGETS = []\n".into(),
+            product_targets: "PRODUCT_TARGETS = []\n".into(),
+            source_census: "{}\n".into(),
         };
-        let outputs = model.render();
+        let outputs = model.render().expect("rendered model");
+        assert_eq!(outputs.len(), APPROVED_OUTPUT_PATHS.len());
         assert_eq!(
-            outputs.keys().collect::<Vec<_>>(),
-            vec![
-                &".bazelignore".to_string(),
-                &"bazel/generated/action-network-inventory.json".to_string(),
-                &"bazel/generated/doctest-census.json".to_string(),
-                &"bazel/generated/governed-rust-sources.bzl".to_string(),
-                &"bazel/generated/harness-free-census.json".to_string(),
-                &"bazel/generated/hermeticity-inventory.json".to_string(),
-                &"packages/a/BUILD.bazel".to_string(),
-                &"packages/z/BUILD.bazel".to_string(),
-            ]
+            outputs.keys().cloned().collect::<Vec<_>>(),
+            APPROVED_OUTPUT_PATHS
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect::<Vec<_>>()
         );
+        assert!(outputs["bazel/generated/BUILD.bazel"].contains("exports_files"));
         assert!(
-            outputs["bazel/generated/governed-rust-sources.bzl"]
-                .contains("\"packages/a/src/lib.rs\",\n    \"packages/z/src/lib.rs\"")
+            !outputs
+                .keys()
+                .any(|path| path.contains("action-network-inventory"))
         );
-        assert!(!outputs["bazel/generated/governed-rust-sources.bzl"].contains("generated_build"));
     }
 
     #[test]
@@ -2265,24 +3423,14 @@ harness = false
         assert_eq!(parsed.tests.len(), 2);
         assert_eq!(parsed.benches.len(), 1);
         let model = GeneratedModel {
-            builds: vec![],
-            governed_sources: vec!["packages/sample/src/lib.rs".into()],
-            harness_free: Census::new(
-                vec!["packages/sample/Cargo.toml#run".into()],
-                vec![
-                    (
-                        "packages/sample/Cargo.toml#fuzz".into(),
-                        "required features are not enabled by the Cargo gate selector".into(),
-                    ),
-                    (
-                        "packages/sample/Cargo.toml#bench".into(),
-                        "bench targets are not selected by the harness-free test selector".into(),
-                    ),
-                ],
-            ),
-            doctests: Census::new(vec!["packages/sample/Cargo.toml".into()], vec![]),
             bazelignore: vec![".scratch/".into()],
-            hermeticity: "{}\n".into(),
+            action_network_policy: "{}\n".into(),
+            configured_targets: "{}\n".into(),
+            evidence_sink_policy: "{}\n".into(),
+            no_shell_inventory: "{}\n".into(),
+            package_policy_targets: "PACKAGE_POLICY_TARGETS = []\n".into(),
+            product_targets: "PRODUCT_TARGETS = []\n".into(),
+            source_census: "{}\n".into(),
         };
         assert!(model.validate().is_ok());
     }
@@ -2310,12 +3458,14 @@ harness = false
     #[test]
     fn empty_or_incomplete_bazelignore_models_are_rejected() {
         let mut model = GeneratedModel {
-            builds: vec![],
-            governed_sources: vec!["packages/a/src/lib.rs".into()],
-            harness_free: Census::new(vec!["a".into()], vec![]),
-            doctests: Census::new(vec!["a".into()], vec![]),
             bazelignore: vec!["packages/target/".into()],
-            hermeticity: "{}\n".into(),
+            action_network_policy: "{}\n".into(),
+            configured_targets: "{}\n".into(),
+            evidence_sink_policy: "{}\n".into(),
+            no_shell_inventory: "{}\n".into(),
+            package_policy_targets: "PACKAGE_POLICY_TARGETS = []\n".into(),
+            product_targets: "PRODUCT_TARGETS = []\n".into(),
+            source_census: "{}\n".into(),
         };
         assert!(model.validate().is_err());
         model.bazelignore.push(".scratch/".into());

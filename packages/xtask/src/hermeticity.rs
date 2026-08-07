@@ -18,7 +18,7 @@ const INVENTORY_SCHEMA_VERSION: u32 = 1;
 /// toolchain/data annotations.
 const ACTION_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR"];
 
-pub(crate) const GENERATED_ARTIFACT_PATH: &str = "bazel/generated/hermeticity-inventory.json";
+pub(crate) const GENERATED_ARTIFACT_PATH: &str = "bazel/generated/action-network-policy.json";
 
 pub(crate) fn pinned_action_env_allowlist() -> &'static [&'static str] {
     ACTION_ENV_ALLOWLIST
@@ -1223,7 +1223,7 @@ mod tests {
 
         assert_eq!(
             first.relative_path,
-            "bazel/generated/hermeticity-inventory.json"
+            "bazel/generated/action-network-policy.json"
         );
         assert_eq!(first.contents, second.contents);
         assert!(first.contents.ends_with('\n'));

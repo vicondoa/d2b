@@ -114,6 +114,13 @@ fn policy_preview_uses_locked_offline_commands_and_stays_in_scratch() {
         .parent()
         .and_then(std::path::Path::parent)
         .expect("repository root");
+    let policy_root = root.join("packages/policy-inputs");
+    let before = fs::read_dir(&policy_root).ok().map(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<BTreeSet<_>>()
+    });
     let outputs = package_policy::package_policy_preview(root).expect("policy preview");
     assert_eq!(outputs.len(), 16);
     assert!(
@@ -121,6 +128,12 @@ fn policy_preview_uses_locked_offline_commands_and_stays_in_scratch() {
             .keys()
             .all(|path| path.starts_with("packages/policy-inputs/"))
     );
-    assert!(!root.join("packages/policy-inputs").exists());
+    let after = fs::read_dir(&policy_root).ok().map(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<BTreeSet<_>>()
+    });
+    assert_eq!(before, after);
     let _ = fs::remove_dir_all(root.join(".scratch/bazel/policy-inputs"));
 }
