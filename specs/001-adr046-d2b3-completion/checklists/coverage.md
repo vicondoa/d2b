@@ -31,7 +31,7 @@ Does the feature spec capture the obligations that live in `docs/specs/`?
 - [ ] CHK005 Are requirements defined for the 11 feasibility work items, or does the spec address only the storage spike? [Gap, Spec §Context]
 - [ ] CHK006 Are requirements for the streamline and friction-closure scope defined, given the spec commits to delivering the terminal wave? [Gap, Spec §FR-037]
 - [ ] CHK007 Is the security-and-threat-model closing obligation represented as a requirement, such as the threat model being updated and re-validated at cutover? [Gap]
-- [ ] CHK008 Are telemetry and audit retention requirements specified, or only content redaction? [Gap, Spec §FR-018]
+- [x] CHK008 Are telemetry and audit retention requirements specified, or only content redaction? [Gap, Spec §FR-018]
 - [ ] CHK009 Is the unsafe-local no-isolation posture rule captured - preserved in status, CLI, and audit, and prohibited as a telemetry label, span attribute, or log field? [Gap]
 - [ ] CHK010 Are requirements for RETAIN-until-parity paths' eventual deletion specified distinctly from DELETE-row retirement? [Coverage, Spec §FR-023]
 - [ ] CHK011 Are checkpoint identity and rollback-command requirements specified, beyond naming a rollback boundary? [Completeness, Spec §FR-022]
@@ -57,7 +57,7 @@ Can these requirements be objectively assessed as written?
 Do the requirements agree with each other and with the artifacts they depend on?
 
 - [x] CHK023 Does fixing the total at 545 work items conflict with the plan's statement that the terminal wave's items are recorded later and are additional? [Conflict, Spec §SC-019, Plan §Wave sequencing]
-- [ ] CHK024 Is the relationship between the operator-perceived 2-second envelope and the tighter component-level budgets stated, or do they read as competing targets? [Consistency, Spec §SC-002]
+- [x] CHK024 Is the relationship between the operator-perceived 2-second envelope and the tighter component-level budgets stated, or do they read as competing targets? [Consistency, Spec §SC-002]
 - [x] CHK025 Is the tension between blocking release on external companions and forbidding a preview build they could adapt against resolved as a requirement, or only as plan-level mitigation? [Conflict, Spec §FR-039, §FR-045]
 - [ ] CHK026 Is the removal-proof obligation internally consistent - one required per path, the migration map supplying only 3 of 16, and every work item carrying a non-empty proof field? [Consistency, Spec §FR-023, Research §R4]
 - [x] CHK027 Is the ordinary entry-evidence versus exit-evidence distinction explicit? The later FR-036 correction separately blocks both boundaries pending an external Principle VI amendment. [Consistency, Spec §FR-025, §FR-036]
@@ -79,20 +79,20 @@ Are requirements present for each scenario class, or explicitly excluded?
 
 - [ ] CHK036 Are hermetic execution-budget and runtime-ledger obligations represented, or does the spec cover only test-layer placement? [Gap, Spec §FR-032]
 - [ ] CHK037 Are the panel's pinned provider, model, and reasoning-effort constraints stated as requirements, or is only unanimity captured? [Completeness, Spec §FR-026]
-- [ ] CHK038 Is host continuity for the operator during the implementation waves stated as a requirement rather than only an assumption? [Completeness, Spec §Assumptions]
+- [x] CHK038 Is host continuity for the operator during the implementation waves stated as a requirement rather than only an assumption? [Completeness, Spec §Assumptions]
 - [x] CHK039 Are requirements defined for the contended-file prep discipline, so shared files are not concurrently edited by parallel slices? [Gap, Plan §Contended files]
 
 ## Traceability
 
 - [x] CHK040 Is a mapping documented between this spec's FR and SC identifiers and the ADR-046 work-item IDs they correspond to? [Traceability, Gap]
-- [ ] CHK041 Does every functional requirement trace to at least one owning spec in the 55-member set, so no requirement is locally invented? [Traceability]
+- [x] CHK041 Does every functional requirement trace to at least one owning spec in the 55-member set, so no requirement is locally invented? [Traceability]
 - [x] CHK042 Is the delegation boundary stated explicitly - which obligations are restated here versus deliberately left in the spec set? [Traceability, Plan §Specification coverage]
 - [ ] CHK043 Does the detail-preservation checklist have a named owner and a defined gate point at which it must pass? [Completeness, Coverage §Detail-preservation checklist]
 
 ## Dependencies and Assumptions
 
 - [x] CHK044 Is the assumption that companions can adapt without any published preview artifact validated or flagged as a risk with a mitigation? [Assumption, Spec §FR-045]
-- [ ] CHK045 Is the assumption that the named design corrections will recover the memory deficit flagged as unvalidated, with a decision path if they do not? [Assumption, Research §RK-1]
+- [x] CHK045 Is the assumption that the named design corrections will recover the memory deficit flagged as unvalidated, with a decision path if they do not? [Assumption, Research §RK-1]
 - [ ] CHK046 Is the daily-driver validation risk acceptance recorded with an explicit accepter and a stated fallback? [Assumption, Spec §Assumptions]
 - [x] CHK047 Are the external dependencies required for cloud-backed Provider validation identified, including whether the necessary accounts and access exist? [Dependency, Gap, Spec §SC-022]
 
@@ -152,8 +152,9 @@ boundary without attestation.
 
 - **Gate 2 - before W2 entry is declared met**: CHK013, CHK027, CHK028, CHK039. (CHK003 closed
   early by FR-047.)
-- **Gate 3 - rides with its owning wave**: CHK004-CHK012 (W5/W7 content), plus the clarity,
-  scenario, and assumption items whose subject matter is waves away. Record each as a
+- **Gate 3 - rides with its owning wave**: CHK004-CHK007 and CHK009-CHK012 remain W7
+  content; CHK008 is now closed by the Wave 5 audit-retention contract. The clarity,
+  scenario, and assumption items whose subject matter is waves away are likewise recorded as a
   deliberate deferral naming its wave, so a scheduled obligation is never mistaken for a gap.
 - **Date-bound regardless of gate**: CHK025 must be resolved before W5 publishes replacement
   contracts, since that is the last moment companions can begin adapting. CHK047 (cloud
@@ -209,8 +210,9 @@ ADR046-delivery-001 W7 ... ADR046-delivery-009 W7                (9 rows, all W7
 
 ### Gate 3 - deliberate deferrals, by owning wave (2026-07-29)
 
-Every item still unchecked is listed here with the wave that owns it, so a **scheduled
-obligation is never mistaken for a coverage gap**. Wave assignments are taken from
+Every item initially deferred at this gate is listed here with its current disposition and
+the wave that owns it, so a **scheduled obligation is never mistaken for a coverage gap**.
+Wave assignments are taken from
 `docs/specs/ADR-046-implementation-graph.json` (authoritative per FR-046) by work-item
 prefix. Where the owning wave cannot be determined confidently from the specification set,
 the row reads **needs integrator** rather than guessing.
@@ -221,7 +223,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK005 | The 11 feasibility work items | W7 | `ADR046-feasibility-*` spans W1 and W7; the outstanding ones are W7 |
 | CHK006 | Streamline and friction-closure scope | W7 | `ADR046-streamline-*` items are W7 |
 | CHK007 | Security-and-threat-model closing obligation | W7 | `ADR046-security-*` spans W6 and W7; the closing/re-validation obligation lands with cutover in W7 |
-| CHK008 | Telemetry and audit retention | W5 | `ADR046-telem-*` and `ADR046-audit-*` items are W5 |
+| CHK008 | Telemetry and audit retention | W5 - **closed** | FR-070 fixes bounded post-export journal and segment retention, prune behavior, restart replay, and typed degraded health; T592/T600/T601/T602 own implementation and exact-candidate evidence without claiming a result here |
 | CHK009 | Unsafe-local no-isolation posture rule | needs integrator | No work-item prefix maps cleanly to this posture rule; owner must be named before it can be scheduled |
 | CHK010 | RETAIN-until-parity eventual deletion, distinct from DELETE-row retirement | W7 | Path retirement is governed by the cutover/streamline waves; `ADR046-reuse-*` (W5) supplies only the reuse decision, not the deletion |
 | CHK011 | Checkpoint identity and rollback-command detail | W7 | `ADR046-reset-*` items are W7 |
@@ -231,7 +233,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK019 | "Host recovery point" definition and attestation evidence | W7 - **closed** | FR-043 defines qualification, exact record fields, candidate/commit/tree and host binding, freshness/expiration, evidence import, and fail-closed refusal; T580/T555/T556 exercise it without claiming the external backup implementation |
 | CHK021 | "Reachable through the operator surface" for deliberately unwired foundations | W5 - **closed** | FR-066-FR-072 define the complete production boundary; T603 binds amended-plan resume and T600-T602 bind exact-candidate evidence before T219 |
 | CHK022 | Pass condition for "compatible version verified against the release candidate" | W5 | **closed** - FR-065; see the companion-membership gate below |
-| CHK024 | 2-second operator envelope versus component-level budgets | W5 | The component budgets are measured against the W5 storage engine and its watch consumer |
+| CHK024 | 2-second operator envelope versus component-level budgets | W5 - **closed** | SC-002 now fixes one monotonic start/stop clock, includes activation ingestion through operator projection, and requires the outer 2,000 ms ceiling and every applicable FR-030 component p95 to pass independently |
 | CHK025 | Companion adaptation without a published preview artifact | W5 | **closed** - see the W5 date-bound gate below |
 | CHK026 | Removal-proof consistency - one per path, 3 of 16 supplied, non-empty proof fields | W7 | Removal proofs are consumed by the cutover and streamline waves |
 | CHK030 | Requirements per distinct cutover phase | W7 | `ADR046-reset-*` items are W7 |
@@ -241,11 +243,11 @@ the row reads **needs integrator** rather than guessing.
 | CHK035 | Rollback or recovery of a wave already merged into the integration lineage | needs integrator | Delivery-contract governance; no work item owns it |
 | CHK036 | Hermetic execution-budget and runtime-ledger obligations | needs integrator | Binds from W2 onward as test discipline but no work item owns the requirement text |
 | CHK037 | Panel's pinned provider, model, and reasoning-effort constraints | W2 | The recorded operator decision pins the panel model and requires a spec amendment plus a code change before **any** wave can seal, so it binds at W2 |
-| CHK038 | Host continuity during the implementation waves as a requirement | needs integrator | Currently an Assumptions bullet covering W2 through W6; promoting it is a program decision, not a wave deliverable |
-| CHK041 | Every FR traces to at least one owning spec | needs integrator | Gate 1 established the mapping and surfaced four locally-added requirements; completing the trace is an integrator sweep |
+| CHK038 | Host continuity during the implementation waves as a requirement | W2-W6 - **closed** | FR-075 and SC-035 promote continuity from assumption to exact-candidate close requirement; tasks map the existing no-skip VM survival attr into every W2-W6 freeze/close pair |
+| CHK041 | Every FR traces to at least one owning spec | **closed** | `spec-coverage.md` maps every FR range to owning specs/work-item prefixes or explicitly labels the locally added requirement and its constraining contracts; FR-075 is included |
 | CHK043 | Detail-preservation checklist owner and gate point | needs integrator | Requires naming an owner |
 | CHK044 | Companion-adaptation assumption validated or risk-flagged | W5 | **closed** - see the W5 date-bound gate below |
-| CHK045 | Memory-deficit recovery assumption and its decision path | W5 | The corrected storage design is delivered and re-measured in W5 |
+| CHK045 | Memory-deficit recovery assumption and its decision path | W5 - **closed** | SC-012 requires T601 to measure final candidate F at <=24,576 KiB with no baseline subtraction; FR-030 requires redesign and forbids durability/authz/audit weakening, sleeps, timeouts, or exclusions if it fails |
 | CHK046 | Daily-driver risk acceptance - explicit accepter and fallback | W7 | The first destructive live run is the cutover in W7 |
 | CHK047 | Cloud-backed Provider validation dependencies | **closed** | Answered by the operator: access is reached through entrablau sign-in from a dev-realm VM, not host-side credentials. The cloud tier is not a wave-exit lane, so it gates only the release gate. See below |
 
@@ -467,8 +469,9 @@ controller endpoint, admitted production watch, durable effect/adoption and audi
 the exact `Provider/system-core` registration plus both required handler handles, and one
 aggregate readiness projection. T604 adds the original operator boundary from Nix declaration
 and emitted bundle through automatic startup/declaration/removal ingestion, owned effect and
-readiness for the Wave 5 acceptance set - representative Volume, Network, and Device - and dependency-safe
-Device cleanup while Volume, Network, and unrelated resources remain ready. Guest
+readiness for exact `Volume/acceptance-state`, `Network/acceptance-net`, and
+`Device/acceptance-tpm`, plus the pinned state-preserving Device cleanup while the acceptance
+Volume/Network and unrelated resources remain ready, identity-stable, and unrecreated. Guest
 runtime-effect acceptance is deferred specifically to Wave 6
 `Provider/runtime-cloud-hypervisor` T384/T479/T480; Guest emission, status,
 or refusal cannot satisfy the Wave 5 positive. This is a partial US1 production-plane
@@ -519,10 +522,25 @@ B/P before T603 may create the receipt or authorize progress. Implementation rem
 
 | Finding | Feature-artifact disposition |
 | --- | --- |
-| COV1 | Wave 5 positive operator acceptance covers the Volume, Network, and Device acceptance set as a partial US1 production-plane checkpoint. Device is the removal case. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance is explicitly deferred to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480; Guest emission, status, or refusal cannot satisfy FR-072, SC-034, T604, T602, or T219, and full US1 remains incomplete until exact-F6 positive Guest runtime-effect acceptance after W6. |
+| COV1 | Wave 5 positive operator acceptance covers exact `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` as a partial US1 production-plane checkpoint. Device is the removal case. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance is explicitly deferred to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480; Guest emission, status, or refusal cannot satisfy FR-072, SC-034, T604, T602, or T219, and full US1 remains incomplete until exact-F6 positive Guest runtime-effect acceptance after W6. |
 | UND1 | T593 now begins with a dependency-only prerequisite commit for vendored `d2b-peer-pidfd` 0.1.0, with exact crate/workspace lockfile ownership, safe `BorrowedFd`-to-`OwnedFd` API, unsafe inventory, executable fd-cleanup tests, dependency-tree proof, and Rust/security review. The `nix` 0.31.3 wrapper and a local session fallback are ineligible; rejection blocks route implementation. |
 | INC1 | Every source-writing completion slice T589-T599, T604, and T605 has one exact, unique fragment path; T220 requires the closed thirteen-row owner/path set and alone folds it. T603's exact validator-only authorization remains fragment-free, and evidence-only tasks write no repository file. |
 | INC2 | Pipelined implementation-start provenance now cites Constitution 2.0.0 only. Constitution 2.1.0 remains attached only to bounded deferral and delivery memory. |
 
 These dispositions amend planning contracts only. They check no task, claim no implementation
 or validation result, and do not authorize T603 or any later source dispatch.
+
+### Exact-HEAD analysis remediation (2026-08-06, `a30acf15cc36fa44122e78658ebf0b076c042e25`)
+
+| Finding | Feature-artifact disposition |
+| --- | --- |
+| A1 | The Wave 5 acceptance set is no longer representative or selectable. `spec.md` pins Zone `acceptance`, `Volume/acceptance-state` with `Provider/volume-local`, `Network/acceptance-net` with `Provider/network-local`, and `Device/acceptance-tpm` with `Provider/device-tpm`; it fixes each Provider artifact/config, decisive resource fields, owned effect, readiness predicate, and the Device finalizer outcome that deletes the stopped swtpm/flush children, leaves the Endpoint unresolvable, and preserves the same TPM state Volume. Plan/tasks/evidence require those exact identities. Support resources cannot substitute, and Network implementation remains W4-owned. |
+| A2 | SC-002 now uses one monotonic clock from durable target-generation transition-intent commit before publication/ingestion to the later of real-effect observation and production operator `Ready` projection. It includes automatic activation ingestion and requires the 2,000 ms outer ceiling plus every applicable FR-030 component p95 independently. CHK024 is closed. |
+| U1 | FR-075 and SC-035 promote W2-W6 host continuity to a fail-closed exact-candidate close gate. The task preamble maps the existing no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` result to every W2-W6 freeze/close pair without a new task ID or W5 evidence identifier. CHK038 is closed. |
+| I1 | CHK008 is closed by FR-070's bounded journal/segment retention and prune/replay requirements; CHK041 is closed by complete owner-or-explicit-local traceability including FR-075; CHK045 is closed by SC-012's final-F measurement and FR-030's mandatory redesign path. No implementation or measurement result is claimed. |
+
+FR-036 remains open. Its separate accepted Constitution Principle VI amendment and ancestor
+check remain prerequisites for every implementation, resume, fix, work-panel, seal, merge, or
+advance action. This planning-only batch supplies no authorization, does not change T072 or any
+other checkbox, and cannot substitute for that external amendment or for W2-W4 historical
+panel/seal evidence.

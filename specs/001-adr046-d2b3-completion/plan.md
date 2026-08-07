@@ -86,6 +86,16 @@ excluded standalone workspaces)
 p95 crash-safe single-resource mutation <=10 ms; p95 durable commit to controller handler
 start <=5 ms; p95 ready Process commit to launch-attempt start <=20 ms
 
+SC-002's 2,000 ms operator envelope is a separate end-to-end ceiling, not the sum of or a
+replacement for those component budgets. Its monotonic clock starts when the public deployment
+entrypoint durably commits the target-generation transition intent, before broker publication
+or daemon ingestion, and stops at the later of real-effect observation and the production
+operator projection reporting the new resource `Ready`. It includes handoff, automatic
+activation ingestion, durable commit, controller dispatch, broker effect, status persistence,
+and watch/read-model projection. Nix evaluation/build and pre-intent profile staging are
+outside the clock. Every applicable component p95 and every qualifying SC-002 sample must pass
+independently.
+
 **Constraints**: Whole-process RSS <=24,576 KiB with **no baseline subtraction** - historical
 production fixtures passed at their recorded tips, but the completed production publication
 path remains unmeasured until T601 measures final candidate F frozen by T220; aggregate idle
@@ -295,12 +305,34 @@ applies without modification.
 | W7 | 5 | 73 | 5 parallel | FR-036 external constitution amendment first; T481 plan panel before implementation; T555 work panel after convergence |
 | W8 | 0 | TBD | friction closure | FR-036 external constitution amendment first; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
+#### W2-W6 host-continuity close gate
+
+FR-075 is a requirement, not an assumption. The converged exact candidate for each of W2
+through W6 must enumerate and successfully build
+`vmChecks.x86_64-linux.daemon-restart-vm-survival` through the existing heavy-gated
+`make test-host-integration` target with no skip. The case must prove public `d2b vm`
+start/status/stop, guest reachability, `d2bd.service` restart, same runner PID/start-time
+adoption, continued reachability, and the exact ADR 0015 unit set. The evidence map is closed:
+
+| Wave candidate | Freeze owner | Close owner | Candidate-bound evidence |
+| --- | --- | --- | --- |
+| F2 | T028 | T029 | exactly one `local-host` `EvidenceRecord.validation = "pre-adr046-host-continuity"` result |
+| F3 | T035 | T036 | exactly one `local-host` `EvidenceRecord.validation = "pre-adr046-host-continuity"` result |
+| F4 | T070 | T071 | exactly one `local-host` `EvidenceRecord.validation = "pre-adr046-host-continuity"` result |
+| F | T220/T604 | T219 | the result appears only in T600's existing `operator-nix-activation-cleanup` record and is revalidated by T602 |
+| F6 | T479 | T480 | the result appears only in the existing `w6-cloud-hypervisor-guest-acceptance` record |
+
+Missing, duplicate, wrong-candidate, empty, skipped, status-only, private-hook, or stale
+continuity evidence blocks the corresponding work-panel request, seal, merge eligibility, and
+merge. No new W5 evidence identifier is introduced. W7's explicit cutover is the only point
+that ends this gate.
+
 #### W6 Guest acceptance ownership
 
 | Scope | Owner | Exact files or evidence surface | Validation lane and done condition |
 | --- | --- | --- | --- |
 | `Provider/runtime-cloud-hypervisor` implementation family | T384-T390 (`ADR046-ch-001` through `ADR046-ch-007`) | `packages/d2b-provider-runtime-cloud-hypervisor/src/{controller,bootstrap_graph,vmm_argv,health,adoption,metrics,audit,state}.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/{nix,tests}/`, only T387's generated Guest option extension under `nixos-modules/`, plus T384's `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix` and only its discovery/build recipe in `Makefile` | Each manifest row's own validation; T384 is the acceptance owner because its authoritative validation requires end-to-end VMM boot with real KVM and a guest-control session through `make test-host-integration` |
-| Exact-F6 Guest acceptance | T479 | No repository write; exactly one delivery `EvidenceRecord.validation = "w6-cloud-hypervisor-guest-acceptance"` bound to F6 | Heavy-gated `make test-host-integration`; nonempty enumeration and successful build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`; declared Guest reaches the real Provider-owned Cloud Hypervisor process effect, authenticated guest-control session, and ready state |
+| Exact-F6 Guest acceptance | T479 | No repository write; exactly one delivery `EvidenceRecord.validation = "w6-cloud-hypervisor-guest-acceptance"` bound to F6 | Heavy-gated `make test-host-integration`; nonempty enumeration and successful no-skip builds of exact attrs `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` and `vmChecks.x86_64-linux.daemon-restart-vm-survival`; declared Guest reaches the real Provider-owned Cloud Hypervisor process effect, authenticated guest-control session, and ready state; the same record carries FR-075 public lifecycle continuity |
 | Close revalidation | T480 | Same immutable T479 evidence record; no alternate record or Provider family | Reinvoke the same closed predicate at every close boundary through merge |
 
 ACA, Azure VM, and qemu-media cannot satisfy this acceptance, and no four-family matrix is
@@ -797,9 +829,19 @@ Type-10 handoff test; T604 does not replace either. Run the lower legs through
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and `make test-rust`. Because a real
 owned host effect requires systemd, broker mutation, and a booted NixOS system, the canonical
 Type-10 destination is `tests/host-integration/resource-operator-activation.nix`, run only by
-the public heavy-gated `make test-host-integration` target. It declares the Wave 5 acceptance
-set - the representative Volume, Network, and Device - through Nix. This names acceptance
-scope only; Network implementation remains owned by Wave 4. It starts from an installed protocol-4 3/1
+the public heavy-gated `make test-host-integration` target. It declares the spec's exact
+Zone `acceptance` fixture through Nix. The three acceptance resources, selected Providers,
+and decisive outcomes are closed:
+
+| Acceptance resource | Selected Provider and exact distinguishing config | Positive effect/readiness and removal obligation |
+| --- | --- | --- |
+| `Volume/acceptance-state` | `Provider/volume-local`; Provider artifact `volume-local-provider`; `controllerExecutionRef = Host/host-system`; sole `state-root` local-path source policy for `state`; resource uses that opaque policy, one private `0700` no-follow root owned by `User/d2bd`, one controller view, no attachment/quota | Broker-backed root and identity marker are provisioned/adopted and read back; resource and layout are `Ready`/`Current`. It remains unchanged throughout Device removal. |
+| `Network/acceptance-net` | `Provider/network-local`; Provider artifact `provider-network-local`; `controllerExecutionRef = Host/host-system`; `10.20.0.0/24`, `192.0.2.0/30`, mandatory host blocklist, east-west denied, empty DNS forwarders/attachments, mDNS off, `net-vm-base` nixos-system artifact | Both derived bridges, IPv6 suppression, and this Network's firewall projection are real and read back; `FabricReady`, `FirewallReady`, `ConfigVolumeReady`, `NetVmReady`, and `DhcpReady` plus both bridge phases are ready. Network-owned Guest dependencies do not count as independent Guest acceptance. It remains unchanged throughout Device removal. |
+| `Device/acceptance-tpm` | `Provider/device-tpm`; Provider artifact `d2b-provider-device-tpm`; `controllerExecutionRef = Host/host-system`, `logLevel = 20`; exclusive emulated Device owned by `Guest/acceptance-vm`, empty selector, schema `device-tpm.d2bus.org/Device/spec` version `1.0.0`, setting `logLevel = 20` | Controller-managed TPM state Volume and marker validate, mandatory flush completes, real swtpm Process runs, typed TPM Endpoint publishes, and Device is `Ready`/`Current`, present, and healthy. Removal stops and waits for then deletes swtpm, deletes any non-terminal flush process, preserves the same state Volume identity/marker, releases its Volume references, clears the finalizer, deletes only the Device, and leaves the Endpoint unresolvable. |
+
+Support Host/User/Guest/system Provider resources may be present but cannot substitute for one
+of these three. This names acceptance scope only; Network implementation remains owned by
+Wave 4. The Type-10 test starts from an installed protocol-4 3/1
 broker, obtains `d2bHostGenerationDeploy` from the explicit target installable, and reaches
 4/2 through that entrypoint without reading an absent stable reference. The new broker must
 start before the new daemon, publish/repair only broker-owned d2b state, and complete exact
@@ -809,10 +851,13 @@ require every one of those three resources to reach its real owned effect and
 readiness. The target must discover a
 nonempty `vmChecks` set, enumerate and successfully build
 `vmChecks.x86_64-linux.resource-operator-activation`, and report no skip; skipped or empty
-output is ineligible evidence. Typed refusal cases are separate negative tests and cannot
-satisfy the positive story. The test removes the Device, switches again, and observes
-dependency-safe cleanup while the Volume, Network, and unrelated resources remain ready and
-intact. Guest runtime-effect ownership is absent from the Wave 5 system-core owner and is
+output is ineligible evidence. It must also enumerate and successfully build
+`vmChecks.x86_64-linux.daemon-restart-vm-survival` with no skip and bind that FR-075 result to
+the same F through `operator-nix-activation-cleanup`. Typed refusal cases are separate
+negative tests and cannot satisfy the positive story. The test removes only
+`Device/acceptance-tpm`, switches again, and observes the exact finalizer outcome above while
+`Volume/acceptance-state`, `Network/acceptance-net`, and unrelated resources remain ready,
+intact, and unrecreated. Guest runtime-effect ownership is absent from the Wave 5 system-core owner and is
 deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor`; Guest emission, ingestion, status, or refusal cannot
 satisfy this positive criterion. A direct
 ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed subject, fake
@@ -836,7 +881,7 @@ second validator.
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
 | `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
-| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; three representative Volume/Network/Device owned effects and readiness; Device dependency-safe cleanup; ready Volume, Network, and unrelated resources; explicit Guest deferral to Wave 6 `Provider/runtime-cloud-hypervisor` with no Wave 5 Guest-success claim; and nonempty host output enumerating and building `vmChecks.x86_64-linux.resource-operator-activation` without skip |
+| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; explicit target-installable bootstrap from installed protocol-4/no-handoff-op 3/1; sole deployment-entrypoint stock profile/service mutation; target broker-before-daemon activation; exact protocol-5 Hello bound to broker/daemon generations and catalogue; daemon-only broker authorization and all caller denials; broker-only d2b pointer/reference publish/repair with fixed-digest audit and prior bytes-or-absence rollback; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every profile, broker, daemon, pointer, reference, and readiness crash boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; explicit-bootstrap and stable-reference documentation commands; initial, identical, declaration, and removal deployments; exact Provider installs/configs and positive owned effects/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; exact Device swtpm/flush cleanup, unresolvable Endpoint, finalizer clearance, and same-identity TPM state-Volume preservation; ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources; explicit Guest deferral to Wave 6 `Provider/runtime-cloud-hypervisor` with no Wave 5 Guest-success claim; candidate-bound FR-075 public lifecycle continuity; and nonempty host output enumerating and building both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival` without skip |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
@@ -873,8 +918,9 @@ may not use one free-form validation name to satisfy two rows. T600 and T601 the
   executable remediation; and
 - T604's exact-candidate operator activation-to-effect-and-cleanup result, including the
   emitted bundle identity, deployment-entrypoint-triggered production daemon entry point,
-  owned effect/readiness for the representative Volume, Network, and Device, cleanup of the
-  removed Device, and unchanged ready Volume, Network, and unrelated resources. Guest
+  owned effect/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and
+  `Device/acceptance-tpm`, exact swtpm/flush cleanup, unresolvable Endpoint, and preserved TPM state, and
+  unchanged ready, identity-stable acceptance Volume/Network and unrelated resources. Guest
   runtime-effect acceptance remains a Wave 6 obligation and is not claimed by this record.
 
 T602's done condition is mechanical: T603, every T589-T599 task, T604, T605, and T220 are complete;
@@ -936,8 +982,9 @@ finding. A successful merge preserves the selected candidate's tree.
 
 | Prose drift | Canon kept | Planning correction |
 | --- | --- | --- |
-| Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the four Guest-capable runtime families are assigned to Wave 6 and absent at this Wave 5 base. The authoritative `ADR046-ch-001` validation already names real-KVM end-to-end Guest boot through `make test-host-integration`. | Wave 5 positive operator acceptance covers the Volume, Network, and Device acceptance set as a partial US1 production-plane checkpoint. Full US1 acceptance is mechanically bounded to `Provider/runtime-cloud-hypervisor`: T384 owns the controller and authoritative real-KVM/guest-control integration obligation, T384-T390 own the exact family files, and T479/T480 require exact-F6 candidate-bound host-integration evidence. Guest emission, ingestion, status, or an actionable refusal is not evidence. |
-| Earlier amendment prose assigned implementation ownership of Volume, Network, and Device to Wave 5. | The task graph assigns Network implementation and its close-blocking obligations to Wave 4 T061-T071. | Call the trio the Wave 5 acceptance set. Wave 5 proves their production-plane effects together but neither reopens nor claims Network implementation ownership. |
+| Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the four Guest-capable runtime families are assigned to Wave 6 and absent at this Wave 5 base. The authoritative `ADR046-ch-001` validation already names real-KVM end-to-end Guest boot through `make test-host-integration`. | Wave 5 positive operator acceptance covers exactly `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` as a partial US1 production-plane checkpoint. Full US1 acceptance is mechanically bounded to `Provider/runtime-cloud-hypervisor`: T384 owns the controller and authoritative real-KVM/guest-control integration obligation, T384-T390 own the exact family files, and T479/T480 require exact-F6 candidate-bound host-integration evidence. Guest emission, ingestion, status, or an actionable refusal is not evidence. |
+| Earlier amendment prose assigned implementation ownership of Volume, Network, and Device to Wave 5. | The task graph assigns Network implementation and its close-blocking obligations to Wave 4 T061-T071. | The exact trio is `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`. Wave 5 proves their production-plane effects together but neither reopens nor claims Network implementation ownership. |
+| `ADR-046-provider-device-tpm` section 11.2 names the finalizer `device-tpm/cleanup`. | Committed `packages/d2b-provider-device-tpm/src/lib.rs` and `packages/d2b-contracts/src/v3/device.rs` both expose `device-tpm.d2bus.org/state-preserved`. | Existing code is canon. The exact T604 fixture uses `device-tpm.d2bus.org/state-preserved` while retaining the dossier's stop/wait/delete-process/delete-flush/retain-Volume/clear sequencing. Correcting the upstream dossier is external to this feature-only batch. |
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI. | The committed constitution permits no artifact-local waiver for these gaps. | FR-036 now makes a separate accepted Principle VI constitution amendment an external prerequisite for every implementation, resume, fix, close, merge, and advance path. Feature-local dispositions remain evidence only. |
 
 ### Recorded drift

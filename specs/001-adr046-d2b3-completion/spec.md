@@ -181,13 +181,46 @@ needed to satisfy the declared resources, and without performing a host cutover.
    recorded in the audit trail.
 
 **Wave checkpoint**: Wave 5 is only a partial US1 production-plane checkpoint. Its
-acceptance set is the representative Volume, Network, and Device; "acceptance set" does not
-assign implementation ownership, and Network implementation remains owned by Wave 4. Wave 5
-does not claim a positive Guest runtime effect and therefore cannot complete this story.
+acceptance set is exactly `Volume/acceptance-state`, `Network/acceptance-net`, and
+`Device/acceptance-tpm` in Zone `acceptance`; no other resource may substitute for one of
+those three. "Acceptance set" does not assign implementation ownership, and Network
+implementation remains owned by Wave 4. Wave 5 does not claim a positive Guest runtime
+effect and therefore cannot complete this story.
 Full US1 completion occurs only after the Wave 6
 `Provider/runtime-cloud-hypervisor` family supplies positive runtime-effect acceptance for
 the declared Guest. Missing, skipped, status-only, fake-boundary, or refusal evidence leaves
 US1 incomplete.
+
+#### Exact Wave 5 acceptance fixture
+
+The T604 fixture MAY contain the Host, User, Guest, system Provider, and artifact-catalog
+prerequisites that these three resources require, but those support objects are not acceptance
+resources and their effects cannot substitute for an effect below. The three selected Provider
+resources and their artifact-catalog entries are exact:
+
+| Provider resource | Artifact entry | Exact `spec.config` |
+| --- | --- | --- |
+| `Provider/volume-local` | `volume-local-provider`, type `provider`, candidate package `d2b-provider-volume-local` | `controllerExecutionRef = "Host/host-system"`; `sourcePolicies = [{ id = "state-root"; class = "local-path"; volumeKinds = ["state"]; }]`; the test-owned backing-root binding remains private compiler/broker data and no raw path enters the Provider or Volume resource |
+| `Provider/network-local` | `provider-network-local`, type `provider`, candidate package `d2b-provider-network-local` | `controllerExecutionRef = "Host/host-system"` |
+| `Provider/device-tpm` | `d2b-provider-device-tpm`, type `provider`, candidate package `d2b-provider-device-tpm` | `controllerExecutionRef = "Host/host-system"` and `logLevel = 20` |
+
+`d2b.artifacts.net-vm-base` is additionally present with type `nixos-system` and the
+candidate generic net-VM system. The exact acceptance resources are:
+
+| Resource | Exact authored configuration | Required real effect and readiness |
+| --- | --- | --- |
+| `Volume/acceptance-state` | `providerRef = "Provider/volume-local"`; `source.executionRef = "Host/host-system"`; `source.settings = { kind = "local-path"; sourcePolicyId = "state-root"; }`; `kind = "state"`; one root directory layout entry owned and grouped by `User/d2bd`, mode `0700`, `createPolicy = "create-if-never-provisioned"`, `repairPolicy = "exact-owner"`, `cleanupPolicy = "never"`, `sensitivity = "private"`, and `noFollow = true`; one `controller` view over `""` with `read`, `write`, `create`, `delete`, and `traverse`; no attachments and no quota | The fixed Core adapter and broker resolve the opaque source policy, provision or adopt the root plus identity marker, and read back the declared owner, mode, type, and no-follow posture. The universal resource phase is `Ready`, `status.update.state` is `Current`, and every declared layout entry is `Ready`; a status-only assignment or a fake effect port is ineligible. |
+| `Network/acceptance-net` | `providerRef = "Provider/network-local"`; `lanCidr = "10.20.0.0/24"`; `uplinkCidr = "192.0.2.0/30"`; `mtu = null`; `mssClamp = false`; `isolation.allowEastWest = false`; `routing.hostBlocklist = ["10.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]`; `dhcp = { domain = null; ignoreClientNames = true; }`; `dns = { forwarders = []; cacheSize = 1000; }`; `externalAttachment = null`; `mdns = { enable = false; reflector = true; dnsmasqLocal = false; dnsmasqLocalPort = 53530; publishWorkstation = false; }`; `netVmNameOverride = null`; `netVmSystemArtifactId = "net-vm-base"`; and `attachments = []` | The production Network controller creates or adopts both derived bridges, reapplies and reads back IPv6 suppression, installs only this Network's firewall ownership projection, and converges its config Volume, owned net-VM, and agent dependencies. The universal resource phase is `Ready`; `FabricReady`, `FirewallReady`, `ConfigVolumeReady`, `NetVmReady`, and `DhcpReady` are true; both bridge status phases are `Ready`. Network-owned Guest dependencies establish only Network readiness and MUST NOT be reported as independent Guest acceptance. |
+| `Device/acceptance-tpm` | `metadata.ownerRef = "Guest/acceptance-vm"`; `providerRef = "Provider/device-tpm"`; `deviceClass = "emulated"`; `arbitration = "exclusive"`; `maxConcurrentClaims = 1`; `inventory.selector = {}`; `provider = { schemaId = "device-tpm.d2bus.org/Device/spec"; schemaVersion = "1.0.0"; settings.logLevel = 20; }` | The production Device controller creates or adopts its controller-managed TPM state Volume, verifies its tamper marker, completes the mandatory pre-start flush, starts the broker-supervised long-lived swtpm Process, and publishes the typed TPM Endpoint. The universal resource phase and Provider phase are `Ready`, `status.update.state` is `Current`, and Device status reports `present = true` and `health = healthy`; a manually assigned phase, refusal, or fake worker is ineligible. |
+
+The removal generation deletes only `Device/acceptance-tpm`. Its
+`device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
+wait for its terminal phase, delete that Process, delete any non-terminal flush
+`EphemeralProcess`, preserve the controller-created TPM state Volume with the same resource
+identity and marker, release its Volume references, clear the finalizer, and allow the Device
+row to disappear. The typed TPM Endpoint MUST no longer resolve after deletion.
+`Volume/acceptance-state`, `Network/acceptance-net`, their live effects, and unrelated
+resources MUST remain `Ready`, retain their resource identities, and show no recreation.
 
 ---
 
@@ -488,8 +521,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   reference documentation compared with emitted behavior; and T605's exact enum
   round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
   API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. T604 MUST
-  additionally prove on that same candidate that an operator Nix declaration for the Wave 5
-  acceptance set - the representative Volume, Network, and Device - emits the installed per-Zone bundle,
+  additionally prove on that same candidate that an operator Nix declaration for the exact
+  Wave 5 acceptance fixture - `Volume/acceptance-state`, `Network/acceptance-net`, and
+  `Device/acceptance-tpm`, with the selected Provider resources, configs, and artifacts pinned
+  above - emits the installed per-Zone bundle,
   activates on initial startup and public declaration/removal NixOS switches without manual
   daemon restart or private reload, reaches a real owned effect and readiness for every
   one of those three resources, and removes one declaration with dependency-safe
@@ -572,6 +607,18 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   amendment with migration guidance, mandatory `zoneRef`/`schemaVersion`, DTO/schema and
   contract tests, release treatment, and closed remediation actions that contain no executable
   Zone/operation-ID argv or free-form command text.
+- **FR-075**: The pre-ADR-046 operator lifecycle MUST remain functional on every exact
+  candidate that closes W2, W3, W4, W5, or W6. Before the corresponding work-panel request,
+  the candidate MUST enumerate and successfully build
+  `vmChecks.x86_64-linux.daemon-restart-vm-survival` through the existing heavy-gated
+  `make test-host-integration` target with no skip. The case MUST use the public `d2b vm`
+  surface to start the configured VM, observe ready status and guest reachability, restart
+  `d2bd.service`, prove the same runner PID/start-time identity was adopted and remained
+  reachable, and stop the VM. It MUST also retain exactly the three root-visible framework
+  units from ADR 0015. Missing, empty, skipped, stale, wrong-candidate, status-only, or
+  private-hook evidence blocks that wave's close. This requirement expires only at W7's
+  explicit cutover; a fail-closed continuity gate is not permission to weaken any W2-W6
+  security or delivery gate.
 
 #### Provider model
 
@@ -818,6 +865,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   | Core system Provider / sandbox system Provider | <= 22 MiB / <= 12 MiB |
   | Per-Provider-crate hermetic suite, aggregate process-CPU p95 | <= 3 s |
   | Scale fixtures sustained while meeting the above | 10,000 resources; 100 live watches |
+
+  SC-002's 2,000 ms activation-to-live interval is the outer operator outcome over this
+  component system, not an additional component row and not a sum of the p95 rows. Its
+  monotonic start/stop events and included ingestion/effect/projection stages are defined in
+  SC-002. The FR-030 no-weakening rule applies to it. A run must satisfy that end-to-end
+  ceiling and every applicable table row independently.
 
 - **FR-031**: Generated artifacts, schemas, and specification indexes MUST remain in exact
   agreement with their sources, enforced by the existing fail-closed drift gates.
@@ -1161,7 +1214,19 @@ carries the object verbatim rather than copying selected fields into the task ro
   activation itself.
 - **SC-002**: A newly declared resource becomes live within 2 seconds of activation for a
   single-Zone declaration of 10 to 20 resources (for example one guest, a volume, a network,
-  and a device), and an operator observes progress rather than an opaque wait.
+  and a device), and an operator observes progress rather than an opaque wait. Measure with one
+  monotonic clock. Start at the durable commit of the public deployment entrypoint's target
+  generation transition intent, immediately before any broker publication or daemon ingestion
+  for that generation. Stop only when both the real owned effect is observed and the production
+  operator watch/read model reports that resource `Ready`; use the later event. The interval
+  therefore includes broker/daemon handoff, automatic activation ingestion, durable resource
+  commit, controller dispatch, broker-mediated effect, status persistence, and operator
+  projection, while excluding Nix evaluation/build and profile staging completed before the
+  transition-intent commit. At least one production progress event MUST be observable strictly
+  after start and no later than stop. Every qualifying acceptance sample MUST be at or below
+  2,000 ms. This outer budget neither replaces nor sums the tighter FR-030 component budgets:
+  every applicable p95 component budget and this end-to-end ceiling MUST pass independently,
+  and passing either one cannot excuse failure of the other.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
   framework-internal switches. Zero capabilities disappear silently: any deliberate
@@ -1253,7 +1318,8 @@ carries the object verbatim rather than copying selected fields into the task ro
   FR-072 evidence identifiers occur once each at their assigned T600/T601 owner and lane; all
   records name F and F's tree; HEAD equals F with no staged, unstaged, or non-ignored
   untracked state; `operator-nix-activation-cleanup` alone carries T604's positive
-  public-switch activation/effect/cleanup result for Volume, Network, and Device and carries
+  public-switch activation/effect/cleanup result for `Volume/acceptance-state`,
+  `Network/acceptance-net`, and `Device/acceptance-tpm` and carries
   no claim that Guest satisfies Wave 5; this proves only the partial US1 production-plane
   checkpoint, never full US1 completion; `system-core-handler-contract` alone
   carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
@@ -1262,6 +1328,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   output. T219 then runs F's exactly one binding panel and seal. F stays immutable and cannot
   receive another request. Nonunanimity fails F and routes scoped fixes through a distinct,
   fully revalidated successor; the successful merge preserves that candidate's tree.
+- **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
+  for `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and
+  built and no skip. W2-W4 carry the closed continuity result directly; W5 carries it only
+  inside `operator-nix-activation-cleanup`; W6 carries it only inside
+  `w6-cloud-hypervisor-guest-acceptance`. The corresponding close task revalidates that result
+  before panel request, seal, merge eligibility, and merge.
 
 #### Scale and footprint
 
@@ -1375,9 +1447,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   does not cure Principle VI or authorize W2. The legacy-named `waiver-w0-w1.md` is only the
   FR-034 evidence record. Program continuation depends on the separate FR-036 constitution
   amendment, and neither that file nor the W2-W4 late-remediation records may stand in for it.
-- The pre-ADR-046 control plane remains functional for operators throughout W2 through W6.
-  It is replaced only by the cutover in W7 and removed under the release gate, so an
-  operator's working host is not expected to be broken mid-program.
+- FR-075 requires the pre-ADR-046 operator lifecycle to remain functional throughout W2
+  through W6 and makes exact-candidate continuity evidence a wave-close gate. It is replaced
+  only by the explicit cutover in W7 and removed under the release gate.
 - Live-host, hardware, and cutover validation run on the operator's daily-driver host,
   because that is where the real GPU, TPM, and security-key devices are. This is a
   deliberate risk acceptance: the daily driver is the machine being put at risk, so the

@@ -164,10 +164,12 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   Zone; duplicates, a missing/wrong name, and `provider-lifecycle` substitution are rejected.
 - All acceptance evidence names one exact candidate and uses production owners. T604 starts
   at the emitted operator Nix declaration/bundle, activates on initial startup and public
-  declaration/removal switches without manual daemon restart, observes a real owned effect
-  and readiness for the Wave 5 acceptance set - representative Volume, Network, and Device - then proves
-  dependency-safe Device removal without affecting ready Volume, Network, or unrelated
-  resources. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance
+  declaration/removal switches without manual daemon restart, observes the exact
+  Provider/config/real-effect/readiness contract for `Volume/acceptance-state`,
+  `Network/acceptance-net`, and `Device/acceptance-tpm`, then proves the pinned
+  state-preserving Device removal without affecting the ready, identity-stable, unrecreated
+  acceptance Volume/Network or unrelated resources. Network implementation remains owned by
+  Wave 4. Guest runtime-effect acceptance
   remains specifically a Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480
   obligation; Guest emission, status, or refusal cannot
   satisfy this partial US1 production-plane checkpoint. Refusals are

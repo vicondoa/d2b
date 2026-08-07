@@ -244,13 +244,21 @@ make test-rust
 make test-host-integration
 ```
 
-The host leg declares the Wave 5 acceptance set - the representative Volume, Network, and
-Device - and consumes the emitted `zones/<zone>/resource-bundle.json`, activates on startup and deployment-entrypoint
+The host leg declares Zone `acceptance` with the exact Wave 5 acceptance set -
+`Volume/acceptance-state` through `Provider/volume-local`,
+`Network/acceptance-net` through `Provider/network-local`, and
+`Device/acceptance-tpm` through `Provider/device-tpm` - and consumes the emitted
+`zones/<zone>/resource-bundle.json`, activates on startup and deployment-entrypoint
 transitions through the production daemon, and requires a real owned effect and readiness for
-every one of those three representative resources. Refusals are separate negative
-cases. It then removes the Device, deploys the next generation without a manual daemon
-restart, verifies dependency-safe cleanup, and proves the Volume, Network, and unrelated
-resources remain ready and intact. Guest runtime-effect acceptance is deferred specifically
+every one of those three exact resources under the Provider/config/effect predicates in
+`spec.md`. Refusals are separate negative cases. It then removes only
+`Device/acceptance-tpm`, deploys the next generation without a manual daemon restart, verifies
+exact swtpm/flush cleanup, an unresolvable Endpoint, finalizer clearance, and same-identity
+TPM state-Volume preservation,
+and proves `Volume/acceptance-state`, `Network/acceptance-net`, and unrelated resources remain
+ready, identity-stable, intact, and unrecreated. The same candidate must also pass the
+no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` FR-075 continuity case. Guest
+runtime-effect acceptance is deferred specifically
 to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480; Guest emission, status, or
 refusal is not a positive Wave 5 result.
 This is a partial US1 production-plane checkpoint, not full US1 completion. The acceptance-set
@@ -289,13 +297,16 @@ After the first successful publication, the installed entrypoint may use the sta
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref
 
-# Every resource in the Wave 5 acceptance set must reach its owned effect and ready state
+# Every exact acceptance resource must reach its owned effect and ready state
 d2b resource list
-d2b resource inspect <Type>/<name>
+d2b resource inspect Volume/acceptance-state
+d2b resource inspect Network/acceptance-net
+d2b resource inspect Device/acceptance-tpm
 ```
 
-**Expected**: the Volume, Network, and Device are each ready through their owned effect, and
-the removed Device completes dependency-safe cleanup. Actionable refusal coverage runs
+**Expected**: all three exact resources are ready through their owned effects; removal of
+`Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
+passes on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest is not expected to pass until Wave 6
 `Provider/runtime-cloud-hypervisor` and its T479/T480 exact-F6 acceptance exist. Network
 remains Wave 4 implementation; Wave 5 accepts it through the production plane without taking
