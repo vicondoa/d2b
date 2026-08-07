@@ -73,7 +73,7 @@
   op, closed typed errors, private evidence with fixed pre/provenance/outcome audit,
   append-only supersession, bounded durable per-intent/root backup retention and sealed
   pruning, named acquisition/repair/escalation procedures, a pinned Type-3 real-binary test,
-  and independent two-edge restoration/two-edge prune fixtures plus a 145-case negative
+  and independent two-edge restoration/two-edge prune fixtures plus a 168-case negative
   matrix covering caller, request shape,
   signature, binding, conflict, crash, replay, and zero-mutation refusal boundaries
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and

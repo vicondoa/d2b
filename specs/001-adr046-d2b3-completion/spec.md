@@ -604,9 +604,32 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   file-and-directory-durable publication protocol before covered mutation durability.
   One intent MUST be bounded to 256 members and 16,777,216 encoded bytes, remain unprunable
   while current, and the root MUST be bounded to 64 retained intents, 4,096 members, and
-  268,435,456 encoded bytes with a durable reservation before handoff. A checked durable
-  retention epoch MUST make replaced members prune-eligible at day 30 and absent after day
-  90 while denying rollback and overflow. Pruning MUST use a sealed typed broker op,
+  268,435,456 backup bytes with a durable reservation before handoff. The aggregate
+  publication root MUST additionally bound every reservation, retention anchor/watermark,
+  restoration body/provenance/settlement, and prune-audit class by record and byte count,
+  reserve capacity before every append, and block rather than overwrite or drop an audit
+  record. Existing append-only broker audit rotation and configured bounded retention own
+  exported root-operation audit lifecycle.
+
+  Nix activation MUST NOT create the privileged publication root directly. T592's typed
+  sealed `EnsureHostGenerationImmutablePublicationRootV1` broker phase MUST emit fixed
+  pre/outcome audit, create or reopen the mode-`0700` root, validate and sync it and its held
+  parent, and pass source/target first-run, second-run zero-write, and every creation-crash
+  boundary before broker descendant use. The accepted external source-generation installer
+  owns source ordering before `source-handoff-v1`; T595 owns target `host-broker.nix` ordering
+  before broker adoption and daemon start. The source installer remains an external
+  prerequisite and no new unit is permitted.
+
+  The effective replacement transition MUST bind one private fixed
+  `CLOCK_REALTIME+CLOCK_BOOTTIME` age anchor before replacement can become effective; replay
+  MUST use the same anchor and never resample after a crash. Same-boot age follows boot time
+  with at most 300 seconds of wall/boot skew. Unsafe forward discontinuity or changed-boot
+  ambiguity MUST quarantine age and block mutation. Replaced members become prune-eligible
+  at 30 trusted days and absent after 90 trusted days. The existing broker MUST run startup
+  and internal idle-wake catch-up without an Admin request, producing either audited prune or
+  typed fail-closed degradation. Pruning MUST use a private-field lifetime-bound permit with
+  no clone/copy/default/conversion/serde/accessor/reconstruction surface, a sealed typed
+  broker op,
   immutable fixed-field pre/outcome audit, fd-relative durable unlink/census settlement, and
   exactly-once restart replay. Prune/bound/clock/settlement failures MUST return a typed
   redacted actionable report and block later mutation.
@@ -621,16 +644,21 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   access, regardless of signature validity. The exact signed
   `HostGenerationImmutableAuditRestorationV1` MUST bind domain, key, authority, member,
   failure class, backup, predecessor, canonical member, and observed member. It MUST append
-  broker-private non-observable preparatory signed evidence, then a durable fixed-field
-  pre-mutation record before digest/enum-only effective audit provenance/restored-member
+  a durable fixed-field pre-mutation record before broker-private non-observable preparatory
+  signed evidence, digest/enum-only effective audit provenance/restored-member
   supersession and matching outcome under the coordinator lock, without replacing any
   mismatched, unauthenticated, or noncontiguous original. Private evidence alone MUST alter
   no coordinator, audit view, census, or member. Only state-independent parsing/signature
   work may precede the lock; coordinator,
   backup, observed-state, and artifact bindings MUST be reopened and revalidated under lock
-  immediately before mutation. The shared response MUST use closed authorization,
-  request/artifact, conflict, retention, and publication pending/degraded variants with no
-  free-form broker-message fallback. Every dispatch, repair audit, backup,
+  immediately before mutation. The shared response MUST use nested typed
+  completed/refused/pending/degraded variants with per-error class domains, derived actions
+  and settlement, total hierarchy/write/file-sync/link/reopen/directory-sync/
+  outcome-publication failure representation, and schema/wire rejection of every illegal
+  sibling/null cross-product. It MUST have no free-form broker-message fallback. A durable
+  degraded settlement is nonterminal: after the named storage repair, byte-identical
+  resubmission resumes the same operation id and append-only attempt and converges through a
+  repair-resume audit event to restored or already-restored. Every dispatch, repair audit, backup,
   restoration-private-evidence/pre/provenance/outcome, and prune-audit publication MUST use
   the one idempotent exact-final protocol and independently test hierarchy creation plus
   every write/file-sync/link/final-reopen/parent/ancestor/final-directory-sync boundary,
@@ -643,12 +671,14 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   registry MUST cover repair projections, inputs, absence classes, conflicts, crash
   boundaries, second-run no-write replay, restoration diagnostics, and integrity escalation.
   Separate two-row restoration and two-row prune audit-edge fixtures plus an independent
-  145-case broker registry
+  168-case broker registry
   MUST cover role denial, every request-shape refusal, artifact binding, private evidence
   with digest-only audit provenance, append-only supersession, conflicts,
-  backup-before-mutation, per-intent and root retention capacity, durable clock epochs,
-  sealed prune pre/outcome audit, zero-mutation refusals, every per-record hierarchy and
-  publication boundary, and completed no-write replay.
+  backup-before-mutation, per-intent and root retention capacity, reservation reconstruction
+  plus both durable-prune and immutable-zero-mutation releases, crash-stable age anchors and
+  unsafe-forward quarantine, sealed prune pre/outcome audit and permit API negatives,
+  zero-mutation refusals, every per-record hierarchy and publication boundary including
+  independently pinned prune pre/outcome classes, and completed no-write replay.
 
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
   has no host-generation handoff operation, and the installed

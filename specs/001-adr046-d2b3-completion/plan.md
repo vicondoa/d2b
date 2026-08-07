@@ -1062,12 +1062,29 @@ root-wide 64-intent/4,096-member/268,435,456-byte reservation, durable checked r
 epoch, fixed prune pre/outcome audit, private non-observable restoration evidence,
 digest/enum-only audit provenance, under-lock coordinator/backup revalidation, closed
 restoration wire errors, generated-schema/wire parity, and pending/degraded settlement.
-T589 owns the frozen strict schemas/snapshots/goldens and literal 145-id restoration broker expected
+T589 owns the frozen strict schemas/snapshots/goldens and literal 168-id restoration broker expected
 set. T595's sole file map additionally includes new
 `packages/d2b/tests/host_generation_restoration_cli.rs` and
 `tests/golden/pinned/host-generation-restoration-cli.txt`; that Type-3 test invokes
 `CARGO_BIN_EXE_d2b-host-generation-deploy` through a hermetic public socket and is enforced
-by `make test-rust` plus the pinned-test census. No task id or dependency changes.
+by `make test-rust` plus the pinned-test census. `D2B_PUBLIC_SOCKET` is its only injectable
+process input. The non-root real binary proves the root-specific projection only from the
+closed typed broker root-refusal response; uid/euid/caller-role/test-mode injection and direct
+renderer substitutes are forbidden. No task id or dependency changes.
+
+**R27 activation and retention correction:** R26's preprovisioning statement is a required
+postcondition, not authority for activation to call `mkdir`. T592 owns typed sealed
+`EnsureHostGenerationImmutablePublicationRootV1` with fixed pre/outcome audit,
+create-or-reopen validation, root and held-parent durability, and first/second-run plus every
+creation-crash test. The accepted external source-generation producer/installer owns the
+source invocation before its installed broker advertises `source-handoff-v1`; T595 owns
+target `host-broker.nix` ordering before broker adoption and daemon activation. The source
+installer remains an external prerequisite. The same correction binds a fixed private
+real-time/boot-time age anchor into the effective replacement transition, rejects unsafe
+forward and changed-boot continuity, seals the non-clonable prune permit, runs existing-broker
+startup/idle catch-up without Admin, bounds aggregate storage for every publication-root
+class, and routes reservations, anchors/watermarks, restoration bodies, and prune state only
+through typed pre-audited broker operations.
 
 The external source-floor row now requires issuer-authenticated canonical receipts, strict
 schemas/golden vectors at the external-owner paths in `data-model.md`, and a
@@ -1577,11 +1594,14 @@ paths, bounded restoration input/output and named procedure goldens, separate in
 escalation, and all 156
 independent cases over seven rollback members, 32 audit members, 15 transition edges,
 mismatch, unaudited-extra-mutation, unauthenticated-pointer, and shrinkage poisons. The
-T592 broker suite independently proves the two restoration and two prune audit edges and all 145
+T592 broker suite independently proves the two restoration and two prune audit edges and all 168
 authorization, request-shape, artifact, supersession, backup-order, retention/capacity/
 clock/prune-audit, conflict, per-record publication, and no-write replay cases; the 156
-status cases cannot substitute. T595's pinned Type-3 binary test separately proves the real
-CLI/public-socket renderer and closed broker-error path.
+status cases cannot substitute. T595's pinned Type-3 binary test separately proves the real CLI/public-socket renderer,
+all nineteen invalid-request projections, pending/degraded/repaired settlement, and every
+closed broker-error path. Its only injection is the socket address; the root projection is
+driven by the closed broker response through the real binary rather than identity injection
+or a direct renderer.
 Type-1 Nix case proves only rebuild-reference option
 grammar. It cannot satisfy service ownership, restart, transfer, rollback, or terminal
 selection. Those effects require T595's dedicated no-skip Type-10 handoff VM evidence and
@@ -1868,6 +1888,12 @@ The Round 24 row is preserved verbatim as dated history; its phrase "Current pla
 62-case restoration value mean current at that round and are non-authorizing now. The active
 R26 values are 156 handoff cases, 35 SC-002 publication cases, and 145 restoration broker
 cases.
+
+R27 preserves that historical R26 census and expands the active restoration broker registry
+to 168 literal ids: 18 independent prune-pre/prune-outcome publication-boundary ids, restart
+reservation reconstruction, immutable-zero-mutation reservation release, and three
+prune/reservation shrinkage poisons. Active plan, task, contract, and checklist references use
+168; the dated R26 row remains historical.
 
 ### Recorded drift
 

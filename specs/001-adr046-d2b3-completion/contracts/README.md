@@ -421,15 +421,23 @@ merge-target registration, merge eligibility, and merge.
     exact-empty clean absence, an independently projected exactly-one-valid repairable
     absence, and invalid competing/malformed/unauthenticated censuses. The separate
     Admin-only restoration command submits one bounded signed artifact over the public
-    socket. Its two-row restoration and two-row prune audit-edge fixtures plus the 145-case
+    socket. Its two-row restoration and two-row prune audit-edge fixtures plus the 168-case
     broker registry cover caller denial,
     all nineteen request-shape refusals, signature/domain/key/member/failure/predecessor
-    binding, private evidence plus digest-only audit provenance, append-only supersession,
-    backup-before-mutation, retention/pruning limits, conflicts, every per-record
-    publication boundary, and completed no-write replay. Backup retention is bounded per
+    binding, pre-audit-before-private-evidence, digest-only audit provenance, append-only
+    supersession, resumable degraded-to-repaired settlement, backup-before-mutation,
+    reservation reconstruction and both release paths, retention/pruning limits, conflicts,
+    every per-record publication boundary including independent prune-pre/prune-outcome
+    boundaries, and completed no-write replay. Backup retention is bounded per
     intent by 256 members and 16,777,216 bytes and at the root by 64 intents, 4,096 members,
-    and 268,435,456 bytes. A durable checked epoch governs 30-to-90-day retention; pruning
-    is a sealed typed broker op with immutable pre/outcome audit and typed degradation.
+    and 268,435,456 bytes; an additional aggregate record/byte ceiling covers every private
+    publication-root class. A replacement-bound fixed real-time/boot-time age anchor governs
+    30-to-90-day retention and rejects unsafe forward or changed-boot continuity; existing
+    broker startup/idle catch-up does not require Admin. Pruning is a sealed typed broker op
+    with a private non-clonable permit, immutable pre/outcome audit, and typed degradation.
+    Source/target root creation runs only through the typed pre-audited existing-broker
+    ensure-root phase; source installer ownership remains external and target ordering belongs
+    to T595.
     Pointer/restoration/integrity escalation actions map to named procedures rather than
     unactionable labels.
     Recovery uses only the existing broker unit.

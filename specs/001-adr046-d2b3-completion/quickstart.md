@@ -775,15 +775,17 @@ unprivileged local Admin reruns the same command with one artifact.
 `reacquire-immutable-audit-backup` and repeats step 1; a durable conflict uses the named
 security escalation below. None authorizes a force or local file repair.
 
-The broker publishes broker-private non-observable preparatory signed evidence, then appends
-restoration pre-mutation audit before digest/enum-only effective audit
-provenance/restored-member and outcome records without
+The broker appends restoration pre-mutation audit first, then publishes broker-private
+non-observable preparatory signed evidence before digest/enum-only effective audit
+provenance/restored-member and outcome/settlement records without
 replacing an existing mismatched, unauthenticated, or noncontiguous member. Every append and
 the repair/backup/dispatch/prune-audit records share one exact-final restart protocol.
 Conflicting bytes are preserved. Invalid request, artifact, authorization, state-race, or
 capacity refusals have zero coordinator/audit/provenance mutation; an accepted attempt that
 later fails or conflicts records exactly one fixed outcome or remains typed pending until
-restart settlement. The independent 145-case broker registry covers all callers, nineteen
+restart settlement. A durable degraded settlement is nonterminal: after the named storage
+repair, resubmitting the byte-identical artifact resumes the same operation and attempt and
+converges to restored without duplicate provenance. The independent 168-case broker registry covers all callers, nineteen
 request shapes, signature/domain/key/member/failure/predecessor binding, conflict,
 backup-order, root/per-intent retention, clock and prune audit, each per-record hierarchy
 and publication boundary, and no-write replay.
@@ -814,7 +816,7 @@ changed transition edge, unaudited extra mutation, unauthenticated pointer, ever
 restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exact successful
 pointer-repair, repairable-absence, bounded audit-restoration, and integrity-incident
 goldens. The separate two-row restoration and two-row prune audit-edge fixtures plus the
-145-case broker registry
+168-case broker registry
 prove the privileged restoration boundary; the 156-case registry cannot substitute. The Type-1 Nix
 case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10

@@ -237,6 +237,28 @@ Only the consumed public-socket `Admin` capability is authorized. Launcher, work
 `HostShutdown`, root, nonmember, unauthenticated-local, direct-broker, and remote callers
 are denied before coordinator access; a valid signature is integrity only.
 
+The release-sealed client constructs only the exact valid shared request DTO, so a broker
+`invalid-request` response is local client/broker contract skew or corruption rather than
+operator syntax. All nineteen closed classes are projected distinctly by their literal
+`failure-class`:
+`missing-schema-version`, `wrong-schema-version`, `missing-kind`, `wrong-kind`,
+`unknown-field`, `missing-operation-id`, `operation-id-length`,
+`operation-id-digest-mismatch`, `missing-artifact-bytes`, `empty-artifact-bytes`,
+`over-limit-artifact-bytes`, `path-field`, `selector-field`, `uid-field`, `pid-field`,
+`authority-token-field`, `member-override-field`, `failure-override-field`, and
+`free-form-field`. Each exits `4` with exactly:
+
+```text
+host generation handoff audit restoration request rejected
+failure-class: <INVALID_REQUEST_CLASS>
+action: repair-restoration-client-broker-contract
+```
+
+JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-invalid-request","failureClass":"<INVALID_REQUEST_CLASS>","action":"repair-restoration-client-broker-contract"}`.
+There is one real-binary golden per literal class. This is distinct from local parser
+invalid invocation, which remains exit `2` and action `restore-with-one-artifact`.
+
 Only canonical parsing, digesting, size, and signature verification may occur before the
 coordinator lock. Under the lock, the broker fd-relative reopens and identity-revalidates
 the coordinator and backup, rechecks the exact artifact/backup/state binding, and reserves
@@ -245,9 +267,24 @@ preparatory evidence carrying the required bodies, then appends fixed-field rest
 pre-mutation audit before digest/enum-only effective audit provenance and a matching fixed
 outcome. Private evidence alone changes no coordinator, audit view, census, or member. A mismatched,
 unauthenticated, or noncontiguous original remains preserved and is superseded only by that
-complete authenticated chain. Post-pre syscall failure becomes one pending or degraded
-outcome and restart settles exactly once. Completed replay, including response loss, returns
-`already-restored` with zero write.
+complete authenticated chain. Restoration pre-audit is durable before any body-bearing
+private evidence. Post-pre hierarchy, write, file-sync, link, reopen, directory-sync, or
+outcome-publication failure becomes one pending or degraded settlement and restart settles
+exactly once.
+
+Settlement is convergent under the same deterministic operation id. Pending renders
+`settlement: restart-settlement-pending`; the operator resubmits the byte-identical artifact
+only after automatic restart settlement. Durable degraded renders
+`settlement: repair-required`; the site backup administrator runs
+`host-generation-restoration-storage-repair-v1`, then the operator resubmits that exact
+artifact. The broker resumes the same append-only attempt, emits a fixed repair-resume
+pre-audit event, completes only the missing publication records, and returns restored or
+already-restored. A degraded event remains history but is not terminal current state after
+the repaired settlement. A different artifact or operation binding conflicts rather than
+opening a new attempt. Completed replay, including response loss, returns
+`already-restored` with zero write. The degraded-repaired-restored, restart-after-pending,
+restart-after-degraded, and response-loss paths each have exact human/JSON goldens and
+success tests.
 
 The command accepts one path and optional `--json`; selector, authority/key/token,
 member/failure override, `--force`, or extra input exits `2`. Root instead exits `4` with
@@ -294,16 +331,23 @@ renderer string is accepted.
 The private backup capability has no construction, clone/copy/default, conversion,
 serialization, or post-transfer reuse surface. A set is capped at 256 members and
 16,777,216 encoded bytes; the root is capped at 64 retained intents, 4,096 members, and
-268,435,456 bytes. Capacity is reserved before handoff. A current set is unprunable; a
-durable checked clock epoch makes a replaced set pruneable from day 30 through the hard
-day-90 deadline. `PruneHostGenerationImmutableAuditBackupsV1` requires the sealed
-coordinator attenuation and emits immutable fixed-field pre/outcome audit. Prune/limit/
-clock/settlement failure returns the typed redacted report/action and blocks later mutation.
-The independent two-edge restoration and two-edge prune audit fixtures plus the 145-case
+268,435,456 bytes. Capacity is reserved before handoff. A current set is unprunable. The replacement transition durably binds one fixed
+`CLOCK_REALTIME+CLOCK_BOOTTIME` age anchor before it becomes effective, and replay never
+resamples it. Same-boot age follows boot time with at most 300 seconds of wall-clock skew;
+unsafe forward discontinuity or a changed-boot continuity gap quarantines age and uses
+`repair-retention-clock-discontinuity`. A replaced set is pruneable from day 30 through the
+hard day-90 deadline. The existing broker runs startup and internal idle-wake catch-up
+without Admin traffic and either performs the audited mandatory prune or fails closed in
+typed degradation. `PruneHostGenerationImmutableAuditBackupsV1` consumes the private-field
+sealed lifetime-bound permit with no clone/copy/default/conversion/serde/accessor surface and
+emits immutable fixed-field pre/outcome audit. Prune/limit/clock/settlement failure returns
+the typed redacted report/action and blocks later mutation.
+The independent two-edge restoration and two-edge prune audit fixtures plus the 168-case
 broker registry own caller
 denial, nineteen request refusals, signature/domain/key/authority/member/failure/predecessor
 binding, all four restoration classes, conflicts, backup-before-mutation, root/per-intent
-retention boundaries, every per-record publication boundary, and zero-mutation refusals.
+retention boundaries, reservation reconstruction and both releases, every per-record
+publication boundary including prune pre/outcome independently, and zero-mutation refusals.
 The 156-case status registry is not a substitute.
 
 An
@@ -316,7 +360,7 @@ Retention rendering is a total mapping:
 | Closed failure class | Exact action |
 | --- | --- |
 | `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit` | `reconcile-immutable-audit-retention` |
-| `clock-rollback`, `clock-watermark`, `epoch-invalid` | `repair-retention-clock-rollback` |
+| `clock-rollback`, `clock-watermark`, `epoch-invalid`, `clock-forward-discontinuity`, `clock-continuity-ambiguous` | `repair-retention-clock-discontinuity` |
 | `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |
 | `unlink`, `directory-sync` | `repair-retention-storage-and-reconcile` |
 | `census` | `repair-retention-census-and-reconcile` |
@@ -337,13 +381,14 @@ Every action is executable or names one external procedure:
 | `use-local-admin-public-socket` | site access administrator runs named external `host-generation-local-admin-session-v1`, then the local Admin reruns submission |
 | `use-unprivileged-local-admin-restoration-session` | site access administrator runs `host-generation-unprivileged-local-admin-restoration-session-v1`; the resulting unprivileged local Admin reruns the same one-artifact command |
 | `reconcile-immutable-audit-retention` | site backup administrator runs `host-generation-immutable-audit-retention-reconciliation-v1`, which can invoke only the typed prune op through the existing public-socket Admin path and sealed coordinator capability |
-| `repair-retention-clock-rollback` | site backup administrator runs `host-generation-retention-clock-rollback-repair-v1`, restores a trusted nondecreasing clock, then runs retention reconciliation |
+| `repair-retention-clock-discontinuity` | site backup administrator runs `host-generation-retention-clock-discontinuity-repair-v1`, restores or attests trusted nondecreasing continuity, publishes the typed continuity anchor through the broker, then runs retention reconciliation |
 | `preserve-and-escalate-retention-clock-overflow` | site security authority runs `host-generation-retention-clock-overflow-escalation-v1`; no pruning or handoff retry is authorized |
 | `repair-retention-storage-and-reconcile` | site backup administrator runs `host-generation-retention-storage-repair-v1`, then typed reconciliation; it never unlinks directly |
 | `repair-retention-census-and-reconcile` | site backup administrator runs `host-generation-retention-census-repair-v1`, then typed reconciliation; it never edits an immutable census directly |
 | `repair-retention-audit-and-reconcile` | site backup administrator runs `host-generation-retention-audit-repair-v1`, settles the immutable prefix through the broker, then reconciles |
 | `resubmit-same-restoration-artifact` | rerun T595's restoration command with the exact same one artifact after automatic restart settlement |
 | `repair-restoration-storage-and-resubmit` | site backup administrator runs `host-generation-restoration-storage-repair-v1`, then the operator resubmits the exact same artifact |
+| `repair-restoration-client-broker-contract` | site package administrator runs `host-generation-restoration-client-broker-contract-repair-v1`, reinstalls one matching release-sealed client/broker generation, then reruns the same one-artifact command |
 | `preserve-and-escalate-invalid-coordinator` | site security authority runs `host-generation-invalid-coordinator-escalation-v1` |
 | `preserve-and-escalate-pointer-conflict` | site security authority runs `host-generation-pointer-conflict-escalation-v1` |
 | `preserve-and-escalate-audit-restoration-conflict` | site security authority runs `host-generation-audit-restoration-conflict-escalation-v1` |
