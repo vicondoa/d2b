@@ -1717,12 +1717,12 @@ fn insert_after_bash_vm_exec_opts(
         .unwrap_or(tail.len());
     let block = &tail[..block_end];
     let matching_lines = block
-        .match_indices('\n')
-        .map(|(end, _)| end)
-        .scan(0, |start, end| {
-            let line_start = *start;
-            *start = end + 1;
-            Some((line_start, end))
+        .lines()
+        .scan(0, |offset, line| {
+            let start = *offset;
+            let end = start + line.len();
+            *offset = end + 1;
+            Some((start, end))
         })
         .filter(|(start, end)| {
             let line = &block[*start..*end];
@@ -2685,8 +2685,8 @@ printf product-lock > bazel/cargo/product.lock
         let patched =
             insert_after_bash_vm_exec_opts(generated.to_owned()).expect("patch reordered opts");
         assert!(patched.contains(
-            "opts=\"--human --detach <VM> --json --cwd\"\n\
-            if [[ \" ${COMP_WORDS[*]} \" == *\" logs \"* ]] ; then"
+            r#"opts="--human --detach <VM> --json --cwd"
+            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then"#
         ));
     }
 
