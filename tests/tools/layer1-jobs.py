@@ -792,7 +792,7 @@ def flake_aarch64_native_job(job: dict[str, Any]) -> str:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
-          printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\\n' "$actual" >> "$GITHUB_OUTPUT"
       - name: Realize native aarch64 flake checks
         env:
           D2B_STABLE_HEAD: ${{{{ steps.stable-head.outputs.commit }}}}
