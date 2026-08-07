@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-02
-- Proposed partial supersession: [ADR 0055](0055-discover-fix-verify-panel-review.md)
+- Partially superseded by: [ADR 0055](0055-discover-fix-verify-panel-review.md)
   replaces D7's open-ended review and fix loop and own-findings-only payload;
   D8's undifferentiated blocking treatment of recommendations in an isolated
   final set; D9's publication refusal while any finding stands; D17's closed
@@ -89,8 +89,8 @@
   authority contract, table, change-surface schema, roster-manifest schema and
   per-seat artifact contract without forking selection. Dependent prototype
   and acceptance items change only where they assert the replaced mechanics.
-  ADR 0055 remains Proposed and is not effective until accepted and
-  implemented; committed fixed ten-seat behavior remains current.
+  ADR 0055 is Accepted. Its standard-skill implementation has not landed, so
+  committed fixed ten-seat behavior remains current until that cutover.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
   every optional seat a deterministic trigger table selects, under a

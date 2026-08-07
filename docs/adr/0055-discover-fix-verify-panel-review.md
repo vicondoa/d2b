@@ -1,7 +1,7 @@
 # ADR 0055: Discover, fix, and verify panel review
 
-- Status: Proposed
-- Date: 2026-08-06
+- Status: Accepted
+- Date: 2026-08-07
 - Partially supersedes: [ADR 0053](0053-gascity-contributor-infrastructure.md)
   D7's open-ended review and fix loop, own-findings-only dispatch payload, and
   Gas-City-specific use of the protected panel-and-approval controller; D8's
