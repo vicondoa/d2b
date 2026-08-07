@@ -586,7 +586,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   generation; the external validator MUST produce the chained installation, validation, and
   exact-C/Q import receipts. T589 dispatch requires the final
   `imported-for-exact-C/Q` transition and consumes it read-only. No T589-T605 task may
-  produce, repair, import, or self-accept a source-floor member or receipt.
+  produce, repair, import, or self-accept a source-floor member or receipt. The separately
+  accepted external `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical
+  encoding, `SourceGenerationIdentityV1`, complete digest/domain/framing and signature
+  registry, strict schemas, and checked-in vectors. The named compatibility authorities
+  implement and install that contract but MUST NOT redefine those repository artifacts.
   The installed broker reached only through the existing
   `d2b-priv-broker.socket` and `d2b-priv-broker.service` is the executable bootstrap actor.
   Bare committed protocol 4 with the field absent, or either source peer advertising another
@@ -601,9 +605,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   obtain a peer pidfd directly from the accepted socket, bind the live peer's start identity
   and current executable store/NAR/digest identity to the apply-object pin, and revalidate
   them immediately before each mutation. Exit, exec, PID reuse, mismatch, or ambiguity MUST
-  refuse before mutation. After the first privileged mutation, tests MUST inject each of
-  those apply-peer identity transitions independently at every later privileged mutation
-  edge and prove refusal before the next mutation executes. The already committed mutation
+  refuse before mutation. Tests MUST use the independent exact registry from
+  `quickstart.md`: six pre-first cases and all 84 literal post-first cases over the fourteen
+  later members of the closed 15-edge set. An unknown, duplicate, missing, reordered, or
+  unvisited id fails. Each case proves refusal before the selected mutation executes. The
+  already committed mutation
   remains auditable; the refused edge and all successors have zero mutation count. The
   connection-scoped pidfd and executable fds MUST close with the connection and MUST NOT be
   serialized or persisted.
@@ -1463,10 +1469,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   incidents MUST NOT fabricate a second identity tuple. A valid census permits at most 64
   leaves of at most 16,384 bytes each. An identity
   mismatch MUST not restore the suspect to the temp namespace. Instead it MUST move the
-  currently named suspect with
-  `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident namespace
-  `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
-  reserved namespaces, and `fsync` the incident directory and old leaf parent. The incident
+  metadata-bound currently named suspect with
+  `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident payload
+  namespace
+  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, outside both
+  ephemeral reserved namespaces, and `fsync` the incident directory, old leaf parent, and
+  every changed ancestor. The incident
   digest uses the `identity-ambiguity` domain and binds the closed reopen stage plus ordered
   before/after identity digests. All four kind-specific preimages and their bounded identity
   and census sub-digests are exactly those in `data-model.md`. In particular,
@@ -1475,15 +1483,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   observation, and failure tag tables, the all-zero/`u64::MAX` unavailable tuple, and the
   exact two-byte `0x01 0xff` whole-census over-bound sentinel; no implementation-defined
   iteration order, errno, or partial over-bound prefix enters `C`. Raw inode identity is
-  never rendered. If that move is itself ambiguous, cleanup leaves the suspect name in place.
-  Every incident durably persists its payload or still-ambiguous-name locator and a status
-  whose immutable `incidentKind` matches the id domain. Missing, unknown, duplicate,
-  cross-kind, or mismatched incident status is malformed and blocks every close stage.
-  Either mismatch terminal state blocks record publication and every close stage, survives
-  restart, and is never automatically unlinked. Ordinary success/refusal requires both
-  ephemeral namespaces empty.
-  Identity ambiguity intentionally leaves a durable incident entry or ambiguous name and
-  MUST NOT claim zero residue. T589's private `CandidateRetentionOwner` is a zero-mutation
+  never rendered. The sole mismatch terminal requires immutable preimage-complete metadata,
+  a same-identity reopen of the moved payload, and a contiguous append-only status prefix
+  beginning at `parked`, with every leaf, parent, and changed ancestor synced. A replacement,
+  `ENOENT`, nonidentical `EEXIST`, or post-move identity mismatch is recovery-pending rather
+  than terminal: every name is preserved, no parked status is published, and restart retries
+  only the same metadata-bound protocol. Missing, unknown, duplicate, noncontiguous,
+  cross-kind, or mismatched incident state blocks every close stage. Both recovery-pending
+  and terminal incidents block record publication and every close stage, survive restart,
+  and are never automatically unlinked. Ordinary success/refusal and terminal incidents
+  require both ephemeral namespaces empty; recovery-pending never claims that terminal
+  predicate. T589's private `CandidateRetentionOwner` is a zero-mutation
   whole-scope retention guard, not deletion authority. Under the same lock it requires the
   exact terminal request/reservation/panel/seal/eligibility/merge, incident, external-
   reference, ephemeral, and bounded durable-census predicate in `data-model.md` to pass. It
@@ -1522,9 +1532,14 @@ carries the object verbatim rather than copying selected fields into the task ro
   preimages and golden vectors, the complete versioned census byte grammar and its
   normal-empty/normal-sorted-mixed/over-bound golden vectors, persisted status kind, the
   distinct deterministic `Sc002IncidentCliStatusV1` JSON projection and remediation table,
+  exact twelve-line human projection, immutable incident metadata, payload and append-only
+  status paths, file-and-ancestor-directory durable publication/recovery protocol,
   disposition/signature/schema/golden/negative contract, retirement identity,
   bounded zero-mutation candidate-retention owner, whole-scope retention guard, and validator
-  authority, receive the parent ADR's
+  authority. The same Version 2 amendment owns the source-floor canonical JSON policy,
+  `SourceGenerationIdentityV1`, complete digest/domain/length-framing and signature registry,
+  strict schemas, and checked-in golden vectors; compatibility authorities implement but do
+  not redefine them. It must receive the parent ADR's
   required approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and
   pass Gate 0 on a commit that is an ancestor of T589's base. T589 MUST NOT own or perform
   that external amendment.

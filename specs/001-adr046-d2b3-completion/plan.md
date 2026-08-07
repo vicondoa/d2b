@@ -96,6 +96,12 @@ manifest-produced -> atomically-installed -> installed-census-validated ->
 imported-for-exact-C/Q chain in `data-model.md`; T589 dispatch requires its final immutable
 import receipt bound to clean C/Q and the source generation used for migration. No
 feature-local task owns a producer, installer, validator, importer, or repair step. The
+separately accepted external `ADR-046-validation-and-delivery` Version 2 amendment owns the
+canonical source-floor object encoding, closed digest/domain/framing registry,
+`SourceGenerationIdentityV1`, strict repository schemas, and checked-in golden vectors.
+The compatibility producer/installer and import/validation authority implement and install
+that accepted contract but do not own or redefine those repository artifacts. Both external
+prerequisites must agree byte-for-byte before T589 dispatch.
 caller-flake target entrypoint
 remains unprivileged. Numeric protocol 4 without that exact negotiated fingerprint is the
 bare committed protocol and refuses. T589 and all downstream Wave 5 implementation remain
@@ -191,14 +197,16 @@ retired leaf and syncs the leaf plus both directories. Two identical orphan leav
 distinct inodes receive distinct names. A destination `EEXIST`, a 65th retired leaf, more
 than 1,048,576 retired bytes, or an invalid retired census routes the source to the incident
 transition instead of overwriting, reusing, deleting, or growing the set. An identity
-mismatch never restores the temp. It moves the currently named suspect with
-`renameat2(RENAME_NOREPLACE)` into durable
-`evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
-reserved namespaces, and `fsync`s the source and incident directories. If that move is
-ambiguous, the name remains in place. Either mismatch result is durable, blocks record
-publication and every close stage, and is never automatically removed. Ordinary
-winners/losers/refusals/restarts leave both ephemeral namespaces empty; ambiguity
-intentionally leaves incident residue and never claims a zero-residue terminal state.
+mismatch never restores the temp. It first durably publishes immutable preimage-complete
+metadata, moves the metadata-bound currently named suspect no-replace into
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, syncs the old
+parent, payload parent, and every changed ancestor, reopens and verifies the moved inode, and
+then append-only publishes and syncs `parked` status. Only that fully verified quarantine is
+terminal. A replacement, `ENOENT`, nonidentical `EEXIST`, or post-move identity mismatch
+remains recovery-pending, preserves every name, publishes no parked status, and blocks record
+publication and every close stage until restart completes the same protocol. Ordinary
+winners/losers/refusals and terminal incidents leave both ephemeral namespaces empty;
+recovery-pending is not reported as terminal.
 T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope retention guard. With
 the shared lock held, it proves the candidate is terminal, every delivery transition is
 terminal, every incident is absent or `successor-admitted`, every retained external
@@ -714,9 +722,11 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    peer's executable store/NAR/digest identity to the apply-object pin, and revalidates
    liveness, process start identity, and current executable identity immediately before each
    mutation. Peer exit, exec, PID reuse, mismatch, or ambiguous identity refuses. After
-   allowing the first privileged mutation, the acceptance matrix injects every one of those
-   transitions independently before every later mutation edge and requires refusal before
-   that next mutation. The prior mutation remains committed and audited; the refused edge and
+   allowing `host-generation.source-bootstrap-publish`, the acceptance matrix injects every
+   one of the six exact transitions independently before each of the fourteen later ids in
+   the closed registry from `quickstart.md`. The literal expected set has 84 post-first
+   cases and is independent of production enumeration. The prior mutation remains committed
+   and audited; the refused edge and
    every successor have zero mutation count. The pidfd and executable fds are closed with the
    connection and are never serialized or persisted. Raw apply-peer PID/start identity and
    raw executable store path/NAR identity are internal comparison inputs only. Human, JSON,
@@ -808,12 +818,22 @@ transactional journal prevents an unaudited committed privilege change. The aggr
 readiness projection prevents the recovered store from becoming success-shaped while policy,
 route, watch, audit export, controller, or the exact system-core Provider ownership is absent.
 
+The apply-peer matrix uses the closed 15-member mutation-edge registry in `quickstart.md`,
+not production self-enumeration. The first edge is
+`host-generation.source-bootstrap-publish`; the remaining fourteen exact ids cover target
+profile, broker service, coordinator transfer, daemon service, pointer/reference publish,
+pointer/reference repair, and the six rollback/service-restore edges. With the closed six
+peer-transition ids, the post-first expected set is exactly 84
+`apply-peer/post-first/<edge>/<transition>` cases, plus the separate six pre-first cases.
+An independent literal expected-set fixture owns the ids and cardinality. Unknown, duplicate,
+missing, reordered, or dynamically skipped edges fail before any evidence is accepted.
+
 #### Serial dependencies and file ownership
 
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
-| External SC-002 delivery-contract amendment | no feature task | Before T589 dispatch, a separate external specification-amendment workflow bumps accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2 and normatively pins the incident commands, `Sc002IncidentDispositionV1` canonical encoding and Ed25519 authority/key/signature binding, separate durable-status and CLI-status schemas with deterministic remediation, the complete `CanonicalRetiredCensusV1` framing/tag/unavailable/sentinel/ordering contract and golden vectors, collision-safe retirement identity, private zero-mutation candidate-retention owner, whole-scope retention guard forbidding candidate-root deletion, and one typed validator. The amendment must receive the parent ADR's required pre-panel and post-panel approvals, regenerate `docs/specs/ADR-046-spec-set.json`, `ADR-046-work-items.json`, and `ADR-046-implementation-graph.{json,md}`, pass Gate 0 and drift validation on the exact amendment commit, and be an ancestor of T589's base. This row owns no feature artifact or implementation file. T589 cannot author, approve, regenerate, or substitute for it. |
-| External source-floor prerequisite | no feature task | The accepted external compatibility disposition must name and deliver the `SourceGenerationCompatibilityFloorV1` producer/installer and typed import/validation authority. Its immutable four-record chain must reach `imported-for-exact-C/Q` for the exact source generation before T589 is ready. This row owns no feature, source, test, Nix, normative, or changelog file and makes no implementation claim. |
+| External Version 2 delivery-contract amendment | no feature task | Before T589 dispatch, a separate external specification-amendment workflow bumps accepted `ADR-046-validation-and-delivery` from Version 1 to Version 2. It normatively owns both contracts that T589 consumes: (1) the incident commands, exact twelve-line human projection, `Sc002IncidentDispositionV1` canonical encoding and Ed25519 authority/key/signature binding, immutable incident metadata and append-only status paths, file-and-ancestor-directory-durable publication/recovery protocol, separate durable-status and CLI-status schemas with deterministic remediation, the complete `CanonicalRetiredCensusV1` framing/tag/unavailable/sentinel/ordering contract and vectors, collision-safe retirement identity, private zero-mutation candidate-retention owner, and typed validator; and (2) the source-floor canonical JSON policy, `SourceGenerationIdentityV1`, complete digest/domain/length-framing and signature registry, unknown-field/tag/version refusal, strict schemas, and checked-in golden vectors. The amendment must receive the parent ADR's required pre-panel and post-panel approvals, regenerate `docs/specs/ADR-046-spec-set.json`, `ADR-046-work-items.json`, and `ADR-046-implementation-graph.{json,md}`, pass Gate 0 and drift validation on the exact amendment commit, and be an ancestor of T589's base. This row owns no feature artifact or implementation file. T589 cannot author, approve, regenerate, or substitute for it. |
+| External source-floor prerequisite | no feature task | The accepted external compatibility disposition must name and deliver the `SourceGenerationCompatibilityFloorV1` producer/installer and typed import/validation authority. Its immutable four-record chain must reach `imported-for-exact-C/Q` for the exact source generation before T589 is ready. Those authorities produce, install, and validate objects against the already accepted Version 2 schemas and vectors; they do not own or redefine the repository encoding, digest, schema, or golden contract. This row owns no feature, source, test, Nix, normative, or changelog file and makes no implementation claim. |
 | External retained-request disposition | no feature task | The external delivery-contract/tooling owner must land the contract and typed validator for `Wave5RetainedRequestDispositionV1`. T219 may consume its validated output only after F freezes. This row owns no repository file in this feature and cannot supply panel sign-off. |
 | Resume reconciliation | T603 | FR-036's external constitution amendment is the first prerequisite and must be an ancestor of A. Exactly one valid T072 disposition is then required: exact historical attestation, or unchecked T072 plus one current `historical-entry-remediation-t072` record bound to A/P0 that claims no implementation completion. Fresh descendant-base analysis and plan panel at A/P0 then authorize exactly three repository paths: the two Rust files `packages/xtask/src/delivery/mod.rs` and `packages/xtask/src/delivery/resume.rs`, plus mandatory `changelog.d/delivery-resume-reconciliation.md`. T603 lands dedicated validator-and-fragment commit V with sole parent A and exactly those three paths; a missing or differently named fragment refuses. It freezes B exactly at V and P byte-identical to P0, revalidates the external prerequisite and T072 disposition, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
 | Integrator prep | T589 | Its sole in-feature direct prerequisite is T603. Both external rows above are additional Wave 5 dispatch prerequisites. T589 does not start until accepted delivery-contract Version 2 and its approvals, regenerated manifests, Gate 0 receipt, and ancestor binding validate, and until the source-floor disposition has landed, its named producer/installer has atomically installed the source 3/1 floor, and its named typed import/validation authority has emitted the exact `SourceGenerationCompatibilityFloorV1` `imported-for-exact-C/Q` receipt for the migration generation. T589 only consumes both accepted external contracts; it authors neither. It checks the immutable source-floor receipt's dispatch binding and consumes it read-only; it is not its producer, installer, importer, or source-floor validator. Candidate-recovery v1 must be accepted on T589's actual base, but T008 is a separate historical W2 attestation and is not retroactively completed by T589. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, HEAD is the clean dedicated checkbox commit, and both external prerequisites are satisfied. It lands the shared sealed capability, transactional audit-journal hook, mutation-response wire, and typed `InspectOperation` store/API/protobuf contract. It does not edit broker wire, StoreSync DTOs, their callers, broker protocol metadata, schemas, fingerprints, or snapshots. It also owns the `adr046w5` closed-evidence profile, the `--sc002-receipt` and incident command synopsis/catalog/help in `command.rs`, and wave-scoped strict state in `packages/xtask/src/delivery/{command,evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace binding-request reservation for the program/wave; fixed redacted state/errors; fd-relative durable orphan retirement; a private `CandidateRetentionOwner`; exact final commit/tree/candidate/request/round binding; and the point-specific zero/zero-or-one/exactly-one crash oracle. In `evidence.rs`, it additionally owns SC-002 candidate-local ingestion. `wave validate-import --sc002-receipt PATH` is required only for the passing operator validation and rejects caller-supplied `--locator`; it once-opens a current-effective-uid `0600` single-link source, hashes before decode, derives `evidence-sidecars/sc002/sha256/<digest>.json`, validates the actual `candidate_id`/`content_id`/`snapshot_sha256` triplet, and durably publishes a current-effective-uid `0600` leaf beneath held current-effective-uid `0700` candidate dirfds with a create-exclusive temp, file `fsync`, `renameat2(RENAME_NOREPLACE)`, bottom-up `fsync` of every ancestor directory, and cleanup serialized by a verified candidate-scoped OFD lock. Every importer and cleanup worker acquires that same exclusive lock; no cleanup bypass exists. The live owner holds it through publication or verified quarantine/retirement cleanup, parent `fsync`, the applicable census, and `EvidenceRecord` publication or return; restart cleanup begins only after acquiring the released lock. Verified orphans retire under a candidate/content/inode-bound id into a 64-leaf/1,048,576-byte bounded census; two identical orphan leaves get distinct names, while destination collision or census failure transitions to incident without overwrite or unlink. Ordinary paths leave the ephemeral temp and cleanup-quarantine namespaces empty. An identity mismatch never unlinks or restores the suspect: it durably moves the currently named inode to `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, or leaves an unmovable ambiguous name, and blocks publication and close with intentional incident residue. The private owner performs only a zero-mutation whole-scope retention guard after the exact terminal/reference/lock/census predicate passes; it preserves the canonical candidate root and all permanent delivery-history namespaces. Every reopen resolves beneath the held candidate dirfd and hashes before decode from the same fd. The accepted Version 2 contract's disposition validator authenticates canonical `Sc002IncidentDispositionV1` bytes against its pinned authority/key and consumes a private validated result by value. Same-candidate and alternate-candidate retries, reservation release, unrestricted successor admission, and every post-request move fail closed at panel, seal, and eligibility. Nonbinding `/d2b-panel-round plan` phase rounds create no reservation and may iterate before the final request. Crash injection covers every SC-002 source/hash/decode/temp/file-sync/no-replace/ancestor-directory-sync/lock/quarantine/retirement/incident/disposition/candidate-retention/cleanup/record boundary plus importer-cleanup and cleanup-cleanup overlap for same and different inputs, two identical orphans, forced retirement collision/census overflow, and replacement before quarantine, reopen, or retirement, as well as binding-request publication and terminal failed or successful disposition without enabling a second binding request. No implementation slice branches before this commit. |
@@ -866,14 +886,16 @@ poison matrix visits all 13 roles for all seven classes with cardinality 13, rec
 enclosing hashes, and valid test signatures; copied authority/proof chains refuse. Within
 T589's SC-002 cleanup, the fixed stable OFD-lock inode and live-owner refusal precede all
 namespace access. Verified orphans move under distinct retirement ids into the bounded
-durable census and ambiguous, colliding, or overflow names move into durable incident
-quarantine; no sidecar data leaf is unlinked. The private retention owner performs only the
+durable census. Incidents use immutable preimage-complete metadata, a no-replace moved and
+revalidated payload outside the ephemeral namespaces, and append-only status; a raced
+rename/reopen remains recovery-pending with every name preserved until restart. No sidecar
+data leaf is unlinked. The private retention owner performs only the
 whole-scope retention guard and proves the canonical candidate root plus every permanent
 delivery-history namespace remains immutable. Overlap tests latch both orderings for
-same/different inputs and recover two identical orphan leaves without collision. T595/T604
-own the six-transition apply-peer cross-product
-after the first durable mutation at every later edge, exact visited count
-`6 * (mutation_edge_count - 1)`, and raw PID/start/store/derivation/NAR canary absence from
+same/different importer, cleanup, and retention actors and recover two identical orphan
+leaves without collision. T595/T604 own the independent closed 15-edge registry, six
+pre-first transition cases, and exact 84-case post-first cross-product after the first
+durable mutation, plus raw PID/start/store/derivation/NAR canary absence from
 every state/output surface with digests only. These refinements make retirement
 identity-bound and collision-safe, name the sole retention owner, keep successor admission
 closed, and remove the former cleanup-by-deletion and output-only identity shorthand without
@@ -891,7 +913,7 @@ and durably adopts coordinator ownership once before daemon activation. Tests in
 `missing`, `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and
 `cross-disposition` source member class, fingerprint mismatch, target/apply
 executable and symlink substitution, every apply-peer identity transition before the first
-and each later mutation edge, target broker startup failure, target daemon
+and in the exact 84-case post-first registry, target broker startup failure, target daemon
 startup/reconciliation failure, entrypoint death, every compatibility-broker crash boundary,
 and both sides of ownership transfer. Recovery accepts only the pre-transfer external source
 owner under the existing broker service or the post-transfer target broker owner, never
@@ -1237,6 +1259,17 @@ T600-T602 and T219 write only external evidence or delivery state, and T220 only
 missing, duplicate, differently named, or cross-owned fragment blocks both V and T220; prose
 that an amendment has release treatment is not a substitute.
 
+The T589 ownership-table row's older incident-path shorthand is superseded by
+`data-model.md` and `tasks.md`: the sole terminal mismatch is immutable metadata, a
+revalidated payload at
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, and a contiguous
+append-only status prefix, all durably synced. A rename/reopen race is recovery-pending, not
+an alternate "unmovable name" terminal. It preserves every name and blocks publication and
+close until restart completes that same metadata-bound protocol. The same correction expands
+the overlap matrix to importer, cleanup, and retention-guard actor pairs and replaces every
+dynamic mutation-edge count with the independent 15-edge/six-transition/84-post-first
+registry. No task dependency or file owner changes.
+
 #### Wave 5 validation and evidence
 
 The implementation tasks run focused hermetic tests while writing their files. Before T595,
@@ -1290,8 +1323,9 @@ from trusted installed-generation metadata, and applies only through that object
 privileged reevaluation. The test substitutes the target executable and apply object, changes
 the installed symlink, and forces apply-peer exit, exec, PID reuse, identity mismatch, and
 ambiguity before the first mutation. After one mutation succeeds, the test repeats every
-transition independently before every later privileged mutation edge and proves refusal
-before that edge, zero later mutations, and preservation of the first mutation's audit. No
+transition in all 84 literal post-first cases over the fourteen exact later edge ids and
+proves refusal before that edge, zero later mutations, and preservation of the first
+mutation's audit. No
 peer pidfd persists. Raw peer PID/start and executable store/NAR identity canaries remain
 absent from every output surface; only typed fixed digests may correlate them, and metrics
 carry no identity label. Accepted
@@ -1491,7 +1525,7 @@ immutable.
 | Earlier handoff prose treated a broker-derived daemon principal and bootstrap euid 0 as independent authorization. | The existing lifecycle authorization chain is public-socket `SO_PEERCRED` plus current `d2b` group classification; broker-socket identity and root execution are not substitute operator authority. | Initial handoff admission transfers the accepted public-socket evidence only after the installed source peers negotiate numeric protocol 4 plus the exact `source-handoff-v1` catalogue fingerprint, then consumes that attachment into one nonfabricable intent-bound capability. No serialized caller/root/provenance/role claim substitutes. Every source or target broker phase consumes the capability or a phase attenuation; daemon identity, Hello, target-closure provenance, and euid 0 are integrity/eligibility checks only. |
 | Earlier handoff prose claimed the target closure's compatibility broker could run under the existing broker service before profile publication and allowed the caller-flake target executable to run under `sudo`. | Committed `d2b_contracts::PROTOCOL_VERSION` is 4 and its `BrokerRequest` and operation-catalogue fingerprint have no host-generation handoff operation. Committed `nixos-modules/host-broker.nix` makes `d2b-priv-broker.service` execute the installed generation's `brokerPackage`, not a target-closure binary. Immutability does not make caller-selected executable code a trusted root entrypoint. | No executable authorized source actor exists at this base. T589 and downstream Wave 5 implementation are blocked on an accepted external source-generation compatibility disposition that atomically installs the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census before migration. That external owner is outside this feature. T592 consumes the census and owns only target protocol-5 adoption and target artifacts; T595 owns target-generation behavior. The caller-flake target entrypoint runs only unprivileged. Only the separately pinned installed apply object runs under `sudo`, and its live connection peer pidfd/executable identity must match the pin before every mutation. Target/apply/GC-root substitution and peer exit/exec/PID reuse/mismatch/ambiguity refuse. Target-only code, a new unit or override, an entrypoint child or mutation path, daemon recovery, and a synthetic starting image are not accepted substitutes. |
 | Earlier follow-up prose called the new source handoff row simply "protocol 4", assigned its compatibility artifacts to T592, and described the external source set with open-ended plurals. | The committed numeric protocol-4 peers negotiate a closed catalogue that does not contain the row; silently changing that catalogue under the same undifferentiated handshake is incompatible. | External scope escalation: the accepted source-generation disposition must install the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from `data-model.md`. Every role occurs once and every member binds the same disposition and source generation; `missing`, `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` poison cases refuse. That external owner adds actual two-peer Hello negotiation whose `operation_catalogue_sha256` equals the exact `source-handoff-v1` catalogue fingerprint. Bare protocol 4 refuses. T592 consumes the census read-only and changes only target-v5 adoption and target outputs. No external source artifact, normative spec, source test, or implementation is edited by this batch. |
-| Earlier SC-002 cleanup prose required an identity-mismatched inode to be restored while also requiring both reserved namespaces to be empty on every return. | The fail-closed rule forbids unlinking an inode whose identity is not proven; restoration makes the universal empty-census terminal state unattainable. | The two reserved temp/cleanup-quarantine namespaces are ephemeral and empty only on ordinary terminal paths. Identity ambiguity moves the currently named suspect into durable incident quarantine outside those namespaces, or leaves an unmovable ambiguous name, never calls `unlinkat`, and blocks record publication and every close stage. Import and cleanup share one exclusive candidate OFD lock. Replacement tests cover every name-consuming edge and same/different-input importer-cleanup overlap. |
+| Earlier SC-002 cleanup prose required an identity-mismatched inode to be restored while also requiring both reserved namespaces to be empty on every return. | The fail-closed rule forbids unlinking an inode whose identity is not proven; restoration makes the universal empty-census terminal state unattainable. | The two reserved temp/cleanup-quarantine namespaces are ephemeral and empty only on ordinary terminal paths. The sole mismatch terminal publishes preimage-complete metadata, moves the currently named suspect no-replace into durable incident payload quarantine outside those namespaces, reopens the moved inode, syncs both parents and every changed ancestor, then append-only publishes `parked` status. A replacement or rename/reopen ambiguity stays `recovery-pending`, preserves every name, publishes no parked status, and blocks record publication and every close stage until restart completes the same protocol. No SC-002 data leaf is unlinked. Import, cleanup, and the retention guard share one exclusive candidate OFD lock. Replacement and live-owner tests cover every name-consuming edge and all importer/cleanup/retention pair orderings. |
 | Earlier SC-002 retention prose allowed the private owner to tombstone and delete the whole candidate after terminal-state checks. | Delivery requests, panel records, evidence records, seals, and eligibility history are permanent delivery history; SC-020 requires each applicable wave seal to remain available, and incident evidence is never automatically removed. Deleting the candidate root would erase those retained proofs. | `CandidateRetentionOwner` is a zero-mutation whole-scope guard. Verified orphans remain in the separately owned bounded `evidence-sidecars/sc002/retired` subtree; incident evidence and every request/record/receipt/seal/eligibility/merge artifact remain under the canonical candidate root. No candidate descendant is automatically unlinked, and the root is never renamed, tombstoned, or deleted. Tests poison candidate-root removal and any permanent-history mutation. |
 | `ADR-046-provider-device-tpm` section 11.2 names the finalizer `device-tpm/cleanup`. | Committed `packages/d2b-provider-device-tpm/src/lib.rs` and `packages/d2b-contracts/src/v3/device.rs` both expose `device-tpm.d2bus.org/state-preserved`. | Existing code is canon. The exact T604 fixture uses `device-tpm.d2bus.org/state-preserved` while retaining the dossier's stop/wait/delete-process/delete-flush/retain-Volume/clear sequencing. Correcting the upstream dossier is external to this feature-only batch. |
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI, while T072 omitted Wave 5's contemporaneous plan-panel predicate. | The committed constitution permits no artifact-local waiver for these gaps, and existing Wave 5 implementation does not prove its historical entry gate. | FR-036 now makes a separate accepted Principle VI constitution amendment that expressly dispositions the W2-W5 plan-panel gap an external prerequisite for every implementation, resume, fix, close, merge, and advance path. T072 requires the exact retained Wave 5 plan-panel receipt to check; no current receipt is claimed, and current remediation remains evidence only. |

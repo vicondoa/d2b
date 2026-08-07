@@ -260,8 +260,13 @@ authorized integration-lineage merge preserves F's tree.
 > until the external gate, T589, and T220's coordinated contract/changelog checks pass.
 
 An identity-ambiguous sidecar is never unlinked. The parked candidate remains ineligible and
-the durable incident remains retained. Recovery is inspect, apply one authenticated external
-disposition, then admit one distinct successor snapshot:
+the durable incident remains retained. A parked incident is success-shaped only after its
+immutable metadata, exact payload at
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, and append-only
+`parked` status are file-and-ancestor-directory durable. A rename/reopen race remains
+`recovery-pending`, preserves every name, and exposes no parked status until restart recovery
+finishes that protocol. Recovery is inspect, apply one authenticated external disposition,
+then admit one distinct successor snapshot:
 
 ```bash
 set -eu
@@ -286,14 +291,45 @@ $X sc002-successor-admit \
 `SC002_INCIDENT_ID` and `SC002_DISPOSITION_ID` are stable lowercase 64-hex typed digests.
 Exit `0` means the requested read or transition completed; `2` means invalid syntax or
 malformed input; `3` means an ID was not found; and `4` means stale state, conflict, or
-blocked admission. Human output contains only the fixed state, stable IDs as data, one closed
-remediation action, and a static next-command name. It never prints interpolated argv. The
-equivalent `--json` output is the distinct version-1 `sc002-incident-cli-status` projection,
-not the persisted `sc002-incident-status` envelope. Its required final `remediation` field is
+blocked admission. Repeating the exact already durable apply or successor admission exits
+`0` without a write; changing its binding exits `4`.
+
+Human output is exactly these twelve lines in this order:
+
+```text
+incident-kind: <INCIDENT_KIND>
+incident-id: <INCIDENT_ID>
+parked-candidate-id: <PARKED_CANDIDATE_ID>
+parked-content-id: <PARKED_CONTENT_ID>
+parked-snapshot-sha256: <PARKED_SNAPSHOT_SHA256>
+state: <STATE>
+disposition-id: <DISPOSITION_ID_OR_NONE>
+successor-candidate-id: <SUCCESSOR_CANDIDATE_ID_OR_NONE>
+successor-content-id: <SUCCESSOR_CONTENT_ID_OR_NONE>
+successor-snapshot-sha256: <SUCCESSOR_SNAPSHOT_SHA256_OR_NONE>
+remediation: <REMEDIATION>
+next-command: <NEXT_COMMAND>
+```
+
+The bracketed forms above denote bounded values. Null IDs render exactly `none`.
+`NEXT_COMMAND` is static: `sc002-incident-apply` for either parked remediation,
+`sc002-successor-admit` for successor admission, and `none` after admission. It never
+contains flags, IDs, paths, argv, an executable path, a shell fragment, or free-form
+guidance. The equivalent `--json` output is the distinct version-1
+`sc002-incident-cli-status` projection, not the persisted `sc002-incident-status` envelope.
+JSON contains no `nextCommand` or guidance field. Its required final `remediation` field is
 derived from the durable status and locked disposition census and is exactly one of
 `obtain-incident-disposition`,
 `apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
 field. Persisted status has no remediation field.
+
+`obtain-incident-disposition` means submit the stable incident id to the disposition
+authority/workflow pinned by accepted Version 2 and receive its signed mode-`0600` record;
+no repository command may mint or self-sign that authority record. Then run
+`sc002-incident-apply`. `apply-incident-disposition` means rerun that command with the
+already obtained record after a publication-before-status crash.
+`admit-successor` means run `sc002-successor-admit` with the disposition id and the fresh
+successor snapshot. These are the only operator actions.
 
 The disposition's only action is `abandon-candidate-admit-successor`. It cannot delete the
 incident, make the parked candidate eligible, reuse its receipt/evidence, release a binding
@@ -304,7 +340,10 @@ preserving the retained request byte-for-byte; T219's external retained-request 
 is still required. A consumed ordinary wave stops for its external wave disposition.
 `SC002_DISPOSITION` is the exact canonical, signed `Sc002IncidentDispositionV1`; the apply
 command trusts only the Version 2 contract's pinned authority and Ed25519 key, never a key
-selected by the file.
+selected by the file. The cleanup refusal and each command return the same stable incident
+id as a data field. T589's existing `changelog.d/resource-api-production.md` fragment names
+all three command nouns, exits `0|2|3|4`, the disposition authority, and the fresh-successor
+requirement; T220 verifies and folds that existing fragment rather than creating another.
 
 ---
 
@@ -372,7 +411,12 @@ no fixed illustrative target.
 > authority. Do not continue until its immutable manifest, installation, validation, and
 > exact-C/Q import receipts form the accepted `SourceGenerationCompatibilityFloorV1`
 > append-only chain. T589 and T592 consume that object read-only and no feature task creates
-> or imports it. The source broker's ordinary `serve` process under the existing
+> or imports it. The separately accepted external
+> `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical encoding, complete
+> digest/domain/framing registry, strict source-floor schemas, and checked-in golden vectors.
+> The source producer/installer and typed import/validation authority must conform to those
+> artifacts; they may not redefine them in the compatibility disposition. The source
+> broker's ordinary `serve` process under the existing
 > `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
 > public-socket evidence fd, seal the typed authority, pin the target object, and pin one
 > exact broker-managed privileged apply executable from the installed source generation.
@@ -565,10 +609,39 @@ identity to the apply-object pin immediately before each mutation; exit, exec, P
 start-identity mismatch, executable mismatch, or ambiguity refuses, and no pidfd is
 persisted. Validation is the full cross-product: each of those six transitions is injected
 in a fresh run before the first mutation and, after exactly the first mutation and its audit
-become durable, immediately before each individual later mutation edge. Every run proves the
-selected edge and all successors remain unexecuted while the durable prefix is unchanged.
-A visited-edge counter must equal `6 * (mutation_edge_count - 1)` for the post-first matrix;
-empty or skipped enumeration fails.
+become durable, immediately before each individual later mutation edge.
+
+The mutation-edge registry is closed and ordered:
+
+```text
+host-generation.source-bootstrap-publish
+host-generation.target-profile-publish
+host-generation.target-broker-service-transition
+host-generation.coordinator-transfer-to-target
+host-generation.target-daemon-service-transition
+host-generation.target-pointer-publish
+host-generation.target-reference-publish
+host-generation.target-pointer-repair
+host-generation.target-reference-repair
+host-generation.rollback-target-daemon-service
+host-generation.rollback-pointer-restore
+host-generation.rollback-reference-restore
+host-generation.rollback-profile-publish
+host-generation.rollback-source-broker-service
+host-generation.rollback-source-daemon-service
+```
+
+The six transition ids are `peer-exit`, `peer-exec`, `peer-pid-reuse`,
+`peer-start-identity-mismatch`, `peer-executable-identity-mismatch`, and
+`peer-identity-ambiguity`. The pre-first matrix has exactly six ids
+`apply-peer/pre-first/<transition>`. For every later edge, a fresh scenario executes the real
+required prefix through the first durable mutation and audit, then injects immediately before
+that named edge. Its id is `apply-peer/post-first/<edge>/<transition>`. The exact post-first
+set is therefore 14 later edge ids times six transition ids, or 84 cases; a literal
+independent expected-set fixture must match all 84 rather than deriving its expectation from
+production enumeration. Every run proves the selected edge and all successors remain
+unexecuted while the durable prefix is unchanged. An unknown, duplicate, reordered,
+dynamically omitted, or unvisited edge fails the matrix.
 
 Outside transient verifier-local kernel handles and bytes, raw peer PID/start and executable
 store path, derivation name, NAR identity, or NAR hash is forbidden in coordinator state,

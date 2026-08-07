@@ -64,9 +64,10 @@ artifact and requires a clean `git diff`, fail-closed.
   URI, installable, stable-reference path, target executable, or caller-flake executable to
   reevaluate. The broker binds the accepted apply connection's direct peer pidfd and live
   executable store/NAR/digest identity to that pin, revalidates it before every mutation, and
-  refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests inject every transition before
-  the first mutation and, after allowing that mutation, before every later mutation edge; the
-  selected edge and all successors remain unexecuted. Raw peer PID/start and executable
+  refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests use the independent exact
+  registry in `quickstart.md`: six pre-first ids and 84 literal post-first ids over the
+  fourteen later members of the closed 15-edge set. Unknown, duplicate, missing, reordered,
+  or unvisited ids fail; the selected edge and all successors remain unexecuted. Raw peer PID/start and executable
   store/NAR identity remains absent from human, JSON, wire, error, log, span, metric, audit,
   and `Debug` output. Correlation uses only typed fixed domain-separated digests, and metrics
   carry no identity label. The connection-scoped pidfd and executable fds are never
@@ -151,8 +152,9 @@ completion. It requires atomic sole-pending selection, zero mutation on
 zero/multiple/concurrent/terminal refusals, durable zero-mutation proof before releasing a
 pre-mutation claim, and same-intent coordinator replay only after mutation. It binds the accepted
 connection's direct peer pidfd and executable identity to that pin, and refuses every identity
-transition before the first mutation and each later mutation edge with no persisted pidfd or
-later mutation. Raw peer PID/start and executable store/NAR identity remains absent from
+transition in the six exact pre-first cases and all 84 exact post-first cases from the
+independent closed edge registry, with no persisted pidfd or later mutation. Raw peer
+PID/start and executable store/NAR identity remains absent from
 every output surface; only typed fixed correlation digests are permitted and metrics carry
 no identity label. The positive case
 proves initial public-socket Admin classification, sealed durable capability,

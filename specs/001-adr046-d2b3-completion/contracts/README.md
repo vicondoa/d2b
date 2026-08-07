@@ -211,14 +211,17 @@ merge-target registration, merge eligibility, and merge.
     exact-C/Q import receipts must form the closed append-only chain before T589. Every role
     occurs once under one accepted disposition and source generation; `missing`, `duplicate`,
     `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` members
-    refuse. Bare protocol 4
+    refuse. The separately accepted external `ADR-046-validation-and-delivery` Version 2
+    amendment owns the canonical JSON/digest/domain/framing policy, strict schemas, and
+    checked-in vectors; the compatibility authorities produce and validate conforming
+    objects but do not redefine those artifacts. Bare protocol 4
     refuses. T592 consumes those source artifacts read-only and
     owns only target-v5 adoption and target outputs. The caller-flake target executable stays
     unprivileged; only the separately broker-pinned installed apply object runs under `sudo`,
     and its connection-scoped peer pidfd/executable identity must remain an exact live match
-    through each mutation with no persisted pidfd. Tests inject every identity transition
-    before the first mutation and, after allowing that mutation, before every later mutation
-    edge; refusal occurs before the selected edge and all successors. Raw peer PID/start and
+    through each mutation with no persisted pidfd. Tests use the independent exact registry:
+    six pre-first cases and 84 literal post-first cases across the fourteen later members of
+    the closed 15-edge set; refusal occurs before the selected edge and all successors. Raw peer PID/start and
     executable store/NAR identity never enters human, JSON, wire, error, log, span, metric,
     audit, or `Debug` output. Only typed fixed domain-separated correlation digests are
     permitted, and metrics carry no identity label. T603's pre-validator analysis and plan panel
@@ -298,11 +301,15 @@ merge-target registration, merge eligibility, and merge.
     into the bounded `evidence-sidecars/sc002/retired` subtree. It then reopens and
     revalidates the retired leaf and `fsync`s the leaf plus both directories. No sidecar data
     leaf is unlinked. An identity mismatch never unlinks or restores the suspect. It durably moves the
-    currently named inode to
-    `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, or preserves an
-    unmovable ambiguous name, and blocks record publication and every close stage. Ordinary
-    paths leave both ephemeral namespaces empty; ambiguity intentionally retains incident
-    residue. T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope
+    metadata-bound currently named inode to
+    `evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, reopens and
+    verifies it, syncs both parents and every changed ancestor, and append-only publishes
+    `parked` status. Only that preimage-complete metadata/payload/status state is terminal.
+    A replacement or rename/reopen mismatch remains recovery-pending, preserves every name,
+    publishes no parked status, and blocks record publication and every close stage until
+    restart completes the same protocol. Ordinary paths and terminal incidents leave both
+    ephemeral namespaces empty; recovery-pending never claims a terminal empty census.
+    T589's private `CandidateRetentionOwner` is a zero-mutation whole-scope
     retention guard: it preserves the canonical candidate root and all request, panel-record,
     evidence-record, receipt, seal, eligibility, merge, incident, disposition, and status
     history. It never renames, tombstones, or deletes the candidate root or automatically

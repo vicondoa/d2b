@@ -135,9 +135,11 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   post-mutation replay of only the same intent through the same pinned apply object. The broker binds that accepted
   connection's direct peer pidfd and live executable identity to the pin and rejects exit,
   exec, PID reuse, start-identity mismatch, executable mismatch, or ambiguity before mutation
-  without persisting a pidfd. After the first privileged mutation, each transition is
-  injected independently before every later mutation edge and must refuse before that edge
-  or any successor executes. Raw peer PID/start and executable store/NAR identity are absent
+  without persisting a pidfd. The expected set is the independent closed 15-edge and
+  six-transition registry in `quickstart.md`: six pre-first cases and exactly 84 literal
+  post-first cases across the fourteen later edge ids. Each must refuse before that edge or
+  any successor executes; an unknown, duplicate, missing, reordered, or unvisited id fails.
+  Raw peer PID/start and executable store/NAR identity are absent
   from human, JSON, wire, error, log, span, metric, audit, and `Debug` output; only typed
   fixed correlation digests are permitted, and metrics carry no peer-identity label. The
   test also proves the sealed capability, no emitted authority token, and that

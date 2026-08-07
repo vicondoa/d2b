@@ -742,18 +742,27 @@ table before the operation exists.
   parser/synopsis/catalogue/dispatch/help surface from `data-model.md`. The receipt option
   must appear exactly where the importer accepts it and remain absent from unrelated
   subcommands. Incident commands use stable lowercase 64-hex incident/disposition IDs and
-  closed exits `0|2|3|4`; human output has fixed state/static next-command text, and
+  closed exits `0|2|3|4`; exact replay of an already durable transition returns `0` without
+  a write while a changed binding returns `4`. Human output is the exact ordered twelve-line
+  projection in `data-model.md`, including bounded IDs as data, nullable IDs rendered as
+  `none`, the closed remediation value, and only the static next-command noun
+  `sc002-incident-apply`, `sc002-successor-admit`, or `none`. It contains no flags,
+  interpolated argv, path, executable, shell fragment, or free-form guidance. The
   version-1 JSON is the distinct `Sc002IncidentCliStatusV1` projection with immutable
   `incidentKind` and a required final remediation enum derived from durable status plus the
-  locked disposition census; persisted `Sc002IncidentStatusV1` has its exact 12 fields and
-  no remediation field. T589
+  locked disposition census and no `nextCommand`/guidance field; persisted
+  `Sc002IncidentStatusV1` has its exact 12 fields and no remediation field. The original
+  cleanup refusal and every later refusal expose the same stable incident id as a bounded
+  data field. T589
   additionally owns `tests/golden/delivery/sc002-incident-id-v1.json`. It defines exactly
   one independently recomputed vector for each closed `Sc002IncidentKindV1`:
   `retirement-id-collision`, `retirement-census-exhausted`,
   `retirement-census-invalid`, and `identity-ambiguity`. The accepted external Version 2
   delivery contract must pin this enum, each kind-specific domain-separated preimage, the
-  exact durable/CLI status schemas and remediation table, the census byte grammar and its
-  three vectors, and all four incident vectors before T589 dispatch.
+  exact `Sc002IncidentMetadataV1`, payload and append-only status paths, durable publication
+  and crash-prefix recovery protocol, exact durable/CLI status schemas and remediation
+  table, the census byte grammar and its three vectors, and all four incident vectors before
+  T589 dispatch.
   `sc002-incident-apply` consumes the
   exact `Sc002IncidentDispositionV1` record from `data-model.md`: at most 4,096 canonical
   JSON bytes with the exact 14-field order, exact Version 2 delivery-contract digest,
@@ -768,14 +777,21 @@ table before the operation exists.
   parked candidate, never unlinks an incident, and creates no binding request or reservation
   release. For `adr046w5` it admits only T220's nonbinding replacement/evidence path while
   retaining the consumed request byte-for-byte. Focused parser,
-  durable-status/CLI-status/disposition schemas, census-byte and incident-kind goldens,
+  incident-metadata/durable-status/CLI-status/disposition schemas, census-byte and
+  incident-kind goldens,
   signed canonical disposition golden,
   signature, human/JSON golden, exit, crash/replay,
   stale/not-found/conflict, wrong-contract/authority/key/domain, malformed/noncanonical,
   tamper/cross-incident/cross-triplet replay, no-unlink, no-evidence-copy, and
   successor-admission tests stay synchronized with `evidence.rs`; the existing
-  `changelog.d/resource-api-production.md` fragment covers this operator-visible flow. No
+  `changelog.d/resource-api-production.md` fragment names all three commands, exits
+  `0|2|3|4`, the authenticated disposition, and fresh-successor requirement. No
   later task may add either surface through an unowned help or dispatch path.
+  T589's schema ownership additionally includes
+  `docs/reference/schemas/delivery/sc002-incident-metadata-v1.schema.json`; its human/JSON
+  golden ownership includes every incident kind and all four remediation rows. This is
+  implementation of the already accepted external Version 2 contract, not ownership of that
+  normative amendment.
   **Typed SC-002 evidence ownership:** in `packages/xtask/src/delivery/evidence.rs`, retain
   schema-v2 `EvidenceRecord` and its decoder byte-for-byte and define the separately versioned
   `Sc002ActivationReceiptV1` exactly as specified in `data-model.md`. A passing
@@ -821,10 +837,12 @@ table before the operation exists.
   source identity, valid pre-add census digest, and current/prospective counts, while an
   unknown entry or path/identity/digest mismatch transitions it to
   `retirement-census-invalid` with the source identity and bounded observed-census digest.
-  Neither census kind fabricates a second identity tuple. Each incident persists a status
-  whose immutable `incidentKind` matches its domain-separated id and durable payload or
-  still-ambiguous-name locator, and blocks publication rather than growing, replacing,
-  reusing, or unlinking the set. Valid retired residue is immutable and non-authorizing and does not
+  Neither census kind fabricates a second identity tuple. Each incident persists the exact
+  immutable `Sc002IncidentMetadataV1`, one metadata-bound payload under
+  `incidents/payload/sha256/<incident-id>.bin`, and a contiguous append-only status prefix
+  under `incidents/status/sha256/<incident-id>/`. Metadata contains every kind-specific
+  preimage component and nulls every inapplicable field; the immutable `incidentKind`
+  matches its recomputed domain-separated id. Valid retired residue is immutable and non-authorizing and does not
   block retry or close. Implement the sole private `CandidateRetentionOwner` in
   `packages/xtask/src/delivery/storage.rs` as a zero-mutation whole-scope retention guard.
   With the same lock held, its full census proves terminal `merged|abandoned-unmerged`
@@ -840,17 +858,20 @@ table before the operation exists.
   durable census.
 
   An identity mismatch has one fail-closed terminal path: never restore the suspect to the
-  temporary namespace or treat a mismatched retired name as verified, and atomically move the currently named
+  temporary namespace or treat a mismatched retired name as verified. Publish and sync the
+  preimage-complete immutable metadata, atomically move the metadata-bound currently named
   suspect with `renameat2(RENAME_NOREPLACE)` into durable candidate-relative
-  `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
-  namespaces. Derive that name in the `identity-ambiguity` domain from the closed reopen
-  stage and ordered before/after identity digests, expose no raw inode identity, and `fsync`
-  both the incident directory and old leaf parent. If the suspect name
-  cannot be moved without ambiguity, leave it in place. Either result blocks
-  `EvidenceRecord` publication and every close stage, survives restart, and is never removed
-  by automated cleanup. Ordinary winners, race losers, refusals, and restarts leave the two
-  ephemeral namespaces empty; the mismatch oracle intentionally requires durable incident
-  residue or an ambiguous name and never claims zero residue. A retry after a
+  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, outside both
+  ephemeral namespaces, `fsync` the old and payload parents plus every changed ancestor,
+  reopen the payload, and prove the moved identity/digest/bytes before append-only publishing
+  and syncing `parked` status. A replacement before rename, mismatch after rename, `ENOENT`,
+  or nonidentical `EEXIST` remains `recovery-pending`: preserve every named leaf, publish no
+  parked status, and retry only this metadata-bound protocol after restart. It is not an
+  alternate terminal state. Both recovery-pending and terminal parked incidents block
+  `EvidenceRecord` publication and every close stage and are never removed by automated
+  cleanup. Ordinary winners and terminal parked incidents leave the two ephemeral namespaces
+  empty; a recovery-pending race may retain ephemeral residue but never claims terminal
+  success. A retry after a
   crash may reuse an identical durable leaf only after reopening and revalidating its full
   type/owner/mode/link-count/device/inode/digest/bytes/decode/binding identity; it never
   replaces the leaf, and a different existing leaf refuses. On every reopen resolve it only
@@ -889,14 +910,21 @@ table before the operation exists.
   crash before and after source hash/decode, OFD-lock acquisition, temp write, file sync,
   no-replace publication, each ancestor-directory sync, quarantine move/reopen, verified
   retirement move/reopen, retirement `EEXIST`, retired-census validation, incident move and
-  both directory syncs, disposition file/status publication, whole-scope retention guard,
+  metadata leaf sync, every metadata ancestor sync, old-parent and payload-parent sync,
+  payload reopen, parked-status leaf sync, every status ancestor sync, disposition
+  file/status publication, whole-scope retention guard,
   candidate-root/permanent-history preservation, cleanup-parent sync, ephemeral-residue census, and record
   publication;
-  importer-versus-cleanup and cleanup-versus-cleanup overlap for same and different inputs,
-  each using independent opens of the one stable lock inode and both latch orderings at temp
-  creation, file sync, quarantine move, retirement move, and incident move; live-owner
-  refusal before namespace access; replacement before quarantine move, before reopen, and on
-  both sides of retirement; two same-byte distinct-inode orphans produce two retirement ids;
+  the exact importer/cleanup, cleanup/cleanup, importer/retention-guard, and
+  cleanup/retention-guard actor-pair matrix for same/different inputs where applicable,
+  each using independent opens of the one stable lock inode and both owner orderings at
+  `temp-created`, `temp-file-synced`, `quarantine-renamed`, `retirement-renamed`,
+  `incident-metadata-published`, `incident-payload-renamed`, and
+  `incident-status-published`; every nonblocking loser has zero namespace opens, zero
+  namespace mutations, and `critical_section_max = 1`, while a blocking restart enters only
+  after release and exactly one retry linearizes after the winner; replacement before
+  quarantine move, before reopen, and on both sides of every retirement/incident rename and
+  reopen; two same-byte distinct-inode orphans produce two retirement ids;
   forced id collision, 65th leaf, 1,048,577th byte, malformed census, unauthorized retention,
   candidate-root removal, permanent-history mutation, and failed whole-scope retention
   predicates preserve data and refuse; synchronized same-input
@@ -906,14 +934,36 @@ table before the operation exists.
   `tests/golden/delivery/sc002-incident-id-v1.json`; independent encoding of its
   normal-empty, normal-sorted-mixed, and exact `01ff` over-bound census vectors; rejection of
   bad version/body/entry/observation/failure tags, framing, unsigned-byte ordering,
-  unavailable sentinels, and partial over-bound prefixes; exact durable-status and CLI-status
-  schema separation plus all four deterministic remediation rows; status/payload/id kind
-  agreement; and
+  unavailable sentinels, and partial over-bound prefixes;   exact incident-metadata, durable-status, and CLI-status schema separation plus all four
+  deterministic remediation rows and the exact twelve-line human projection;
+  metadata/payload/contiguous-status/id kind agreement; idempotent recovery from every
+  allowed metadata/source/payload/status crash prefix; refusal with all names preserved for
+  source-plus-payload, neither source nor payload, status-without-payload, skipped status,
+  nonidentical `EEXIST`, and post-rename identity mismatch; and
   durable incident preservation plus publication and close denial for every
   identity-ambiguous, collision, exhausted-census, or invalid-census terminal,
   missing/duplicate/mixed/unrelated samples, effect/Ready identity disagreement, misordering
   and arithmetic overflow, stale binding, progress-free or overlong progress, and over-budget
   samples.
+  **Source-floor contract consumption:** the separately accepted external
+  `ADR-046-validation-and-delivery` Version 2 amendment, not T589 and not the compatibility
+  producer, owns `SourceGenerationIdentityV1`, canonical JSON order/int/text/unknown policy,
+  every length-framed digest and signature domain, strict
+  `docs/reference/schemas/delivery/source-floor-v1/` schema, and every checked-in
+  `tests/golden/delivery/source-floor-v1/` vector from `data-model.md`. The separately named
+  producer/installer and typed import/validation authority implement and install that
+  contract. T589 consumes only the disposition-pinned nonserializable validator result and
+  adds the local poison/meta-tests against the already accepted schemas and vectors.
+  Poison case ids are exactly `source-floor/<class>/<role>` for the literal seven classes
+  and literal 13 canonical roles, exactly once each. A second independent literal expected
+  set must contain 91 ids and may not call the generator. Each one-for-one substitution keeps
+  array and declared cardinality 13, uses the exact class mutation in `data-model.md`, and
+  recomputes member digest where applicable, manifest/proof/hash, census,
+  installation/proof/hash, validation/proof/hash, validated-floor hash,
+  exact-C/Q import/proof/hash, and aggregate identity in that order. Every test-only
+  signature is valid and every canonical/schema check passes before the intended semantic
+  refusal. A stale enclosing hash, bad signature, wrong cardinality, duplicate/missing case
+  id, unvisited role, or early structural refusal fails the matrix itself.
   **Additional T589 strict-binding ownership:** `packages/xtask/src/delivery/{history_proof.rs,storage.rs}`
   joins T589's existing delivery file set. Add the wave-scoped ADR046 strict profile
   described under "Wave gate tasks". A canonical binding-request reservation record, reached
@@ -1310,10 +1360,12 @@ table before the operation exists.
   while the original pinned tuple remains eligible.   On the apply connection, inject peer exit, exec to another executable, numeric PID reuse,
   start-identity mismatch, executable identity mismatch, and multiple plausible identities
   before the first mutation; every case refuses, closes the connection-scoped
-  pidfd/executable fds, and persists neither. Then allow exactly the first privileged
-  mutation and, for every later privileged mutation edge in the typed transition catalogue,
-  inject each transition independently after the preceding mutation and before the selected
-  edge. Every case must refuse before that edge executes, retain the earlier committed audit,
+  pidfd/executable fds, and persists neither. Then allow exactly
+  `host-generation.source-bootstrap-publish` and its audit to become durable and, for each
+  of the fourteen later ids in the independent closed registry from `quickstart.md`, inject
+  every transition independently before the selected edge. The exact post-first fixture set
+  has 84 literal ids and is not derived from the typed production catalogue. Every case must
+  refuse before that edge executes, retain the earlier committed audit,
   and report zero mutations for the selected edge and all successors. Distinct raw numeric
   PID, start identity, executable store path, NAR identity, and executable digest canaries
   must occur zero times in human, JSON, wire, error, log, span, metric, audit, and `Debug`
@@ -1384,13 +1436,18 @@ table before the operation exists.
   the first mutation, and invoke apply after terminal completion. They require exactly one
   claim winner only with one pending intent, no caller selector or token, zero mutations by
   refused contenders, same-intent coordinator replay only after mutation, and no terminal
-  replay. Tests enumerate the exact transition set `exit`, `exec`, `PID reuse`,
-  `start-identity mismatch`, `executable-identity mismatch`, and `ambiguity`. Each is
-  injected in a fresh run before the first mutation and, after exactly the first mutation and
-  its audit are durable, immediately before each individual later mutation edge. The
-  post-first visited count equals `6 * (mutation_edge_count - 1)`; empty or skipped edge
-  discovery fails. The selected edge and all successors remain unexecuted and the durable
-  prefix is unchanged.
+  replay. Tests use the exact transition ids `peer-exit`, `peer-exec`, `peer-pid-reuse`,
+  `peer-start-identity-mismatch`, `peer-executable-identity-mismatch`, and
+  `peer-identity-ambiguity`. They use the independent closed 15-id mutation-edge registry
+  in `quickstart.md`, beginning with `host-generation.source-bootstrap-publish` and ending
+  with `host-generation.rollback-source-daemon-service`; production self-enumeration is not
+  the expected set. Each transition is injected in a fresh six-case pre-first run. Then each
+  is injected after the first mutation and audit are durable and immediately before each of
+  the exact fourteen later edges, yielding exactly 84 distinct
+  `apply-peer/post-first/<edge>/<transition>` cases. A literal expected-set fixture that
+  shares no generator with production must match all 15 edge ids, all six pre-first ids, and
+  all 84 post-first ids. Unknown, duplicate, reordered, missing, or unvisited edges fail.
+  The selected edge and all successors remain unexecuted and the durable prefix is unchanged.
   Outside transient verifier-local kernel handles and bytes, raw peer PID/start and
   executable store path, derivation name, NAR identity, or NAR hash are forbidden in
   coordinator state, receipts/evidence, human, JSON, wire, error/`Display`, log, tracing
@@ -1544,11 +1601,16 @@ table before the operation exists.
   authenticated issuer proof at every transition. Its generator visits every one of the 13
   canonical role/artifact pairs for each of `missing`, `duplicate`, `extra`, `empty`,
   `stale-generation`, `stale-digest`, and `cross-disposition`: exactly 91 poison cases before
-  fd transfer, authorization, or mutation. Each case keeps vector and declared cardinality
-  13 through one-for-one substitution, recomputes all enclosing hashes, and re-signs with
-  test-only keys so the selected semantic invariant is exercised; overlapping set cases
-  assert their complete error set. A stale enclosing hash, bad signature, wrong cardinality,
-  or unvisited role fails the matrix. Separately reject a copied authority-digest chain,
+  fd transfer, authorization, or mutation. Case ids and mutations are exactly the
+  `source-floor/<class>/<role>` registry in `data-model.md`; an independent literal
+  expected-set fixture contains all 91 and calls no generator. Each case keeps vector and
+  declared cardinality 13 through the specified one-for-one substitution, then recomputes
+  member digest where applicable, manifest/proof/hash, census, installation/proof/hash,
+  validation/proof/hash, validated-floor hash, import/proof/hash, and aggregate identity in
+  order. Every signature and enclosing hash is valid before the intended semantic refusal;
+  overlapping set cases assert their complete error set. A stale enclosing hash, bad
+  signature, wrong cardinality, duplicate/missing id, early structural refusal, or unvisited
+  role fails the matrix. Separately reject a copied authority-digest chain,
   copied valid signed chain rebound to another C/Q or source generation, wrong issuer key,
   noncanonical encoding, wrong frame/domain, schema/golden drift, and direct receipt
   consumption instead of T589's disposition-pinned validator and nonserializable typed
@@ -1567,12 +1629,14 @@ table before the operation exists.
   connection-scoped peer pidfd and
   live executable store/NAR/digest match before every mutation; exit, exec, PID reuse,
   start-identity mismatch, executable mismatch, or ambiguity refuses and no pidfd persists.
-  Enumerate those exact six transitions in fresh runs before the first mutation. Then allow
-  exactly the first privileged mutation and its audit to become durable and inject each of
-  the six independently immediately before each individual later mutation edge. Require a
-  post-first visited count of `6 * (mutation_edge_count - 1)`, refusal before the selected
-  edge, zero selected or successor mutations, preservation of the entire durable prefix, and
-  empty/skip refusal. Add explicit zero-output and
+  Enumerate the exact six transition ids from `quickstart.md` in fresh runs before the first
+  mutation. Use that file's independent closed 15-id edge registry. Then allow exactly
+  `host-generation.source-bootstrap-publish` and its audit to become durable and inject each
+  transition independently immediately before each of the exact fourteen later edges.
+  Require all 84 literal `apply-peer/post-first/<edge>/<transition>` ids exactly once,
+  refusal before the selected edge, zero selected or successor mutations, preservation of
+  the entire durable prefix, and unknown/duplicate/missing/reordered/empty/skip refusal. The
+  expected-set fixture does not derive from production enumeration. Add explicit zero-output and
   multi-output resolution refusals. After
   authorization, independently substitute the target executable and apply object, replace
   and delete/recreate the broker-managed GC root, and retarget the installed symlink; every
@@ -1705,14 +1769,22 @@ authoritative external disposition preserving sole Network opt-in and leaving do
 prospectively unimplemented. No local matrix, checked status, or Wave 5 acceptance result
 unblocks T220. Only then rebase the Wave 5 integration branch onto the updated `v3` and record
 that exact `v3` commit as the panel-base eligibility proof. Run integration tests, full `make test-drift`, and CI on the converged tree, and resolve every content-changing result. Open or update one PR against `v3` and identify a clean provisional candidate. Run the nonbinding `/d2b-panel-round plan` phase surface against its exact commit/tree, implementation base, and feature snapshot. This process review creates no delivery `panel-request.json` and no binding reservation. A finding routes only its scoped fix through T220, reruns validation, and requires a delta/full-context phase-plan round against the replacement provisional candidate; iterate until all ten roles sign off with zero recommendations. Only then freeze that clean HEAD and tree as final F and retain its unanimous phase receipt. T220 MUST NOT invoke a binding `/d2b-panel-round work` request, panel-attest, or seal. After F is frozen, any content change or rebase invalidates F and requires T220, the phase review, and T600-T602 to rerun. Their completion still does not authorize T219; the accepted external disposition of Wave 5's retained binding request remains mandatory.
+  T220 also revalidates the external Version 2 ownership split: that amendment owns the
+  source-floor canonical JSON/digest/domain/framing policy, strict schemas, and checked-in
+  golden vectors, while the separately named compatibility authorities own only production,
+  installation, validation, and import of conforming objects. Any schema/vector emitted or
+  silently redefined by the compatibility implementation instead of the accepted amendment
+  blocks convergence. For SC-002, exact human goldens are the ordered twelve-line projection
+  in `data-model.md`; summary prose or a variable command rendering is not a golden.
   The SC-002 suite also proves retained schema-v2 `EvidenceRecord` fixtures decode
   byte-identically. It must recompute the exact four kind-specific records in
   `tests/golden/delivery/sc002-incident-id-v1.json`; independently encode its
   normal-empty, normal-sorted-mixed, and exact `01ff` census vectors; reject census version,
   body, framing, ordering, tag, unavailable-tuple, partial-sentinel, kind-domain,
   tuple-order, stage, census-evidence, durable/CLI schema, remediation-derivation, and
-  status-kind mismatches; and prove each durable payload or
-  still-ambiguous-name locator has exactly one matching status. A failed operator record imports without a receipt but cannot satisfy the
+  status-kind mismatches; and prove each immutable incident metadata object reconstructs its
+  id, each durable payload matches that metadata, and each payload has exactly one
+  contiguous append-only status prefix. A failed operator record imports without a receipt but cannot satisfy the
   closed profile or any later stage, and a passed record requires exactly one matching
   receipt at canonical candidate-relative locator
   `evidence-sidecars/sc002/sha256/<digest>.json`. The import suite supplies the external
@@ -1731,14 +1803,19 @@ that exact `v3` commit as the panel-base eligibility proof. Run integration test
   removal, permanent-history mutation, and failed whole-scope-retention fixtures preserve
   data, transition to incident where specified, and refuse. T589's private owner performs
   only the zero-mutation terminal/reference/lock/ephemeral/bounded-durable whole-scope
-  retention guard. Identity ambiguity
-  durably moves the suspect into the incident namespace or preserves an unmovable ambiguous
-  name and blocks publication and close. Crash injection covers every retirement,
-  disposition, census-encoding, status-projection, and whole-scope-retention boundary;
-  importer-cleanup and cleanup-cleanup
-  same/different-input overlaps use independently opened descriptions and both latch
-  orderings at temp creation, file sync, quarantine move, retirement move, and incident
-  move. Replacement runs on both sides of every rename/reopen; synchronized same-input retry
+  retention guard. Identity ambiguity has one terminal result: preimage-complete metadata,
+  a fully revalidated payload under `incidents/payload/sha256/<incident-id>.bin`, and
+  append-only `parked` status, all file-and-ancestor-directory durable outside the ephemeral
+  namespaces. A rename/reopen race remains `recovery-pending`, preserves all names, publishes
+  no parked status, and blocks publication and close until restart resumes the same protocol.
+  Crash injection covers every retirement, incident metadata/payload/status,
+  disposition, census-encoding, status-projection, and whole-scope-retention boundary.
+  Importer/cleanup, cleanup/cleanup, importer/retention, and cleanup/retention
+  same/different-input overlaps use independently opened descriptions and both owner
+  orderings at temp creation, file sync, quarantine move, retirement move, incident metadata
+  publication, payload move, and parked-status publication. Every live-owner loser has zero
+  namespace opens/mutations and `critical_section_max = 1`. Replacement runs on both sides
+  of every rename/reopen; synchronized same-input retry
   and different-byte or wrong-binding races prove bounded completion, no deadlock, no
   sidecar-data unlink, and exact final census. Ordinary terminals leave empty ephemeral
   namespaces and no more than 64 retired leaves or 1,048,576 retired bytes; ambiguous,
@@ -1760,9 +1837,12 @@ that exact `v3` commit as the panel-base eligibility proof. Run integration test
   census and authenticated issuer chain. Its poison generator must visit all 13 canonical
   role/artifact pairs for all seven `missing`, `duplicate`, `extra`, `empty`,
   `stale-generation`, `stale-digest`, and `cross-disposition` classes: exactly 91 cases.
-  Each keeps vector/declared cardinality 13 by one-for-one substitution, recomputes all
-  enclosing hashes, and re-signs with test-only keys so the semantic poison is selected;
-  set-overlap cases assert their complete error set. Missing/wrong/copied issuer proof,
+  The exact ids are `source-floor/<class>/<role>` and an independent literal expected set
+  shares no generator. Each keeps vector/declared cardinality 13 by the class-specific
+  one-for-one substitution and recomputes every enclosing digest/proof in the order pinned
+  by `data-model.md`, so all signatures and canonical envelopes are valid before the
+  semantic poison is selected; set-overlap cases assert their complete error set.
+  Missing/wrong/copied issuer proof,
   copied authority digests, copied signed chain against another C/Q or source generation,
   noncanonical field order/integer/text, duplicate/unknown field, wrong frame/domain, schema,
   and golden-vector negatives also refuse. T589 must invoke the disposition-pinned validator
@@ -1774,9 +1854,9 @@ that exact `v3` commit as the panel-base eligibility proof. Run integration test
   privileged no-URI/no-reference reevaluation; zero-output and multi-output resolution
   refusal; target/apply executable, GC-root, and symlink substitution refusal; apply-peer
   direct pidfd/executable binding plus the six-transition cross-product before the first
-  mutation and, after exactly the first mutation and audit are durable, before each later
-  mutation edge. The post-first visited count must equal
-  `6 * (mutation_edge_count - 1)`; zero selected and successor mutations follow refusal, no
+  mutation and, after exactly the first mutation and audit are durable, before each of the
+  fourteen later ids in the independent closed 15-edge registry. All six pre-first and 84
+  literal post-first ids must occur exactly once; zero selected and successor mutations follow refusal, no
   pidfd persists, and the durable prefix is unchanged. Distinct PID/start/store-path/
   derivation/NAR canaries are absent from coordinator state, receipt/evidence, human, JSON,
   wire, error/`Display`, log, tracing event/span, metric name/label/value/exemplar, audit,
@@ -1833,10 +1913,13 @@ an invalid retired census transitions the source to incident and blocks publicat
 overwrite, reuse, or deletion. T589's private candidate-retention owner performs only the
 exact zero-mutation terminal whole-scope retention guard; retired leaves and the canonical
 candidate root remain retained. Identity ambiguity
-moves the currently named suspect to durable
-`evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin` and syncs both directories,
-or leaves an unmovable ambiguous name; either result intentionally retains incident residue
-and blocks publication and close. No SC-002 cleanup path unlinks a sidecar data leaf. Crash retry may reuse only an identical fully
+moves the metadata-bound currently named suspect no-replace to durable
+`evidence-sidecars/sc002/incidents/payload/sha256/<incident-digest>.bin`, syncs both parents
+and every changed ancestor, reopens and verifies the moved inode, then append-only publishes
+and syncs `parked` status. Only that state is terminal. A rename/reopen race remains
+`recovery-pending`, preserves every name, publishes no parked status, and blocks publication
+and close until restart recovery resumes the same metadata-bound protocol. No SC-002 cleanup
+path unlinks a sidecar data leaf. Crash retry may reuse only an identical fully
 revalidated durable leaf; different bytes or binding refuse. At every reopen, resolve beneath
 the held candidate dirfd and verify the exact bytes against the locator digest before decode
 from that fd. Require schema version 1, correct kind, at most 16,384 encoded bytes, exact outer
@@ -1850,7 +1933,9 @@ absolute/traversal/URL/symlink/hard-link locator, replacement before quarantine 
 reopen, or on either side of retirement, live-owner cleanup, retirement collision/census
 failure, identical-orphan name collision, candidate-root deletion, permanent-history
 mutation, unauthorized retention mutation,
-importer-cleanup or cleanup-cleanup same/different-input overlap failure, any durable
+importer-cleanup, cleanup-cleanup, importer-retention, or cleanup-retention
+same/different-input overlap failure, live-owner namespace access, or
+`critical_section_max != 1`, any durable
 incident, missing-sample, duplicate-sample, mixed-identity,
 effect/Ready-disagreeing, or unrelated-sample evidence is rejected. A failed operator record
 imports without a receipt but cannot count among T600's five passing records or satisfy any
@@ -1868,8 +1953,9 @@ store-object authorization and broker pin plus a separately pinned installed app
 followed by no-reevaluation apply only through that object; target/apply/symlink substitution
 refusal; apply-connection direct peer-pidfd/executable binding with
 the six transition classes refused before the first mutation and, after exactly the first
-mutation/audit are durable, at every later mutation edge with visited count
-`6 * (mutation_edge_count - 1)`. No selected or successor mutation follows refusal, the
+mutation/audit are durable, at every exact later mutation edge in `quickstart.md`. The
+independent expected set contains 15 edge ids, six pre-first ids, and exactly 84
+`apply-peer/post-first/<edge>/<transition>` ids. No selected or successor mutation follows refusal, the
 durable prefix is unchanged, and no pidfd persists. Raw peer PID/start, executable store
 path/derivation, and NAR identity/hash canaries are absent from coordinator state,
 receipt/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
@@ -1924,17 +2010,18 @@ health hold; malformed status fields cannot round-trip; and every command passed
   bound ids plus leaf/directory syncs and leave both ephemeral namespaces empty. The bounded
   retirement census and private zero-mutation whole-scope retention guard validate; two identical
   orphan leaves survive under distinct ids. No sidecar data leaf is unlinked. Identity
-  ambiguity, retirement collision, or census failure durably moves the suspect into
-  the incident namespace or preserves an unmovable ambiguous name, then blocks publication
-  and every close stage with intentional residue. The handoff evidence validates the exact
+  ambiguity, retirement collision, or census failure uses the preimage-complete immutable
+  metadata, payload-quarantine, append-only-status protocol and blocks publication and every
+  close stage with intentional residue. A raced move remains recovery-pending with all names
+  preserved rather than becoming a second terminal. The handoff evidence validates the exact
   nonempty 13-member `SourceGenerationCompatibilityFloorV1` census separately from T592's
   target-v5 adoption row and target artifacts.
   It proves the caller-flake target executable ran only unprivileged, the exact installed
   broker-managed apply object ran under `sudo` with no URI/reference reevaluation, zero-output
   and multi-output target resolution refused, and target/apply/GC-root/symlink substitutions
   plus the six-transition cross-product refused before the first mutation and after the first
-  durable mutation/audit at each later mutation edge, with exact visited count
-  `6 * (mutation_edge_count - 1)`, no selected or successor mutation, no persisted pidfd,
+  durable mutation/audit at each of the fourteen exact later mutation edges, with all 84
+  literal case ids visited once, no selected or successor mutation, no persisted pidfd,
   raw peer/executable identity canary absence from every state/output surface, fixed
   correlation digests only, and no peer-identity metric label or value.
   FR-075 exact set equality is computed only after excluding canonical
@@ -1966,7 +2053,8 @@ that installed source broker; sealed durable handoff capability plus separate br
 target-object and installed-apply-object pins; no-reevaluation privileged apply only through
 the installed apply object plus target/apply/symlink substitution and apply-peer
 exit/exec/PID-reuse/start-identity/executable-identity/ambiguity refusal before the first
-mutation and every later mutation edge, zero selected or successor mutations after refusal,
+mutation and in all 84 literal cases across the fourteen exact later mutation-edge ids,
+zero selected or successor mutations after refusal,
 no persisted pidfd, raw peer PID/start and executable store/NAR canary absence on every
 output surface, fixed correlation digests only, and no peer-identity metric label;
 capability-authorized installed-source-broker-before-transfer and
@@ -2034,29 +2122,36 @@ Historical validation remains historical and is not reclassified.
   `SourceGenerationCompatibilityFloorV1` census and authenticated receipt chain. T589 invokes
   the disposition-pinned validator and consumes its nonserializable typed result; a copied
   authority-digest/receipt chain is never authority. The matrix visits all 13 roles for all
-  seven poison classes with cardinality 13, recomputed enclosing hashes, valid test
-  signatures, and exact count 91; canonical schemas/golden vectors and wrong
+  seven poison classes under the exact `source-floor/<class>/<role>` ids with array and
+  declared cardinality 13, the complete ordered enclosing-hash/signature recomputation,
+  independently pinned valid test keys, and exact literal count 91; canonical
+  Version 2-owned schemas/golden vectors and wrong
   encoding/frame/domain/proof negatives also pass. T592 consumes that set read-only and owns only the target-v5 adoption half and target artifacts. The
   caller-flake target executable runs only unprivileged, and the separately pinned installed
   apply object gets no URI or reference to reevaluate. The evidence includes
   zero-output/multi-output refusal, independent target/apply/GC-root/symlink substitution
   negatives, and all six apply-peer transitions before the first mutation plus the full
-  post-first cross-product at each later edge, with exact visited count
-  `6 * (mutation_edge_count - 1)`, no persistent pidfd, no later mutation after refusal,
+  post-first cross-product at the fourteen exact later edges from the independent 15-id
+  registry, with all six pre-first and 84 post-first literal case ids visited exactly once,
+  no persistent pidfd, no later mutation after refusal,
   fixed correlation digests only, and raw PID/start/store-path/derivation/NAR canary absence
   from every state/output surface. Its SC-002 crash matrix includes every ancestor-directory
   sync, the one stable candidate OFD-lock inode, live-owner refusal before namespace access,
-  identity-preserving ordinary quarantine/reopen/no-replace durable retirement, incident
-  move and directory sync, replacement on both sides of every rename/reopen, and
-  same/different-input importer-cleanup and cleanup-cleanup overlap through independently
-  opened lock descriptions and both latch orderings. It also covers two same-byte
+  identity-preserving ordinary quarantine/reopen/no-replace durable retirement, immutable
+  incident metadata publication, payload move/reopen, append-only status publication, and
+  every leaf/parent/ancestor sync. Replacement runs on both sides of every rename/reopen.
+  Same/different-input importer-cleanup, cleanup-cleanup, importer-retention, and
+  cleanup-retention overlaps use independently opened lock descriptions and both owner
+  orderings at every named latch; live-owner losers have zero namespace access and
+  `critical_section_max = 1`. It also covers two same-byte
   distinct-inode orphans retiring under distinct ids, forced retirement `EEXIST`, the
   64-leaf/1,048,576-byte bounds, malformed retired census, the private retention-owner seal,
   and every zero-mutation whole-scope retention predicate and candidate-root/permanent-history
-  preservation boundary. Ordinary terminals
-  leave empty ephemeral namespaces and a valid bounded durable census; ambiguous,
-  collision, overflow, or invalid-census terminals retain a durable incident or ambiguous
-  name.
+  preservation boundary. Ordinary terminals leave empty ephemeral namespaces and a valid
+  bounded durable census. Incident terminals retain exact metadata, a revalidated payload,
+  and a contiguous status prefix outside those namespaces. A name/reopen race remains
+  `recovery-pending`, preserves every name, publishes no parked status, and blocks close
+  until idempotent restart recovery; it is not a second terminal.
   No SC-002 sidecar data leaf is unlinked. This correction supersedes every earlier T602
   cleanup-by-deletion shorthand.
   Its full unit
@@ -2092,8 +2187,9 @@ Historical validation remains historical and is not reclassified.
   `sudo` with no URI or reference to reevaluate. Target/apply/GC-root/symlink substitution,
   zero-output/multi-output resolution, and every one of the six apply-peer identity
   transitions refuses before the first mutation and in the full post-first cross-product at
-  each later mutation edge. The exact post-first count is
-  `6 * (mutation_edge_count - 1)`; no selected or successor mutation occurs, its peer pidfd
+  each of the fourteen exact later mutation edges. The exact post-first set is the 84
+  literal `apply-peer/post-first/<edge>/<transition>` ids from the independent registry; no
+  selected or successor mutation occurs, its peer pidfd
   is connection-scoped and never persisted, and the durable prefix is unchanged. Raw
   PID/start/store-path/derivation/NAR identity canaries never escape any coordinator,
   receipt/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
