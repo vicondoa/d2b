@@ -6857,5 +6857,9 @@ fn ci_process_marker_policy_reaches_a_planted_marker() {
     let violations = ci_process_marker_violations(planted, "fixture.yml");
     assert_eq!(violations.len(), 2);
     assert!(violations.iter().any(|line| line.contains("W3fu2")));
-    assert!(violations.iter().any(|line| line.contains("fleet_execution")));
+    assert!(
+        violations
+            .iter()
+            .any(|line| line.contains("fleet_execution"))
+    );
 }
