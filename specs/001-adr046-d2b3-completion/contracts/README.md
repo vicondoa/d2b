@@ -204,14 +204,20 @@ merge-target registration, merge eligibility, and merge.
     (FR-070).
 11. **Amended-plan resume is receipt-bound.** T603 is the sole in-feature direct prerequisite
     of T589; FR-070's accepted and installed source-generation compatibility floor is an
-    additional external dispatch prerequisite. That external floor atomically owns both
-    numeric-protocol-4 source peers, exact `source-handoff-v1` catalogue negotiation, every
-    matching source schema/catalogue/fingerprint/snapshot/fixture, and the source installed
-    apply object. Bare protocol 4 refuses. T592 consumes those source artifacts read-only and
+    additional external dispatch prerequisite. That external floor atomically owns the exact
+    nonempty 13-member `SourceGenerationCompatibilityFloorV1` census in `data-model.md`.
+    Every role occurs once under one accepted disposition and source generation; missing,
+    duplicate, extra, empty, stale, and cross-disposition members refuse. Bare protocol 4
+    refuses. T592 consumes those source artifacts read-only and
     owns only target-v5 adoption and target outputs. The caller-flake target executable stays
     unprivileged; only the separately broker-pinned installed apply object runs under `sudo`,
     and its connection-scoped peer pidfd/executable identity must remain an exact live match
-    through each mutation with no persisted pidfd. T603's pre-validator analysis and plan panel
+    through each mutation with no persisted pidfd. Tests inject every identity transition
+    before the first mutation and, after allowing that mutation, before every later mutation
+    edge; refusal occurs before the selected edge and all successors. Raw peer PID/start and
+    executable store/NAR identity never enters human, JSON, wire, error, log, span, metric,
+    audit, or `Debug` output. Only typed fixed domain-separated correlation digests are
+    permitted, and metrics carry no identity label. T603's pre-validator analysis and plan panel
     at A/P0 authorize only its two validator source
     paths plus `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit
     V becomes B, P remains byte-identical to P0, and analysis
@@ -280,12 +286,17 @@ merge-target registration, merge eligibility, and merge.
     current-effective-uid `0600` leaf. The importer uses a create-exclusive temp, file
     `fsync`, and `renameat2(RENAME_NOREPLACE)`, then `fsync`s every ancestor directory from
     `sha256` through the candidate directory before it publishes the `EvidenceRecord`.
-    Creation, publication, and cleanup hold one verified candidate-scoped OFD lock through
-    record publication or return. A live owner cannot be cleaned; restart cleanup begins only
-    after lock acquisition, moves the opened temp to a reserved quarantine name, reopens and
-    verifies the same device/inode and full identity, then unlinks through the held parent fd
-    and `fsync`s that parent. A mismatch is restored and refused, never unlinked. Every path
-    leaves zero temporary and quarantine residue. Crash retry may
+    Every importer and cleanup worker holds the same verified candidate-scoped exclusive OFD
+    lock through record publication or return. A live owner cannot be cleaned; restart
+    cleanup begins only after lock acquisition, moves the opened temp to a reserved
+    quarantine name, reopens and verifies the same device/inode and full identity, performs a
+    final name/identity check, then unlinks through the held parent fd and `fsync`s that
+    parent. An identity mismatch never unlinks or restores the suspect. It durably moves the
+    currently named inode to
+    `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, or preserves an
+    unmovable ambiguous name, and blocks record publication and every close stage. Ordinary
+    paths leave both ephemeral namespaces empty; ambiguity intentionally retains incident
+    residue. Crash retry may
     reuse only an identical fully revalidated durable leaf; a different existing leaf or
     concurrent wrong-byte/binding input refuses.
     T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and

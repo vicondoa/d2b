@@ -555,12 +555,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   daemon recovery owner. This feature does not claim otherwise. T589 and every downstream
   Wave 5 implementation task MUST remain blocked until an accepted external source-generation
   compatibility disposition lands and is installed before the migration under test. That
-  disposition MUST atomically install both source daemon/broker peers, numeric protocol 4
-  plus Hello `operation_catalogue_sha256` exactly equal to the `source-handoff-v1`
-  operation-catalogue fingerprint, every
-  matching source wire/privilege schema, catalogue, compatibility disposition, capability/API
-  fingerprint, serialization snapshot, positive/negative fixture, and one immutable
-  broker-managed source apply object. The installed broker reached only through the existing
+  disposition MUST atomically install the exact nonempty 13-member
+  `SourceGenerationCompatibilityFloorV1` census in `data-model.md`: both source
+  daemon/broker peers, the source wire schema, privilege schema, operation catalogue,
+  `source-handoff-v1` catalogue fingerprint, compatibility disposition, capability/API
+  fingerprint, serialization snapshot, positive fixture, bare-protocol negative fixture,
+  cross-fingerprint negative fixture, and one immutable broker-managed source apply object.
+  Every member MUST bind the same accepted disposition and source generation. An absent,
+  duplicate, extra, empty, stale-generation, stale-digest, or cross-disposition member MUST
+  refuse before fd transfer, authorization, or mutation. The installed broker reached only through the existing
   `d2b-priv-broker.socket` and `d2b-priv-broker.service` is the executable bootstrap actor.
   Bare committed protocol 4 with the field absent, or either source peer advertising another
   catalogue fingerprint, MUST refuse before fd transfer. Only after both peers match numeric
@@ -574,8 +577,18 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   obtain a peer pidfd directly from the accepted socket, bind the live peer's start identity
   and current executable store/NAR/digest identity to the apply-object pin, and revalidate
   them immediately before each mutation. Exit, exec, PID reuse, mismatch, or ambiguity MUST
-  refuse before mutation. The connection-scoped pidfd and executable fds MUST close with the
-  connection and MUST NOT be serialized or persisted. The source broker MUST durably own the
+  refuse before mutation. After the first privileged mutation, tests MUST inject each of
+  those apply-peer identity transitions independently at every later privileged mutation
+  edge and prove refusal before the next mutation executes. The already committed mutation
+  remains auditable; the refused edge and all successors have zero mutation count. The
+  connection-scoped pidfd and executable fds MUST close with the connection and MUST NOT be
+  serialized or persisted.
+  Raw apply-peer numeric PID/start identity and raw executable store path/NAR identity MUST
+  never appear in human, JSON, wire, error, log, span, metric, audit, or `Debug` output. A
+  surface that requires correlation may carry only a typed fixed domain-separated digest;
+  metrics omit this identity rather than creating a digest label. Distinct raw PID, start,
+  store-path, NAR, and executable-digest canaries MUST occur zero times on every output
+  surface. The source broker MUST durably own the
   coordinator before mutation, reopen it from its ordinary `serve` startup after the
   existing unit's `Restart=on-failure`, and transfer ownership exactly once to the
   authenticated target broker. A serialized credential, token, fd number, daemon identity,
@@ -588,7 +601,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   public-socket Admin authorization; exact source-peer protocol/catalogue negotiation;
   durable intent and capability; source-generation compatibility-broker coordinator
   ownership before the first mutation; exact target, apply-object, and apply-peer identity
-  revalidation; stock profile publication; target
+  revalidation before every mutation; stock profile publication; target
   broker transition; durable coordinator ownership transfer to that target broker; target
   daemon transition;
   exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
@@ -724,12 +737,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   surface to start the configured VM, observe the explicit `Ready` state and guest
   reachability, restart `d2bd.service`, prove the same runner PID/start-time identity was
   adopted through a newly acquired pidfd and remained reachable, stop the VM, and observe the
-  explicit `Stopped` state. It MUST enumerate exactly `d2bd.service`,
-  `d2b-priv-broker.socket`, and `d2b-priv-broker.service`, with no additional root-visible
-  framework unit. Enumeration MUST query the complete loaded `d2b*` and `microvm*` namespace
-  with `systemctl list-units --all`, extract every returned unit name, exclude exactly the
-  canonical `d2b.slice`, sort the remainder, and compare that set for exact equality with the
-  required three. A nonzero `systemctl list-units --all` result MUST refuse before filtering;
+  explicit `Stopped` state. Enumeration MUST query the complete loaded `d2b*` and
+  `microvm*` namespace with `systemctl list-units --all`, extract every returned unit name,
+  exclude exactly the canonical `d2b.slice`, sort the remainder, and require exactly these
+  three lifecycle units: `d2bd.service`, `d2b-priv-broker.socket`, and
+  `d2b-priv-broker.service`. No additional unit may remain after that sole exclusion. A
+  nonzero `systemctl list-units --all` result MUST refuse before filtering;
   a later pipeline stage may not turn failed enumeration into an empty or successful census.
   No other slice, target, service, socket, timer, path, or template is excluded. Querying only
   those three names is not enumeration and cannot detect an unexpected lifecycle unit. The
@@ -1383,16 +1396,26 @@ carries the object verbatim rather than copying selected fields into the task ro
   `fsync` and `renameat2(RENAME_NOREPLACE)`. Before the ordinary `EvidenceRecord` may be
   published, the importer `fsync`s every held ancestor directory fd from `sha256` through
   `sc002`, `evidence-sidecars`, and the candidate directory. Creation, publication, and
-  cleanup MUST hold one verified candidate-scoped OFD write lock through parent `fsync`, the
-  zero-residue census, and record publication or return. The live importer retains that lock,
-  so loser or restart cleanup MUST NOT inspect or remove its temp; restart cleanup begins only
+  cleanup MUST hold the same verified candidate-scoped exclusive OFD write lock through
+  parent `fsync`, the applicable census, and record publication or return. There is no second
+  cleanup lock or lock-free orphan path. The live importer retains that lock, so loser or
+  restart cleanup MUST NOT inspect, rename, or remove its temp; restart cleanup begins only
   after acquiring the released lock. Under the lock, cleanup MUST atomically move the opened
   temp into a reserved quarantine name with `renameat2(RENAME_NOREPLACE)`, reopen it, require
-  the same device/inode, owner, mode, link count, digest, and bytes as the pre-move fd, then
-  use fd-relative `unlinkat` and `fsync` the leaf parent. A mismatch MUST be restored and
-  refused, never unlinked. Both reserved temp and quarantine namespaces MUST be empty before
-  success, refusal, record publication, or return. Only after that durable publication and
-  identity-preserving cleanup may the ordinary `EvidenceRecord` be published.
+  the same device/inode, owner, mode, link count, digest, and bytes as the pre-move fd, and
+  perform a final fd-relative name/identity check before `unlinkat` and leaf-parent `fsync`.
+  An identity mismatch MUST never call `unlinkat` and MUST not restore the suspect to the temp
+  namespace. Instead it MUST move the currently named suspect with
+  `renameat2(RENAME_NOREPLACE)` into the durable candidate-relative incident namespace
+  `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
+  reserved namespaces, and `fsync` the incident directory and old leaf parent. The incident
+  digest is fixed and domain-separated; raw inode identity is never rendered. If that move is
+  itself ambiguous, cleanup leaves the suspect name in place. Either mismatch terminal state
+  blocks record publication and every close stage, survives restart, and is never
+  automatically unlinked. Ordinary success/refusal requires both ephemeral namespaces empty.
+  Identity ambiguity intentionally leaves a durable incident entry or ambiguous name and
+  MUST NOT claim zero residue. Only after durable publication and identity-preserving
+  ordinary cleanup may the `EvidenceRecord` be published.
   An identical sidecar
   left by a crash may be reopened and reused only after the complete
   identity/hash/owner/mode check; a different existing leaf refuses. A failed operator record
@@ -1402,8 +1425,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
   stale or wrong canonical outer `candidate_id`/`content_id`/`snapshot_sha256` triplet,
   sidecar content-digest mismatch, a receipt on a failed record, progress-free
-  evidence, live-owner cleanup, temp-name/inode swap, residual temp/quarantine state, or an
-  over-budget sample fails
+  evidence, live-owner cleanup, temp replacement before quarantine move, quarantine
+  replacement before reopen, replacement immediately before unlink, unexpected ephemeral
+  residue, any durable incident entry, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than

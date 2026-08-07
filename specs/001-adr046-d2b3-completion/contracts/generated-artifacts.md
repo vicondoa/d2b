@@ -63,8 +63,13 @@ artifact and requires a clean `git diff`, fail-closed.
   URI, installable, stable-reference path, target executable, or caller-flake executable to
   reevaluate. The broker binds the accepted apply connection's direct peer pidfd and live
   executable store/NAR/digest identity to that pin, revalidates it before every mutation, and
-  refuses exit, exec, PID reuse, mismatch, or ambiguity. The connection-scoped pidfd and
-  executable fds are never serialized or persisted.
+  refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests inject every transition before
+  the first mutation and, after allowing that mutation, before every later mutation edge; the
+  selected edge and all successors remain unexecuted. Raw peer PID/start and executable
+  store/NAR identity remains absent from human, JSON, wire, error, log, span, metric, audit,
+  and `Debug` output. Correlation uses only typed fixed domain-separated digests, and metrics
+  carry no identity label. The connection-scoped pidfd and executable fds are never
+  serialized or persisted.
   Capability-authorized broker code exclusively owns stock profile publication,
   broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference publication and
   repair, stock rollback, and source-service restoration. Before transfer that actor must be
@@ -72,10 +77,10 @@ artifact and requires a clean `git diff`, fail-closed.
   existing `d2b-priv-broker.service`, after both installed source peers negotiate numeric
   protocol 4 plus Hello `operation_catalogue_sha256` exactly equal to the
   `source-handoff-v1` operation-catalogue fingerprint; after durable
-  transfer it is the target broker. The accepted external disposition must move both source
-  peers and every matching source wire/privilege schema, catalogue, compatibility
-  disposition, capability/API fingerprint, serialization snapshot and positive/negative
-  fixture atomically with the source installed apply object. Committed protocol 4 has no
+  transfer it is the target broker. The accepted external disposition must atomically install
+  the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from
+  `data-model.md`. Every role occurs once under one disposition and source generation;
+  missing, stale, or cross-disposition members refuse. Committed protocol 4 has no
   handoff operation and omits the field or advertises a different catalogue fingerprint, so this feature remains
   blocked until that external floor is installed before migration. T592 consumes those source
   outputs read-only and owns only target-v5 adoption plus target artifacts. A
@@ -119,16 +124,19 @@ artifact and requires a clean `git diff`, fail-closed.
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
 coverage starts with a 3/1 source generation that has independently and atomically installed
-both accepted numeric-protocol-4 source peers, exact `source-handoff-v1` catalogue
-negotiation, matching source schemas/catalogues/fingerprints/snapshots/fixtures, and its
-broker-managed immutable apply object while still lacking the target-v5 operation. Bare
+the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from
+`data-model.md`, with every role once under one disposition and generation, while still
+lacking the target-v5 operation. Missing, stale, and cross-disposition member poisons plus bare
 committed protocol 4 and mismatched source-peer fingerprints are refusal cases. The positive case executes the
 parameterized target-closure entrypoint, proves the caller-flake executable runs only
 unprivileged and only validates/builds/stages/authorizes/submits, rejects zero-output and
 multi-output resolution, proves privileged apply uses only the separately pinned installed
 object with no URI, reference, or target executable to reevaluate, binds the accepted
-connection's direct peer pidfd and executable identity to that pin, and refuses
-exit/exec/PID-reuse/mismatch/ambiguity with no persisted pidfd,
+connection's direct peer pidfd and executable identity to that pin, and refuses every identity
+transition before the first mutation and each later mutation edge with no persisted pidfd or
+later mutation. Raw peer PID/start and executable store/NAR identity remains absent from
+every output surface; only typed fixed correlation digests are permitted and metrics carry
+no identity label. The positive case
 proves initial public-socket Admin classification, sealed durable capability,
 broker-before-daemon activation, Hello while unready, phase-attenuated authenticated
 publication request, and durable publication before ingestion/readiness, then injects failure and crash points through

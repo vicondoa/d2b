@@ -301,9 +301,10 @@ no fixed illustrative target.
 > has been installed on the source 3/1 host. That prerequisite must make the installed
 > source daemon and broker negotiate numeric protocol 4 plus Hello
 > `operation_catalogue_sha256` exactly equal to the `source-handoff-v1` operation-catalogue
-> fingerprint, and must atomically install both peers,
-> all matching source schemas/catalogues/fingerprints/snapshots/fixtures, and the source apply
-> object. The source broker's ordinary `serve` process under the existing
+> fingerprint, and must atomically install the exact nonempty 13-member
+> `SourceGenerationCompatibilityFloorV1` census from `data-model.md`. Every closed role occurs
+> once under one disposition and source generation; missing, duplicate, extra, empty, stale,
+> or cross-disposition members refuse. The source broker's ordinary `serve` process under the existing
 > `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
 > public-socket evidence fd, seal the typed authority, pin the target object, and pin one
 > exact broker-managed privileged apply executable from the installed source generation.
@@ -474,7 +475,12 @@ exact immutable broker-managed apply object from the installed generation. Apply
 both the target-object and apply-object pins and performs no evaluation or reference lookup.
 The broker also binds the accepted apply connection's direct peer pidfd and live executable
 identity to the apply-object pin immediately before each mutation; exit, exec, PID reuse,
-mismatch, or ambiguity refuses, and no pidfd is persisted. An empty, malformed, over-bound,
+start-identity mismatch, executable mismatch, or ambiguity refuses, and no pidfd is
+persisted. Validation injects every transition before the first mutation and, after allowing
+that mutation, before every later mutation edge; the next edge and all successors remain
+unexecuted. Raw peer PID/start and executable store/NAR identity never appears in human,
+JSON, wire, error, log, span, metric, audit, or `Debug` output. Correlation uses only typed
+fixed domain-separated digests, and metrics carry no peer-identity label. An empty, malformed, over-bound,
 mismatched, changed, unreadable, or nonexistent input exits 2 with the named remediation and
 runs no privileged command.
 
@@ -499,7 +505,10 @@ broker may reopen it through the existing broker service; after transfer
 the existing `d2b-priv-broker.service` reopens it even when target
 daemon startup fails. No entrypoint process or extra unit must remain alive. Verify the
 source state, then retry with the parameterized target command above; do not create the file
-or copy the rolled-back target value into place:
+or copy the rolled-back target value into place. The census below queries the complete loaded
+`d2b*`/`microvm*` namespace, excludes only canonical `d2b.slice`, and requires exactly the
+three lifecycle units `d2bd.service`, `d2b-priv-broker.socket`, and
+`d2b-priv-broker.service`:
 
 ```bash
 set -eu

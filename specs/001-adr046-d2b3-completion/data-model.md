@@ -264,35 +264,55 @@ Through the already held candidate-directory fd it creates and verifies current-
 and publishes with `renameat2(RENAME_NOREPLACE)`. Before publishing the `EvidenceRecord`
 carrying the derived locator, it `fsync`s each held ancestor directory fd bottom-up:
 `sha256`, `sc002`, `evidence-sidecars`, then the candidate directory. Namespace creation is
-therefore durable, not only the final leaf rename. Before temp creation or recovery, the
-importer acquires one verified candidate-scoped OFD write lock and retains it through
-publication or cleanup, parent `fsync`, an exact residue census, and `EvidenceRecord`
-publication or return. A live importer owns that lock; a failed no-replace loser or restart
-path cannot inspect or remove the live owner's temp. Restart cleanup begins only after it
-acquires the released lock.
+therefore durable, not only the final leaf rename. Before temp creation or recovery, every
+importer and every cleanup worker acquires the same verified candidate-scoped exclusive OFD
+write lock and retains it through publication or cleanup, parent `fsync`, the applicable
+census, and `EvidenceRecord` publication or return. There is no second cleanup lock or
+lock-free orphan path. A live importer owns that lock; a failed no-replace loser or restart
+path cannot inspect, rename, or remove the live owner's temp. Restart cleanup begins only
+after it acquires the released lock.
 
 While holding the lock, cleanup may inspect only the reserved temporary and quarantine
 namespaces through the held leaf-parent fd. It opens the candidate temp, requires a regular
 single-link current-effective-uid `0600` leaf, records its device/inode, owner, mode, link
 count, digest, and bytes, and atomically moves the name into a unique reserved quarantine
 name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf and requires all
-recorded identity members to match before `unlinkat`. A mismatch is restored to its original
-name and refused without unlinking either inode. Successful unlink is followed by parent
-`fsync`; before success, refusal, record publication, or return, the still-held lock guards an
-exact empty census of both reserved namespaces. No joined path or broad sweep is allowed,
-and every winner, race loser, refusal, and recovery path leaves zero temporary or quarantine
-residue.
+recorded identity members to match before a final fd-relative name check and `unlinkat`.
+Successful unlink is followed by parent `fsync`; before ordinary success or an ordinary
+refusal returns, the still-held lock guards an exact empty census of both ephemeral reserved
+namespaces. No joined path or broad sweep is allowed.
+
+Identity ambiguity has one different, attainable terminal state. If the quarantine reopen or
+the final pre-unlink name check does not prove the recorded inode, cleanup MUST NOT call
+`unlinkat` and MUST NOT restore the suspect name to the temporary namespace. It atomically
+moves the currently named suspect with `renameat2(RENAME_NOREPLACE)` into the durable
+candidate-relative incident namespace
+`evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
+reserved namespaces, then `fsync`s the incident directory and the old leaf parent. The
+incident digest is a fixed domain-separated digest of the candidate binding and both observed
+identity tuples; raw device/inode values never enter an error or observability surface. The
+move empties the two ephemeral namespaces but intentionally leaves the durable incident
+entry. That entry is not zero residue: it blocks `EvidenceRecord` publication and every
+close stage, survives restart, and is never removed by automated cleanup. The fixed refusal
+requires an operator incident disposition and a successor candidate. If the suspect name
+cannot itself be moved without ambiguity, cleanup leaves it in place, records no success,
+and blocks publication and close; it still never unlinks an unverified inode.
+
 If a crash leaves the canonical sidecar durable before record publication, retry opens that
 leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
 mode `0600`, link count one, device/inode stability, digest, bytes, decode, and outer binding
 all match; it never replaces the leaf. A different or malformed existing leaf refuses.
 Crash injection covers source open, hash, decode, OFD-lock acquisition, temp write, file sync,
 no-replace publication, each ancestor-directory sync, quarantine move/reopen,
-race-loser/orphan unlink, cleanup-parent sync, zero-residue census, and record publication.
-Synchronized imports cover a live owner versus cleanup, temp-name/inode swap,
-same-bytes/same-record idempotence, and different-bytes or wrong-binding races, with no record
-allowed to reference absent or not-yet-durable bytes and no temporary or quarantine leaf left
-by a winner or loser.
+the final pre-unlink identity check, race-loser/orphan unlink, incident move and both incident
+directory syncs, cleanup-parent sync, ephemeral-residue census, and record publication.
+Synchronized tests cover importer versus cleanup and cleanup versus cleanup for both the same
+input and different inputs, temp replacement before quarantine move, quarantine replacement
+before reopen, replacement immediately before unlink, same-bytes/same-record idempotence, and
+different-bytes or wrong-binding races. An ordinary winner or loser leaves both ephemeral
+namespaces empty. Every identity-ambiguous case instead proves no unverified inode was
+unlinked, the durable incident entry or still-ambiguous name remains, restart redetects it,
+and publication and close remain blocked.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -328,8 +348,44 @@ selected-stop/progress identity mismatch; arithmetic overflow or event misorderi
 binding; zero progress; more than 32 progress observations; and any over-budget sample all
 refuse. Missing ancestor sync, non-fd-relative cleanup, cleanup outside the reserved temp
 namespace, missing or replaceable candidate OFD lock, cleanup against a live lock owner,
-quarantine identity mismatch, cleanup-parent sync failure, or any temporary/quarantine
-residue after success, refusal, race, or restart also refuses. Compatibility tests decode
+quarantine identity mismatch, cleanup-parent or incident-directory sync failure, unexpected
+ephemeral residue after an ordinary success/refusal/race/restart, or any durable incident
+entry also refuses. An identity mismatch instead passes only its negative oracle: no
+unverified unlink, durable incident preservation, and publication/close denial.
+Compatibility tests decode
 retained schema-v2 `EvidenceRecord` fixtures
 byte-identically, import a failed operator record without a receipt, and prove that the same
 failed record remains ineligible for every close stage.
+
+---
+
+## 10. Installed source-floor evidence
+
+The source-generation compatibility floor is external to this feature, but Wave 5 consumes
+one closed evidence object. `SourceGenerationCompatibilityFloorV1` contains a nonempty exact
+13-member census. Each member carries one accepted external disposition ID, source generation
+identity, canonical artifact identity, and fixed content digest; no member is inferred from a
+directory listing or prose claim.
+
+| Member role | Exact member |
+| --- | --- |
+| `source-daemon-peer` | installed numeric-protocol-4 daemon peer |
+| `source-broker-peer` | installed numeric-protocol-4 broker peer under the existing broker service |
+| `source-wire-schema` | source handoff wire schema |
+| `source-privilege-schema` | source handoff privilege schema |
+| `source-operation-catalogue` | catalogue containing the source handoff row |
+| `source-operation-catalogue-fingerprint` | exact `source-handoff-v1` `operation_catalogue_sha256` value |
+| `source-compatibility-disposition` | accepted external compatibility disposition |
+| `source-capability-api-fingerprint` | source capability/API fingerprint |
+| `source-serialization-snapshot` | source serialization snapshot |
+| `source-positive-fixture` | exact negotiated source-handoff positive fixture |
+| `source-bare-protocol-negative-fixture` | bare protocol-4 refusal fixture |
+| `source-cross-fingerprint-negative-fixture` | mismatched-peer catalogue refusal fixture |
+| `source-installed-apply-object` | immutable broker-managed privileged apply object |
+
+The set is exact: an absent, duplicate, extra, empty, stale-generation, stale-digest, or
+cross-disposition member refuses before accepted-socket fd transfer, authorization, or
+mutation. Both installed peers, all eleven remaining members, and the evidence object itself
+must name the same disposition and source generation. T592 and all in-feature tasks consume
+this object read-only; producing or repairing any member remains an external scope
+escalation.
