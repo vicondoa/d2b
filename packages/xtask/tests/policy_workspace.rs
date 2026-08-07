@@ -179,6 +179,13 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
     assert!(driver.contains("tests/tools/api-surface-json.sh"));
     assert!(api_driver.contains("--document-private-items --document-hidden-items"));
     assert!(api_driver.contains("--workspace"));
+    assert_eq!(api_driver.matches("--exclude d2b-priv-broker").count(), 2);
+    assert_eq!(
+        api_driver
+            .matches("--exclude d2b-guest-shell-runner")
+            .count(),
+        2
+    );
     assert!(api_driver.contains("--lib --no-deps"));
     assert!(policy_manifest.contains("public-api = { version = \"=0.52.0\""));
     assert!(policy_manifest.contains("rustdoc-types = \"=0.57.4\""));
@@ -192,11 +199,10 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
         "hidden-public-api.txt",
         "capability-trait-impls.txt",
     ] {
-        assert!(
-            root.join("tests/golden/api-surface")
-                .join(required)
-                .is_file()
-        );
+        assert!(root
+            .join("tests/golden/api-surface")
+            .join(required)
+            .is_file());
     }
 }
 
@@ -1107,13 +1113,11 @@ fn bazel_prep_crates_are_registered_with_dependency_leaf_ownership() {
         "d2b-test-locator",
     ] {
         assert!(workspace.contains(&format!("\"{package}\"")));
-        assert!(
-            repo_root()
-                .join("packages")
-                .join(package)
-                .join("src/lib.rs")
-                .is_file()
-        );
+        assert!(repo_root()
+            .join("packages")
+            .join(package)
+            .join("src/lib.rs")
+            .is_file());
     }
     let support = read_repo_file("packages/d2b-bazel-support/Cargo.toml");
     let execution = read_repo_file("packages/d2b-bazel-exec/Cargo.toml");
