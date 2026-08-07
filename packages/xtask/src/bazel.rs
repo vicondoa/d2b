@@ -175,6 +175,10 @@ Rerun the exact refused command from the closed contributor-command set.",
 
 struct ProcessExecutor;
 
+const EXPLICIT_BAZEL_ENVIRONMENT: &[&str] = &[
+    "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+];
+
 impl BazelExecutor for ProcessExecutor {
     fn run(
         &mut self,
@@ -183,15 +187,21 @@ impl BazelExecutor for ProcessExecutor {
         command_args: &[String],
         environment: &[(&str, &str)],
     ) -> Result<std::process::ExitStatus, Box<dyn Error>> {
-        let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+        let executable = bazel_executable()?;
         let mut command = Command::new(executable);
         command
             .current_dir(root)
             .args(startup_args)
             .args(command_args)
+            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        for name in EXPLICIT_BAZEL_ENVIRONMENT {
+            if let Some(value) = env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         for (name, value) in environment {
             command.env(name, value);
         }
@@ -402,7 +412,6 @@ fn reject_ambient_repin(command: &str, hub: Option<&str>) -> Result<(), Box<dyn 
 struct StartupOptions {
     output_user_root: PathBuf,
     output_base: PathBuf,
-    symlink_prefix: PathBuf,
 }
 
 impl StartupOptions {
@@ -414,15 +423,11 @@ impl StartupOptions {
     }
 
     fn repin_command_args(&self, fresh_tree: bool) -> Vec<String> {
-        let mut args = vec![
-            "run".to_owned(),
-            format!("--symlink_prefix={}/", self.symlink_prefix.display()),
-            "@rules_rust//crate_universe:cargo_bazel".to_owned(),
-            "--".to_owned(),
-            "generate".to_owned(),
-        ];
+        // Bazel 8.6's `sync` command is WORKSPACE-only; `mod deps` is the
+        // Bzlmod extension evaluation that rules_rust uses for this path.
+        let mut args = vec!["mod".to_owned(), "deps".to_owned()];
         if fresh_tree {
-            args.insert(1, "--lockfile_mode=off".to_owned());
+            args.push("--lockfile_mode=off".to_owned());
         }
         args
     }
@@ -442,8 +447,20 @@ fn startup_options(root: &Path) -> StartupOptions {
     StartupOptions {
         output_user_root: scratch.join("output-user-root"),
         output_base: scratch.join("output-base"),
-        symlink_prefix: scratch.join("symlinks"),
     }
+}
+
+fn bazel_executable() -> Result<PathBuf, Box<dyn Error>> {
+    let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+    let executable = PathBuf::from(executable);
+    if executable.is_absolute() {
+        return Ok(executable);
+    }
+    let path = env::var_os("PATH").ok_or("BAZEL is unset and PATH is unavailable")?;
+    env::split_paths(&path)
+        .map(|directory| directory.join(&executable))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| format!("{} is not on PATH", executable.display()).into())
 }
 
 fn absolute_root(root: &Path) -> PathBuf {
@@ -648,7 +665,9 @@ fn generate_model(root: &Path) -> Result<GeneratedModel, Box<dyn Error>> {
     let mut doctest_executed = Vec::new();
     let mut doctest_out = Vec::new();
     for manifest in &manifests {
-        builds.push(render_build(manifest, root, &dependencies)?);
+        if manifest.relative != "tests/tools/no-bash-ast-walker/Cargo.toml" {
+            builds.push(render_build(manifest, root, &dependencies)?);
+        }
         for target in &manifest.tests {
             let entry = format!("{}#{}", manifest.relative, target.name);
             if target.harness && !target.required_features {
@@ -1963,9 +1982,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn is_generator_owned(path: &str) -> bool {
     path == ".bazelignore"
         || path.starts_with("bazel/generated/")
-        || (path.ends_with("/BUILD.bazel")
-            && (path.starts_with("packages/")
-                || path == "tests/tools/no-bash-ast-walker/BUILD.bazel"))
+        || (path.ends_with("/BUILD.bazel") && path.starts_with("packages/"))
 }
 
 fn tracked_paths(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
@@ -2096,7 +2113,6 @@ mod tests {
         assert!(options.output_base.is_absolute());
         assert!(options.output_user_root.starts_with("/worktree"));
         assert!(options.output_base.starts_with("/worktree"));
-        assert!(options.symlink_prefix.starts_with("/worktree"));
         assert_eq!(
             options.startup_args(),
             vec![
@@ -2107,12 +2123,9 @@ mod tests {
         assert_eq!(
             options.repin_command_args(true),
             vec![
-                "run".to_owned(),
+                "mod".to_owned(),
+                "deps".to_owned(),
                 "--lockfile_mode=off".to_owned(),
-                "--symlink_prefix=/worktree/.scratch/bazel/symlinks/".to_owned(),
-                "@rules_rust//crate_universe:cargo_bazel".to_owned(),
-                "--".to_owned(),
-                "generate".to_owned(),
             ]
         );
         assert_eq!(

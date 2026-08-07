@@ -15,6 +15,7 @@ struct Executor {
     write_lock: bool,
     unrelated: bool,
     write_product: bool,
+    write_walker: bool,
 }
 
 impl bazel::BazelExecutor for Executor {
@@ -40,6 +41,10 @@ impl bazel::BazelExecutor for Executor {
         if self.write_product {
             fs::create_dir_all(root.join("bazel/cargo"))?;
             fs::write(root.join("bazel/cargo/product.lock"), b"product-lock-v1\n")?;
+        }
+        if self.write_walker {
+            fs::create_dir_all(root.join("bazel/cargo"))?;
+            fs::write(root.join("bazel/cargo/walker.lock"), b"walker-lock-v1\n")?;
         }
         if self.unrelated {
             fs::write(root.join("unrelated.txt"), b"unexpected\n")?;
@@ -68,6 +73,7 @@ fn refresh_is_no_argument_absolute_and_lock_only() {
         write_lock: true,
         unrelated: false,
         write_product: false,
+        write_walker: false,
     };
     let first =
         bazel::bazel_module_refresh_with_executor(&root, &mut executor).expect("first refresh");
@@ -111,6 +117,7 @@ fn refresh_refuses_unrelated_mutation() {
         write_lock: false,
         unrelated: true,
         write_product: false,
+        write_walker: false,
     };
     let error = bazel::bazel_module_refresh_with_executor(&root, &mut executor)
         .expect_err("unrelated mutation must refuse");
@@ -120,49 +127,87 @@ fn refresh_refuses_unrelated_mutation() {
 }
 
 #[test]
-fn fresh_repin_uses_command_local_off_and_refuses_it_after_module_refresh() {
-    let root = temp_root("repin");
+fn fresh_repin_uses_bzlmod_extension_sync_and_selected_output_isolation() {
+    for hub in ["product", "walker"] {
+        let root = temp_root(hub);
+        let mut executor = Executor {
+            calls: Vec::new(),
+            write_lock: false,
+            unrelated: false,
+            write_product: hub == "product",
+            write_walker: hub == "walker",
+        };
+        let output =
+            bazel::bazel_repin_with_executor(&root, hub, &mut executor).expect("fresh repin");
+        assert_eq!(
+            output,
+            vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))]
+        );
+        assert_eq!(
+            executor.calls[0].2,
+            vec![
+                "mod".to_owned(),
+                "deps".to_owned(),
+                "--lockfile_mode=off".to_owned(),
+            ]
+        );
+        assert_eq!(
+            executor.calls[0].3,
+            vec![
+                ("CARGO_BAZEL_REPIN".to_owned(), "1".to_owned()),
+                ("CARGO_BAZEL_REPIN_ONLY".to_owned(), hub.to_owned()),
+            ]
+        );
+        assert!(!root.join("MODULE.bazel.lock").exists());
+        let other = if hub == "product" {
+            "bazel/cargo/walker.lock"
+        } else {
+            "bazel/cargo/product.lock"
+        };
+        assert!(!root.join(other).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn repin_after_module_refresh_uses_global_lockfile_policy() {
+    let root = temp_root("repin-after-module");
+    fs::write(root.join("MODULE.bazel.lock"), b"module-lock-v1\n").unwrap();
     let mut executor = Executor {
         calls: Vec::new(),
         write_lock: false,
         unrelated: false,
-        write_product: true,
+        write_product: false,
+        write_walker: true,
     };
-    let output =
-        bazel::bazel_repin_with_executor(&root, "product", &mut executor).expect("fresh repin");
-    assert_eq!(output, vec![PathBuf::from("bazel/cargo/product.lock")]);
+    bazel::bazel_repin_with_executor(&root, "walker", &mut executor)
+        .expect("repin after module refresh");
     assert_eq!(
         executor.calls[0].2,
-        vec![
-            "run".to_owned(),
-            "--lockfile_mode=off".to_owned(),
-            format!(
-                "--symlink_prefix={}/.scratch/bazel/symlinks/",
-                root.display()
-            ),
-            "@rules_rust//crate_universe:cargo_bazel".to_owned(),
-            "--".to_owned(),
-            "generate".to_owned(),
-        ]
+        vec!["mod".to_owned(), "deps".to_owned()]
     );
     assert_eq!(
         executor.calls[0].3,
         vec![
             ("CARGO_BAZEL_REPIN".to_owned(), "1".to_owned()),
-            ("CARGO_BAZEL_REPIN_ONLY".to_owned(), "product".to_owned()),
+            ("CARGO_BAZEL_REPIN_ONLY".to_owned(), "walker".to_owned()),
         ]
     );
+    let _ = fs::remove_dir_all(root);
+}
 
-    fs::write(root.join("MODULE.bazel.lock"), b"module-lock-v1\n").unwrap();
-    executor.calls.clear();
-    executor.write_product = false;
-    bazel::bazel_repin_with_executor(&root, "walker", &mut executor)
-        .expect("repin after module refresh");
-    assert!(
-        !executor.calls[0]
-            .2
-            .iter()
-            .any(|argument| argument == "--lockfile_mode=off")
-    );
+#[test]
+fn repin_rejects_an_unselected_hub_lock() {
+    let root = temp_root("repin-isolation");
+    let mut executor = Executor {
+        calls: Vec::new(),
+        write_lock: false,
+        unrelated: false,
+        write_product: true,
+        write_walker: false,
+    };
+    let error = bazel::bazel_repin_with_executor(&root, "walker", &mut executor)
+        .expect_err("unselected hub lock must refuse");
+    assert!(error.to_string().contains("bazel/cargo/product.lock"));
     let _ = fs::remove_dir_all(root);
 }

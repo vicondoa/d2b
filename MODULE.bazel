@@ -41,8 +41,8 @@ crate.from_cargo(
 
 crate.from_cargo(
     name = "walker",
-    manifests = ["//tests/tools/no-bash-ast-walker:Cargo.toml"],
-    cargo_lockfile = "//tests/tools/no-bash-ast-walker:Cargo.lock",
+    manifests = ["//:tests/tools/no-bash-ast-walker/Cargo.toml"],
+    cargo_lockfile = "//:tests/tools/no-bash-ast-walker/Cargo.lock",
     lockfile = "//bazel/cargo:walker.lock",
     skip_cargo_lockfile_overwrite = True,
 )

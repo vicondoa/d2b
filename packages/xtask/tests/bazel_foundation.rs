@@ -31,11 +31,22 @@ fn module_declares_exactly_the_two_accepted_hubs() {
     assert!(!module.contains("Cargo.guest.lock"));
     assert!(module.contains("manifests = [\"//:packages/Cargo.toml\"]"));
     assert!(module.contains("cargo_lockfile = \"//:packages/Cargo.lock\""));
-    assert!(!module.contains(&format!("//{}:", "packages")));
+    assert!(module.contains("manifests = [\"//:tests/tools/no-bash-ast-walker/Cargo.toml\"]"));
+    assert!(module.contains("cargo_lockfile = \"//:tests/tools/no-bash-ast-walker/Cargo.lock\""));
+    assert!(!module.contains("//packages:"));
+    assert!(!module.contains("//tests/tools/no-bash-ast-walker:"));
     let root_build = fs::read_to_string(root.join("BUILD.bazel")).expect("root BUILD");
     assert!(root_build.contains("\"packages/Cargo.toml\""));
     assert!(root_build.contains("\"packages/Cargo.lock\""));
+    assert!(root_build.contains("\"tests/tools/no-bash-ast-walker/Cargo.toml\""));
+    assert!(root_build.contains("\"tests/tools/no-bash-ast-walker/Cargo.lock\""));
     assert!(!root.join("packages").join("BUILD.bazel").exists());
+    assert!(
+        !root
+            .join("tests/tools/no-bash-ast-walker")
+            .join("BUILD.bazel")
+            .exists()
+    );
     for retired in ["main", "broker", "guest"] {
         let error = bazel::parse_repin(&["--hub".into(), retired.into()])
             .expect_err("retired hub must refuse");
@@ -140,6 +151,13 @@ fn generator_preview_is_the_only_generation_side_effect() {
         outputs
             .iter()
             .all(|path| !path.ends_with(&nested_workspace_build))
+    );
+    let walker_workspace_build =
+        PathBuf::from("tests/tools/no-bash-ast-walker").join("BUILD.bazel");
+    assert!(
+        outputs
+            .iter()
+            .all(|path| !path.ends_with(&walker_workspace_build))
     );
     let first_bytes = outputs
         .iter()
