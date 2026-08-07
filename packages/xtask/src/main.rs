@@ -3,7 +3,10 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::Write,
-    os::fd::AsRawFd,
+    os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -788,21 +791,39 @@ fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, Box<dyn s
 
 fn fresh_content_snapshot(
     root: &Path,
-) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<PathBuf, FreshEntry>, Box<dyn std::error::Error>> {
     let mut paths = Vec::new();
     collect_fresh_files(root, root, &mut paths)?;
     let mut snapshot = BTreeMap::new();
     for path in paths {
-        let bytes = fs::read(root.join(&path))?;
-        snapshot.insert(path, Sha256::digest(bytes).into());
+        let absolute = root.join(&path);
+        let metadata = fs::symlink_metadata(&absolute)?;
+        let entry = if metadata.file_type().is_symlink() {
+            FreshEntry::Symlink(fs::read_link(absolute)?.as_os_str().as_bytes().to_vec())
+        } else if metadata.file_type().is_file() {
+            FreshEntry::File {
+                mode: metadata.mode() & 0o7777,
+                digest: Sha256::digest(fs::read(absolute)?).into(),
+            }
+        } else {
+            FreshEntry::Directory(metadata.mode() & 0o7777)
+        };
+        snapshot.insert(path, entry);
     }
     Ok(snapshot)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FreshEntry {
+    File { mode: u32, digest: [u8; 32] },
+    Symlink(Vec<u8>),
+    Directory(u32),
 }
 
 fn collect_fresh_files(
     root: &Path,
     current: &Path,
-    paths: &mut Vec<String>,
+    paths: &mut Vec<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
@@ -812,13 +833,12 @@ fn collect_fresh_files(
         }
         let path = entry.path();
         if entry.file_type()?.is_dir() {
+            if path != root {
+                paths.push(path.strip_prefix(root)?.to_path_buf());
+            }
             collect_fresh_files(root, &path, paths)?;
-        } else if entry.file_type()?.is_file() {
-            paths.push(
-                path.strip_prefix(root)?
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
+        } else if entry.file_type()?.is_file() || entry.file_type()?.is_symlink() {
+            paths.push(path.strip_prefix(root)?.to_path_buf());
         }
     }
     paths.sort();
@@ -826,11 +846,11 @@ fn collect_fresh_files(
 }
 
 fn fresh_content_changed_outside_selected(
-    before: &BTreeMap<String, [u8; 32]>,
-    after: &BTreeMap<String, [u8; 32]>,
+    before: &BTreeMap<PathBuf, FreshEntry>,
+    after: &BTreeMap<PathBuf, FreshEntry>,
     hub: &str,
 ) -> bool {
-    let selected = format!("bazel/cargo/{hub}.lock");
+    let selected = PathBuf::from(format!("bazel/cargo/{hub}.lock"));
     let paths = before
         .keys()
         .chain(after.keys())
@@ -2319,13 +2339,32 @@ mod fresh_bootstrap_tests {
 
     #[test]
     fn content_filter_allows_only_the_selected_output() {
-        let before = BTreeMap::from([("bazel/cargo/product.lock".to_owned(), [1_u8; 32])]);
-        let after = BTreeMap::from([("bazel/cargo/product.lock".to_owned(), [2_u8; 32])]);
+        let selected = PathBuf::from("bazel/cargo/product.lock");
+        let before = BTreeMap::from([(
+            selected.clone(),
+            FreshEntry::File {
+                mode: 0o644,
+                digest: [1_u8; 32],
+            },
+        )]);
+        let after = BTreeMap::from([(
+            selected,
+            FreshEntry::File {
+                mode: 0o600,
+                digest: [2_u8; 32],
+            },
+        )]);
         assert!(!fresh_content_changed_outside_selected(
             &before, &after, "product"
         ));
         let mut changed = after.clone();
-        changed.insert("MODULE.bazel".to_owned(), [3_u8; 32]);
+        changed.insert(
+            PathBuf::from("MODULE.bazel"),
+            FreshEntry::File {
+                mode: 0o644,
+                digest: [3_u8; 32],
+            },
+        );
         assert!(fresh_content_changed_outside_selected(
             &before,
             &changed,
