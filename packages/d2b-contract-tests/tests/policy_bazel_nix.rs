@@ -600,6 +600,7 @@ fn real_supervisor_rebinds_by_open_file_description_and_emits_exact_output() {
             "-Wextra",
             "-Werror",
             "-Wno-unused-parameter",
+            "-Wno-unused-result",
             "-fno-pie",
             "-no-pie",
         ])
