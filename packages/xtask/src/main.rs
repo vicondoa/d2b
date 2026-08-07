@@ -497,12 +497,37 @@ fn fresh_hub_bootstrap(
     if root.join("MODULE.bazel.lock").is_file() {
         return Ok(None);
     }
+    let peer = match hub {
+        "product" => "walker",
+        "walker" => "product",
+        _ => return Ok(None),
+    };
     let root_lockfile = root.join(format!("bazel/cargo/{hub}.lock"));
-    match fs::symlink_metadata(&root_lockfile) {
-        Ok(metadata) if metadata.file_type().is_file() => return Ok(None),
-        Ok(_) => return Err(fresh_bootstrap_error(hub, "selected lock path is not a regular file")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(fresh_bootstrap_error(hub, "selected lock path cannot be inspected")),
+    let selected_exists = match fs::symlink_metadata(&root_lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => true,
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path is not a regular file",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path cannot be inspected",
+            ));
+        }
+    };
+    let peer_lockfile = root.join(format!("bazel/cargo/{peer}.lock"));
+    let peer_missing = match fs::symlink_metadata(&peer_lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => false,
+        Ok(_) => return Err(fresh_bootstrap_error(hub, "peer lock path is not a regular file")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => return Err(fresh_bootstrap_error(hub, "peer lock path cannot be inspected")),
+    };
+    if selected_exists && !peer_missing {
+        return Ok(None);
     }
 
     let scratch = root.join(".scratch/bazel");
@@ -522,8 +547,10 @@ fn fresh_hub_bootstrap(
         })?;
     drop(guard);
 
-    let workspace = create_exclusive_scratch_dir(root, "fresh-bootstrap")?;
+    let workspace = create_exclusive_scratch_dir(root, "fresh-bootstrap")
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
     let result = fresh_bootstrap_in_workspace(root, &workspace, hub)
+        .map_err(|_| fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"))
         .and_then(|bytes| install_fresh_lock(root, hub, &bytes));
     let cleanup = fs::remove_dir_all(&workspace);
     let guard_cleanup = fs::remove_file(&guard_path);
@@ -545,7 +572,8 @@ fn fresh_bootstrap_in_workspace(
     workspace: &Path,
     hub: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    prepare_fresh_workspace(root, workspace, hub)?;
+    prepare_fresh_workspace(root, workspace, hub)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot prepare isolated workspace"))?;
     let output_user_root = workspace.join("bazel-output-user-root");
     let output_base = workspace.join("bazel-output-base");
     let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
@@ -595,11 +623,13 @@ fn install_fresh_lock(
     bytes: &[u8],
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let destination = root.join(format!("bazel/cargo/{hub}.lock"));
-    if fs::symlink_metadata(&destination).is_ok() {
-        return Err(fresh_bootstrap_error(
-            hub,
-            "selected lock path became occupied during bootstrap",
-        ));
+    if let Ok(metadata) = fs::symlink_metadata(&destination) {
+        if !metadata.file_type().is_file() {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path became occupied during bootstrap",
+            ));
+        }
     }
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
