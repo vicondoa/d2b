@@ -265,10 +265,15 @@ immutable metadata, exact payload at
 `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, and append-only
 `parked` status are file-and-ancestor-directory durable. A rename/reopen race remains
 `recovery-pending`, preserves every still-named leaf, and exposes no parked status until
-restart recovery or the owned recovery command finishes that protocol. It is not a terminal
-cleanup result; only a revalidated durable payload outside both ephemeral namespaces plus
-the append-only `parked` status is terminal. Recovery is inspect, resume the exact incident
-prefix if requested, apply one authenticated external disposition, then admit one distinct
+restart recovery or the owned recovery command finishes that protocol. Inspect still returns
+the stable incident id, one closed cause, deterministic remediation, and the exact
+human/JSON status. Recovery-pending is not a terminal cleanup result. A revalidated durable
+payload outside both ephemeral namespaces plus `parked` is one terminal entry. If the
+expected identity cannot be recovered, the authenticated disposition may instead retain
+each currently named leaf by no-replace rename/reopen through durable incident residue
+staging. Only an empty ephemeral/staging census, exact identity-derived residue census, and
+synced `mismatch-retained` status form the other terminal entry. No path unlinks or restores
+a suspect. Both terminal entries require the same external disposition and one distinct
 successor snapshot:
 
 ```bash
@@ -301,10 +306,12 @@ malformed input; `3` means an ID was not found; and `4` means stale state, confl
 blocked admission. Repeating the exact already durable apply or successor admission exits
 `0` without a write. Recovering an incident already at `parked` or later also exits `0`
 without a write. A recovery that still cannot prove the metadata-bound move exits `4`,
-preserves every name, and leaves publication and close blocked; changing any binding exits
+preserves every name, prints the same cause/remediation status as inspect, and leaves
+publication and close blocked. Applying the authenticated disposition may complete
+no-unlink mismatch retention and then disposition validation. Changing any binding exits
 `4`.
 
-Human output is exactly these twelve lines in this order:
+Human output is exactly these thirteen lines in this order:
 
 ```text
 incident-kind: <INCIDENT_KIND>
@@ -313,6 +320,7 @@ parked-candidate-id: <PARKED_CANDIDATE_ID>
 parked-content-id: <PARKED_CONTENT_ID>
 parked-snapshot-sha256: <PARKED_SNAPSHOT_SHA256>
 state: <STATE>
+cause: <CAUSE>
 disposition-id: <DISPOSITION_ID_OR_NONE>
 successor-candidate-id: <SUCCESSOR_CANDIDATE_ID_OR_NONE>
 successor-content-id: <SUCCESSOR_CONTENT_ID_OR_NONE>
@@ -322,6 +330,10 @@ next-command: <NEXT_COMMAND>
 ```
 
 The bracketed forms above denote bounded values. Null IDs render exactly `none`.
+`STATE` is exactly `recovery-pending`, `parked`, `mismatch-retained`,
+`disposition-validated`, or `successor-admitted`. `CAUSE` is one closed
+`Sc002IncidentCauseV1` from `data-model.md`; it is never a path, errno, or free-form
+sentence.
 `NEXT_COMMAND` is static: `sc002-incident-apply` for either parked remediation,
 `sc002-incident-recover` for `resume-incident-recovery`,
 `sc002-successor-admit` for successor admission, and `none` after admission. It never
@@ -329,7 +341,7 @@ contains flags, IDs, paths, argv, an executable path, a shell fragment, or free-
 guidance. The equivalent `--json` output is the distinct version-1
 `sc002-incident-cli-status` projection, not the persisted `sc002-incident-status` envelope.
 JSON contains no `nextCommand` or guidance field. Its required final `remediation` field is
-derived from the validated metadata/source/payload prefix, durable status, and locked
+derived from the validated metadata/source/payload/residue prefix, durable status, and locked
 disposition census and is exactly one of
 `resume-incident-recovery`, `obtain-incident-disposition`,
 `apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
@@ -341,8 +353,10 @@ deletion selector.
 `obtain-incident-disposition` means submit the stable incident id to the disposition
 authority/workflow pinned by accepted Version 2 and receive its signed mode-`0600` record;
 no repository command may mint or self-sign that authority record. Then run
-`sc002-incident-apply`. `apply-incident-disposition` means rerun that command with the
-already obtained record after a publication-before-status crash.
+`sc002-incident-apply`. `apply-incident-disposition` means run or rerun that command with the
+already obtained record. On a nonrecoverable prefix it retains every current leaf in durable
+incident residue, publishes `mismatch-retained`, and then validates the disposition; it never
+unlinks.
 `admit-successor` means run `sc002-successor-admit` with the disposition id and the fresh
 successor snapshot. These are the only operator actions.
 
@@ -356,7 +370,8 @@ is still required. A consumed ordinary wave stops for its external wave disposit
 `SC002_DISPOSITION` is the exact canonical, signed `Sc002IncidentDispositionV1`; the apply
 command trusts only the Version 2 contract's pinned authority and Ed25519 key, never a key
 selected by the file. The cleanup refusal and each command return the same stable incident
-id as a data field. T589's existing `changelog.d/resource-api-production.md` fragment names
+id, cause, and remediation as bounded data fields. T589's existing
+`changelog.d/resource-api-production.md` fragment names
 all four command nouns, exits `0|2|3|4`, the disposition authority, and the fresh-successor
 requirement; T220 verifies and folds that existing fragment rather than creating another.
 
@@ -428,7 +443,13 @@ no fixed illustrative target.
 > append-only chain. T589 and T592 consume that object read-only and no feature task creates
 > or imports it. The separately accepted external
 > `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical encoding, complete
-> digest/domain/framing registry, strict source-floor schemas, and checked-in golden vectors.
+> digest/domain/framing registry, strict source-floor schemas, and exact
+> `hash-vectors-v1.json` with 15 digest and four signature vectors. The 13 role/artifact
+> rows, 91 member poisons, and five copied-issuer poisons are
+> independently pinned. A proof is authority only when its authority digest, key digest,
+> actual verifier key, signature domain, and signature all match the accepted disposition;
+> copying expected digests into a chain signed by another valid key refuses after enclosing
+> hashes and unaffected proofs validate.
 > The source producer/installer and typed import/validation authority must conform to those
 > artifacts; they may not redefine them in the compatibility disposition. The source
 > broker's ordinary `serve` process under the existing
@@ -654,17 +675,23 @@ required prefix through the first durable mutation and audit, then injects immed
 that named edge. Its id is `apply-peer/post-first/<edge>/<transition>`. The exact post-first
 set is therefore 14 later edge ids times six transition ids, or 84 cases; a literal
 independent expected-set fixture must match all 84 rather than deriving its expectation from
-production enumeration. Every run proves the selected edge and all successors remain
-unexecuted while the durable prefix is unchanged. An unknown, duplicate, reordered,
-dynamically omitted, or unvisited edge fails the matrix.
+production enumeration. A second independent fixture pins the 15 ordered mutation ids, and a
+third pins the closed post-first negative matrix. Every run proves the selected edge and all
+successors remain unexecuted while the durable prefix and first mutation audit are unchanged.
+Missing, extra, duplicate, unknown, reordered, dynamically omitted, or unvisited
+edge/transition cases, selected-edge mutation, successor mutation, durable-prefix change,
+or missing first audit fail the matrix.
 
 Outside transient verifier-local kernel handles and bytes, raw peer PID/start and executable
-store path, derivation name, NAR identity, or NAR hash is forbidden in coordinator state,
+store path, derivation name, NAR identity/hash, or executable content digest is forbidden in coordinator state,
 receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
 name/label/value/exemplar, audit, panic, or `Debug` output. Persisted correlation contains
-only typed fixed domain-separated digests, and metrics carry no peer-identity label or value.
-Distinct PID, start, store-path, derivation, and NAR canaries must be absent from every
-captured surface while the expected correlation digests remain present. An empty, malformed,
+only typed fixed domain-separated digests, and metrics carry no raw or digested peer-identity
+label or value. The exact seven-row literal canary registry in `data-model.md` injects PID,
+start, store-path, derivation, NAR identity, NAR hash, and executable-content values one at a
+time. Only that fixture and the test's private injection buffer are scan exclusions. Every
+literal must be absent from every captured surface while the expected class-specific
+correlation digests remain present where allowed. An empty, malformed,
 over-bound, mismatched, changed, unreadable, or nonexistent input exits 2 with the named
 remediation and runs no privileged command.
 

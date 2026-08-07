@@ -1101,13 +1101,17 @@ content. The original clarification family and the later approved additions are:
 
 The FR-066 - FR-072 shorthand is refined, not expanded, by the current Wave 5 planning
 contracts. Accepted external delivery Version 2 owns source-floor canonical encoding,
-digest/domain/framing, schemas, and vectors; the compatibility authorities only produce and
-validate conforming objects. The poison set is the exact 91-id class/role product with valid
-cardinality, enclosing hashes, and signatures. Apply-peer coverage is the independent
-15-edge registry with six pre-first and 84 post-first cases. SC-002 ambiguity has one
-metadata/payload/append-only-status terminal outside the ephemeral namespaces; a rename race
-is recovery-pending with all names preserved and no unverified unlink. These refinements add
-no work-item or task id.
+digest/domain/framing, strict schemas, and exact 15-digest/four-signature vectors; the
+compatibility authorities only produce and validate conforming objects. The independent
+13-row role/artifact fixture, exact 91-id class/role poison product, and five copied-issuer
+cases require valid cardinality, enclosing hashes, and unaffected signatures before their
+semantic or pinned-key refusals. Apply-peer coverage has separate 15-edge, 90-case,
+12-negative, and seven-forbidden-value fixtures, with six pre-first and 84 post-first cases.
+SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
+human/JSON remediation, and closed exits. A verified payload reaches `parked`; an
+authenticated no-unlink residue census reaches `mismatch-retained` outside ephemeral
+namespaces; and a raced rename remains recovery-pending with every name preserved. These
+refinements add no work-item or task id.
 
 A reviewer checking upstream fidelity should expect these rows to have no one-to-one
 counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this
