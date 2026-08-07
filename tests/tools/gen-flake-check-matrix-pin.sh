@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tests/tools/gen-flake-check-matrix-pin.sh - regenerate / verify the committed
-# pin of x86_64-linux flake check names.
+# pin of one native-system flake check inventory.
 #
-# The `pr-l1-static-fast` workflow discovers its hosted-runner x86_64 matrix
+# The `pr-l1-static-fast` workflow discovers its hosted-runner native matrix
 # via `make test-flake-list`. That list may intentionally filter checks that are
 # too large or unstable for GitHub-hosted runners (for example
 # `fixture-smoke-full`). This pin tracks the full static
@@ -14,8 +14,10 @@
 #   make flake-matrix-pin                              # regenerate the pin
 #   bash tests/tools/gen-flake-check-matrix-pin.sh --check   # diff (CI gate)
 #
-# This is CI-matrix plumbing, not a test case; it lives in tests/tools/ and is
-# invoked by tests/unit/gates/flake-check-matrix-sync.sh (run by `make test-drift`).
+# Set D2B_FLAKE_MATRIX_SYSTEM to regenerate the matching native inventory; the
+# default remains x86_64-linux for the existing public Make target. This is
+# CI-matrix plumbing, not a test case; it lives in tests/tools/ and is invoked
+# by tests/unit/gates/flake-check-matrix-sync.sh (run by `make test-drift`).
 
 set -euo pipefail
 
@@ -24,6 +26,14 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
 SYSTEM=${D2B_FLAKE_MATRIX_SYSTEM:-x86_64-linux}
 PIN="$ROOT/tests/golden/flake-check-matrix/$SYSTEM.txt"
+
+case "$SYSTEM" in
+  x86_64-linux|aarch64-linux) ;;
+  *)
+    echo "flake-check-matrix: unsupported native system '$SYSTEM'" >&2
+    exit 2
+    ;;
+esac
 
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"

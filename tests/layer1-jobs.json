@@ -362,12 +362,22 @@
       "runsOn": "ubuntu-latest"
     },
     "test-flake-aarch64": {
-      "displayName": "aarch64 smoke eval",
-      "ciKind": "flake-aarch64-smoke",
+      "displayName": "Native aarch64 flake realizations and supply-chain gate",
+      "nativeSystem": "aarch64-linux",
+      "nativeChecks": [
+        "broker-production-dependency-policy",
+        "guest-shell-runner-static-dependency-policy",
+        "broker-production-package-policy",
+        "guest-real-libshpool-package-policy",
+        "broker-host-artifact-contract",
+        "guest-static-elf"
+      ],
+      "stableHeadBinding": true,
+      "ciKind": "flake-aarch64-native",
       "ciJobId": "test-flake-aarch64",
       "needs": ["tier0"],
-      "timeoutMinutes": 15,
-      "runsOn": "ubuntu-latest"
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-24.04-arm"
     },
     "test-drift": {
       "displayName": "Drift gate",
