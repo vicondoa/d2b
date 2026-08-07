@@ -150,6 +150,12 @@ Never invoke an internal `heavy-lane-*` target directly - it fails closed by des
 
 ### 4b. Pre-panel gates (parallel, read-only)
 
+**`adr046w5` exception:** this subsection's `/d2b-panel-round work` instruction is forbidden
+for this wave because its binding request is already consumed. Its only panel work is T220's
+repeatable, nonbinding `/d2b-panel-round plan` phase review. Those rounds create no delivery
+request, reservation, attestation, or seal. After T220 freezes F, run T600, T601, and T602,
+then stop for T219's accepted external disposition. Do not fall through to section 5.
+
 Before any panel lane is dispatched, run both gates against **this wave scope**:
 
 ```bash
@@ -170,10 +176,14 @@ and require read-only findings. Then run the actual Copilot panel skill,
 There is no separate dotted verification or review command.
 
 Clear every verification HIGH and CRITICAL, including constitution conflicts, before the
-binding panel request. For `adr046w5`, a defect found here returns to T220 and reruns
-T600-T602 against a new F before the binding panel is invoked.
+binding panel request on an ordinary unconsumed wave. For `adr046w5`, a defect found here
+returns to T220, reruns its nonbinding plan round, freezes a replacement F, reruns T600-T602,
+and stops again for the external disposition; no binding panel is invoked.
 
 ### 5. Snapshot, validate, panel, seal
+
+This procedure applies only to a wave whose binding request has not been consumed.
+`adr046w5` MUST NOT execute any command in this subsection.
 
 ```bash
 X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
@@ -197,9 +207,9 @@ concurrently. They must not run tests or builds unless you explicitly ask a
 specific lane to.
 
 For ordinary waves, required CI, local/host validators, and panel lanes may run concurrently
-against the snapshot. For `adr046w5`, T600/T601 evidence and T602's closed-set check complete
-before T219 evaluates the accepted external disposition. They do not authorize another
-binding request.
+against the snapshot. For `adr046w5`, T600/T601 evidence and T602's closed-set check complete,
+then execution stops before T219 until the accepted external disposition exists. They do not
+authorize another binding request.
 
 ### 6. Merge, rebase, and clean up
 
@@ -318,33 +328,73 @@ D2B_HOST_INSTALLABLE="${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFI
 [ "${#D2B_HOST_REBUILD_REF}" -le 2048 ] ||
   fail 'composed host generation rebuild reference exceeds 2048 bytes'
 
+# Capture evaluator/build diagnostics privately. Never print this file: a flake can place
+# secrets, credentials, host names, store paths, or arbitrary canaries in Nix stderr.
+D2B_NIX_STDERR="$(mktemp)"
+chmod 0600 "$D2B_NIX_STDERR"
+trap 'rm -f -- "$D2B_NIX_STDERR"' EXIT
+
 if ! D2B_EVALUATED_REF="$(nix eval --raw \
-  "${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")"; then
+  "${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef" \
+  2>"$D2B_NIX_STDERR")"; then
   fail 'target hostGenerationRebuildRef evaluation failed'
 fi
 [ "$D2B_EVALUATED_REF" = "$D2B_HOST_REBUILD_REF" ] ||
   fail 'target hostGenerationRebuildRef does not match the validated parameters'
-nix path-info "$D2B_HOST_INSTALLABLE" >/dev/null ||
-  fail 'target deployment installable does not exist'
-nix run "$D2B_HOST_INSTALLABLE" -- --authorize-handoff ||
+
+if ! D2B_DEPLOY_OUT="$(nix build --no-link --print-out-paths \
+  "$D2B_HOST_INSTALLABLE" 2>"$D2B_NIX_STDERR")"; then
+  fail 'target deployment store object resolution failed'
+fi
+case "$D2B_DEPLOY_OUT" in
+  /nix/store/*) ;;
+  *) fail 'target deployment store object resolution returned a non-store path' ;;
+esac
+case "$D2B_DEPLOY_OUT" in
+  *'
+'*|*[[:space:]]*)
+    fail 'target deployment store object resolution returned more than one path'
+    ;;
+esac
+D2B_DEPLOY_EXE="${D2B_DEPLOY_OUT}/bin/d2b-host-generation-deploy"
+[ -x "$D2B_DEPLOY_EXE" ] ||
+  fail 'target deployment store object has no deployment executable'
+
+"$D2B_DEPLOY_EXE" --authorize-handoff ||
   fail 'public-socket administrator authorization failed'
-sudo nix run "$D2B_HOST_INSTALLABLE" -- --apply-authorized-handoff
+sudo -- "$D2B_DEPLOY_EXE" --apply-authorized-handoff ||
+  fail 'authorized host generation handoff failed'
 ```
 
 The unprivileged invocation traverses the existing public socket and its
 `SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority token. The broker
-consumes that one-shot classification into one durably sealed nonfabricable handoff
-capability bound to the staged intent; the privileged
-invocation can only resume that exact authorized intent. Effective uid 0 and daemon identity
-never authorize independently. A capability-authorized typed normal broker, or the target
-closure's one-shot bootstrap-broker mode when the installed protocol-4 broker lacks the
-operation, performs every profile, service, 3/1 bootstrap, publication, and rollback mutation
-with immutable pre-mutation and outcome audit. The broker durably owns the coordinator before
-the first mutation. Bootstrap ownership transfers exactly once to the authenticated target
-broker before target daemon activation. The durable order is staged intent/capability,
-broker coordinator, target broker, coordinator transfer, target daemon, Hello while unready,
-phase-attenuated authenticated publication request, broker-durable pointer/reference
-publication, daemon ingestion, then readiness.
+consumes the accepted-socket authorization evidence over the authenticated 3/1 compatibility
+channel into one durably sealed nonfabricable handoff capability bound to the staged intent.
+It also creates and retains the GC root and immutable identity for the exact store object and
+executable used above. The privileged command performs no Nix evaluation, build, or
+installable resolution; it can only resume the exact broker-pinned object and intent.
+Substituting a different store executable, changing a symlink after authorization, or
+replaying the same executable for another intent refuses before mutation. Effective uid 0,
+target-closure provenance, daemon identity, broker peer credentials, and caller-supplied role
+claims never authorize independently.
+
+The existing `d2b-priv-broker.service`, reached through
+`d2b-priv-broker.socket` and its protocol-4 compatibility path, is the sole pre-transfer
+bootstrap lifecycle owner. Its existing restart policy restarts the pinned bootstrap mode;
+the entrypoint is never a supervisor. A capability-authorized normal or compatibility broker
+performs every profile, service, 3/1 bootstrap, publication, and rollback mutation with
+immutable pre-mutation and outcome audit. The broker durably owns the coordinator before the
+first mutation. Coordinator ownership transfers exactly once to the authenticated target
+broker before target daemon activation. The durable order is staged intent/capability and
+store-object pin, broker coordinator, supervised bootstrap, target broker, coordinator
+transfer, target daemon, Hello while unready, phase-attenuated authenticated publication
+request, broker-durable pointer/reference publication, daemon ingestion, then readiness.
+Killing either entrypoint or bootstrap cannot orphan the coordinator.
+
+The shell captures raw Nix stderr only in the private temporary file and emits the fixed
+errors above. The production entrypoint applies the same rule with a bounded private capture
+and fixed typed errors; it never forwards evaluator or builder stderr to human, JSON, wire,
+log, audit, span, or `Debug` output.
 
 After the first successful publication, the installed entrypoint may use the stable reference:
 
@@ -355,13 +405,21 @@ fail() { printf '%s\n' "$1" >&2; exit 2; }
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
-/run/current-system/sw/bin/d2b-host-generation-deploy \
+D2B_DEPLOY_EXE="$(readlink -e \
+  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
+  fail 'installed deployment executable cannot be resolved'
+case "$D2B_DEPLOY_EXE" in
+  /nix/store/*/bin/d2b-host-generation-deploy) ;;
+  *) fail 'installed deployment executable is not an immutable store object' ;;
+esac
+"$D2B_DEPLOY_EXE" \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
   --authorize-handoff ||
   fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
-sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
+sudo -- "$D2B_DEPLOY_EXE" \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
-  --apply-authorized-handoff
+  --apply-authorized-handoff ||
+  fail 'authorized stable-reference handoff failed'
 
 # Every exact acceptance resource must reach its owned effect and ready state
 d2b resource list
@@ -373,7 +431,9 @@ d2b resource inspect Device/acceptance-tpm
 For every authorization/apply pair above and below, the unprivileged authorization command is
 the complete preflight: it validates the flake/configuration or stable-reference grammar,
 UTF-8 byte bounds, target identity, existence, immutable digest, and public-socket Admin
-classification before returning success. The shell invokes `sudo` only after that success.
+classification, then requires the broker to durably pin the exact executable store object
+before returning success. The shell invokes `sudo` only after that success and passes the
+same canonical store path; apply revalidates the broker pin and performs no evaluation.
 An empty, malformed, over-bound, mismatched, changed, unreadable, or nonexistent input exits
 2 with the named remediation and runs no privileged command.
 
@@ -394,7 +454,8 @@ leaves double opt-in unimplemented. Do not change feature status to bypass that 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an
 entrypoint crash. Before durable transfer only the matching one-shot bootstrap owner may
-reopen it; after transfer the existing `d2b-priv-broker.service` reopens it even when target
+reopen it through the existing broker service's supervised compatibility mode; after transfer
+the existing `d2b-priv-broker.service` reopens it even when target
 daemon startup fails. No entrypoint process or extra unit must remain alive. Verify the
 source state, then retry with the parameterized target command above; do not create the file
 or copy the rolled-back target value into place:
@@ -441,26 +502,54 @@ D2B_ROLLBACK_INSTALLABLE="${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_RO
 [ "${#D2B_ROLLBACK_REF}" -le 2048 ] ||
   fail 'composed rollback reference exceeds 2048 bytes'
 
+D2B_NIX_STDERR="$(mktemp)"
+chmod 0600 "$D2B_NIX_STDERR"
+trap 'rm -f -- "$D2B_NIX_STDERR"' EXIT
+
 if ! D2B_EVALUATED_ROLLBACK_REF="$(nix eval --raw \
-  "${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")"; then
+  "${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef" \
+  2>"$D2B_NIX_STDERR")"; then
   fail 'prior hostGenerationRebuildRef evaluation failed'
 fi
 [ "$D2B_EVALUATED_ROLLBACK_REF" = "$D2B_ROLLBACK_REF" ] ||
   fail 'prior hostGenerationRebuildRef does not match the validated parameters'
-nix path-info "$D2B_ROLLBACK_INSTALLABLE" >/dev/null ||
-  fail 'prior deployment installable does not exist'
-nix run "$D2B_ROLLBACK_INSTALLABLE" -- --authorize-handoff ||
+
+if ! D2B_ROLLBACK_OUT="$(nix build --no-link --print-out-paths \
+  "$D2B_ROLLBACK_INSTALLABLE" 2>"$D2B_NIX_STDERR")"; then
+  fail 'prior deployment store object resolution failed'
+fi
+case "$D2B_ROLLBACK_OUT" in
+  /nix/store/*) ;;
+  *) fail 'prior deployment store object resolution returned a non-store path' ;;
+esac
+case "$D2B_ROLLBACK_OUT" in
+  *'
+'*|*[[:space:]]*)
+    fail 'prior deployment store object resolution returned more than one path'
+    ;;
+esac
+D2B_ROLLBACK_EXE="${D2B_ROLLBACK_OUT}/bin/d2b-host-generation-deploy"
+[ -x "$D2B_ROLLBACK_EXE" ] ||
+  fail 'prior deployment store object has no deployment executable'
+
+"$D2B_ROLLBACK_EXE" --authorize-handoff ||
   fail 'public-socket rollback authorization failed'
-sudo nix run "$D2B_ROLLBACK_INSTALLABLE" -- --apply-authorized-handoff
+sudo -- "$D2B_ROLLBACK_EXE" --apply-authorized-handoff ||
+  fail 'authorized rollback handoff failed'
 ```
 
 The host-integration acceptance executes the parameterized migration and rollback procedures,
 rejects empty, malformed, over-bound, mismatched, and nonexistent flake/configuration inputs
 before public-socket authorization or `sudo`, kills the entrypoint at every post-staging
-crash point, and requires the broker-owned coordinator to finish or roll back. It injects
-target broker startup failure, target daemon startup/reconciliation failure, every
-bootstrap-broker crash boundary, and both sides of durable ownership transfer without adding
-a systemd unit.
+crash point, and requires the broker-owned coordinator to finish or roll back. It authorizes
+one store executable, then substitutes another executable and changes the installed symlink
+before apply; both substitutions must refuse with no mutation, while the originally pinned
+store executable remains eligible. It injects target broker startup failure, target daemon
+startup/reconciliation failure, entrypoint death, every supervised bootstrap-broker crash
+boundary, and both sides of durable ownership transfer. The existing
+`d2b-priv-broker.service` must restart pre-transfer bootstrap work and no systemd unit may be
+added. Nix stderr canaries must be absent from every emitted diagnostic, log, audit, span,
+wire response, and `Debug`; only the fixed error class and remediation may appear.
 
 ### Story 1 - retire and restart
 
@@ -472,13 +561,21 @@ fail() { printf '%s\n' "$1" >&2; exit 2; }
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
-/run/current-system/sw/bin/d2b-host-generation-deploy \
+D2B_DEPLOY_EXE="$(readlink -e \
+  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
+  fail 'installed deployment executable cannot be resolved'
+case "$D2B_DEPLOY_EXE" in
+  /nix/store/*/bin/d2b-host-generation-deploy) ;;
+  *) fail 'installed deployment executable is not an immutable store object' ;;
+esac
+"$D2B_DEPLOY_EXE" \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
   --authorize-handoff ||
   fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
-sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
+sudo -- "$D2B_DEPLOY_EXE" \
   --from-reference /etc/d2b/host-generation-rebuild-ref \
-  --apply-authorized-handoff
+  --apply-authorized-handoff ||
+  fail 'authorized stable-reference handoff failed'
 d2b resource list          # retired in dependency-safe order, cleanup visible, others intact
 
 sudo reboot

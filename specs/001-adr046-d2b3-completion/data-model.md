@@ -204,9 +204,14 @@ Owning spec: `ADR-046-validation-and-delivery`.
 
 The delivery schema-v2 `EvidenceRecord` remains byte-for-byte unchanged and retains its v2
 decoder. A passing `validation = "operator-nix-activation-cleanup"` record uses its existing
-opaque locator to reference exactly one separately encoded `Sc002ActivationReceiptV1`. No
-field, enum variant, or version is added to `EvidenceRecord`, and no other validation may
-reference this receipt type.
+`locator` field to reference exactly one separately encoded `Sc002ActivationReceiptV1`. For
+this validation only, the locator is a candidate-directory-relative content address with the
+exact form `evidence-sidecars/sc002/sha256/<digest>.json`, where `<digest>` is the lowercase
+64-hex SHA-256 of the exact encoded sidecar bytes. The locator and its digest component are
+immutable. An absolute path, URL, query or fragment, empty or dot component, `..`, alternate
+separator, noncanonical digest, or locator outside this namespace is malformed. No field,
+enum variant, or version is added to `EvidenceRecord`, and no other validation may reference
+this receipt type.
 
 A failed `operator-nix-activation-cleanup` `EvidenceRecord` remains importable with no SC-002
 receipt. It cannot satisfy the closed evidence profile, panel request, seal, or merge
@@ -220,10 +225,9 @@ The serialized object rejects unknown fields and has this closed shape:
 | --- | --- |
 | `schemaVersion` | integer exactly `1` |
 | `kind` | string exactly `sc002-activation-live` |
-| `evidenceRecordSha256` | lowercase 64-hex SHA-256 of the canonical unchanged schema-v2 `EvidenceRecord` bytes |
-| `candidateId` | exact outer-record candidate id |
-| `commit` | exact outer-record commit |
-| `tree` | exact outer-record tree |
+| `candidateId` | exact outer-record `candidate_id` |
+| `contentId` | exact outer-record `content_id` |
+| `snapshotSha256` | exact outer-record `snapshot_sha256` |
 | `validation` | string exactly `operator-nix-activation-cleanup` |
 | `outcome` | string exactly `passed` |
 | `clock` | string exactly `CLOCK_MONOTONIC` |
@@ -240,14 +244,23 @@ Each sample contains `resourceIdentity`, `effect`, `ready`, `selectedStop`, `ela
 monotonic tick, and using only the closed kind enum `ingestion`, `commit`, `dispatch`,
 `effect`, `status`, or `projection`.
 
-The encoded receipt is at most 16,384 bytes; 16,384 is accepted and 16,385 is refused. The
-validator requires exactly one sample for each closed identity, every repeated identity to
-match its sample key, effect and Ready ticks
+The encoded receipt is at most 16,384 bytes; 16,384 is accepted and 16,385 is refused. At
+import and every durable reopen, the validator resolves the locator beneath the already held
+candidate-directory fd with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV)`, opens
+the leaf once with `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, verifies regular-file type, owner, mode,
+link count, and stable device/inode identity, hashes those exact bytes, and compares the hash
+with the locator digest before decoding from the same opened fd. A replacement between
+lookup, hash, decode, or later-stage reopen is a hard failure rather than a second read. The
+validator then requires exactly one sample for each closed identity, every repeated identity
+to match its sample key, effect and Ready ticks
 not earlier than start, selected stop to equal the later effect/Ready tick and its source
 (`ready` wins an exact tie), `elapsedNs` to equal the checked stop-minus-start difference,
 elapsed to be at most 2,000,000,000 ns, and every progress tick to fall in `(start, stop]`.
-The receipt repeats and must match the unchanged outer `EvidenceRecord` candidate, commit,
-tree, validation, outcome, and record digest; reopening against another binding is stale.
+The receipt repeats and must match the unchanged outer `EvidenceRecord`
+`candidate_id`/`content_id`/`snapshot_sha256` triplet, validation, and outcome;
+the immutable snapshot resolves the commit/tree binding without adding either field to
+`EvidenceRecord`. Reopening against another triplet is stale.
 `EvidenceRecord`, receipt, and validation-error `Debug` output is fixed and redacted: it
 exposes only type/version, sample count, and pass/refuse class, never ticks, identities, host
 data, paths, commands, argv, or free-form text.
@@ -255,7 +268,8 @@ data, paths, commands, argv, or free-form text.
 T589 owns the type and one validator invoked unchanged at evidence import, durable reopen,
 panel-request/panel-attest, seal, and merge-eligibility. The negative census is closed:
 passed record with a missing or duplicate receipt; receipt on a failed or wrong-validation
-record; unknown/malformed version, kind, field, enum, locator, digest, or size; missing,
+record; unknown/malformed version, kind, field, enum, locator, content digest, or size; absolute,
+traversal, URL, symlink, hard-link, and replacement-race locators; missing,
 duplicate, mixed, or unrelated resource samples; effect/Ready identity disagreement;
 selected-stop/progress identity mismatch; arithmetic overflow or event misordering; stale
 binding; zero progress; more than 32 progress observations; and any over-budget sample all
