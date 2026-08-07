@@ -343,6 +343,8 @@ ImplementationEvidenceConsumption =
   Reserved {
     evidence_id,
     issuance_prepare_identity,
+    issuance_prepare_incarnation,
+    accepted_attempt_identity,
     assignment_binding_digest
   }
   | Settled {
@@ -356,16 +358,39 @@ The binding digest covers assignment kind, lifecycle, candidate, mapping
 version, exact issue set, file-ownership digest when present, authenticated
 implementer run, use limit, issuance, expiry, and the exact originating
 principal identity. Issuance first acquires a fenced unique reservation for
-`evidence_id`. The controller then creates exactly one immutable prepare:
+`evidence_id`. The ordinary accepted attempt preallocates its assignment
+success result and canonical audit event before it creates a prepare:
 
 ```
+AssignmentIssuancePrepareIncarnation =
+  MonotonicallyIncreasingNonZeroU64PerAssignmentRequest
+
+AssignmentIssuanceCanonicalAuditTuple = {
+  attempt_identity: AttemptIdentity,
+  event_id: AuditEventId,
+  event_digest,
+  canonical_event_bytes_digest
+}
+
 AssignmentIssuancePrepareIdentity =
   digest(
     "d2b:panel:implementation-assignment-issuance-prepare:v1",
+    AttemptIdentity,
     AssignmentRequestId,
     ImplementationEvidenceId,
-    AssignmentBindingDigest
+    AssignmentBindingDigest,
+    AssignmentIssuancePrepareIncarnation,
+    AssignmentIssuanceCanonicalAuditTuple
   )
+
+AssignmentIssuancePrepareBinding = {
+  accepted_attempt_identity,
+  assignment_request_id,
+  protected_evidence_digest,
+  assignment_binding_digest,
+  prepare_incarnation,
+  canonical_issuance_audit_tuple
+}
 
 AssignmentIssuancePrepareState =
   SinkReservationCreateOrAdoptPending {
@@ -378,45 +403,67 @@ AssignmentIssuancePrepareState =
       sink_reservation_generation,
       sink_prepare_proof_digest
     }
-  | AssignmentActivationPending {
+  | PreparedForOrdinaryAudit {
       controller_reservation_alias,
       sink_reservation_alias,
       sink_activation_proof_digest
     }
-  | SinkReservationProofCancellationPending {
+  | SinkReservationNonCreatableFencePending {
       controller_reservation_alias,
       revocation_capacity_binding_digest,
       cancellation_reason_code
     }
+  | SinkReservationProofCancellationPending {
+      controller_reservation_alias,
+      revocation_capacity_binding_digest,
+      sink_non_creatable_fence_proof_digest,
+      cancellation_reason_code
+    }
   | ControllerReservationReleasePending {
       controller_reservation_alias,
+      sink_non_creatable_fence_proof_digest,
       sink_absence_or_cancellation_proof_digest,
       cancellation_reason_code
     }
 ```
 
-The prepare identity is controller-derived from immutable request, evidence,
-and assignment bindings; no caller supplies it. The transaction that enters
-`IssuancePending` first stores the prepare, the evidence reservation, and the
-dedicated controller revocation reservation. The sink creates or adopts only
-the reservation whose authorization matches that prepare identity and
-binding. The controller records the sink prepare proof, the sink durably
-activates that reservation for the immutable assignment binding, and only
-then may the controller enter `AssignmentActivationPending`.
+The prepare identity is controller-derived from the exact ordinary
+`AttemptIdentity`, immutable request, evidence and assignment bindings,
+monotonic prepare incarnation, and the canonical issuance event id, digest,
+and bytes digest. No caller supplies any of them. The transaction that enters
+`IssuancePending` first stores the immutable
+`AssignmentIssuancePrepareBinding`, evidence reservation, and dedicated
+controller revocation reservation, including permanent sink-fence capacity.
+The sink creates or adopts only the reservation whose authorization matches
+the exact accepted attempt, prepare identity and incarnation, assignment
+binding, and canonical issuance audit tuple. The controller records the sink
+prepare proof, the sink durably activates that reservation for the same
+binding, and only then may the controller enter
+`PreparedForOrdinaryAudit`.
 
-The final controller activation transaction verifies both dedicated
-reservations and the sink activation proof, installs `Active`, moves fresh-flow
-eligibility to `Issued`, and converts the evidence reservation to `Settled`.
-Until that transaction commits, no assignment capability, active state, or
-issued response is visible. Originating evidence is then consumed for
-authority purposes: it can identify and replay
-the settled assignment but cannot mint another one. Two concurrent issuances
-therefore cannot both mint, and a crash can expose neither an unindexed
-assignment nor a settled consumption without its assignment. Reissuing
-byte-identical evidence and bindings returns the same assignment even under a
-fresh idempotency key. Reusing that evidence with a different kind, issue set,
-candidate, mapping version, implementer run, expiry, origin, use limit,
-lifecycle, or file-ownership digest is
+`PreparedForOrdinaryAudit` is not assignment activation. It permits only the
+ordinary accepted-attempt handler to install the already bound issuance result
+as its quarantined effect, replay result, and canonical outbox tuple. The
+attempt then traverses `OrdinarySinkAcknowledgementPending`. Only after the
+sink acknowledgement is durably persisted may it enter
+`OrdinaryActivationPending`. `ActivatePreparedImplementationAssignment` is
+permitted only from that exact state when the accepted attempt, current
+prepare incarnation, sink activation proof, and canonical issuance audit tuple
+all match. Its one controller transaction installs `Active`, moves the exact
+initial or successor eligibility to `Issued`, converts the evidence
+reservation to `Settled`, makes the replay result available, creates the
+immutable `AttemptTombstone`, and marks the accepted attempt `Completed`.
+Until that transaction commits, no assignment capability, active state,
+issued response, settled evidence, or tombstone is visible.
+
+Originating evidence is then consumed for authority purposes: it can identify
+and replay the settled assignment but cannot mint another one. Two concurrent
+issuances therefore cannot both mint, and a crash can expose neither an
+unindexed assignment nor a settled consumption without its assignment.
+Reissuing byte-identical evidence and bindings returns the same assignment
+even under a fresh idempotency key. Reusing that evidence with a different
+kind, issue set, candidate, mapping version, implementer run, expiry, origin,
+use limit, lifecycle, or file-ownership digest is
 `implementation-assignment-evidence-conflict`, with a closed field code.
 Different bytes under the same key are the section 13 protected replay
 conflict and never reach evidence evaluation. A fresh key never bypasses the
@@ -424,20 +471,31 @@ evidence index. A genuinely new assignment requires fresh protected dispatch
 or resolver evidence.
 
 Startup scans every nonterminal issuance prepare before admitting assignment
-use. It queries both capacity owners by the immutable prepare identity,
-adopts an exact matching controller or sink reservation, resumes sink
-activation or controller activation, or marks the prepare non-adoptable and
-enters `SinkReservationProofCancellationPending`. Cancellation requires a
-durable sink proof that no reservation exists or that the exact reservation
-was cancelled before
-`ControllerReservationReleasePending` releases controller capacity and
-returns the evidence and request to their pre-issuance eligibility. Time,
-worker loss, or an absent controller observation is not cancellation proof.
-A sink reservation cannot be created without a durable controller prepare,
-and no prepare is deleted before sink proof-cancellation and controller
-release. Thus startup closes crashes before sink creation, after sink creation
-but before adoption, after adoption, and after sink activation without
-exposing an under-reserved assignment or leaving an orphan reservation.
+use. It queries both capacity owners by the immutable accepted-attempt and
+prepare binding, adopts an exact matching controller or sink reservation,
+resumes sink activation or ordinary audit, or marks the prepare non-adoptable
+and enters `SinkReservationNonCreatableFencePending`. The sink must first
+persist a permanent fence tombstone for that exact prepare identity and
+incarnation. Once fenced, no delayed creation authorization can create,
+adopt, or activate capacity for that incarnation. Only the resulting durable
+non-creatable proof permits
+`SinkReservationProofCancellationPending` to obtain a sink proof that no
+reservation exists or that the exact reservation was cancelled. Both the
+non-creatable and cancellation proofs bind the accepted attempt, prepare
+identity and incarnation, assignment binding, and canonical issuance audit
+tuple.
+`ControllerReservationReleasePending` then releases controller capacity and
+returns the evidence and request to their pre-prepare eligibility inside the
+same accepted attempt. Its next retry allocates the next prepare incarnation;
+it never restores or reuses the fenced incarnation. Time, worker loss, or an
+absent controller observation is neither a non-creatable fence nor
+cancellation proof. A sink reservation cannot be created without a durable
+controller prepare, and no prepare is deleted before the permanent sink fence,
+proof-cancellation, and controller release. Thus startup closes crashes before
+sink creation, after sink creation but before adoption, after adoption, after
+sink activation, and at every cancellation boundary without exposing an
+under-reserved assignment, leaving an orphan reservation, or allowing stale
+authorization to revive capacity.
 
 The controller-private assignment id and opaque capability handle never
 appear in an error, log, audit event, status projection, or `Debug`. A
@@ -563,7 +621,8 @@ AssignmentRevocationAuditEventId =
 
 `IssueImplementationAssignment` cannot create `Active` until the issuance
 prepare has sealed and verified one dedicated controller reservation,
-revocation outbox, and activated sink reservation at the schema maximum.
+revocation outbox, and activated sink reservation at the schema maximum, and
+the exact ordinary issuance audit acknowledgement is durable.
 These issuance-time reservations cannot be borrowed, resized, or recreated
 from ordinary capacity. `RevocationPending` refuses
 completion with its exact pending state and cannot return to `Active`.
@@ -612,7 +671,7 @@ when the use count is zero. Completion, expiry, exhaustion, duplicate revocation
 settlement, and restart all compare-and-swap the same assignment record, so
 none can bypass the two-condition finalization or reactivate authority.
 
-`Completed`, `Expired`, and `Exhausted` reached without revocation have a
+`Complete`, `Expire`, and `Exhaust` intents reached without revocation have a
 separate mandatory capacity-release path. The winning completion, expiry, or
 final-use transaction closes new use and revocation admission, freezes the
 exact `AssignmentTerminalIntent`, and enters
@@ -983,29 +1042,49 @@ AssignmentTerminalRecovery =
 AssignmentIssuancePrepareRecovery =
   SinkReservationCreateOrAdoptPending {
     issuance_prepare_alias,
+    prepare_incarnation,
     protected_evidence_digest,
+    canonical_issuance_audit_tuple_digest,
     next: CreateOrAdoptAssignmentIssuanceSinkReservation
   }
   | SinkReservationActivationPending {
       issuance_prepare_alias,
+      prepare_incarnation,
       protected_evidence_digest,
+      canonical_issuance_audit_tuple_digest,
       sink_reservation_alias,
       sink_reservation_generation,
       next: ActivateAssignmentIssuanceSinkReservation
     }
-  | AssignmentActivationPending {
+  | PreparedForOrdinaryAudit {
       issuance_prepare_alias,
+      prepare_incarnation,
       protected_evidence_digest,
       sink_activation_proof_digest,
-      next: ActivatePreparedImplementationAssignment
+      canonical_issuance_audit_tuple_digest,
+      next: AttemptStatus.ReadProtectedAttemptStatus
+        by OriginalAttemptPeerOrProtectedOperator
+    }
+  | SinkReservationNonCreatableFencePending {
+      issuance_prepare_alias,
+      prepare_incarnation,
+      canonical_issuance_audit_tuple_digest,
+      cancellation_reason_code,
+      next: FenceAssignmentIssuanceSinkIncarnation
     }
   | SinkReservationProofCancellationPending {
       issuance_prepare_alias,
+      prepare_incarnation,
+      canonical_issuance_audit_tuple_digest,
+      sink_non_creatable_fence_proof_digest,
       cancellation_reason_code,
       next: ProofCancelAssignmentIssuanceSinkReservation
     }
   | ControllerReservationReleasePending {
       issuance_prepare_alias,
+      prepare_incarnation,
+      canonical_issuance_audit_tuple_digest,
+      sink_non_creatable_fence_proof_digest,
       sink_absence_or_cancellation_proof_digest,
       cancellation_reason_code,
       next: ReleaseAssignmentIssuanceControllerReservation
@@ -1105,11 +1184,17 @@ allocate another request. `IssueImplementationAssignment` consumes only that
 evidence. Acceptance moves it to `IssuancePending` only after the immutable
 issuance prepare, evidence reservation, and controller revocation reservation
 are durable. Its exact nested prepare state owns creation or adoption, sink
-activation, assignment activation, sink proof-cancellation, or controller
-release. Only verified sink activation permits the final transaction to move
-it to `Issued` and expose `Active`. An issuance retry can finish only the same
-pending request, and an old retry after `Issued` returns the issued successor
-state without minting another capability.
+activation, ordinary-audit continuation, sink-incarnation fencing,
+proof-cancellation, or controller release. Verified sink activation permits
+only `PreparedForOrdinaryAudit`; durable acknowledgement then permits
+`ActivatePreparedImplementationAssignment` only from the exact ordinary
+attempt's `OrdinaryActivationPending` state. That transaction alone moves the
+eligibility to `Issued` and exposes `Active`. A retry before cancellation
+continues only the same prepare incarnation. A retry restored after the
+permanent non-creatable fence, proof-cancellation, and controller release
+allocates the next incarnation for the same pending request. An old retry
+after `Issued` returns the issued successor state without minting another
+capability.
 
 Intentional parallel fix slices never consume predecessor successor
 eligibility. They remain exclusively under the existing controller-owned
@@ -1173,8 +1258,10 @@ usable active contexts, completion retry only from
 fresh-flow actions only from their matching eligibility states. It checks endpoint, operation, caller,
 authoritative assignment state, partition, predecessor, request id, and
 fresh-evidence prerequisites. Every nested issuance prepare state admits only
-its exact create-or-adopt, sink-activation, assignment-activation,
-proof-cancellation, or controller-release action. `InitialAssignmentEligibility` and every
+its exact create-or-adopt, sink-activation, ordinary-audit read,
+sink-incarnation fence, proof-cancellation, or controller-release action.
+Only the matching ordinary accepted attempt's `OrdinaryActivationPending`
+state admits assignment activation. `InitialAssignmentEligibility` and every
 terminal predecessor's `AssignmentSuccessorEligibility` remain exactly one
 request and one issuance: `Available -> RequestPending -> IssuancePending ->
 Issued`. The join rejects a context inferred from the source operation, a
@@ -1224,14 +1311,17 @@ distinct attempt reserves one available use by compare-and-swap. The
 reservation is a quarantined authority effect committed with the terminal
 journal, replay result, and outbox; section 13 activates the use atomically
 with the other authority effects in the final transaction after audit
-acknowledgement persistence. The final use activates `Exhausted`. A
-byte-identical retry replays the original attempt and never reserves or
-consumes again. A definite-no-append conversion releases the quarantined
-reservation in the same replacement transaction. A concurrent fresh read that
-finds all remaining uses reserved waits on the owning attempt's terminal
-transition; it then either acquires a released use or
-reaches the activated `Exhausted` state, rather than oversubscribing or
-inventing a sixth lifecycle state. No uid equality,
+acknowledgement persistence. A non-final use returns the assignment to
+unreserved `Active`. Final-use activation instead atomically enters
+`RevocationCapacityReleasePending { Exhaust }`; it never installs
+`Exhausted` directly. A byte-identical retry replays the original attempt and
+never reserves or consumes again. A definite-no-append conversion releases
+the quarantined reservation in the same replacement transaction. A concurrent
+fresh read that finds all remaining uses reserved waits on the owning
+attempt's terminal transition; it then either acquires a released use or
+receives the exact pending sink-cancellation, controller-release, or
+terminal-install action. Only after those proof-backed actions complete can a
+later read observe `Exhausted` and its successor eligibility. No uid equality,
 local file, environment value, run name, caller-provided issue set, or
 self-asserted assignment claim is evidence.
 
@@ -2449,9 +2539,9 @@ controller floor rather than permanent raw response bytes.
 | `AuditConversionTombstone` | Immutable permanent controller audit floor. It binds the attempt identity, old and replacement reservation generations, replacement refusal event id and digest, and the intent, invalidation-proof, and rebind-proof digests. It contains no proof or event bytes. |
 | `MigrationAuditRepairIntent`, migration `AuditSinkInvalidationProof`, and `MigrationAuditSinkRebindProof` | Audit floor and ineligible while migration-specific no-append repair is pending. They preserve the original migration success result, quarantined capacity-switch effect, outbox event id and digest, and `MigrationExecutionReserve` binding. |
 | `MigrationAuditRepairTombstone` | Immutable permanent controller audit floor binding the migration attempt alias, old and replacement reservation generations, unchanged success event alias and digest, and repair intent, invalidation-proof, and rebind-proof digests. It contains no proof, event, result, or authority-effect bytes. |
-| `AssignmentIssuancePrepareState`, its evidence reservation, controller reservation, sink reservation, and sink prepare, activation, or cancellation proof | Current recovery floor while issuance is pending. An exact matching sink reservation is adopted; a non-adoptable reservation is proof-cancelled before controller release. The row becomes eligible only when atomic assignment activation installs `Active` and `Issued`, or when proof-backed cancellation returns the request and evidence to pre-issuance eligibility. No age-only cleanup is permitted. |
+| `AssignmentIssuancePrepareState`, its accepted-attempt and canonical-audit binding, evidence reservation, controller reservation, sink reservation, and sink prepare, activation, non-creatable-fence, or cancellation proof | Current recovery floor while issuance is pending. An exact matching sink reservation is adopted. A non-adoptable incarnation is first made permanently non-creatable at the sink, then proof-cancelled before controller release; its sink fence tombstone is a permanent floor. The remaining row becomes eligible only when `OrdinaryActivationPending` atomically installs `Active`, `Issued`, settled evidence, replay result, and attempt tombstone, or when proof-backed cancellation restores the same accepted attempt to allocate a strictly newer incarnation. No age-only cleanup is permitted. |
 | `AssignmentRevocationAuditState`, its dedicated outbox, sink reservation, invalidation proof, and rebind proof | Audit floor and ineligible while the assignment remains `RevocationPending`. Definite-no-append repair retains the unchanged revocation event and can neither restore `Active` nor create a generic refusal. After acknowledgement and zero reserved uses reach the exact ready state and atomic finalization installs `Revoked`, proof bytes become ordinary audit-period input while the revocation event projection remains at the audit floor. |
-| `AssignmentRevocationCapacityReleaseState`, unused sink cancellation proof, and controller release proof | Recovery state and audit floor while a non-revocation `Completed`, `Expired`, or `Exhausted` terminal intent is pending. The sink proof-cancels its issuance-time reservation before controller capacity is released. Proof bytes become ordinary audit-period input only after atomic terminal install; no age-only cleanup or successor admission is permitted. |
+| `AssignmentRevocationCapacityReleaseState`, unused sink cancellation proof, and controller release proof | Recovery state and audit floor while a non-revocation `Complete`, `Expire`, or `Exhaust` terminal intent is pending. The sink proof-cancels its issuance-time reservation before controller capacity is released. Proof bytes become ordinary audit-period input only after atomic terminal install; no age-only cleanup or successor admission is permitted. |
 | `AuditAppendTombstone` | Permanent append-sink idempotency floor for the sink namespace. It contains only audit event id and digest plus the original acknowledgement and has no event payload bytes. Raw sink event bytes remain under the sink's bounded rotation. |
 | `MigrationPreflightSignal::ReplayConflict` | D17 round input in a stricter diagnostic subclass: exactly 256 reusable detailed slots in the active 15-minute window, forced compaction at rotation or generation cutover, and a hard 30-minute TTL even when compaction fails. It is never an audit floor or migration blocker. |
 | `MigrationPreflightSignal::AggregateOverflow` and `MigrationPreflightSignalWindowSummary` | D17 round input in the same stricter diagnostic subclass: one reusable overflow slot in the active window and a controller-wide ring of exactly 96 compacted summary slots. A summary has a hard 24-hour TTL; rotation and generation cutover reuse slots and never wait for export. |
@@ -3460,7 +3550,10 @@ MigrationChildAuditCapacityRecovery =
     refusal_subslot_generation,
     current_refusal_alias,
     deadline,
-    next: WaitForMigrationRefusalSubslotSettlementThenReadStatus
+    next: RemedyPlan [
+      WaitForMigrationRefusalSubslotSettlement,
+      ReadCurrentMigrationRecoveryStatus
+    ]
   }
   | PrePrepareCapacityUnavailable {
     migration_attempt_alias,
@@ -3491,8 +3584,11 @@ MigrationChildAuditCapacityRecovery =
     }
 ```
 
-After `RefusalSubslotOccupied`, the caller waits for that exact subslot
-generation to settle and then reads fresh status. After either
+After `RefusalSubslotOccupied`, the declared two-action `RemedyPlan` first
+waits for that exact subslot generation to settle, then renders
+`ReadCurrentMigrationRecoveryStatus` as
+`Operator.ReadMigrationRecoveryStatus` with the causing migration alias.
+After either
 `PrePrepareCapacityUnavailable` or `ReconciledAndAvailable`, the caller must
 use the operation returned by the fresh status tag. No generated remedy
 blindly resubmits the old canonical request bytes. Only
@@ -4599,8 +4695,7 @@ MigrationTelemetryHealthMarker =
       expected_failed_sequence,
       prior_failure_digest,
       required_probe_set_digest,
-      telemetry_failure_alias,
-      recovery_identity_alias
+      telemetry_failure_alias
     }
 
 MigrationTelemetryHealthObservation =
@@ -4636,7 +4731,6 @@ MigrationTelemetryHealthObservation =
     }
   | RecoveryBarrier {
       marker_sequence,
-      recovery_identity_alias,
       telemetry_failure_alias,
       next: Operator.RecoverMigrationTelemetryHealth
     }
@@ -4766,7 +4860,7 @@ MigrationTelemetryHealthRecoverySlot =
 
 MigrationTelemetryHealthRecoveryLastResult =
   Succeeded {
-    recovery_identity_alias,
+    accepted_telemetry_failure_alias,
     request_binding_digest,
     source_failure_digest,
     installed_stable_state,
@@ -4776,7 +4870,7 @@ MigrationTelemetryHealthRecoveryLastResult =
     sealed_response: BoundedMigrationTelemetryRecoveryResponse
   }
   | Failed {
-      recovery_identity_alias,
+      accepted_telemetry_failure_alias,
       request_binding_digest,
       source_failure_digest,
       failed_recovery_state_tag,
@@ -4804,7 +4898,7 @@ MigrationTelemetryHealthRecoveryEvent =
   Success {
     recovery_event_id,
     controller_epoch,
-    recovery_identity_alias,
+    telemetry_failure_alias,
     source_failure_digest,
     probe_result_digest,
     prepared_stable_state,
@@ -4814,7 +4908,7 @@ MigrationTelemetryHealthRecoveryEvent =
   | Failure {
       recovery_event_id,
       controller_epoch,
-      recovery_identity_alias,
+      telemetry_failure_alias,
       source_failure_digest,
       failed_recovery_state_tag,
       failed_recovery_state_digest,
@@ -4833,7 +4927,7 @@ cycle, including a corrupt marker that cannot safely carry its own alias.
 Startup reconciles this fixed record before status admission; when marker
 corruption has no trustworthy prior alias, it mints and fsyncs a fresh alias in
 the independent record without rewriting the marker. Thus even the corrupt
-marker observation has a current server-issued recovery alias. If that fixed
+marker observation has a current server-issued failure alias. If that fixed
 record cannot be made durable, status admission fails closed before returning
 a telemetry observation; no non-healthy tag is ever emitted without its
 alias.
@@ -4879,18 +4973,25 @@ marker. `DetailedDegraded`, `AggregateDegraded`, `ExporterDegraded`,
 
 `RecoverMigrationTelemetryHealth` authenticates `ProtectedOperator` and uses
 only the separately sealed `MigrationTelemetryHealthRecoverySlot` and its
-fixed audit capacity. Its request carries the current non-capability alias;
-the controller resolves it to the exact current epoch, marker, latch,
-normal-health, failure-alias record, and recovery-slot digests. The first
-eligible request creates a controller-issued recovery identity, stores the
-bounded `MigrationTelemetryHealthRecoveryRequestBinding`, seals the mandatory
-operator-attribution prefix in the fixed audit workspace, and enters
-`RecoveryRequested`. The binding contains only the current alias, epoch,
-marker, latch, failure-alias-record, and canonical request digests shown
-above. A byte-identical retry joins that identity and state. A stale alias or
-changed bytes cannot replace the identity, request binding, barrier, probes,
-event, or result. Authentication, decoding, alias-resolution, or sealed
-capacity failure creates no recovery identity or health change.
+fixed audit capacity. Its request carries the server-issued
+`TelemetryFailureAlias` from the causing observation or retryable product.
+The controller resolves that one accepted identifier against the active
+request binding and reusable last-result slot before treating it as the
+current alias for a fresh cycle. A bound active alias resolves to the exact
+recovery identity, epoch, marker, latch, normal-health, failure-alias record,
+and recovery-slot digests. A settled alias plus the same canonical request
+digest returns the sealed last result. Only the current alias with no matching
+active or settled request may create a fresh controller-issued recovery
+identity, store the bounded
+`MigrationTelemetryHealthRecoveryRequestBinding`, seal the mandatory
+operator-attribution prefix in the fixed audit workspace, and enter
+`RecoveryRequested`. The binding contains only that accepted failure alias,
+epoch, marker, latch, failure-alias-record, and canonical request digests shown
+above. A byte-identical retry with the same alias joins that identity and
+state. An unrelated stale alias or changed bytes cannot replace the identity,
+request binding, barrier, probes, event, or result. Authentication, decoding,
+alias-resolution, or sealed capacity failure creates no recovery identity or
+health change. No request variant accepts a recovery-identity parameter.
 
 Recovery performs two semantic marker compare-and-swaps, with the durable
 outbox and acknowledgement substates between them. First it advances only the
@@ -4941,18 +5042,19 @@ settlement. A crash after acknowledgement resumes only that final transition.
 A crash before success install cannot expose healthy; a crash before failure
 settlement cannot rotate the alias or reuse the work slot. The last-result
 slot remains readable while a later recovery is active and is overwritten
-only when that later outcome settles. A byte-identical retry matched by
-recovery identity alias and request-binding digest returns the exact stored
-sealed response from that slot without another event.
+only when that later outcome settles. A byte-identical retry matched by its
+accepted `TelemetryFailureAlias` and request-binding digest returns the exact
+stored sealed response from that slot without another event.
 
 Both recovery audit variants omit `protected_operator_alias` and always carry
 the deployment-keyed `ProtectedOperatorAuditDigest`. The authenticated
 request transaction places that digest directly in the preallocated canonical
 audit prefix, not in recovery-slot fields. All other surfaces use neither
 operator alias nor audit digest. The recovery event id is independent of
-marker sequence and is assigned once per recovery identity. Each success or
-failure outbox freezes one canonical byte string; the same id with different
-bytes is refused before append.
+marker sequence and is assigned once per internal recovery identity. Each
+success or failure event carries the accepted `TelemetryFailureAlias`, not an
+external recovery-identity alias. Each outbox freezes one canonical byte
+string; the same id with different bytes is refused before append.
 
 Both normal and recovery closure compare controller epoch, expected prior
 marker sequence, marker digest and tag, write or recovery identity, exact latch
@@ -5515,7 +5617,16 @@ transaction persists it, marks the outbox acknowledged, and enters the
 matching `OrdinaryActivationPending` or `MigrationActivationPending`. The
 ordinary final authority transaction activates the quarantined effect and
 assignment use, advances the replay result to available, creates the immutable
-tombstone, and marks the attempt `Completed`. Migration instead requires
+tombstone, and marks the attempt `Completed`. For
+`IssueImplementationAssignment`, that transaction is
+`ActivatePreparedImplementationAssignment`; it is constructible only from
+`OrdinaryActivationPending` with the matching prepare incarnation, sink
+activation proof, and canonical issuance audit tuple, and it also installs
+`Active`, `Issued`, and settled evidence. For a final
+`ReadImplementerIssueView` use, the same transaction installs
+`RevocationCapacityReleasePending { Exhaust }`, never `Exhausted`; issue
+readers and every assignment recovery context expose only the exact pending
+release action until terminal installation. Migration instead requires
 the `CompleteMigrationAuditActivation` child command through its fixed
 `MigrationControlReserve` slot. No
 effect, use, or response is visible before the applicable final transaction.
@@ -5603,7 +5714,16 @@ PendingProtectedAttemptStatus =
   | OrdinaryActivationPending {
       attempt_identity, appendable_reservation_generation,
       audit_acknowledgement_digest, deadline,
-      action: CompleteAtomicActivation
+      activation:
+        Generic {
+          action: CompleteAtomicActivation
+        }
+        | AssignmentIssuance {
+            prepare_incarnation,
+            sink_activation_proof_digest,
+            canonical_issuance_audit_tuple_digest,
+            action: ActivatePreparedImplementationAssignment
+          }
     }
   | MigrationActivationPending {
       migration_attempt_alias, controller_epoch,
@@ -5683,8 +5803,11 @@ authenticated audited child commands of the accepted migration, require the
 narrow operator endpoint, and cannot invent a result, activate an effect,
 cancel an accepted attempt, or bypass child audit.
 The ordinary and migration sink-acknowledgement and activation tags are
-different wire variants. Ordinary variants own only generic append replay and
-atomic activation actions and cannot address a migration reserve. Migration
+different wire variants. The ordinary activation tag owns exactly one nested
+activation variant: generic attempts use `CompleteAtomicActivation`, while
+assignment issuance carries its prepare incarnation, sink activation proof,
+canonical audit tuple digest, and
+`ActivatePreparedImplementationAssignment`. Neither can address a migration reserve. Migration
 variants own only `RepairMigrationSinkAppend` and
 `CompleteMigrationAuditActivation` through their fixed child slots.
 Operation type is never consulted to reinterpret a generic status tag.
@@ -5719,8 +5842,10 @@ Crash handling is closed at every boundary:
    sink returns the original acknowledgement;
 10. a crash after acknowledgement persistence leaves
     `OrdinaryActivationPending` or `MigrationActivationPending`; ordinary
-    recovery performs its generic atomic transaction, while migration
-    activation is reachable only through
+    recovery performs the one exact nested activation, with assignment
+    issuance permitted only through
+    `ActivatePreparedImplementationAssignment`, while migration activation is
+    reachable only through
     the `CompleteMigrationAuditActivation` child command and its fixed
     audit-activation slot;
 11. after completion but before delivery, identical retry returns the stored
@@ -6140,7 +6265,6 @@ RemedyAction =
   | ReadCurrentMigrationTelemetryHealth
   | FollowCurrentMigrationTelemetryHealthRemedy
   | RecoverMigrationTelemetryHealth
-  | RetryMigrationTelemetryRecoverySameIdentity
   | ReadAssignmentRevocationRecovery
   | InvokeReturnedAssignmentRecoveryAction
   | RestoreAssignmentRevocationAuditCapacity
@@ -6154,6 +6278,7 @@ RemedyAction =
   | RetrySamePendingAssignmentIssuance
   | CreateOrAdoptAssignmentIssuanceSinkReservation
   | ActivateAssignmentIssuanceSinkReservation
+  | FenceAssignmentIssuanceSinkIncarnation
   | ActivatePreparedImplementationAssignment
   | ProofCancelAssignmentIssuanceSinkReservation
   | ReleaseAssignmentIssuanceControllerReservation
@@ -6166,23 +6291,23 @@ Their generated protected command mapping is exact:
 | `ReadCurrentMigrationRecoveryStatus` | `Operator.ReadMigrationRecoveryStatus` with the causing migration alias |
 | `InvokeReturnedMigrationOperation` | the one endpoint operation, caller class, reserve route, and identity owned by the returned status tag |
 | `SubmitStateCurrentMigrationChildCommand` | the one child operation and current epoch and state generation owned by the causing product |
-| `WaitForMigrationRefusalSubslotSettlement` | wait only for the exact refusal-subslot generation in the causing occupied product, then `Operator.ReadMigrationRecoveryStatus`; it cannot repair controller outbox or sink capacity |
+| `WaitForMigrationRefusalSubslotSettlement` | wait only for the exact refusal-subslot generation in the causing occupied product; it cannot read status or repair controller outbox or sink capacity |
 | `StartMigrationControllerRekeyIdentityFree` | initial `Operator.RekeyMigrationControllerEpoch` from an exact threshold-reached, would-cross-threshold, or exhausted pre-request product, with no rekey identity or alias |
 | `ResumeMigrationControllerRekeyWithCurrentAlias` or `RetryMigrationControllerRekeySameIdentity` | `Operator.RekeyMigrationControllerEpoch::Resume` only from an active rekey product carrying the current server-resolved non-capability rekey alias |
 | `ReadCurrentMigrationTelemetryHealth` | the health projection nested in `Operator.ReadMigrationRecoveryStatus` |
-| `RecoverMigrationTelemetryHealth` | `Operator.RecoverMigrationTelemetryHealth` with the causing current `TelemetryFailureAlias` |
-| `RetryMigrationTelemetryRecoverySameIdentity` | `Operator.RecoverMigrationTelemetryHealth` with the current server-resolved `recovery_identity_alias` carried by the causing nonterminal recovery product; a product without that alias must first use `ReadCurrentMigrationTelemetryHealth` and follow the returned action |
+| `RecoverMigrationTelemetryHealth` | `Operator.RecoverMigrationTelemetryHealth` with the causing server-issued `TelemetryFailureAlias`, whether it is current in a non-healthy observation or bound in a retryable recovery product |
 | `ReadAssignmentRevocationRecovery` | `RecoveryRead.ReadAssignmentRecoveryState { context: RevocationRecovery }` with the causing assignment alias |
 | `ResumeAssignmentRevocationAudit` | the exact append, query, invalidation, rebind, or acknowledgement action owned only by `RevocationAuditWorkPending` |
 | `WaitForAssignmentRevocationSettlement` | wait and reread owned only by `RevocationAuditAcknowledgedUsesReserved` |
 | `FinalizeAssignmentRevoked` | atomic finalization owned only by `RevocationReadyToFinalize` |
 | `RestoreAssignmentIssuanceCapacity { Controller | Sink }` | restore only the named dedicated capacity owner from the exact `AssignmentIssuanceCapacityUnavailable` variant; it cannot create a prepare or assignment |
-| `RetrySamePendingAssignmentIssuance` | `AssignmentIssuance.IssueImplementationAssignment` for the same `RequestPending` request after controller-capacity restoration, or the same `IssuancePending` prepare after sink-capacity restoration; no fresh request or assignment identity is allowed |
-| `CreateOrAdoptAssignmentIssuanceSinkReservation` | create or adopt only the sink reservation bound to `SinkReservationCreateOrAdoptPending` and its immutable prepare identity |
-| `ActivateAssignmentIssuanceSinkReservation` | activate only the adopted sink reservation owned by `SinkReservationActivationPending` |
-| `ActivatePreparedImplementationAssignment` | atomically install `Active`, `Issued`, and settled evidence only from `AssignmentActivationPending` after verifying both capacity reservations and the sink activation proof |
-| `ProofCancelAssignmentIssuanceSinkReservation` | obtain sink absence or cancellation proof only for `SinkReservationProofCancellationPending`; time alone cannot satisfy it |
-| `ReleaseAssignmentIssuanceControllerReservation` | release controller capacity and restore pre-issuance request and evidence eligibility only from `ControllerReservationReleasePending` with the sink proof |
+| `RetrySamePendingAssignmentIssuance` | `AssignmentIssuance.IssueImplementationAssignment` for the same `RequestPending` request after controller-capacity restoration, or the same `IssuancePending` prepare after sink-capacity restoration; after proof-backed restoration it allocates the next prepare incarnation, never the fenced incarnation, and no fresh request or assignment identity is allowed |
+| `CreateOrAdoptAssignmentIssuanceSinkReservation` | create or adopt only the sink reservation bound to `SinkReservationCreateOrAdoptPending`, its exact ordinary accepted attempt, prepare identity and incarnation, assignment binding, and canonical issuance audit tuple |
+| `ActivateAssignmentIssuanceSinkReservation` | activate only the adopted sink reservation owned by `SinkReservationActivationPending` with that same incarnation and binding |
+| `FenceAssignmentIssuanceSinkIncarnation` | durably install the permanent non-creatable sink fence for the exact non-adoptable prepare identity and incarnation before any proof-cancellation action is constructible |
+| `ActivatePreparedImplementationAssignment` | only from the matching ordinary accepted attempt's `OrdinaryActivationPending` after durable audit acknowledgement, atomically install `Active`, the exact `Issued` eligibility state, settled evidence, available replay result, immutable attempt tombstone, and completed attempt |
+| `ProofCancelAssignmentIssuanceSinkReservation` | obtain sink absence or cancellation proof only from `SinkReservationProofCancellationPending` with the exact incarnation's durable non-creatable fence proof; time alone cannot satisfy it |
+| `ReleaseAssignmentIssuanceControllerReservation` | release controller capacity and restore the same accepted attempt's request and evidence eligibility only from `ControllerReservationReleasePending` with both sink proofs; its retry must allocate a newer incarnation |
 | every remaining value above | the named internal controller action with all parameters taken from the causing refusal product |
 
 No renderer accepts free-form command text or caller-supplied recovery
@@ -6235,7 +6360,7 @@ The refusal catalog and core plans are closed:
 | `migration-status-audit-capacity-unavailable` | migration attempt alias, controller epoch, status-audit slot state, bounded required and available capacity | `WaitForMigrationStatusAuditSlot`, then `ReadCurrentMigrationRecoveryStatus` |
 | `migration-telemetry-health-barrier-stale` | controller epoch, presented and current marker sequences and digests, presented and current marker tags, presented and current latch tags and digests | `DiscardStaleMigrationTelemetryClosure`, then `ReadCurrentMigrationTelemetryHealth`, then `FollowCurrentMigrationTelemetryHealthRemedy` |
 | `migration-telemetry-health-recovery-required` | exact non-healthy `MigrationTelemetryHealthObservation`: degraded, unavailable, update pending, recovery barrier, corrupt marker, or armed latch, with its current server-issued failure alias | `RecoverMigrationTelemetryHealth` |
-| `migration-telemetry-health-recovery-retryable` | controller epoch, unchanged telemetry recovery identity alias, exact nonterminal recovery slot state, marker, latch, and failure-alias-record digests, and closed retryable failure code | `RetryMigrationTelemetryRecoverySameIdentity` |
+| `migration-telemetry-health-recovery-retryable` | controller epoch, bound server-issued `TelemetryFailureAlias`, exact nonterminal recovery slot state, request-binding, marker, latch, and failure-alias-record digests, and closed retryable failure code; no recovery-identity parameter | `RecoverMigrationTelemetryHealth` with that bound `TelemetryFailureAlias` |
 | `migration-telemetry-health-recovery-cycle-failed` | exact settled `MigrationTelemetryHealthRecoveryLastResult::Failed`, failed recovery state tag and digest, closed failure code, failure event digest, audit acknowledgement digest, and newly current server-issued failure alias | `RecoverMigrationTelemetryHealth` to start a fresh recovery cycle |
 | `idempotency-result-evicted` | attempt identity, endpoint, operation, closed outcome, safe result ids, response and event digests | `ReturnOperationSpecificProtectedAttemptRecovery` |
 | `protected-attempt-status-cross-peer` | attempt identity, presented peer safe alias | `UseOriginalAttemptPeerOrProtectedOperator` |
@@ -6566,30 +6691,46 @@ corpus separately exercises:
   `ImplementationAssignment` request, issue, complete, revoke and resolve
   operations;
 - atomic single consumption of both protected assignment evidence variants,
-  the immutable `AssignmentIssuancePrepareIdentity`, and every
+  the immutable `AssignmentIssuancePrepareIdentity`, its exact ordinary
+  accepted `AttemptIdentity`, canonical issuance audit tuple, monotonic
+  prepare incarnation, and every
   `AssignmentIssuancePrepareState` from controller reservation through sink
-  create-or-adopt, sink activation, and final assignment activation. An undersized,
+  create-or-adopt, sink activation, ordinary audit, and final assignment
+  activation. An undersized,
   unavailable, or integrity-invalid controller or sink reservation refuses
   issuance or new use as specified and cannot be repaired by borrowing
   ordinary capacity. Controller-capacity refusal creates no prepare;
   sink-capacity refusal retains the same prepare. Both render only the closed
   capacity-restore action followed by retry of the same pending issuance.
   Crashes before sink creation, after sink creation but before controller
-  adoption, after adoption, after sink activation, and during
-  proof-cancellation resume the exact prepare. Orphan reservations are adopted
-  only on an exact immutable binding or proof-cancelled before controller
-  release. `Active`, `Issued`, and the capability remain unconstructible until
-  both reservations and sink activation proof are complete. The complete
+  adoption, after adoption, after sink activation, before and after the
+  non-creatable fence, and during proof-cancellation resume the exact
+  prepare. Orphan reservations are adopted only on the exact accepted-attempt,
+  incarnation, assignment, and audit binding. A non-adoptable incarnation is
+  durably fenced non-creatable at the sink before proof-cancellation and
+  controller release. Its restored retry uses the next incarnation, and
+  planted delayed create, adopt, activate, and cancel authorizations for the
+  fenced incarnation all fail without capacity mutation. `Active`, `Issued`,
+  settled evidence, replay availability, the capability, and the attempt
+  tombstone remain unconstructible until sink activation is complete, the
+  canonical ordinary issuance event is acknowledged durably, and the attempt
+  is in `OrdinaryActivationPending`. Planted direct activation from
+  `PreparedForOrdinaryAudit`, every cancellation state, a different accepted
+  attempt, a mismatched audit tuple, or an unacknowledged ordinary audit
+  fails. The one valid `ActivatePreparedImplementationAssignment` transaction
+  installs `Active`, the exact `Issued` successor state, settled evidence,
+  replay result, tombstone, and completed attempt atomically. The complete
   `Available -> RequestPending -> IssuancePending -> Issued`
   flow for every terminal predecessor. Concurrent requests, byte-identical
   retries, changed caller keys, and fresh caller keys all consume
   `Available` once and replay one `assignment_request_id`; issuance consumes
   only that request and fresh protected evidence, resumes only the same
-  accepted pending issuance after a crash, and activates one successor
-  capability. Old evidence, a second request, or a delayed issuance cannot
-  mint another. Separate fixtures prove intentional parallel slices use only
-  the controller-owned disjoint partition authority and never predecessor
-  successor eligibility;
+  accepted pending issuance after a crash, uses a newer incarnation only after
+  proof-backed restoration, and activates one successor capability. Old
+  evidence, a second request, a stale-incarnation authorization, or a delayed
+  issuance cannot mint another. Separate fixtures prove intentional parallel
+  slices use only the controller-owned disjoint partition authority and never
+  predecessor successor eligibility;
 - assignment self-assertion, cross-peer or cross-run replay, active to
   completed, revoked, expired and exhausted transitions, transition races,
   exact retry, use exhaustion and cross-scope access; authoritative
@@ -6612,7 +6753,8 @@ corpus separately exercises:
   interpretation.
   `ReadImplementerIssueView` followed by a state read returns the same active
   assignment when a use remains, a reserved-use wait while settlement is
-  pending, `RevocationCapacityReleasePending` after final activation, and
+  pending, `RevocationCapacityReleasePending { Exhaust }` after final
+  activation, and
   `Exhausted` only after proof-backed release. Payload eviction alone
   never selects loss. An explicit unavailable or abandoned capability
   declaration permits only protected operator revocation. Unauthorized,
@@ -6645,7 +6787,10 @@ corpus separately exercises:
   time-only clearing, premature cleanup, or early successor eligibility.
   Completion success and final-use recovery expose the exact
   `RevocationCapacityReleasePending` action until terminal installation;
-  neither can serialize `Completed` or `Exhausted` early.
+  neither can serialize `Completed` or `Exhausted` early. A generated
+  transition negative rejects every direct final-use edge to `Exhausted`;
+  successor eligibility is absent until proof-backed sink cancellation,
+  controller release, and terminal installation have all completed.
   `CandidateChanged`, `MappingSuperseded`, and `LifecycleTerminated`
   invalidations instead traverse the same audited `RevocationPending` graph as
   operator revocation. Dedicated-capacity undersize and unavailability,
@@ -7016,7 +7161,14 @@ corpus separately exercises:
   remains current, changed bytes return the audited closed conflict through
   the fixed refusal subslot, `Past`, `Future`, and matching generations are
   all tested, and corrected bytes after an audited tuple or prerequisite
-  refusal reclaim the slot with a new child sequence. Repeated
+  refusal reclaim the slot with a new child sequence.
+  `RefusalSubslotOccupied` carries exactly the two-action `RemedyPlan`
+  `WaitForMigrationRefusalSubslotSettlement`, then
+  `ReadCurrentMigrationRecoveryStatus`; the renderer maps the latter to
+  `Operator.ReadMigrationRecoveryStatus` with the causing migration alias.
+  A composite wait-and-read action, either missing action, reversed order,
+  extra repair action, or a wait action that itself performs the read fails
+  product, enum, mapping, and catalog coverage. Repeated
   pause and resume cycles run beyond every former generated-state bound and
   reuse those slots without permanent controller growth while producing
   distinct bounded sink audit events. Fresh caller keys remain nonsemantic
@@ -7163,15 +7315,22 @@ corpus separately exercises:
   `MigrationTelemetryHealthRecoveryEvent` is generated as the closed
   `Success | Failure` union. Success owns probe, prepared-stable, and
   normal-health fields; failure owns failed-state tag and digest plus
-  `closed_failure_code`. Missing, extra, cross-outcome, optional, and
-  unattributed encodings are rejected.
+  `closed_failure_code`. Both carry the accepted
+  `TelemetryFailureAlias`; neither carries a recovery-identity alias.
+  `MigrationTelemetryHealthRecoveryLastResult` carries the same accepted
+  failure alias used by the request binding. Missing, extra, cross-outcome,
+  optional, and unattributed encodings are rejected.
   Byte-identical
-  retry joins one recovery identity, response loss returns its fixed last
-  result, and changed bytes or a stale `TelemetryFailureAlias` cannot replace it,
-  and crashes at every success or failure recovery-slot state resume the same
-  request binding, identity, outcome, and canonical event bytes. A crash after
-  success acknowledgement recovers stable install; a crash after failure
-  acknowledgement recovers failure settlement. A same event id with changed
+  retry through `RecoverMigrationTelemetryHealth` uses the bound
+  `TelemetryFailureAlias`, joins one internal recovery identity, and returns
+  its fixed last result after response loss. Every retryable state and refusal
+  carries that alias, and both renderers pass it to the existing operation.
+  A recovery-identity command parameter, missing alias, substituted current
+  alias, changed bytes, or unrelated stale alias cannot replace the request
+  binding. Crashes at every success or failure recovery-slot state resume the
+  same request binding, identity, outcome, and canonical event bytes. A crash
+  after success acknowledgement recovers stable install; a crash after
+  failure acknowledgement recovers failure settlement. A same event id with changed
   bytes is refused before append. A closed failure cannot rotate its alias,
   return its sealed response, or release the slot before audit
   acknowledgement. Settlement installs `LastResult::Failed`, rotates to the
@@ -7199,6 +7358,15 @@ corpus separately exercises:
   events require `ProtectedOperatorAuditDigest` in canonical audit bytes and
   reject it
   from logs, status, `Debug`, metrics, refusal products, and reservations.
+  Independently produced and pinned known-answer vectors, not the production
+  digest helper or event encoder, verify for status events and both telemetry
+  event variants that
+  `ProtectedOperatorAuditDigest = keyed_digest(DeploymentAuditKey,
+  "d2b:panel:protected-operator-audit:v1",
+  ProtectedOperatorIdentity)`. The vector set includes two distinct
+  authenticated operators under one deployment key and one operator under
+  two distinct deployment keys. Planted constant-digest, swapped-operator,
+  and wrong-key implementations must each fail exact event validation.
   Metric schema fixtures
   admit only the closed operation-class, signal-outcome, health-state, and
   reserve-role labels, reject capacity generation and every unbounded label,
@@ -7363,9 +7531,14 @@ corpus separately exercises:
   bound to worker epoch, status-only assignment mutation actions, generic
   conversion, unaudited terminalization of assignment revocation, terminal
   assignment cleanup before unused revocation-capacity cancellation,
+  assignment activation before ordinary audit acknowledgement, reuse of a
+  fenced assignment-prepare incarnation, direct final-use installation of
+  `Exhausted`,
   universal revocation-audit resume, automatic resume of operator-repair
   pauses, telemetry write before the failure latch, healthy-only telemetry
   recovery, `RecoveryBarrierInstalled` as a marker or latch,
+  a telemetry recovery-identity command parameter, a composite
+  refusal-subslot wait-and-read action,
   `protected_operator_alias` in status-disclosure or telemetry-recovery audit,
   a one-step-from-overflow rekey sentinel, raw rekey identity input, `Installed` as an
   in-progress rekey state, the two retired generic audit and integrity pause
@@ -7529,9 +7702,9 @@ before `UpdatePending` and before any telemetry write, so a latch failure or a
 crash before `UpdatePending` cannot reveal old healthy state. Only protected
 `RecoverMigrationTelemetryHealth` can commit marker `RecoveryBarrier`, audit
 the verified recovery, install a new exact stable marker, and clear the latch.
-Every non-healthy state carries a current recovery alias, and a closed failed
-recovery can begin a fresh cycle only after its failure event is acknowledged,
-its alias rotates, and its exact last result is durable. Metric
+Every non-healthy state carries a current `TelemetryFailureAlias`, and a
+closed failed recovery can begin a fresh cycle only after its failure event is
+acknowledged, its alias rotates, and its exact last result is durable. Metric
 labels contain no capacity generation.
 
 Ordinary accepted attempts gain reconciliable prepares, common base-or-conflict
