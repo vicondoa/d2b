@@ -59,8 +59,9 @@ lands its dedicated validator commit V, freezes resume base B exactly at V, and 
 analysis and the plan panel at B/P before it may create a reconciliation receipt or authorize
 the checkbox transition. Because dedicated checkbox commit C changes the reviewed feature
 snapshot from P to Q, the B/P sign-off does not authorize T589. T589 remains blocked until
-the receipt-bound progress reconciliation passes and a fresh cross-artifact analysis plus
-unanimous plan review bind exact clean C/Q.
+the receipt-bound progress reconciliation passes, a fresh cross-artifact analysis plus
+unanimous plan review bind exact clean C/Q, and the externally accepted compatibility floor
+has been installed in the source 3/1 generation.
 
 **Current Wave 5 resume state:** at this amendment batch's committed input HEAD
 `67f0ba8e32c4f91ebfcb4038aff77821d42b64b1`, the feature root is pre-T603 A/P0.
@@ -72,6 +73,19 @@ V. C/Q becomes a valid state only after the future V/B implementation, B/P gates
 reconciliation authorization, authorized editor checkbox transition, dedicated commit C,
 and progress-receipt finalization. Only then does the fresh C/Q analysis and plan panel become
 the T589 dispatch gate.
+
+**Current installed-host bootstrap state: BLOCKED.** Committed protocol 4 has no
+host-generation handoff operation, while committed `nixos-modules/host-broker.nix` makes the
+source generation's `d2b-priv-broker.service` execute that generation's `brokerPackage`.
+Consequently the target closure's proposed compatibility mode is not an executable,
+supervised actor before profile publication. The constraints correctly forbid solving that
+cycle with a new unit, runtime override, child process, mutating entrypoint, or daemon recovery
+owner. This plan therefore escalates the missing source-generation compatibility floor rather
+than claiming T592/T595 can implement it inside the one Wave 5 target transition. T589 and all
+downstream Wave 5 implementation remain blocked until an accepted external disposition lands,
+is installed in the source 3/1 generation, and proves the exact actor contract stated in
+FR-070. A target-only binary, synthetic starting image, or prose compatibility claim is not
+that disposition.
 
 ## Technical Context
 
@@ -137,7 +151,15 @@ fall strictly after start and no later than stop. T589 owns the type plus one va
 unchanged at evidence import, durable reopen, panel-request/panel-attest, seal, and
 merge-eligibility. A failed operator `EvidenceRecord` imports without a receipt but cannot
 satisfy any close stage; only a passing record must resolve exactly one matching receipt.
-T600 imports the exact-F result only in `operator-nix-activation-cleanup`; T602 and T219
+T604 emits the receipt only as an external current-effective-uid `0600` validation output.
+T600 imports the exact-F result only in `operator-nix-activation-cleanup` and supplies that
+output through the T589-owned explicit `--sc002-receipt PATH` input; it may not supply
+`--locator`. T589 hashes and validates the once-opened source before deriving the locator,
+then installs the exact bytes as a current-effective-uid `0600` leaf beneath current-effective-
+uid `0700` candidate directories using a held dirfd, create-exclusive temp, file `fsync`,
+`renameat2(RENAME_NOREPLACE)`, and destination-directory `fsync`. Only then does it publish
+the `EvidenceRecord`. Crash recovery may reuse an identical already-durable sidecar after a
+full reopen check but never replaces it; mismatched bytes or binding refuse. T602 and T219
 reopen it through that validator. Unknown fields or enum values, missing/duplicate/unrelated
 samples, effect/Ready identity disagreement, mixed selected-stop/progress identities,
 malformed or misordered ticks, a stale or wrong-triplet outer binding, progress-free evidence,
@@ -363,9 +385,11 @@ through W6 must have enumerated and successfully built
 `make test-host-integration` target with no skip. The case must prove public `d2b vm`
 start/status/stop, an explicit `Ready` observation before restart, guest reachability,
 `d2bd.service` restart, same runner PID/start-time adoption through a newly acquired pidfd,
-continued reachability, and an explicit `Stopped` observation after stop. It must enumerate
-exactly `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` as the complete
-root-visible framework unit set. The same case injects PID reuse,
+continued reachability, and an explicit `Stopped` observation after stop. It must query
+`systemctl list-units --all` over the complete loaded `d2b*`/`microvm*` namespace, sort every
+returned unit name, and require exact set equality with `d2bd.service`,
+`d2b-priv-broker.socket`, and `d2b-priv-broker.service`. A query containing only those
+expected names is ineligible because it cannot observe a fourth unit. The same case injects PID reuse,
 pidfd/start-identity mismatch, and multiple-plausible-runner ambiguity and proves each is
 quarantined with no adoption, cleanup, or signal against an unproven process. Passing
 evidence must record nonempty discovery, the exact enumerated and successfully built attr,
@@ -620,28 +644,31 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    closure, durably stage immutable bytes, and submit one opaque intent; it cannot publish a
    profile, control a service, initiate rollback, or select a path, unit, generation, command,
    or argv.
-   A protocol-5 installed broker accepts the typed request. When installed 3/1 lacks that
-   operation, the existing authenticated protocol-4 daemon/broker channel transfers the
-   accepted public-socket authorization evidence as a single owned capability attachment to
-   the target closure's typed compatibility mode. The receiver derives authority only from
-   that consumed attachment and its broker-sealed staged-intent binding. It accepts no
-   serialized uid, gid, role, provenance, root, daemon, or caller claim.
+   A protocol-5 installed broker accepts the typed request after transfer. Before transfer,
+   only the externally installed source-generation protocol-4 compatibility actor may receive
+   exactly one accepted public-socket evidence fd over the authenticated daemon/broker
+   channel. Committed protocol 4 without that actor refuses; it cannot route authority to a
+   target-closure mode. The installed source receiver derives authority only from that
+   consumed fd and its broker-sealed staged-intent binding. It accepts no serialized uid,
+   gid, role, provenance, root, daemon, or caller claim.
    Before either broker acts, the unprivileged operator must pass the existing public-socket
    `SO_PEERCRED` plus current `d2b`-group Admin classification. The broker consumes that
    one-shot evidence into one durably sealed, nonfabricable capability bound to the complete
    staged intent and pinned store object; process/socket credentials, daemon identity, Hello,
    target-closure provenance, and bootstrap euid 0 are integrity or eligibility inputs only.
-   The normal and compatibility broker advance a phase only by consuming that capability or a
+   The installed source broker before transfer and target broker after transfer advance a
+   phase only by consuming that capability or a
    broker-issued phase attenuation and emit immutable pre-mutation and outcome audit rows for
    every system-profile, service, bootstrap, publication, repair, and rollback phase.
 
    The existing `d2b-priv-broker.service`, reached through
    `d2b-priv-broker.socket`, is the sole executable lifecycle owner before and after transfer.
-   Its existing `Restart=on-failure` path starts or restarts the broker-pinned compatibility
-   mode from the durable coordinator; the deployment entrypoint and `d2bd` never supervise it,
+   Its existing `Restart=on-failure` path starts or restarts the externally installed source
+   broker, whose ordinary `serve` startup reopens the durable coordinator; the deployment
+   entrypoint and `d2bd` never supervise it,
    and no transient, template, path, timer, or additional service is created. The broker
    durably owns the coordinator before the first mutation, including the exact lifecycle
-   owner and pinned bootstrap generation. Compatibility mode retains that ownership until the
+   owner and pinned bootstrap generation. The installed source broker retains that ownership until the
    authenticated target protocol-5 broker durably adopts it exactly once. Target broker
    activation and durable coordinator transfer precede target daemon activation. Killing the
    entrypoint or compatibility process at any pre-transfer boundary must cause the existing
@@ -662,8 +689,12 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    authorization/apply pairs for first bootstrap, stable-reference use, and rollback; every
    preflight stops before public-socket authorization or `sudo`, every privileged apply names
    the already authorized exact store executable, and runtime output contains neither command
-   nor reference. Nix evaluation and build stderr is captured in a bounded private buffer,
-   never forwarded or persisted, and mapped to fixed identifier-free typed failures. Canary
+   nor reference. Runnable documentation redirects Nix evaluation and build stderr directly
+   to `/dev/null`; it creates no diagnostic file and emits only the fixed stage-specific
+   `fail` literals shown in `quickstart.md`. The production entrypoint may retain at most
+   16,384 stderr bytes in memory, never on disk; overflow is a fail-closed stage failure, all
+   raw bytes are dropped before return, and only the closed identifier-free typed
+   failure/remediation is emitted. Canary
    tests require raw evaluator/builder stderr to be absent from human, JSON, wire, log, audit,
    metric, span, and `Debug` output.
 
@@ -682,28 +713,31 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
 | Resume reconciliation | T603 | FR-036's external constitution amendment is the first prerequisite and must be an ancestor of A. Exactly one valid T072 disposition is then required: exact historical attestation, or unchecked T072 plus one current `historical-entry-remediation-t072` record bound to A/P0 that claims no implementation completion. Fresh descendant-base analysis and plan panel at A/P0 then authorize exactly three repository paths: the two Rust files `packages/xtask/src/delivery/mod.rs` and `packages/xtask/src/delivery/resume.rs`, plus mandatory `changelog.d/delivery-resume-reconciliation.md`. T603 lands dedicated validator-and-fragment commit V with sole parent A and exactly those three paths; a missing or differently named fragment refuses. It freezes B exactly at V and P byte-identical to P0, revalidates the external prerequisite and T072 disposition, reruns analysis and the plan panel at B/P, then and only then writes the immutable authorization receipt at `.scratch/autopilot/adr046w5/reconciliation.json` and routes the sole receipt-bound checkbox transition through `/d2b-spec-edit`. It writes no feature prose; the Wave 5 integrator alone owns dedicated checkbox commit C. |
-| Integrator prep | T589 | Its sole direct prerequisite is T603. Candidate-recovery v1 must be accepted on T589's actual base, but T008 is a separate historical W2 attestation and is not retroactively completed by T589. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, and HEAD is the clean dedicated checkbox commit. It lands the shared sealed capability, transactional audit-journal hook, mutation-response wire, and typed `InspectOperation` store/API/protobuf contract. It does not edit broker wire, StoreSync DTOs, their callers, broker protocol metadata, schemas, fingerprints, or snapshots. It also owns the `adr046w5` closed-evidence profile and wave-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace binding-request reservation for the program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; exact final commit/tree/candidate/request/round binding; and the point-specific zero/zero-or-one/exactly-one crash oracle. In `evidence.rs`, it additionally owns the content-addressed SC-002 sidecar resolver: the unchanged `EvidenceRecord.locator` must be `evidence-sidecars/sc002/sha256/<digest>.json`, resolved beneath the held candidate dirfd, hashed before decode from the same fd, and bound to the actual `candidate_id`/`content_id`/`snapshot_sha256` triplet. Same-candidate and alternate-candidate retries, reservation release, successor admission, and every post-request move fail closed at panel, seal, and eligibility. Nonbinding `/d2b-panel-round plan` phase rounds create no reservation and may iterate before the final request. Crash injection covers publication and terminal failed or successful disposition without enabling a second binding request. No implementation slice branches before this commit. |
-| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 and consumes its sealed broker peer-pidfd operation without another lockfile or dependency prerequisite; T605 starts after T593 and regenerates the shared API snapshots. T592 is the sole atomic broker-wire, compatibility-broker, FFI-quarantine, and privilege-contract owner: it changes both StoreSync DTOs with every producer/consumer; defines the audit drain, `OpenPeerPidfdFromAcceptedSocket`, and host-generation handoff operations; owns the authenticated protocol-4 accepted-socket-evidence transfer, broker-managed executable store-object/GC-root pin, durable coordinator and exact bootstrap-to-target ownership transfer; binds source/target broker/daemon generations and protocol/catalogue digests; makes exact Hello mandatory before d2b-state publication; requires initial public-socket Admin evidence and a sealed durable handoff capability for every phase, while denying daemon-identity/euid0-only and every caller-claimed/admin-on-broker/launcher/root/HostShutdown/remote path; bumps `PROTOCOL_VERSION` 4 to 5; and updates `d2b-contracts`, `d2b-core` privilege sources, broker protocol/runtime/bootstrap/`sys.rs` sources, `d2bd` Hello/version and both ancillary-fd receive paths, `nixos-modules/privileges-json.nix`, `xtask` generators, Rust/Nix parity and policy tests, `wire-protocol.json`, `privileges.json`, daemon/privilege catalogues, fingerprints, snapshots, workspace lockfile, and standalone broker lockfile in one commit. Both receive paths require `MSG_CMSG_CLOEXEC`, complete ancillary parsing, exact-one-fd validation, and close-on-every-error behavior. A safe dependency may provide peer-pidfd acquisition only if it meets the exact contract; otherwise repository-authored unsafe is confined to approved `sys.rs` with per-block `SAFETY:`. T592 also owns `d2b-audit`; the authoritative `ZoneBundle`; duplicate-envelope retirement; and the one enforcing pidfd policy suite under `make test-fixture-contracts`, including a poison fixture for the forbidden `nix` 0.31.3 `PeerPidfd` wrapper. `make test-policy` must not duplicate or claim this suite. A new project FFI crate and a local session-crate syscall fallback are ineligible. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots. T592's serialized commit may edit `d2bd/src/lib.rs`; after it lands, ownership transfers to T595. |
-| Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, new `d2b/src/bin/d2b-host-generation-deploy.rs`, `d2b/Cargo.toml`, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, the Type-1 `host-generation-rebuild-ref.nix` case, and Type-10 `host-generation-handoff.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, exact 4/2 consumption, the parameterized validation/build/stage/public-socket-authorization/opaque-request-only target-closure entrypoint, and broker-before-daemon unit ordering. The entrypoint resolves once while unprivileged, invokes the same exact store executable for authorization and apply, performs no privileged reevaluation, and maps bounded private Nix stderr capture to fixed redacted errors. T592's capability-authorized normal or compatibility broker owns the executable pin, durable coordinator before first mutation, stock profile publication, service transition, 3/1 bootstrap, d2b pointer/reference publication/repair, rollback, and the exact compatibility-to-target-broker ownership transfer. T595 wires the pre-transfer compatibility mode only through the existing `d2b-priv-broker.socket` and `d2b-priv-broker.service` with its restart policy; neither the daemon nor entrypoint owns recovery, and no new unit or runtime unit override is permitted. The option is required `lib.types.strMatching` with exact `<flake-ref>#<configuration-name>` grammar, 2048-byte total limit, and 64-byte selector limit. `make nix-unit-pin` and Type-1 positive/boundary/missing/malformed/selector cases are required in addition to the VM crash/rollback matrix. |
-| File-disjoint acceptance and docs | T596-T599, T604 | T599 retains its named CLI/reference ownership. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, existing `tests/host-integration/daemon-restart-vm-survival.nix`, and only those checks' host-integration discovery/build recipe in `Makefile`. Its 3/1 leg must resolve and authorize one exact store executable, apply without Nix reevaluation, reject a substituted executable and a changed installed symlink before mutation, then use the stable-reference pair only after broker publication. It kills the entrypoint and compatibility broker before and after coordinator durability and every mutation/ownership-transfer boundary, requires the existing broker service to restart pre-transfer work, and covers target broker/daemon failure, exact profile/reference rollback, Nix stderr canary redaction, and the resource effect/cleanup story. Its evidence must enumerate and build both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival`; skip or empty discovery is ineligible. The latter proves public Ready/Stopped, same-runner fresh-pidfd adoption, PID-reuse/mismatch/ambiguity quarantine, and exactly the three ADR-0015 units. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
+| Integrator prep | T589 | Its sole in-feature direct prerequisite is T603. The unresolved external source-generation compatibility disposition in FR-070 is an additional Wave 5 dispatch prerequisite: T589 does not start until that disposition has landed and the source 3/1 generation used by migration has installed it. Candidate-recovery v1 must be accepted on T589's actual base, but T008 is a separate historical W2 attestation and is not retroactively completed by T589. T589 remains blocked until the finalized editor progress receipt exists, T073-T218 and T603 are checked, HEAD is the clean dedicated checkbox commit, and the external bootstrap prerequisite is satisfied. It lands the shared sealed capability, transactional audit-journal hook, mutation-response wire, and typed `InspectOperation` store/API/protobuf contract. It does not edit broker wire, StoreSync DTOs, their callers, broker protocol metadata, schemas, fingerprints, or snapshots. It also owns the `adr046w5` closed-evidence profile and wave-scoped strict state in `packages/xtask/src/delivery/{evidence,panel,seal,eligibility,history_proof,storage}.rs`: one fd-anchored, file-and-directory-durable, no-replace binding-request reservation for the program/wave; fixed redacted state/errors; fd-relative durable orphan cleanup; exact final commit/tree/candidate/request/round binding; and the point-specific zero/zero-or-one/exactly-one crash oracle. In `evidence.rs`, it additionally owns SC-002 candidate-local ingestion. `wave validate-import --sc002-receipt PATH` is required only for the passing operator validation and rejects caller-supplied `--locator`; it once-opens a current-effective-uid `0600` single-link source, hashes before decode, derives `evidence-sidecars/sc002/sha256/<digest>.json`, validates the actual `candidate_id`/`content_id`/`snapshot_sha256` triplet, and durably publishes a current-effective-uid `0600` leaf beneath held current-effective-uid `0700` candidate dirfds with create-exclusive temp, file `fsync`, `renameat2(RENAME_NOREPLACE)`, and destination-directory `fsync` before publishing the `EvidenceRecord`. Every reopen resolves beneath the held candidate dirfd and hashes before decode from the same fd. Same-candidate and alternate-candidate retries, reservation release, successor admission, and every post-request move fail closed at panel, seal, and eligibility. Nonbinding `/d2b-panel-round plan` phase rounds create no reservation and may iterate before the final request. Crash injection covers every SC-002 source/hash/decode/temp/file-sync/no-replace/directory-sync/record boundary plus same/different-input races, as well as binding-request publication and terminal failed or successful disposition without enabling a second binding request. No implementation slice branches before this commit. |
+| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start together from T589. T592 starts only after T591 because both own `transaction.rs`; T593 starts after T592 and consumes its sealed broker peer-pidfd operation without another lockfile or dependency prerequisite; T605 starts after T593 and regenerates the shared API snapshots. T592 is the sole in-feature atomic broker-wire, target-broker, FFI-quarantine, and privilege-contract owner: it changes both StoreSync DTOs with every producer/consumer; defines the audit drain, `OpenPeerPidfdFromAcceptedSocket`, and protocol-5 host-generation handoff/adoption operations; consumes but does not claim implementation of the externally installed source-generation protocol-4 bootstrap actor; owns broker-managed executable store-object/GC-root pin, the target coordinator adoption half, and exact bootstrap-to-target ownership transfer; binds source/target broker/daemon generations and protocol/catalogue digests; makes exact Hello mandatory before d2b-state publication; requires initial public-socket Admin evidence and a sealed durable handoff capability for every phase, while denying daemon-identity/euid0-only and every caller-claimed/admin-on-broker/launcher/root/HostShutdown/remote path; bumps `PROTOCOL_VERSION` 4 to 5; and updates `d2b-contracts`, `d2b-core` privilege sources, broker protocol/runtime/bootstrap/`sys.rs` sources, `d2bd` Hello/version and both ancillary-fd receive paths, `nixos-modules/privileges-json.nix`, `xtask` generators, Rust/Nix parity and policy tests, `wire-protocol.json`, `privileges.json`, daemon/privilege catalogues, fingerprints, snapshots, workspace lockfile, and standalone broker lockfile in one commit. Both receive paths require `MSG_CMSG_CLOEXEC`, complete ancillary parsing, exact-one-fd validation, and close-on-every-error behavior. A safe dependency may provide peer-pidfd acquisition only if it meets the exact contract; otherwise repository-authored unsafe is confined to approved `sys.rs` with per-block `SAFETY:`. T592 also owns `d2b-audit`; the authoritative `ZoneBundle`; duplicate-envelope retirement; and the one enforcing pidfd policy suite under `make test-fixture-contracts`, including a poison fixture for the forbidden `nix` 0.31.3 `PeerPidfd` wrapper. `make test-policy` must not duplicate or claim this suite. A new project FFI crate and a local session-crate syscall fallback are ineligible. T605 owns its Zone enum, governing specs, paired reference, and final API snapshots. T592's serialized commit may edit `d2bd/src/lib.rs`; after it lands, ownership transfers to T595. |
+| Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/resource_runtime.rs`, `d2bd/src/lib.rs`, `d2bd/Cargo.toml`, new `d2b/src/bin/d2b-host-generation-deploy.rs`, `d2b/Cargo.toml`, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, the Type-1 `host-generation-rebuild-ref.nix` case, and Type-10 `host-generation-handoff.nix`; begins only after T590, T592, T594, and T605 converge. It owns startup ingestion, exact 4/2 consumption, the parameterized validation/build/stage/public-socket-authorization/opaque-request-only target-closure entrypoint, and broker-before-daemon unit ordering. The entrypoint resolves once while unprivileged, invokes the same exact store executable for authorization and apply, performs no privileged reevaluation, retains at most 16,384 Nix-stderr bytes in memory, fails closed on overflow, drops the bytes, and emits only fixed redacted errors. The externally installed source-generation compatibility broker owns the pre-transfer executable pin, durable coordinator, stock profile publication, service transition, 3/1 bootstrap, rollback, and transfer; T592's target broker owns only post-transfer phases. T595 consumes that accepted external contract and wires target broker-before-daemon ordering; changing target `host-broker.nix` cannot by itself satisfy or install the source-generation prerequisite. Neither daemon nor entrypoint owns recovery, and no new unit or runtime unit override is permitted. The option is required `lib.types.strMatching` with exact `<flake-ref>#<configuration-name>` grammar, 2048-byte total limit, and 64-byte selector limit. `make nix-unit-pin` and Type-1 positive/boundary/missing/malformed/selector cases are required in addition to the VM crash/rollback matrix. |
+| File-disjoint acceptance and docs | T596-T599, T604 | T599 retains its named CLI/reference ownership. T604 owns new `packages/d2b-contract-tests/tests/resource_operator_activation.rs`, `packages/d2bd/tests/resource_operator_activation.rs`, `tests/host-integration/resource-operator-activation.nix`, existing `tests/host-integration/daemon-restart-vm-survival.nix`, and only those checks' host-integration discovery/build recipe in `Makefile`. Its 3/1 leg starts from a source generation that has independently satisfied the external compatibility-floor prerequisite; it must not synthesize that actor from F. It resolves and authorizes one exact store executable, applies without Nix reevaluation, rejects a substituted executable and a changed installed symlink before mutation, then uses the stable-reference pair only after broker publication. It kills the entrypoint and compatibility broker before and after coordinator durability and every mutation/ownership-transfer boundary, requires the existing broker service to restart pre-transfer work, and covers target broker/daemon failure, exact profile/reference rollback, Nix stderr canary redaction, and the resource effect/cleanup story. It emits the SC-002 receipt only as a current-effective-uid `0600` external output; T600 alone passes that file to T589's explicit candidate-local import. Its evidence must enumerate and build both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival`; skip or empty discovery is ineligible. The latter proves public Ready/Stopped, same-runner fresh-pidfd adoption, PID-reuse/mismatch/ambiguity quarantine, and exact set equality between the full loaded `d2b*`/`microvm*` namespace and the three ADR-0015 units. The other tasks retain their named files. All five tasks may proceed together after T595 and share no file. |
 | Integrator convergence and freeze | T220 | Merges every slice; reconciles generated manifests; verifies coordinated normative/reference/test/schema/changelog treatment, including the authoritative single-owner 4/2 bundle contract/compiler/schema, poison guard, canonical digest, old/mixed/future refusals, replayable installed-host migration/rollback, closed runtime action, and command-only docs; folds fragments; rebases after W4; and records the panel base. It runs the closed-evidence profile plus the point-specific wave-reservation oracle, durable orphan cleanup, concurrent first-request, duplicate/same-wave alternate-candidate, and post-request movement tests at panel, seal, and eligibility. It then runs integration, CI, and full drift and opens or updates the PR. Each integrated provisional candidate receives a nonbinding `/d2b-panel-round plan` phase review; findings route scoped fixes back through this row, followed by validation and a delta/full-context phase rerun. Only unanimous phase convergence freezes final F. Any later content/history change invalidates F and restarts T220 plus T600-T602 and the phase review, provided no binding request has occurred. |
-| Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact closed validation identifiers assigned below. They may run together subject to the heavy-gate limit. |
+| Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact closed validation identifiers assigned below. T600 imports `operator-nix-activation-cleanup` by passing T604's explicit external `0600` receipt input to T589's candidate-local importer; the importer durably installs the sidecar before it publishes the record. They may run together subject to the heavy-gate limit. |
 | Mechanical evidence convergence | T602 | Revalidates exactly one T072 historical/current remedial disposition without requiring or changing T072's checkbox, then verifies dependency closure, resume identities, clean F, T220's unanimous final phase-panel receipt, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | External disposition and conditional close | T219 | Revalidates the T072 disposition, T603 phase-plan chain, and T220 final nonbinding phase-plan receipt, but those process rounds do not replace or dispose the retained Wave 5 binding delivery request. T219 first requires an accepted external delivery-contract/tooling disposition that identifies the consumed request and preserves its candidate, evidence, and `panel-request.json`. Before that disposition, T219 authorizes no request, attestation, seal, merge-target registration, merge eligibility, or merge. After it, T219 may perform only the close action the disposition expressly authorizes; feature-local prose never grants a second binding request. F and `adr046w5` delivery history stay immutable. |
 
 T592 has two mechanically closed subcontracts within its serialized scope. First, the
 broker-owned handoff coordinator, broker-managed executable store-object pin, and authenticated
 public-socket-evidence transfer are durable before first mutation and record the exact
-lifecycle owner. The existing `d2b-priv-broker.service` starts and restarts the pinned
-protocol-4 compatibility mode before transfer. That owner transfers the coordinator exactly
+lifecycle owner. This subcontract is conditional on the unresolved external compatibility
+floor: the source generation must already have installed a protocol-4 handoff-capable broker
+whose ordinary `serve` process runs under the existing `d2b-priv-broker.service`. The existing
+service starts and restarts that installed actor before transfer. That owner transfers the coordinator exactly
 once to the target protocol-5 broker before daemon activation. Tests inject executable and
 symlink substitution, target broker startup failure, target daemon startup/reconciliation
 failure, entrypoint death, every compatibility-broker crash boundary, and both sides of
 ownership transfer. Recovery accepts only the pre-transfer compatibility owner under the
 existing broker service or the post-transfer target broker owner, never `d2bd`, Nix
 activation, the entrypoint, root/provenance/caller claims, or a new unit.
-T592 solely owns
-`packages/d2b-priv-broker/tests/host_generation_coordinator_v5.rs` for this matrix. Second,
+T592 solely owns the target protocol-5 half and
+`packages/d2b-priv-broker/tests/host_generation_coordinator_v5.rs` for this matrix; it neither
+implements nor attests installation of the source-generation actor. Second,
 T592 solely owns
 `packages/d2b-contract-tests/tests/policy_peer_pidfd_quarantine.rs` and
 `packages/d2b-contract-tests/tests/fixtures/peer_pidfd_quarantine/`. The nonempty source
@@ -715,10 +749,12 @@ existing meta-gates and must not run or duplicate this policy. T220 requires bot
 subcontracts before F can freeze.
 
 This `/d2b-spec-edit` batch changes planning artifacts only. The implementation escalation is
-exact and remains pending: T592 owns broker capability transfer, executable pin, coordinator,
-wire receive helpers, pidfd policy, and broker tests; T595 owns the entrypoint and existing
-unit wiring; T604 owns the substitution, crash-replay, redaction, and host acceptance tests;
-T220 owns only convergence and generated-output reconciliation. No source, test, Nix,
+exact and remains pending: no in-feature task owns the missing source-generation bootstrap
+floor; its accepted external disposition and installation block T589. After that prerequisite,
+T592 owns target-broker adoption, post-transfer coordinator phases, wire receive helpers,
+pidfd policy, and broker tests; T595 owns the entrypoint and target existing-unit ordering;
+T604 owns the substitution, crash-replay, redaction, and host acceptance tests; T220 owns only
+convergence and generated-output reconciliation. No source, test, Nix,
 normative specification, ADR, contributor guide, changelog, or panel artifact is changed by
 this batch.
 
@@ -739,7 +775,8 @@ T072 disposition -> pre-T603 analysis + plan panel at A/P0
 pre-T603 analysis + plan panel at A/P0 -> T603 validator commit V
 V = B -> post-T603 analysis + plan panel at B/P -> receipt/editor transition C
 C/Q -> fresh analysis + unanimous plan panel at exact C/Q
-fresh C/Q analysis + plan panel -> T589 -> {T590,T591,T594}
+accepted external source-generation compatibility disposition -> installed source 3/1 compatibility floor
+{fresh C/Q analysis + plan panel, installed source 3/1 compatibility floor} -> T589 -> {T590,T591,T594}
 T591 -> T592
 T592 -> T593 route -> T605
 {T590,T592,T594,T605} -> T595
@@ -753,16 +790,23 @@ retained Wave 5 binding delivery request -> accepted external disposition X
 The host-generation sub-DAG inside `T592 -> T595 -> T604` is fixed:
 
 ```text
-T592 protocol-5 Hello + generation identity + privilege/output parity
+accepted external source-generation compatibility disposition
+  -> source 3/1 generation installs protocol-4 handoff-capable broker `serve`
+  -> existing d2b-priv-broker.service supervises that exact installed actor
+  -> T589 dispatch gate opens
+  -> T592 protocol-5 Hello + generation identity + privilege/output parity
   -> T595 unprivileged resolution of one exact target executable store object
-  -> T595 build target closure and immutable reference input with bounded private Nix stderr capture
+  -> T595 build target closure and immutable reference input with a 16,384-byte in-memory
+     Nix-stderr ceiling
   -> file-and-directory-durable deployment intent
   -> unprivileged existing-public-socket Admin classification
-  -> accepted-socket evidence transferred over the authenticated protocol-4 channel
-  -> evidence consumed into a broker-durable sealed handoff capability
+  -> source daemon transfers exactly one accepted-socket evidence fd over the authenticated
+     protocol-4 channel
+  -> installed source broker consumes it into a broker-durable sealed handoff capability
   -> broker-managed GC root plus exact store-object/executable pin
-  -> existing d2b-priv-broker.service durable coordinator ownership before first mutation
-  -> existing service starts/restarts {capability-authorized protocol-5 broker | pinned compatibility mode}
+  -> installed source broker under existing d2b-priv-broker.service durably owns the
+     coordinator before first mutation
+  -> existing service restarts the same installed source broker on pre-transfer failure
   -> broker-audited stock profile publication and target broker transition
   -> target broker staged-identity adoption audit
   -> durable coordinator ownership transfer to the target protocol-5 broker
@@ -779,12 +823,12 @@ Any failure after stock publication follows one recovery edge only:
 
 ```text
 broker-owned durable coordinator reopens intent and capability
-  -> before transfer: existing d2b-priv-broker.service restarts pinned compatibility mode
-  -> compatibility owner resumes or rolls back without the entrypoint
+  -> before transfer: existing d2b-priv-broker.service restarts its installed source broker
+  -> source-generation compatibility owner resumes or rolls back without the entrypoint
   -> after transfer: restarted existing d2b-priv-broker.service resumes or rolls back
   -> capability-authorized owner records durable rollback preparation
   -> prior d2b pointer and reference bytes-or-absence restoration
-  -> target broker or supervised compatibility broker audited stock rollback
+  -> target broker or supervised installed source broker audited stock rollback
   -> source system/broker/daemon/3/1 verification
 ```
 
@@ -792,14 +836,17 @@ No readiness, acknowledgement, repair, or rollback edge may skip its predecessor
 Type-10 crash table injects immediately before and after every arrow, including target broker
 startup failure, target daemon startup failure, every compatibility-broker exit boundary, and
 both sides of durable ownership transfer. Before-transfer recovery accepts only the
-compatibility owner under the existing broker service, after-transfer recovery accepts only
+externally installed source-generation compatibility owner under the existing broker service,
+after-transfer recovery accepts only
 the target broker owner, and neither requires a
 new unit or a surviving entrypoint. It also authorizes executable A and attempts apply through
 store executable B and a changed installed symlink; both substitutions must refuse before
 mutation, while A remains usable. The done predicate is one exact matching source or target
 tuple, one lifecycle owner, and zero mixed/unaudited transition, not merely a running daemon.
 
-T603 is the sole direct prerequisite of T589 and never treats code presence as completion.
+T603 is the sole in-feature direct prerequisite of T589 and never treats code presence as
+completion. FR-070's accepted and installed source-generation compatibility floor is a
+separate external dispatch prerequisite.
 Its gate is deliberately two-pass because the validator cannot attest to a base that predates
 its own implementation:
 
@@ -1049,16 +1096,19 @@ and decisive outcomes are closed:
 
 Support Host/User/Guest/system Provider resources may be present but cannot substitute for one
 of these three. This names acceptance scope only; Network implementation remains owned by
-Wave 4. The Type-10 test starts from an installed protocol-4 3/1
-broker, obtains `d2bHostGenerationDeploy` from the explicit target installable, and reaches
+Wave 4. The Type-10 test starts only after the accepted external compatibility floor is
+installed in the protocol-4 3/1 source generation; committed protocol 4 without its handoff
+operation is a refusal case, not the positive control. It obtains `d2bHostGenerationDeploy`
+from the explicit target installable and reaches
 4/2 through that entrypoint without reading an absent stable reference. It resolves the
 target executable once while unprivileged, requires the broker-managed GC root and immutable
 store-object pin before authorization returns, and applies through that exact executable
 without privileged reevaluation. The test substitutes another executable and changes the
 installed symlink after authorization; both refuse before mutation. Accepted public-socket
-evidence crosses the authenticated protocol-4 channel and no root, provenance, daemon, or
-caller claim substitutes for it. The broker coordinator is durable before first mutation and
-the existing `d2b-priv-broker.service` starts/restarts pinned compatibility mode across
+evidence crosses as exactly one fd over the authenticated protocol-4 channel and no root,
+provenance, daemon, or caller claim substitutes for it. The source broker coordinator is
+durable before first mutation and the existing `d2b-priv-broker.service` starts/restarts its
+installed source broker across
 entrypoint or compatibility-process death. The coordinator then transfers durably to the
 target broker before daemon activation, with no new unit. Raw Nix stderr canaries never
 escape the fixed typed error surface. The new broker must start before the new daemon. The
@@ -1101,7 +1151,7 @@ second validator.
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
 | `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
-| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; parameterized fail-closed flake/configuration bootstrap from installed protocol-4/no-handoff-op 3/1, with every preflight stopping before authorization or `sudo`; one unprivileged resolution and broker-managed pin of the exact executable store object, followed by privileged apply of that same object with no reevaluation; executable and changed-symlink substitution refusals; validation/build/stage/public-socket-authorization/opaque-request-only entrypoint; accepted public-socket evidence transferred over the authenticated 3/1 channel and consumed into a sealed nonfabricable durable handoff capability, with no root/provenance/caller-claim substitute; capability-authorized normal/compatibility-broker-only stock profile, service, 3/1 bootstrap, publication, and rollback mutations with immutable pre-mutation/outcome audit; broker-owned coordinator before first mutation; existing `d2b-priv-broker.service` start/restart ownership before transfer; compatibility-to-target-broker durable ownership transfer; entrypoint and compatibility-broker death recovery; target broker and daemon startup-failure rollback through existing units; and no daemon-owned recovery or new unit; target broker start, daemon Hello while unready, phase-attenuated authenticated publish request, durable broker publication, then ingestion/readiness; daemon-identity/euid0-only and all caller denials; fixed typed Nix-eval/build failures with raw stderr canaries absent from every output surface; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every compatibility-broker, ownership-transfer, profile, broker, daemon, pointer, reference, readiness, and rollback boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; runnable parameterized migration, stable-reference, and rollback authorization/apply commands; initial, identical, declaration, and removal deployments; unchanged schema-v2 `EvidenceRecord` whose candidate-relative content-addressed locator names one version-1 bounded fixed-redacted typed `Sc002ActivationReceiptV1`; hash-before-decode at import and every reopen; actual `candidate_id`/`content_id`/`snapshot_sha256` triplet binding; replacement/traversal/URL/symlink refusal; closed three-resource census, same-identity effect/Ready pairs, valid selected-stop/elapsed/progress ordering, and every sample <=2,000 ms; failed-record-without-receipt import plus passed-record receipt requirements; import/reopen/panel/seal/eligibility negatives for unknown version/field/enum, 16,385-byte, missing/duplicate/mixed/effect-Ready-disagreeing/unrelated identity, stale, wrong-record, misordered, progress-free, and over-budget evidence; exact Provider installs/configs and positive owned effects/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; exact Device swtpm/flush cleanup, unresolvable Endpoint, finalizer clearance, and same-identity TPM state-Volume preservation; ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources; explicit Guest deferral to Wave 6 `Provider/runtime-cloud-hypervisor` with no Wave 5 Guest-success claim; candidate-bound FR-075 public lifecycle continuity including Ready/Stopped, fresh-pidfd adoption, PID reuse/mismatch/ambiguity quarantine, and exactly the three ADR-0015 units; and nonempty host output enumerating and building both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival` without skip |
+| `operator-nix-activation-cleanup` | T600 | `local-host` | T604 exact 4/2 top-level audit carrier, audit-only generation identity change, empty ZoneSpec/no emitted Zone resource, and old/mixed/future refusals; Type-1 required/grammar/2048-byte/selector matrix with current nix-unit pin; accepted external compatibility-floor identity and proof that the source 3/1 generation installed its protocol-4 handoff-capable broker before parameterized fail-closed flake/configuration migration, with every preflight stopping before authorization or `sudo`; one unprivileged resolution and broker-managed pin of the exact executable store object, followed by privileged apply of that same object with no reevaluation; executable and changed-symlink substitution refusals; validation/build/stage/public-socket-authorization/opaque-request-only entrypoint; accepted public-socket evidence transferred as exactly one fd over the authenticated 3/1 channel and consumed by the installed source broker into a sealed nonfabricable durable handoff capability, with no root/provenance/caller-claim substitute; capability-authorized source/target-broker-only stock profile, service, 3/1 bootstrap, publication, and rollback mutations with immutable pre-mutation/outcome audit; broker-owned coordinator before first mutation; existing `d2b-priv-broker.service` start/restart ownership before transfer; compatibility-to-target-broker durable ownership transfer; entrypoint and compatibility-broker death recovery; target broker and daemon startup-failure rollback through existing units; and no daemon-owned recovery or new unit; target broker start, daemon Hello while unready, phase-attenuated authenticated publish request, durable broker publication, then ingestion/readiness; daemon-identity/euid0-only and all caller denials; fixed typed Nix-eval/build failures with raw stderr canaries absent from every output surface; generated wire/privilege schemas/catalogues/parity/drift/lockfile proof; every compatibility-broker, ownership-transfer, profile, broker, daemon, pointer, reference, readiness, and rollback boundary; no unaudited or direct bypass mutation; closed identifier-free runtime action; runnable parameterized migration, stable-reference, and rollback authorization/apply commands only after the external prerequisite; initial, identical, declaration, and removal deployments; unchanged schema-v2 `EvidenceRecord` whose candidate-relative content-addressed locator names one version-1 bounded fixed-redacted typed `Sc002ActivationReceiptV1`; explicit current-effective-uid `0600` source input, hash-before-decode, current-effective-uid `0700` candidate directories, current-effective-uid `0600` destination, no-replace file-and-directory-durable sidecar publication before record publication, and crash/race recovery at import; hash-before-decode at every reopen; actual `candidate_id`/`content_id`/`snapshot_sha256` triplet binding; replacement/traversal/URL/symlink refusal; closed three-resource census, same-identity effect/Ready pairs, valid selected-stop/elapsed/progress ordering, and every sample <=2,000 ms; failed-record-without-receipt import plus passed-record receipt requirements; import/reopen/panel/seal/eligibility negatives for unknown version/field/enum, 16,385-byte, missing/duplicate/mixed/effect-Ready-disagreeing/unrelated identity, stale, wrong-record, misordered, progress-free, and over-budget evidence; exact Provider installs/configs and positive owned effects/readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; exact Device swtpm/flush cleanup, unresolvable Endpoint, finalizer clearance, and same-identity TPM state-Volume preservation; ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources; explicit Guest deferral to Wave 6 `Provider/runtime-cloud-hypervisor` with no Wave 5 Guest-success claim; candidate-bound FR-075 public lifecycle continuity including Ready/Stopped, fresh-pidfd adoption, PID reuse/mismatch/ambiguity quarantine, and exact set equality between the full loaded `d2b*`/`microvm*` namespace and the three ADR-0015 units; and nonempty host output enumerating and building both `vmChecks.x86_64-linux.resource-operator-activation` and `vmChecks.x86_64-linux.daemon-restart-vm-survival` without skip |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
 | `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
@@ -1238,6 +1288,7 @@ afterward W6 rebases its own branch while F and `adr046w5` delivery history rema
 | Earlier amendment prose assigned implementation ownership of Volume, Network, and Device to Wave 5. | The task graph assigns Network implementation and its close-blocking obligations to Wave 4 T061-T071. | The exact trio is `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`. Wave 5 proves their production-plane effects together but neither reopens nor claims Network implementation ownership. |
 | Earlier feature prose asserted that W4 implemented Host/site plus Network double opt-in for east-west traffic. | Untouched external `ADR-046-resources-network` makes `Network.spec.isolation.allowEastWest` the sole opt-in and says no Zone-level gate is required. This feature cannot silently change that normative contract or claim different historical implementation. | The desired double-opt-in matrix still names all four Network/Host combinations, but W4 adjudication, T070, T071, and T220 remain blocked on an accepted external correction. Confirmation requires a versioned normative amendment and migration that predate actual F4 plus evidence for Network false/Host false, Network false/Host true, Network true/Host false, and Network true/Host true; otherwise the correction must preserve sole Network opt-in as W4's authoritative result and leave double opt-in prospectively unimplemented. No feature status or local matrix can unblock the gate. |
 | Earlier handoff prose treated a broker-derived daemon principal and bootstrap euid 0 as independent authorization. | The existing lifecycle authorization chain is public-socket `SO_PEERCRED` plus current `d2b` group classification; broker-socket identity and root execution are not substitute operator authority. | Initial handoff admission transfers the accepted public-socket evidence over the authenticated protocol-4 channel and consumes that attachment into one nonfabricable intent-bound capability. No serialized caller/root/provenance/role claim substitutes. Every normal/compatibility broker phase consumes the capability or a phase attenuation; daemon identity, Hello, target-closure provenance, and euid 0 are integrity/eligibility checks only. |
+| Earlier handoff prose claimed the target closure's compatibility broker could run under the existing broker service before profile publication. | Committed `d2b_contracts::PROTOCOL_VERSION` is 4 and its `BrokerRequest` has no host-generation handoff operation. Committed `nixos-modules/host-broker.nix` makes `d2b-priv-broker.service` execute the installed generation's `brokerPackage`, not a target-closure binary. | No executable authorized bootstrap actor exists at this base. T589 and downstream Wave 5 implementation are blocked on an accepted external source-generation compatibility disposition that is installed before migration and satisfies FR-070's exact existing-service/evidence/capability/coordinator/restart/transfer contract. Target-only code, a new unit or override, an entrypoint child or mutation path, daemon recovery, and a synthetic starting image are not accepted substitutes. |
 | `ADR-046-provider-device-tpm` section 11.2 names the finalizer `device-tpm/cleanup`. | Committed `packages/d2b-provider-device-tpm/src/lib.rs` and `packages/d2b-contracts/src/v3/device.rs` both expose `device-tpm.d2bus.org/state-preserved`. | Existing code is canon. The exact T604 fixture uses `device-tpm.d2bus.org/state-preserved` while retaining the dossier's stop/wait/delete-process/delete-flush/retain-Volume/clear sequencing. Correcting the upstream dossier is external to this feature-only batch. |
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI, while T072 omitted Wave 5's contemporaneous plan-panel predicate. | The committed constitution permits no artifact-local waiver for these gaps, and existing Wave 5 implementation does not prove its historical entry gate. | FR-036 now makes a separate accepted Principle VI constitution amendment that expressly dispositions the W2-W5 plan-panel gap an external prerequisite for every implementation, resume, fix, close, merge, and advance path. T072 requires the exact retained Wave 5 plan-panel receipt to check; no current receipt is claimed, and current remediation remains evidence only. |
 | Feature-local Wave 5 recovery prose allowed one binding delivery panel per candidate and a second request after a failed or content-invalidated binding result. | `ADR-046-validation-and-delivery` section 12.3 and `docs/contributing/panel-review.md` require the binding ten-role panel exactly once per wave. Delivery state already retains a Wave 5 `panel-request.json`; content invalidation does not reclassify or erase it. Iterative findings belong only to the nonbinding phase-plan surface. | T220 uses repeatable `/d2b-panel-round plan` phase reviews for scoped pre-close convergence; those rounds create no delivery request or reservation. T219 is non-authorizing until an accepted external delivery-contract/tooling disposition reconciles the consumed request with the amended candidate while preserving history. This feature batch does not authorize another request, seal, or merge; any correction is external scope. |

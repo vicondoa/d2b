@@ -202,8 +202,10 @@ merge-target registration, merge eligibility, and merge.
     make same-ID retry observe rather than reapply the mutation. Audit/export identifiers are
     fixed domain-separated digests, and retention/prune failure is typed degraded health
     (FR-070).
-11. **Amended-plan resume is receipt-bound.** T603 is the sole direct prerequisite of T589
-    but pre-validator analysis and plan panel at A/P0 authorize only its two validator source
+11. **Amended-plan resume is receipt-bound.** T603 is the sole in-feature direct prerequisite
+    of T589; FR-070's accepted and installed source-generation compatibility floor is an
+    additional external dispatch prerequisite. T603's pre-validator analysis and plan panel
+    at A/P0 authorize only its two validator source
     paths plus `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit
     V becomes B, P remains byte-identical to P0, and analysis
     plus the plan panel rerun at B/P before T603 writes immutable authorization R using
@@ -263,8 +265,17 @@ merge-target registration, merge eligibility, and merge.
     observations repeat the sample identity, and effect plus Ready must name the same typed
     resource identity. A failed operator record remains importable without a receipt but
     cannot satisfy a close stage; a failed record with a positive receipt is malformed.
+    T604 emits only an external regular single-link receipt owned by the current effective uid
+    with mode `0600`. T600 supplies it through T589's explicit
+    `wave validate-import --sc002-receipt PATH` input and supplies no locator. T589 once-opens
+    the source, hashes before decode, derives the locator, validates the outer triplet, then
+    installs the exact bytes beneath held current-effective-uid `0700` candidate dirfds as a
+    current-effective-uid `0600` leaf. The importer uses a create-exclusive temp, file
+    `fsync`, `renameat2(RENAME_NOREPLACE)`, and destination-directory `fsync` before it
+    publishes the `EvidenceRecord`. Crash retry may reuse only an identical fully revalidated
+    durable leaf; a different existing leaf or concurrent wrong-byte/binding input refuses.
     T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and
     merge-eligibility and retains schema-v2 decoding while rejecting every missing,
     malformed, unknown-version/field/enum, over-bound, misordered, stale, progress-free,
     over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
-    or unrelated-sample case.
+    unrelated-sample, wrong-owner/mode, pre-durability record publication, or crash/race case.

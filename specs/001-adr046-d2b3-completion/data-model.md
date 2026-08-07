@@ -244,16 +244,43 @@ Each sample contains `resourceIdentity`, `effect`, `ready`, `selectedStop`, `ela
 monotonic tick, and using only the closed kind enum `ingestion`, `commit`, `dispatch`,
 `effect`, `status`, or `projection`.
 
-The encoded receipt is at most 16,384 bytes; 16,384 is accepted and 16,385 is refused. At
-import and every durable reopen, the validator resolves the locator beneath the already held
+The encoded receipt is at most 16,384 bytes; 16,384 is accepted and 16,385 is refused.
+T604 produces the receipt as an external validation output; it does not place bytes in a
+candidate directory. T600 supplies that file explicitly to
+`wave validate-import --sc002-receipt PATH` while importing the
+`operator-nix-activation-cleanup` record. That option is required exactly for a passing
+record with this validation and forbidden for every other validation or failed result;
+caller-supplied `--locator` is forbidden in the same invocation because the importer derives
+the content address.
+
+The importer opens the explicit source once with `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires a
+regular single-link file owned by the current effective uid with mode exactly `0600`, reads at
+most 16,385 bytes, hashes the exact opened bytes before decoding, and derives
+`evidence-sidecars/sc002/sha256/<digest>.json`. It decodes and validates from those same
+bytes, including the outer candidate/content/snapshot binding, before candidate publication.
+Through the already held candidate-directory fd it creates and verifies current-effective-uid
+`0700` namespace directories, creates a current-effective-uid `0600` temporary leaf with
+`O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW`, writes the exact validated bytes, `fsync`s the leaf,
+publishes with `renameat2(RENAME_NOREPLACE)`, and `fsync`s the destination directory. Only
+after that directory sync may it publish the `EvidenceRecord` carrying the derived locator.
+If a crash leaves the canonical sidecar durable before record publication, retry opens that
+leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
+mode `0600`, link count one, device/inode stability, digest, bytes, decode, and outer binding
+all match; it never replaces the leaf. A different or malformed existing leaf refuses.
+Crash injection covers source open, hash, decode, temp write, file sync, no-replace
+publication, directory sync, and record publication. Synchronized imports cover
+same-bytes/same-record idempotence and different-bytes or wrong-binding races, with no
+record allowed to reference absent or not-yet-durable bytes.
+
+At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
 `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV)`, opens
-the leaf once with `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, verifies regular-file type, owner, mode,
-link count, and stable device/inode identity, hashes those exact bytes, and compares the hash
-with the locator digest before decoding from the same opened fd. A replacement between
-lookup, hash, decode, or later-stage reopen is a hard failure rather than a second read. The
-validator then requires exactly one sample for each closed identity, every repeated identity
-to match its sample key, effect and Ready ticks
+the leaf once with `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`, requires a regular single-link file owned
+by the current effective uid with mode exactly `0600` and stable device/inode identity,
+hashes those exact bytes, and compares the hash with the locator digest before decoding from
+the same opened fd. A replacement between lookup, hash, decode, or later-stage reopen is a
+hard failure rather than a second read. The validator then requires exactly one sample for
+each closed identity, every repeated identity to match its sample key, effect and Ready ticks
 not earlier than start, selected stop to equal the later effect/Ready tick and its source
 (`ready` wins an exact tie), `elapsedNs` to equal the checked stop-minus-start difference,
 elapsed to be at most 2,000,000,000 ns, and every progress tick to fall in `(start, stop]`.
@@ -269,7 +296,11 @@ T589 owns the type and one validator invoked unchanged at evidence import, durab
 panel-request/panel-attest, seal, and merge-eligibility. The negative census is closed:
 passed record with a missing or duplicate receipt; receipt on a failed or wrong-validation
 record; unknown/malformed version, kind, field, enum, locator, content digest, or size; absolute,
-traversal, URL, symlink, hard-link, and replacement-race locators; missing,
+traversal, URL, symlink, hard-link, wrong-owner, non-`0600`, and replacement-race inputs;
+caller-supplied locator with an SC-002 input; absent SC-002 input for a passed operator record;
+SC-002 input for a failed or other-validation record; crash before and after every
+sidecar/file-sync/directory-sync/record-publication boundary; same-name concurrent imports
+with different bytes or bindings; missing,
 duplicate, mixed, or unrelated resource samples; effect/Ready identity disagreement;
 selected-stop/progress identity mismatch; arithmetic overflow or event misordering; stale
 binding; zero progress; more than 32 progress observations; and any over-budget sample all

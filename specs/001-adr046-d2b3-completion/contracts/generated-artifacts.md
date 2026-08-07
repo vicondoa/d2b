@@ -58,9 +58,16 @@ artifact and requires a clean `git diff`, fail-closed.
   public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
   one-shot classification into one durably sealed nonfabricable handoff capability bound to
   the complete intent and emits no authority token.
-  Capability-authorized typed normal or target-closure bootstrap broker code exclusively owns stock
-  profile publication, broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference
-  publication and repair, stock rollback, and source-service restoration.
+  Capability-authorized broker code exclusively owns stock profile publication,
+  broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference publication and
+  repair, stock rollback, and source-service restoration. Before transfer that actor must be
+  a source-generation-installed protocol-4 broker running as the ordinary `serve` process of
+  the existing `d2b-priv-broker.service`; after durable transfer it is the target broker.
+  Committed protocol 4 has no handoff operation and the installed service is pinned to its
+  installed `brokerPackage`, so this feature remains blocked until an accepted external
+  disposition installs that compatibility floor before migration. A target-closure-only
+  mode, synthetic starting image, new unit or override, child, mutating entrypoint, or daemon
+  recovery owner is not a substitute.
 - The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.
   The broker verifies and audits the staged source/target identity. The target daemon starts
   and completes Hello for the exact target broker generation and protocol while unready, then
@@ -96,7 +103,9 @@ artifact and requires a clean `git diff`, fail-closed.
 `make test-drift` is clean; no artifact is hand-edited; no delivery record appears in
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
-coverage starts with an installed 3/1 broker lacking the v5 handoff operation, executes the
+coverage starts with a 3/1 source generation that has independently installed the accepted
+external protocol-4 compatibility actor while still lacking the v5 operation. Committed
+protocol 4 without that source-side operation is a refusal case. The positive case executes the
 parameterized target-closure entrypoint, proves it only validates/builds/stages/authorizes/submits,
 proves initial public-socket Admin classification, sealed durable capability,
 broker-before-daemon activation, Hello while unready, phase-attenuated authenticated

@@ -293,9 +293,24 @@ The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
 2048 bytes. Use the real validated flake and configuration values below; this procedure has
 no fixed illustrative target.
 
-The first installed 3/1-to-4/2 migration cannot read the stable reference because only the
-target broker can publish it. Build and run the deployment entrypoint from the explicit target
-configuration instead:
+> **Blocked at this committed base.** The installed protocol-4 broker has no
+> host-generation handoff operation, and `d2b-priv-broker.service` executes the installed
+> generation's `brokerPackage`. The target closure cannot make its compatibility binary that
+> service's executable before profile publication. Do not run the migration or rollback
+> procedures below until an accepted external source-generation compatibility disposition
+> has been installed on the source 3/1 host. That prerequisite must make the installed
+> protocol-4 broker's ordinary `serve` process under the existing
+> `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
+> public-socket evidence fd, seal the typed authority, pin the target object, durably own and
+> restart the coordinator, and transfer it to the target broker. No target-only binary, new
+> unit or override, child, mutating entrypoint, daemon recovery owner, serialized credential,
+> or root/provenance claim substitutes. This quickstart claims no implementation of that
+> prerequisite.
+
+After that prerequisite is accepted and installed, the first 3/1-to-4/2 migration cannot read
+the stable reference because only the target broker can publish it. The following is the
+post-prerequisite operator contract using the deployment entrypoint from the explicit target
+configuration:
 
 ```bash
 set -eu
@@ -328,23 +343,20 @@ D2B_HOST_INSTALLABLE="${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFI
 [ "${#D2B_HOST_REBUILD_REF}" -le 2048 ] ||
   fail 'composed host generation rebuild reference exceeds 2048 bytes'
 
-# Capture evaluator/build diagnostics privately. Never print this file: a flake can place
-# secrets, credentials, host names, store paths, or arbitrary canaries in Nix stderr.
-D2B_NIX_STDERR="$(mktemp)"
-chmod 0600 "$D2B_NIX_STDERR"
-trap 'rm -f -- "$D2B_NIX_STDERR"' EXIT
+# Discard evaluator/build stderr. A flake may place secrets, credentials, host names,
+# store paths, or arbitrary canaries there; this procedure never persists or prints it.
 
 if ! D2B_EVALUATED_REF="$(nix eval --raw \
   "${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef" \
-  2>"$D2B_NIX_STDERR")"; then
-  fail 'target hostGenerationRebuildRef evaluation failed'
+  2>/dev/null)"; then
+  fail 'target hostGenerationRebuildRef evaluation failed; fix the target flake/configuration and retry'
 fi
 [ "$D2B_EVALUATED_REF" = "$D2B_HOST_REBUILD_REF" ] ||
   fail 'target hostGenerationRebuildRef does not match the validated parameters'
 
 if ! D2B_DEPLOY_OUT="$(nix build --no-link --print-out-paths \
-  "$D2B_HOST_INSTALLABLE" 2>"$D2B_NIX_STDERR")"; then
-  fail 'target deployment store object resolution failed'
+  "$D2B_HOST_INSTALLABLE" 2>/dev/null)"; then
+  fail 'target deployment store object resolution failed; fix the target build and retry'
 fi
 case "$D2B_DEPLOY_OUT" in
   /nix/store/*) ;;
@@ -366,10 +378,11 @@ sudo -- "$D2B_DEPLOY_EXE" --apply-authorized-handoff ||
   fail 'authorized host generation handoff failed'
 ```
 
-The unprivileged invocation traverses the existing public socket and its
-`SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority token. The broker
-consumes the accepted-socket authorization evidence over the authenticated 3/1 compatibility
-channel into one durably sealed nonfabricable handoff capability bound to the staged intent.
+Once the external prerequisite exists, the unprivileged invocation traverses the existing
+public socket and its `SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority
+token. The installed source daemon forwards exactly one accepted-socket evidence fd over the
+authenticated protocol-4 channel, and the installed source broker consumes it into one
+durably sealed nonfabricable handoff capability bound to the staged intent.
 It also creates and retains the GC root and immutable identity for the exact store object and
 executable used above. The privileged command performs no Nix evaluation, build, or
 installable resolution; it can only resume the exact broker-pinned object and intent.
@@ -378,10 +391,10 @@ replaying the same executable for another intent refuses before mutation. Effect
 target-closure provenance, daemon identity, broker peer credentials, and caller-supplied role
 claims never authorize independently.
 
-The existing `d2b-priv-broker.service`, reached through
-`d2b-priv-broker.socket` and its protocol-4 compatibility path, is the sole pre-transfer
-bootstrap lifecycle owner. Its existing restart policy restarts the pinned bootstrap mode;
-the entrypoint is never a supervisor. A capability-authorized normal or compatibility broker
+The installed source broker reached through the existing `d2b-priv-broker.service` and
+`d2b-priv-broker.socket` is the sole pre-transfer bootstrap lifecycle owner. Its ordinary
+`serve` startup reopens the durable coordinator when the existing restart policy restarts it;
+the entrypoint is never a supervisor. A capability-authorized source or target broker
 performs every profile, service, 3/1 bootstrap, publication, and rollback mutation with
 immutable pre-mutation and outcome audit. The broker durably owns the coordinator before the
 first mutation. Coordinator ownership transfers exactly once to the authenticated target
@@ -391,10 +404,13 @@ transfer, target daemon, Hello while unready, phase-attenuated authenticated pub
 request, broker-durable pointer/reference publication, daemon ingestion, then readiness.
 Killing either entrypoint or bootstrap cannot orphan the coordinator.
 
-The shell captures raw Nix stderr only in the private temporary file and emits the fixed
-errors above. The production entrypoint applies the same rule with a bounded private capture
-and fixed typed errors; it never forwards evaluator or builder stderr to human, JSON, wire,
-log, audit, span, or `Debug` output.
+The shell sends raw Nix stderr directly to `/dev/null` and emits only the fixed
+stage-specific `fail` literals above; it creates no diagnostic file. The production
+entrypoint instead permits at most 16,384 raw stderr bytes in memory, fails closed if that
+ceiling is exceeded, drops all raw bytes before return, and emits only its fixed
+identifier-free typed stage failure with remediation `rebuild-host-generation`. Neither path
+forwards evaluator or builder stderr to human, JSON, wire, log, audit, metric, span, or
+`Debug` output.
 
 After the first successful publication, the installed entrypoint may use the stable reference:
 
@@ -453,8 +469,8 @@ leaves double opt-in unimplemented. Do not change feature status to bypass that 
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an
-entrypoint crash. Before durable transfer only the matching one-shot bootstrap owner may
-reopen it through the existing broker service's supervised compatibility mode; after transfer
+entrypoint crash. Before durable transfer only the matching externally installed source
+broker may reopen it through the existing broker service; after transfer
 the existing `d2b-priv-broker.service` reopens it even when target
 daemon startup fails. No entrypoint process or extra unit must remain alive. Verify the
 source state, then retry with the parameterized target command above; do not create the file
@@ -462,9 +478,19 @@ or copy the rolled-back target value into place:
 
 ```bash
 set -eu
+LC_ALL=C
+export LC_ALL
+fail() { printf '%s\n' "$1" >&2; exit 2; }
+
 systemctl is-active d2bd.service d2b-priv-broker.socket >/dev/null
-systemctl list-units --all --plain --no-legend \
-  'd2bd.service' 'd2b-priv-broker.socket' 'd2b-priv-broker.service'
+D2B_EXPECTED_UNITS="$(printf '%s\n' \
+  d2bd.service \
+  d2b-priv-broker.service \
+  d2b-priv-broker.socket | sort -u)"
+D2B_ACTUAL_UNITS="$(systemctl list-units --all --plain --no-legend --no-pager \
+  'd2b*' 'microvm*' | awk '{ print $1 }' | sort -u)"
+[ "$D2B_ACTUAL_UNITS" = "$D2B_EXPECTED_UNITS" ] ||
+  fail 'unexpected d2b/microvm root unit set; restore the required three-unit generation'
 d2b vm status acceptance-vm
 ```
 
@@ -502,21 +528,17 @@ D2B_ROLLBACK_INSTALLABLE="${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_RO
 [ "${#D2B_ROLLBACK_REF}" -le 2048 ] ||
   fail 'composed rollback reference exceeds 2048 bytes'
 
-D2B_NIX_STDERR="$(mktemp)"
-chmod 0600 "$D2B_NIX_STDERR"
-trap 'rm -f -- "$D2B_NIX_STDERR"' EXIT
-
 if ! D2B_EVALUATED_ROLLBACK_REF="$(nix eval --raw \
   "${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef" \
-  2>"$D2B_NIX_STDERR")"; then
-  fail 'prior hostGenerationRebuildRef evaluation failed'
+  2>/dev/null)"; then
+  fail 'prior hostGenerationRebuildRef evaluation failed; fix the prior flake/configuration and retry'
 fi
 [ "$D2B_EVALUATED_ROLLBACK_REF" = "$D2B_ROLLBACK_REF" ] ||
   fail 'prior hostGenerationRebuildRef does not match the validated parameters'
 
 if ! D2B_ROLLBACK_OUT="$(nix build --no-link --print-out-paths \
-  "$D2B_ROLLBACK_INSTALLABLE" 2>"$D2B_NIX_STDERR")"; then
-  fail 'prior deployment store object resolution failed'
+  "$D2B_ROLLBACK_INSTALLABLE" 2>/dev/null)"; then
+  fail 'prior deployment store object resolution failed; fix the prior build and retry'
 fi
 case "$D2B_ROLLBACK_OUT" in
   /nix/store/*) ;;

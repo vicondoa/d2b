@@ -1010,7 +1010,8 @@ Run this against `tasks.md` before implementation starts.
       not all file-disjoint. This is permitted because
       every shared writer and strict dependency edge is explicit; no two owners write a
       contended file concurrently.
-- [x] T603 is the sole direct prerequisite of T589; pre-T603 A/P0 analysis and panel authorize
+- [x] T603 is the sole in-feature direct prerequisite of T589; the external installed
+  source-generation compatibility floor is an additional dispatch prerequisite. Pre-T603 A/P0 analysis and panel authorize
       exactly its two Rust validator files plus mandatory unique fragment, validator-and-fragment V
       becomes B, post-T603 analysis and panel
       rerun at B/P, and only those post-validator receipts authorize immutable

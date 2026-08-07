@@ -531,8 +531,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   rollback, or select a path, unit, generation, command, or argv. Every system-profile,
   broker/daemon service, bootstrap, d2b-state publication/repair, stock rollback, and
   source-service restoration mutation MUST run through the capability-authorized typed normal
-  broker or target-closure one-shot bootstrap broker and MUST have immutable pre-mutation and
-  outcome audit. Initial authorization MUST occur while the invoking operator is unprivileged through
+  broker or a source-generation-installed compatibility broker and MUST have immutable
+  pre-mutation and outcome audit. Initial authorization MUST occur while the invoking operator is unprivileged through
   the existing public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker
   MUST then consume that one-shot classification into one durably sealed, non-serializable,
   nonfabricable handoff capability bound to the complete staged intent. Every normal or
@@ -540,17 +540,42 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Daemon uid/gid/generation, successful
   Hello, broker-socket credentials, target-closure provenance, and effective uid 0 are
   eligibility or integrity checks only and MUST NOT independently authorize any mutation.
-  No bootstrap unit or fourth root-visible service may exist. The exact ordering is:
-  public-socket Admin authorization; durable intent and capability; capability-authorized
-  broker-coordinator ownership before the first mutation; stock profile publication; target
+  No bootstrap unit or fourth root-visible service may exist.
+
+  **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
+  has no host-generation handoff operation, and the installed
+  `d2b-priv-broker.service` executes the installed generation's `brokerPackage`. A target
+  closure therefore cannot make its compatibility binary the existing service's executable
+  before profile publication. No current executable actor can receive the accepted public
+  socket evidence, durably seal authority, own the coordinator, and survive an entrypoint
+  crash without using a new unit, runtime override, child supervisor, entrypoint mutation, or
+  daemon recovery owner. This feature does not claim otherwise. T589 and every downstream
+  Wave 5 implementation task MUST remain blocked until an accepted external source-generation
+  compatibility disposition lands and is installed before the migration under test. That
+  disposition MUST make the installed protocol-4 broker reached only through the existing
+  `d2b-priv-broker.socket` and `d2b-priv-broker.service` the executable bootstrap actor. The
+  installed daemon may only forward exactly one accepted public-socket evidence fd over the
+  authenticated protocol-4 channel. The installed broker MUST consume that fd into the
+  nonfabricable intent-bound capability, pin the target executable and GC root, durably own
+  the coordinator before mutation, reopen it from its ordinary `serve` startup after the
+  existing unit's `Restart=on-failure`, and transfer ownership exactly once to the
+  authenticated target broker. A serialized credential, token, fd number, daemon identity,
+  root execution, or target provenance is not authority. The external disposition MUST also
+  define how that compatibility floor reaches the source 3/1 generation; a target-only
+  implementation, synthetic test starting image, or prose assertion does not satisfy the
+  prerequisite.
+
+  After that prerequisite is accepted, the exact ordering is:
+  public-socket Admin authorization; durable intent and capability; source-generation
+  compatibility-broker coordinator ownership before the first mutation; stock profile publication; target
   broker transition; durable coordinator ownership transfer to that target broker; target
   daemon transition;
   exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
   request; broker-durable pointer/reference publication and audit; daemon reopen and
   ingestion; readiness. The broker-owned durable coordinator is the recovery owner before
-  any daemon exists. Before ownership transfer, the one-shot bootstrap broker may only reopen
-  or roll back its own durable phase; after transfer, the existing
-  `d2b-priv-broker.service` reopens the coordinator after broker restart and completes or
+  any target daemon exists. Before ownership transfer, only the installed compatibility
+  broker under the existing service may reopen or roll back its own durable phase; after
+  transfer, the existing target `d2b-priv-broker.service` reopens the coordinator after broker restart and completes or
   rolls back even when target daemon startup or reconciliation fails. `d2bd.service` may
   report readiness and submit a capability attenuation, but it never owns or initiates the
   rollback state machine. The entrypoint is never the recovery supervisor, and no new unit is
@@ -680,7 +705,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   adopted through a newly acquired pidfd and remained reachable, stop the VM, and observe the
   explicit `Stopped` state. It MUST enumerate exactly `d2bd.service`,
   `d2b-priv-broker.socket`, and `d2b-priv-broker.service`, with no additional root-visible
-  framework unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
+  framework unit. Enumeration MUST query the complete loaded `d2b*` and `microvm*` namespace
+  with `systemctl list-units --all`, extract and sort every returned unit name, and compare
+  that set for exact equality with the required three. Querying only those three names is not
+  enumeration and cannot detect an unexpected fourth unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
   cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
   is limited to T220/T604 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
   results only and MUST NOT rerun the target. T604 is the sole prospective owner of the
@@ -1317,7 +1345,18 @@ carries the object verbatim rather than copying selected fields into the task ro
   receipt, unchanged outer `EvidenceRecord`, and its errors use fixed redacted `Debug` and
   contain no free-form strings, host identity, path, command, argv, or log text. T589 owns one
   validator used unchanged at import, durable reopen, panel-request/panel-attest, seal, and
-  merge-eligibility. A failed operator record remains importable without a receipt and remains
+  merge-eligibility. T600 passes T604's external receipt as the explicit
+  `wave validate-import --sc002-receipt PATH` input. For this validation the importer rejects
+  caller-supplied `--locator`, opens the source once without following links, requires a
+  regular single-link file owned by the current effective uid with mode exactly `0600`, hashes
+  before decode, derives the locator, and publishes the exact bytes beneath the held candidate
+  dirfd. Candidate directories are current-effective-uid `0700`; the sidecar leaf is
+  current-effective-uid `0600`. Publication uses create-exclusive temporary state, file
+  `fsync`, `renameat2(RENAME_NOREPLACE)`, and destination-directory `fsync`; only after that
+  durable publication may the ordinary `EvidenceRecord` be published. An identical sidecar
+  left by a crash may be reopened and reused only after the complete
+  identity/hash/owner/mode check; a different existing leaf refuses. A failed operator record
+  remains importable without a receipt and remains
   ineligible for close; a passing record requires exactly one matching receipt. T600 carries
   the exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
   unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
