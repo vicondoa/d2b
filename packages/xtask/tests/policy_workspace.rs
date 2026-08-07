@@ -264,6 +264,11 @@ fn product_context_packages_use_the_single_lock_and_scoped_policy() {
         2,
         "both selected deny branches must use the supported command-local metadata option"
     );
+    assert_eq!(
+        selected_deny.matches("cd \"$ROOT/packages\"").count(),
+        2,
+        "both selected deny branches must execute from the product workspace"
+    );
     assert!(!selected_deny.contains("cargo deny --metadata-path"));
     assert!(
         !read_repo_file("packages/deny.toml").contains("RUSTSEC-2024-0384"),
