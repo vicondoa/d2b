@@ -12,7 +12,8 @@
   narrow original-peer-or-operator recovery reads, migration-conflict
   preflight and its isolated hard-bounded signal reserve, separate
   fixed-cardinality migration-control conflict signals, sticky
-  integrity-checked telemetry-health barriers, reconciliable acceptance
+  integrity-checked telemetry-health barriers with a durable pre-barrier
+  failure latch and protected recovery operation, reconciliable acceptance
   prepare and
   accepted-attempt journal, fenced worker and sink-generation recovery, replay
   result, outbox, immutable permanent replay tombstones, append-only
@@ -25,8 +26,10 @@
   migration-integrity reserve,
   exhaustive ordinary protected-attempt recovery and pending status, with
   active-migration controls instead modelled as audited fixed-slot child
-  commands and migration recovery status as a coalesced observational read,
-  finite migration counters with separately reserved controller-epoch rekey,
+  commands with durable audit-capacity prepare and migration recovery status
+  as a serialized per-disclosure audited observational read,
+  exactly six finite migration counters with a counter-independent dedicated
+  controller-epoch rekey state machine,
   migration-specific no-append audit repair, generic conversion from the exact
   ordinary sink-acknowledgement-pending tuple, distinct migration
   sink-acknowledgement and activation variants, and re-entrant online
@@ -51,9 +54,9 @@
   least-authority issue-reader, caller-disjoint risk recovery that keeps the
   opaque handle behind fresh protected-operator authentication, protected
   attempt-status and narrow recovery-read endpoints, while
-  protected-operator-only assignment revocation, migration repair,
-  migration-control integrity repair, and attempt resume and fencing stay on
-  the operator endpoint. It
+  protected-operator-only assignment revocation with dedicated audit recovery,
+  migration repair, migration-control integrity repair, telemetry-health
+  recovery, and attempt resume and fencing stay on the operator endpoint. It
   assigns lifecycle, ledger proposal and correction, implementation-assignment
   issue, completion and revocation, severity, risk, inspection, recovery
   status and online capacity migration, publication, merge-completion and
