@@ -806,6 +806,32 @@ route, watch, audit export, controller, or the exact system-core Provider owners
 | Mechanical evidence convergence | T602 | Revalidates exactly one T072 historical/current remedial disposition without requiring or changing T072's checkbox, then verifies dependency closure, resume identities, clean F, T220's unanimous final phase-panel receipt, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | External disposition and conditional close | T219 | Revalidates the T072 disposition, T603 phase-plan chain, and T220 final nonbinding phase-plan receipt, but those process rounds do not replace or dispose the retained Wave 5 binding delivery request. T219 first requires the external owner to land the delivery-contract/tooling change and validator, then imports exactly one valid `Wave5RetainedRequestDispositionV1` bound to the byte-preserved request and exact F. Before that import, T219 authorizes no request, attestation, seal, merge-target registration, merge eligibility, or merge. `remain-blocked` stays blocked; `abandon-without-merge` is terminal and cannot advance; `recover-panel-without-new-request` permits only the external recovery-attestation surface, still requiring the complete ten-role unanimous exact-F panel before seal or merge. The record creates no second request and supplies no panel result or constitutional waiver. F and `adr046w5` delivery history stay immutable. |
 
+The T589 ownership row is refined by the SC-002/source-floor closure in `tasks.md`. In
+addition to its prior files, T589 owns the accepted
+`docs/specs/ADR-046-validation-and-delivery.md` amendment,
+`docs/reference/schemas/delivery/sc002-incident-status-v1.schema.json`, and
+`tests/golden/delivery/sc002-incident-{human,json}-v1.txt`. Its existing
+`changelog.d/resource-api-production.md` fragment carries the incident-recovery entry, so the
+fourteen-fragment map does not grow. It owns the exact inspect/apply/admit-successor delivery
+commands, stable IDs, exits, human/JSON remediation, and focused tests. That nonbinding
+successor flow never releases or creates a binding request and preserves Wave 5's retained
+request byte-for-byte.
+
+The external source-floor row now requires issuer-authenticated canonical receipts, strict
+schemas/golden vectors at the external-owner paths in `data-model.md`, and a
+disposition-pinned validator that returns T589 a nonserializable typed result. The 91-case
+poison matrix visits all 13 roles for all seven classes with cardinality 13, recomputed
+enclosing hashes, and valid test signatures; copied authority/proof chains refuse. Within
+T589's SC-002 cleanup, the fixed stable OFD-lock inode and live-owner refusal precede all
+namespace access. Verified orphans move into durable retirement and ambiguous names move
+into durable incident quarantine; no sidecar data leaf is unlinked. Overlap tests latch both
+orderings for same/different inputs. T595/T604 own the six-transition apply-peer cross-product
+after the first durable mutation at every later edge, exact visited count
+`6 * (mutation_edge_count - 1)`, and raw PID/start/store/derivation/NAR canary absence from
+every state/output surface with digests only. These refinements supersede the older
+`quarantine/unlink`, unrestricted successor-admission, and output-only identity shorthand in
+the table without changing stage dependencies.
+
 T592 has two mechanically closed subcontracts within its serialized scope. First, it consumes
 the accepted external source floor as a read-only input and owns only target-v5 coordinator
 adoption. Before T592 starts, the source generation must already have atomically installed

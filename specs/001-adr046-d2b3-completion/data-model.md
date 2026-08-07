@@ -270,21 +270,34 @@ write lock and retains it through publication or cleanup, parent `fsync`, the ap
 census, and `EvidenceRecord` publication or return. There is no second cleanup lock or
 lock-free orphan path. A live importer owns that lock; a failed no-replace loser or restart
 path cannot inspect, rename, or remove the live owner's temp. Restart cleanup begins only
-after it acquires the released lock.
+after it acquires the released lock. The lock is one fixed candidate-relative regular
+single-link current-effective-uid `0600` leaf opened with `O_CLOEXEC`. Every actor verifies
+the same device/inode before taking `F_OFD_SETLK`; the leaf is never replaced, renamed, or
+unlinked. A nonblocking lock attempt returning `EAGAIN` or `EACCES` proves a live owner and
+requires zero namespace inspection or mutation before the caller returns the typed
+`sc002-sidecar-owner-live` refusal.
 
 While holding the lock, cleanup may inspect only the reserved temporary and quarantine
 namespaces through the held leaf-parent fd. It opens the candidate temp, requires a regular
 single-link current-effective-uid `0600` leaf, records its device/inode, owner, mode, link
 count, digest, and bytes, and atomically moves the name into a unique reserved quarantine
-name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf and requires all
-recorded identity members to match before a final fd-relative name check and `unlinkat`.
-Successful unlink is followed by parent `fsync`; before ordinary success or an ordinary
-refusal returns, the still-held lock guards an exact empty census of both ephemeral reserved
-namespaces. No joined path or broad sweep is allowed.
+name with `renameat2(RENAME_NOREPLACE)`. It then reopens the quarantine leaf. Cleanup never
+calls `unlinkat` on a sidecar data leaf: Linux has no inode-qualified unlink, so a final
+name check followed by `unlinkat` would retain a name/inode race. If every recorded identity
+member matches, cleanup moves the still-named leaf with
+`renameat2(RENAME_NOREPLACE)` into the durable candidate-relative retired namespace
+`evidence-sidecars/sc002/retired/sha256/<content-digest>.bin`, reopens and revalidates it,
+and `fsync`s both directory fds. A replacement can therefore cause only quarantine and
+refusal, never deletion of an unverified inode. A verified retired orphan is immutable,
+non-authorizing residue and does not block retry or close; it is removed only when the
+external retention owner retires the whole candidate, never by per-leaf automated cleanup.
+Before ordinary success or an ordinary refusal returns, the still-held lock guards an exact
+empty census of both ephemeral reserved namespaces. No joined path or broad sweep is
+allowed.
 
 Identity ambiguity has one different, attainable terminal state. If the quarantine reopen or
-the final pre-unlink name check does not prove the recorded inode, cleanup MUST NOT call
-`unlinkat` and MUST NOT restore the suspect name to the temporary namespace. It atomically
+the post-retirement reopen does not prove the recorded inode, cleanup MUST NOT restore the
+suspect name to the temporary namespace or treat the retired name as verified. It atomically
 moves the currently named suspect with `renameat2(RENAME_NOREPLACE)` into the durable
 candidate-relative incident namespace
 `evidence-sidecars/sc002/incidents/sha256/<incident-digest>.bin`, outside both ephemeral
@@ -296,23 +309,74 @@ entry. That entry is not zero residue: it blocks `EvidenceRecord` publication an
 close stage, survives restart, and is never removed by automated cleanup. The fixed refusal
 requires an operator incident disposition and a successor candidate. If the suspect name
 cannot itself be moved without ambiguity, cleanup leaves it in place, records no success,
-and blocks publication and close; it still never unlinks an unverified inode.
+and blocks publication and close. No SC-002 cleanup path unlinks a sidecar data leaf.
+
+The incident digest is also the stable `Sc002IncidentIdV1`: exactly 32 bytes rendered as 64
+lowercase hexadecimal characters. It is safe to expose because its fixed
+`d2b:sc002:incident-id:v1` preimage contains only the candidate digest binding and hashed
+identity tuples, never raw device/inode values. `Sc002DispositionIdV1` has the same rendered
+form and is
+`SHA-256("d2b:sc002:disposition-id:v1\0" || u64be(disposition-length) ||
+canonical-authenticated-disposition)`. One immutable `Sc002IncidentStatusV1`
+records exactly `schemaVersion = 1`, `kind = "sc002-incident-status"`, `incidentId`, the
+parked candidate/content/snapshot triplet, `state`, nullable-but-always-present
+`dispositionId`, and a nullable-but-always-present successor candidate/content/snapshot
+triplet. Null is the sole absent representation; omission is malformed. Its closed
+transition is:
+
+```text
+parked -> disposition-validated -> successor-admitted
+```
+
+The parked candidate remains permanently ineligible at every transition. A validated
+disposition has the sole action `abandon-candidate-admit-successor`; it binds the incident,
+parked triplet, distinct successor triplet, and the accepted external disposition authority.
+It never authorizes unlink, incident deletion, publication of the parked record, a binding
+panel request, reservation release, or reuse of evidence. Successor admission requires a
+fresh snapshot with no copied SC-002 receipt or incident bytes. For `adr046w5`, it admits
+only T220's nonbinding replacement-candidate and exact-candidate evidence path while
+preserving the byte-identical retained request and reservation; T219's separate external
+retained-request disposition remains mandatory. Any other wave whose binding request was
+already consumed must stop for its external wave disposition rather than use this flow.
+
+T589 owns the planned delivery CLI contract:
+`wave sc002-incident-inspect --snapshot PATH --incident-id ID [--json]`,
+`wave sc002-incident-apply --snapshot PATH --incident-id ID --disposition PATH [--json]`,
+and
+`wave sc002-successor-admit --snapshot PATH --incident-id ID --disposition-id ID
+--successor-snapshot PATH [--json]`. Exit `0` means the requested read or transition
+completed, exit `2` means invalid syntax or malformed input, exit `3` means the stable
+incident/disposition/successor ID was not found, and exit `4` means stale state, conflict,
+or blocked admission; no other stable exit is assigned. Human output is the fixed state plus
+one static next-command name and never interpolates executable argv. JSON is the closed
+`Sc002IncidentStatusV1` envelope with one remediation enum:
+`obtain-incident-disposition`, `apply-incident-disposition`, `admit-successor`, or `none`;
+it has no free-form remediation field. T589's focused parser, state-transition, human/JSON
+golden, exit, crash, stale-ID, replay, and no-request/no-unlink tests own this contract. Its
+existing `changelog.d/resource-api-production.md` fragment carries the operator-visible
+delivery recovery entry, and T220 verifies the accepted validation/delivery specification,
+generated help, schema/goldens, and fragment fold. This assigns future work only; these
+commands are not claimed implemented at this planning base.
 
 If a crash leaves the canonical sidecar durable before record publication, retry opens that
 leaf through the same dirfd policy and accepts it only when type, effective-uid ownership,
 mode `0600`, link count one, device/inode stability, digest, bytes, decode, and outer binding
 all match; it never replaces the leaf. A different or malformed existing leaf refuses.
 Crash injection covers source open, hash, decode, OFD-lock acquisition, temp write, file sync,
-no-replace publication, each ancestor-directory sync, quarantine move/reopen,
-the final pre-unlink identity check, race-loser/orphan unlink, incident move and both incident
-directory syncs, cleanup-parent sync, ephemeral-residue census, and record publication.
+no-replace publication, each ancestor-directory sync, quarantine move/reopen, verified
+retirement move/reopen, incident move and both incident directory syncs, cleanup-parent sync,
+ephemeral-residue census, and record publication.
 Synchronized tests cover importer versus cleanup and cleanup versus cleanup for both the same
 input and different inputs, temp replacement before quarantine move, quarantine replacement
-before reopen, replacement immediately before unlink, same-bytes/same-record idempotence, and
-different-bytes or wrong-binding races. An ordinary winner or loser leaves both ephemeral
-namespaces empty. Every identity-ambiguous case instead proves no unverified inode was
-unlinked, the durable incident entry or still-ambiguous name remains, restart redetects it,
-and publication and close remain blocked.
+before reopen, replacement before and after the retirement move, same-bytes/same-record
+idempotence, and different-bytes or wrong-binding races. Each overlap uses two independently
+opened descriptions of the same verified lock inode and latches both orderings at temp
+creation, file sync, quarantine move, retirement move, and incident move. The loser must
+receive the live-owner refusal before namespace access; after release, exactly one retry may
+advance. Every case proves bounded completion with no deadlock, no unverified unlink, and an
+exact final census. An ordinary winner or loser leaves both ephemeral namespaces empty.
+Every identity-ambiguous case instead proves the durable incident entry or still-ambiguous
+name remains, restart redetects it, and publication and close remain blocked.
 
 At every durable reopen, the validator resolves the locator beneath the already held
 candidate-directory fd with
@@ -351,7 +415,7 @@ namespace, missing or replaceable candidate OFD lock, cleanup against a live loc
 quarantine identity mismatch, cleanup-parent or incident-directory sync failure, unexpected
 ephemeral residue after an ordinary success/refusal/race/restart, or any durable incident
 entry also refuses. An identity mismatch instead passes only its negative oracle: no
-unverified unlink, durable incident preservation, and publication/close denial.
+sidecar-data unlink, durable incident preservation, and publication/close denial.
 Compatibility tests decode
 retained schema-v2 `EvidenceRecord` fixtures
 byte-identically, import a failed operator record without a receipt, and prove that the same
@@ -372,6 +436,52 @@ Self-asserted owner names, prose, a directory census, a target-only fixture, or 
 task are not authority. No task in this feature produces, installs, repairs, imports, or
 accepts this floor. T589 is a read-only consumer at dispatch, and T592 remains a read-only
 consumer during migration.
+
+Every source-floor object uses one canonical UTF-8 JSON encoding. Objects contain fields in
+the order listed here, arrays retain their stated canonical order, and output has no BOM,
+whitespace, or trailing newline. Text is ASCII and uses the shortest JSON escaping; hex is
+lowercase. Unsigned integers use base-10 digits with no sign, exponent, fraction, or leading
+zero except the single digit `0`, and must fit their stated Rust width before conversion.
+Duplicate, missing, reordered, or unknown fields; invalid UTF-8; non-ASCII text; alternate
+escapes; and any byte sequence that differs from decode-then-canonical-reencode are refused.
+The strict schemas set `additionalProperties: false` at every object level.
+
+Receipt hashes use `SHA-256(domain || u64be(payload-length) || payload)`, where `domain` is
+the exact ASCII tag including its terminating zero byte and `payload` is canonical bytes.
+The closed tag registry is:
+
+| Field | Exact domain tag |
+| --- | --- |
+| `manifestSha256` | `d2b:source-floor:manifest:v1\0` |
+| `installationReceiptSha256` | `d2b:source-floor:installation-receipt:v1\0` |
+| `validationReceiptSha256` | `d2b:source-floor:validation-receipt:v1\0` |
+| import receipt content identity | `d2b:source-floor:import-receipt:v1\0` |
+| `installedCensusSha256` / `validatedCensusSha256` | `d2b:source-floor:census:v1\0` |
+| `validatedFloorSha256` | `d2b:source-floor:validated-floor:v1\0` |
+
+The census payload is the canonical 13-member array, not a concatenation of member hashes.
+The validated-floor payload is three length-framed canonical objects in manifest,
+installation, validation order; it excludes the import receipt and therefore cannot contain
+itself. No receipt hash is SHA-256 of unframed concatenation, serializer-dependent map order,
+pretty JSON, or caller-supplied bytes. `dispositionSha256`, authority identities, source
+generation identity, and member artifact `contentSha256` retain the accepted external
+disposition's separately tagged definitions and are not aliases for any tag above.
+
+Issuer provenance is authenticated, not asserted by copying an authority digest. The
+accepted external disposition pins one Ed25519 verification key to each producer, installer,
+and import/validation authority. Each manifest or receipt ends with one closed
+`SourceFloorIssuerProofV1` containing, in order, `authoritySha256`,
+`verificationKeySha256`, and `signatureEd25519`; the key digest is 64 lowercase hex and the
+64-byte signature is 128 lowercase hex. The proof signs
+`signature-domain || u64be(unsigned-canonical-length) || unsigned-canonical-object`, where
+the unsigned object is the same ordered object with only its final `issuerProof` field
+omitted. The exact signature domains are
+`d2b:source-floor:manifest-signature:v1\0`,
+`d2b:source-floor:installation-signature:v1\0`,
+`d2b:source-floor:validation-signature:v1\0`, and
+`d2b:source-floor:import-signature:v1\0`. The authority and key must match the accepted
+disposition before signature verification. Missing, copied, wrong-key, cross-transition,
+or binding-stale proofs refuse before fd transfer, authorization, or mutation.
 
 `SourceGenerationCompatibilityFloorV1` is one immutable aggregate with exactly these
 top-level fields:
@@ -402,6 +512,7 @@ authority binding in the already accepted external disposition.
 | `importValidatorAuthoritySha256` | disposition-pinned typed import/validation authority |
 | `memberCount` | integer `13` |
 | `members` | exactly 13 `SourceGenerationCompatibilityMemberV1` values in the canonical order below |
+| `issuerProof` | producer `SourceFloorIssuerProofV1`, final field |
 
 Each `SourceGenerationCompatibilityMemberV1` has exactly `role`, `artifactId`,
 `dispositionSha256`, `sourceGenerationSha256`, `byteLength`, and `contentSha256`.
@@ -424,32 +535,47 @@ values. `role` and `artifactId` are the closed pair from this table:
 | `source-cross-fingerprint-negative-fixture` | `source-cross-fingerprint-negative-fixture-v1` |
 | `source-installed-apply-object` | `source-installed-apply-object-v1` |
 
-`SourceGenerationCompatibilityInstallationV1` contains exactly `schemaVersion = 1`,
-`kind = "source-generation-compatibility-installation"`, `manifestSha256`,
-`dispositionSha256`, `sourceGenerationSha256`, `installerAuthoritySha256`, and
-`installedCensusSha256`. The installer computes `installedCensusSha256` from the canonical
-ordered tuples re-read from the immutable installed source generation after the atomic
-installation; it cannot copy the manifest digest into that field without reading the
-installed bytes.
+`SourceGenerationCompatibilityInstallationV1` contains, in exact order,
+`schemaVersion = 1`, `kind = "source-generation-compatibility-installation"`,
+`manifestSha256`, `dispositionSha256`, `sourceGenerationSha256`,
+`installerAuthoritySha256`, `installedCensusSha256`, and the installer's final
+`issuerProof`. The installer computes `installedCensusSha256` from the canonical ordered
+tuples re-read from the immutable installed source generation after the atomic installation;
+it cannot copy the manifest digest into that field without reading the installed bytes.
 
-`SourceGenerationCompatibilityValidationV1` contains exactly `schemaVersion = 1`,
-`kind = "source-generation-compatibility-validation"`, `manifestSha256`,
-`installationReceiptSha256`, `dispositionSha256`, `sourceGenerationSha256`,
-`validatorAuthoritySha256`, `validatedCensusSha256`, and `verdict = "accepted"`. The typed
-validator re-reads the installed census, recomputes every member and aggregate digest, and
-requires `validatedCensusSha256` to equal the installation receipt's
-`installedCensusSha256`.
+`SourceGenerationCompatibilityValidationV1` contains, in exact order,
+`schemaVersion = 1`, `kind = "source-generation-compatibility-validation"`,
+`manifestSha256`, `installationReceiptSha256`, `dispositionSha256`,
+`sourceGenerationSha256`, `validatorAuthoritySha256`, `validatedCensusSha256`,
+`verdict = "accepted"`, and the validator's final `issuerProof`. The typed validator
+re-reads the installed census, recomputes every member and aggregate digest, and requires
+`validatedCensusSha256` to equal the installation receipt's `installedCensusSha256`.
 
-`SourceGenerationCompatibilityImportV1` contains exactly `schemaVersion = 1`,
-`kind = "source-generation-compatibility-import"`, `validatedFloorSha256`, `manifestSha256`,
-`installationReceiptSha256`, `validationReceiptSha256`, `dispositionSha256`,
-`sourceGenerationSha256`, `executionCommitOid`, `featureSnapshotSha256`,
-`validatorAuthoritySha256`, and `verdict = "accepted"`. `validatedFloorSha256` covers the
-canonical manifest, installation receipt, and validation receipt only, avoiding a
-self-referential aggregate digest. `executionCommitOid` is the full Git
-object id of exact clean C and `featureSnapshotSha256` is Q; neither may be abbreviated.
+`SourceGenerationCompatibilityImportV1` contains, in exact order,
+`schemaVersion = 1`, `kind = "source-generation-compatibility-import"`,
+`validatedFloorSha256`, `manifestSha256`, `installationReceiptSha256`,
+`validationReceiptSha256`, `dispositionSha256`, `sourceGenerationSha256`,
+`executionCommitOid`, `featureSnapshotSha256`, `validatorAuthoritySha256`,
+`verdict = "accepted"`, and the validator's final `issuerProof`.
+`validatedFloorSha256` covers the canonical manifest, installation receipt, and validation
+receipt only, avoiding a self-referential aggregate digest. `executionCommitOid` is the full
+Git object id of exact clean C and `featureSnapshotSha256` is Q; neither may be abbreviated.
 The external typed import/validation authority emits this receipt only after validating the
 same installed source generation that the migration will use.
+
+The accepted external prerequisite supplies strict JSON Schemas at
+`docs/reference/schemas/delivery/source-floor-v1/{floor,manifest,member,issuer-proof,installation-receipt,validation-receipt,import-receipt}.schema.json`
+and checked-in vectors under `tests/golden/delivery/source-floor-v1/`. The vectors contain
+each canonical byte string, framed preimage, digest, verification key, and signature. The
+suite includes noncanonical field order, integer spelling, text encoding, duplicate/unknown
+field, wrong domain, missing frame, and copied-proof negatives. Those paths belong to the
+external prerequisite owner, not a feature task. T589 does not deserialize a floor and decide
+for itself. It invokes the exact disposition-pinned validator and consumes one private,
+nonserializable `ValidatedSourceGenerationCompatibilityFloor` result by value. That type has
+no public fields, constructor, serde implementation, `Clone`, `Copy`, `Default`, conversion,
+or byte importer; it binds the validated floor digest, source generation, C/Q, and
+authenticated issuer chain. A serialized receipt chain, even with copied matching authority
+digests, is not a dispatch capability.
 
 Acceptance is a closed append-only transition:
 
@@ -465,14 +591,22 @@ Only the authority assigned to a transition may append its receipt. A skipped, r
 repeated transition refuses. Any changed disposition, source generation, member bytes,
 authority binding, receipt, C, or Q makes the aggregate stale and requires a new external
 chain; no receipt is edited in place. T589 dispatch opens only from
-`imported-for-exact-C/Q`, and every later source-side handoff boundary revalidates the same
-aggregate.
+`imported-for-exact-C/Q` after the disposition-pinned validator returns the nonserializable
+typed result, and every later source-side handoff boundary revalidates the same aggregate.
 
 The member-census rejection list is closed and always means all seven classes: `missing`,
 `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and
 `cross-disposition`. Each refuses before accepted-socket fd transfer, authorization, or
 mutation. Unknown versions, kinds, fields, authority bindings, transition order, or malformed
 encodings are structural refusals and never weaken or replace that seven-class census.
+The poison generator iterates all 13 canonical role/artifact pairs for all seven classes.
+Every case keeps the member array and declared cardinality at 13 by a one-for-one
+class-specific substitution, recomputes every enclosing hash, and signs the mutated
+otherwise-valid chain with test-only keys so the selected semantic invariant is reached.
+For the mathematically overlapping `missing`, `duplicate`, and `extra` set cases, the oracle
+asserts the complete expected census-error set rather than relying on first-error order. A
+fixture with a stale enclosing hash, invalid signature, wrong cardinality, or unvisited role
+does not count toward the 91-case matrix.
 
 ---
 

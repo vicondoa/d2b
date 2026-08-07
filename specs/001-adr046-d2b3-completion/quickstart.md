@@ -248,6 +248,56 @@ preserves the consumed request and authorizes a specific non-request close actio
 silently re-attest changed content, waive findings, or infer successor admission. Any
 authorized integration-lineage merge preserves F's tree.
 
+### Recover a parked SC-002 sidecar incident
+
+> **Planned contract, not a command available at this committed base.** T589 owns these
+> delivery subcommands, their accepted validation/delivery contract amendment, focused tests,
+> generated help/schema goldens, and the operator-visible entry in its existing
+> `changelog.d/resource-api-production.md` fragment. Do not claim recovery until that task
+> and T220's coordinated contract/changelog checks pass.
+
+An identity-ambiguous sidecar is never unlinked. The parked candidate remains ineligible and
+the durable incident remains retained. Recovery is inspect, apply one authenticated external
+disposition, then admit one distinct successor snapshot:
+
+```bash
+set -eu
+X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
+
+$X sc002-incident-inspect \
+  --snapshot "$PARKED_SNAPSHOT" \
+  --incident-id "$SC002_INCIDENT_ID"
+
+$X sc002-incident-apply \
+  --snapshot "$PARKED_SNAPSHOT" \
+  --incident-id "$SC002_INCIDENT_ID" \
+  --disposition "$SC002_DISPOSITION"
+
+$X sc002-successor-admit \
+  --snapshot "$PARKED_SNAPSHOT" \
+  --incident-id "$SC002_INCIDENT_ID" \
+  --disposition-id "$SC002_DISPOSITION_ID" \
+  --successor-snapshot "$SUCCESSOR_SNAPSHOT"
+```
+
+`SC002_INCIDENT_ID` and `SC002_DISPOSITION_ID` are stable lowercase 64-hex typed digests.
+Exit `0` means the requested read or transition completed; `2` means invalid syntax or
+malformed input; `3` means an ID was not found; and `4` means stale state, conflict, or
+blocked admission. Human output contains only the fixed state, stable IDs as data, one closed
+remediation action, and a static next-command name. It never prints interpolated argv. The
+equivalent `--json` output is the version-1 `sc002-incident-status` envelope and its
+`remediation` is exactly one of `obtain-incident-disposition`,
+`apply-incident-disposition`, `admit-successor`, or `none`; there is no free-form guidance
+field.
+
+The disposition's only action is `abandon-candidate-admit-successor`. It cannot delete the
+incident, make the parked candidate eligible, reuse its receipt/evidence, release a binding
+reservation, or issue another binding request. The successor must have a distinct freshly
+derived candidate/content/snapshot triplet and no copied SC-002 bytes. For `adr046w5`, this
+admits only T220's nonbinding replacement-candidate and exact-candidate evidence flow while
+preserving the retained request byte-for-byte; T219's external retained-request disposition
+is still required. A consumed ordinary wave stops for its external wave disposition.
+
 ---
 
 ## Operator loop: prove the plane works
@@ -505,13 +555,22 @@ both the target-object and apply-object pins and performs no evaluation or refer
 The broker also binds the accepted apply connection's direct peer pidfd and live executable
 identity to the apply-object pin immediately before each mutation; exit, exec, PID reuse,
 start-identity mismatch, executable mismatch, or ambiguity refuses, and no pidfd is
-persisted. Validation injects every transition before the first mutation and, after allowing
-that mutation, before every later mutation edge; the next edge and all successors remain
-unexecuted. Raw peer PID/start and executable store/NAR identity never appears in human,
-JSON, wire, error, log, span, metric, audit, or `Debug` output. Correlation uses only typed
-fixed domain-separated digests, and metrics carry no peer-identity label. An empty, malformed, over-bound,
-mismatched, changed, unreadable, or nonexistent input exits 2 with the named remediation and
-runs no privileged command.
+persisted. Validation is the full cross-product: each of those six transitions is injected
+in a fresh run before the first mutation and, after exactly the first mutation and its audit
+become durable, immediately before each individual later mutation edge. Every run proves the
+selected edge and all successors remain unexecuted while the durable prefix is unchanged.
+A visited-edge counter must equal `6 * (mutation_edge_count - 1)` for the post-first matrix;
+empty or skipped enumeration fails.
+
+Outside transient verifier-local kernel handles and bytes, raw peer PID/start and executable
+store path, derivation name, NAR identity, or NAR hash is forbidden in coordinator state,
+receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
+name/label/value/exemplar, audit, panic, or `Debug` output. Persisted correlation contains
+only typed fixed domain-separated digests, and metrics carry no peer-identity label or value.
+Distinct PID, start, store-path, derivation, and NAR canaries must be absent from every
+captured surface while the expected correlation digests remain present. An empty, malformed,
+over-bound, mismatched, changed, unreadable, or nonexistent input exits 2 with the named
+remediation and runs no privileged command.
 
 **Expected**: all three exact resources are ready through their owned effects; removal of
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
