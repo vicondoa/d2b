@@ -480,7 +480,7 @@ fn bazel_repin_with_executable_target(
         fs::canonicalize(repo_root()?)?
     };
     reject_ambient_repin_before_bootstrap()?;
-    let mut fresh_executor = ProcessFreshBootstrapExecutor;
+    let mut fresh_executor = ProcessFreshBootstrapExecutor::from_environment();
     if let Some(output) = fresh_hub_bootstrap(&root, hub, &mut fresh_executor)? {
         return Ok(output);
     }
@@ -626,7 +626,19 @@ trait FreshBootstrapExecutor {
     ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>>;
 }
 
-struct ProcessFreshBootstrapExecutor;
+struct ProcessFreshBootstrapExecutor {
+    executable: PathBuf,
+}
+
+impl ProcessFreshBootstrapExecutor {
+    fn from_environment() -> Self {
+        Self {
+            executable: env::var_os("BAZEL")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("bazel")),
+        }
+    }
+}
 
 impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
     fn run(
@@ -636,8 +648,7 @@ impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
     ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
         let output_user_root = workspace.join("bazel-output-user-root");
         let output_base = workspace.join("bazel-output-base");
-        let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
-        let mut command = Command::new(executable);
+        let mut command = Command::new(&self.executable);
         command
             .env_clear()
             .current_dir(workspace)
@@ -2237,6 +2248,7 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 #[cfg(test)]
 mod fresh_bootstrap_tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     struct FakeFreshExecutor {
         fail: bool,
@@ -2323,6 +2335,37 @@ mod fresh_bootstrap_tests {
             .expect("retry")
             .is_some());
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn process_executor_pins_the_bzlmod_bootstrap_contract() {
+        let workspace = create_exclusive_temp_dir("xtask-fresh-process").expect("workspace");
+        fs::create_dir_all(workspace.join("bazel/cargo")).expect("cargo directory");
+        let executable = workspace.join("fake-bazel");
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+[ "$1" = "--batch" ] || exit 10
+[ "$4" = "mod" ] || exit 11
+[ "$5" = "deps" ] || exit 12
+[ "$6" = "--lockfile_mode=off" ] || exit 13
+[ "$CARGO_BAZEL_REPIN" = "1" ] || exit 14
+[ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 15
+mkdir -p bazel/cargo
+printf product-lock > bazel/cargo/product.lock
+"#,
+        )
+        .expect("fake Bazel");
+        let mut permissions = fs::metadata(&executable).expect("fake metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).expect("fake executable");
+        let mut executor = ProcessFreshBootstrapExecutor { executable };
+        assert!(executor.run(&workspace, "product").expect("child").success());
+        assert_eq!(
+            fs::read(workspace.join("bazel/cargo/product.lock")).expect("lock"),
+            b"product-lock"
+        );
+        fs::remove_dir_all(workspace).expect("cleanup");
     }
 
     #[test]
