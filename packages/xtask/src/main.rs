@@ -535,10 +535,12 @@ fn fresh_hub_bootstrap(
             Ok(metadata) if metadata.file_type().is_file()
         )
     {
-        return Err(fresh_bootstrap_error(
-            hub,
-            "product lock is required before walker bootstrap",
-        ));
+        return Err(
+            "D2B-BZL-FRESH-ORDER: product lock is required before walker bootstrap; \
+             run cargo xtask bazel-repin --hub product, then retry \
+             cargo xtask bazel-repin --hub walker"
+                .into(),
+        );
     }
     let root_lockfile = root.join(format!("bazel/cargo/{hub}.lock"));
     let selected_exists = match fs::symlink_metadata(&root_lockfile) {
@@ -617,7 +619,7 @@ fn fresh_hub_bootstrap(
         ));
     }
     generated?;
-    Ok(result.expect("generated output has an installation result"))
+    Ok(result?)
 }
 
 fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -2488,6 +2490,15 @@ printf product-lock > bazel/cargo/product.lock
         assert!(module.contains("use_repo(crate, \"product\")"));
         assert!(!workspace.join("MODULE.bazel.lock").exists());
         fs::remove_dir_all(workspace).expect("cleanup");
+
+        let workspace = create_exclusive_temp_dir("xtask-fresh-module-walker").expect("workspace");
+        prepare_fresh_workspace(root, &workspace, "walker").expect("prepare walker workspace");
+        let module = fs::read_to_string(workspace.join("MODULE.bazel")).expect("module");
+        assert!(!module.contains("name = \"product\""));
+        assert!(module.contains("name = \"walker\""));
+        assert!(module.contains("use_repo(crate, \"walker\")"));
+        assert!(!workspace.join("MODULE.bazel.lock").exists());
+        fs::remove_dir_all(workspace).expect("cleanup");
     }
 
     #[test]
@@ -2538,5 +2549,40 @@ printf product-lock > bazel/cargo/product.lock
             &changed,
             "product"
         ));
+
+        let root = create_exclusive_temp_dir("xtask-fresh-content").expect("root");
+        fs::write(root.join("unrelated"), b"v1").expect("unrelated");
+        let before = fresh_content_snapshot(&root).expect("before");
+        let mut permissions = fs::metadata(root.join("unrelated"))
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(root.join("unrelated"), permissions).expect("mode");
+        let after = fresh_content_snapshot(&root).expect("after mode");
+        assert!(fresh_content_changed_outside_selected(
+            &before, &after, "product"
+        ));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn walker_first_refuses_before_child() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: None,
+        };
+        let error = bazel_repin_with_fresh_executor(
+            &["--hub".into(), "walker".into()],
+            Some(root.clone()),
+            &mut executor,
+        )
+        .expect_err("walker-first bootstrap");
+        assert!(error.to_string().contains("D2B-BZL-FRESH-ORDER"));
+        assert_eq!(executor.calls, 0);
+        assert!(!root.join("bazel/cargo/product.lock").exists());
+        assert!(!root.join("bazel/cargo/walker.lock").exists());
+        fs::remove_dir_all(root).expect("cleanup");
     }
 }
