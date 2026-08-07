@@ -1628,16 +1628,7 @@ printf '%s\n' "$sanitized_line"
             encoding="utf-8"
         )
         rust_driver = RUST_DRIVER.read_text(encoding="utf-8")
-        binaries = [
-            "policy_dash_gate",
-            "policy_adr046_work_items",
-            "policy_changelog_gate",
-            "policy_adr046_spec_literals",
-            "policy_adr046_envelopes",
-            "policy_provider_crates",
-            "policy_resource_mutation_seal",
-            "policy_docs",
-        ]
+        binaries = list(POLICY_INDEPENDENT_BINARIES)
 
         self.assertIn(
             "readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(",
