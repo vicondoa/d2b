@@ -20,7 +20,7 @@ third source of truth that the drift gates do not check.
 | [nix-configuration.md](./nix-configuration.md) | `d2b.zones.<zone>.resources.*` option schema | Host configurations | W2, W5 |
 | [generated-artifacts.md](./generated-artifacts.md) | Schemas, per-Zone bundles, UI colors, delivery artifacts | Broker, daemon, companions, drift gates | W2-W7 |
 | [companion-contracts.md](./companion-contracts.md) | What the five desktop companions consume | Sibling repositories | W5 publish, W8 verify |
-| [Candidate recovery prerequisite v1](#candidate-recovery-prerequisite-v1) | Immutable-candidate failure closure and successor admission | Plan integrator, delivery tooling, panel process | Historical W2 entry; requalified at close if unattested |
+| [Candidate recovery prerequisite v1](#candidate-recovery-prerequisite-v1) | Immutable-candidate failure closure and external disposition | Plan integrator, delivery tooling, panel process | Historical W2 entry; requalified at close if unattested |
 
 ## Candidate recovery prerequisite v1
 
@@ -36,8 +36,8 @@ The feature-local sequencing contract is:
 1. one immutable candidate receives at most one binding request;
 2. a nonunanimous candidate is durably closed as failed and retains its request and records;
 3. the active candidate slot is not released until that closure is durable;
-4. only a distinct successor with the failed predecessor's complete recommendation,
-   convergence, and candidate-bound validation identities may be admitted; and
+4. no same-wave successor may receive another binding request; an accepted external
+   disposition is required and may authorize only a non-request close action; and
 5. same-candidate retry, two active candidates, stale or cross-wave recovery evidence, and
    any post-request content, history, or evidence move fail closed.
 
@@ -57,7 +57,7 @@ exactly one field, binding, or transition at a time. The case inventory is itsel
 must cover every required and forbidden field in both receipt variants; candidate, program,
 wave, request, round, commit, tree, recommendations, convergence, and validation bindings;
 same-candidate second request; alternate candidate while active; release before durable
-failure closure; successor admission before durable release; missing or stale recovery
+failure closure; successor admission before or after durable release; missing or stale recovery
 evidence; cross-candidate and cross-wave evidence; and post-request content, history, or
 evidence movement. A prose assertion or one happy-path test is not this matrix.
 
@@ -243,17 +243,19 @@ merge-target registration, merge eligibility, and merge.
     `operator-nix-activation-cleanup`; T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
     `cli-reference-conformance`. T602 rejects any unknown, duplicate, missing, extra,
-    wrong-lane, or conflated identifier. T219 alone runs F's one binding panel, seal, and
-    tree-preserving merge. F cannot change or receive a second request. Nonunanimity retains F
-    as failed and routes scoped fixes through a fully revalidated successor and
-    delta/full-context follow-up panel before that candidate's one request.
+    wrong-lane, or conflated identifier. Wave 5's retained `panel-request.json` has already
+    consumed its binding surface. T219 issues no binding or successor request and may perform
+    only a non-request close action expressly authorized by an accepted external disposition
+    that preserves the historical bytes. F and delivery history remain immutable.
 15. **SC-002 evidence is typed and census-closed.** Only
     `operator-nix-activation-cleanup` carries
     `EvidencePayload::Sc002ActivationLiveV1`. Its version-1, 16,384-byte-bounded,
     fixed-redacted payload contains one common monotonic start and exactly one sample for each
     of `Volume/acceptance-state`, `Network/acceptance-net`, and
     `Device/acceptance-tpm`. Effect, production Ready, selected-stop, and bounded progress
-    observations repeat the sample identity. T589's one validator runs at import, durable
-    reopen, panel-request, seal, and merge-eligibility and rejects every missing, malformed,
-    misordered, stale, progress-free, over-budget, missing-sample, duplicate-sample,
-    mixed-identity, or unrelated-sample case.
+    observations repeat the sample identity, and effect plus Ready must name the same typed
+    resource identity. T589's one validator runs at import, durable reopen,
+    panel-request/panel-attest, seal, and merge-eligibility and rejects every missing,
+    malformed, unknown-version/field/enum, over-bound, misordered, stale, progress-free,
+    over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
+    or unrelated-sample case.

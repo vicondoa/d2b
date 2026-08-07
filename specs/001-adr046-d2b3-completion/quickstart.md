@@ -49,10 +49,12 @@ rebases onto the merged predecessor.
 
 T603 never infers task completion from code presence and never edits a feature artifact
 directly. First freeze clean pre-validator base A and feature snapshot P0, run
-`/speckit-analyze`, and obtain unanimous plan signoff at A/P0. That pair authorizes only
-`packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
+`/speckit-analyze`, and obtain unanimous plan signoff at A/P0. That pair authorizes exactly
+three repository paths: the two Rust files `packages/xtask/src/delivery/mod.rs` and
+`packages/xtask/src/delivery/resume.rs`, plus mandatory
 `changelog.d/delivery-resume-reconciliation.md`. Land validator-and-fragment commit V with
-sole parent A, freeze B exactly at V, require P to remain byte-identical to P0, rerun analysis over
+sole parent A and exactly those three paths, freeze B exactly at V, require P to remain
+byte-identical to P0, rerun analysis over
 A..B plus the feature artifacts, and rerun the plan panel at B/P. Any finding or later
 validator change invalidates B and requires both post-validator gates again.
 
@@ -98,7 +100,8 @@ For `adr046w5`, the exact implementation and close chain is
 T220 -> F -> {T600,T601} -> T602 -> T219`.
 T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
 `SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
-remaining content change before F; T219 alone runs the binding panel, seal, and merge.
+remaining content change before F. T219 remains an external-disposition gate because Wave 5
+already consumed its binding request; it issues no request or successor request.
 
 ### 3. Inner loop while implementing
 
@@ -188,7 +191,8 @@ specific lane to.
 
 For ordinary waves, required CI, local/host validators, and panel lanes may run concurrently
 against the snapshot. For `adr046w5`, T600/T601 evidence and T602's closed-set check complete
-before T219 issues the single binding panel request.
+before T219 evaluates the accepted external disposition. They do not authorize another
+binding request.
 
 ### 6. Merge, rebase, and clean up
 
@@ -214,14 +218,13 @@ proof passes, and required CI reruns regardless.
 ### If content changes after snapshotting
 
 Any content change before the binding panel request invalidates validation evidence: converge,
-re-snapshot, and rerun before requesting the panel. For `adr046w5`, F and its evidence
-identity may not change after F's binding request, and F can never receive a second request.
-A nonunanimous F is retained as failed; route only its recommendations through scoped fixes,
-return through T220 and T600-T602, and run the delta/full-context follow-up panel before a
-distinct successor receives its one request. If the current external ADR or tooling refuses
-that successor flow, stop for integrator scope escalation rather than silently re-attesting
-changed content or waiving findings. The eligible integration-lineage merge may change
-history only while preserving the successful candidate's tree.
+re-snapshot, and rerun before requesting the panel. For `adr046w5`, the retained historical request already consumed the binding surface. F and
+its evidence identity do not receive a request, and no successor candidate may receive one
+through this feature. T220 may replace provisional candidates only during nonbinding
+pre-request phase convergence. After T602, stop until an accepted external disposition
+preserves the consumed request and authorizes a specific non-request close action; never
+silently re-attest changed content, waive findings, or infer successor admission. Any
+authorized integration-lineage merge preserves F's tree.
 
 ---
 
@@ -278,40 +281,74 @@ target broker can publish it. Build and run the deployment entrypoint from the e
 configuration instead:
 
 ```bash
-: "${D2B_HOST_FLAKE_REF:?set the target flake ref without a # selector}"
-: "${D2B_HOST_CONFIGURATION:?set the target nixosConfigurations name}"
+set -eu
+LC_ALL=C
+export LC_ALL
+fail() { printf '%s\n' "$1" >&2; exit 2; }
+
+[ -n "${D2B_HOST_FLAKE_REF:-}" ] ||
+  fail 'set D2B_HOST_FLAKE_REF to the target flake ref without a # selector'
+[ -n "${D2B_HOST_CONFIGURATION:-}" ] ||
+  fail 'set D2B_HOST_CONFIGURATION to the target nixosConfigurations name'
 
 case "$D2B_HOST_FLAKE_REF" in
-  *'#'*|'') printf '%s\n' 'D2B_HOST_FLAKE_REF must be nonempty and contain no # selector' >&2; exit 2 ;;
+  *[!A-Za-z0-9+._~:/?@%=\&,-]*|*'#'*)
+    fail 'D2B_HOST_FLAKE_REF has invalid grammar'
+    ;;
 esac
 case "$D2B_HOST_CONFIGURATION" in
-  ''|*[!A-Za-z0-9_-]*|[!A-Za-z0-9]*) printf '%s\n' 'invalid D2B_HOST_CONFIGURATION' >&2; exit 2 ;;
+  [!A-Za-z0-9]*|*[!A-Za-z0-9_-]*)
+    fail 'D2B_HOST_CONFIGURATION has invalid grammar'
+    ;;
 esac
-test "${#D2B_HOST_CONFIGURATION}" -le 64
+[ "${#D2B_HOST_CONFIGURATION}" -le 64 ] ||
+  fail 'D2B_HOST_CONFIGURATION exceeds 64 bytes'
+[ "$(id -u)" -ne 0 ] ||
+  fail 'run authorization as the unprivileged d2b administrator, not root'
 
 D2B_HOST_REBUILD_REF="${D2B_HOST_FLAKE_REF}#${D2B_HOST_CONFIGURATION}"
 D2B_HOST_INSTALLABLE="${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.system.build.d2bHostGenerationDeploy"
+[ "${#D2B_HOST_REBUILD_REF}" -le 2048 ] ||
+  fail 'composed host generation rebuild reference exceeds 2048 bytes'
 
-test "$(nix eval --raw "${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")" = \
-  "$D2B_HOST_REBUILD_REF"
-nix path-info "$D2B_HOST_INSTALLABLE"
-sudo nix run "$D2B_HOST_INSTALLABLE"
+if ! D2B_EVALUATED_REF="$(nix eval --raw \
+  "${D2B_HOST_FLAKE_REF}#nixosConfigurations.${D2B_HOST_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")"; then
+  fail 'target hostGenerationRebuildRef evaluation failed'
+fi
+[ "$D2B_EVALUATED_REF" = "$D2B_HOST_REBUILD_REF" ] ||
+  fail 'target hostGenerationRebuildRef does not match the validated parameters'
+nix path-info "$D2B_HOST_INSTALLABLE" >/dev/null ||
+  fail 'target deployment installable does not exist'
+nix run "$D2B_HOST_INSTALLABLE" -- --authorize-handoff ||
+  fail 'public-socket administrator authorization failed'
+sudo nix run "$D2B_HOST_INSTALLABLE" -- --apply-authorized-handoff
 ```
 
-That entrypoint only builds and verifies the target closure, durably stages immutable state,
-and submits one opaque intent. An authorized typed normal broker, or the target closure's
-one-shot bootstrap-broker mode when the installed protocol-4 broker lacks the operation,
-performs every profile, service, 3/1 bootstrap, publication, and rollback mutation with
-immutable audit. The target broker starts before the target daemon. The daemon completes
-Hello while unready, sends the authenticated publication request, and ingests only after
-broker-durable publication of the d2b generation pointer and
-`/etc/d2b/host-generation-rebuild-ref`.
+The unprivileged invocation traverses the existing public socket and its
+`SO_PEERCRED`/`d2b`-group Admin classification. It emits no authority token. The broker
+durably seals one nonfabricable handoff capability to the staged intent; the privileged
+invocation can only resume that exact authorized intent. Effective uid 0 and daemon identity
+never authorize independently. A capability-authorized typed normal broker, or the target
+closure's one-shot bootstrap-broker mode when the installed protocol-4 broker lacks the
+operation, performs every profile, service, 3/1 bootstrap, publication, and rollback mutation
+with immutable pre-mutation and outcome audit. The durable order is staged intent/capability,
+target broker, target daemon, Hello while unready, phase-attenuated authenticated publication
+request, broker-durable pointer/reference publication, daemon ingestion, then readiness.
 
 After the first successful publication, the installed entrypoint may use the stable reference:
 
 ```bash
+set -eu
+[ "$(id -u)" -ne 0 ] || {
+  printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
+  exit 2
+}
+/run/current-system/sw/bin/d2b-host-generation-deploy \
+  --from-reference /etc/d2b/host-generation-rebuild-ref \
+  --authorize-handoff
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
-  --from-reference /etc/d2b/host-generation-rebuild-ref
+  --from-reference /etc/d2b/host-generation-rebuild-ref \
+  --apply-authorized-handoff
 
 # Every exact acceptance resource must reach its owned effect and ready state
 d2b resource list
@@ -329,13 +366,15 @@ remains Wave 4 implementation; Wave 5 accepts it through the production plane wi
 implementation ownership.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
-the correct restored state. The existing daemon startup/reconciliation path resumes rollback
-after an entrypoint crash; no entrypoint process or extra unit must remain alive. Verify the
+the correct restored state. The systemd-supervised existing `d2bd.service`
+startup/reconciliation DAG resumes rollback after an entrypoint crash; no entrypoint process
+or extra unit must remain alive. Verify the
 source state, then retry with the parameterized target command above; do not create the file
 or copy the rolled-back target value into place:
 
 ```bash
-systemctl is-active d2bd.service d2b-priv-broker.socket
+set -eu
+systemctl is-active d2bd.service d2b-priv-broker.socket >/dev/null
 systemctl list-units --all --plain --no-legend \
   'd2bd.service' 'd2b-priv-broker.socket' 'd2b-priv-broker.service'
 d2b vm status acceptance-vm
@@ -345,36 +384,69 @@ To roll a successfully migrated host back to a prior validated configuration, se
 values explicitly and run that target through the same broker-owned path:
 
 ```bash
-: "${D2B_ROLLBACK_FLAKE_REF:?set the prior flake ref without a # selector}"
-: "${D2B_ROLLBACK_CONFIGURATION:?set the prior nixosConfigurations name}"
+set -eu
+LC_ALL=C
+export LC_ALL
+fail() { printf '%s\n' "$1" >&2; exit 2; }
+
+[ -n "${D2B_ROLLBACK_FLAKE_REF:-}" ] ||
+  fail 'set D2B_ROLLBACK_FLAKE_REF to the prior flake ref without a # selector'
+[ -n "${D2B_ROLLBACK_CONFIGURATION:-}" ] ||
+  fail 'set D2B_ROLLBACK_CONFIGURATION to the prior nixosConfigurations name'
 
 case "$D2B_ROLLBACK_FLAKE_REF" in
-  *'#'*|'') printf '%s\n' 'D2B_ROLLBACK_FLAKE_REF must be nonempty and contain no # selector' >&2; exit 2 ;;
+  *[!A-Za-z0-9+._~:/?@%=\&,-]*|*'#'*)
+    fail 'D2B_ROLLBACK_FLAKE_REF has invalid grammar'
+    ;;
 esac
 case "$D2B_ROLLBACK_CONFIGURATION" in
-  ''|*[!A-Za-z0-9_-]*|[!A-Za-z0-9]*) printf '%s\n' 'invalid D2B_ROLLBACK_CONFIGURATION' >&2; exit 2 ;;
+  [!A-Za-z0-9]*|*[!A-Za-z0-9_-]*)
+    fail 'D2B_ROLLBACK_CONFIGURATION has invalid grammar'
+    ;;
 esac
-test "${#D2B_ROLLBACK_CONFIGURATION}" -le 64
+[ "${#D2B_ROLLBACK_CONFIGURATION}" -le 64 ] ||
+  fail 'D2B_ROLLBACK_CONFIGURATION exceeds 64 bytes'
+[ "$(id -u)" -ne 0 ] ||
+  fail 'run authorization as the unprivileged d2b administrator, not root'
 
 D2B_ROLLBACK_REF="${D2B_ROLLBACK_FLAKE_REF}#${D2B_ROLLBACK_CONFIGURATION}"
 D2B_ROLLBACK_INSTALLABLE="${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.system.build.d2bHostGenerationDeploy"
-test "$(nix eval --raw "${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")" = \
-  "$D2B_ROLLBACK_REF"
-nix path-info "$D2B_ROLLBACK_INSTALLABLE"
-sudo nix run "$D2B_ROLLBACK_INSTALLABLE"
+[ "${#D2B_ROLLBACK_REF}" -le 2048 ] ||
+  fail 'composed rollback reference exceeds 2048 bytes'
+
+if ! D2B_EVALUATED_ROLLBACK_REF="$(nix eval --raw \
+  "${D2B_ROLLBACK_FLAKE_REF}#nixosConfigurations.${D2B_ROLLBACK_CONFIGURATION}.config.d2b.site.hostGenerationRebuildRef")"; then
+  fail 'prior hostGenerationRebuildRef evaluation failed'
+fi
+[ "$D2B_EVALUATED_ROLLBACK_REF" = "$D2B_ROLLBACK_REF" ] ||
+  fail 'prior hostGenerationRebuildRef does not match the validated parameters'
+nix path-info "$D2B_ROLLBACK_INSTALLABLE" >/dev/null ||
+  fail 'prior deployment installable does not exist'
+nix run "$D2B_ROLLBACK_INSTALLABLE" -- --authorize-handoff ||
+  fail 'public-socket rollback authorization failed'
+sudo nix run "$D2B_ROLLBACK_INSTALLABLE" -- --apply-authorized-handoff
 ```
 
 The host-integration acceptance executes the parameterized migration and rollback procedures,
-rejects empty, malformed, mismatched, and nonexistent flake/configuration inputs before
-mutation, kills the entrypoint at every post-staging crash point, and requires autonomous
-daemon reconciliation to finish or roll back.
+rejects empty, malformed, over-bound, mismatched, and nonexistent flake/configuration inputs
+before public-socket authorization or `sudo`, kills the entrypoint at every post-staging
+crash point, and requires the systemd-supervised existing daemon DAG to finish or roll back.
 
 ### Story 1 - retire and restart
 
 ```bash
 # Remove one resource from config, reactivate
+set -eu
+[ "$(id -u)" -ne 0 ] || {
+  printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
+  exit 2
+}
+/run/current-system/sw/bin/d2b-host-generation-deploy \
+  --from-reference /etc/d2b/host-generation-rebuild-ref \
+  --authorize-handoff
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
-  --from-reference /etc/d2b/host-generation-rebuild-ref
+  --from-reference /etc/d2b/host-generation-rebuild-ref \
+  --apply-authorized-handoff
 d2b resource list          # retired in dependency-safe order, cleanup visible, others intact
 
 sudo reboot

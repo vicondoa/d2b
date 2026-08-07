@@ -21,6 +21,10 @@
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
+- [x] Wave 5 Nix acceptance names exactly `Volume/acceptance-state`, `Network/acceptance-net`,
+  and `Device/acceptance-tpm`; each effect and production `Ready` projection is bound to that
+  same identity, while Guest runtime-effect acceptance is explicitly deferred to Wave 6
+  `Provider/runtime-cloud-hypervisor` T384/T479/T480
 
 ## Feature Readiness
 

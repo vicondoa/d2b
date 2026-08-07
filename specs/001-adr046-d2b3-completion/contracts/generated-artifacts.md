@@ -54,16 +54,21 @@ artifact and requires a clean `git diff`, fail-closed.
   4/2 has not published. The entrypoint builds and verifies the complete target closure,
   stages one immutable transition identity, and submits only an opaque request. It cannot
   publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback.
-  Authorized typed normal or target-closure bootstrap broker code exclusively owns stock
+  Before any privileged invocation, the unprivileged operator must pass the existing
+  public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker durably seals
+  one nonfabricable handoff capability to the complete intent and emits no authority token.
+  Capability-authorized typed normal or target-closure bootstrap broker code exclusively owns stock
   profile publication, broker/daemon service transition, 3/1 bootstrap, d2b pointer/reference
   publication and repair, stock rollback, and source-service restoration.
 - The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.
   The broker verifies and audits the staged source/target identity. The target daemon starts
   and completes Hello for the exact target broker generation and protocol while unready, then
-  its broker-derived principal requests publication. The broker publishes the pointer and
-  reference with file and directory durability before daemon ingestion/readiness. A failed
-  build leaves 3/1 active; a later failure is reopened by existing daemon
-  startup/reconciliation, which requests broker restoration of the prior pointer and stable
+  presents a broker-issued phase attenuation in the authenticated publication request.
+  Daemon identity, Hello, and bootstrap euid 0 never authorize independently. The broker
+  publishes the pointer and reference with file and directory durability before daemon
+  ingestion/readiness. A failed build leaves 3/1 active; a later failure is reopened by the
+  systemd-supervised existing daemon startup/reconciliation DAG, which requests
+  capability-authorized broker restoration of the prior pointer and stable
   reference bytes or verified absence before broker-owned stock rollback.
   Rollback therefore cannot leave a 4/2 reference on a restored 3/1 host.
 - Nix activation stages immutable input only. Direct activation or daemon creation, repair,
@@ -72,9 +77,13 @@ artifact and requires a clean `git diff`, fail-closed.
   file and parent-directory sync, fixed-digest audit fields, and the same operation for repair.
 - Runtime version refusal is identifier-free and carries only closed action
   `rebuild-host-generation`; it contains no command or argv. Reference documentation gives
-  parameterized paths: a validated target-closure bootstrap for a 3/1 host where the stable
-  reference is absent, the installed `d2b-host-generation-deploy --from-reference` command
-  only after broker publication, and a validated prior-target rollback. No path contains a
+  parameterized paths: a validated target-closure `--authorize-handoff` then
+  `--apply-authorized-handoff` bootstrap pair for a 3/1 host where the stable reference is
+  absent, the installed `d2b-host-generation-deploy --from-reference`
+  authorization/apply pair with those same flags only after broker publication, and a
+  validated prior-target rollback pair with those same flags. Every preflight validates
+  grammar and bounds and stops before public-socket
+  authorization or `sudo`; a failed authorization prevents the privileged invocation. No path contains a
   fixed illustrative target, invokes raw `nixos-rebuild` directly, or asks an operator to edit
   generated state. The value and stable path stay out of runtime diagnostics.
 
@@ -84,11 +93,12 @@ artifact and requires a clean `git diff`, fail-closed.
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
 boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
 coverage starts with an installed 3/1 broker lacking the v5 handoff operation, executes the
-parameterized target-closure entrypoint, proves it only builds/stages/submits, proves
-broker-before-daemon activation, Hello while unready, authenticated publication request, and
-durable publication before ingestion/readiness, then injects failure and crash points through
+parameterized target-closure entrypoint, proves it only validates/builds/stages/authorizes/submits,
+proves initial public-socket Admin classification, sealed durable capability,
+broker-before-daemon activation, Hello while unready, phase-attenuated authenticated
+publication request, and durable publication before ingestion/readiness, then injects failure and crash points through
 profile/service/bootstrap/publication/reference repair/readiness/rollback. It kills the
-entrypoint and proves existing daemon reconciliation autonomously resumes. Prior reference
+entrypoint and proves the systemd-supervised existing daemon DAG autonomously resumes. Prior reference
 bytes or absence, 3/1 artifacts, and source service generations are restored together with
 immutable broker audit. Host recovery also executes the post-publication stable-reference and
 parameterized prior-target rollback commands, rejects direct entrypoint/daemon/Nix mutation

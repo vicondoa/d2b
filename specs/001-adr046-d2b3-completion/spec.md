@@ -108,8 +108,10 @@ The Zone desired-spec artifact
 prove generator output is byte-identical rather than hand-editing it. C1 is resolved in these
 feature artifacts but is not implemented. The plan is eligible for read-only cross-artifact
 analysis at clean pre-validator base A and feature snapshot P0 and, if that has no HIGH or
-CRITICAL finding, a unanimous plan panel bound to A/P0. Those gates authorize only T603's
-two validator source paths plus `changelog.d/delivery-resume-reconciliation.md`. T603 then
+CRITICAL finding, a unanimous plan panel bound to A/P0. Those gates authorize exactly T603's
+two Rust files `packages/xtask/src/delivery/mod.rs` and
+`packages/xtask/src/delivery/resume.rs`, plus mandatory
+`changelog.d/delivery-resume-reconciliation.md`. T603 then
 lands validator-and-fragment commit V, freezes resume base B
 exactly at V, and MUST rerun analysis and the plan panel at B/P before it may create the
 reconciliation receipt or authorize any checkbox edit. T589 remains gated on those
@@ -402,10 +404,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   socket with `SO_PEERPIDFD`; opening a pidfd later from `SO_PEERCRED.pid` is forbidden.
   Acquisition MUST use a typed broker operation that receives only the accepted socket over
   `SCM_RIGHTS` and returns only an `OwnedFd` pidfd with `FD_CLOEXEC` over `SCM_RIGHTS`; no
-  numeric PID, raw descriptor integer, or credential tuple is serializable. The sole raw
-  `getsockopt(SO_PEERPIDFD)` wrapper MUST live in the approved
+  numeric PID, raw descriptor integer, or credential tuple is serializable. A safe dependency
+  API MAY be used only if it satisfies the exact no-panic and fd-ownership contract.
+  Otherwise the sole raw `getsockopt(SO_PEERPIDFD)` wrapper MUST live in the approved
   `packages/d2b-priv-broker/src/sys.rs` FFI quarantine with narrow item-level unsafe
-  allowances and a `SAFETY:` justification on every unsafe block. It MUST validate exact
+  allowances and an immediate `SAFETY:` justification on every unsafe block. No
+  repository-authored unsafe is permitted outside that quarantine. The wrapper MUST validate exact
   `optlen`, take ownership of every nonnegative returned fd before checking syscall outcome
   or later invariants, and close it on every failure. The `nix` 0.31.3 `PeerPidfd`
   `MaybeUninit`/assert wrapper, a new repository-authored FFI crate, and a
@@ -517,15 +521,24 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   NOT publish a profile, control a service, perform 3/1 bootstrap mutation, initiate
   rollback, or select a path, unit, generation, command, or argv. Every system-profile,
   broker/daemon service, bootstrap, d2b-state publication/repair, stock rollback, and
-  source-service restoration mutation MUST run through the authorized typed normal broker or
-  target-closure one-shot bootstrap broker and MUST have immutable pre-mutation and outcome
-  audit. No bootstrap unit or fourth root-visible service may exist. The target broker starts
-  before the daemon; the daemon completes exact-generation protocol-5 Hello while unready;
-  its broker-derived principal sends the authenticated opaque publication request; the
-  broker durably publishes matching d2b state; then daemon ingestion and readiness may
-  proceed. The existing `d2bd.service` startup/reconciliation path is the durable owner that
-  reopens and resumes an interrupted rollback after entrypoint crash, without a supervising
-  unit.
+  source-service restoration mutation MUST run through the capability-authorized typed normal
+  broker or target-closure one-shot bootstrap broker and MUST have immutable pre-mutation and
+  outcome audit. Initial authorization MUST occur while the invoking operator is unprivileged through
+  the existing public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker
+  MUST then durably create one sealed, non-serializable, nonfabricable handoff capability
+  bound to the complete staged intent. Every normal or bootstrap-broker phase consumes that
+  capability or a broker-issued phase attenuation. Daemon uid/gid/generation, successful
+  Hello, broker-socket credentials, target-closure provenance, and effective uid 0 are
+  eligibility or integrity checks only and MUST NOT independently authorize any mutation.
+  No bootstrap unit or fourth root-visible service may exist. The exact ordering is:
+  public-socket Admin authorization; durable intent and capability; capability-authorized
+  stock profile publication; target broker transition; target daemon transition;
+  exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
+  request; broker-durable pointer/reference publication and audit; daemon reopen and
+  ingestion; readiness. The systemd-supervised existing `d2bd.service`
+  startup/reconciliation DAG is the durable owner that reopens and resumes an interrupted
+  rollback after entrypoint crash or exit. The entrypoint is never the recovery supervisor,
+  and no new unit is added.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -565,19 +578,19 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
   `cli-reference-conformance`. T600 exclusively owns the first five; T601 exclusively owns
   the final three. Before F freezes, T589 MUST implement one hermetic closed-profile validator
-  used by panel-request, seal, and merge-eligibility, with negative tests for missing, extra,
+  used by panel-request/panel-attest, seal, and merge-eligibility, with negative tests for missing, extra,
   duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
   MUST require all eight records to bind F and F's tree. Before F is final, T220 MUST run the
   nonbinding `/d2b-panel-round plan` phase surface over each integrated provisional candidate.
   Findings scope a fix round through T220 and require validation plus a delta/full-context
   phase-panel rerun; that loop may iterate and issues no binding delivery request. Only a
-  unanimous phase-panel result may freeze final F for T600-T602. T219 alone then requests the
-  wave's binding delivery panel exactly once, against F, and seals and merges only that
-  unanimously accepted immutable candidate. No content, evidence identity, or candidate
-  change is permitted after that request. A nonunanimous binding result is retained as the
-  failed Wave 5 close, and neither F nor a successor may receive a second binding request for
-  the wave. The integrator MUST stop and escalate the external policy/tooling disposition;
-  findings are never waived. Before
+  unanimous phase-panel result may freeze final F for T600-T602. Wave 5's retained
+  `panel-request.json` has already consumed its sole binding request. T219 therefore has no
+  request or successor-request path: it remains non-authorizing until an accepted external
+  delivery-contract/tooling disposition preserves that request and expressly authorizes a
+  non-request close action. No feature-local content, evidence identity, candidate, phase
+  panel, or replacement candidate may free or replace the request. The integrator MUST stop
+  for the external disposition; findings are never waived. Before
   T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
   analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
   authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
@@ -605,7 +618,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   apply, and finalize protocol MUST resume safely from exact B/P, B/Q, or C/Q and refuse every other
   state. T589 MUST require the finalized progress receipt, clean HEAD C, and those checked
   boxes. Before F freezes, T589's hermetic closed-profile validator is wired into
-  panel-request, seal, and merge-eligibility and its exact-eight positive plus missing, extra,
+  panel-request/panel-attest, seal, and merge-eligibility and its exact-eight positive plus missing, extra,
   duplicate, unknown, wrong-lane, and conflated negatives pass. T602 later invokes that same
   validator and validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F
   frozen by T220, the exact eight-record T600/T601 closed set bound to F and F's tree, HEAD
@@ -643,8 +656,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   explicit `Stopped` state. It MUST enumerate exactly `d2bd.service`,
   `d2b-priv-broker.socket`, and `d2b-priv-broker.service`, with no additional root-visible
   framework unit. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
-  cases MUST quarantine without adoption, cleanup, or signal. T028 owns the existing host VM
-  case and its sole Makefile recipe before W2 freezes; every later close reuses that
+  cases MUST quarantine without adoption, cleanup, or signal. Historical T028/T035/T070
+  inspect retained results only. T604 is the sole prospective owner of the existing host VM
+  case and its Makefile discovery/build recipe; every current or later close reuses that
   candidate-bound predicate. Passing evidence MUST name the enumerated and successfully built
   attr, command success, and no `SKIP` result. Missing, empty, skipped, stale,
   wrong-candidate, status-only, private-hook, incomplete unit enumeration, missing
@@ -1273,11 +1287,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   effect, production `Ready`, selected-stop, and 1-32 progress observations; selected stop is
   the later effect/Ready tick; checked elapsed nanoseconds equal stop minus start and are at
   most 2,000,000,000; and progress falls strictly after start and no later than stop. The
-  payload and its errors use fixed redacted `Debug` and contain no free-form strings, host
+  payload, outer `EvidenceRecord`, and its errors use fixed redacted `Debug` and contain no free-form strings, host
   identity, path, command, argv, or log text. T589 owns one validator used unchanged at
-  import, durable reopen, panel-request, seal, and merge-eligibility. T600 carries the
+  import, durable reopen, panel-request/panel-attest, seal, and merge-eligibility. T600 carries the
   exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
-  unrelated samples, mixed effect/Ready/progress identities, malformed or misordered ticks,
+  unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
   stale/wrong-candidate binding, progress-free evidence, or an over-budget sample fails
   SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
@@ -1351,9 +1365,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: Clean pre-validator A/P0 analysis and plan-panel receipts authorize only T603's
-  two validator source paths plus `changelog.d/delivery-resume-reconciliation.md`. Dedicated
-  validator-and-fragment commit V has sole parent A and no other repository changes; resume
+- **SC-034**: Clean pre-validator A/P0 analysis and plan-panel receipts authorize exactly
+  T603's two Rust source files `packages/xtask/src/delivery/mod.rs` and
+  `packages/xtask/src/delivery/resume.rs`, plus mandatory
+  `changelog.d/delivery-resume-reconciliation.md`. Dedicated validator-and-fragment commit V
+  has sole parent A and exactly those three repository paths; resume
   base B equals V and feature snapshot P equals P0. Analysis over
   A..B plus the full feature artifacts and the plan panel are rerun and bound to B/P before
   T603 creates any authorization. A finding or later validator change invalidates B and both
@@ -1381,10 +1397,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   current removal proofs pass; and checked reference behavior matches emitted CLI and wire
   output. Before F is final, T220 iterates scoped fixes and delta/full-context
   `/d2b-panel-round plan` phase reviews to unanimous convergence without issuing a binding
-  delivery request. T219 then requests the wave's exactly one binding panel and seals only a
-  unanimous F. F stays immutable. A binding nonunanimity fails the wave close, permits no
-  successor request, and requires integrator scope escalation; a successful merge preserves
-  F's tree.
+  delivery request. Because the retained request already consumed Wave 5's binding surface,
+  T219 performs no request and no successor flow. It may execute only a non-request close
+  action expressly authorized by an accepted external disposition that preserves the
+  historical request. F stays immutable; without such authorization the wave remains blocked.
 - **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
   for `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and
   built and no skip. W2-W4 carry the closed continuity result directly; W5 carries it only
