@@ -137,8 +137,8 @@ in
   "bazel-package-policy/no-fetch-and-independent-aggregates" = {
     expr = has flake "--no-fetch"
       && has rustGate "--no-fetch"
-      && has flake "run_audit ${rustPackagesSrc}/packages/Cargo.lock"
-      && has flake "run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock"
+      && has flake "run_audit \${rustPackagesSrc}/packages/Cargo.lock"
+      && has flake "run_audit \${rustPackagesSrc}/packages/Cargo.guest.lock"
       && has flake "guest-real-libshpool/production/closure.json"
       && has flake "guest-real-libshpool/production/Cargo.lock"
       && !(has flake "d2b-guest-shell-runner/Cargo.lock");
