@@ -168,6 +168,14 @@ needed to satisfy the declared resources, and without performing a host cutover.
    read or modify that resource, **Then** the attempt is refused and the refusal is
    recorded in the audit trail.
 
+**Wave checkpoint**: Wave 5 is only a partial US1 production-plane checkpoint. Its
+acceptance set is the representative Volume, Network, and Device; "acceptance set" does not
+assign implementation ownership, and Network implementation remains owned by Wave 4. Wave 5
+does not claim a positive Guest runtime effect and therefore cannot complete this story.
+Full US1 completion occurs only after the Wave 6 Guest Provider supplies positive
+runtime-effect acceptance for the declared Guest. Missing, skipped, status-only, or refusal
+evidence leaves US1 incomplete.
+
 ---
 
 ### User Story 2 - Get host capabilities through declarative Providers (Priority: P2)
@@ -467,8 +475,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   reference documentation compared with emitted behavior; and T605's exact enum
   round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
   API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. T604 MUST
-  additionally prove on that same candidate that an operator Nix declaration for the
-  representative Wave 5-owned Volume, Network, and Device emits the installed per-Zone bundle,
+  additionally prove on that same candidate that an operator Nix declaration for the Wave 5
+  acceptance set - the representative Volume, Network, and Device - emits the installed per-Zone bundle,
   activates on initial startup and public declaration/removal NixOS switches without manual
   daemon restart or private reload, reaches a real owned effect and readiness for every
   one of those three resources, and removes one declaration with dependency-safe
@@ -476,6 +484,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   negative cases and cannot satisfy this positive story. Positive Guest runtime-effect
   acceptance belongs to the Wave 6 Guest Provider and is not a Wave 5 success criterion;
   Guest bundle emission, ingestion, status, or refusal MUST NOT satisfy FR-072 or SC-034.
+  This acceptance scope does not reassign implementation: Network remains Wave 4-owned.
   Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and
   historical proof artifacts are not evidence for this gate. T220 MUST converge all slice and
@@ -1220,7 +1229,8 @@ carries the object verbatim rather than copying selected fields into the task ro
   records name F and F's tree; HEAD equals F with no staged, unstaged, or non-ignored
   untracked state; `operator-nix-activation-cleanup` alone carries T604's positive
   public-switch activation/effect/cleanup result for Volume, Network, and Device and carries
-  no claim that Guest satisfies Wave 5; `system-core-handler-contract` alone
+  no claim that Guest satisfies Wave 5; this proves only the partial US1 production-plane
+  checkpoint, never full US1 completion; `system-core-handler-contract` alone
   carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
   RSS is at or below 24,576 KiB with no baseline subtraction; owner fan-in is singular;
   current removal proofs pass; and checked reference behavior matches emitted CLI and wire

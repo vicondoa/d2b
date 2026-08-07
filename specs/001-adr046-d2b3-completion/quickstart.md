@@ -241,14 +241,18 @@ make test-rust
 make test-host-integration
 ```
 
-The host leg declares the representative Wave 5-owned Volume, Network, and Device, consumes the
-emitted `zones/<zone>/resource-bundle.json`, activates on startup and deployment-entrypoint
+The host leg declares the Wave 5 acceptance set - the representative Volume, Network, and
+Device - and consumes the emitted `zones/<zone>/resource-bundle.json`, activates on startup and deployment-entrypoint
 transitions through the production daemon, and requires a real owned effect and readiness for
 every one of those three representative resources. Refusals are separate negative
 cases. It then removes the Device, deploys the next generation without a manual daemon
 restart, verifies dependency-safe cleanup, and proves the Volume, Network, and unrelated
 resources remain ready and intact. Guest runtime-effect acceptance is deferred to the Wave 6
 Guest Provider; Guest emission, status, or refusal is not a positive Wave 5 result.
+This is a partial US1 production-plane checkpoint, not full US1 completion. The acceptance-set
+label does not reassign Network implementation from Wave 4. Full US1 completes only after the
+Wave 6 Guest Provider produces positive Guest runtime-effect acceptance; missing, skipped,
+status-only, or refusal evidence leaves it incomplete.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
 The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
 `<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
@@ -280,7 +284,7 @@ After the first successful publication, the installed entrypoint may use the sta
 sudo /run/current-system/sw/bin/d2b-host-generation-deploy \
   --from-reference /etc/d2b/host-generation-rebuild-ref
 
-# Every Wave 5-owned representative resource must reach its owned effect and ready state
+# Every resource in the Wave 5 acceptance set must reach its owned effect and ready state
 d2b resource list
 d2b resource inspect <Type>/<name>
 ```
@@ -288,7 +292,8 @@ d2b resource inspect <Type>/<name>
 **Expected**: the Volume, Network, and Device are each ready through their owned effect, and
 the removed Device completes dependency-safe cleanup. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest is not expected to pass until its
-Wave 6 Provider exists.
+Wave 6 Provider exists. Network remains Wave 4 implementation; Wave 5 accepts it through the
+production plane without taking implementation ownership.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. Retry with the explicit target-configuration command above; do

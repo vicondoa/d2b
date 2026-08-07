@@ -775,8 +775,9 @@ Type-10 handoff test; T604 does not replace either. Run the lower legs through
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and `make test-rust`. Because a real
 owned host effect requires systemd, broker mutation, and a booted NixOS system, the canonical
 Type-10 destination is `tests/host-integration/resource-operator-activation.nix`, run only by
-the public heavy-gated `make test-host-integration` target. It declares the representative Wave 5-owned Volume,
-Network, and Device through Nix. It starts from an installed protocol-4 3/1
+the public heavy-gated `make test-host-integration` target. It declares the Wave 5 acceptance
+set - the representative Volume, Network, and Device - through Nix. This names acceptance
+scope only; Network implementation remains owned by Wave 4. It starts from an installed protocol-4 3/1
 broker, obtains `d2bHostGenerationDeploy` from the explicit target installable, and reaches
 4/2 through that entrypoint without reading an absent stable reference. The new broker must
 start before the new daemon, publish/repair only broker-owned d2b state, and complete exact
@@ -913,7 +914,8 @@ finding. A successful merge preserves the selected candidate's tree.
 
 | Prose drift | Canon kept | Planning correction |
 | --- | --- | --- |
-| Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the Guest Provider is assigned to Wave 6 and absent at this Wave 5 base. | Wave 5 positive operator acceptance covers Volume, Network, and Device. Guest runtime-effect acceptance remains a fail-closed Wave 6 obligation; Guest emission, ingestion, status, or an actionable refusal is not FR-072/SC-034 evidence and cannot close T604, T602, or T219. |
+| Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the Guest Provider is assigned to Wave 6 and absent at this Wave 5 base. | Wave 5 positive operator acceptance covers the Volume, Network, and Device acceptance set as a partial US1 production-plane checkpoint. Full US1 completion moves after the Wave 6 Guest Provider's positive runtime-effect acceptance; Guest emission, ingestion, status, or an actionable refusal is not FR-072/SC-034 evidence and cannot close T604, T602, or T219. |
+| Earlier amendment prose assigned implementation ownership of Volume, Network, and Device to Wave 5. | The task graph assigns Network implementation and its close-blocking obligations to Wave 4 T061-T071. | Call the trio the Wave 5 acceptance set. Wave 5 proves their production-plane effects together but neither reopens nor claims Network implementation ownership. |
 
 ### Recorded drift
 

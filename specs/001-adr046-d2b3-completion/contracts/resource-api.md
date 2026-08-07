@@ -165,10 +165,11 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - All acceptance evidence names one exact candidate and uses production owners. T604 starts
   at the emitted operator Nix declaration/bundle, activates on initial startup and public
   declaration/removal switches without manual daemon restart, observes a real owned effect
-  and readiness for the representative Wave 5-owned Volume, Network, and Device, then proves
+  and readiness for the Wave 5 acceptance set - representative Volume, Network, and Device - then proves
   dependency-safe Device removal without affecting ready Volume, Network, or unrelated
-  resources. Guest runtime-effect acceptance remains a Wave 6 Guest Provider obligation;
-  Guest emission, status, or refusal cannot satisfy this Wave 5 positive. Refusals are
+  resources. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance
+  remains a Wave 6 Guest Provider obligation; Guest emission, status, or refusal cannot
+  satisfy this partial US1 production-plane checkpoint. Refusals are
   separate negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
   subject, or an older result artifact is ineligible.
 - Before T589, pre-validator analysis and plan panel at A/P0 authorize only T603's two

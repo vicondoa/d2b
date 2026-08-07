@@ -215,10 +215,11 @@ merge-target registration, merge eligibility, and merge.
 12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix
     resource declaration and per-Zone bundle, activates on startup and public declaration and
     removal switches without manual restart, observes a real owned effect and readiness for
-    the representative Wave 5-owned Volume, Network, and Device, then removes the Device and
+    the Wave 5 acceptance set - representative Volume, Network, and Device - then removes the Device and
     proves dependency-safe cleanup without disturbing ready Volume, Network, or unrelated
-    resources. Guest runtime-effect acceptance is deferred to the Wave 6 Guest Provider;
-    Guest emission, status, or refusal cannot satisfy the Wave 5 positive. Refusals are
+    resources. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance
+    is deferred to the Wave 6 Guest Provider; Guest emission, status, or refusal cannot
+    satisfy this partial US1 production-plane checkpoint. Refusals are
     separate negative cases. The exact
     candidate result is emitted once by T600 as
     `operator-nix-activation-cleanup` and is required by T602 and T219.

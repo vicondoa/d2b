@@ -467,10 +467,12 @@ controller endpoint, admitted production watch, durable effect/adoption and audi
 the exact `Provider/system-core` registration plus both required handler handles, and one
 aggregate readiness projection. T604 adds the original operator boundary from Nix declaration
 and emitted bundle through automatic startup/declaration/removal ingestion, owned effect and
-readiness for the Wave 5-owned representative Volume, Network, and Device, and dependency-safe
+readiness for the Wave 5 acceptance set - representative Volume, Network, and Device - and dependency-safe
 Device cleanup while Volume, Network, and unrelated resources remain ready. Guest
 runtime-effect acceptance is deferred to the Wave 6 Guest Provider; Guest emission, status,
-or refusal cannot satisfy the Wave 5 positive. Refusals remain separate negative cases.
+or refusal cannot satisfy the Wave 5 positive. This is a partial US1 production-plane
+checkpoint, not story completion, and Network implementation remains owned by Wave 4.
+Refusals remain separate negative cases.
 T219 cannot accept
 a fabricable or reusable bootstrap reader, numeric-PID-only identity, direct service call,
 `ProductionWatchHarness`, fake endpoint, constructed subject, independent readiness bit,
@@ -516,7 +518,7 @@ B/P before T603 may create the receipt or authorize progress. Implementation rem
 
 | Finding | Feature-artifact disposition |
 | --- | --- |
-| COV1 | Wave 5 positive operator acceptance now covers only the committed Wave 5-owned Volume, Network, and Device effects. Device is the removal case. Guest runtime-effect acceptance is explicitly deferred to the Wave 6 Guest Provider, and Guest emission, status, or refusal cannot satisfy FR-072, SC-034, T604, T602, or T219. |
+| COV1 | Wave 5 positive operator acceptance covers the Volume, Network, and Device acceptance set as a partial US1 production-plane checkpoint. Device is the removal case. Network implementation remains owned by Wave 4. Guest runtime-effect acceptance is explicitly deferred to the Wave 6 Guest Provider; Guest emission, status, or refusal cannot satisfy FR-072, SC-034, T604, T602, or T219, and full US1 remains incomplete until positive Guest runtime-effect acceptance after W6. |
 | UND1 | T593 now begins with a dependency-only prerequisite commit for vendored `d2b-peer-pidfd` 0.1.0, with exact crate/workspace lockfile ownership, safe `BorrowedFd`-to-`OwnedFd` API, unsafe inventory, executable fd-cleanup tests, dependency-tree proof, and Rust/security review. The `nix` 0.31.3 wrapper and a local session fallback are ineligible; rejection blocks route implementation. |
 | INC1 | Every source-writing completion slice T589-T599, T604, and T605 has one exact, unique fragment path; T220 requires the closed thirteen-row owner/path set and alone folds it. T603's exact validator-only authorization remains fragment-free, and evidence-only tasks write no repository file. |
 | INC2 | Pipelined implementation-start provenance now cites Constitution 2.0.0 only. Constitution 2.1.0 remains attached only to bounded deferral and delivery memory. |
