@@ -34,20 +34,18 @@ fn selected_policy_inputs_and_no_fetch_audits_are_pinned_without_retry() {
     let test_rust = read_repo_file("tests/test-rust.sh");
 
     for path in [
-        "x86_64-linux/x86_64-unknown-linux-gnu/broker-production/policy/metadata.json",
-        "x86_64-linux/x86_64-unknown-linux-gnu/broker-production/policy/Cargo.lock",
-        "x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool/production/closure.json",
-        "x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool/production/Cargo.lock",
-        "aarch64-linux/aarch64-unknown-linux-gnu/broker-production/policy/metadata.json",
-        "aarch64-linux/aarch64-unknown-linux-gnu/broker-production/policy/Cargo.lock",
-        "aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/production/closure.json",
-        "aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/production/Cargo.lock",
+        "x86_64-linux/x86_64-unknown-linux-gnu/broker-production",
+        "x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
+        "aarch64-linux/aarch64-unknown-linux-gnu/broker-production",
+        "aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool",
     ] {
         assert!(
             test_rust.contains(path),
             "missing selected policy input {path}"
         );
     }
+    assert!(test_rust.contains("policy_metadata_path"));
+    assert!(test_rust.contains("policy_lock_path"));
     assert!(flake.contains("--no-fetch"));
     assert!(test_rust.contains("--no-fetch"));
     assert!(!flake.contains("retry"));
