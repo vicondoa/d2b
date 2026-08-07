@@ -188,7 +188,7 @@ fn guest_elf_and_broker_linkage_contract_is_closed_without_store_diagnostics() {
             "PT_INTERP",
             "DT_NEEDED",
             "readelf",
-            "RUSTFLAGS = \"-C relocation-model=pie\";",
+            "RUSTFLAGS = \"-C relocation-model=pie -C link-arg=-static-pie\";",
             "closure",
             "selectedPolicyDigest",
             "sizeGrowthAuthorization",

@@ -267,7 +267,7 @@
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
-            RUSTFLAGS = "-C relocation-model=pie";
+            RUSTFLAGS = "-C relocation-model=pie -C link-arg=-static-pie";
             nativeBuildInputs = [
               pkgs.pkgsStatic.binutils
               pkgs.pkgsStatic.rustPlatform.bindgenHook
