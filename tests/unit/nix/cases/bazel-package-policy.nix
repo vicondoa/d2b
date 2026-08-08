@@ -204,15 +204,15 @@ let
     });
   wrongEdge = replaceRootNode policyArtifact
     (node: node // {
-      deps = [ (builtins.head node.deps) // {
+      deps = [ ((builtins.head node.deps) // {
         pkg = alternatePackageId;
-      } ] ++ (builtins.tail node.deps);
+      }) ] ++ (builtins.tail node.deps);
     });
   wrongKind = replaceRootNode policyArtifact
     (node: node // {
-      deps = [ (builtins.head node.deps) // {
+      deps = [ ((builtins.head node.deps) // {
         dep_kinds = [ { kind = "unexpected"; target = null; } ];
-      } ] ++ (builtins.tail node.deps);
+      }) ] ++ (builtins.tail node.deps);
     });
   lockIdentityMutation = policyLock // {
     package = [
