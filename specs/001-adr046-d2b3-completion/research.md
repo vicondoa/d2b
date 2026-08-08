@@ -220,6 +220,8 @@ is landed and reachable. Their state tracks full Destination-plus-Validation ver
 existence. They belong to W0 and its dependents, so they are inside the W0/W1 historical
 record's evidence scope; the record authorizes nothing, and FR-035 requires them to reach
 `Merged` before any wave that owns them can seal after FR-036 is satisfied.
+**Supersession note**: That W0 assignment is historical; current authority is the W7
+allocation in `spec.md`, `plan.md`, and `tasks.md`.
 
 ---
 
