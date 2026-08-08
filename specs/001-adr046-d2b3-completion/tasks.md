@@ -1926,6 +1926,15 @@ table before the operation exists.
   2,048-byte decision-intent witness and four 2,048-byte target-unlink witness slots; unused
   target-witness slots remain reserved, and durable witnesses are reclaimed only in the
   ordered successor-proved, parent-synced phase before source release and slot reuse.
+  Independent read-literal target-cardinality zero, one, two, and three probes fill
+  unrelated general capacity to its exact remaining record and byte boundary, accept that
+  boundary, and refuse one record or byte beyond it. Fresh processes at attempt admission,
+  targets compacted, every applicable witness-reclamation prefix, source `Released`, and
+  immediately before and after attempt-slice `CompletedReleased` must prove that the full
+  46-record/222,208-byte slice remains charged until that exact release and then returns
+  atomically; unused witness slots, witness absence/unlink, and source release return no
+  partial capacity. Every cardinality/boundary/restart hook and premature-credit removal
+  poison is independent of the four-target case.
   Read-independent record/byte boundary cases calculate each row and multiplier without
   production constants, refuse either one-short boundary, poison every omission/count,
   exhaust all unreserved capacity after replacement, retain 255 degraded or partial-prune
@@ -2133,7 +2142,11 @@ table before the operation exists.
   consumption and forbids reselection. Before authorized reclamation it returns the closed
   witness-missing integrity incident with zero mutation; at or after reclamation, only the
   exact targets-compacted/immediate-receipt successor chain may classify absence and resume
-  that successor.
+  that successor. The exact post-reclamation chain is the byte-identical basis/downstream
+  decision predecessors, targets-compacted receipt, complete immediate target-receipt
+  chain, and ordered coordinator-parent absences. If the intent final is absent too, that
+  complete validated chain proves prior consumption and constructs
+  `IntentFinalMissingAfterAncestorsDurable` instead of resuming, recreating, or reselecting.
   The replacement candidate may have different intent bytes, terminal
   outcome, or degraded branch/class because no prior candidate identity was committed or
   projected; exact survival resumes durability without reselection. Exact intent survival
@@ -2145,7 +2158,9 @@ table before the operation exists.
   parent and ancestor sync and cannot freeze selection early.
   A missing intent returns the closed record/boundary-specific
   `audit-continuity-repair-decision-durability-integrity-incident` exit-`4` response from
-  `contracts/operator-cli.md` only when its matching witness survives; a basis
+  `contracts/operator-cli.md` only when its matching witness survives or, after authorized
+  witness reclamation, when that exact validated successor chain proves prior consumption;
+  a basis
   `AncestorsDurable` final remains mandatory. After any basis or later durable consumer,
   the exact decision-intent witness and exact predecessor are also mandatory; a missing,
   foreign, field-mismatched, digest-mismatched, or predecessor-mismatched witness returns
@@ -2193,6 +2208,19 @@ table before the operation exists.
   later descendant in turn and prove no-witness reselection refuses with the exact
   consumed-witness incident and zero mutation. Cases also cover all five closed
   record/boundary/failure response DTO tuples from `contracts/operator-cli.md` and
+  an independent decision-intent-witness publication matrix at the literal
+  `decision-intent-witness/after-write`,
+  `decision-intent-witness/after-file-sync`,
+  `decision-intent-witness/after-link`,
+  `decision-intent-witness/after-reopen`,
+  `decision-intent-witness/after-parent-sync`, and every
+  `decision-intent-witness/after-ancestor-sync/<depth>` hook. Each hook starts a fresh
+  process before the next operation, requires zero basis construction/consumption and zero
+  selected-outcome projection until the final ancestor sync, and resumes at the exact first
+  missing operation without rewriting or relinking a durable prefix. Only complete witness
+  directory-chain durability admits the basis consumer. Every prefix, resume point,
+  forbidden-effect assertion, hook-removal poison, and early-consumer poison is
+  independent; the absent/fully-durable pair cannot satisfy this matrix. Cases also cover
   fresh-process
   intent-final-removal cases that physically remove the exact durable intent immediately
   after its matching witness is durable and after every decision-basis `Progress` prefix
@@ -2227,7 +2255,19 @@ table before the operation exists.
   consumption, every case returns its closed integrity incident, poisons the attempt, and
   proves zero reconstruction, relink, witness publication, source access, reselection,
   later publication, compaction, settlement, cleanup, or slot-reuse mutation. Every
-  prefix, substitution, forbidden effect, hook, and removal poison is independent. The independent literal
+  prefix, substitution, forbidden effect, hook, and removal poison is independent. Four
+  additional intent-final-removal cases start independent fresh processes at
+  `WitnessReclamationPending`, `WitnessReclamationReleased`, `CompletedReleased`, and
+  `Complete`. `WitnessReclamationReleased` is the test-only checkpoint after the
+  decision-intent witness unlink and coordinator-parent sync, not a new lifecycle variant
+  or registry id. The pending case uses the surviving witness; each later case validates
+  the complete post-reclamation successor chain and constructs
+  `IntentFinalMissingAfterAncestorsDurable`, preserving the absent intent and performing
+  zero reconstruction, relink, witness publication, source access, reselection,
+  continuation, cleanup, settlement, response replay, or slot reuse. Removing or changing
+  each chain member at each post-reclamation checkpoint fails closed with zero mutation.
+  Every checkpoint/chain-member/response/forbidden-effect hook and removal poison is
+  independent. The independent literal
   `continuityRepairDecisionBasisIntentSha256` and
   `continuityRepairDecisionBasisSha256` formula/vectors pin every input, expected hash,
   same-width substitution, field order, framing, omission, and removal poison; the
@@ -2252,7 +2292,7 @@ table before the operation exists.
   procedures, and exact command, rejecting added selectors or substitutions.
   T592's closed wire variants distinguish replay-key
   unavailable, source-lifecycle unavailable, reserved capacity, cleanup pending, terminal
-  capacity integrity incident,
+  compaction-witness integrity incident, terminal capacity integrity incident,
   decision-basis pending, decision-durability integrity incident, decision-selection
   pending, preparation-incomplete, later
   settlement pending, and settled degraded; constructors reject every cross-domain class,
@@ -2282,6 +2322,19 @@ table before the operation exists.
   slot reuse. Every class/forbidden-effect pair has its own hook and removal poison under
   the existing lifecycle id; no registry id is added. Schema and golden negatives reject a
   terminal class in cleanup-pending and a resumable class in the terminal incident. The
+  compaction-witness terminal DTO consumes only sealed
+  `ContinuityCompactionWitnessIntegrityIncidentV1` and derives exactly
+  `witness-operation-mismatch | witness-selection-mismatch |
+  witness-ordinal-mismatch | witness-intent-mismatch | witness-parent-mismatch |
+  witness-digest-mismatch | immediate-receipt-missing |
+  immediate-receipt-predecessor-mismatch`, the fixed
+  `preserve-and-escalate-audit-integrity-incident` action, and no identifier or stage.
+  Strict schema, snapshot, construction, serialization, raw-wire, and deserialization
+  tests accept only those eight terminal classes and reject them all in cleanup-pending;
+  the terminal shape rejects every cleanup-pending class, field, and action. Each
+  class/surface/cross-shape rejection and forbidden identifier field has an independent
+  poison.
+  The
   `continuity-repair-attempt-limit` class and
   `resume-oldest-continuity-cleanup` continuation label are private trigger-only control
   tokens: public response constructors, serializers, deserializers, schemas, snapshots, and
@@ -2361,7 +2414,10 @@ table before the operation exists.
   prefix without that receipt, any mismatched receipt predecessor, or any present
   nonidentical witness returns the closed
   `ContinuityCompactionWitnessIntegrityIncidentV1`, poisons the attempt, and performs zero
-  mutation. `head-changed | target-changed | unlink` may settle
+  mutation. Every nested variant must project the exact identifier-free exit-`4`
+  `audit-continuity-compaction-witness-integrity-incident` response in
+  `contracts/operator-cli.md`; no variant may construct or deserialize as
+  `audit-continuity-cleanup-pending`. `head-changed | target-changed | unlink` may settle
   degraded only before a successful unlink while the failed target remains present; the
   completed receipts are the exact prior ordinal prefix and the residual begins at that
   target. Post-unlink storage, census, conflict, receipt-publication, and audit-publication
@@ -2458,7 +2514,14 @@ table before the operation exists.
   Fresh-process cases crash before and after every unlink and parent sync, independently
   poison each successor and mismatch check, and prove the full
   46-record/222,208-byte slice and live slot remain charged through source `Released` and
-  attempt-slice `CompletedReleased`. Separate restarts after source `Released`,
+  attempt-slice `CompletedReleased`. Four additional independent target-cardinality
+  probes use exactly zero, one, two, and three targets and restart at admission, targets
+  compacted, every applicable reclamation prefix, source `Released`, and immediately before
+  and after `CompletedReleased`. Literal ledger and exact-bound unrelated
+  general-capacity checks prove the full 46-record/222,208-byte charge remains through the
+  exact release and returns only as one complete slice; every unused-slot,
+  premature-credit, cardinality, record/byte boundary, hook, and removal poison is
+  independent of the maximum four-target vector. Separate restarts after source `Released`,
   attempt-slice `CompletedReleased`, and `Complete` must reconstruct authorized witness
   absence from the exact targets-compacted and immediate-receipt successor chain; removing
   or changing one successor is the closed zero-mutation integrity incident and cannot
@@ -3150,9 +3213,38 @@ table before the operation exists.
   `failureBranch`, `failure-branch`, terminal failure class, candidate digest,
   predecessor, `settlement`, `pending`, `retry`, `successor`, every source or repair
   identifier, every extra JSON field, and every extra human line. A direct DTO constructor
-  assertion, renderer unit, or one pair reused for another is ineligible. A
-  `parent-durable` incident DTO must fail wire construction and deserialization. This matrix
-  adds no registry, subvisitor, or top-level pinned test id.
+  assertion, renderer unit, or one pair reused for another is ineligible. Adjacent to the
+  five valid tuples, an independently literal nineteen-row negative matrix enumerates
+  every other known cross-product of the three records, two durable boundaries, and four
+  failure classes. Every row must fail T592 typed construction, strict schema validation,
+  raw-wire shared decoding, and serde deserialization before the T595 renderer; each
+  row/surface has its own poison, and omission, duplication, accidental acceptance, or
+  replacement with an unknown-string case fails. Unknown-string negatives remain separate.
+  `parent-durable` is therefore covered as part of the complete known cross-product rather
+  than as the sole invalid tuple. This matrix adds no registry, subvisitor, or top-level
+  pinned test id.
+  The same real-binary file must also contain a literal sixteen-row
+  compaction-witness-integrity matrix: each of
+  `witness-operation-mismatch`, `witness-selection-mismatch`,
+  `witness-ordinal-mismatch`, `witness-intent-mismatch`,
+  `witness-parent-mismatch`, `witness-digest-mismatch`,
+  `immediate-receipt-missing`, and `immediate-receipt-predecessor-mismatch` crossed with
+  `human | json`. Every row uses a fresh AF_UNIX server, T592's sealed-state-derived DTO,
+  shared wire decode, and the production renderer; exits `4`; and matches the exact
+  newline-terminated human or no-trailing-newline JSON bytes in
+  `contracts/operator-cli.md`. Strict forbidden-field checks reject stage, ordinal, member,
+  every operation/selection/intent/parent/digest/target/receipt/predecessor or source/repair
+  identifier, `pending`, `settlement`, `retry`, `successor`, and every extra field or line.
+  Raw-wire cases also prove all eight terminal classes refuse in cleanup-pending and every
+  cleanup-pending class refuses in the terminal shape. Each class/mode/cross-shape/
+  forbidden-field assertion has an independent poison; no direct renderer or constructed
+  public class is eligible.
+  The later T595 implementation is not done until its owned
+  `changelog.d/zone-runtime-production.md` contains exactly one occurrence each of
+  `audit-continuity-compaction-witness-integrity-incident`,
+  `preserve-and-escalate-audit-integrity-incident`, and `exit 4`, and describes the form as
+  terminal and identifier-free. T220 must check those exact literals and cardinalities
+  before folding the fragment; this batch does not edit a changelog file.
   A separate decision-selection real-binary matrix feeds every progress boundary and the
   sealed conflict form after the durable selected decision exists. For repaired selection
   it proves no failure field; for every degraded outcome it proves the exact selected
@@ -3735,7 +3827,7 @@ table before the operation exists.
   renders the exact safe static `d2b op inspect` guidance from `contracts/operator-cli.md`
   without flags, identifiers, argv, or shell text; machine output retains only the closed
   remediation-action enum and never gains a free-form guidance field.
-- [ ] T220 [US1] `adr046w5` CONVERGE + PHASE-PANEL + FREEZE - depends on T596-T599 and T604. Before exact-candidate evidence, merge every slice branch into the wave integration branch. Reconcile the accepted-spec version changes owned by T589 (`resource-api-and-authorization` only), T592 (`resource-store-redb` and `telemetry-audit-and-support`), T593 (`componentsession-and-bus`), T595 (`nix-configuration`), T599 (`cli-and-operations`), and T605 (both system-core governing specs) into the integrator-owned generated spec manifests. Separately revalidate that the externally owned accepted `ADR-046-validation-and-delivery` Version 2 amendment, both required approvals, Gate 0 receipt, and regenerated spec-set/work-item/implementation-graph artifacts were already complete on an ancestor of T589's base and remain byte-consistent; T220 must not defer, perform, or claim that pre-T589 transition. Verify each amendment's paired reference, contract/API/DTO test, generated schema or explicit no-schema-impact proof, and migration guidance where applicable. Require the exact fourteen-row owner/path fragment set declared under this wave's dependency map, including T603's mandatory `changelog.d/delivery-resume-reconciliation.md`; a missing, duplicate, differently named, or cross-owned path fails closed. Fold exactly those fourteen fragments only after the amendment matrix is complete; T589's existing `resource-api-production.md` fragment must include the SC-002 incident recovery surface without adding a fifteenth fragment. Verify T605's API snapshots include T593's sealed registrar surface, and verify T595's emitter and T599's consumers against T605. Run T589's hermetic `adr046w5` evidence-profile suite and require the exact eight-record positive plus missing, extra, duplicate, unknown, wrong-lane, and conflated negatives to prove panel-request/panel-attest, seal, and merge-eligibility all invoke the same validator. Run the separately versioned typed SC-002 receipt suite and prove the same validator is invoked at import, durable reopen, panel-request/panel-attest, seal, and merge-eligibility; require the exact closed three-resource positive, exact-size boundary success, all 61 independently pinned receipt negatives, all 73 independently pinned malformed census negatives, and all 26 independently pinned request-output cases. Pin all five SC-002 incident commands in parser/catalogue/help, exact thirteen-line human and distinct 17-field version-1 CLI JSON goldens, stable IDs, every closed cause, closed exits `0|2|3|4`, the 19-field durable status and separate resolution schemas, the six-value deterministic remediation table for both recovery variants, coverage denial, and authenticated mismatch retention, `parked`, `mismatch-retained`, and frozen-primary-evidence resolution terminal branches, the complete retired and recursively enumerated primary-evidence census grammars/vectors, the identity-bearing bounded-failure commitment, the shared nineteen-digest/one-signature SC-002 oracle, four incident-id vectors, exact 22-field `Sc002IncidentDispositionV1` schema, canonical successor-freeze/request/signed-disposition goldens, pre-signing successor triplet and exact apply/admit reuse, Version 2 contract/authority/key binding, private by-value validator, malformed/noncanonical/unsigned/wrong-domain/tamper/replay/copied-commitment/post-resolution-mutation/post-signing-successor-substitution negatives, incident-candidate denial, fresh successor admission, retained-request byte identity, and no binding-request/reservation-release/evidence-copy/unlink behavior. Then, after W4's reported seal and merge are externally confirmed or corrected, require the
+- [ ] T220 [US1] `adr046w5` CONVERGE + PHASE-PANEL + FREEZE - depends on T596-T599 and T604. Before exact-candidate evidence, merge every slice branch into the wave integration branch. Reconcile the accepted-spec version changes owned by T589 (`resource-api-and-authorization` only), T592 (`resource-store-redb` and `telemetry-audit-and-support`), T593 (`componentsession-and-bus`), T595 (`nix-configuration`), T599 (`cli-and-operations`), and T605 (both system-core governing specs) into the integrator-owned generated spec manifests. Separately revalidate that the externally owned accepted `ADR-046-validation-and-delivery` Version 2 amendment, both required approvals, Gate 0 receipt, and regenerated spec-set/work-item/implementation-graph artifacts were already complete on an ancestor of T589's base and remain byte-consistent; T220 must not defer, perform, or claim that pre-T589 transition. Verify each amendment's paired reference, contract/API/DTO test, generated schema or explicit no-schema-impact proof, and migration guidance where applicable. Require the exact fourteen-row owner/path fragment set declared under this wave's dependency map, including T603's mandatory `changelog.d/delivery-resume-reconciliation.md`; a missing, duplicate, differently named, or cross-owned path fails closed. Fold exactly those fourteen fragments only after the amendment matrix is complete; T589's existing `resource-api-production.md` fragment must include the SC-002 incident recovery surface without adding a fifteenth fragment. Before folding, require T595's `changelog.d/zone-runtime-production.md` to contain exactly one occurrence each of `audit-continuity-compaction-witness-integrity-incident`, `preserve-and-escalate-audit-integrity-incident`, and `exit 4`, and to call the form terminal and identifier-free; any missing or duplicate literal fails closed. Verify T605's API snapshots include T593's sealed registrar surface, and verify T595's emitter and T599's consumers against T605. Run T589's hermetic `adr046w5` evidence-profile suite and require the exact eight-record positive plus missing, extra, duplicate, unknown, wrong-lane, and conflated negatives to prove panel-request/panel-attest, seal, and merge-eligibility all invoke the same validator. Run the separately versioned typed SC-002 receipt suite and prove the same validator is invoked at import, durable reopen, panel-request/panel-attest, seal, and merge-eligibility; require the exact closed three-resource positive, exact-size boundary success, all 61 independently pinned receipt negatives, all 73 independently pinned malformed census negatives, and all 26 independently pinned request-output cases. Pin all five SC-002 incident commands in parser/catalogue/help, exact thirteen-line human and distinct 17-field version-1 CLI JSON goldens, stable IDs, every closed cause, closed exits `0|2|3|4`, the 19-field durable status and separate resolution schemas, the six-value deterministic remediation table for both recovery variants, coverage denial, and authenticated mismatch retention, `parked`, `mismatch-retained`, and frozen-primary-evidence resolution terminal branches, the complete retired and recursively enumerated primary-evidence census grammars/vectors, the identity-bearing bounded-failure commitment, the shared nineteen-digest/one-signature SC-002 oracle, four incident-id vectors, exact 22-field `Sc002IncidentDispositionV1` schema, canonical successor-freeze/request/signed-disposition goldens, pre-signing successor triplet and exact apply/admit reuse, Version 2 contract/authority/key binding, private by-value validator, malformed/noncanonical/unsigned/wrong-domain/tamper/replay/copied-commitment/post-resolution-mutation/post-signing-successor-substitution negatives, incident-candidate denial, fresh successor admission, retained-request byte identity, and no binding-request/reservation-release/evidence-copy/unlink behavior. Then, after W4's reported seal and merge are externally confirmed or corrected, require the
 untouched external Network sole-opt-in contradiction to be resolved by the versioned
 correction/migration and exact four-case evidence required by T070/T071, or by an
 authoritative external disposition preserving sole Network opt-in and leaving double opt-in

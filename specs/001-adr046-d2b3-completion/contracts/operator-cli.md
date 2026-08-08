@@ -540,6 +540,38 @@ stage/class/action triple reject every other pair and every action substitution.
 capacity release, `census` and `audit-publication` preserve and resume the original
 ledger-safe release prefix after their named repair.
 
+Compaction-witness integrity is terminal, not cleanup pending. Every
+`ContinuityCompactionWitnessIntegrityIncidentV1` variant exits `4` with exactly:
+
+```text
+host generation handoff immutable audit continuity compaction witness integrity incident
+failure-class: <CLOSED_COMPACTION_WITNESS_INTEGRITY_INCIDENT_CLASS>
+action: preserve-and-escalate-audit-integrity-incident
+```
+
+Its JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-compaction-witness-integrity-incident","failureClass":"<CLOSED_COMPACTION_WITNESS_INTEGRITY_INCIDENT_CLASS>","action":"preserve-and-escalate-audit-integrity-incident"}`.
+`CLOSED_COMPACTION_WITNESS_INTEGRITY_INCIDENT_CLASS` is exactly
+`witness-operation-mismatch | witness-selection-mismatch |
+witness-ordinal-mismatch | witness-intent-mismatch | witness-parent-mismatch |
+witness-digest-mismatch | immediate-receipt-missing |
+immediate-receipt-predecessor-mismatch`. The response constructor consumes only the sealed
+incident from `data-model.md`; it derives the failure class and fixed action and accepts no
+caller-supplied class or action.
+
+The shape contains no stage, ordinal, member, operation, selection, intent, parent, digest,
+target, receipt, predecessor, private identifier, source or repair identifier, `pending`,
+`settlement`, `retry`, `successor`, or extra JSON field or human line. Strict schema,
+constructor, serializer, deserializer, and raw-wire tests accept exactly these eight
+classes in this terminal shape. They reject every class in
+`audit-continuity-cleanup-pending`, and the cleanup-pending shape rejects all eight
+terminal classes; neither form may borrow the other's action or fields. A literal
+sixteen-row real-binary golden matrix crosses all eight classes with `human | json`,
+traverses the hermetic AF_UNIX public-socket decoder and production renderer, pins exit
+`4`, exact newline-terminated human bytes and no-trailing-newline JSON bytes, and checks
+every forbidden field above. One row cannot satisfy another, and each
+class/mode/forbidden-field assertion has an independent removal poison.
+
 `ledger-conflict` and the four standing-reserve corruption classes are terminal integrity
 incidents, not pending cleanup. They exit `4` with the distinct human form:
 
@@ -649,7 +681,16 @@ record/boundary/failure tuples are:
 
 `CLOSED_DECISION_DURABILITY_RECORD`, `CLOSED_DECISION_DURABILITY_BOUNDARY`, and
 `CLOSED_DECISION_DURABILITY_FAILURE_CLASS` are derived from this table. Every other
-cross-product refuses. No parent-durable incident variant is wire-valid because
+cross-product refuses. The known domains contain exactly three records, two durable
+boundaries, and four failure classes: the literal 24-tuple Cartesian product partitions
+into these five valid tuples and exactly nineteen invalid known cross-products. A
+read-independent negative fixture lists all nineteen tuples literally rather than deriving
+them by filtering production acceptance. Every row independently fails typed construction,
+strict schema validation, raw-wire shared decoding, and serde deserialization. Each
+row/surface has its own poison, and omission, duplication, acceptance, or substitution by
+an unknown-string negative fails the matrix. Unknown record, boundary, and failure strings
+remain separate negatives and cannot satisfy any of the nineteen known-tuple cases. No
+parent-durable incident variant is wire-valid because
 pre-ancestor absence restarts through the absent-or-exact rules above. The form contains no
 `intendedOutcome`, `intended-outcome`, `failure`, `failureBranch`, `failure-branch`,
 terminal failure class, candidate digest, predecessor, `settlement`, `pending`, `retry`,

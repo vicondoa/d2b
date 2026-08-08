@@ -3028,6 +3028,17 @@ them to general capacity. Slice release returns the fixed 46/222,208 reservation
 after every witness that did become durable has completed the successor-proved,
 parent-synced reclamation below; deleting a file does not itself decrement the reservation
 ledger.
+Target cardinality cannot vary this charge. Independent read-literal probes for target
+cardinality zero, one, two, and three each fill unrelated general capacity to the
+independently calculated remaining record and byte boundary, accept that exact boundary,
+and refuse one record or one byte beyond it. At attempt admission, after targets compacted,
+after each applicable witness reclamation, and after source `Released`, every probe must
+still observe the complete 46-record/222,208-byte slice as charged, including every unused
+target-witness slot. Only the exact attempt-slice `CompletedReleased` transition returns
+all 46 records and 222,208 bytes atomically to general capacity; no smaller cardinality,
+witness absence, witness unlink, or source release returns a partial charge. Each
+cardinality/boundary/restart assertion has its own hook and removal poison and does not
+reuse the maximum four-target reclamation case.
 The one recovery pre/outcome pair is recyclable only after its prior outcome and every
 completed-target intent and receipt are file-and-directory-durably exported and the
 residual selection is durably superseded. Each missing prerequisite is a no-mutation
@@ -5738,6 +5749,26 @@ publication, census, receipt, next-target, outcome, recovery-generation,
 targets-compacted, source-release, attempt-slice-release, settlement, or slot-reuse
 mutation. It has no retry or successor constructor.
 
+Its public projection is total, terminal, and identifier-free. The response constructor
+consumes only the sealed incident and derives exactly this closed failure class:
+
+| Sealed incident | Public failure class |
+| --- | --- |
+| `WitnessMismatch { member: operation, .. }` | `witness-operation-mismatch` |
+| `WitnessMismatch { member: selection, .. }` | `witness-selection-mismatch` |
+| `WitnessMismatch { member: ordinal, .. }` | `witness-ordinal-mismatch` |
+| `WitnessMismatch { member: intent, .. }` | `witness-intent-mismatch` |
+| `WitnessMismatch { member: parent, .. }` | `witness-parent-mismatch` |
+| `WitnessMismatch { member: digest, .. }` | `witness-digest-mismatch` |
+| `ImmediateReceiptMissing { .. }` | `immediate-receipt-missing` |
+| `ImmediateReceiptPredecessorMismatch { .. }` | `immediate-receipt-predecessor-mismatch` |
+
+No constructor accepts a failure class, action, ordinal, member, operation, selection,
+intent, parent, digest, or stage from a caller. The exact exit-`4` human and JSON response
+is `audit-continuity-compaction-witness-integrity-incident` in
+`contracts/operator-cli.md`; none of these variants is cleanup pending or wire-valid in
+the cleanup-pending shape.
+
 After the last target receipt the broker publishes the immutable
 `ContinuityTargetsCompactedReceiptV1` and enters `WitnessReclamationPending`. Witness
 reclamation is bounded to at most five attempt-local names in this order: the one
@@ -5873,6 +5904,15 @@ an exact successor is mandatory,
 missing under that successor is accepted as already reclaimed, mismatch is an integrity
 incident, no source release begins early, and the fixed 46-record/222,208-byte slice and
 live slot remain charged until source `Released` and attempt-slice `CompletedReleased`.
+Four separate target-cardinality probes use exactly zero, one, two, and three targets.
+Each runs in a fresh process at attempt admission, targets compacted, every applicable
+witness-reclamation prefix, source `Released`, and the boundaries immediately before and
+after attempt-slice `CompletedReleased`. Read-literal ledger and exact-bound unrelated
+general-capacity admissions prove that all 46 records and 222,208 bytes remain charged
+before that exact release despite unused witness slots, and that exactly the complete
+slice, never a cardinality-dependent subset, returns afterward. Every cardinality,
+record/byte boundary, restart, premature-credit assertion, hook, and removal poison is
+independent of the maximum four-target matrix.
 Independent fresh processes also restart after source `Released`, attempt-slice
 `CompletedReleased`, and `Complete`; each must reconstruct authorized witness absence from
 the exact targets-compacted receipt, complete immediate-receipt chain, and ordered
@@ -6172,6 +6212,24 @@ publisher may consume the intent predecessor only together with its matching sea
 witness. For the intent publisher only, `Progress { prefix: AncestorsDurable }` remains the
 witness-pending state and derives the existing final-directory-sync boundary; `Complete`
 is reachable only after the matching witness final and directory chain are durable.
+The witness publisher has independent fresh-process fault cases after write, file sync,
+no-replace link, exact reopen, coordinator-parent sync, and each required ancestor sync.
+Their literal hooks are
+`decision-intent-witness/after-write`,
+`decision-intent-witness/after-file-sync`,
+`decision-intent-witness/after-link`,
+`decision-intent-witness/after-reopen`,
+`decision-intent-witness/after-parent-sync`, and
+`decision-intent-witness/after-ancestor-sync/<depth>`. A hook terminates before the next
+publication operation. At every prefix before the final required ancestor sync, the basis
+constructor and consumer hooks and the selected-outcome hook must all remain at zero. A
+fresh process reopens the exact surviving prefix, resumes at its first missing operation,
+and neither rewrites nor relinks a durable earlier prefix. Only the final ancestor-sync
+case may classify the witness directory chain complete and admit the basis consumer. Every
+fault hook, first-missing-operation assertion, forbidden basis/selection effect, hook
+removal poison, and early-consumer poison is independent; no earlier generic
+absent-or-fully-durable case can satisfy this matrix. These are test hooks, not record
+boundaries, registry ids, or public states.
 
 Durable-final loss is a separate closed integrity algebra:
 
@@ -6193,9 +6251,15 @@ class `final-missing-after-durable-boundary`. The last three map only to record
 predecessor-mismatch-after-consumption`. Every variant derives only its listed tuple and
 `preserve-and-escalate-audit-integrity-incident`; no constructor accepts a caller-supplied
 record, boundary, failure, or action. The intent variant is constructible only when the
-matching independent commit witness survives and the intent final does not; an
-`AncestorsDurable` progress prefix or prior in-memory sync observation without that witness
-cannot construct it. A witness-consumption variant is constructible only from an exact
+intent final does not and either the matching independent commit witness survives or an
+exact validated post-reclamation successor chain proves that the witness was consumed and
+then reclaimed. That chain consists of the byte-identical basis and downstream decision
+predecessors, the exact targets-compacted receipt, the complete immediate target-receipt
+chain, and the ordered coordinator-parent absences produced by witness reclamation; every
+member must reopen and validate before it can prove prior consumption. An
+`AncestorsDurable` progress prefix, prior in-memory sync observation, later prefix without
+that complete chain, or asserted witness absence cannot construct the incident. A
+witness-consumption variant is constructible only from an exact
 durable basis or later descendant proving that a witness was consumed. It preserves a
 missing or nonidentical witness and any nonidentical intent predecessor, poisons the
 attempt, and performs zero reconstruction, relink, witness publication, source access,
@@ -6239,7 +6303,9 @@ newly selected canonical intent. Any surviving consumer instead proves that the 
 was consumed and forbids reselection. Before authorized witness reclamation it returns the
 matching witness-consumption incident with zero mutation; at or after reclamation, only the
 exact targets-compacted/immediate-receipt successor chain may classify the witness absence
-and resume that successor.
+and resume that successor. If the intent final is also absent, the complete validated
+post-reclamation chain instead constructs
+`IntentFinalMissingAfterAncestorsDurable`; it never resumes, recreates, or reselects.
 Precommit reselection may produce different intent bytes, terminal outcome, or degraded
 branch/class; no prior candidate identity is preserved or projected, and no selected
 decision existed to replace. Basis absence is recreated byte-identically only from the
@@ -6250,8 +6316,10 @@ bytes are presumed to exist when the pre-`AncestorsDurable` final is absent.
 
 Once the matching intent commit witness is durable, and at every state that has consumed
 it, both the byte-identical intent final and the byte-identical witness are mandatory until
-the ordered successor-proved reclamation after the targets-compacted receipt. Intent
-absence then returns
+the ordered successor-proved reclamation after the targets-compacted receipt. After that
+authorized reclamation, the witness may be absent but the intent final remains mandatory
+and the exact post-reclamation successor chain replaces the surviving witness solely as
+proof that the intent was consumed. Intent absence then returns
 `IntentFinalMissingAfterAncestorsDurable` and performs zero recreation, relink, source
 access, reselection, decision-selection publication, or later settlement. Without that
 witness and without a surviving consumer, intent absence follows the same precommit
@@ -6493,6 +6561,14 @@ discard-and-reselect recovery as every indistinguishable precommit absence; exac
 publishes only the matching witness without source access or reselection. The pair has
 independent hooks and poisons and cannot borrow an earlier prefix case. The absence half
 also proves the complete descendant census is empty before reselection.
+In addition to that pair, the decision-intent-witness publication matrix starts an
+independent fresh process from every write, file-sync, link, reopen, parent-sync, and
+individual ancestor-sync hook named above. Every incomplete case proves zero basis
+construction or consumption and zero selected-outcome projection, then resumes exactly at
+the first missing publication operation. The final ancestor-sync case alone may consume
+the witness and continue to basis publication. Every prefix, forbidden-effect assertion,
+resume point, hook, hook-removal poison, and early-consumer poison is independently
+enumerated.
 
 Separate fresh-process removal-integrity cases physically delete the exact durable intent
 before process start immediately after its matching independent commit witness is durable
@@ -6534,6 +6610,21 @@ settlement, cleanup, or slot-reuse mutation. Every
 prefix/substitution/forbidden-effect assertion has a separate hook and removal poison. No
 pre-consumer conflict, no-witness reselection, later-prefix incident, or authorized
 post-targets-compacted witness-reclamation case may satisfy another.
+Four additional intent-final-removal cases start independent fresh processes at the exact
+checkpoints `WitnessReclamationPending`, `WitnessReclamationReleased`,
+`CompletedReleased`, and `Complete`. `WitnessReclamationReleased` is the test-only label
+for the decision-intent witness's completed unlink and coordinator-parent sync within the
+existing reclamation phase; it is not a new lifecycle variant or registry id. The pending
+case uses the surviving exact witness. Each later case requires the complete validated
+post-reclamation successor chain and then constructs
+`IntentFinalMissingAfterAncestorsDurable`, returns the exact decision-durability integrity
+response, preserves the absent intent, and performs zero reconstruction, relink, witness
+publication, source access, reselection, continuation, cleanup, settlement, response
+replay, or slot reuse. For each post-reclamation checkpoint, removing or changing every
+successor-chain member in turn makes incident construction fail closed with zero mutation;
+it never falls back to precommit reselection or completed response replay. Every
+checkpoint, chain member, response assertion, forbidden-effect hook, and removal poison is
+independent.
 
 After the intent commit witness is durable, every fresh process must preserve its
 selected outcome through every basis boundary. After basis durability, each case must
