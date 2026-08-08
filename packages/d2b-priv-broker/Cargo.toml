@@ -34,27 +34,6 @@ layer1-bootstrap = []
 # d2b-host's matching fake backends.
 fake-backends = ["d2b-host/fake-backends"]
 
-[workspace]
-
-[profile.dev]
-debug = "line-tables-only"
-
-[profile.dev.package."*"]
-debug = false
-
-[profile.test]
-debug = "line-tables-only"
-
-[profile.test.package."*"]
-debug = false
-
-[profile.debugging]
-inherits = "dev"
-debug = 2
-
-[profile.debugging.package."*"]
-debug = 2
-
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }

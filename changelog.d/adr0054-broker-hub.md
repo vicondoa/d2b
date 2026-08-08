@@ -1,17 +1,17 @@
 ### Added
 
-- Accepted ADR 0054, selecting one Cargo workspace and dependency hub for d2b
-  product packages while retaining the no-bash walker as a separate tooling
-  workspace. The decision accepts the shared external package and feature
-  superset while keeping selected Cargo closure policy authoritative for
-  security and exact native Bazel context censuses authoritative for
-  first-party edges. The amended Spec 003 plan requires future implementation
-  to generate separate broker and real-libshpool guest production and
-  root-dev-inclusive policy inputs for x86_64-linux and aarch64-linux, retain
-  the contributor-only two-step mutation workflow, retire the `main`,
-  `broker`, and `guest` hub identifiers in favor of `product`, preserve
-  `walker`, use existing enforcing gates, realize native architecture
-  artifacts, and narrowly resolve the six guest license findings.
+- Accepted ADR 0054, which governs the newer workspace shape: one resolver-v2
+  product Cargo workspace and root lock for product packages, a separate
+  no-bash walker workspace and lock, generated `Cargo.guest.lock` static-guest
+  closure input, and exactly the `product` and `walker` Bazel hubs. Selected
+  Cargo closure policy remains authoritative for package security, while
+  native Bazel context censuses remain authoritative for first-party edges.
+  The broker GNU and guest musl policy contexts are generated for
+  `x86_64-linux` and `aarch64-linux`; the native arm gate realizes six checks
+  and runs the supply-chain gate on one stable head. Release builds use the
+  root manifest and `packages/target/release`, with explicit package, binary,
+  lock, and feature selectors. Retired `main`, `broker`, and `guest` hub
+  identifiers are not authorities.
 - Amended the Spec 003 plan to require every governed Rust action to use the
   repository's exact Nix-pinned, Linux-sandbox-patched Bazel 8.6.0. Planned
   implementation must load the fixed seccomp policy before the complete action

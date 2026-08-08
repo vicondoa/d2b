@@ -21,6 +21,37 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      mkBazelSeccomp = system:
+        if builtins.elem system systems then
+          import ./pkgs/bazel-8.6.0-seccomp {
+            pkgs = nixpkgsFor.${system};
+          }
+        else
+          throw ''
+            D2B-BZLEXEC-NIX-PTRACE-SYSTEM: native-system is unsupported.
+            Move evaluation and execution to a native x86_64-linux or aarch64-linux runner;
+            run make test-flake; then run the exact phase-valid closed slice command.
+          '';
+      mkRustsecAdvisoryDb = pkgs:
+        let
+          source = pkgs.fetchFromGitHub {
+            owner = "rustsec";
+            repo = "advisory-db";
+            rev = "831c50f4a4304068f125e603add6a8839f08b3eb";
+            hash = "sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=";
+          };
+        in
+        pkgs.runCommand "rustsec-advisory-db-git" {
+          nativeBuildInputs = [ pkgs.git ];
+        } ''
+          cp -r ${source} $out
+          chmod -R u+w $out
+          cd $out
+          git init -q
+          git add .
+          git -c user.email=nixbld@localhost -c user.name=nixbld \
+            commit -q -m 'advisory-db snapshot'
+        '';
       mkGuestRustPackagesSrc = pkgs:
         pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
@@ -104,6 +135,7 @@
       # for pkgs.rustc/pkgs.cargo and the pin will be served natively.
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazelSeccomp = mkBazelSeccomp system;
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
@@ -111,6 +143,10 @@
             # Toolchain. rustup resolves packages/rust-toolchain.toml.
             rustup
             stdenv.cc
+            # Bazel is the repository-pinned 8.6.0 output with the Linux
+            # sandbox seccomp and PID-namespace monitor patch. Do not add an
+            # ambient Bazel here.
+            bazelSeccomp
             # Compiler cache. The cargo configs route rustc through
             # .cargo/rustc-wrapper.sh, which uses this when present and plain
             # rustc when absent, so the shell never has to clear RUSTC_WRAPPER.
@@ -144,6 +180,10 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazelSeccomp = mkBazelSeccomp system;
+        bazelExecSupervisor =
+          import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
+        rustsecAdvisoryDb = mkRustsecAdvisoryDb pkgs;
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
@@ -160,6 +200,32 @@
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
         } // args);
+        brokerHostPackage = pkgs.rustPlatform.buildRustPackage {
+          pname = "d2b-priv-broker";
+          version = "0.0.0-bootstrap";
+          src = rustPackagesSrc;
+          sourceRoot = "d2b-rust-src/packages";
+          cargoLock = {
+            lockFile = ./packages/Cargo.lock;
+            outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+          };
+          cargoBuildFlags = [
+            "--package"
+            "d2b-priv-broker"
+            "--bin"
+            "d2b-priv-broker"
+            "--no-default-features"
+          ];
+          doCheck = false;
+          RUSTC_WRAPPER = "";
+          SCCACHE_DIR = "";
+          postPatch = ''
+            mkdir -p .cargo
+            printf '%s\n' '[build]' 'rustc-wrapper = ""' > .cargo/config.toml
+            rm -f .cargo/rustc-wrapper.sh
+          '';
+          meta.mainProgram = "d2b-priv-broker";
+        };
         guestRustPackagesSrc = mkGuestRustPackagesSrc pkgs;
         cargoLock = {
           lockFile = ./packages/Cargo.guest.lock;
@@ -204,14 +270,25 @@
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "d2b-guest-shell-runner-static";
             version = "0.0.0-bootstrap";
-            src = ./packages/d2b-guest-shell-runner;
+            src = rustPackagesSrc;
+            sourceRoot = "d2b-rust-src/packages";
             cargoLock = {
-              lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
+              lockFile = ./packages/Cargo.lock;
+              outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
             };
-            cargoBuildFlags = [ "--features" "real-libshpool" ];
+            cargoBuildFlags = [
+              "--package"
+              "d2b-guest-shell-runner"
+              "--bin"
+              "d2b-guest-shell-runner"
+              "--no-default-features"
+              "--features"
+              "real-libshpool"
+            ];
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
+            RUSTFLAGS = "-C relocation-model=pie -C link-arg=-static-pie";
             nativeBuildInputs = [
               pkgs.pkgsStatic.binutils
               pkgs.pkgsStatic.rustPlatform.bindgenHook
@@ -220,7 +297,9 @@
               readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
               bin="$out/bin/d2b-guest-shell-runner"
               test -x "$bin"
-              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -h "$bin" > "$TMPDIR/d2b-guest-shell-runner.header"
+              grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' \
+                "$TMPDIR/d2b-guest-shell-runner.header"
               "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
                 echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
@@ -241,6 +320,9 @@
             '';
           };
       in {
+        "bazel-8.6.0-seccomp" = bazelSeccomp;
+        "d2b-bazel-exec-supervisor" = bazelExecSupervisor;
+        "rustsec-advisory-db" = rustsecAdvisoryDb;
         manpages = pkgs.runCommand "d2b-manpages" { } ''
           install -Dm644 ${./docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
           ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
@@ -257,6 +339,7 @@
           guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
         d2b-sk-frontend-static =
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
+        d2b-priv-broker = brokerHostPackage;
         d2b-guest-shell-runner-static = guestShellRunnerStatic;
         d2b-clipd = rustWorkspace {
           pname = "d2b-clipd";
@@ -391,6 +474,7 @@
       # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        lib = pkgs.lib;
         d2bModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
@@ -685,48 +769,340 @@
         } // args);
         rustToolchainChannel =
           (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
-        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
-        mainManifestToml = builtins.fromTOML (builtins.readFile ./packages/Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
-        assertRustSupplyChainInputs = ''
-          test -f ${rustPackagesSrc}/packages/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/Cargo.guest.lock
-          test -f ${rustPackagesSrc}/packages/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml
-          printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
-          printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
-          printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
-        '';
 
-        # Pinned RustSec advisory DB snapshot for offline cargo-deny /
-        # cargo-audit checks in the Nix sandbox.  Update the rev + hash
-        # periodically to pick up new advisories.
-        advisoryDbSrc = pkgs.fetchFromGitHub {
-          owner = "rustsec";
-          repo = "advisory-db";
-          rev = "831c50f4a4304068f125e603add6a8839f08b3eb";
-          hash = "sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=";
-        };
+        advisoryDbGit = mkRustsecAdvisoryDb pkgs;
 
-        # cargo-deny and cargo-audit (via the rustsec crate) require the
-        # advisory DB to be a git repository.  Wrap the fetchFromGitHub
-        # source tree in a minimal git repo so gix::open succeeds.
-        advisoryDbGit = pkgs.runCommand "rustsec-advisory-db-git" {
-          nativeBuildInputs = [ pkgs.git ];
-        } ''
-          cp -r ${advisoryDbSrc} $out
-          chmod -R u+w $out
-          cd $out
-          git init -q
-          git add .
-          git -c user.email=nixbld@localhost -c user.name=nixbld \
-            commit -q -m 'advisory-db snapshot'
+        nativePrefix =
+          if system == "x86_64-linux" then "x86_64"
+          else if system == "aarch64-linux" then "aarch64"
+          else throw "unsupported native system";
+        nativeGnuTarget = "${nativePrefix}-unknown-linux-gnu";
+        nativeMuslTarget = "${nativePrefix}-unknown-linux-musl";
+        policyInputRoot = target: context:
+          ./. + "/packages/policy-inputs/${system}/${target}/${context}";
+        brokerPolicyRoot =
+          policyInputRoot nativeGnuTarget "broker-production";
+        guestPolicyRoot =
+          policyInputRoot nativeMuslTarget "guest-real-libshpool";
+        # The guest static policy consumes only
+        # guest-real-libshpool/production/{closure.json,Cargo.lock}; the
+        # guest-real-libshpool/production/closure.json
+        # guest-real-libshpool/production/Cargo.lock
+        # policy metadata and lock are reserved for deny and audit.
+        policyInputsPresent = builtins.pathExists
+          (./. + "/packages/policy-inputs");
+        artifactBaselinePath =
+          ./. + "/tests/golden/bazel-rust-artifact-baselines.json";
+        artifactBaselines =
+          if builtins.pathExists artifactBaselinePath
+          then builtins.fromJSON (builtins.readFile artifactBaselinePath)
+          else null;
+        artifactRows =
+          if artifactBaselines == null
+          then [ ]
+          else artifactBaselines.rows or [ ];
+        expectedArtifactPairs = [
+          "x86_64-linux/broker-host-artifact-contract"
+          "x86_64-linux/guest-static-elf"
+          "aarch64-linux/broker-host-artifact-contract"
+          "aarch64-linux/guest-static-elf"
+        ];
+        artifactPair = row: "${row.system}/${row.artifact}";
+        artifactAuthFields = [
+          "artifact"
+          "candidateContentSha256"
+          "decision"
+          "deltaBytes"
+          "newBinaryBytes"
+          "priorBinaryBytes"
+          "rationalePath"
+          "reviewRecordSha256"
+          "system"
+        ];
+        hexDigest = value:
+          builtins.isString value
+          && builtins.match "[0-9a-fA-F]{64}" value != null;
+        artifactAuthorizationShapeOk = row:
+          let
+            authorization = row.sizeGrowthAuthorization;
+          in
+          authorization == null
+          || (builtins.isAttrs authorization
+            && lib.sort builtins.lessThan (builtins.attrNames authorization)
+              == lib.sort builtins.lessThan artifactAuthFields
+            && authorization.system == row.system
+            && authorization.artifact == row.artifact
+            && authorization.decision == "approved"
+            && builtins.isInt authorization.priorBinaryBytes
+            && authorization.priorBinaryBytes == row.binaryBytes
+            && builtins.isInt authorization.newBinaryBytes
+            && authorization.newBinaryBytes > authorization.priorBinaryBytes
+            && builtins.isInt authorization.deltaBytes
+            && authorization.deltaBytes
+              == authorization.newBinaryBytes - authorization.priorBinaryBytes
+            && builtins.isString authorization.rationalePath
+            && !(lib.hasPrefix "/" authorization.rationalePath)
+            && !(lib.hasPrefix "../" authorization.rationalePath)
+            && !(lib.hasInfix "/../" authorization.rationalePath)
+            && hexDigest authorization.candidateContentSha256
+            && hexDigest authorization.reviewRecordSha256);
+        artifactLinkageShapeOk = row:
+          builtins.isString row.elfType
+          && builtins.isString row.elfMachine
+          && (if row.artifact == "broker-host-artifact-contract" then
+            builtins.isString row.interpreter
+            && builtins.isList row.needed
+            && row.needed == lib.sort builtins.lessThan row.needed
+          else
+            (!(row ? interpreter) || row.interpreter == null)
+            && (row.needed or [ ]) == [ ]);
+        artifactBaselineShapeOk =
+          artifactBaselines != null
+          && builtins.isAttrs artifactBaselines
+          && builtins.isList artifactRows
+          && builtins.length artifactRows == 4
+          && lib.sort builtins.lessThan (map artifactPair artifactRows)
+            == lib.sort builtins.lessThan expectedArtifactPairs
+          && !(lib.hasInfix storePathMarker (builtins.toJSON artifactBaselines))
+          && builtins.all (row:
+            builtins.isString row.system
+            && builtins.isString row.artifact
+            && builtins.isInt row.binaryBytes
+            && builtins.isInt row.closureCount
+            && hexDigest row.closureSha256
+            && builtins.isString row.selectedPolicyDigest
+            && hexDigest row.selectedPolicyDigest
+            && builtins.isString row.measurementCommand
+            && builtins.isString row.candidateCommit
+            && artifactLinkageShapeOk row
+            && !(row ? rowAllowance)
+            && !(row ? sizeAllowance)
+            && (row ? sizeGrowthAuthorization)
+            && artifactAuthorizationShapeOk row)
+            artifactRows;
+        storePathMarker = lib.concatStringsSep "/" [ "" "nix" "store" "" ];
+        baselineRowFor = artifact:
+          lib.findFirst
+            (row: row.system == system && row.artifact == artifact)
+            null
+            artifactRows;
+        artifactContractPrelude = ''
+          set -euo pipefail
+          fail() {
+            printf '%s\n' "$1" >&2
+            exit 1
+          }
         '';
+        mkArtifactContract =
+          { artifact
+          , binaryPackage
+          , binaryName
+          , policyRoot
+          , row
+          , guest
+          }:
+          if !policyInputsPresent || !artifactBaselineShapeOk || row == null then
+            pkgs.runCommand "d2b-${artifact}-baseline-input" { } ''
+              printf '%s\n' D2B-BZLARTIFACT-IDENTITY >&2
+              exit 1
+            ''
+          else
+            let
+              binary = "${binaryPackage}/bin/${binaryName}";
+              closureInfo = pkgs.closureInfo {
+                rootPaths = [ binaryPackage ];
+              };
+              expectedMachine =
+                if system == "x86_64-linux"
+                then "Advanced Micro Devices X86-64"
+                else "AArch64";
+              expectedE =
+                if system == "x86_64-linux" then "EM_X86_64" else "EM_AARCH64";
+              expectedInterpreter = row.interpreter or "";
+              expectedNeeded = lib.concatStringsSep "\n" (row.needed or [ ]);
+              authorization = row.sizeGrowthAuthorization or null;
+              authorizationDecision =
+                if authorization == null then "" else authorization.decision;
+              authorizationSystem =
+                if authorization == null then "" else authorization.system;
+              authorizationArtifact =
+                if authorization == null then "" else authorization.artifact;
+              authorizationPrior =
+                if authorization == null then 0 else authorization.priorBinaryBytes;
+              authorizationNew =
+                if authorization == null then 0 else authorization.newBinaryBytes;
+              authorizationDelta =
+                if authorization == null then 0 else authorization.deltaBytes;
+              authorizationRationale =
+                if authorization == null then "" else authorization.rationalePath;
+              authorizationCandidate =
+                if authorization == null then "" else authorization.candidateContentSha256;
+              authorizationReview =
+                if authorization == null then "" else authorization.reviewRecordSha256;
+            in
+            pkgs.runCommand "d2b-${artifact}-contract" {
+              nativeBuildInputs = [
+                pkgs.binutils
+                pkgs.coreutils
+                pkgs.gnugrep
+                pkgs.gawk
+              ];
+            } ''
+              ${artifactContractPrelude}
+              binary=${lib.escapeShellArg binary}
+              test -x "$binary" || fail D2B-BZLARTIFACT-IDENTITY
+              header="$TMPDIR/header"
+              program_headers="$TMPDIR/program-headers"
+              dynamic="$TMPDIR/dynamic"
+              dynamic_error="$TMPDIR/dynamic-error"
+              ${pkgs.binutils.bintools}/bin/readelf -h "$binary" > "$header" \
+                || fail D2B-BZLARTIFACT-LINKAGE
+              grep -Eq "^[[:space:]]*Machine:[[:space:]]+${expectedMachine}$" "$header" \
+                || fail D2B-BZLARTIFACT-LINKAGE
+              printf '%s\n' ${lib.escapeShellArg expectedE} > "$TMPDIR/expected-e-machine"
+              # Guest artifacts are ET_DYN static PIE and have no PT_INTERP or DT_NEEDED.
+              ${if guest then ''
+                grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' "$header" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                ${pkgs.binutils.bintools}/bin/readelf -l "$binary" > "$program_headers" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                if grep -Fq 'Requesting program interpreter' "$program_headers"; then
+                  fail D2B-BZLARTIFACT-LINKAGE
+                fi
+                if ${pkgs.binutils.bintools}/bin/readelf -d "$binary" > "$dynamic" \
+                  2> "$dynamic_error"; then
+                  if grep -Fq '(NEEDED)' "$dynamic"; then
+                    fail D2B-BZLARTIFACT-LINKAGE
+                  fi
+                elif ! grep -qi 'no dynamic section' "$dynamic_error"; then
+                  fail D2B-BZLARTIFACT-LINKAGE
+                fi
+              '' else ''
+                ${pkgs.binutils.bintools}/bin/readelf -l "$binary" > "$program_headers" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                actual_interpreter=$(
+                  sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p' \
+                    "$program_headers" | sed 's#.*/##'
+                )
+                test "$actual_interpreter" = ${lib.escapeShellArg expectedInterpreter} \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                ${pkgs.binutils.bintools}/bin/readelf -d "$binary" > "$dynamic" \
+                  2> "$dynamic_error" || fail D2B-BZLARTIFACT-LINKAGE
+                actual_needed=$(
+                  sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' "$dynamic" | sort
+                )
+                test "$actual_needed" = ${lib.escapeShellArg expectedNeeded} \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+              ''}
+
+              actual_bytes=$(${pkgs.coreutils}/bin/stat -c %s "$binary")
+              baseline_bytes=${toString row.binaryBytes}
+              if test "$actual_bytes" -gt "$baseline_bytes"; then
+                test ${lib.escapeShellArg authorizationDecision} = approved \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${lib.escapeShellArg authorizationSystem} = ${lib.escapeShellArg system} \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${lib.escapeShellArg authorizationArtifact} = ${lib.escapeShellArg artifact} \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${toString authorizationPrior} -eq "$baseline_bytes" \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${toString authorizationNew} -eq "$actual_bytes" \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${toString authorizationDelta} -eq \
+                  "$((actual_bytes - baseline_bytes))" \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${toString authorizationDelta} -gt 0 \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                case ${lib.escapeShellArg authorizationRationale} in
+                  ""|/*|../*|*/../*|*/..) fail D2B-BZLARTIFACT-SIZE-AUTH ;;
+                esac
+                printf '%s\n' ${lib.escapeShellArg authorizationCandidate} \
+                  | grep -Eq '^[0-9a-fA-F]{64}$' \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                printf '%s\n' ${lib.escapeShellArg authorizationReview} \
+                  | grep -Eq '^[0-9a-fA-F]{64}$' \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+              else
+                test ${lib.escapeShellArg authorizationDecision} = "" \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+              fi
+
+              closure_count=$(${pkgs.coreutils}/bin/wc -l < ${closureInfo}/store-paths)
+              closure_count=$(${pkgs.coreutils}/bin/tr -d '[:space:]' <<< "$closure_count")
+              closure_sha=$(${pkgs.coreutils}/bin/sha256sum ${closureInfo}/store-paths | ${pkgs.gawk}/bin/awk '{print $1}')
+              test "$closure_count" -eq ${toString row.closureCount} \
+                || fail D2B-BZLARTIFACT-CLOSURE
+              test "$closure_sha" = ${lib.escapeShellArg row.closureSha256} \
+                || fail D2B-BZLARTIFACT-CLOSURE
+              policy_sha=$(${pkgs.coreutils}/bin/sha256sum \
+                ${lib.escapeShellArg "${policyRoot}/policy/metadata.json"} \
+                | ${pkgs.gawk}/bin/awk '{print $1}')
+              test "$policy_sha" = ${lib.escapeShellArg row.selectedPolicyDigest} \
+                || fail D2B-BZLARTIFACT-IDENTITY
+              mkdir -p "$out"
+              printf '%s\n' ok > "$out/result"
+            '';
+        mkPolicyInputCheck =
+          { name
+          , root
+          , package
+          , target
+          , feature
+          , variant
+          , edgeKinds
+          , production
+          }:
+          if !policyInputsPresent then
+            pkgs.runCommand "d2b-${name}-input" { } ''
+              printf '%s\n' D2B-BZLPOLICY-INPUT >&2
+              exit 1
+            ''
+          else
+            let
+              selectedDir = if production then "production" else "policy";
+              selectedFile =
+                if production then "closure.json" else "metadata.json";
+            in
+            pkgs.runCommand "d2b-${name}" {
+              nativeBuildInputs = [ pkgs.gnugrep ];
+            } ''
+              set -euo pipefail
+              fail() {
+                printf '%s\n' "$1" >&2
+                exit 1
+              }
+              input=${root}/${selectedDir}/${selectedFile}
+              lock=${root}/${selectedDir}/Cargo.lock
+              test -s "$input" || fail D2B-BZLPOLICY-INPUT
+              test -s "$lock" || fail D2B-BZLPOLICY-INPUT
+              grep -Fq '"system": "${system}"' "$input" \
+                || fail D2B-BZLPOLICY-CONTEXT
+              grep -Fq '"target": "${target}"' "$input" \
+                || fail D2B-BZLPOLICY-CONTEXT
+              grep -Fq '"package": "${package}"' "$input" \
+                || fail D2B-BZLPOLICY-ROOT
+              grep -Fq '"defaultFeatures": false' "$input" \
+                || fail D2B-BZLPOLICY-FEATURE
+              ${if feature == "" then ''
+                if grep -Fq 'real-libshpool' "$input"; then
+                  fail D2B-BZLPOLICY-FEATURE
+                fi
+              '' else ''
+                grep -Fq 'real-libshpool' "$input" \
+                  || fail D2B-BZLPOLICY-FEATURE
+              ''}
+              grep -Fq '"variant": "${variant}"' "$input" \
+                || fail D2B-BZLPOLICY-EDGES
+              grep -Fq '"edgeKinds": "${edgeKinds}"' "$input" \
+                || fail D2B-BZLPOLICY-EDGES
+              grep -Fq '"identities": [' "$input" \
+                || fail D2B-BZLPOLICY-CENSUS
+              mkdir -p "$out"
+              printf '%s\n' ok > "$out/result"
+            '';
 
         # --- W2 nix-unit layer -------------------------------------------
         # Hermetic pure-eval comparison runner over the tests/unit/nix
@@ -757,6 +1133,8 @@
           nix-unit-misc = [
             "assertions.nix"
             "autostart-wiring.nix"
+            "bazel-package-policy.nix"
+            "bazel-toolchain.nix"
             "examples-with-observability.nix"
             "ifname-nix-rust-parity.nix"
             "observability.nix"
@@ -975,14 +1353,26 @@
         rust-build = rustWorkspace {
           pname = "d2b-rust-build";
           preBuild = assertRustToolchain;
-          cargoBuildFlags = [ "--workspace" ];
+          cargoBuildFlags = [
+            "--workspace"
+            "--exclude"
+            "d2b-priv-broker"
+            "--exclude"
+            "d2b-guest-shell-runner"
+          ];
           doCheck = false;
         };
 
         rust-tests = rustWorkspace {
           pname = "d2b-rust-tests";
           preBuild = assertRustToolchain;
-          cargoBuildFlags = [ "--workspace" ];
+          cargoBuildFlags = [
+            "--workspace"
+            "--exclude"
+            "d2b-priv-broker"
+            "--exclude"
+            "d2b-guest-shell-runner"
+          ];
           # Keep fixture-dependent contract crates out of generic sandbox
           # workspace tests. fixture-smoke only renders their input artifacts;
           # it does not execute these tests. Full D2B_FIXTURES delivery to the
@@ -991,6 +1381,10 @@
             "--workspace"
             "--exclude"
             "d2b-contract-tests"
+            "--exclude"
+            "d2b-priv-broker"
+            "--exclude"
+            "d2b-guest-shell-runner"
           ];
           installPhase = ''
             runHook preInstall
@@ -1003,12 +1397,21 @@
         rust-clippy = rustWorkspace {
           pname = "d2b-rust-clippy";
           nativeBuildInputs = [ pkgs.clippy ];
-          cargoBuildFlags = [ "--workspace" ];
+          cargoBuildFlags = [
+            "--workspace"
+            "--exclude"
+            "d2b-priv-broker"
+            "--exclude"
+            "d2b-guest-shell-runner"
+          ];
           doCheck = false;
           buildPhase = ''
             runHook preBuild
             ${assertRustToolchain}
-            cargo clippy --workspace --all-targets -- -D warnings
+            cargo clippy --workspace --all-targets \
+              --exclude d2b-priv-broker \
+              --exclude d2b-guest-shell-runner \
+              -- -D warnings
             runHook postBuild
           '';
           installPhase = ''
@@ -1019,41 +1422,73 @@
           '';
         };
 
-        guest-static-elf = pkgs.runCommand "d2b-guest-static-elf" {
-          nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
-        } ''
-          readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
-          for bin in \
-            ${self.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
-            ${self.packages.${system}.d2b-userd-static}/bin/d2b-userd \
-            ${self.packages.${system}.d2b-exec-runner-static}/bin/d2b-exec-runner \
-            ${self.packages.${system}.d2b-sk-frontend-static}/bin/d2b-sk-frontend \
-            ${self.packages.${system}.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner
-          do
-            test -x "$bin"
-            name="$(basename "$bin")"
-            "$readelf" -h "$bin" >/dev/null
-            "$readelf" -l "$bin" > "$TMPDIR/$name.program-headers"
-            if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
-              echo "$bin: unexpected ELF interpreter" >&2
-              cat "$TMPDIR/$name.program-headers" >&2
+        broker-host-artifact-contract =
+          mkArtifactContract {
+            artifact = "broker-host-artifact-contract";
+            binaryPackage = self.packages.${system}."d2b-priv-broker";
+            binaryName = "d2b-priv-broker";
+            policyRoot = brokerPolicyRoot;
+            row = baselineRowFor "broker-host-artifact-contract";
+            guest = false;
+          };
+
+        guest-static-elf =
+          if !policyInputsPresent || !artifactBaselineShapeOk
+            || baselineRowFor "guest-static-elf" == null then
+            pkgs.runCommand "d2b-guest-static-elf-baseline-input" { } ''
+              printf '%s\n' D2B-BZLARTIFACT-IDENTITY >&2
               exit 1
-            fi
-            if "$readelf" -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
-              if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
-                echo "$bin: unexpected dynamic dependency" >&2
-                cat "$TMPDIR/$name.dynamic" >&2
+            ''
+          else
+            let
+              guestContract = mkArtifactContract {
+                artifact = "guest-static-elf";
+                binaryPackage =
+                  self.packages.${system}."d2b-guest-shell-runner-static";
+                binaryName = "d2b-guest-shell-runner";
+                policyRoot = guestPolicyRoot;
+                row = baselineRowFor "guest-static-elf";
+                guest = true;
+              };
+            in
+            pkgs.runCommand "d2b-guest-static-elf" {
+              nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
+            } ''
+              set -euo pipefail
+              fail() {
+                printf '%s\n' "$1" >&2
                 exit 1
-              fi
-            elif ! grep -qi 'no dynamic section' "$TMPDIR/$name.dynamic.err"; then
-              echo "$bin: readelf -d failed unexpectedly" >&2
-              cat "$TMPDIR/$name.dynamic.err" >&2
-              exit 1
-            fi
-          done
-          mkdir -p "$out"
-          echo ok > "$out/guest-static-elf"
-        '';
+              }
+              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
+              for bin in \
+                ${self.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
+                ${self.packages.${system}.d2b-userd-static}/bin/d2b-userd \
+                ${self.packages.${system}.d2b-exec-runner-static}/bin/d2b-exec-runner \
+                ${self.packages.${system}.d2b-sk-frontend-static}/bin/d2b-sk-frontend \
+                ${self.packages.${system}."d2b-guest-shell-runner-static"}/bin/d2b-guest-shell-runner
+              do
+                test -x "$bin" || fail D2B-BZLARTIFACT-IDENTITY
+                name="$(basename "$bin")"
+                "$readelf" -h "$bin" > "$TMPDIR/$name.header" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                "$readelf" -l "$bin" > "$TMPDIR/$name.program-headers" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
+                  fail D2B-BZLARTIFACT-LINKAGE
+                fi
+                if "$readelf" -d "$bin" > "$TMPDIR/$name.dynamic" \
+                  2> "$TMPDIR/$name.dynamic.err"; then
+                  if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
+                    fail D2B-BZLARTIFACT-LINKAGE
+                  fi
+                elif ! grep -qi 'no dynamic section' "$TMPDIR/$name.dynamic.err"; then
+                  fail D2B-BZLARTIFACT-LINKAGE
+                fi
+              done
+              test -f ${guestContract}/result || fail D2B-BZLARTIFACT-IDENTITY
+              mkdir -p "$out"
+              printf '%s\n' ok > "$out/guest-static-elf"
+            '';
 
         # Build-level determinism proof for the Provider package catalog
         # emitter. The drift gate proves the generator's output matches what is
@@ -1117,12 +1552,6 @@
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
-          brokerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-priv-broker/Cargo.lock;
-          };
-          guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
-          };
           cargoConfig = vendorDir: ''
             [source.crates-io]
             replace-with = "vendored-sources"
@@ -1160,18 +1589,6 @@
             "Cargo.toml" \
             '${cargoConfig mainVendor}' \
             "${rustPackagesSrc}/packages/deny.toml"
-
-          run_deny "broker" \
-            "${rustPackagesSrc}" \
-            "d2b-priv-broker/Cargo.toml" \
-            '${cargoConfig brokerVendor}' \
-            "${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml"
-
-          run_deny "guest-shell-runner" \
-            "${rustPackagesSrc}" \
-            "d2b-guest-shell-runner/Cargo.toml" \
-            '${cargoConfig guestShellRunnerVendor}' \
-            "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml"
 
           echo ok > $out
         '';
@@ -1221,12 +1638,6 @@
             --ignore RUSTSEC-2026-0194 \
             --ignore RUSTSEC-2026-0195
           run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
-          run_audit ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
-          # Track that feasibility-spike warning explicitly while the helper
-          # evaluates the pinned shpool dependency.
-          run_audit ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock \
-            --ignore RUSTSEC-2024-0384
           echo ok > $out
         '';
 
@@ -1241,18 +1652,72 @@
           '';
 
         guest-shell-runner-static-dependency-policy =
-          pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./packages/d2b-guest-shell-runner/Cargo.lock}
-            if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
-              echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
+          if !policyInputsPresent then
+            pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy-input" { } ''
+              printf '%s\n' D2B-BZLPOLICY-INPUT >&2
               exit 1
-            fi
-            if ! grep -A6 'name = "motd"' "$lock" | grep -F 'version = "0.2.2"' >/dev/null; then
-              echo "guest shell runner lock must pin the expected PAM-free motd dependency posture" >&2
-              exit 1
-            fi
-            echo ok > "$out"
-          '';
+            ''
+          else
+            pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" {
+              nativeBuildInputs = [ pkgs.gnugrep ];
+            } ''
+              set -euo pipefail
+              fail() {
+                printf '%s\n' "$1" >&2
+                exit 1
+              }
+              closure=${guestPolicyRoot}/production/closure.json
+              lock=${guestPolicyRoot}/production/Cargo.lock
+              test -s "$closure" || fail D2B-BZLPOLICY-INPUT
+              test -s "$lock" || fail D2B-BZLPOLICY-INPUT
+              grep -Fq '"system": "${system}"' "$closure" \
+                || fail D2B-BZLPOLICY-CONTEXT
+              grep -Fq '"target": "${nativeMuslTarget}"' "$closure" \
+                || fail D2B-BZLPOLICY-CONTEXT
+              grep -Fq '"package": "d2b-guest-shell-runner"' "$closure" \
+                || fail D2B-BZLPOLICY-ROOT
+              if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
+                fail D2B-BZLPOLICY-CLOSURE
+              fi
+              mkdir -p "$out"
+              printf '%s\n' ok > "$out/result"
+            '';
+
+        broker-production-dependency-policy =
+          mkPolicyInputCheck {
+            name = "broker-production-dependency-policy";
+            root = brokerPolicyRoot;
+            package = "d2b-priv-broker";
+            target = nativeGnuTarget;
+            feature = "";
+            variant = "production";
+            edgeKinds = "normal,build";
+            production = true;
+          };
+
+        guest-real-libshpool-package-policy =
+          mkPolicyInputCheck {
+            name = "guest-real-libshpool-package-policy";
+            root = guestPolicyRoot;
+            package = "d2b-guest-shell-runner";
+            target = nativeMuslTarget;
+            feature = "real-libshpool";
+            variant = "policy";
+            edgeKinds = "normal,build,dev";
+            production = false;
+          };
+
+        broker-production-package-policy =
+          mkPolicyInputCheck {
+            name = "broker-production-package-policy";
+            root = brokerPolicyRoot;
+            package = "d2b-priv-broker";
+            target = nativeGnuTarget;
+            feature = "";
+            variant = "policy";
+            edgeKinds = "normal,build,dev";
+            production = false;
+          };
 
         harness-ubuntu-skeleton = (import ./harness/ubuntu/default.nix) {
           pkgs = nixpkgsFor.${system};

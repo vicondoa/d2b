@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "artifact": "bazel-8.6.0-seccomp",
+  "version": "8.6.0",
+  "supportedSystems": [
+    "x86_64-linux",
+    "aarch64-linux"
+  ],
+  "derivationSha256Method": "raw-drv-file-sha256",
+  "source": {
+    "url": "https://github.com/bazelbuild/bazel/releases/download/8.6.0/bazel-8.6.0-dist.zip",
+    "sha256": "5b6d9e0742331cd65edf1685f0064e9144c30a2737357932a5da920d8eb54aed",
+    "archiveSha256": "13a84586429b6084b13bd5040d78deda58d523012151e71e7d4be0c63dd831f9"
+  },
+  "patch": {
+    "path": "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch",
+    "sha256": "3293478bf69c07dd16963f7ab7efeb6e4afcbb274c6461a8a8d94a4b211f2786",
+    "loadPoint": "after-sandbox-construction-before-action-command-exec"
+  },
+  "policy": {
+    "path": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
+    "sha256": "b1ce0e3607e6888af24475cac8ca4ab59555a42fed791dcc6420fbb4434831a9",
+    "abiSha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f",
+    "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+    "denialErrno": "EACCES",
+    "futureChildPidMatching": false,
+    "noNetwork": true,
+    "noFallback": true
+  },
+  "capabilityAbi": {
+    "name": "d2b-bazel-seccomp-abi-v1",
+    "sha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f"
+  },
+  "output": {
+    "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
+    "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a"
+  },
+  "nativeOutputs": {
+    "x86_64-linux": {
+      "derivationSha256": "5c00bb451a0851f096f4a396bc4efd0bed2deedaf1c37ac649ee3a988c03116d",
+      "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
+      "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a",
+      "nativeExecutable": "bazel-8.6.0-linux-x86_64",
+      "startupProbe": {
+        "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+        "filterLoad": "observed",
+        "fixedDenial": "EACCES"
+      }
+    },
+    "aarch64-linux": {
+      "derivationSha256": "84a3d3df481794798afbdd9459073cb6e8c2ff845b028066bceb01687574b9e5",
+      "narSha256": "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91",
+      "executableSha256": "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb",
+      "nativeExecutable": "bazel-8.6.0-linux-aarch64",
+      "startupProbe": {
+        "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+        "filterLoad": "observed",
+        "fixedDenial": "EACCES"
+      }
+    }
+  },
+  "actionNetwork": {
+    "strategy": "sandboxed",
+    "deniedSyscalls": [
+      "socket",
+      "socketpair",
+      "connect",
+      "bind",
+      "listen",
+      "accept",
+      "accept4",
+      "sendto",
+      "sendmsg",
+      "sendmmsg",
+      "recvfrom",
+      "recvmsg",
+      "recvmmsg",
+      "shutdown",
+      "getsockname",
+      "getpeername",
+      "setsockopt",
+      "getsockopt",
+      "pidfd_getfd",
+      "io_uring_setup",
+      "io_uring_enter",
+      "io_uring_register",
+      "socketcall"
+    ],
+    "inheritedDescriptorPreflight": [
+      "socket",
+      "io_uring",
+      "io_uring-sqpoll",
+      "io_uring-registered-files",
+      "io_uring-fixed-sockets"
+    ],
+    "forbiddenStrategies": [
+      "process",
+      "local",
+      "standalone",
+      "worker",
+      "remote",
+      "no-sandbox",
+      "fallback"
+    ]
+  },
+  "containment": {
+    "namespace": "CLONE_NEWPID",
+    "userspaceCeilingMs": 10000,
+    "kernelCleanupBounded": false,
+    "pendingState": "pending-kernel-cleanup",
+    "releaseRecord": "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
+    "runbook": "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
+  },
+  "preHelperPredicates": [
+    {
+      "owner": "nix-evaluation",
+      "stage": "NIX_PTRACE_SYSTEM",
+      "code": "D2B-BZLEXEC-NIX-PTRACE-SYSTEM",
+      "causingInput": "native-system",
+      "locator": "flake.nix",
+      "correction": "Move evaluation and execution to a native x86_64-linux or aarch64-linux runner; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "toolchain-startup",
+      "stage": "TOOLCHAIN_PTRACE_KERNEL",
+      "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL",
+      "causingInput": "linux-minimum-3.19",
+      "locator": "tests/golden/bazel-exec-supervisor.json",
+      "correction": "Migrate to a native supported runner with Linux 3.19 or newer; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "toolchain-startup",
+      "stage": "TOOLCHAIN_PTRACE_YAMA",
+      "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA",
+      "causingInput": "yama-parent-child-mode",
+      "locator": "tests/golden/bazel-exec-supervisor.json",
+      "correction": "Migrate to a native supported runner whose boot policy fixes kernel.yama.ptrace_scope=1; grant no CAP_SYS_PTRACE; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "toolchain-startup",
+      "stage": "TOOLCHAIN_PTRACE_PROBE",
+      "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE",
+      "causingInput": "immutable-ptrace-startup-probe",
+      "locator": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
+      "correction": "Restore and rebuild the pinned static supervisor and startup probe; if exact identities pass but the probe refuses, migrate to a native runner satisfying the kernel and Yama rows; run make test-flake; then run the exact phase-valid closed slice command."
+    },
+    {
+      "owner": "patched-sandbox",
+      "stage": "SANDBOX_PTRACE_POLICY",
+      "code": "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
+      "causingInput": "pinned-ptrace-seccomp-policy",
+      "locator": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
+      "correction": "Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run make test-flake; then run the phase-valid closed slice command selected verbatim from the command-version table."
+    }
+  ]
+}

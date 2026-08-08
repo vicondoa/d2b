@@ -1,0 +1,3354 @@
+{
+  "actionKinds": {
+    "count": 24,
+    "labels": [
+      "nightly:CargoBuildScript",
+      "nightly:Clippy",
+      "nightly:Rustc",
+      "nightly:RustcMetadata",
+      "nightly:repository",
+      "nightly:rustdoc",
+      "nightly:rustdoc-test-compile",
+      "nightly:rustdoc-test-run",
+      "nightly:rustfmt",
+      "nightly:setup",
+      "nightly:test",
+      "nightly:unpretty",
+      "stable:CargoBuildScript",
+      "stable:Clippy",
+      "stable:Rustc",
+      "stable:RustcMetadata",
+      "stable:repository",
+      "stable:rustdoc",
+      "stable:rustdoc-test-compile",
+      "stable:rustdoc-test-run",
+      "stable:rustfmt",
+      "stable:setup",
+      "stable:test",
+      "stable:unpretty"
+    ]
+  },
+  "artifactKind": "bazel-rust-query-snapshot",
+  "authorityCount": 4,
+  "authorityDigests": [
+    {
+      "path": "bazel/generated/action-network-policy.json",
+      "sha256": "8b09b9929a754ec93baee78afbabeeb8d4da08c8c7694cf256160cde42d6e0b3"
+    },
+    {
+      "path": "bazel/generated/configured-targets.json",
+      "sha256": "8c086489a3b02dab2c9a0dfcdecb66c601ab02f871b3470ecdbdc678e555e350"
+    },
+    {
+      "path": "bazel/generated/output-manifest.json",
+      "sha256": "c5dbe11652b3a9a40e9bd043c323588c20292aff4991ca5527aeefb63665b3ac"
+    },
+    {
+      "path": "bazel/generated/source-census.json",
+      "sha256": "272e376838b3eeb228abbb458f9738d2ab1ec710d545701387035acd489138e7"
+    }
+  ],
+  "configuredTargets": {
+    "contextCounts": [
+      {
+        "context": "broker-production-aarch64",
+        "count": 1
+      },
+      {
+        "context": "broker-production-x86_64",
+        "count": 1
+      },
+      {
+        "context": "guest-real-libshpool-aarch64",
+        "count": 1
+      },
+      {
+        "context": "guest-real-libshpool-x86_64",
+        "count": 1
+      },
+      {
+        "context": "main",
+        "count": 60
+      }
+    ],
+    "count": 64,
+    "firstPartyCount": 64,
+    "kindCounts": [
+      {
+        "count": 3,
+        "kind": "rust_binary"
+      },
+      {
+        "count": 57,
+        "kind": "rust_library"
+      },
+      {
+        "count": 4,
+        "kind": "rust_test"
+      }
+    ],
+    "labelCensus": {
+      "count": 64,
+      "labels": [
+        "//packages/d2b-api-surface:d2b-api-surface",
+        "//packages/d2b-bazel-exec:d2b-bazel-exec",
+        "//packages/d2b-bazel-runner:d2b-bazel-runner",
+        "//packages/d2b-bazel-support:d2b-bazel-support",
+        "//packages/d2b-bus:d2b-bus",
+        "//packages/d2b-clipd:d2b-clipd",
+        "//packages/d2b-contract-tests:d2b-contract-tests",
+        "//packages/d2b-contracts:d2b-contracts",
+        "//packages/d2b-controller-toolkit:d2b-controller-toolkit",
+        "//packages/d2b-core-controller:d2b-core-controller",
+        "//packages/d2b-core:d2b-core",
+        "//packages/d2b-credential-service:d2b-credential-service",
+        "//packages/d2b-daemon-access:d2b-daemon-access",
+        "//packages/d2b-exec-runner:d2b-exec-runner",
+        "//packages/d2b-gateway-runtime:d2b-gateway-runtime",
+        "//packages/d2b-gateway:d2b-gateway",
+        "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner",
+        "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-aarch64",
+        "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-x86_64",
+        "//packages/d2b-guestd:d2b-guestd",
+        "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
+        "//packages/d2b-host-providers:d2b-host-providers",
+        "//packages/d2b-host:d2b-host",
+        "//packages/d2b-notify:d2b-notify",
+        "//packages/d2b-priv-broker:d2b-priv-broker",
+        "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-aarch64",
+        "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-x86_64",
+        "//packages/d2b-process-conformance:d2b-process-conformance",
+        "//packages/d2b-process:d2b-process",
+        "//packages/d2b-provider-aca:d2b-provider-aca",
+        "//packages/d2b-provider-credential-entra:d2b-provider-credential-entra",
+        "//packages/d2b-provider-credential-managed-identity:d2b-provider-credential-managed-identity",
+        "//packages/d2b-provider-credential-secret-service:d2b-provider-credential-secret-service",
+        "//packages/d2b-provider-device-usbip:d2b-provider-device-usbip",
+        "//packages/d2b-provider-network-local:d2b-provider-network-local",
+        "//packages/d2b-provider-relay:d2b-provider-relay",
+        "//packages/d2b-provider-supervisor:d2b-provider-supervisor",
+        "//packages/d2b-provider-system-core:d2b-provider-system-core",
+        "//packages/d2b-provider-system-minijail:d2b-provider-system-minijail",
+        "//packages/d2b-provider-system-systemd:d2b-provider-system-systemd",
+        "//packages/d2b-provider-toolkit:d2b-provider-toolkit",
+        "//packages/d2b-provider-volume-local:d2b-provider-volume-local",
+        "//packages/d2b-provider-volume-virtiofs:d2b-provider-volume-virtiofs",
+        "//packages/d2b-provider:d2b-provider",
+        "//packages/d2b-realm-codec-protobuf:d2b-realm-codec-protobuf",
+        "//packages/d2b-realm-core:d2b-realm-core",
+        "//packages/d2b-realm-provider:d2b-realm-provider",
+        "//packages/d2b-realm-router:d2b-realm-router",
+        "//packages/d2b-realm-transport:d2b-realm-transport",
+        "//packages/d2b-resource-api:d2b-resource-api",
+        "//packages/d2b-resource-client:d2b-resource-client",
+        "//packages/d2b-resource-store-redb:d2b-resource-store-redb",
+        "//packages/d2b-resource-store:d2b-resource-store",
+        "//packages/d2b-session-unix:d2b-session-unix",
+        "//packages/d2b-session:d2b-session",
+        "//packages/d2b-sk-frontend:d2b-sk-frontend",
+        "//packages/d2b-test-locator:d2b-test-locator",
+        "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
+        "//packages/d2b-userd:d2b-userd",
+        "//packages/d2b-wayland-proxy:d2b-wayland-proxy",
+        "//packages/d2b-zone-routing:d2b-zone-routing",
+        "//packages/d2b:d2b",
+        "//packages/d2bd:d2bd",
+        "//packages/xtask:xtask"
+      ]
+    },
+    "packagePolicyCount": 4,
+    "targets": [
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-api-surface:d2b-api-surface"
+          ],
+          "externalIdentities": [
+            "@product//:public-api",
+            "@product//:rustdoc-types",
+            "@product//:serde",
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:public-api",
+          "@product//:rustdoc-types",
+          "@product//:serde",
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-api-surface:d2b-api-surface",
+        "manifest": "packages/d2b-api-surface/Cargo.toml",
+        "native": true,
+        "package": "d2b-api-surface",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-api-surface/src/bin/d2b-api-surface.rs",
+          "packages/d2b-api-surface/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-bazel-exec:d2b-bazel-exec"
+          ],
+          "externalIdentities": [
+            "@product//:command-fds",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:serde"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-bazel-support:d2b-bazel-support"
+        ],
+        "directProductDeps": [
+          "@product//:command-fds",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:serde"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-bazel-exec:d2b-bazel-exec",
+        "manifest": "packages/d2b-bazel-exec/Cargo.toml",
+        "native": true,
+        "package": "d2b-bazel-exec",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-bazel-exec/src/execute.rs",
+          "packages/d2b-bazel-exec/src/lib.rs",
+          "packages/d2b-bazel-exec/src/provider.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-bazel-runner:d2b-bazel-runner"
+          ],
+          "externalIdentities": [
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:thiserror"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-bazel-exec:d2b-bazel-exec",
+          "//packages/d2b-bazel-support:d2b-bazel-support",
+          "//packages/d2b-test-locator:d2b-test-locator"
+        ],
+        "directProductDeps": [
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:thiserror"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-bazel-runner:d2b-bazel-runner",
+        "manifest": "packages/d2b-bazel-runner/Cargo.toml",
+        "native": true,
+        "package": "d2b-bazel-runner",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs",
+          "packages/d2b-bazel-runner/src/exec_handle.rs",
+          "packages/d2b-bazel-runner/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-bazel-support:d2b-bazel-support"
+          ],
+          "externalIdentities": [
+            "@product//:rustix",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:rustix",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-bazel-support:d2b-bazel-support",
+        "manifest": "packages/d2b-bazel-support/Cargo.toml",
+        "native": true,
+        "package": "d2b-bazel-support",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-bazel-support/src/fsops.rs",
+          "packages/d2b-bazel-support/src/lib.rs",
+          "packages/d2b-bazel-support/src/runfiles.rs",
+          "packages/d2b-bazel-support/src/startup.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-bus:d2b-bus"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:getrandom",
+            "@product//:sha2",
+            "@product//:snow",
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-resource-api:d2b-resource-api",
+          "//packages/d2b-session-unix:d2b-session-unix",
+          "//packages/d2b-session:d2b-session"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:getrandom",
+          "@product//:sha2",
+          "@product//:snow",
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-bus:d2b-bus",
+        "manifest": "packages/d2b-bus/Cargo.toml",
+        "native": true,
+        "package": "d2b-bus",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-bus/src/authorization.rs",
+          "packages/d2b-bus/src/lib.rs",
+          "packages/d2b-bus/src/operations.rs",
+          "packages/d2b-bus/src/registry.rs",
+          "packages/d2b-bus/src/relay.rs",
+          "packages/d2b-bus/src/router.rs",
+          "packages/d2b-bus/src/session/contract.rs",
+          "packages/d2b-bus/src/session/enrollment.rs",
+          "packages/d2b-bus/src/session/mod.rs",
+          "packages/d2b-bus/src/session/noise_vectors.rs",
+          "packages/d2b-bus/src/session/prologue.rs",
+          "packages/d2b-bus/src/session/zone_link.rs",
+          "packages/d2b-bus/src/session_seam_tests.rs",
+          "packages/d2b-bus/src/streams.rs",
+          "packages/d2b-bus/src/transport/credit.rs",
+          "packages/d2b-bus/src/transport/mod.rs",
+          "packages/d2b-bus/src/transport/unix.rs",
+          "packages/d2b-bus/src/zone_route.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-clipd:d2b-clipd"
+          ],
+          "externalIdentities": [
+            "@product//:command-fds",
+            "@product//:env_logger",
+            "@product//:html2text",
+            "@product//:log",
+            "@product//:nix",
+            "@product//:notify-rust",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:thiserror",
+            "@product//:wayland-client",
+            "@product//:wayland-protocols",
+            "@product//:wayland-protocols-misc",
+            "@product//:wayland-protocols-wlr"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:command-fds",
+          "@product//:env_logger",
+          "@product//:html2text",
+          "@product//:log",
+          "@product//:nix",
+          "@product//:notify-rust",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:thiserror",
+          "@product//:wayland-client",
+          "@product//:wayland-protocols",
+          "@product//:wayland-protocols-misc",
+          "@product//:wayland-protocols-wlr"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-clipd:d2b-clipd",
+        "manifest": "packages/d2b-clipd/Cargo.toml",
+        "native": true,
+        "package": "d2b-clipd",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-clipd/src/audit.rs",
+          "packages/d2b-clipd/src/bin/d2b-clip-debug.rs",
+          "packages/d2b-clipd/src/fallback.rs",
+          "packages/d2b-clipd/src/fd.rs",
+          "packages/d2b-clipd/src/framing.rs",
+          "packages/d2b-clipd/src/host.rs",
+          "packages/d2b-clipd/src/lib.rs",
+          "packages/d2b-clipd/src/main.rs",
+          "packages/d2b-clipd/src/niri.rs",
+          "packages/d2b-clipd/src/notifications.rs",
+          "packages/d2b-clipd/src/picker.rs",
+          "packages/d2b-clipd/src/policy.rs",
+          "packages/d2b-clipd/src/protocol.rs",
+          "packages/d2b-clipd/src/virtual_keyboard.rs",
+          "packages/d2b-clipd/src/wayland.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-contract-tests:d2b-contract-tests"
+          ],
+          "externalIdentities": [
+            "@product//:serde",
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-core:d2b-core"
+        ],
+        "directProductDeps": [
+          "@product//:serde",
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-contract-tests:d2b-contract-tests",
+        "manifest": "packages/d2b-contract-tests/Cargo.toml",
+        "native": true,
+        "package": "d2b-contract-tests",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-contract-tests/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-contracts:d2b-contracts"
+          ],
+          "externalIdentities": [
+            "@product//:protobuf",
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:unicode-normalization"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:protobuf",
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:unicode-normalization"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-contracts:d2b-contracts",
+        "manifest": "packages/d2b-contracts/Cargo.toml",
+        "native": true,
+        "package": "d2b-contracts",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-contracts/src/broker_wire.rs",
+          "packages/d2b-contracts/src/cli_output.rs",
+          "packages/d2b-contracts/src/generated/d2b_resource_v3.rs",
+          "packages/d2b-contracts/src/generated/guest_control.rs",
+          "packages/d2b-contracts/src/generated/mod.rs",
+          "packages/d2b-contracts/src/generation_bundle.rs",
+          "packages/d2b-contracts/src/guest_auth.rs",
+          "packages/d2b-contracts/src/guest_wire.rs",
+          "packages/d2b-contracts/src/lib.rs",
+          "packages/d2b-contracts/src/public_wire.rs",
+          "packages/d2b-contracts/src/resource_proto_formatting_tests.rs",
+          "packages/d2b-contracts/src/security_key.rs",
+          "packages/d2b-contracts/src/terminal_wire.rs",
+          "packages/d2b-contracts/src/types.rs",
+          "packages/d2b-contracts/src/unsafe_local_wire.rs",
+          "packages/d2b-contracts/src/usbip.rs",
+          "packages/d2b-contracts/src/v3/component_session.rs",
+          "packages/d2b-contracts/src/v3/credential.rs",
+          "packages/d2b-contracts/src/v3/credential/service.rs",
+          "packages/d2b-contracts/src/v3/credential_controller.rs",
+          "packages/d2b-contracts/src/v3/device.rs",
+          "packages/d2b-contracts/src/v3/error.rs",
+          "packages/d2b-contracts/src/v3/execution_policy.rs",
+          "packages/d2b-contracts/src/v3/guest.rs",
+          "packages/d2b-contracts/src/v3/host.rs",
+          "packages/d2b-contracts/src/v3/identity.rs",
+          "packages/d2b-contracts/src/v3/ifname.rs",
+          "packages/d2b-contracts/src/v3/limits.rs",
+          "packages/d2b-contracts/src/v3/mod.rs",
+          "packages/d2b-contracts/src/v3/network.rs",
+          "packages/d2b-contracts/src/v3/process.rs",
+          "packages/d2b-contracts/src/v3/provider.rs",
+          "packages/d2b-contracts/src/v3/resource.rs",
+          "packages/d2b-contracts/src/v3/resource_ref.rs",
+          "packages/d2b-contracts/src/v3/resource_schema.rs",
+          "packages/d2b-contracts/src/v3/resource_status.rs",
+          "packages/d2b-contracts/src/v3/semantic_services/audio.rs",
+          "packages/d2b-contracts/src/v3/semantic_services/mod.rs",
+          "packages/d2b-contracts/src/v3/semantic_services/security_key.rs",
+          "packages/d2b-contracts/src/v3/semantic_services/telemetry.rs",
+          "packages/d2b-contracts/src/v3/semantic_services/usb.rs",
+          "packages/d2b-contracts/src/v3/storage.rs",
+          "packages/d2b-contracts/src/v3/user.rs",
+          "packages/d2b-contracts/src/v3/volume.rs",
+          "packages/d2b-contracts/src/v3/volume_state.rs",
+          "packages/d2b-contracts/src/v3/zone_routing.rs",
+          "packages/d2b-contracts/src/v3/zone_session.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-controller-toolkit:d2b-controller-toolkit"
+          ],
+          "externalIdentities": [
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-controller-toolkit:d2b-controller-toolkit",
+        "manifest": "packages/d2b-controller-toolkit/Cargo.toml",
+        "native": true,
+        "package": "d2b-controller-toolkit",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-controller-toolkit/src/context.rs",
+          "packages/d2b-controller-toolkit/src/contract.rs",
+          "packages/d2b-controller-toolkit/src/lib.rs",
+          "packages/d2b-controller-toolkit/src/owner_hints.rs",
+          "packages/d2b-controller-toolkit/src/queue.rs",
+          "packages/d2b-controller-toolkit/src/result.rs",
+          "packages/d2b-controller-toolkit/src/runner.rs",
+          "packages/d2b-controller-toolkit/src/state_migration.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-core-controller:d2b-core-controller"
+          ],
+          "externalIdentities": [
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-controller-toolkit:d2b-controller-toolkit"
+        ],
+        "directProductDeps": [
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-core-controller:d2b-core-controller",
+        "manifest": "packages/d2b-core-controller/Cargo.toml",
+        "native": true,
+        "package": "d2b-core-controller",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-core-controller/src/api_catalog.rs",
+          "packages/d2b-core-controller/src/authority.rs",
+          "packages/d2b-core-controller/src/authz.rs",
+          "packages/d2b-core-controller/src/budgets.rs",
+          "packages/d2b-core-controller/src/cleanup.rs",
+          "packages/d2b-core-controller/src/configuration/bundle_apply.rs",
+          "packages/d2b-core-controller/src/configuration/generation_transition.rs",
+          "packages/d2b-core-controller/src/configuration/mod.rs",
+          "packages/d2b-core-controller/src/controllers.rs",
+          "packages/d2b-core-controller/src/dependencies.rs",
+          "packages/d2b-core-controller/src/hints.rs",
+          "packages/d2b-core-controller/src/lib.rs",
+          "packages/d2b-core-controller/src/main.rs",
+          "packages/d2b-core-controller/src/optional_state_admission.rs",
+          "packages/d2b-core-controller/src/owner_reconcile.rs",
+          "packages/d2b-core-controller/src/ownership.rs",
+          "packages/d2b-core-controller/src/providers.rs",
+          "packages/d2b-core-controller/src/rbac.rs",
+          "packages/d2b-core-controller/src/resource_store.rs",
+          "packages/d2b-core-controller/src/runtime.rs",
+          "packages/d2b-core-controller/src/store.rs",
+          "packages/d2b-core-controller/src/watches.rs",
+          "packages/d2b-core-controller/src/zone_links.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-core:d2b-core"
+          ],
+          "externalIdentities": [
+            "@product//:bolero",
+            "@product//:rustix",
+            "@product//:schemars",
+            "@product//:semver",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:bolero",
+          "@product//:rustix",
+          "@product//:schemars",
+          "@product//:semver",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-core:d2b-core",
+        "manifest": "packages/d2b-core/Cargo.toml",
+        "native": true,
+        "package": "d2b-core",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-core/src/allocator_config.rs",
+          "packages/d2b-core/src/audio_policy.rs",
+          "packages/d2b-core/src/base64_codec.rs",
+          "packages/d2b-core/src/bundle.rs",
+          "packages/d2b-core/src/bundle_resolver.rs",
+          "packages/d2b-core/src/closures.rs",
+          "packages/d2b-core/src/configured_argv.rs",
+          "packages/d2b-core/src/console_ring.rs",
+          "packages/d2b-core/src/contract_id.rs",
+          "packages/d2b-core/src/error.rs",
+          "packages/d2b-core/src/host.rs",
+          "packages/d2b-core/src/host_check.rs",
+          "packages/d2b-core/src/host_w3.rs",
+          "packages/d2b-core/src/lib.rs",
+          "packages/d2b-core/src/manifest.rs",
+          "packages/d2b-core/src/manifest_v04.rs",
+          "packages/d2b-core/src/minijail_profile.rs",
+          "packages/d2b-core/src/privileges.rs",
+          "packages/d2b-core/src/privileges_w3.rs",
+          "packages/d2b-core/src/process_builder.rs",
+          "packages/d2b-core/src/processes.rs",
+          "packages/d2b-core/src/provider_capabilities.rs",
+          "packages/d2b-core/src/realm_controller_config.rs",
+          "packages/d2b-core/src/realm_workloads_launcher.rs",
+          "packages/d2b-core/src/runtime.rs",
+          "packages/d2b-core/src/static_invariants.rs",
+          "packages/d2b-core/src/storage.rs",
+          "packages/d2b-core/src/storage_lifecycle.rs",
+          "packages/d2b-core/src/sync.rs",
+          "packages/d2b-core/src/test_support.rs",
+          "packages/d2b-core/src/unsafe_local_workloads.rs",
+          "packages/d2b-core/src/workload_identity.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-credential-service:d2b-credential-service"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-credential-service:d2b-credential-service",
+        "manifest": "packages/d2b-credential-service/Cargo.toml",
+        "native": true,
+        "package": "d2b-credential-service",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-credential-service/src/client.rs",
+          "packages/d2b-credential-service/src/lib.rs",
+          "packages/d2b-credential-service/src/server.rs",
+          "packages/d2b-credential-service/src/service.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-daemon-access:d2b-daemon-access"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:nix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:nix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-daemon-access:d2b-daemon-access",
+        "manifest": "packages/d2b-daemon-access/Cargo.toml",
+        "native": true,
+        "package": "d2b-daemon-access",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-daemon-access/src/direct_tls.rs",
+          "packages/d2b-daemon-access/src/lib.rs",
+          "packages/d2b-daemon-access/src/relay.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-exec-runner:d2b-exec-runner"
+          ],
+          "externalIdentities": [
+            "@product//:rustix"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:rustix"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-exec-runner:d2b-exec-runner",
+        "manifest": "packages/d2b-exec-runner/Cargo.toml",
+        "native": true,
+        "package": "d2b-exec-runner",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-exec-runner/src/atomicio.rs",
+          "packages/d2b-exec-runner/src/codec.rs",
+          "packages/d2b-exec-runner/src/filering.rs",
+          "packages/d2b-exec-runner/src/lib.rs",
+          "packages/d2b-exec-runner/src/limits.rs",
+          "packages/d2b-exec-runner/src/main.rs",
+          "packages/d2b-exec-runner/src/paths.rs",
+          "packages/d2b-exec-runner/src/record.rs",
+          "packages/d2b-exec-runner/src/service_mode.rs",
+          "packages/d2b-exec-runner/src/spec.rs",
+          "packages/d2b-exec-runner/src/tty_helper.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-gateway-runtime:d2b-gateway-runtime"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:base64",
+            "@product//:chacha20poly1305",
+            "@product//:getrandom",
+            "@product//:libc",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tracing",
+            "@product//:tracing-subscriber"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-gateway:d2b-gateway",
+          "//packages/d2b-provider-aca:d2b-provider-aca",
+          "//packages/d2b-provider-relay:d2b-provider-relay",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:base64",
+          "@product//:chacha20poly1305",
+          "@product//:getrandom",
+          "@product//:libc",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tracing",
+          "@product//:tracing-subscriber"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-gateway-runtime:d2b-gateway-runtime",
+        "manifest": "packages/d2b-gateway-runtime/Cargo.toml",
+        "native": true,
+        "package": "d2b-gateway-runtime",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-gateway-runtime/src/aca_workload.rs",
+          "packages/d2b-gateway-runtime/src/audit_jsonl.rs",
+          "packages/d2b-gateway-runtime/src/bin/d2b-gateway-enroll.rs",
+          "packages/d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs",
+          "packages/d2b-gateway-runtime/src/credential.rs",
+          "packages/d2b-gateway-runtime/src/display_listener.rs",
+          "packages/d2b-gateway-runtime/src/lib.rs",
+          "packages/d2b-gateway-runtime/src/production.rs",
+          "packages/d2b-gateway-runtime/src/waypipe_display.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-gateway:d2b-gateway"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:hmac",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:hmac",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-gateway:d2b-gateway",
+        "manifest": "packages/d2b-gateway/Cargo.toml",
+        "native": true,
+        "package": "d2b-gateway",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-gateway/src/audit.rs",
+          "packages/d2b-gateway/src/error.rs",
+          "packages/d2b-gateway/src/handshake.rs",
+          "packages/d2b-gateway/src/ledger.rs",
+          "packages/d2b-gateway/src/lib.rs",
+          "packages/d2b-gateway/src/orchestrator.rs",
+          "packages/d2b-gateway/src/types.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner"
+          ],
+          "externalIdentities": [
+            "@product//:anyhow",
+            "@product//:clap",
+            "@product//:libshpool",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:thiserror"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:anyhow",
+          "@product//:clap",
+          "@product//:libshpool",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:thiserror"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner",
+        "manifest": "packages/d2b-guest-shell-runner/Cargo.toml",
+        "native": true,
+        "package": "d2b-guest-shell-runner",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-guest-shell-runner/src/cli.rs",
+          "packages/d2b-guest-shell-runner/src/lib.rs",
+          "packages/d2b-guest-shell-runner/src/libshpool_bridge.rs",
+          "packages/d2b-guest-shell-runner/src/main.rs",
+          "packages/d2b-guest-shell-runner/src/name.rs",
+          "packages/d2b-guest-shell-runner/src/output.rs",
+          "packages/d2b-guest-shell-runner/src/socket.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "guest-real-libshpool-aarch64",
+        "cargoTarget": "aarch64-unknown-linux-musl",
+        "cfgs": [
+          "target_arch=\"aarch64\"",
+          "target_env=\"musl\"",
+          "target_os=\"linux\""
+        ],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-aarch64"
+          ],
+          "externalIdentities": [
+            "@product//:anyhow",
+            "@product//:clap",
+            "@product//:libshpool",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:thiserror"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:anyhow",
+          "@product//:clap",
+          "@product//:libshpool",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:thiserror"
+        ],
+        "features": [
+          "real-libshpool"
+        ],
+        "kind": "rust_test",
+        "label": "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-aarch64",
+        "manifest": "packages/d2b-guest-shell-runner/Cargo.toml",
+        "native": true,
+        "package": "d2b-guest-shell-runner",
+        "policyInput": "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool",
+        "sourceFiles": [
+          "packages/d2b-guest-shell-runner/src/cli.rs",
+          "packages/d2b-guest-shell-runner/src/lib.rs",
+          "packages/d2b-guest-shell-runner/src/libshpool_bridge.rs",
+          "packages/d2b-guest-shell-runner/src/main.rs",
+          "packages/d2b-guest-shell-runner/src/name.rs",
+          "packages/d2b-guest-shell-runner/src/output.rs",
+          "packages/d2b-guest-shell-runner/src/socket.rs"
+        ],
+        "system": "aarch64-linux"
+      },
+      {
+        "cargoContext": "guest-real-libshpool-x86_64",
+        "cargoTarget": "x86_64-unknown-linux-musl",
+        "cfgs": [
+          "target_arch=\"x86_64\"",
+          "target_env=\"musl\"",
+          "target_os=\"linux\""
+        ],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-x86_64"
+          ],
+          "externalIdentities": [
+            "@product//:anyhow",
+            "@product//:clap",
+            "@product//:libshpool",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:thiserror"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:anyhow",
+          "@product//:clap",
+          "@product//:libshpool",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:thiserror"
+        ],
+        "features": [
+          "real-libshpool"
+        ],
+        "kind": "rust_test",
+        "label": "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-x86_64",
+        "manifest": "packages/d2b-guest-shell-runner/Cargo.toml",
+        "native": true,
+        "package": "d2b-guest-shell-runner",
+        "policyInput": "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
+        "sourceFiles": [
+          "packages/d2b-guest-shell-runner/src/cli.rs",
+          "packages/d2b-guest-shell-runner/src/lib.rs",
+          "packages/d2b-guest-shell-runner/src/libshpool_bridge.rs",
+          "packages/d2b-guest-shell-runner/src/main.rs",
+          "packages/d2b-guest-shell-runner/src/name.rs",
+          "packages/d2b-guest-shell-runner/src/output.rs",
+          "packages/d2b-guest-shell-runner/src/socket.rs"
+        ],
+        "system": "x86_64-linux"
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-guestd:d2b-guestd"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:futures",
+            "@product//:hmac",
+            "@product//:protobuf",
+            "@product//:rustix",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tokio-vsock",
+            "@product//:ttrpc"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-exec-runner:d2b-exec-runner",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:futures",
+          "@product//:hmac",
+          "@product//:protobuf",
+          "@product//:rustix",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tokio-vsock",
+          "@product//:ttrpc"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-guestd:d2b-guestd",
+        "manifest": "packages/d2b-guestd/Cargo.toml",
+        "native": true,
+        "package": "d2b-guestd",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-guestd/src/auth.rs",
+          "packages/d2b-guestd/src/detached.rs",
+          "packages/d2b-guestd/src/detached_registry.rs",
+          "packages/d2b-guestd/src/exec.rs",
+          "packages/d2b-guestd/src/exec_linux.rs",
+          "packages/d2b-guestd/src/exec_pty.rs",
+          "packages/d2b-guestd/src/generated/guest_control_ttrpc.rs",
+          "packages/d2b-guestd/src/generated/mod.rs",
+          "packages/d2b-guestd/src/lib.rs",
+          "packages/d2b-guestd/src/login_session.rs",
+          "packages/d2b-guestd/src/main.rs",
+          "packages/d2b-guestd/src/service.rs",
+          "packages/d2b-guestd/src/shell.rs",
+          "packages/d2b-guestd/src/terminal_io.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-host-activation-helper:d2b-host-activation-helper"
+          ],
+          "externalIdentities": [
+            "@product//:libc"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:libc"
+        ],
+        "features": [],
+        "kind": "rust_binary",
+        "label": "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
+        "manifest": "packages/d2b-host-activation-helper/Cargo.toml",
+        "native": true,
+        "package": "d2b-host-activation-helper",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-host-activation-helper/src/main.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-host-providers:d2b-host-providers"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-host:d2b-host",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-host-providers:d2b-host-providers",
+        "manifest": "packages/d2b-host-providers/Cargo.toml",
+        "native": true,
+        "package": "d2b-host-providers",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-host-providers/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-host:d2b-host"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:libc",
+            "@product//:miniz_oxide",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:libc",
+          "@product//:miniz_oxide",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-host:d2b-host",
+        "manifest": "packages/d2b-host/Cargo.toml",
+        "native": true,
+        "package": "d2b-host",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-host/src/audio_argv.rs",
+          "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+          "packages/d2b-host/src/bridge_port.rs",
+          "packages/d2b-host/src/cgroup.rs",
+          "packages/d2b-host/src/ch_argv.rs",
+          "packages/d2b-host/src/devices.rs",
+          "packages/d2b-host/src/dnsmasq.rs",
+          "packages/d2b-host/src/fake.rs",
+          "packages/d2b-host/src/gpu_argv.rs",
+          "packages/d2b-host/src/hardlink_farm.rs",
+          "packages/d2b-host/src/host_prep_dag.rs",
+          "packages/d2b-host/src/ifname.rs",
+          "packages/d2b-host/src/ioctl_policy.rs",
+          "packages/d2b-host/src/lib.rs",
+          "packages/d2b-host/src/media.rs",
+          "packages/d2b-host/src/modules.rs",
+          "packages/d2b-host/src/netlink.rs",
+          "packages/d2b-host/src/nftables.rs",
+          "packages/d2b-host/src/otel_host_bridge_argv.rs",
+          "packages/d2b-host/src/ownership_matrix.rs",
+          "packages/d2b-host/src/qemu_media_argv.rs",
+          "packages/d2b-host/src/routes.rs",
+          "packages/d2b-host/src/runner_argv_regenerator.rs",
+          "packages/d2b-host/src/runner_process.rs",
+          "packages/d2b-host/src/runner_shape.rs",
+          "packages/d2b-host/src/runtime_provider.rs",
+          "packages/d2b-host/src/seccomp.rs",
+          "packages/d2b-host/src/ssh_keygen.rs",
+          "packages/d2b-host/src/swtpm_argv.rs",
+          "packages/d2b-host/src/usbip_argv.rs",
+          "packages/d2b-host/src/video_argv.rs",
+          "packages/d2b-host/src/virtiofsd_argv.rs",
+          "packages/d2b-host/src/vsock_relay_argv.rs",
+          "packages/d2b-host/src/wayland_proxy_argv.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-notify:d2b-notify"
+          ],
+          "externalIdentities": [
+            "@product//:getrandom",
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:getrandom",
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-notify:d2b-notify",
+        "manifest": "packages/d2b-notify/Cargo.toml",
+        "native": true,
+        "package": "d2b-notify",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-notify/src/bin/waybar_helper.rs",
+          "packages/d2b-notify/src/events.rs",
+          "packages/d2b-notify/src/lib.rs",
+          "packages/d2b-notify/src/nonce.rs",
+          "packages/d2b-notify/src/notifications.rs",
+          "packages/d2b-notify/src/state.rs",
+          "packages/d2b-notify/src/waybar.rs",
+          "packages/d2b-notify/src/wlcontrol.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-priv-broker:d2b-priv-broker"
+          ],
+          "externalIdentities": [
+            "@product//:hmac",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tracing",
+            "@product//:tracing-subscriber"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-host:d2b-host",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:hmac",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tracing",
+          "@product//:tracing-subscriber"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-priv-broker:d2b-priv-broker",
+        "manifest": "packages/d2b-priv-broker/Cargo.toml",
+        "native": true,
+        "package": "d2b-priv-broker",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-priv-broker/src/audit.rs",
+          "packages/d2b-priv-broker/src/bootstrap.rs",
+          "packages/d2b-priv-broker/src/fd_passing.rs",
+          "packages/d2b-priv-broker/src/lib.rs",
+          "packages/d2b-priv-broker/src/live_handlers.rs",
+          "packages/d2b-priv-broker/src/main.rs",
+          "packages/d2b-priv-broker/src/ops/audit_op.rs",
+          "packages/d2b-priv-broker/src/ops/cgroup.rs",
+          "packages/d2b-priv-broker/src/ops/device.rs",
+          "packages/d2b-priv-broker/src/ops/disk_init.rs",
+          "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+          "packages/d2b-priv-broker/src/ops/hosts.rs",
+          "packages/d2b-priv-broker/src/ops/media.rs",
+          "packages/d2b-priv-broker/src/ops/mod.rs",
+          "packages/d2b-priv-broker/src/ops/modprobe.rs",
+          "packages/d2b-priv-broker/src/ops/network.rs",
+          "packages/d2b-priv-broker/src/ops/nft.rs",
+          "packages/d2b-priv-broker/src/ops/nm.rs",
+          "packages/d2b-priv-broker/src/ops/pidfd.rs",
+          "packages/d2b-priv-broker/src/ops/route.rs",
+          "packages/d2b-priv-broker/src/ops/security_key.rs",
+          "packages/d2b-priv-broker/src/ops/spawn_runner.rs",
+          "packages/d2b-priv-broker/src/ops/state_dir.rs",
+          "packages/d2b-priv-broker/src/ops/storage_contract.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync_audit.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync_export.rs",
+          "packages/d2b-priv-broker/src/ops/store_verify.rs",
+          "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
+          "packages/d2b-priv-broker/src/ops/store_view_posture.rs",
+          "packages/d2b-priv-broker/src/ops/swtpm_dir.rs",
+          "packages/d2b-priv-broker/src/ops/sysctl.rs",
+          "packages/d2b-priv-broker/src/ops/tap.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_firewall.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_host.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_lock.rs",
+          "packages/d2b-priv-broker/src/protocol.rs",
+          "packages/d2b-priv-broker/src/runtime.rs",
+          "packages/d2b-priv-broker/src/seccomp_compile_tests.rs",
+          "packages/d2b-priv-broker/src/sys.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "broker-production-aarch64",
+        "cargoTarget": "aarch64-unknown-linux-gnu",
+        "cfgs": [
+          "target_arch=\"aarch64\"",
+          "target_env=\"gnu\"",
+          "target_os=\"linux\""
+        ],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-aarch64"
+          ],
+          "externalIdentities": [
+            "@product//:hmac",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tracing",
+            "@product//:tracing-subscriber"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-host:d2b-host",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:hmac",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tracing",
+          "@product//:tracing-subscriber"
+        ],
+        "features": [],
+        "kind": "rust_test",
+        "label": "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-aarch64",
+        "manifest": "packages/d2b-priv-broker/Cargo.toml",
+        "native": true,
+        "package": "d2b-priv-broker",
+        "policyInput": "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production",
+        "sourceFiles": [
+          "packages/d2b-priv-broker/src/audit.rs",
+          "packages/d2b-priv-broker/src/bootstrap.rs",
+          "packages/d2b-priv-broker/src/fd_passing.rs",
+          "packages/d2b-priv-broker/src/lib.rs",
+          "packages/d2b-priv-broker/src/live_handlers.rs",
+          "packages/d2b-priv-broker/src/main.rs",
+          "packages/d2b-priv-broker/src/ops/audit_op.rs",
+          "packages/d2b-priv-broker/src/ops/cgroup.rs",
+          "packages/d2b-priv-broker/src/ops/device.rs",
+          "packages/d2b-priv-broker/src/ops/disk_init.rs",
+          "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+          "packages/d2b-priv-broker/src/ops/hosts.rs",
+          "packages/d2b-priv-broker/src/ops/media.rs",
+          "packages/d2b-priv-broker/src/ops/mod.rs",
+          "packages/d2b-priv-broker/src/ops/modprobe.rs",
+          "packages/d2b-priv-broker/src/ops/network.rs",
+          "packages/d2b-priv-broker/src/ops/nft.rs",
+          "packages/d2b-priv-broker/src/ops/nm.rs",
+          "packages/d2b-priv-broker/src/ops/pidfd.rs",
+          "packages/d2b-priv-broker/src/ops/route.rs",
+          "packages/d2b-priv-broker/src/ops/security_key.rs",
+          "packages/d2b-priv-broker/src/ops/spawn_runner.rs",
+          "packages/d2b-priv-broker/src/ops/state_dir.rs",
+          "packages/d2b-priv-broker/src/ops/storage_contract.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync_audit.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync_export.rs",
+          "packages/d2b-priv-broker/src/ops/store_verify.rs",
+          "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
+          "packages/d2b-priv-broker/src/ops/store_view_posture.rs",
+          "packages/d2b-priv-broker/src/ops/swtpm_dir.rs",
+          "packages/d2b-priv-broker/src/ops/sysctl.rs",
+          "packages/d2b-priv-broker/src/ops/tap.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_firewall.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_host.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_lock.rs",
+          "packages/d2b-priv-broker/src/protocol.rs",
+          "packages/d2b-priv-broker/src/runtime.rs",
+          "packages/d2b-priv-broker/src/seccomp_compile_tests.rs",
+          "packages/d2b-priv-broker/src/sys.rs"
+        ],
+        "system": "aarch64-linux"
+      },
+      {
+        "cargoContext": "broker-production-x86_64",
+        "cargoTarget": "x86_64-unknown-linux-gnu",
+        "cfgs": [
+          "target_arch=\"x86_64\"",
+          "target_env=\"gnu\"",
+          "target_os=\"linux\""
+        ],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-x86_64"
+          ],
+          "externalIdentities": [
+            "@product//:hmac",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tracing",
+            "@product//:tracing-subscriber"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-host:d2b-host",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:hmac",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tracing",
+          "@product//:tracing-subscriber"
+        ],
+        "features": [],
+        "kind": "rust_test",
+        "label": "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-x86_64",
+        "manifest": "packages/d2b-priv-broker/Cargo.toml",
+        "native": true,
+        "package": "d2b-priv-broker",
+        "policyInput": "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production",
+        "sourceFiles": [
+          "packages/d2b-priv-broker/src/audit.rs",
+          "packages/d2b-priv-broker/src/bootstrap.rs",
+          "packages/d2b-priv-broker/src/fd_passing.rs",
+          "packages/d2b-priv-broker/src/lib.rs",
+          "packages/d2b-priv-broker/src/live_handlers.rs",
+          "packages/d2b-priv-broker/src/main.rs",
+          "packages/d2b-priv-broker/src/ops/audit_op.rs",
+          "packages/d2b-priv-broker/src/ops/cgroup.rs",
+          "packages/d2b-priv-broker/src/ops/device.rs",
+          "packages/d2b-priv-broker/src/ops/disk_init.rs",
+          "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+          "packages/d2b-priv-broker/src/ops/hosts.rs",
+          "packages/d2b-priv-broker/src/ops/media.rs",
+          "packages/d2b-priv-broker/src/ops/mod.rs",
+          "packages/d2b-priv-broker/src/ops/modprobe.rs",
+          "packages/d2b-priv-broker/src/ops/network.rs",
+          "packages/d2b-priv-broker/src/ops/nft.rs",
+          "packages/d2b-priv-broker/src/ops/nm.rs",
+          "packages/d2b-priv-broker/src/ops/pidfd.rs",
+          "packages/d2b-priv-broker/src/ops/route.rs",
+          "packages/d2b-priv-broker/src/ops/security_key.rs",
+          "packages/d2b-priv-broker/src/ops/spawn_runner.rs",
+          "packages/d2b-priv-broker/src/ops/state_dir.rs",
+          "packages/d2b-priv-broker/src/ops/storage_contract.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync_audit.rs",
+          "packages/d2b-priv-broker/src/ops/store_sync_export.rs",
+          "packages/d2b-priv-broker/src/ops/store_verify.rs",
+          "packages/d2b-priv-broker/src/ops/store_view_farm.rs",
+          "packages/d2b-priv-broker/src/ops/store_view_posture.rs",
+          "packages/d2b-priv-broker/src/ops/swtpm_dir.rs",
+          "packages/d2b-priv-broker/src/ops/sysctl.rs",
+          "packages/d2b-priv-broker/src/ops/tap.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_firewall.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_host.rs",
+          "packages/d2b-priv-broker/src/ops/usbip_lock.rs",
+          "packages/d2b-priv-broker/src/protocol.rs",
+          "packages/d2b-priv-broker/src/runtime.rs",
+          "packages/d2b-priv-broker/src/seccomp_compile_tests.rs",
+          "packages/d2b-priv-broker/src/sys.rs"
+        ],
+        "system": "x86_64-linux"
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-process-conformance:d2b-process-conformance"
+          ],
+          "externalIdentities": [
+            "@product//:serde",
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde",
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-process-conformance:d2b-process-conformance",
+        "manifest": "packages/d2b-process-conformance/Cargo.toml",
+        "native": true,
+        "package": "d2b-process-conformance",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-process-conformance/src/error.rs",
+          "packages/d2b-process-conformance/src/identity.rs",
+          "packages/d2b-process-conformance/src/lib.rs",
+          "packages/d2b-process-conformance/src/port.rs",
+          "packages/d2b-process-conformance/src/provider.rs",
+          "packages/d2b-process-conformance/src/status.rs",
+          "packages/d2b-process-conformance/src/suite.rs",
+          "packages/d2b-process-conformance/src/testing.rs",
+          "packages/d2b-process-conformance/src/ticket.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-process:d2b-process"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-process-conformance:d2b-process-conformance"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-process:d2b-process",
+        "manifest": "packages/d2b-process/Cargo.toml",
+        "native": true,
+        "package": "d2b-process",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-process/src/backend.rs",
+          "packages/d2b-process/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-aca:d2b-provider-aca"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:azure_core",
+            "@product//:azure_identity",
+            "@product//:reqwest",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tracing"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:azure_core",
+          "@product//:azure_identity",
+          "@product//:reqwest",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tracing"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-aca:d2b-provider-aca",
+        "manifest": "packages/d2b-provider-aca/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-aca",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-aca/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-credential-entra:d2b-provider-credential-entra"
+          ],
+          "externalIdentities": [
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-credential-entra:d2b-provider-credential-entra",
+        "manifest": "packages/d2b-provider-credential-entra/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-credential-entra",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-credential-entra/src/audit.rs",
+          "packages/d2b-provider-credential-entra/src/controller.rs",
+          "packages/d2b-provider-credential-entra/src/lib.rs",
+          "packages/d2b-provider-credential-entra/src/main.rs",
+          "packages/d2b-provider-credential-entra/src/service.rs",
+          "packages/d2b-provider-credential-entra/src/telemetry.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-credential-managed-identity:d2b-provider-credential-managed-identity"
+          ],
+          "externalIdentities": [
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-credential-managed-identity:d2b-provider-credential-managed-identity",
+        "manifest": "packages/d2b-provider-credential-managed-identity/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-credential-managed-identity",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-credential-managed-identity/src/agent.rs",
+          "packages/d2b-provider-credential-managed-identity/src/audit.rs",
+          "packages/d2b-provider-credential-managed-identity/src/controller.rs",
+          "packages/d2b-provider-credential-managed-identity/src/lib.rs",
+          "packages/d2b-provider-credential-managed-identity/src/main.rs",
+          "packages/d2b-provider-credential-managed-identity/src/service.rs",
+          "packages/d2b-provider-credential-managed-identity/src/telemetry.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-credential-secret-service:d2b-provider-credential-secret-service"
+          ],
+          "externalIdentities": [
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-credential-secret-service:d2b-provider-credential-secret-service",
+        "manifest": "packages/d2b-provider-credential-secret-service/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-credential-secret-service",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-credential-secret-service/src/audit.rs",
+          "packages/d2b-provider-credential-secret-service/src/controller.rs",
+          "packages/d2b-provider-credential-secret-service/src/lib.rs",
+          "packages/d2b-provider-credential-secret-service/src/main.rs",
+          "packages/d2b-provider-credential-secret-service/src/service.rs",
+          "packages/d2b-provider-credential-secret-service/src/telemetry.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-device-usbip:d2b-provider-device-usbip"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-device-usbip:d2b-provider-device-usbip",
+        "manifest": "packages/d2b-provider-device-usbip/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-device-usbip",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-device-usbip/src/controller.rs",
+          "packages/d2b-provider-device-usbip/src/firewall.rs",
+          "packages/d2b-provider-device-usbip/src/lib.rs",
+          "packages/d2b-provider-device-usbip/src/workers.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-network-local:d2b-provider-network-local"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-network-local:d2b-provider-network-local",
+        "manifest": "packages/d2b-provider-network-local/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-network-local",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-network-local/src/artifact.rs",
+          "packages/d2b-provider-network-local/src/bridge_port.rs",
+          "packages/d2b-provider-network-local/src/controller.rs",
+          "packages/d2b-provider-network-local/src/ifname.rs",
+          "packages/d2b-provider-network-local/src/lib.rs",
+          "packages/d2b-provider-network-local/src/netlink.rs",
+          "packages/d2b-provider-network-local/src/nftables.rs",
+          "packages/d2b-provider-network-local/src/observe.rs",
+          "packages/d2b-provider-network-local/src/plan.rs",
+          "packages/d2b-provider-network-local/src/routes.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-relay:d2b-provider-relay"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:base64",
+            "@product//:futures-util",
+            "@product//:hmac",
+            "@product//:libc",
+            "@product//:rustls",
+            "@product//:rustls-pki-types",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:tokio-tungstenite",
+            "@product//:tracing",
+            "@product//:urlencoding",
+            "@product//:webpki-roots"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:base64",
+          "@product//:futures-util",
+          "@product//:hmac",
+          "@product//:libc",
+          "@product//:rustls",
+          "@product//:rustls-pki-types",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:tokio-tungstenite",
+          "@product//:tracing",
+          "@product//:urlencoding",
+          "@product//:webpki-roots"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-relay:d2b-provider-relay",
+        "manifest": "packages/d2b-provider-relay/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-relay",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-relay/src/bin/d2b-relay.rs",
+          "packages/d2b-provider-relay/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-supervisor:d2b-provider-supervisor"
+          ],
+          "externalIdentities": [
+            "@product//:rustix",
+            "@product//:sha2",
+            "@product//:socket2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-process-conformance:d2b-process-conformance",
+          "//packages/d2b-process:d2b-process"
+        ],
+        "directProductDeps": [
+          "@product//:rustix",
+          "@product//:sha2",
+          "@product//:socket2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-supervisor:d2b-provider-supervisor",
+        "manifest": "packages/d2b-provider-supervisor/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-supervisor",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-supervisor/src/adapter.rs",
+          "packages/d2b-provider-supervisor/src/broker.rs",
+          "packages/d2b-provider-supervisor/src/lib.rs",
+          "packages/d2b-provider-supervisor/src/systemd.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-system-core:d2b-provider-system-core"
+          ],
+          "externalIdentities": [
+            "@product//:serde",
+            "@product//:serde_json"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde",
+          "@product//:serde_json"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-system-core:d2b-provider-system-core",
+        "manifest": "packages/d2b-provider-system-core/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-system-core",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-system-core/src/error.rs",
+          "packages/d2b-provider-system-core/src/host.rs",
+          "packages/d2b-provider-system-core/src/lib.rs",
+          "packages/d2b-provider-system-core/src/ownership.rs",
+          "packages/d2b-provider-system-core/src/testing.rs",
+          "packages/d2b-provider-system-core/src/user.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-system-minijail:d2b-provider-system-minijail"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-process-conformance:d2b-process-conformance"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-system-minijail:d2b-provider-system-minijail",
+        "manifest": "packages/d2b-provider-system-minijail/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-system-minijail",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-system-minijail/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-system-systemd:d2b-provider-system-systemd"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-process-conformance:d2b-process-conformance"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-system-systemd:d2b-provider-system-systemd",
+        "manifest": "packages/d2b-provider-system-systemd/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-system-systemd",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-system-systemd/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-toolkit:d2b-provider-toolkit"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-toolkit:d2b-provider-toolkit",
+        "manifest": "packages/d2b-provider-toolkit/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-toolkit",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-toolkit/src/audit.rs",
+          "packages/d2b-provider-toolkit/src/bootstrap.rs",
+          "packages/d2b-provider-toolkit/src/conformance.rs",
+          "packages/d2b-provider-toolkit/src/dispatch.rs",
+          "packages/d2b-provider-toolkit/src/error.rs",
+          "packages/d2b-provider-toolkit/src/fakes.rs",
+          "packages/d2b-provider-toolkit/src/lib.rs",
+          "packages/d2b-provider-toolkit/src/redaction.rs",
+          "packages/d2b-provider-toolkit/src/testing.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-volume-local:d2b-provider-volume-local"
+          ],
+          "externalIdentities": [
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-volume-local:d2b-provider-volume-local",
+        "manifest": "packages/d2b-provider-volume-local/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-volume-local",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-volume-local/src/atomic.rs",
+          "packages/d2b-provider-volume-local/src/audit.rs",
+          "packages/d2b-provider-volume-local/src/controller.rs",
+          "packages/d2b-provider-volume-local/src/effect_port.rs",
+          "packages/d2b-provider-volume-local/src/error.rs",
+          "packages/d2b-provider-volume-local/src/identity.rs",
+          "packages/d2b-provider-volume-local/src/layout.rs",
+          "packages/d2b-provider-volume-local/src/lib.rs",
+          "packages/d2b-provider-volume-local/src/lock.rs",
+          "packages/d2b-provider-volume-local/src/marker.rs",
+          "packages/d2b-provider-volume-local/src/migration.rs",
+          "packages/d2b-provider-volume-local/src/otel.rs",
+          "packages/d2b-provider-volume-local/src/path.rs",
+          "packages/d2b-provider-volume-local/src/port.rs",
+          "packages/d2b-provider-volume-local/src/relocation.rs",
+          "packages/d2b-provider-volume-local/src/sealing.rs",
+          "packages/d2b-provider-volume-local/src/snapshot.rs",
+          "packages/d2b-provider-volume-local/src/status.rs",
+          "packages/d2b-provider-volume-local/src/store_view.rs",
+          "packages/d2b-provider-volume-local/src/swtpm_volume.rs",
+          "packages/d2b-provider-volume-local/src/testing.rs",
+          "packages/d2b-provider-volume-local/src/views.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider-volume-virtiofs:d2b-provider-volume-virtiofs"
+          ],
+          "externalIdentities": [
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider-volume-virtiofs:d2b-provider-volume-virtiofs",
+        "manifest": "packages/d2b-provider-volume-virtiofs/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider-volume-virtiofs",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider-volume-virtiofs/src/controller.rs",
+          "packages/d2b-provider-volume-virtiofs/src/error.rs",
+          "packages/d2b-provider-volume-virtiofs/src/export.rs",
+          "packages/d2b-provider-volume-virtiofs/src/lib.rs",
+          "packages/d2b-provider-volume-virtiofs/src/port.rs",
+          "packages/d2b-provider-volume-virtiofs/src/testing.rs",
+          "packages/d2b-provider-volume-virtiofs/src/worker.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-provider:d2b-provider"
+          ],
+          "externalIdentities": [
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-zone-routing:d2b-zone-routing"
+        ],
+        "directProductDeps": [
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-provider:d2b-provider",
+        "manifest": "packages/d2b-provider/Cargo.toml",
+        "native": true,
+        "package": "d2b-provider",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-provider/src/context.rs",
+          "packages/d2b-provider/src/descriptor.rs",
+          "packages/d2b-provider/src/error.rs",
+          "packages/d2b-provider/src/forwarding.rs",
+          "packages/d2b-provider/src/identity.rs",
+          "packages/d2b-provider/src/installation.rs",
+          "packages/d2b-provider/src/lib.rs",
+          "packages/d2b-provider/src/registry.rs",
+          "packages/d2b-provider/src/session.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-realm-codec-protobuf:d2b-realm-codec-protobuf"
+          ],
+          "externalIdentities": [
+            "@product//:prost"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:prost"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-realm-codec-protobuf:d2b-realm-codec-protobuf",
+        "manifest": "packages/d2b-realm-codec-protobuf/Cargo.toml",
+        "native": true,
+        "package": "d2b-realm-codec-protobuf",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-realm-codec-protobuf/src/lib.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-realm-core:d2b-realm-core"
+          ],
+          "externalIdentities": [
+            "@product//:schemars",
+            "@product//:serde"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:schemars",
+          "@product//:serde"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-realm-core:d2b-realm-core",
+        "manifest": "packages/d2b-realm-core/Cargo.toml",
+        "native": true,
+        "package": "d2b-realm-core",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-realm-core/src/access.rs",
+          "packages/d2b-realm-core/src/allocator.rs",
+          "packages/d2b-realm-core/src/allocator_engine.rs",
+          "packages/d2b-realm-core/src/audit.rs",
+          "packages/d2b-realm-core/src/capability.rs",
+          "packages/d2b-realm-core/src/enrollment.rs",
+          "packages/d2b-realm-core/src/error.rs",
+          "packages/d2b-realm-core/src/execution.rs",
+          "packages/d2b-realm-core/src/frame.rs",
+          "packages/d2b-realm-core/src/identity_config.rs",
+          "packages/d2b-realm-core/src/identity_store.rs",
+          "packages/d2b-realm-core/src/ids.rs",
+          "packages/d2b-realm-core/src/lib.rs",
+          "packages/d2b-realm-core/src/migration.rs",
+          "packages/d2b-realm-core/src/mux.rs",
+          "packages/d2b-realm-core/src/node.rs",
+          "packages/d2b-realm-core/src/payload.rs",
+          "packages/d2b-realm-core/src/realm.rs",
+          "packages/d2b-realm-core/src/registry.rs",
+          "packages/d2b-realm-core/src/route_engine.rs",
+          "packages/d2b-realm-core/src/routing.rs",
+          "packages/d2b-realm-core/src/shell.rs",
+          "packages/d2b-realm-core/src/stream.rs",
+          "packages/d2b-realm-core/src/target.rs",
+          "packages/d2b-realm-core/src/token.rs",
+          "packages/d2b-realm-core/src/trace_context.rs",
+          "packages/d2b-realm-core/src/workload.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-realm-provider:d2b-realm-provider"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:tokio",
+            "@product//:tracing"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:tokio",
+          "@product//:tracing"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-realm-provider:d2b-realm-provider",
+        "manifest": "packages/d2b-realm-provider/Cargo.toml",
+        "native": true,
+        "package": "d2b-realm-provider",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-realm-provider/src/capabilities.rs",
+          "packages/d2b-realm-provider/src/conformance.rs",
+          "packages/d2b-realm-provider/src/credential.rs",
+          "packages/d2b-realm-provider/src/error.rs",
+          "packages/d2b-realm-provider/src/lib.rs",
+          "packages/d2b-realm-provider/src/mock.rs",
+          "packages/d2b-realm-provider/src/provider.rs",
+          "packages/d2b-realm-provider/src/rate_limit.rs",
+          "packages/d2b-realm-provider/src/types.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-realm-router:d2b-realm-router"
+          ],
+          "externalIdentities": [
+            "@product//:chacha20poly1305",
+            "@product//:hmac",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:subtle",
+            "@product//:tokio",
+            "@product//:tracing"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:chacha20poly1305",
+          "@product//:hmac",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:subtle",
+          "@product//:tokio",
+          "@product//:tracing"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-realm-router:d2b-realm-router",
+        "manifest": "packages/d2b-realm-router/Cargo.toml",
+        "native": true,
+        "package": "d2b-realm-router",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-realm-router/src/display_transport.rs",
+          "packages/d2b-realm-router/src/execution.rs",
+          "packages/d2b-realm-router/src/lib.rs",
+          "packages/d2b-realm-router/src/mux_session.rs",
+          "packages/d2b-realm-router/src/remote_node.rs",
+          "packages/d2b-realm-router/src/secure_session.rs",
+          "packages/d2b-realm-router/src/session.rs",
+          "packages/d2b-realm-router/src/session_lifecycle.rs",
+          "packages/d2b-realm-router/src/target_resolver.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-realm-transport:d2b-realm-transport"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-realm-transport:d2b-realm-transport",
+        "manifest": "packages/d2b-realm-transport/Cargo.toml",
+        "native": true,
+        "package": "d2b-realm-transport",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-realm-transport/src/lib.rs",
+          "packages/d2b-realm-transport/src/local_tcp.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-resource-api:d2b-resource-api"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:protobuf",
+            "@product//:sha2",
+            "@product//:tokio",
+            "@product//:ttrpc"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core-controller:d2b-core-controller",
+          "//packages/d2b-resource-store-redb:d2b-resource-store-redb",
+          "//packages/d2b-resource-store:d2b-resource-store"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:protobuf",
+          "@product//:sha2",
+          "@product//:tokio",
+          "@product//:ttrpc"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-resource-api:d2b-resource-api",
+        "manifest": "packages/d2b-resource-api/Cargo.toml",
+        "native": true,
+        "package": "d2b-resource-api",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-resource-api/src/adapter.rs",
+          "packages/d2b-resource-api/src/admission.rs",
+          "packages/d2b-resource-api/src/authz.rs",
+          "packages/d2b-resource-api/src/client.rs",
+          "packages/d2b-resource-api/src/error.rs",
+          "packages/d2b-resource-api/src/generated/d2b_resource_v3_ttrpc.rs",
+          "packages/d2b-resource-api/src/generated/mod.rs",
+          "packages/d2b-resource-api/src/identity.rs",
+          "packages/d2b-resource-api/src/lib.rs",
+          "packages/d2b-resource-api/src/service.rs",
+          "packages/d2b-resource-api/src/store.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-resource-client:d2b-resource-client"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-resource-client:d2b-resource-client",
+        "manifest": "packages/d2b-resource-client/Cargo.toml",
+        "native": true,
+        "package": "d2b-resource-client",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-resource-client/src/call.rs",
+          "packages/d2b-resource-client/src/client.rs",
+          "packages/d2b-resource-client/src/dispatch.rs",
+          "packages/d2b-resource-client/src/error.rs",
+          "packages/d2b-resource-client/src/lib.rs",
+          "packages/d2b-resource-client/src/target.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-resource-store-redb:d2b-resource-store-redb"
+          ],
+          "externalIdentities": [
+            "@product//:redb",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:tokio"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-controller-toolkit:d2b-controller-toolkit",
+          "//packages/d2b-resource-store:d2b-resource-store"
+        ],
+        "directProductDeps": [
+          "@product//:redb",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:tokio"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-resource-store-redb:d2b-resource-store-redb",
+        "manifest": "packages/d2b-resource-store-redb/Cargo.toml",
+        "native": true,
+        "package": "d2b-resource-store-redb",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-resource-store-redb/src/actor.rs",
+          "packages/d2b-resource-store-redb/src/keys.rs",
+          "packages/d2b-resource-store-redb/src/lib.rs",
+          "packages/d2b-resource-store-redb/src/ownership.rs",
+          "packages/d2b-resource-store-redb/src/schema.rs",
+          "packages/d2b-resource-store-redb/src/tests.rs",
+          "packages/d2b-resource-store-redb/src/transaction.rs",
+          "packages/d2b-resource-store-redb/src/values.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-resource-store:d2b-resource-store"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-resource-store:d2b-resource-store",
+        "manifest": "packages/d2b-resource-store/Cargo.toml",
+        "native": true,
+        "package": "d2b-resource-store",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-resource-store/src/error.rs",
+          "packages/d2b-resource-store/src/lib.rs",
+          "packages/d2b-resource-store/src/mutation_seal.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-session-unix:d2b-session-unix"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:envmnt",
+            "@product//:libc",
+            "@product//:listenfd",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:tokio",
+            "@product//:tokio-vsock"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-session:d2b-session"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:envmnt",
+          "@product//:libc",
+          "@product//:listenfd",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:tokio",
+          "@product//:tokio-vsock"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-session-unix:d2b-session-unix",
+        "manifest": "packages/d2b-session-unix/Cargo.toml",
+        "native": true,
+        "package": "d2b-session-unix",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-session-unix/src/adapter.rs",
+          "packages/d2b-session-unix/src/credit.rs",
+          "packages/d2b-session-unix/src/descriptor.rs",
+          "packages/d2b-session-unix/src/error.rs",
+          "packages/d2b-session-unix/src/lib.rs",
+          "packages/d2b-session-unix/src/pidfd.rs",
+          "packages/d2b-session-unix/src/socket.rs",
+          "packages/d2b-session-unix/src/subject.rs",
+          "packages/d2b-session-unix/src/systemd.rs",
+          "packages/d2b-session-unix/src/vsock.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-session:d2b-session"
+          ],
+          "externalIdentities": [
+            "@product//:async-trait",
+            "@product//:futures-util",
+            "@product//:sha2",
+            "@product//:snow",
+            "@product//:tokio",
+            "@product//:ttrpc",
+            "@product//:zeroize"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-resource-api:d2b-resource-api"
+        ],
+        "directProductDeps": [
+          "@product//:async-trait",
+          "@product//:futures-util",
+          "@product//:sha2",
+          "@product//:snow",
+          "@product//:tokio",
+          "@product//:ttrpc",
+          "@product//:zeroize"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-session:d2b-session",
+        "manifest": "packages/d2b-session/Cargo.toml",
+        "native": true,
+        "package": "d2b-session",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-session/src/admission.rs",
+          "packages/d2b-session/src/attachment.rs",
+          "packages/d2b-session/src/bootstrap.rs",
+          "packages/d2b-session/src/cancellation.rs",
+          "packages/d2b-session/src/deadline.rs",
+          "packages/d2b-session/src/driver.rs",
+          "packages/d2b-session/src/engine.rs",
+          "packages/d2b-session/src/error.rs",
+          "packages/d2b-session/src/fragmentation.rs",
+          "packages/d2b-session/src/handshake.rs",
+          "packages/d2b-session/src/lib.rs",
+          "packages/d2b-session/src/lifecycle.rs",
+          "packages/d2b-session/src/metrics.rs",
+          "packages/d2b-session/src/operation.rs",
+          "packages/d2b-session/src/record.rs",
+          "packages/d2b-session/src/scheduler.rs",
+          "packages/d2b-session/src/server.rs",
+          "packages/d2b-session/src/streams.rs",
+          "packages/d2b-session/src/transport.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-sk-frontend:d2b-sk-frontend"
+          ],
+          "externalIdentities": [
+            "@product//:libc",
+            "@product//:tokio",
+            "@product//:tokio-vsock"
+          ]
+        },
+        "directFirstPartyDeps": [],
+        "directProductDeps": [
+          "@product//:libc",
+          "@product//:tokio",
+          "@product//:tokio-vsock"
+        ],
+        "features": [],
+        "kind": "rust_binary",
+        "label": "//packages/d2b-sk-frontend:d2b-sk-frontend",
+        "manifest": "packages/d2b-sk-frontend/Cargo.toml",
+        "native": true,
+        "package": "d2b-sk-frontend",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-sk-frontend/src/framing.rs",
+          "packages/d2b-sk-frontend/src/main.rs",
+          "packages/d2b-sk-frontend/src/uhid.rs",
+          "packages/d2b-sk-frontend/src/vsock.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-test-locator:d2b-test-locator"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-bazel-exec:d2b-bazel-exec",
+          "//packages/d2b-bazel-support:d2b-bazel-support"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-test-locator:d2b-test-locator",
+        "manifest": "packages/d2b-test-locator/Cargo.toml",
+        "native": true,
+        "package": "d2b-test-locator",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-test-locator/src/lib.rs",
+          "packages/d2b-test-locator/src/mode.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper"
+          ],
+          "externalIdentities": [
+            "@product//:clap",
+            "@product//:getrandom",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:socket2",
+            "@product//:uzers",
+            "@product//:zbus"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-wayland-proxy:d2b-wayland-proxy"
+        ],
+        "directProductDeps": [
+          "@product//:clap",
+          "@product//:getrandom",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:socket2",
+          "@product//:uzers",
+          "@product//:zbus"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
+        "manifest": "packages/d2b-unsafe-local-helper/Cargo.toml",
+        "native": true,
+        "package": "d2b-unsafe-local-helper",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-unsafe-local-helper/src/environment.rs",
+          "packages/d2b-unsafe-local-helper/src/lib.rs",
+          "packages/d2b-unsafe-local-helper/src/main.rs",
+          "packages/d2b-unsafe-local-helper/src/output_ring.rs",
+          "packages/d2b-unsafe-local-helper/src/protocol.rs",
+          "packages/d2b-unsafe-local-helper/src/runtime.rs",
+          "packages/d2b-unsafe-local-helper/src/shell_runtime.rs",
+          "packages/d2b-unsafe-local-helper/src/shell_socket.rs",
+          "packages/d2b-unsafe-local-helper/src/shell_supervisor.rs",
+          "packages/d2b-unsafe-local-helper/src/supervisor_protocol.rs",
+          "packages/d2b-unsafe-local-helper/src/systemd.rs",
+          "packages/d2b-unsafe-local-helper/src/tty_exec.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-userd:d2b-userd"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-userd:d2b-userd",
+        "manifest": "packages/d2b-userd/Cargo.toml",
+        "native": true,
+        "package": "d2b-userd",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-userd/src/lib.rs",
+          "packages/d2b-userd/src/main.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-wayland-proxy:d2b-wayland-proxy"
+          ],
+          "externalIdentities": [
+            "@product//:clap",
+            "@product//:env_logger",
+            "@product//:getrandom",
+            "@product//:libc",
+            "@product//:log",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:smallvec",
+            "@product//:thiserror",
+            "@product//:uapi",
+            "@product//:wl-proxy"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core"
+        ],
+        "directProductDeps": [
+          "@product//:clap",
+          "@product//:env_logger",
+          "@product//:getrandom",
+          "@product//:libc",
+          "@product//:log",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:smallvec",
+          "@product//:thiserror",
+          "@product//:uapi",
+          "@product//:wl-proxy"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-wayland-proxy:d2b-wayland-proxy",
+        "manifest": "packages/d2b-wayland-proxy/Cargo.toml",
+        "native": true,
+        "package": "d2b-wayland-proxy",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-wayland-proxy/src/attribution.rs",
+          "packages/d2b-wayland-proxy/src/bridge.rs",
+          "packages/d2b-wayland-proxy/src/clipboard.rs",
+          "packages/d2b-wayland-proxy/src/decoration.rs",
+          "packages/d2b-wayland-proxy/src/diag.rs",
+          "packages/d2b-wayland-proxy/src/dmabuf.rs",
+          "packages/d2b-wayland-proxy/src/filter.rs",
+          "packages/d2b-wayland-proxy/src/identity.rs",
+          "packages/d2b-wayland-proxy/src/lib.rs",
+          "packages/d2b-wayland-proxy/src/main.rs",
+          "packages/d2b-wayland-proxy/src/policy.rs",
+          "packages/d2b-wayland-proxy/src/readiness.rs",
+          "packages/d2b-wayland-proxy/src/terminal.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b-zone-routing:d2b-zone-routing"
+          ],
+          "externalIdentities": []
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts"
+        ],
+        "directProductDeps": [],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b-zone-routing:d2b-zone-routing",
+        "manifest": "packages/d2b-zone-routing/Cargo.toml",
+        "native": true,
+        "package": "d2b-zone-routing",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b-zone-routing/src/engine.rs",
+          "packages/d2b-zone-routing/src/lib.rs",
+          "packages/d2b-zone-routing/src/resolver.rs",
+          "packages/d2b-zone-routing/src/service.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2b:d2b"
+          ],
+          "externalIdentities": [
+            "@product//:clap",
+            "@product//:nix",
+            "@product//:rustix",
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-router:d2b-realm-router"
+        ],
+        "directProductDeps": [
+          "@product//:clap",
+          "@product//:nix",
+          "@product//:rustix",
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2b:d2b",
+        "manifest": "packages/d2b/Cargo.toml",
+        "native": true,
+        "package": "d2b",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2b/src/doctor.rs",
+          "packages/d2b/src/exec_client.rs",
+          "packages/d2b/src/host_validate.rs",
+          "packages/d2b/src/human_render.rs",
+          "packages/d2b/src/lib.rs",
+          "packages/d2b/src/main.rs",
+          "packages/d2b/src/status_read_model.rs",
+          "packages/d2b/src/target_routing.rs",
+          "packages/d2b/src/terminal_client.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/d2bd:d2bd"
+          ],
+          "externalIdentities": [
+            "@product//:arc-swap",
+            "@product//:async-trait",
+            "@product//:clap",
+            "@product//:getrandom",
+            "@product//:libc",
+            "@product//:nix",
+            "@product//:parking_lot",
+            "@product//:protobuf",
+            "@product//:rustix",
+            "@product//:semver",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:socket2",
+            "@product//:subtle",
+            "@product//:tokio",
+            "@product//:tracing",
+            "@product//:tracing-subscriber",
+            "@product//:ttrpc",
+            "@product//:uzers"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-gateway-runtime:d2b-gateway-runtime",
+          "//packages/d2b-gateway:d2b-gateway",
+          "//packages/d2b-host:d2b-host",
+          "//packages/d2b-provider-aca:d2b-provider-aca",
+          "//packages/d2b-provider-relay:d2b-provider-relay",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b-realm-provider:d2b-realm-provider",
+          "//packages/d2b-realm-router:d2b-realm-router"
+        ],
+        "directProductDeps": [
+          "@product//:arc-swap",
+          "@product//:async-trait",
+          "@product//:clap",
+          "@product//:getrandom",
+          "@product//:libc",
+          "@product//:nix",
+          "@product//:parking_lot",
+          "@product//:protobuf",
+          "@product//:rustix",
+          "@product//:semver",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:socket2",
+          "@product//:subtle",
+          "@product//:tokio",
+          "@product//:tracing",
+          "@product//:tracing-subscriber",
+          "@product//:ttrpc",
+          "@product//:uzers"
+        ],
+        "features": [],
+        "kind": "rust_library",
+        "label": "//packages/d2bd:d2bd",
+        "manifest": "packages/d2bd/Cargo.toml",
+        "native": true,
+        "package": "d2bd",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/d2bd/src/admission.rs",
+          "packages/d2bd/src/audio_dispatch.rs",
+          "packages/d2bd/src/audio_host_controller.rs",
+          "packages/d2bd/src/audit_check.rs",
+          "packages/d2bd/src/autostart.rs",
+          "packages/d2bd/src/ch_api.rs",
+          "packages/d2bd/src/ch_stats.rs",
+          "packages/d2bd/src/concurrency.rs",
+          "packages/d2bd/src/console_session.rs",
+          "packages/d2bd/src/daemon_audit.rs",
+          "packages/d2bd/src/daemon_version.rs",
+          "packages/d2bd/src/exec_detached.rs",
+          "packages/d2bd/src/exec_session.rs",
+          "packages/d2bd/src/exec_session_real.rs",
+          "packages/d2bd/src/guest_control_bridge.rs",
+          "packages/d2bd/src/guest_control_health.rs",
+          "packages/d2bd/src/guest_control_vsock.rs",
+          "packages/d2bd/src/kernel_module_check.rs",
+          "packages/d2bd/src/known_hosts_refresh.rs",
+          "packages/d2bd/src/lib.rs",
+          "packages/d2bd/src/main.rs",
+          "packages/d2bd/src/metrics.rs",
+          "packages/d2bd/src/net_route_preflight.rs",
+          "packages/d2bd/src/net_vm_bundle_gate.rs",
+          "packages/d2bd/src/otel_host_bridge_readiness.rs",
+          "packages/d2bd/src/ownership_preflight.rs",
+          "packages/d2bd/src/pidfs_probe.rs",
+          "packages/d2bd/src/provider_shutdown.rs",
+          "packages/d2bd/src/realm_access_resolver.rs",
+          "packages/d2bd/src/realm_stubs.rs",
+          "packages/d2bd/src/security_key.rs",
+          "packages/d2bd/src/shell_backend.rs",
+          "packages/d2bd/src/ssh_host_key_preflight.rs",
+          "packages/d2bd/src/storage_lifecycle.rs",
+          "packages/d2bd/src/supervisor/dag.rs",
+          "packages/d2bd/src/supervisor/mod.rs",
+          "packages/d2bd/src/supervisor/pidfd.rs",
+          "packages/d2bd/src/supervisor/pidfd_table.rs",
+          "packages/d2bd/src/supervisor/readiness_liveness.rs",
+          "packages/d2bd/src/supervisor/state.rs",
+          "packages/d2bd/src/supervisor/stop_dag.rs",
+          "packages/d2bd/src/terminal_session.rs",
+          "packages/d2bd/src/typed_error.rs",
+          "packages/d2bd/src/unsafe_local_helper.rs",
+          "packages/d2bd/src/unsafe_local_terminal.rs",
+          "packages/d2bd/src/usbip_reconcile_state.rs",
+          "packages/d2bd/src/usbip_state_machine.rs",
+          "packages/d2bd/src/usbipd_perenv_autostart.rs",
+          "packages/d2bd/src/wire.rs",
+          "packages/d2bd/src/workload_dispatch.rs",
+          "packages/d2bd/src/workload_target_index.rs"
+        ],
+        "system": null
+      },
+      {
+        "cargoContext": "main",
+        "cargoTarget": null,
+        "cfgs": [],
+        "closureCensus": {
+          "configuredTargets": [
+            "//packages/xtask:xtask"
+          ],
+          "externalIdentities": [
+            "@product//:clap_complete",
+            "@product//:clap_mangen",
+            "@product//:nix",
+            "@product//:protobuf-codegen",
+            "@product//:rustix",
+            "@product//:schemars",
+            "@product//:serde",
+            "@product//:serde_json",
+            "@product//:sha2",
+            "@product//:ttrpc-codegen"
+          ]
+        },
+        "directFirstPartyDeps": [
+          "//packages/d2b-contracts:d2b-contracts",
+          "//packages/d2b-core:d2b-core",
+          "//packages/d2b-realm-core:d2b-realm-core",
+          "//packages/d2b:d2b"
+        ],
+        "directProductDeps": [
+          "@product//:clap_complete",
+          "@product//:clap_mangen",
+          "@product//:nix",
+          "@product//:protobuf-codegen",
+          "@product//:rustix",
+          "@product//:schemars",
+          "@product//:serde",
+          "@product//:serde_json",
+          "@product//:sha2",
+          "@product//:ttrpc-codegen"
+        ],
+        "features": [],
+        "kind": "rust_binary",
+        "label": "//packages/xtask:xtask",
+        "manifest": "packages/xtask/Cargo.toml",
+        "native": true,
+        "package": "xtask",
+        "policyInput": null,
+        "sourceFiles": [
+          "packages/xtask/src/bazel.rs",
+          "packages/xtask/src/bazel_yanked.rs",
+          "packages/xtask/src/bin/manifest_v04_check.rs",
+          "packages/xtask/src/changelog.rs",
+          "packages/xtask/src/delivery/command.rs",
+          "packages/xtask/src/delivery/eligibility.rs",
+          "packages/xtask/src/delivery/evidence.rs",
+          "packages/xtask/src/delivery/history_proof.rs",
+          "packages/xtask/src/delivery/mod.rs",
+          "packages/xtask/src/delivery/model.rs",
+          "packages/xtask/src/delivery/panel.rs",
+          "packages/xtask/src/delivery/seal.rs",
+          "packages/xtask/src/delivery/snapshot.rs",
+          "packages/xtask/src/delivery/storage.rs",
+          "packages/xtask/src/delivery/work_item_state.rs",
+          "packages/xtask/src/diagnostic_redaction.rs",
+          "packages/xtask/src/gen_spec_set.rs",
+          "packages/xtask/src/heavy_gate.rs",
+          "packages/xtask/src/hermeticity.rs",
+          "packages/xtask/src/implementation_graph.rs",
+          "packages/xtask/src/inventory.rs",
+          "packages/xtask/src/main.rs",
+          "packages/xtask/src/package_policy.rs",
+          "packages/xtask/src/process_marker_pin.rs",
+          "packages/xtask/src/provider_crate_policy.rs",
+          "packages/xtask/src/provider_packaging.rs",
+          "packages/xtask/src/schema.rs",
+          "packages/xtask/src/semantic_service_schemas.rs",
+          "packages/xtask/src/test_runtime_ledger.rs",
+          "packages/xtask/src/zone_schema.rs"
+        ],
+        "system": null
+      }
+    ]
+  },
+  "coverageTargets": {
+    "count": 20,
+    "labels": [
+      "//ci/rust:api_census",
+      "//ci/rust:audit_broker",
+      "//ci/rust:audit_guest",
+      "//ci/rust:audit_main",
+      "//ci/rust:broker_default",
+      "//ci/rust:broker_fakebackends",
+      "//ci/rust:broker_layer1",
+      "//ci/rust:clippy",
+      "//ci/rust:deny_broker",
+      "//ci/rust:deny_guest",
+      "//ci/rust:deny_main",
+      "//ci/rust:fmt",
+      "//ci/rust:guest_shell_runner",
+      "//ci/rust:main_doctests",
+      "//ci/rust:main_harness_free",
+      "//ci/rust:main_tests",
+      "//ci/rust:no_bash_ast",
+      "//ci/rust:pinned_test_inventory",
+      "//ci/rust:schema_reproducibility",
+      "//ci/rust:stub_no_socket"
+    ]
+  },
+  "hubs": {
+    "count": 2,
+    "labels": [
+      "product",
+      "walker"
+    ]
+  },
+  "schemaVersion": 1,
+  "seedStatus": "foundation",
+  "sourceCensus": {
+    "count": 633,
+    "targetLabelCensus": {
+      "count": 64,
+      "labels": [
+        "//packages/d2b-api-surface:d2b-api-surface",
+        "//packages/d2b-bazel-exec:d2b-bazel-exec",
+        "//packages/d2b-bazel-runner:d2b-bazel-runner",
+        "//packages/d2b-bazel-support:d2b-bazel-support",
+        "//packages/d2b-bus:d2b-bus",
+        "//packages/d2b-clipd:d2b-clipd",
+        "//packages/d2b-contract-tests:d2b-contract-tests",
+        "//packages/d2b-contracts:d2b-contracts",
+        "//packages/d2b-controller-toolkit:d2b-controller-toolkit",
+        "//packages/d2b-core-controller:d2b-core-controller",
+        "//packages/d2b-core:d2b-core",
+        "//packages/d2b-credential-service:d2b-credential-service",
+        "//packages/d2b-daemon-access:d2b-daemon-access",
+        "//packages/d2b-exec-runner:d2b-exec-runner",
+        "//packages/d2b-gateway-runtime:d2b-gateway-runtime",
+        "//packages/d2b-gateway:d2b-gateway",
+        "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner",
+        "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-aarch64",
+        "//packages/d2b-guest-shell-runner:d2b-guest-shell-runner-guest-real-libshpool-x86_64",
+        "//packages/d2b-guestd:d2b-guestd",
+        "//packages/d2b-host-activation-helper:d2b-host-activation-helper",
+        "//packages/d2b-host-providers:d2b-host-providers",
+        "//packages/d2b-host:d2b-host",
+        "//packages/d2b-notify:d2b-notify",
+        "//packages/d2b-priv-broker:d2b-priv-broker",
+        "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-aarch64",
+        "//packages/d2b-priv-broker:d2b-priv-broker-broker-production-x86_64",
+        "//packages/d2b-process-conformance:d2b-process-conformance",
+        "//packages/d2b-process:d2b-process",
+        "//packages/d2b-provider-aca:d2b-provider-aca",
+        "//packages/d2b-provider-credential-entra:d2b-provider-credential-entra",
+        "//packages/d2b-provider-credential-managed-identity:d2b-provider-credential-managed-identity",
+        "//packages/d2b-provider-credential-secret-service:d2b-provider-credential-secret-service",
+        "//packages/d2b-provider-device-usbip:d2b-provider-device-usbip",
+        "//packages/d2b-provider-network-local:d2b-provider-network-local",
+        "//packages/d2b-provider-relay:d2b-provider-relay",
+        "//packages/d2b-provider-supervisor:d2b-provider-supervisor",
+        "//packages/d2b-provider-system-core:d2b-provider-system-core",
+        "//packages/d2b-provider-system-minijail:d2b-provider-system-minijail",
+        "//packages/d2b-provider-system-systemd:d2b-provider-system-systemd",
+        "//packages/d2b-provider-toolkit:d2b-provider-toolkit",
+        "//packages/d2b-provider-volume-local:d2b-provider-volume-local",
+        "//packages/d2b-provider-volume-virtiofs:d2b-provider-volume-virtiofs",
+        "//packages/d2b-provider:d2b-provider",
+        "//packages/d2b-realm-codec-protobuf:d2b-realm-codec-protobuf",
+        "//packages/d2b-realm-core:d2b-realm-core",
+        "//packages/d2b-realm-provider:d2b-realm-provider",
+        "//packages/d2b-realm-router:d2b-realm-router",
+        "//packages/d2b-realm-transport:d2b-realm-transport",
+        "//packages/d2b-resource-api:d2b-resource-api",
+        "//packages/d2b-resource-client:d2b-resource-client",
+        "//packages/d2b-resource-store-redb:d2b-resource-store-redb",
+        "//packages/d2b-resource-store:d2b-resource-store",
+        "//packages/d2b-session-unix:d2b-session-unix",
+        "//packages/d2b-session:d2b-session",
+        "//packages/d2b-sk-frontend:d2b-sk-frontend",
+        "//packages/d2b-test-locator:d2b-test-locator",
+        "//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper",
+        "//packages/d2b-userd:d2b-userd",
+        "//packages/d2b-wayland-proxy:d2b-wayland-proxy",
+        "//packages/d2b-zone-routing:d2b-zone-routing",
+        "//packages/d2b:d2b",
+        "//packages/d2bd:d2bd",
+        "//packages/xtask:xtask"
+      ]
+    },
+    "uniquePathCount": 633
+  }
+}

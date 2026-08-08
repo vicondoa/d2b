@@ -1,0 +1,73 @@
+{
+  "rows": [
+    {
+      "artifact": "broker-host-artifact-contract",
+      "binaryBytes": 8501608,
+      "candidateCommit": "3653c44e4025d68ae42dc1602d14684721712350",
+      "closureCount": 7,
+      "closureSha256": "caf0de0012e0d675bde9e7d7cac769c9437d9a464a5b553f6548ac156d4d3f9d",
+      "elfMachine": "EM_AARCH64",
+      "elfType": "ET_DYN",
+      "interpreter": "ld-linux-aarch64.so.1",
+      "measurementCommand": "nix build --no-link .#packages.aarch64-linux.d2b-priv-broker",
+      "needed": [
+        "ld-linux-aarch64.so.1",
+        "libc.so.6",
+        "libgcc_s.so.1",
+        "libm.so.6"
+      ],
+      "selectedPolicyDigest": "cce5bda3f853781466d396845a1aea0da262780714ade0dc3b7fced859a4ba9f",
+      "sizeGrowthAuthorization": null,
+      "system": "aarch64-linux"
+    },
+    {
+      "artifact": "guest-static-elf",
+      "binaryBytes": 5508064,
+      "candidateCommit": "3653c44e4025d68ae42dc1602d14684721712350",
+      "closureCount": 1,
+      "closureSha256": "3ac65deeb416e327b128a14c3f3694ab516d889b02610a56096e65c199ac984a",
+      "elfMachine": "EM_AARCH64",
+      "elfType": "ET_DYN",
+      "measurementCommand": "nix build --no-link .#packages.aarch64-linux.d2b-guest-shell-runner-static",
+      "needed": [],
+      "selectedPolicyDigest": "c3d53a1d170fd80cfdf9f6d87ae52213d0bdaa53b40ce595fec3ed735232fff4",
+      "sizeGrowthAuthorization": null,
+      "system": "aarch64-linux"
+    },
+    {
+      "artifact": "broker-host-artifact-contract",
+      "binaryBytes": 8635488,
+      "candidateCommit": "3653c44e4025d68ae42dc1602d14684721712350",
+      "closureCount": 7,
+      "closureSha256": "16d4a11aa781e1d77e956a7e7b863ebc176a5069245bd6e4ab1ed981bd01cca6",
+      "elfMachine": "EM_X86_64",
+      "elfType": "ET_DYN",
+      "interpreter": "ld-linux-x86-64.so.2",
+      "measurementCommand": "nix build --no-link .#packages.x86_64-linux.d2b-priv-broker",
+      "needed": [
+        "ld-linux-x86-64.so.2",
+        "libc.so.6",
+        "libgcc_s.so.1",
+        "libm.so.6"
+      ],
+      "selectedPolicyDigest": "b5b2827d8c8e76ebd15318aa86d604d8dda3cffb31b8285bffd7c6b41577841b",
+      "sizeGrowthAuthorization": null,
+      "system": "x86_64-linux"
+    },
+    {
+      "artifact": "guest-static-elf",
+      "binaryBytes": 5362360,
+      "candidateCommit": "3653c44e4025d68ae42dc1602d14684721712350",
+      "closureCount": 1,
+      "closureSha256": "5e56e8e4a8af028c7eff280fefbd571b687c51dfc5cd1432dbf738c9daa2522d",
+      "elfMachine": "EM_X86_64",
+      "elfType": "ET_DYN",
+      "measurementCommand": "nix build --no-link .#packages.x86_64-linux.d2b-guest-shell-runner-static",
+      "needed": [],
+      "selectedPolicyDigest": "b3c80f09eab238dc0c9d49da42d828a33bdf08e1911d02a94d4635d2d2823cf3",
+      "sizeGrowthAuthorization": null,
+      "system": "x86_64-linux"
+    }
+  ],
+  "schemaVersion": 1
+}

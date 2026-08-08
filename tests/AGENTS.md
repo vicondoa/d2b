@@ -62,6 +62,14 @@ mirrored into the guest workspace gains or changes a dependency, update the
 fixture and any affected override, refresh `packages/Cargo.guest.lock`, then
 run `make test-policy`.
 
+The product Cargo workspace is `packages/Cargo.toml`, and
+`packages/Cargo.lock` is its only authoritative product lock. The broker and
+guest shell runner are members of that workspace even though their dedicated
+gate streams select their packages and features separately. The generated
+`packages/Cargo.guest.lock` remains a static-guest closure input, not a
+workspace or hub authority. The no-bash AST walker is the separate workspace
+under `tests/tools/no-bash-ast-walker/` and keeps its own Cargo lock.
+
 ### Layer 2 - integration tiers (only when Layer 1 genuinely can't cover it)
 
 | # | Type | What it is | Lives in | Runs **where** |
@@ -180,27 +188,31 @@ back into a single invocation:
   (kind `test` with zero cases) rather than pinned, so a new one cannot
   silently drop out of the gate.
 
-The privileged broker workspace stays on `cargo test`. Its tests are not
-process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
-nothing to win there.
+The privileged broker package stays on `cargo test` within the product
+workspace. Its tests are not process-per-test safe, so its package-selected
+stream remains serial. The guest shell runner uses the same root manifest and
+root lock with its `real-libshpool` feature selection. Neither stream is a
+standalone product workspace.
 
 `make test-rust` owns the bounded local GNU Make DAG. Its stable leaves cover
 the API, main format/clippy/workspace, conditional fixture/CLI, broker,
 guest-shell-runner, no-bash AST, schema, supply-chain, stub, and pinned-test
-surfaces. Fixture and CLI leaves use an isolated stable target below
-`.scratch/rust-test-cache`, so they can overlap the main workspace without
-sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
-Layer-1 graph. The focused `make test-rust-main` retains the same conditional
-fixture behavior. The public and private rustdoc censuses use separate stable
-targets and overlap only when the API leaf has at least two admitted jobs,
-with split Cargo quotas bounded by that leaf's budget. The snapshot checker
-uses its release profile for the measured CPU-bound JSON pass. Budgets through
-nine admit one job per active lane; surplus jobs above nine go to the measured
-API long pole while the full nine-lane frontier remains within budget. Direct
+surfaces. The main workspace uses `packages/target`; broker feature passes use
+stable package-selected target directories, and the guest stream uses its
+stable package-selected target directory. Fixture and CLI leaves use an
+isolated stable target below `.scratch/rust-test-cache`, so they can overlap
+the main workspace without sharing mutable Cargo state;
+`D2B_SKIP_FIXTURE_BUILD=1` omits them for the Layer-1 graph. The focused
+`make test-rust-main` retains the same conditional fixture behavior. The
+public and private rustdoc censuses use separate stable targets and overlap
+only when the API leaf has at least two admitted jobs, with split Cargo quotas
+bounded by that leaf's budget. The snapshot checker uses its release profile
+for the measured CPU-bound JSON pass. Budgets through nine admit one job per
+active lane; surplus jobs above nine go to the measured API long pole while
+the full nine-lane frontier remains within budget. Direct
 `tests/test-rust.sh` calls require exactly one leaf mode and must not be used
-as an aggregate scheduler. The broker passes remain
-serial, and the main workspace, schema, and inventory leaves retain their
-dependency edges.
+as an aggregate scheduler. The broker passes remain serial, and the main
+workspace, schema, and inventory leaves retain their dependency edges.
 
 Those dependency edges are warm-local-profile only. CI dispatches API, main,
 broker, guest, no-bash, schema, inventory and supply-chain Make targets as
@@ -339,16 +351,18 @@ When a failure reproduces only inside the gate's toolchain environment, use
 `tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole
 gate.
 
-### Standalone Rust workspaces
+### Separate Rust workspaces
 
-Most Rust crates are members of `packages/Cargo.toml`, but some crates are
-intentionally excluded because they require a distinct safety or dependency
-policy. The privileged broker lives at `packages/d2b-priv-broker/`; the
-persistent-shell feasibility helper lives at
-`packages/d2b-guest-shell-runner/`.
+The product packages, including `d2b-priv-broker` and
+`d2b-guest-shell-runner`, are members of `packages/Cargo.toml` and resolve
+through `packages/Cargo.lock`. Dedicated Type 2 and Type 3 streams select
+those packages from the root manifest and use their gate-owned target
+directories. The no-bash AST walker is intentionally separate at
+`tests/tools/no-bash-ast-walker/`, with its own Cargo manifest and lock because
+it is gate plumbing outside the product package tree.
 
-Tests for those excluded workspaces still follow the same taxonomy: Type 2 unit
-tests live under `src/**`, Type 3 binary/integration tests live under
-`packages/<crate>/tests/*.rs`, and Type 6 static/supply-chain assertions live in
-existing `flake.checks.<system>.*` entries. Do not add a new top-level
-`tests/*.sh`; extend the existing Rust/static orchestrators by manifest path.
+Tests still follow the same taxonomy: Type 2 unit tests live under `src/**`,
+Type 3 binary/integration tests live under `packages/<crate>/tests/*.rs`, and
+Type 6 static/supply-chain assertions live in existing
+`flake.checks.<system>.*` entries. Do not add a new top-level `tests/*.sh`;
+extend the existing Rust/static orchestrators by manifest path.

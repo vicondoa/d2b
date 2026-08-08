@@ -1,0 +1,513 @@
+diff --git a/src/main/tools/linux-sandbox-pid1.cc b/src/main/tools/linux-sandbox-pid1.cc
+index 1a4bc4d..d2b9a01 100644
+--- a/src/main/tools/linux-sandbox-pid1.cc
++++ b/src/main/tools/linux-sandbox-pid1.cc
+@@ -22,21 +22,30 @@
+ #include <errno.h>
++#include <dirent.h>
+ #include <fcntl.h>
+ #include <grp.h>
+ #include <libgen.h>
+ #include <math.h>
+ #include <mntent.h>
+ #include <net/if.h>
++#include <limits.h>
+ #include <pwd.h>
+ #include <signal.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <stddef.h>
++#include <linux/audit.h>
++#include <linux/filter.h>
++#include <linux/seccomp.h>
++#include <sys/ptrace.h>
+ #include <sys/ioctl.h>
+ #include <sys/mount.h>
+ #include <sys/prctl.h>
+ #include <sys/stat.h>
+ #include <sys/syscall.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <stdint.h>
++#include <time.h>
+ #include <unistd.h>
+@@ -68,8 +69,335 @@
+ #include "src/main/tools/logging.h"
+ #include "src/main/tools/process-tools.h"
+-
++
+-
++
++/*
++ * D2B action policy
++ *
++ * The policy is loaded by namespace PID 1 after mount, user, PID, and
++ * networking setup and before the action command is forked.  The installed
++ * JSON is an immutable identity input.  The filter below is deliberately
++ * closed: it retains the no-network denial set and admits only the four
++ * ptrace requests whose constant arguments classic seccomp can enforce.
++ * The future child pid is intentionally not compared here.  It is a dynamic
++ * identity owned by the supervisor's fork result, process-group check,
++ * direct-parent relation, initial trace stop, sole wait, and exec event.
++ * Every governed action receives a fresh CLONE_NEWPID namespace.
++ * Sandbox recovery ownership is closed to:
++ * D2B-BZLEXEC-SANDBOX-NAMESPACE,
++ * D2B-BZLEXEC-SANDBOX-PTRACE-POLICY,
++ * D2B-BZLEXEC-SANDBOX-MONITOR,
++ * D2B-BZLEXEC-SANDBOX-KILL,
++ * D2B-BZLEXEC-SANDBOX-REAP,
++ * D2B-BZLEXEC-SANDBOX-CEILING,
++ * D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP, and
++ * D2B-BZLEXEC-SANDBOX-CLEANUP.
++ */
++static const char kD2BPolicyAbi[] = "d2b-bazel-seccomp-abi-v1";
++static const char kD2BPolicyAbiSha256[] =
++    "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f";
++static const char kD2BPolicyFailure[] = "D2B-BZLNET-POLICY";
++static const char kD2BPreflightFailure[] = "D2B-BZLNET-PREFLIGHT";
++static const char kD2BFilterFailure[] = "D2B-BZLNET-FILTER-LOAD";
++static const char kD2BSandboxPolicyFailure[] =
++    "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY";
++static const char kD2BPendingCleanup[] =
++    "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP";
++static const char kD2BPendingRunbook[] =
++    "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine";
++static const char kD2BConsumingReapRelease[] =
++    "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
++static const int kD2BUserspaceCeilingMs = 10000;
++
++static void D2BFail(const char *code) {
++  fprintf(stderr, "%s\n", code);
++  _exit(EXIT_FAILURE);
++}
++
++static bool D2BHasSocketOrRing(int fd) {
++  struct stat statbuf;
++  if (fstat(fd, &statbuf) < 0) {
++    return true;
++  }
++  if (S_ISSOCK(statbuf.st_mode)) {
++    return true;
++  }
++  char link[128];
++  const ssize_t length =
++      readlink(("/proc/self/fd/" + std::to_string(fd)).c_str(), link,
++               sizeof(link) - 1);
++  if (length <= 0) {
++    return true;
++  }
++  link[length] = '\0';
++  return strstr(link, "anon_inode:[io_uring]") != nullptr;
++}
++
++static bool D2BInheritedDescriptorPreflight() {
++  DIR *fds = opendir("/proc/self/fd");
++  if (fds == nullptr) {
++    return false;
++  }
++  bool valid = true;
++  while (true) {
++    errno = 0;
++    struct dirent *entry = readdir(fds);
++    if (entry == nullptr) {
++      if (errno != 0) {
++        valid = false;
++      }
++      break;
++    }
++    char *end = nullptr;
++    const long fd = strtol(entry->d_name, &end, 10);
++    if (end == entry->d_name || *end != '\0' || fd < 0 ||
++        fd == dirfd(fds)) {
++      continue;
++    }
++    if (D2BHasSocketOrRing(static_cast<int>(fd))) {
++      valid = false;
++      break;
++    }
++  }
++  closedir(fds);
++  return valid;
++}
++
++static std::string D2BPolicyPath() {
++  /*
++   * The immutable Bazel wrapper sets this to the policy installed in the
++   * same output. Missing or empty input is a refusal; there is no
++   * executable-link, ambient path, or policy-open fallback.
++   */
++  const char *policy_path = getenv("D2B_BAZEL_SECCOMP_POLICY");
++  if (policy_path == nullptr || policy_path[0] == '\0') {
++    return std::string();
++  }
++  return std::string(policy_path);
++}
++
++static bool D2BPolicyIdentityMatches() {
++  const std::string path = D2BPolicyPath();
++  if (path.empty()) {
++    return false;
++  }
++  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
++  if (fd < 0) {
++    return false;
++  }
++  char contents[8192];
++  const ssize_t length = read(fd, contents, sizeof(contents) - 1);
++  close(fd);
++  if (length <= 0) {
++    return false;
++  }
++  contents[length] = '\0';
++  return strstr(contents, kD2BPolicyAbi) != nullptr &&
++         strstr(contents, kD2BPolicyAbiSha256) != nullptr &&
++         strstr(contents, "\"futureChildPidMatching\": false") != nullptr &&
++         strstr(contents, "\"noFallback\": true") != nullptr;
++}
++
++static void D2BAddLoad(std::vector<struct sock_filter> *filter,
++                       unsigned int offset) {
++  filter->push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offset));
++}
++
++static size_t D2BAddEqual(std::vector<struct sock_filter> *filter,
++                          unsigned int value,
++                          std::vector<size_t> *failure_jumps) {
++  const size_t position = filter->size();
++  filter->push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, value, 0, 0));
++  failure_jumps->push_back(position);
++  return position;
++}
++
++static void D2BAddPointerEqual(
++    std::vector<struct sock_filter> *filter, unsigned int offset,
++    unsigned int value, std::vector<size_t> *failure_jumps) {
++  D2BAddLoad(filter, offset + sizeof(uint32_t));
++  D2BAddEqual(filter, 0, failure_jumps);
++  D2BAddLoad(filter, offset);
++  D2BAddEqual(filter, value, failure_jumps);
++}
++
++static void D2BAddPidEqual(std::vector<struct sock_filter> *filter,
++                           unsigned int value,
++                           std::vector<size_t> *failure_jumps) {
++  D2BAddLoad(filter, offsetof(struct seccomp_data, args[1]) + sizeof(uint32_t));
++  D2BAddEqual(filter, 0, failure_jumps);
++  D2BAddLoad(filter, offsetof(struct seccomp_data, args[1]));
++  D2BAddEqual(filter, value, failure_jumps);
++}
++
++static bool D2BInstallFilter() {
++  std::vector<struct sock_filter> filter;
++  filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
++                            offsetof(struct seccomp_data, arch)));
++#if defined(__x86_64__)
++  const unsigned int expected_arch = AUDIT_ARCH_X86_64;
++#elif defined(__aarch64__)
++  const unsigned int expected_arch = AUDIT_ARCH_AARCH64;
++#else
++  return false;
++#endif
++  filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, expected_arch, 1, 0));
++  filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
++
++  std::vector<struct sock_filter> ptrace_rules;
++  ptrace_rules.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
++                                  offsetof(struct seccomp_data, nr)));
++  const size_t ptrace_jump = ptrace_rules.size();
++  ptrace_rules.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_ptrace, 0,
++                                   0));
++
++  std::vector<size_t> request_jumps;
++  std::vector<size_t> argument_failures;
++  struct PtraceRule {
++    unsigned int request;
++    bool pid_is_zero;
++    unsigned int data;
++  };
++  const PtraceRule rules[] = {
++      {PTRACE_TRACEME, true, 0},
++      {PTRACE_SETOPTIONS, false, PTRACE_O_TRACEEXEC},
++      {PTRACE_CONT, false, 0},
++      {PTRACE_DETACH, false, 0},
++  };
++  for (const PtraceRule &rule : rules) {
++    D2BAddLoad(&ptrace_rules, offsetof(struct seccomp_data, args[0]));
++    const size_t request_position = ptrace_rules.size();
++    ptrace_rules.push_back(
++        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, rule.request, 0, 0));
++    request_jumps.push_back(request_position);
++    if (rule.pid_is_zero) {
++      D2BAddPidEqual(&ptrace_rules, 0, &argument_failures);
++    }
++    D2BAddPointerEqual(&ptrace_rules, offsetof(struct seccomp_data, args[2]), 0,
++                       &argument_failures);
++    D2BAddPointerEqual(&ptrace_rules, offsetof(struct seccomp_data, args[3]),
++                       rule.data, &argument_failures);
++    ptrace_rules.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
++  }
++  const size_t ptrace_deny = ptrace_rules.size();
++  ptrace_rules.push_back(
++      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EACCES));
++  for (size_t i = 0; i < request_jumps.size(); ++i) {
++    const size_t target =
++        i + 1 < request_jumps.size() ? request_jumps[i + 1] : ptrace_deny;
++    ptrace_rules[request_jumps[i]].jf =
++        static_cast<unsigned char>(target - request_jumps[i] - 1);
++  }
++  for (size_t position : argument_failures) {
++    ptrace_rules[position].jf =
++        static_cast<unsigned char>(ptrace_deny - position - 1);
++  }
++  ptrace_rules[ptrace_jump].jt = 0;
++  ptrace_rules[ptrace_jump].jf = static_cast<unsigned char>(
++      ptrace_rules.size() - ptrace_jump - 1);
++  filter.insert(filter.end(), ptrace_rules.begin(), ptrace_rules.end());
++
++  const int denied_syscalls[] = {
++#ifdef __NR_socket
++      __NR_socket,
++#endif
++#ifdef __NR_socketpair
++      __NR_socketpair,
++#endif
++#ifdef __NR_connect
++      __NR_connect,
++#endif
++#ifdef __NR_bind
++      __NR_bind,
++#endif
++#ifdef __NR_listen
++      __NR_listen,
++#endif
++#ifdef __NR_accept
++      __NR_accept,
++#endif
++#ifdef __NR_accept4
++      __NR_accept4,
++#endif
++#ifdef __NR_sendto
++      __NR_sendto,
++#endif
++#ifdef __NR_sendmsg
++      __NR_sendmsg,
++#endif
++#ifdef __NR_sendmmsg
++      __NR_sendmmsg,
++#endif
++#ifdef __NR_recvfrom
++      __NR_recvfrom,
++#endif
++#ifdef __NR_recvmsg
++      __NR_recvmsg,
++#endif
++#ifdef __NR_recvmmsg
++      __NR_recvmmsg,
++#endif
++#ifdef __NR_shutdown
++      __NR_shutdown,
++#endif
++#ifdef __NR_getsockname
++      __NR_getsockname,
++#endif
++#ifdef __NR_getpeername
++      __NR_getpeername,
++#endif
++#ifdef __NR_setsockopt
++      __NR_setsockopt,
++#endif
++#ifdef __NR_getsockopt
++      __NR_getsockopt,
++#endif
++#ifdef __NR_pidfd_getfd
++      __NR_pidfd_getfd,
++#endif
++#ifdef __NR_io_uring_setup
++      __NR_io_uring_setup,
++#endif
++#ifdef __NR_io_uring_enter
++      __NR_io_uring_enter,
++#endif
++#ifdef __NR_io_uring_register
++      __NR_io_uring_register,
++#endif
++#ifdef __NR_socketcall
++      __NR_socketcall,
++#endif
++  };
++  for (const int syscall_number : denied_syscalls) {
++    filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
++                               offsetof(struct seccomp_data, nr)));
++    filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
++                              static_cast<unsigned int>(syscall_number), 0, 1));
++    filter.push_back(
++        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EACCES));
++  }
++  filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
++
++  if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
++    return false;
++  }
++  struct sock_fprog program = {
++      static_cast<unsigned short>(filter.size()), filter.data()};
++  return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program, 0, 0) == 0;
++}
++
++static void D2BPrepareActionPolicy() {
++  if (!D2BInheritedDescriptorPreflight()) {
++    D2BFail(kD2BPreflightFailure);
++  }
++  if (!D2BPolicyIdentityMatches()) {
++    D2BFail(kD2BPolicyFailure);
++  }
++  if (!D2BInstallFilter()) {
++    D2BFail(kD2BFilterFailure);
++  }
++}
++
+ static int global_child_pid;
+-
++
+ // Helper methods
+ static void CreateFile(const char *path) {
+@@ -549,1 +882,41 @@ static int WaitForChild() {
++static int64_t D2BNowMilliseconds() {
++  struct timespec now;
++  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
++    return -1;
++  }
++  return static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_nsec / 1000000;
++}
++
++static void D2BKillAndReapRemaining() {
++  if (kill(-1, SIGKILL) != 0 && errno != ESRCH) {
++    fprintf(stderr, "D2B-BZLEXEC-SANDBOX-KILL\n");
++    return;
++  }
++  const int64_t deadline =
++      D2BNowMilliseconds() + kD2BUserspaceCeilingMs;
++  while (true) {
++    int status;
++    const pid_t pid = waitpid(-1, &status, WNOHANG);
++    if (pid > 0) {
++      continue;
++    }
++    if (pid < 0 && errno == ECHILD) {
++      return;
++    }
++    if (pid < 0 && errno != EINTR) {
++      fprintf(stderr, "D2B-BZLEXEC-SANDBOX-REAP\n");
++      return;
++    }
++    if (D2BNowMilliseconds() >= deadline) {
++      fprintf(stderr, "%s\n", kD2BPendingCleanup);
++      fprintf(stderr, "state=pending-kernel-cleanup\n");
++      fprintf(stderr, "quarantine=entered-and-held\n");
++      fprintf(stderr, "wait-owner=original-live-monitor\n");
++      fprintf(stderr, "runbook=%s\n", kD2BPendingRunbook);
++      return;
++    }
++    usleep(1000);
++  }
++}
++
+ static int WaitForChild() {
+@@ -575,1 +948,2 @@
++      D2BKillAndReapRemaining();
+       return 128 + signal;
+@@ -581,1 +954,2 @@
++    D2BKillAndReapRemaining();
+     return exit_code;
+@@ -742,0 +1117,3 @@
++  // The fixed policy is loaded after namespace construction and before the
++  // action command. There is no policy-open, digest, load, or exec fallback.
++  D2BPrepareActionPolicy();
+@@ -755,3 +1133,2 @@
+-  // Note that there's no need to kill any remaining descendant processes; they
+-  // are in our PID namespace and the kernel will send them SIGKILL
+-  // automatically once we exit.
++  // PID 1 kills every remaining namespace member and makes nonblocking reap
++  // progress before returning the action status to outer linux-sandbox.
+diff --git a/src/main/tools/linux-sandbox.cc b/src/main/tools/linux-sandbox.cc
+index 2c92d4e..b8f1b73 100644
+--- a/src/main/tools/linux-sandbox.cc
++++ b/src/main/tools/linux-sandbox.cc
+@@ -58,2 +58,4 @@
+ #include <sys/wait.h>
++#include <stdint.h>
++#include <time.h>
+ #include <unistd.h>
+@@ -214,13 +215,38 @@ static pid_t SpawnPid1() {
+   return child_pid;
+ }
+-
++
++/*
++ * The userspace escalation ceiling is intentionally separate from kernel
++ * cleanup.  A consuming wait is the only release authority.  If PID 1 has
++ * not been proved reaped at the ceiling, the original outer monitor remains
++ * live and owns pending-kernel-cleanup until complete-after-quarantine.
++ */
++static const int kD2BUserspaceCeilingMs = 10000;
++static const char kD2BPendingCleanup[] =
++    "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP";
++static const char kD2BPendingRunbook[] =
++    "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine";
++static const char kD2BConsumingReapRelease[] =
++    "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
++
++static int64_t D2BMonotonicMilliseconds() {
++  struct timespec now;
++  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
++    return -1;
++  }
++  return static_cast<int64_t>(now.tv_sec) * 1000 + now.tv_nsec / 1000000;
++}
++
+ static int WaitForPid1(const pid_t child_pid) {
+   // Wait for the child to exit, obtaining usage information. Restart in the
+   // case of a signal interrupting us.
+   int child_status;
+   struct rusage child_rusage;
++  bool quarantined = false;
++  const int64_t ceiling =
++      D2BMonotonicMilliseconds() + kD2BUserspaceCeilingMs;
+   while (true) {
+-    const int ret = wait4(child_pid, &child_status, 0, &child_rusage);
++    const int ret = wait4(child_pid, &child_status, WNOHANG, &child_rusage);
+     if (ret > 0) {
+       break;
+     }
+@@ -236,0 +262,21 @@
++    if (ret == 0) {
++      if (!quarantined && D2BMonotonicMilliseconds() >= ceiling) {
++        quarantined = true;
++        fprintf(stderr, "%s\n", kD2BPendingCleanup);
++        fprintf(stderr, "state=pending-kernel-cleanup\n");
++        fprintf(stderr, "quarantine=entered-and-held\n");
++        fprintf(stderr, "wait-owner=original-live-monitor\n");
++        fprintf(stderr, "runbook=%s\n", kD2BPendingRunbook);
++        fprintf(stderr, "action=failed-no-success-no-reuse\n");
++        fprintf(stderr, "prohibited=reboot,retry-before-release,"
++                        "replacement-waiter,manual-release\n");
++      }
++      /*
++       * WNOHANG is non-consuming observation only.  The original live
++       * monitor remains the sole wait owner until a consuming wait proves
++       * PID 1 reaped.  No replacement wait, PID file, host PID, or manual
++       * release path exists.
++       */
++      usleep(1000);
++      continue;
++    }
+@@ -240,0 +287,8 @@
++  if (quarantined) {
++    fprintf(stderr, "%s\n", kD2BConsumingReapRelease);
++    fprintf(stderr, "cleanup=complete-after-quarantine\n");
++    fprintf(stderr, "quarantine=entered-and-released-after-consuming-reap\n");
++    fprintf(stderr, "wait-owner=original-live-monitor\n");
++    fprintf(stderr, "action=failed\n");
++    return EXIT_FAILURE;
++  }

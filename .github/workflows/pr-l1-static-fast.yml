@@ -164,11 +164,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -268,11 +268,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -375,11 +375,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -479,11 +479,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -583,11 +583,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -687,11 +687,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -791,11 +791,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -895,11 +895,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -1059,11 +1059,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -1330,22 +1330,49 @@ jobs:
 
   test-flake-aarch64:
     needs: [tier0]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: aarch64 smoke eval
+      - name: Verify stable PR head
+        id: stable-head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          nix-instantiate --eval --strict \
-            -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath' \
-            >/dev/null
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+      - name: Realize native aarch64 flake checks
+        env:
+          D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          nix build --no-link \
+            .#checks.aarch64-linux.broker-production-dependency-policy \
+            .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy \
+            .#checks.aarch64-linux.broker-production-package-policy \
+            .#checks.aarch64-linux.guest-real-libshpool-package-policy \
+            .#checks.aarch64-linux.broker-host-artifact-contract \
+            .#checks.aarch64-linux.guest-static-elf
+      - name: Run native aarch64 supply-chain gate
+        env:
+          D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          make test-rust-supply-chain
 
   test-drift:
     needs: [tier0]
@@ -1442,11 +1469,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -1546,11 +1573,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"

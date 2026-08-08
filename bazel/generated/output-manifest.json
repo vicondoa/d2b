@@ -1,0 +1,56 @@
+{
+  "manifestPath": "bazel/generated/output-manifest.json",
+  "outputCount": 10,
+  "outputPaths": [
+    ".bazelignore",
+    "bazel/generated/BUILD.bazel",
+    "bazel/generated/action-network-policy.json",
+    "bazel/generated/configured-targets.json",
+    "bazel/generated/evidence-sink-policy.json",
+    "bazel/generated/no-shell-inventory.json",
+    "bazel/generated/output-manifest.json",
+    "bazel/generated/package-policy-targets.bzl",
+    "bazel/generated/product-targets.bzl",
+    "bazel/generated/source-census.json"
+  ],
+  "outputs": [
+    {
+      "path": ".bazelignore",
+      "sha256": "f993431fffc12bedd16cae4dc13aabe42c1d280d654560edb90aac016fd8f99a"
+    },
+    {
+      "path": "bazel/generated/BUILD.bazel",
+      "sha256": "cbc251220af3e42888c45fa1c0e21f1e421a12402f2c7770c4755fa02298c441"
+    },
+    {
+      "path": "bazel/generated/action-network-policy.json",
+      "sha256": "8b09b9929a754ec93baee78afbabeeb8d4da08c8c7694cf256160cde42d6e0b3"
+    },
+    {
+      "path": "bazel/generated/configured-targets.json",
+      "sha256": "8c086489a3b02dab2c9a0dfcdecb66c601ab02f871b3470ecdbdc678e555e350"
+    },
+    {
+      "path": "bazel/generated/evidence-sink-policy.json",
+      "sha256": "c715a80318f93161b0c7733992484156dd5854b5121c2f94e1d22ae5962af907"
+    },
+    {
+      "path": "bazel/generated/no-shell-inventory.json",
+      "sha256": "012062d8fe191ab3af9ba41acd8c0ddd9f7136d35a12a6070ddf6c175dc7b7fa"
+    },
+    {
+      "path": "bazel/generated/package-policy-targets.bzl",
+      "sha256": "248297e2dda201e7eb235812d083e9defa71653ff2a55d14909e74525c551e50"
+    },
+    {
+      "path": "bazel/generated/product-targets.bzl",
+      "sha256": "91c323efe43ab37f740af986dda825abf76f9da7d031e6d4a8f663b26da73dd5"
+    },
+    {
+      "path": "bazel/generated/source-census.json",
+      "sha256": "272e376838b3eeb228abbb458f9738d2ab1ec710d545701387035acd489138e7"
+    }
+  ],
+  "schemaVersion": 1,
+  "selfDigest": null
+}

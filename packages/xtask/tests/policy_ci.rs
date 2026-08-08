@@ -15,6 +15,18 @@ const V3_PR_GATE_WORKFLOWS: &[&str] = &[
     ".github/workflows/pr-l1-static-fast.yml",
 ];
 
+const REPIN_CONTROLS: &[&str] = &["CARGO_BAZEL_REPIN", "REPIN", "CARGO_BAZEL_REPIN_ONLY"];
+
+const CONTRIBUTOR_ONLY_COMMANDS: &[&str] = &[
+    "bazel-repin",
+    "bazel-module-refresh",
+    "bazel-yanked-refresh",
+    "bazel-yanked-check",
+    "bazel-evidence",
+    "gen-package-policy-inputs",
+    "generate-lockfile",
+];
+
 const APPROVED_MAKE_TARGETS: &[&str] = &[
     "check",
     "check-ci",
@@ -79,6 +91,34 @@ fn read_repo_file(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).expect("read repo file")
 }
 
+fn gate_inputs() -> Vec<(String, String)> {
+    let root = repo_root();
+    let mut inputs = vec![(
+        "Makefile".to_owned(),
+        std::fs::read_to_string(root.join("Makefile")).expect("read Makefile"),
+    )];
+    inputs.extend(
+        workflow_files()
+            .into_iter()
+            .map(|rel| (rel.clone(), read_repo_file(&rel))),
+    );
+    inputs
+}
+
+fn contains_repin_control(content: &str) -> bool {
+    REPIN_CONTROLS.iter().any(|control| {
+        content
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+            .any(|word| word == *control)
+    })
+}
+
+fn contains_contributor_only_command(content: &str, command: &str) -> bool {
+    content
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
+        .any(|word| word == command)
+}
+
 fn calls_approved_make_target(content: &str) -> bool {
     let approved = APPROVED_MAKE_TARGETS
         .iter()
@@ -134,6 +174,40 @@ fn ci_uses_make_allowlist_is_intentional_and_bounded() {
         ],
         "workflow make-target exceptions must stay reviewed and bounded"
     );
+}
+
+#[test]
+fn contributor_mutation_reachability_helpers_are_not_blind_to_fixtures() {
+    assert!(contains_contributor_only_command(
+        "run cargo xtask bazel-repin --hub product",
+        "bazel-repin"
+    ));
+    assert!(contains_contributor_only_command(
+        "cargo generate-lockfile --offline",
+        "generate-lockfile"
+    ));
+    assert!(!contains_contributor_only_command(
+        "cargo xtask bazel-repin-helper",
+        "bazel-repin"
+    ));
+    assert!(contains_repin_control("CARGO_BAZEL_REPIN=1"));
+    assert!(!contains_repin_control("CARGO_BAZEL_REPINNED=1"));
+}
+
+#[test]
+fn contributor_only_commands_and_repin_controls_are_unreachable_from_gates() {
+    for (path, content) in gate_inputs() {
+        assert!(
+            !contains_repin_control(&content),
+            "{path} contains a forbidden repin control by variable name"
+        );
+        for command in CONTRIBUTOR_ONLY_COMMANDS {
+            assert!(
+                !contains_contributor_only_command(&content, command),
+                "{path} reaches contributor-only command {command}"
+            );
+        }
+    }
 }
 
 #[test]

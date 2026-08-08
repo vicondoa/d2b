@@ -12,46 +12,32 @@
   happens to find, and records the measured `crate_universe` repin controls
   that make a scoped, reviewed lock regeneration possible without a gate-path
   escape hatch. No decision here is reversed and nothing here is superseded.
-- Proposed amendment (2026-08-05):
-  [ADR 0054](0054-single-product-cargo-workspace.md) replaces this record's
-  three-workspace and four-hub lock inventory with one product Cargo workspace
-  and hub plus one separate walker workspace and hub. It leaves distinct
-  broker, guest, and test-context execution surfaces unchanged, accepts the
-  repository-owner-approved shared product external repository's feature and
-  package union without requiring per-context third-party feature parity, and
-  makes selected Cargo closure policy the security authority while exact native
-  first-party context censuses still refuse unrelated sibling leakage. It
-  preserves the baseline contract-crate clippy, policy, test, and fixture
-  compilation surfaces. Broker and guest production inventories and
-  root-dev-inclusive deny and audit inputs are generated separately for the
-  root flake's x86_64-linux and aarch64-linux systems. Broker artifacts use
-  matching GNU targets; static guest artifacts use matching musl targets.
+- Accepted amendment (2026-08-05):
+  [ADR 0054](0054-single-product-cargo-workspace.md) governs the newer
+  workspace shape and replaces this record's retired three-workspace and
+  four-hub lock model with one product Cargo workspace and root lock plus one
+  separate walker workspace and lock. It leaves distinct broker, guest, and
+  test-context execution surfaces unchanged, accepts the repository-owner-
+  approved shared product external repository's feature and package union
+  without requiring per-context third-party feature parity, and makes selected
+  Cargo closure policy the security authority while exact native first-party
+  context censuses still refuse unrelated sibling leakage. It preserves the
+  baseline contract-crate clippy, policy, test, and fixture compilation
+  surfaces. Broker and guest production inventories and root-dev-inclusive
+  deny and audit inputs are generated separately for the root flake's
+  x86_64-linux and aarch64-linux systems, using matching GNU and musl targets.
   Every Nix dependency and package check binds one exact system-and-target
   artifact and has early wrong-system, wrong-target, and wrong-edge-kind
   refusals. Contributor-only repin and policy mutations follow existing
   repository practice: from the repository root the trusted operator enters
   `nix develop`, then runs `cd packages` and the named `cargo xtask` command.
   They are unreachable from workflows and Make targets and are not a
-  credential or sandbox boundary; local `HOME`, startup configuration, and
-  shell functions are outside the security model. Gates call approved Make
-  targets in controlled environments, while package policy remains hermetic
-  through vendored sources and the pinned advisory database. `main`, `broker`,
-  and `guest` hub inputs are retired with fixed diagnostics that, after the
-  operator has entered `nix develop`, say to run
-  `cargo xtask bazel-repin --hub product` from `packages/`. They never say
-  `cd packages`. Tests pass that exact argv and cwd through an injected
-  non-mutating executor, never the genuine repin, and reject a duplicated
-  `packages/packages` path. The implementation adds all eight per-system
-  dependency/package installables. Existing Layer-1
-  supply-chain, drift, and flake targets execute their shared checker logic,
-  enforce generated inventory and target mapping with wrong-runner and
-  wrong-system refusals plus independent x86_64 and aarch64 foreign-system and
-  remote-builder seeds, each expecting its own diagnostic. Each system's four
-  wrappers plus `guest-static-elf` realize on its native runner. Neither native
-  block uses a foreign system or remote builder; common cross-system
-  configuration pins and drift remain one step. The Layer-1, realized-class,
-  and dual-system matrix pins are regenerated. If accepted, Spec 003 must be
-  amended and re-panelled before implementation resumes.
+  credential or sandbox boundary. The only accepted Bazel hubs are `product`
+  and `walker`; `main`, `broker`, and `guest` hub identifiers are retired.
+  Existing Layer-1 supply-chain, drift, and native realization targets use
+  exact selected contexts. Spec 003 is amended to this accepted shape; this
+  ADR now governs the Bazel scheduler over that newer workspace. ADR 0038
+  remains unchanged.
 - Related: [ADR 0009](0009-rust-toolchain-msrv-and-supply-chain.md) (Rust
   toolchain, MSRV, and supply-chain policy), which keeps its authority
   unchanged and is not superseded;
@@ -171,8 +157,10 @@ contradict the guidance that would otherwise have been followed.
    continuous-integration job unless it is set to zero.
 7. **The workspace is pure first-party Rust with heavy repository coupling.**
    56 workspace members, 205 integration test files, 912 tracked `.rs` files
-   under `packages/`, and locks resolving 544, 117 and 161 packages for the
-   main, broker and guest-shell-runner workspaces. There are no first-party
+   under `packages/`. Before the accepted ADR 0054 shape, separate locks
+   resolved 544, 117 and 161 packages for the main, broker and
+   guest-shell-runner workspaces; those measurements are historical and no
+   longer define workspace authority. There are no first-party
    build scripts, no first-party proc-macro crates, and no `links =`
    declarations; there is exactly one git dependency (`wl-proxy`, pinned by
    rev) and six `harness = false` targets across two crates. But 20 test files
@@ -293,9 +281,11 @@ Explicitly not decided here, and not to be inferred from this ADR:
   `test-flake-aarch64`, or any Nix evaluation into Bazel.
 - VM images, `runNixOSTest`, fixture materialization, or the
   `test-fixture-contracts` lane.
-- The release workflow, `release-host-binaries.yml`, or prebuilt artifacts.
+- The release workflow's implementation details, except for the root-manifest,
+  locked selector, root release output, and cache shape required by the
+  accepted ADR 0054 workspace.
 - Static guest binaries, musl or `pkgsStatic` sysroots, and cross-compilation
-  for `aarch64-linux`.
+  for `aarch64-linux` beyond the selected native policy and ELF checks.
 - Remote execution and any remote cache. See section 10.
 - `test-proofs`, `test-policy`, `test-runtime-ledger`, `test-drift`,
   `test-lint`, and every other Layer-1 job outside the `test-rust` rollup.
@@ -306,19 +296,24 @@ settled them.
 
 ### 2. Cargo stays the authoritative dependency and toolchain input
 
-`packages/Cargo.toml`, the three `Cargo.lock` files, `packages/deny.toml` and
-the two `rust-toolchain.toml` files remain the single source of truth for
-dependency resolution, feature selection and compiler version. Bazel consumes
-them; it never becomes the place a dependency is declared.
+`packages/Cargo.toml` and its `packages/Cargo.lock` remain the authoritative
+product source for dependency resolution and feature selection. The
+no-bash AST walker has its separate
+`tests/tools/no-bash-ast-walker/{Cargo.toml,Cargo.lock}` authority.
+`packages/Cargo.guest.lock` is a generated static-guest closure input only.
+The two `rust-toolchain.toml` files remain authoritative compiler inputs. Bazel
+consumes these authorities; it never becomes the place a dependency is
+declared.
 
 Concretely:
 
-- Third-party crates enter the graph through `crate_universe`
-  (`crates_repository`) reading the committed `Cargo.lock` files, in
-  non-vendored mode with a committed Bazel-side lock per Cargo workspace. A
-  repin drift check (section 5) fails closed when the Bazel-side lock does not
-  match what the Cargo lock resolves to, which is the Bazel equivalent of the
-  `--locked` flag the gate passes today.
+- Third-party product crates enter the graph through `crate_universe`
+  (`crates_repository`) reading the committed root `Cargo.lock`, while the
+  walker uses its separate Cargo lock. The two committed Bazel-side locks are
+  `bazel/cargo/product.lock` and `bazel/cargo/walker.lock`. A repin drift check
+  (section 5) fails closed when either Bazel-side lock does not match its Cargo
+  authority, which is the Bazel equivalent of the `--locked` flag the gate
+  passes today.
 - The Rust toolchains registered in Bazel are exactly the channels named in
   `packages/rust-toolchain.toml` (1.97.0) and
   `packages/d2b-api-surface/rust-toolchain.toml` (nightly-2026-02-16). A guard
@@ -329,6 +324,17 @@ Concretely:
 
 Moving dependency or toolchain authority into Bazel would require a follow-up
 ADR justified by measured prototypes, and this ADR authorizes no such move.
+
+The accepted ADR 0054 workspace also fixes the surrounding Cargo and Nix gate
+shape. `release-host-binaries.yml` builds from `packages/Cargo.toml` with
+`--locked` and explicit package, binary, and default-feature selectors, copies
+all product binaries from `packages/target/release`, and declares one
+`packages -> target` workspace cache mapping plus explicit broker and guest
+gate target directories. The native `test-flake-aarch64` job realizes exactly
+the four package policy checks, `broker-host-artifact-contract`, and
+`guest-static-elf`, then runs `make test-rust-supply-chain` on the same stable
+head. It is an enforcing native arm job, not an advisory or cross-system
+evaluation.
 
 ### 3. Pinned tools, and no unpinned resolution
 
@@ -360,7 +366,8 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
   repository-owned command, `cargo xtask bazel-repin --hub <name>`, and it is
   the only place in the repository those three names may appear as a
   process-environment assignment. It requires an explicit hub from the closed
-  four-hub set, sets `CARGO_BAZEL_REPIN` and `CARGO_BAZEL_REPIN_ONLY=<hub>`
+  `product` or `walker` set, sets `CARGO_BAZEL_REPIN` and
+  `CARGO_BAZEL_REPIN_ONLY=<hub>`
   only in the environment of the single Bazel child process it spawns, never
   process-globally, uses the same absolute output user root, output base and
   symlink prefix the wrapper derives, so it cannot start a second server, and
@@ -385,8 +392,9 @@ ADR justified by measured prototypes, and this ADR authorizes no such move.
 
 ### 4. First-party BUILD files are generated by a repository-owned generator
 
-`cargo xtask gen-bazel` reads `cargo metadata` for the three Cargo workspaces
-and emits the first-party `BUILD.bazel` files, plus the tracked
+`cargo xtask gen-bazel` reads `cargo metadata` for the product workspace and
+the separate walker workspace and emits the first-party `BUILD.bazel` files,
+plus the tracked
 governed-source manifest that section 6's no-bash scan consumes.
 `cargo xtask gen-bazel --check` regenerates into a scratch tree and fails on
 any difference; it is wired into `test-drift`, which already exists to catch
@@ -395,7 +403,7 @@ exactly this class of staleness for the other `xtask gen-*` outputs.
 `gazelle_rust` is rejected. It would add a Go toolchain and a third-party
 generator to the trusted build path for a workspace whose interesting cases are
 precisely the ones a generic generator handles worst: three feature variants of
-one privileged workspace, two standalone workspaces with their own locks, six
+one privileged product package, one separate walker workspace, six
 `harness = false` targets, `compile_fail` doctests that are capability seals
 and carry their own rustc flags, and a nightly-rendered API census. The
 repository already has a codegen-plus-drift-gate idiom and a place to put it.
@@ -426,22 +434,22 @@ in the map. The map is the normative statement of coverage:
 | --- | --- | --- | --- |
 | `rust-api-surface` | `tests/tools/api-surface-json.sh`, nightly rustdoc JSON plus snapshot compare | `//ci/rust:api_census` | `api` |
 | `rust-main-format` | `cargo fmt --all --check` | `//ci/rust:fmt` | `main` |
-| `rust-main-clippy` | `cargo clippy --locked --workspace --all-targets -- -D warnings` | `//ci/rust:clippy` | `main` |
-| `rust-main-workspace-tests` | `cargo nextest run --workspace --exclude d2b-contract-tests`, plus `cargo test --doc`, plus one `cargo test --test` per `harness = false` target | `//ci/rust:main_tests`, `//ci/rust:main_doctests`, `//ci/rust:main_harness_free` | `main` |
+| `rust-main-clippy` | `cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings` | `//ci/rust:clippy` | `main` |
+| `rust-main-workspace-tests` | `cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner`, plus `cargo test --doc`, plus one `cargo test --test` per `harness = false` target | `//ci/rust:main_tests`, `//ci/rust:main_doctests`, `//ci/rust:main_harness_free` | `main` |
 | `rust-no-bash-ast` | `no-bash-ast-walker` over `packages/` | `//ci/rust:no_bash_ast` | `main` |
 | `rust-schema-reproducibility` | `cargo xtask gen-schemas` twice, digests compared | `//ci/rust:schema_reproducibility` | `main` |
 | `rust-stub-no-socket` | `tests/tools/stub-no-socket.sh` | `//ci/rust:stub_no_socket` | `main` |
 | `rust-assert-pinned` | `tests/tools/assert-pinned-tests.sh` | `//ci/rust:pinned_test_inventory` | `main` |
-| `rust-broker-default` | broker workspace, default features | `//ci/rust:broker_default` | `broker` |
-| `rust-broker-layer1` | broker workspace, `layer1-bootstrap` | `//ci/rust:broker_layer1` | `broker` |
-| `rust-broker-fakebackends` | broker workspace, `fake-backends` | `//ci/rust:broker_fakebackends` | `broker` |
-| `rust-guest-shell-runner` | standalone workspace, `real-libshpool`, fmt plus clippy plus tests plus companions | `//ci/rust:guest_shell_runner` | `aux` |
-| `rust-deny-main` | `cargo deny check` (main) | `//ci/rust:deny_main` | `aux` |
-| `rust-deny-broker` | `cargo deny check` (broker) | `//ci/rust:deny_broker` | `aux` |
-| `rust-deny-guest` | `cargo deny check` (guest shell runner) | `//ci/rust:deny_guest` | `aux` |
-| `rust-audit-main` | `cargo audit` (main lock, two ignores) | `//ci/rust:audit_main` | `aux` |
-| `rust-audit-broker` | `cargo audit` (broker lock) | `//ci/rust:audit_broker` | `aux` |
-| `rust-audit-guest` | `cargo audit` (guest lock, one ignore) | `//ci/rust:audit_guest` | `aux` |
+| `rust-broker-default` | root workspace package `d2b-priv-broker`, default features | `//ci/rust:broker_default` | `broker` |
+| `rust-broker-layer1` | root workspace package `d2b-priv-broker`, `layer1-bootstrap` | `//ci/rust:broker_layer1` | `broker` |
+| `rust-broker-fakebackends` | root workspace package `d2b-priv-broker`, `fake-backends` | `//ci/rust:broker_fakebackends` | `broker` |
+| `rust-guest-shell-runner` | root workspace package `d2b-guest-shell-runner`, `real-libshpool`, fmt plus clippy plus tests plus companions | `//ci/rust:guest_shell_runner` | `aux` |
+| `rust-deny-main` | `cargo deny check` (root product lock) | `//ci/rust:deny_main` | `aux` |
+| `rust-deny-broker` | `cargo deny check` (selected broker policy contexts) | `//ci/rust:deny_broker` | `aux` |
+| `rust-deny-guest` | `cargo deny check` (selected guest policy contexts) | `//ci/rust:deny_guest` | `aux` |
+| `rust-audit-main` | `cargo audit` (root product lock, two ignores) | `//ci/rust:audit_main` | `aux` |
+| `rust-audit-broker` | `cargo audit` (selected broker policy contexts) | `//ci/rust:audit_broker` | `aux` |
+| `rust-audit-guest` | `cargo audit` (selected guest policy contexts, one ignore) | `//ci/rust:audit_guest` | `aux` |
 
 `rust-contract-tests` and `rust-cli-contract-tests` are the two conditional
 surfaces the aggregate publishes only when the fixture build is enabled. They
@@ -498,9 +506,11 @@ Nine of the eighteen surfaces are not `rules_rust` tests in any natural sense.
 Pretending otherwise is how coverage disappears during a migration, so each one
 gets a named representation and a named hazard.
 
-**cargo-deny (three surfaces).** A Bazel test per workspace that runs the
-nixpkgs-pinned `cargo-deny` against declared inputs: that workspace's
-`Cargo.toml` set, its `Cargo.lock`, its `deny.toml`, and a materialized
+**cargo-deny (three surfaces).** A Bazel test for the generic product
+workspace and the selected broker and guest policy contexts runs the
+nixpkgs-pinned `cargo-deny` against declared inputs: the root manifest and
+lock for the product surface, the exact selected policy metadata and filtered
+lock for broker and guest, the applicable `deny.toml`, and a materialized
 vendored Cargo source tree.
 
 Two measured facts rule out the obvious construction. First, `crate_universe`
@@ -532,8 +542,9 @@ internal content-addressed store with no label and no enumeration interface,
 and `crate_universe`'s spoke repositories expose per-crate rules rather than
 `.crate` archives or a whole-tree filegroup.
 
-The rule re-declares the downloads instead. For each of the three locks it
-reads every package with a registry source and calls `ctx.download` with the
+The rule re-declares the downloads instead. For the root product lock and
+each selected policy projection it reads every package with a registry source
+and calls `ctx.download` with the
 crate's registry URL and the `checksum` the lock already records; a download
 declared with a `sha256` is served from `--repository_cache` when the content
 is already present, so the re-declaration reuses the bytes the pinned
@@ -599,20 +610,24 @@ check produces that `cargo-audit` does not, yanked-crate detection being the
 obvious candidate, because it needs a registry index that neither the vendored
 tree nor the pinned advisory snapshot provides. Guard: before promotion the
 implementer records in the wave notes the exit status and the finding set of
-today's `cargo deny check` and of the decomposed pair, over all three locks.
+today's `cargo deny check` and of the decomposed pair over the root product
+lock and selected policy projections.
 Today's leaf invokes `cargo deny --manifest-path ... check --config ...` with
 no subcommand list, so `advisories` runs there in addition to `cargo audit`,
-which is what makes that comparison meaningful rather than tautological.
-Promotion is blocked when any enforcing outcome differs. If one does differ,
+which is what makes that comparison meaningful rather than tautological. The
+comparison covers the root product lock and the selected broker and guest
+policy projections, while `Cargo.guest.lock` remains an independent aggregate
+check. Promotion is blocked when any enforcing outcome differs. If one does differ,
 the remedy is the carrier described below, which has already landed by then,
 not dropping the outcome.
 
 **The carrier is unconditional, so the capability does not depend on what the
 comparison happens to find.** An earlier form of this section built the carrier
 only when the recorded comparison showed a yanked-state difference. That is
-wrong in the direction that matters. The comparison is one observation of one
-lock set at one moment; "no crate in these three locks is yanked today" is not
-"this repository can detect a yanked crate". A capability gated on a finding is
+wrong in the direction that matters. The comparison is one observation of the
+root product lock and selected policy projections at one moment; "no crate in
+these selected contexts is yanked today" is not "this repository can detect a
+yanked crate". A capability gated on a finding is
 absent exactly when the finding first appears, and it appears after promotion,
 when the Cargo executor that used to carry the outcome is gone. Continuous
 detection is the property being preserved, not a one-time diff.
@@ -621,13 +636,15 @@ Therefore, whatever the comparison shows:
 
 - A **yanked-crate check against a committed, lock-bounded index snapshot**
   lands during the shadow stage, before promotion. The snapshot records, for
-  every `(name, version)` in the three locks, its yanked state and the index
-  revision identifier the generator observed it at. It is refreshed by a
+  every `(name, version)` in the root product lock and selected policy
+  projections, its yanked state and the index revision identifier the
+  generator observed it at. It is refreshed by a
   repository-owned `xtask` subcommand that reads the index only during an
   explicit reviewed update, outside the gate, and the result is committed.
 - The enforcing drift check is offline: it verifies that the snapshot's
-  `(name, version)` key set exactly equals the key set derived from the three
-  committed locks and never regenerates yanked state from the live index.
+  `(name, version)` key set exactly equals the key set derived from the root
+  product lock and selected policy projections and never regenerates yanked
+  state from the live index.
   The Bazel action consumes the committed snapshot as a declared input and
   runs offline. A full index snapshot is rejected: the state the check needs is
   bounded by three committed locks, so the artifact is bounded by three
@@ -638,12 +655,13 @@ Therefore, whatever the comparison shows:
 
 The comparison keeps its full force and is unchanged as promotion evidence:
 promotion criterion 7 still records today's `cargo deny check` against the
-decomposed pair over all three locks and still blocks on any differing
-enforcing outcome. What the comparison no longer decides is whether the
+decomposed pair over the root product lock and selected policy projections and
+still blocks on any differing enforcing outcome. What the comparison no longer
+decides is whether the
 detection capability exists.
 
 The carrier reports under the existing `rust-deny-main`, `rust-deny-broker` and
-`rust-deny-guest` identifiers, one target per lock. It is **not** a nineteenth
+`rust-deny-guest` identifiers, one target per selected context. It is **not** a nineteenth
 execution-manifest surface: the outcome it restores is one `cargo deny check`
 produces inside those surfaces today, and a new identifier would misattribute a
 `deny` finding and move the baseline section 5 freezes.
@@ -841,12 +859,13 @@ topologies and the Bazel path must preserve each of them:
 
 | Suite | Today | Topology |
 | --- | --- | --- |
-| Main workspace | `cargo nextest run --workspace` | one fresh process per test case |
-| Guest shell runner | `cargo nextest run --features real-libshpool` | one fresh process per test case |
-| Broker, three feature passes | `cargo test -- --test-threads N` | one process per binary, bounded threads inside |
+| Product workspace main selection | `cargo nextest run --locked --workspace --exclude d2b-contract-tests --exclude d2b-priv-broker --exclude d2b-guest-shell-runner` | one fresh process per test case |
+| Guest shell runner package selection | `cargo nextest run --locked -p d2b-guest-shell-runner --no-default-features --features real-libshpool` | one fresh process per test case |
+| Broker, three feature passes | `cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads N` | one process per binary, bounded threads inside |
 
-The main and standalone workspaces are process-per-test under cargo-nextest,
-and `tests/test-rust.sh` says so directly. The broker deliberately is not:
+The product main selection and guest package selection are process-per-test
+under cargo-nextest, and `tests/test-rust.sh` says so directly. The broker
+deliberately is not:
 committed code records that under nextest `runtime::tests::usbip_bind_*` fails
 with `LiveHandler("USB device 1-2.3 is missing required sysfs attr devpath")`
 because whatever keeps handler selection off live sysfs does not survive being
@@ -1037,8 +1056,8 @@ to output trees is not authorized here and would reintroduce exactly the
 false-positive class this paragraph exists to prevent.
 
 **Promotion is blocked** until a prototype, recorded in the wave notes, proves
-this topology for the main workspace, all three broker feature passes, and the
-guest shell runner: census equal to the current `cargo nextest list` and
+this topology for the generic product workspace, all three broker feature
+passes, and the guest shell runner: census equal to the current `cargo nextest list` and
 `cargo test -- --list` output for each suite, equal ignored-case counts, no
 shell in the repository-owned execution path, and the measured wall clock per
 suite under the runner against the current gate. Converting the broker to
@@ -1218,8 +1237,9 @@ grounded in this repository's committed comments. The handoff's rule is to
 avoid runner fan-out that hides duplicated compilation. These four slices
 duplicate nothing: the API census renders through a separately pinned nightly
 toolchain into its own tree and, as the gate documentation already states,
-"shares nothing with the workspace build"; the broker and guest-shell-runner
-are separate Cargo workspaces with separate locks; and the supply-chain targets
+"shares nothing with the product workspace build"; broker and guest-shell-runner
+are selected members of the product workspace, with dedicated target
+directories but no separate product locks; and the supply-chain targets
 compile no first-party code. The one slice that does contain a shared
 dependency graph, `main`, is not split, and that is where Bazel's deduplication
 is actually collected. Splitting along boundaries that already share nothing
@@ -1308,10 +1328,13 @@ and it is the single largest thing a naive implementation would try to carry.
 **Keys.** The primary key is unique per successful push-to-`v3` run; the
 restore prefix omits the run identifier and never contains a commit SHA. Both
 key and prefix bind: `.bazelversion`, `MODULE.bazel`, `MODULE.bazel.lock`,
-`.bazelrc`, both `rust-toolchain.toml` files, the three `Cargo.lock` files and
-`packages/Cargo.guest.lock`, the three `deny.toml` files, the advisory-database
-pin, and a digest of the generated BUILD tree. A change to any of those must
-produce a different key rather than a subtly stale cache.
+`.bazelrc`, both `rust-toolchain.toml` files, the product
+`packages/Cargo.lock`, the walker
+`tests/tools/no-bash-ast-walker/Cargo.lock`, `packages/Cargo.guest.lock`,
+`bazel/cargo/product.lock`, `bazel/cargo/walker.lock`, the three `deny.toml`
+files, the advisory-database pin, and a digest of the generated BUILD tree. A
+change to any of those must produce a different key rather than a subtly
+stale cache.
 
 **Writer policy.** Pull requests restore read-only and never save. Pushes to
 protected `v3` restore, run, trim, and publish exactly one refreshed snapshot,
@@ -1802,7 +1825,8 @@ hold. Each is mechanically checkable.
    every measurement recorded, and the in-band deadline handoff is wired.
 7. **Supply chain.** The section 6 comparison is recorded: today's
    `cargo deny check` against the decomposed `cargo-deny` plus `cargo-audit`
-   pair, over all three locks, with no differing enforcing outcome. The
+   pair over the root product lock and selected policy projections, with no
+   differing enforcing outcome. The
    section 6 yanked carrier has landed under the three `rust-deny-*`
    identifiers regardless of what that comparison found, its committed
    lock-bounded snapshot passes its offline key-set drift check, and the union
@@ -2482,9 +2506,12 @@ closed when any `.bazelrc` line or wrapper argument sets that flag.
 1. Bazel is the Rust build and test scheduler for the surfaces in the coverage
    map, and for nothing else. It does not build Nix outputs, package artifacts,
    images, or release binaries under this decision.
-2. `Cargo.toml`, `Cargo.lock` and the two `rust-toolchain.toml` files remain
-   the authoritative dependency and toolchain inputs. A dependency or toolchain
-   change is a Cargo-file change followed by regeneration.
+2. `packages/Cargo.toml` and `packages/Cargo.lock` remain the authoritative
+   product dependency inputs; the walker keeps its separate Cargo manifest and
+   lock, and `packages/Cargo.guest.lock` remains a generated static-guest
+   closure input. The two `rust-toolchain.toml` files remain authoritative
+   toolchain inputs. A dependency or toolchain change is a Cargo-file change
+   followed by regeneration.
 3. Every one of the eighteen baseline execution-manifest surfaces has a
    nonempty carrier set and every carrier belongs to exactly one identifier:
    the mapping is total and unambiguous, not one-to-one. Mapped-label existence

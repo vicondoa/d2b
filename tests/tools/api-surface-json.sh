@@ -112,7 +112,10 @@ run_public_census() {
       RUSTC_WORKSPACE_WRAPPER= \
       CARGO_BUILD_RUSTC_WRAPPER= \
       RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json" \
-      cargo "+$pin" doc --locked --workspace --lib --no-deps \
+      cargo "+$pin" doc --locked --workspace \
+        --exclude d2b-priv-broker \
+        --exclude d2b-guest-shell-runner \
+        --lib --no-deps \
         --target-dir "$public_target"
   ) >"$scratch/public-rustdoc.log" 2>&1 || rc=$?
   [ "$rc" = 0 ] || return "$rc"
@@ -130,7 +133,10 @@ run_private_census() {
       RUSTC_WORKSPACE_WRAPPER= \
       CARGO_BUILD_RUSTC_WRAPPER= \
       RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json --document-private-items --document-hidden-items" \
-      cargo "+$pin" doc --locked --workspace --lib --no-deps \
+      cargo "+$pin" doc --locked --workspace \
+        --exclude d2b-priv-broker \
+        --exclude d2b-guest-shell-runner \
+        --lib --no-deps \
         --target-dir "$private_target"
   ) >"$scratch/private-rustdoc.log" 2>&1 || rc=$?
   [ "$rc" = 0 ] || return "$rc"

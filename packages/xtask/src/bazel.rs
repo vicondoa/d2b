@@ -1,0 +1,3479 @@
+#![allow(dead_code)]
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
+use crate::hermeticity;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GenBazelMode {
+    Write,
+    Check,
+}
+
+const HUBS: &[(&str, &str, &str)] = &[
+    ("product", "packages/Cargo.toml", "packages/Cargo.lock"),
+    (
+        "walker",
+        "tests/tools/no-bash-ast-walker/Cargo.toml",
+        "tests/tools/no-bash-ast-walker/Cargo.lock",
+    ),
+];
+
+const STABLE_TOOLCHAIN: &str = "1.97.0";
+const NIGHTLY_TOOLCHAIN: &str = "nightly-2026-02-16";
+const GENERATOR_METADATA_TARGET: &str = "x86_64-unknown-linux-gnu";
+const PREVIEW_ROOT: &str = ".scratch/bazel/generated-preview";
+const OUTPUT_MANIFEST_PATH: &str = "bazel/generated/output-manifest.json";
+
+const APPROVED_OUTPUT_PATHS: &[&str] = &[
+    ".bazelignore",
+    "bazel/generated/BUILD.bazel",
+    "bazel/generated/action-network-policy.json",
+    "bazel/generated/configured-targets.json",
+    "bazel/generated/evidence-sink-policy.json",
+    "bazel/generated/no-shell-inventory.json",
+    OUTPUT_MANIFEST_PATH,
+    "bazel/generated/package-policy-targets.bzl",
+    "bazel/generated/product-targets.bzl",
+    "bazel/generated/source-census.json",
+];
+
+const APPROVED_GENERATED_EXPORTS: &[&str] = &[
+    "action-network-policy.json",
+    "configured-targets.json",
+    "evidence-sink-policy.json",
+    "no-shell-inventory.json",
+    "output-manifest.json",
+    "package-policy-targets.bzl",
+    "product-targets.bzl",
+    "source-census.json",
+];
+
+const RETIRED_HUB_MESSAGES: &[(&str, &str)] = &[
+    (
+        "main",
+        "Hub 'main' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product",
+    ),
+    (
+        "broker",
+        "Hub 'broker' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product",
+    ),
+    (
+        "guest",
+        "Hub 'guest' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product",
+    ),
+];
+
+pub fn retired_hub_remediation(hub: &str) -> Option<(&'static str, Vec<String>, &'static str)> {
+    RETIRED_HUB_MESSAGES
+        .iter()
+        .find(|(name, _)| *name == hub)
+        .map(|(_, message)| {
+            (
+                *message,
+                vec![
+                    "cargo".to_owned(),
+                    "xtask".to_owned(),
+                    "bazel-repin".to_owned(),
+                    "--hub".to_owned(),
+                    "product".to_owned(),
+                ],
+                "packages/",
+            )
+        })
+}
+
+pub fn validate_retired_hub_remediation(argv: &[String], cwd: &str) -> Result<(), Box<dyn Error>> {
+    if cwd != "packages/"
+        || argv
+            .first()
+            .is_some_and(|argument| argument == "cd" || argument.starts_with("packages/"))
+        || argv
+            != [
+                "cargo".to_owned(),
+                "xtask".to_owned(),
+                "bazel-repin".to_owned(),
+                "--hub".to_owned(),
+                "product".to_owned(),
+            ]
+    {
+        return Err(
+            "retired hub remediation must use the repository-relative packages/ cwd".into(),
+        );
+    }
+    Ok(())
+}
+
+pub trait BazelExecutor {
+    fn run(
+        &mut self,
+        root: &Path,
+        startup_args: &[String],
+        command_args: &[String],
+        environment: &[(&str, &str)],
+    ) -> Result<std::process::ExitStatus, Box<dyn Error>>;
+}
+
+pub fn adr0054_drift_message(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "D2B-CARGODRIFT-PRODUCT" => "\
+D2B-CARGODRIFT-PRODUCT: packages/Cargo.lock is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo generate-lockfile --offline
+Review and commit packages/Cargo.lock.
+Rerun cargo generate-lockfile --offline; run cargo xtask bazel-repin --hub product and review and commit bazel/cargo/product.lock; run cargo xtask bazel-module-refresh and review and commit MODULE.bazel.lock; then rerun the failed command.",
+        "D2B-CARGODRIFT-WALKER" => "\
+D2B-CARGODRIFT-WALKER: walker Cargo.lock is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo generate-lockfile --offline --manifest-path ../tests/tools/no-bash-ast-walker/Cargo.toml
+Review and commit tests/tools/no-bash-ast-walker/Cargo.lock.
+Rerun the walker cargo generate-lockfile command; run cargo xtask bazel-repin --hub walker and review and commit bazel/cargo/walker.lock; run cargo xtask bazel-module-refresh and review and commit MODULE.bazel.lock; then rerun the failed command.",
+        "D2B-BZLDRIFT-PRODUCT-HUB" => "\
+D2B-BZLDRIFT-PRODUCT-HUB: bazel/cargo/product.lock is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask bazel-repin --hub product
+Review and commit bazel/cargo/product.lock.
+Rerun cargo xtask bazel-repin --hub product, then rerun the failed command.",
+        "D2B-BZLDRIFT-WALKER-HUB" => "\
+D2B-BZLDRIFT-WALKER-HUB: bazel/cargo/walker.lock is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask bazel-repin --hub walker
+Review and commit bazel/cargo/walker.lock.
+Rerun cargo xtask bazel-repin --hub walker, then rerun the failed command.",
+        "D2B-BZLDRIFT-MODULE" => "\
+D2B-BZLDRIFT-MODULE: MODULE.bazel.lock is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask bazel-module-refresh
+Review and commit MODULE.bazel.lock.
+Rerun cargo xtask bazel-module-refresh, then rerun the failed command.",
+        "D2B-BZLDRIFT-GENERATOR" => "\
+D2B-BZLDRIFT-GENERATOR: generated Bazel output is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask gen-bazel
+Review and commit the listed repository-relative generated paths.
+Rerun cargo xtask gen-bazel --check, then rerun the failed command.",
+        "D2B-BZLDRIFT-PACKAGE-POLICY" => "\
+D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask gen-package-policy-inputs
+Review and commit the generated changes under packages/policy-inputs/.
+Rerun cargo xtask gen-package-policy-inputs --check, then rerun the failed command.",
+        "D2B-BZLDRIFT-YANKED" => "\
+D2B-BZLDRIFT-YANKED: yanked snapshot is stale.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask bazel-yanked-refresh
+Review and commit bazel/supply_chain/yanked-snapshot.json.
+Rerun cargo xtask bazel-yanked-check, then rerun the failed command.",
+        "D2B-BZL-AMBIENT-REPIN" => "\
+D2B-BZL-AMBIENT-REPIN: a repin control is present.
+From the repository root, run: nix develop
+Then run: cd packages
+unset CARGO_BAZEL_REPIN REPIN CARGO_BAZEL_REPIN_ONLY
+Review the requested contributor command and its selected hub; no file is changed by this refusal.
+Rerun the exact refused command from the closed contributor-command set.",
+        "D2B-BZL-UNEXPECTED-MUTATION" => "\
+D2B-BZL-UNEXPECTED-MUTATION: a mutation changed an unapproved tracked path.
+From the repository root, run: nix develop
+Then run: cd packages
+git status --short --untracked-files=all
+Review every listed repository-relative path; commit the intended generated change or remove the unintended change.
+Rerun the exact refused command from the closed contributor-command set.",
+        _ => return None,
+    })
+}
+
+struct ProcessExecutor;
+
+const EXPLICIT_BAZEL_ENVIRONMENT: &[&str] = &[
+    "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+];
+
+impl BazelExecutor for ProcessExecutor {
+    fn run(
+        &mut self,
+        root: &Path,
+        startup_args: &[String],
+        command_args: &[String],
+        environment: &[(&str, &str)],
+    ) -> Result<std::process::ExitStatus, Box<dyn Error>> {
+        let executable = bazel_executable()?;
+        let mut command = Command::new(executable);
+        command
+            .current_dir(root)
+            .args(startup_args)
+            .args(command_args)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        for name in EXPLICIT_BAZEL_ENVIRONMENT {
+            if let Some(value) = env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        command
+            .status()
+            .map_err(|error| format!("could not start the Bazel child: {error}").into())
+    }
+}
+
+pub(crate) fn parse_gen_bazel(args: &[String]) -> Result<GenBazelMode, Box<dyn Error>> {
+    match args {
+        [] => Ok(GenBazelMode::Write),
+        [flag] if flag == "--check" => Ok(GenBazelMode::Check),
+        _ => Err("usage: gen-bazel [--check]".into()),
+    }
+}
+
+pub(crate) fn gen_bazel(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let mode = parse_gen_bazel(args)?;
+    let root = repo_root()?;
+    let model = generate_model(&root)?;
+    model.validate()?;
+    let rendered = model.render()?;
+    validate_rendered_outputs(&rendered)?;
+    let paths = rendered.keys().map(PathBuf::from).collect::<Vec<_>>();
+
+    match mode {
+        GenBazelMode::Write => {
+            // This wave is allowed to leave a reviewable preview only.  The
+            // integrator owns generated BUILD files, inventories, pins, and
+            // goldens, so a contributor command must not silently create one.
+            let preview_root = root.join(PREVIEW_ROOT);
+            if preview_root.exists() {
+                fs::remove_dir_all(&preview_root)?;
+            }
+            fs::create_dir_all(&preview_root)?;
+            for (relative, contents) in rendered {
+                let path = preview_root.join(&relative);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(path, contents)?;
+            }
+            Ok(paths
+                .into_iter()
+                .map(|relative| PathBuf::from(PREVIEW_ROOT).join(relative))
+                .collect())
+        }
+        GenBazelMode::Check => {
+            validate_committed_output_census(&root, &rendered)?;
+            for (relative, expected) in rendered {
+                let path = root.join(&relative);
+                if path.is_file() {
+                    let actual = fs::read_to_string(&path).map_err(|_error| {
+                        format!(
+                            "{}\nStale path: {relative}",
+                            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+                                .expect("generator diagnostic is closed")
+                        )
+                    })?;
+                    if actual != expected {
+                        return Err(format!(
+                            "{}\nStale path: {relative}",
+                            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+                                .expect("generator diagnostic is closed")
+                        )
+                        .into());
+                    }
+                }
+            }
+            // A check is intentionally read-only.  It does not compare or
+            // delete a stale output outside this scope and never creates a
+            // generated repository artifact.
+            Ok(paths
+                .into_iter()
+                .map(|relative| PathBuf::from(PREVIEW_ROOT).join(relative))
+                .collect())
+        }
+    }
+}
+
+pub(crate) fn parse_repin(args: &[String]) -> Result<&str, Box<dyn Error>> {
+    match args {
+        [flag, hub] if flag == "--hub" && HUBS.iter().any(|(name, _, _)| name == hub) => {
+            Ok(hub.as_str())
+        }
+        [flag, hub]
+            if flag == "--hub" && RETIRED_HUB_MESSAGES.iter().any(|(name, _)| name == hub) =>
+        {
+            Err(RETIRED_HUB_MESSAGES
+                .iter()
+                .find(|(name, _)| name == hub)
+                .map(|(_, message)| *message)
+                .unwrap_or("retired Bazel hub")
+                .into())
+        }
+        [flag, hub] if flag == "--hub" && !hub.is_empty() => {
+            Err(format!("unknown Bazel dependency hub `{hub}`; expected product or walker").into())
+        }
+        _ => Err("usage: bazel-repin --hub <name>".into()),
+    }
+}
+
+pub(crate) fn bazel_repin(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let hub = parse_repin(args)?;
+    reject_ambient_repin("bazel-repin", Some(hub))?;
+    let root = repo_root()?;
+    let mut executor = ProcessExecutor;
+    bazel_repin_with_executor(&root, hub, &mut executor)
+}
+
+pub fn bazel_repin_with_executor(
+    root: &Path,
+    hub: &str,
+    executor: &mut dyn BazelExecutor,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    if !HUBS.iter().any(|(name, _, _)| *name == hub) {
+        if let Some((_, message)) = RETIRED_HUB_MESSAGES.iter().find(|(name, _)| *name == hub) {
+            return Err((*message).into());
+        }
+        return Err(
+            format!("unknown Bazel dependency hub `{hub}`; expected product or walker").into(),
+        );
+    }
+    reject_ambient_repin("bazel-repin", Some(hub))?;
+    let before = mutation_snapshot(root)?;
+    let options = startup_options(root);
+    let command = options.repin_command_args(!root.join("MODULE.bazel.lock").is_file());
+    let status = executor.run(
+        root,
+        &options.startup_args(),
+        &command,
+        &[("CARGO_BAZEL_REPIN", "1"), ("CARGO_BAZEL_REPIN_ONLY", hub)],
+    )?;
+    let after = mutation_snapshot(root)?;
+    let lock = format!("bazel/cargo/{hub}.lock");
+    let outside = changed_outside(&before, &after, Some(&lock));
+    if !outside.is_empty() {
+        return Err(unexpected_mutation_message(&outside).into());
+    }
+    if !status.success() {
+        let code = if hub == "product" {
+            "D2B-BZLDRIFT-PRODUCT-HUB"
+        } else {
+            "D2B-BZLDRIFT-WALKER-HUB"
+        };
+        return Err(adr0054_drift_message(code)
+            .expect("hub diagnostic is closed")
+            .into());
+    }
+    Ok(if before.get(&lock) != after.get(&lock) {
+        vec![PathBuf::from(lock)]
+    } else {
+        Vec::new()
+    })
+}
+
+pub(crate) fn bazel_module_refresh(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    if !args.is_empty() {
+        return Err("usage: bazel-module-refresh".into());
+    }
+    reject_ambient_repin("bazel-module-refresh", None)?;
+    let root = repo_root()?;
+    let mut executor = ProcessExecutor;
+    bazel_module_refresh_with_executor(&root, &mut executor)
+}
+
+pub fn bazel_module_refresh_with_executor(
+    root: &Path,
+    executor: &mut dyn BazelExecutor,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    reject_ambient_repin("bazel-module-refresh", None)?;
+    let before = mutation_snapshot(root)?;
+    let options = startup_options(root);
+    let status = executor.run(
+        root,
+        &options.startup_args(),
+        &options.module_refresh_command_args(),
+        &[],
+    )?;
+    let after = mutation_snapshot(root)?;
+    let outside = changed_outside(&before, &after, Some("MODULE.bazel.lock"));
+    if !outside.is_empty() {
+        return Err(unexpected_mutation_message(&outside).into());
+    }
+    if !status.success() {
+        return Err(adr0054_drift_message("D2B-BZLDRIFT-MODULE")
+            .expect("module diagnostic is closed")
+            .into());
+    }
+    Ok(
+        if before.get("MODULE.bazel.lock") != after.get("MODULE.bazel.lock") {
+            vec![PathBuf::from("MODULE.bazel.lock")]
+        } else {
+            Vec::new()
+        },
+    )
+}
+
+fn reject_ambient_repin(command: &str, hub: Option<&str>) -> Result<(), Box<dyn Error>> {
+    let present = ["CARGO_BAZEL_REPIN", "REPIN", "CARGO_BAZEL_REPIN_ONLY"]
+        .iter()
+        .any(|name| env::var_os(name).is_some());
+    if !present {
+        return Ok(());
+    }
+    let _ = (command, hub);
+    Err(adr0054_drift_message("D2B-BZL-AMBIENT-REPIN")
+        .expect("ambient repin diagnostic is closed")
+        .into())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StartupOptions {
+    output_user_root: PathBuf,
+    output_base: PathBuf,
+}
+
+impl StartupOptions {
+    fn startup_args(&self) -> Vec<String> {
+        vec![
+            format!("--output_user_root={}", self.output_user_root.display()),
+            format!("--output_base={}", self.output_base.display()),
+        ]
+    }
+
+    fn repin_command_args(&self, fresh_tree: bool) -> Vec<String> {
+        // Bazel 8.6's `sync` command is WORKSPACE-only; `mod deps` is the
+        // Bzlmod extension evaluation that rules_rust uses for this path.
+        let mut args = vec!["mod".to_owned(), "deps".to_owned()];
+        if fresh_tree {
+            args.push("--lockfile_mode=off".to_owned());
+        }
+        args
+    }
+
+    fn module_refresh_command_args(&self) -> Vec<String> {
+        vec![
+            "mod".to_owned(),
+            "deps".to_owned(),
+            "--lockfile_mode=update".to_owned(),
+        ]
+    }
+}
+
+fn startup_options(root: &Path) -> StartupOptions {
+    let root = absolute_root(root);
+    let scratch = root.join(".scratch/bazel");
+    StartupOptions {
+        output_user_root: scratch.join("output-user-root"),
+        output_base: scratch.join("output-base"),
+    }
+}
+
+fn bazel_executable() -> Result<PathBuf, Box<dyn Error>> {
+    let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+    let executable = PathBuf::from(executable);
+    if executable.is_absolute() {
+        return Ok(executable);
+    }
+    let path = env::var_os("PATH").ok_or("BAZEL is unset and PATH is unavailable")?;
+    env::split_paths(&path)
+        .map(|directory| directory.join(&executable))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| format!("{} is not on PATH", executable.display()).into())
+}
+
+fn absolute_root(root: &Path) -> PathBuf {
+    if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(root)
+    }
+}
+
+fn status_text(status: &std::process::ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "signal".to_owned())
+}
+
+fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(root) = env::var_os("D2B_BAZEL_WORKTREE") {
+        return fs::canonicalize(root)
+            .map_err(|error| format!("cannot canonicalize D2B_BAZEL_WORKTREE: {error}").into());
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "cannot locate repository root".into())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GeneratedBuild {
+    path: String,
+    content: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Census {
+    executed: Vec<String>,
+    out_of_census: Vec<(String, String)>,
+}
+
+impl Census {
+    fn new(mut executed: Vec<String>, mut out_of_census: Vec<(String, String)>) -> Self {
+        executed.sort();
+        executed.dedup();
+        out_of_census.sort();
+        out_of_census.dedup();
+        Self {
+            executed,
+            out_of_census,
+        }
+    }
+
+    fn json(&self) -> String {
+        serde_json::to_string_pretty(&json!({
+            "executed": self.executed,
+            "outOfCensus": self.out_of_census
+                .iter()
+                .map(|(entry, reason)| json!({"entry": entry, "reason": reason}))
+                .collect::<Vec<_>>(),
+        }))
+        .expect("census JSON is serializable")
+            + "\n"
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GeneratedModel {
+    bazelignore: Vec<String>,
+    action_network_policy: String,
+    configured_targets: String,
+    evidence_sink_policy: String,
+    no_shell_inventory: String,
+    package_policy_targets: String,
+    product_targets: String,
+    source_census: String,
+}
+
+impl GeneratedModel {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.bazelignore.is_empty() || !self.bazelignore.iter().any(|entry| entry == ".scratch/")
+        {
+            return Err("generated .bazelignore must be nonempty and cover .scratch/".into());
+        }
+        hermeticity::validate_action_network_inventory(
+            &hermeticity::complete_action_network_inventory(),
+        )
+        .map_err(|error| format!("action-network inventory is invalid: {error}"))?;
+        for (name, contents) in [
+            ("action-network-policy.json", &self.action_network_policy),
+            ("configured-targets.json", &self.configured_targets),
+            ("evidence-sink-policy.json", &self.evidence_sink_policy),
+            ("no-shell-inventory.json", &self.no_shell_inventory),
+            ("source-census.json", &self.source_census),
+        ] {
+            let value: Value = serde_json::from_str(contents)
+                .map_err(|error| format!("generated {name} is not valid JSON: {error}"))?;
+            if !value.is_object() {
+                return Err(format!("generated {name} must be a JSON object").into());
+            }
+        }
+        if self.package_policy_targets.trim().is_empty() || self.product_targets.trim().is_empty() {
+            return Err("generated target definitions must be nonempty".into());
+        }
+        Ok(())
+    }
+
+    fn render(&self) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
+        let mut outputs = BTreeMap::new();
+        insert_output(
+            &mut outputs,
+            ".bazelignore",
+            render_bazelignore(&self.bazelignore),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/BUILD.bazel",
+            generated_build_file(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/action-network-policy.json",
+            self.action_network_policy.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/configured-targets.json",
+            self.configured_targets.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/evidence-sink-policy.json",
+            self.evidence_sink_policy.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/no-shell-inventory.json",
+            self.no_shell_inventory.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/package-policy-targets.bzl",
+            self.package_policy_targets.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/product-targets.bzl",
+            self.product_targets.clone(),
+        )?;
+        insert_output(
+            &mut outputs,
+            "bazel/generated/source-census.json",
+            self.source_census.clone(),
+        )?;
+        let manifest = output_manifest(&outputs);
+        insert_output(&mut outputs, OUTPUT_MANIFEST_PATH, manifest)?;
+        Ok(outputs)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ManifestInfo {
+    relative: String,
+    package_dir: String,
+    package_name: String,
+    lib_doctest: Option<bool>,
+    tests: Vec<TargetInfo>,
+    bins: Vec<TargetInfo>,
+    benches: Vec<TargetInfo>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TargetInfo {
+    name: String,
+    path: String,
+    harness: bool,
+    required_features: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DependencyInfo {
+    package_name: String,
+    package_dir: String,
+    hub: String,
+    normal: Vec<String>,
+    dev: Vec<String>,
+    optional: BTreeSet<String>,
+    proc_macro: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TargetRow {
+    label: String,
+    package: String,
+    manifest: String,
+    kind: String,
+    cargo_context: String,
+    system: Option<String>,
+    cargo_target: Option<String>,
+    policy_input: Option<String>,
+    source_files: Vec<String>,
+    direct_first_party_deps: Vec<String>,
+    direct_product_deps: Vec<String>,
+    cfgs: Vec<String>,
+    features: Vec<String>,
+    closure_configured_targets: Vec<String>,
+    closure_external_identities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SpawnSite {
+    source: String,
+    start_line: usize,
+    start_column: usize,
+    end_line: usize,
+    end_column: usize,
+    program_expression: String,
+    shell_invocation: bool,
+}
+
+type PolicyTargetContext = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+);
+
+const POLICY_TARGET_CONTEXTS: &[PolicyTargetContext] = &[
+    (
+        "broker-production",
+        "d2b-priv-broker",
+        "x86_64-linux",
+        "x86_64-unknown-linux-gnu",
+        "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production",
+        &[],
+    ),
+    (
+        "broker-production",
+        "d2b-priv-broker",
+        "aarch64-linux",
+        "aarch64-unknown-linux-gnu",
+        "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production",
+        &[],
+    ),
+    (
+        "guest-real-libshpool",
+        "d2b-guest-shell-runner",
+        "x86_64-linux",
+        "x86_64-unknown-linux-musl",
+        "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
+        &["real-libshpool"],
+    ),
+    (
+        "guest-real-libshpool",
+        "d2b-guest-shell-runner",
+        "aarch64-linux",
+        "aarch64-unknown-linux-musl",
+        "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool",
+        &["real-libshpool"],
+    ),
+];
+
+fn ordered_object(fields: impl IntoIterator<Item = (String, Value)>) -> Value {
+    let fields = fields.into_iter().collect::<BTreeMap<_, _>>();
+    Value::Object(fields.into_iter().collect())
+}
+
+fn json_array(values: impl IntoIterator<Item = Value>) -> Value {
+    Value::Array(values.into_iter().collect())
+}
+
+fn json_string_array(values: &[String]) -> Value {
+    json_array(values.iter().cloned().map(Value::String))
+}
+
+fn pretty_json(value: &Value) -> String {
+    serde_json::to_string_pretty(value).expect("generated JSON is serializable") + "\n"
+}
+
+fn insert_output(
+    outputs: &mut BTreeMap<String, String>,
+    relative: &str,
+    contents: String,
+) -> Result<(), Box<dyn Error>> {
+    if !is_generator_owned(relative) {
+        return Err(format!("generator attempted to emit an unowned path: {relative}").into());
+    }
+    if outputs.insert(relative.to_owned(), contents).is_some() {
+        return Err(format!("generator emitted a duplicate path: {relative}").into());
+    }
+    Ok(())
+}
+
+fn render_bazelignore(entries: &[String]) -> String {
+    let mut entries = entries.to_vec();
+    entries.sort();
+    entries.dedup();
+    entries
+        .into_iter()
+        .map(|entry| format!("{}/\n", entry.trim_end_matches('/')))
+        .collect()
+}
+
+fn generated_build_file() -> String {
+    let mut content = String::from(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         # First-party target definitions live in the consolidated .bzl files.\n\n\
+         package(default_visibility = [\"//visibility:public\"])\n\n\
+         exports_files([\n",
+    );
+    for file in APPROVED_GENERATED_EXPORTS {
+        content.push_str("    ");
+        content.push_str(&bazel_string(file));
+        content.push_str(",\n");
+    }
+    content.push_str("])\n");
+    content
+}
+
+fn output_manifest(outputs: &BTreeMap<String, String>) -> String {
+    let output_paths = APPROVED_OUTPUT_PATHS
+        .iter()
+        .map(|path| Value::String((*path).to_owned()))
+        .collect::<Vec<_>>();
+    let output_digests = outputs
+        .iter()
+        .map(|(path, contents)| {
+            ordered_object([
+                ("path".to_owned(), Value::String(path.clone())),
+                (
+                    "sha256".to_owned(),
+                    Value::String(sha256_hex(contents.as_bytes())),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+    pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("manifestPath".to_owned(), json!(OUTPUT_MANIFEST_PATH)),
+        ("selfDigest".to_owned(), Value::Null),
+        ("outputCount".to_owned(), json!(APPROVED_OUTPUT_PATHS.len())),
+        ("outputPaths".to_owned(), Value::Array(output_paths)),
+        ("outputs".to_owned(), Value::Array(output_digests)),
+    ]))
+}
+
+fn validate_rendered_outputs(outputs: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    let expected = APPROVED_OUTPUT_PATHS
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<BTreeSet<_>>();
+    let actual = outputs.keys().cloned().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(format!(
+            "generated output census differs: expected {:?}, found {:?}",
+            expected, actual
+        )
+        .into());
+    }
+    if outputs.values().any(String::is_empty) {
+        return Err("generated output census contains an empty output".into());
+    }
+    if outputs.keys().any(|path| {
+        path.contains("action-network-inventory")
+            || path.contains("hermeticity-inventory")
+            || path.contains("governed-rust-sources")
+            || path.contains("harness-free-census")
+            || path.contains("doctest-census")
+            || path.ends_with("/BUILD.bazel") && path.starts_with("packages/")
+    }) {
+        return Err("generated output census contains an obsolete output".into());
+    }
+    validate_json_schema(
+        "action-network-policy.json",
+        &outputs["bazel/generated/action-network-policy.json"],
+        &[
+            "action_network",
+            "aquery_actions",
+            "bazel_archive_sha256",
+            "bazel_source_sha256",
+            "capability_abi",
+            "configured_targets",
+            "coverage_targets",
+            "declared_inputs",
+            "denied_syscalls",
+            "derivation_sha256_method",
+            "executable_sha256",
+            "fallback_strategies",
+            "fixed_policy",
+            "hermeticity",
+            "inherited_descriptor_plants",
+            "load_point",
+            "native_outputs",
+            "output_nar_sha256",
+            "patch_sha256",
+            "policy_sha256",
+            "ptrace_requests",
+            "repository_fetches_outside_actions",
+            "sandbox_provider",
+            "schema_version",
+            "socket_plants",
+            "strategy_inventory",
+        ],
+    )?;
+    validate_json_schema(
+        "configured-targets.json",
+        &outputs["bazel/generated/configured-targets.json"],
+        &[
+            "actionKinds",
+            "coverageTargets",
+            "hubs",
+            "schemaVersion",
+            "targets",
+        ],
+    )?;
+    validate_json_schema(
+        "evidence-sink-policy.json",
+        &outputs["bazel/generated/evidence-sink-policy.json"],
+        &["measured", "rows", "schemaVersion", "status"],
+    )?;
+    validate_json_schema(
+        "no-shell-inventory.json",
+        &outputs["bazel/generated/no-shell-inventory.json"],
+        &[
+            "declaredInputs",
+            "governedSources",
+            "scanResults",
+            "schemaVersion",
+            "spawnSites",
+        ],
+    )?;
+    validate_json_schema(
+        "source-census.json",
+        &outputs["bazel/generated/source-census.json"],
+        &["schemaVersion", "sources"],
+    )?;
+    validate_json_schema(
+        "output-manifest.json",
+        &outputs[OUTPUT_MANIFEST_PATH],
+        &[
+            "manifestPath",
+            "outputCount",
+            "outputPaths",
+            "outputs",
+            "schemaVersion",
+            "selfDigest",
+        ],
+    )?;
+    validate_output_manifest(outputs)?;
+    Ok(())
+}
+
+fn validate_json_schema(
+    name: &str,
+    contents: &str,
+    expected_keys: &[&str],
+) -> Result<(), Box<dyn Error>> {
+    let value: Value = serde_json::from_str(contents)
+        .map_err(|error| format!("{name} is not valid JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{name} must be a JSON object"))?;
+    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = expected_keys.iter().copied().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(format!(
+            "{name} schema is not closed: expected {:?}, found {:?}",
+            expected, actual
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_output_manifest(outputs: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    let value: Value = serde_json::from_str(&outputs[OUTPUT_MANIFEST_PATH])?;
+    let object = value
+        .as_object()
+        .ok_or("output manifest is not an object")?;
+    if object.get("schemaVersion") != Some(&json!(1))
+        || object.get("manifestPath").and_then(Value::as_str) != Some(OUTPUT_MANIFEST_PATH)
+        || object.get("outputCount").and_then(Value::as_u64)
+            != Some(APPROVED_OUTPUT_PATHS.len() as u64)
+        || !object.get("selfDigest").is_some_and(Value::is_null)
+    {
+        return Err("output manifest header is invalid".into());
+    }
+    let paths = object
+        .get("outputPaths")
+        .and_then(Value::as_array)
+        .ok_or("output manifest paths are missing")?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "output manifest contains a non-string path".into())
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    let expected_paths = APPROVED_OUTPUT_PATHS
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<Vec<_>>();
+    if paths != expected_paths {
+        return Err("output manifest path census is not exact and sorted".into());
+    }
+    let entries = object
+        .get("outputs")
+        .and_then(Value::as_array)
+        .ok_or("output manifest digest entries are missing")?;
+    if entries.len() != APPROVED_OUTPUT_PATHS.len() - 1 {
+        return Err("output manifest digest census has the wrong size".into());
+    }
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let entry = entry
+            .as_object()
+            .ok_or("output manifest digest entry is not an object")?;
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("output manifest digest entry has no path")?;
+        let digest = entry
+            .get("sha256")
+            .and_then(Value::as_str)
+            .ok_or("output manifest digest entry has no sha256")?;
+        let expected_digest = outputs
+            .get(path)
+            .map(|contents| sha256_hex(contents.as_bytes()))
+            .ok_or_else(|| format!("output manifest names an unknown path: {path}"))?;
+        if path == OUTPUT_MANIFEST_PATH
+            || !seen.insert(path.to_owned())
+            || digest != expected_digest
+        {
+            return Err(format!("output manifest digest is invalid for {path}").into());
+        }
+    }
+    let expected_digest_paths = expected_paths
+        .into_iter()
+        .filter(|path| path != OUTPUT_MANIFEST_PATH)
+        .collect::<BTreeSet<_>>();
+    if seen != expected_digest_paths {
+        return Err("output manifest digest paths are not exact".into());
+    }
+    Ok(())
+}
+
+fn validate_committed_output_census(
+    root: &Path,
+    expected: &BTreeMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
+    let mut actual = BTreeSet::new();
+    for path in [".bazelignore"] {
+        if root.join(path).is_file() {
+            actual.insert(path.to_owned());
+        }
+    }
+    let generated = root.join("bazel/generated");
+    if generated.exists() {
+        if !generated.is_dir() {
+            return Err("bazel/generated is not a directory".into());
+        }
+        for entry in fs::read_dir(&generated)? {
+            let entry = entry?;
+            let relative = format!("bazel/generated/{}", entry.file_name().to_string_lossy());
+            if !entry.file_type()?.is_file() {
+                return Err(format!("stale generated path: {relative}").into());
+            }
+            actual.insert(relative);
+        }
+    }
+    let mut package_builds = Vec::new();
+    collect_named_files(&root.join("packages"), "BUILD.bazel", &mut package_builds)?;
+    for path in package_builds {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| "package BUILD path escaped repository root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        actual.insert(relative);
+    }
+    let expected_paths = expected.keys().cloned().collect::<BTreeSet<_>>();
+    let extras = actual
+        .difference(&expected_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !extras.is_empty() {
+        return Err(format!(
+            "{}\nStale paths: {}",
+            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+                .expect("generator diagnostic is closed"),
+            extras.join(", ")
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn target_row_value(row: &TargetRow) -> Value {
+    ordered_object([
+        ("label".to_owned(), Value::String(row.label.clone())),
+        ("native".to_owned(), json!(true)),
+        ("package".to_owned(), Value::String(row.package.clone())),
+        ("manifest".to_owned(), Value::String(row.manifest.clone())),
+        ("kind".to_owned(), Value::String(row.kind.clone())),
+        (
+            "cargoContext".to_owned(),
+            Value::String(row.cargo_context.clone()),
+        ),
+        (
+            "system".to_owned(),
+            row.system.clone().map_or(Value::Null, Value::String),
+        ),
+        (
+            "cargoTarget".to_owned(),
+            row.cargo_target.clone().map_or(Value::Null, Value::String),
+        ),
+        (
+            "policyInput".to_owned(),
+            row.policy_input.clone().map_or(Value::Null, Value::String),
+        ),
+        (
+            "sourceFiles".to_owned(),
+            json_string_array(&row.source_files),
+        ),
+        (
+            "directFirstPartyDeps".to_owned(),
+            json_string_array(&row.direct_first_party_deps),
+        ),
+        (
+            "directProductDeps".to_owned(),
+            json_string_array(&row.direct_product_deps),
+        ),
+        ("cfgs".to_owned(), json_string_array(&row.cfgs)),
+        ("features".to_owned(), json_string_array(&row.features)),
+        (
+            "closureCensus".to_owned(),
+            ordered_object([
+                (
+                    "configuredTargets".to_owned(),
+                    json_string_array(&row.closure_configured_targets),
+                ),
+                (
+                    "externalIdentities".to_owned(),
+                    json_string_array(&row.closure_external_identities),
+                ),
+            ]),
+        ),
+    ])
+}
+
+fn configured_targets_json(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    let mut rows = rows.to_vec();
+    rows.sort_by(|left, right| left.label.cmp(&right.label));
+    if rows.windows(2).any(|pair| pair[0].label == pair[1].label) {
+        return Err("configured-target census contains a duplicate label".into());
+    }
+    let mut action_kinds = hermeticity::GOVERNED_ACTION_KINDS
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
+    action_kinds.sort();
+    let mut coverage_targets = hermeticity::CONFIGURED_COVERAGE_TARGETS
+        .iter()
+        .map(|target| (*target).to_owned())
+        .collect::<Vec<_>>();
+    coverage_targets.sort();
+    let value = ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        (
+            "hubs".to_owned(),
+            json_array(
+                ["product", "walker"]
+                    .into_iter()
+                    .map(|hub| Value::String(hub.to_owned())),
+            ),
+        ),
+        (
+            "targets".to_owned(),
+            json_array(rows.iter().map(target_row_value)),
+        ),
+        (
+            "coverageTargets".to_owned(),
+            json_string_array(&coverage_targets),
+        ),
+        ("actionKinds".to_owned(), json_string_array(&action_kinds)),
+    ]);
+    Ok(pretty_json(&value))
+}
+
+fn product_targets_bzl(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    let mut product_rows = rows
+        .iter()
+        .filter(|row| row.system.is_none())
+        .map(target_row_value)
+        .collect::<Vec<_>>();
+    product_rows.sort_by_key(|row| {
+        row.get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    });
+    if product_rows.is_empty() {
+        return Err("product target definitions are empty".into());
+    }
+    Ok(format!(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         # Native first-party targets; third-party dependencies remain in @product.\n\n\
+         PRODUCT_TARGETS = {}\n",
+        starlark_value(&Value::Array(product_rows), 0)
+    ))
+}
+
+fn package_policy_targets_bzl(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    let mut policy_rows = rows
+        .iter()
+        .filter(|row| row.system.is_some())
+        .map(target_row_value)
+        .collect::<Vec<_>>();
+    policy_rows.sort_by_key(|row| {
+        row.get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    });
+    if policy_rows.len() != POLICY_TARGET_CONTEXTS.len() {
+        return Err(format!(
+            "package-policy target census must contain exactly {} contexts",
+            POLICY_TARGET_CONTEXTS.len()
+        )
+        .into());
+    }
+    Ok(format!(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         # Native package-policy targets are selected from the root product lock.\n\n\
+         PACKAGE_POLICY_TARGETS = {}\n",
+        starlark_value(&Value::Array(policy_rows), 0)
+    ))
+}
+
+fn starlark_value(value: &Value, indent: usize) -> String {
+    match value {
+        Value::Null => "None".to_owned(),
+        Value::Bool(value) => value
+            .to_string()
+            .replace("true", "True")
+            .replace("false", "False"),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => bazel_string(value),
+        Value::Array(values) => {
+            if values.is_empty() {
+                return "[]".to_owned();
+            }
+            let mut output = String::from("[\n");
+            for value in values {
+                output.push_str(&" ".repeat(indent + 4));
+                output.push_str(&starlark_value(value, indent + 4));
+                output.push_str(",\n");
+            }
+            output.push_str(&" ".repeat(indent));
+            output.push(']');
+            output
+        }
+        Value::Object(values) => {
+            if values.is_empty() {
+                return "{}".to_owned();
+            }
+            let mut output = String::from("{\n");
+            for (key, value) in values {
+                output.push_str(&" ".repeat(indent + 4));
+                output.push_str(&bazel_string(key));
+                output.push_str(": ");
+                output.push_str(&starlark_value(value, indent + 4));
+                output.push_str(",\n");
+            }
+            output.push_str(&" ".repeat(indent));
+            output.push('}');
+            output
+        }
+    }
+}
+
+fn direct_dependency_sets(
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> (Vec<String>, Vec<String>) {
+    let mut first_party = Vec::new();
+    let mut product = Vec::new();
+    for name in &package.normal {
+        if let Some(local) = dependencies
+            .values()
+            .find(|candidate| candidate.package_name == *name && candidate.hub == "product")
+        {
+            first_party.push(format!("//{}:{}", local.package_dir, local.package_name));
+        } else if package.hub == "product" {
+            product.push(format!("@product//:{}", name));
+        } else {
+            product.push(format!("@walker//:{}", name));
+        }
+    }
+    first_party.sort();
+    first_party.dedup();
+    product.sort();
+    product.dedup();
+    (first_party, product)
+}
+
+fn target_cfgs(system: &str, cargo_target: &str) -> Vec<String> {
+    let arch = system.strip_suffix("-linux").unwrap_or(system);
+    let environment = cargo_target
+        .rsplit_once('-')
+        .map(|(_, environment)| environment)
+        .unwrap_or("gnu");
+    let mut cfgs = vec![
+        format!("target_arch=\"{arch}\""),
+        "target_os=\"linux\"".to_owned(),
+        format!("target_env=\"{environment}\""),
+    ];
+    cfgs.sort();
+    cfgs
+}
+
+fn configured_target_rows(
+    root: &Path,
+    manifests: &[ManifestInfo],
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> Result<Vec<TargetRow>, Box<dyn Error>> {
+    let mut rows = Vec::new();
+    for manifest in manifests {
+        let package = dependencies
+            .get(&manifest.relative)
+            .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+        let source_files = package_source_paths(root, &manifest.package_dir)?;
+        let (direct_first_party_deps, direct_product_deps) =
+            direct_dependency_sets(package, dependencies);
+        let kind = if source_files
+            .iter()
+            .any(|path| path == &format!("{}/src/lib.rs", manifest.package_dir))
+        {
+            "rust_library"
+        } else {
+            "rust_binary"
+        };
+        let label = format!("//{}:{}", manifest.package_dir, manifest.package_name);
+        rows.push(TargetRow {
+            label: label.clone(),
+            package: manifest.package_name.clone(),
+            manifest: manifest.relative.clone(),
+            kind: kind.to_owned(),
+            cargo_context: "main".to_owned(),
+            system: None,
+            cargo_target: None,
+            policy_input: None,
+            source_files: source_files.clone(),
+            direct_first_party_deps: direct_first_party_deps.clone(),
+            direct_product_deps: direct_product_deps.clone(),
+            cfgs: Vec::new(),
+            features: Vec::new(),
+            closure_configured_targets: vec![label],
+            closure_external_identities: direct_product_deps.clone(),
+        });
+    }
+
+    for (context, package_name, system, cargo_target, policy_input, features) in
+        POLICY_TARGET_CONTEXTS
+    {
+        let manifest = manifests
+            .iter()
+            .find(|manifest| manifest.package_name == *package_name)
+            .ok_or_else(|| format!("package-policy package is missing: {package_name}"))?;
+        let package = dependencies
+            .get(&manifest.relative)
+            .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+        let source_files = package_source_paths(root, &manifest.package_dir)?;
+        let (direct_first_party_deps, direct_product_deps) =
+            direct_dependency_sets(package, dependencies);
+        let system_suffix = system.strip_suffix("-linux").unwrap_or(system);
+        let label = format!(
+            "//{}:{}-{}-{}",
+            manifest.package_dir, manifest.package_name, context, system_suffix
+        );
+        let mut requested_features = features
+            .iter()
+            .map(|feature| (*feature).to_owned())
+            .collect::<Vec<_>>();
+        requested_features.sort();
+        rows.push(TargetRow {
+            label: label.clone(),
+            package: manifest.package_name.clone(),
+            manifest: manifest.relative.clone(),
+            kind: "rust_test".to_owned(),
+            cargo_context: format!("{context}-{system_suffix}"),
+            system: Some((*system).to_owned()),
+            cargo_target: Some((*cargo_target).to_owned()),
+            policy_input: Some((*policy_input).to_owned()),
+            source_files,
+            direct_first_party_deps,
+            direct_product_deps: direct_product_deps.clone(),
+            cfgs: target_cfgs(system, cargo_target),
+            features: requested_features,
+            closure_configured_targets: vec![label],
+            closure_external_identities: direct_product_deps,
+        });
+    }
+    rows.sort_by(|left, right| left.label.cmp(&right.label));
+    if rows.windows(2).any(|pair| pair[0].label == pair[1].label) {
+        return Err("configured target definitions contain duplicate labels".into());
+    }
+    Ok(rows)
+}
+
+fn package_source_paths(root: &Path, package_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let prefix = format!("{package_dir}/src/");
+    let mut paths = tracked_paths(root)?
+        .into_iter()
+        .filter(|path| path.starts_with(&prefix) && path.ends_with(".rs"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Err(
+            format!("first-party package has no tracked Rust sources: {package_dir}").into(),
+        );
+    }
+    Ok(paths)
+}
+
+fn first_party_source_paths(
+    root: &Path,
+    manifests: &[ManifestInfo],
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut paths = BTreeSet::new();
+    for manifest in manifests {
+        paths.extend(package_source_paths(root, &manifest.package_dir)?);
+    }
+    if paths.is_empty() {
+        return Err("source census is empty".into());
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn source_census_json(
+    root: &Path,
+    manifests: &[ManifestInfo],
+    rows: &[TargetRow],
+    source_paths: &[String],
+) -> Result<String, Box<dyn Error>> {
+    let mut sources = Vec::new();
+    for path in source_paths {
+        let manifest = manifests
+            .iter()
+            .find(|manifest| path.starts_with(&format!("{}/", manifest.package_dir)))
+            .ok_or_else(|| format!("source is outside first-party manifests: {path}"))?;
+        let mut target_labels = rows
+            .iter()
+            .filter(|row| row.source_files.iter().any(|source| source == path))
+            .map(|row| row.label.clone())
+            .collect::<Vec<_>>();
+        target_labels.sort();
+        target_labels.dedup();
+        if target_labels.is_empty() {
+            return Err(format!("source is not bound to a configured target: {path}").into());
+        }
+        sources.push(ordered_object([
+            ("path".to_owned(), Value::String(path.clone())),
+            (
+                "manifest".to_owned(),
+                Value::String(manifest.relative.clone()),
+            ),
+            (
+                "package".to_owned(),
+                Value::String(manifest.package_name.clone()),
+            ),
+            (
+                "sha256".to_owned(),
+                Value::String(sha256_hex(&fs::read(root.join(path))?)),
+            ),
+            ("targetLabels".to_owned(), json_string_array(&target_labels)),
+        ]));
+    }
+    Ok(pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("sources".to_owned(), Value::Array(sources)),
+    ])))
+}
+
+fn no_shell_inventory_json(root: &Path, source_paths: &[String]) -> Result<String, Box<dyn Error>> {
+    if source_paths.is_empty() {
+        return Err("no-shell-inventory-empty".into());
+    }
+    let mut all_sites = Vec::new();
+    let mut scan_results = Vec::new();
+    for source in source_paths {
+        let contents = fs::read_to_string(root.join(source))
+            .map_err(|error| format!("no-shell-inventory-missing-entry: {source}: {error}"))?;
+        let sites = scan_spawn_sites(source, &contents)?;
+        if sites.iter().any(|site| site.shell_invocation) {
+            return Err("no-shell-inventory-planted-shell".into());
+        }
+        let keys = sites.iter().map(spawn_site_key).collect::<Vec<_>>();
+        scan_results.push(ordered_object([
+            ("source".to_owned(), Value::String(source.clone())),
+            ("status".to_owned(), json!("scanned")),
+            ("spawnSiteCount".to_owned(), json!(sites.len())),
+            ("spawnSiteKeys".to_owned(), json_string_array(&keys)),
+        ]));
+        all_sites.extend(sites);
+    }
+    all_sites.sort_by_key(spawn_site_key);
+    if all_sites
+        .windows(2)
+        .any(|pair| spawn_site_key(&pair[0]) == spawn_site_key(&pair[1]))
+    {
+        return Err("no-shell-inventory-extra-entry".into());
+    }
+    let governed = source_paths
+        .iter()
+        .map(|path| ordered_object([("path".to_owned(), Value::String(path.clone()))]))
+        .collect::<Vec<_>>();
+    let spawn_sites = all_sites
+        .iter()
+        .map(|site| {
+            ordered_object([
+                ("source".to_owned(), Value::String(site.source.clone())),
+                (
+                    "span".to_owned(),
+                    ordered_object([
+                        ("startLine".to_owned(), json!(site.start_line)),
+                        ("startColumn".to_owned(), json!(site.start_column)),
+                        ("endLine".to_owned(), json!(site.end_line)),
+                        ("endColumn".to_owned(), json!(site.end_column)),
+                    ]),
+                ),
+                (
+                    "programExpression".to_owned(),
+                    Value::String(site.program_expression.clone()),
+                ),
+                ("shellInvocation".to_owned(), json!(site.shell_invocation)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    Ok(pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("governedSources".to_owned(), Value::Array(governed.clone())),
+        ("declaredInputs".to_owned(), Value::Array(governed)),
+        ("scanResults".to_owned(), Value::Array(scan_results)),
+        ("spawnSites".to_owned(), Value::Array(spawn_sites)),
+    ])))
+}
+
+fn scan_spawn_sites(source: &str, contents: &str) -> Result<Vec<SpawnSite>, Box<dyn Error>> {
+    let masked = mask_rust_source(contents);
+    let marker = "Command::new(";
+    let mut sites = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = masked[cursor..].find(marker) {
+        let marker_start = cursor + relative;
+        let alias_start = marker_start
+            .checked_sub(5)
+            .filter(|start| &masked[*start..marker_start] == "Tokio");
+        if alias_start.is_none()
+            && marker_start > 0
+            && is_identifier_byte(masked.as_bytes()[marker_start - 1])
+        {
+            cursor = marker_start + marker.len();
+            continue;
+        }
+        let open = marker_start + marker.len() - 1;
+        let close = matching_paren(&masked, open)
+            .ok_or_else(|| format!("no-shell-inventory-missing-entry: {source}"))?;
+        let expression = contents[open + 1..close].trim().to_owned();
+        if expression.is_empty() {
+            return Err(format!("no-shell-inventory-unguarded-spawn: {source}").into());
+        }
+        let call_start = alias_start.unwrap_or(marker_start);
+        let (start_line, start_column) = line_column(contents, call_start);
+        let (end_line, end_column) = line_column(contents, close + 1);
+        sites.push(SpawnSite {
+            source: source.to_owned(),
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+            shell_invocation: shell_program_expression(&expression),
+            program_expression: expression.split_whitespace().collect::<Vec<_>>().join(" "),
+        });
+        cursor = close + 1;
+    }
+    sites.sort_by_key(spawn_site_key);
+    Ok(sites)
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn mask_rust_source(contents: &str) -> String {
+    let bytes = contents.as_bytes();
+    let mut masked = bytes.to_vec();
+    let mut index = 0;
+    let mut block_depth = 0usize;
+    while index < bytes.len() {
+        if block_depth > 0 {
+            if bytes[index..].starts_with(b"/*") {
+                masked[index] = b' ';
+                if index + 1 < masked.len() {
+                    masked[index + 1] = b' ';
+                }
+                block_depth += 1;
+                index += 2;
+            } else if bytes[index..].starts_with(b"*/") {
+                masked[index] = b' ';
+                if index + 1 < masked.len() {
+                    masked[index + 1] = b' ';
+                }
+                block_depth -= 1;
+                index += 2;
+            } else {
+                if masked[index] != b'\n' {
+                    masked[index] = b' ';
+                }
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"//") {
+            masked[index] = b' ';
+            if index + 1 < masked.len() {
+                masked[index + 1] = b' ';
+            }
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                masked[index] = b' ';
+                index += 1;
+            }
+            continue;
+        }
+        if bytes[index..].starts_with(b"/*") {
+            masked[index] = b' ';
+            if index + 1 < masked.len() {
+                masked[index + 1] = b' ';
+            }
+            block_depth = 1;
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'r' {
+            let mut quote = index + 1;
+            while quote < bytes.len() && bytes[quote] == b'#' {
+                quote += 1;
+            }
+            if quote < bytes.len() && bytes[quote] == b'"' {
+                let hashes = quote - index - 1;
+                for byte in &mut masked[index..=quote] {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+                index = quote + 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'"' && bytes[index + 1..].starts_with(&vec![b'#'; hashes]) {
+                        masked[index] = b' ';
+                        for offset in 0..hashes {
+                            masked[index + 1 + offset] = b' ';
+                        }
+                        index += hashes + 1;
+                        break;
+                    }
+                    if masked[index] != b'\n' {
+                        masked[index] = b' ';
+                    }
+                    index += 1;
+                }
+                continue;
+            }
+        }
+        if bytes[index] == b'"' {
+            masked[index] = b' ';
+            index += 1;
+            while index < bytes.len() {
+                let escaped = index > 0 && bytes[index - 1] == b'\\';
+                if bytes[index] == b'"' && !escaped {
+                    masked[index] = b' ';
+                    index += 1;
+                    break;
+                }
+                if masked[index] != b'\n' {
+                    masked[index] = b' ';
+                }
+                index += 1;
+            }
+            continue;
+        }
+        let is_char_literal = bytes[index] == b'\''
+            && (bytes.get(index + 1) == Some(&b'\\') || bytes.get(index + 2) == Some(&b'\''));
+        if is_char_literal {
+            masked[index] = b' ';
+            index += 1;
+            while index < bytes.len() {
+                let escaped = index > 0 && bytes[index - 1] == b'\\';
+                if bytes[index] == b'\'' && !escaped {
+                    masked[index] = b' ';
+                    index += 1;
+                    break;
+                }
+                if masked[index] != b'\n' {
+                    masked[index] = b' ';
+                }
+                index += 1;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    String::from_utf8(masked).expect("source was valid UTF-8")
+}
+
+fn matching_paren(masked: &str, open: usize) -> Option<usize> {
+    let bytes = masked.as_bytes();
+    let mut depth: usize = 0;
+    for (index, byte) in bytes.iter().enumerate().skip(open) {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn line_column(contents: &str, offset: usize) -> (usize, usize) {
+    let prefix = &contents[..offset.min(contents.len())];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit_once('\n')
+        .map_or(prefix.len() + 1, |(_, line)| line.len() + 1);
+    (line, column)
+}
+
+fn shell_program_expression(expression: &str) -> bool {
+    let normalized = expression.trim().trim_matches('"').to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "sh" | "bash"
+            | "/bin/sh"
+            | "/bin/bash"
+            | "/usr/bin/sh"
+            | "/usr/bin/bash"
+            | "/usr/bin/env sh"
+            | "/usr/bin/env bash"
+    ) || normalized.contains("sh -c")
+        || normalized.contains("bash -c")
+}
+
+fn spawn_site_key(site: &SpawnSite) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        site.source, site.start_line, site.start_column, site.program_expression
+    )
+}
+
+fn evidence_sink_policy_json() -> String {
+    let rows = [
+        (
+            "evidence-v1",
+            "execution-evidence",
+            30,
+            262_144,
+            32,
+            "workflow-and-head-digest",
+        ),
+        (
+            "exporter-diagnostic-v1",
+            "exporter-diagnostic",
+            7,
+            32_768,
+            64,
+            "workflow-and-head-digest",
+        ),
+        ("junit-v1", "junit", 14, 65_536, 128, "slice-output-root"),
+        (
+            "test-log-v1",
+            "test-log",
+            14,
+            65_536,
+            128,
+            "slice-output-root",
+        ),
+    ];
+    let rows = rows
+        .iter()
+        .map(
+            |(retention_class, sink_kind, max_age_days, max_bytes, max_records, scope)| {
+                ordered_object([
+                    (
+                        "retentionClass".to_owned(),
+                        Value::String((*retention_class).to_owned()),
+                    ),
+                    (
+                        "sinkKind".to_owned(),
+                        Value::String((*sink_kind).to_owned()),
+                    ),
+                    ("maxAgeDays".to_owned(), json!(max_age_days)),
+                    ("maxBytes".to_owned(), json!(max_bytes)),
+                    ("maxRecords".to_owned(), json!(max_records)),
+                    ("scope".to_owned(), Value::String((*scope).to_owned())),
+                    (
+                        "permittedFields".to_owned(),
+                        json_array(
+                            [
+                                "sinkKind",
+                                "retentionClass",
+                                "testVerdict",
+                                "evidenceStatus",
+                            ]
+                            .into_iter()
+                            .map(|field| Value::String(field.to_owned())),
+                        ),
+                    ),
+                    (
+                        "truncationCode".to_owned(),
+                        json!("D2B-BZLEVIDENCE-TRUNCATED"),
+                    ),
+                ])
+            },
+        )
+        .collect::<Vec<_>>();
+    pretty_json(&ordered_object([
+        ("schemaVersion".to_owned(), json!(1)),
+        ("status".to_owned(), json!("w0-seed")),
+        ("measured".to_owned(), json!(false)),
+        ("rows".to_owned(), Value::Array(rows)),
+    ]))
+}
+
+fn action_network_policy_json(hermeticity: &str) -> Result<String, Box<dyn Error>> {
+    let inventory = hermeticity::complete_action_network_inventory();
+    hermeticity::validate_action_network_inventory(&inventory)
+        .map_err(|error| format!("action-network inventory is invalid: {error}"))?;
+    let hermeticity: Value = serde_json::from_str(hermeticity)
+        .map_err(|error| format!("hermeticity inventory is not valid JSON: {error}"))?;
+    let mut policy = serde_json::to_value(inventory)?;
+    let object = policy
+        .as_object_mut()
+        .ok_or("action-network inventory did not serialize as an object")?;
+    object.insert("schema_version".to_owned(), json!(1));
+    object.insert("hermeticity".to_owned(), hermeticity);
+    Ok(pretty_json(&policy))
+}
+
+fn generate_model(root: &Path) -> Result<GeneratedModel, Box<dyn Error>> {
+    validate_generator_inputs(root)?;
+    let manifests = discover_manifests(root)?;
+    if manifests.is_empty() {
+        return Err("no Cargo package manifests were discovered".into());
+    }
+    let dependencies = dependency_graph(root)?;
+    let product_manifests = manifests
+        .iter()
+        .filter(|manifest| manifest.relative.starts_with("packages/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if product_manifests.is_empty() {
+        return Err("no first-party product manifests were discovered".into());
+    }
+    let target_rows = configured_target_rows(root, &product_manifests, &dependencies)?;
+    if target_rows.is_empty() {
+        return Err("configured first-party target census is empty".into());
+    }
+    let source_paths = first_party_source_paths(root, &product_manifests)?;
+    let source_census = source_census_json(root, &product_manifests, &target_rows, &source_paths)?;
+    let no_shell_inventory = no_shell_inventory_json(root, &source_paths)?;
+    let hermeticity = hermeticity_artifact(root)?;
+    let action_network_policy = action_network_policy_json(&hermeticity)?;
+    let configured_targets = configured_targets_json(&target_rows)?;
+    let product_targets = product_targets_bzl(&target_rows)?;
+    let package_policy_targets = package_policy_targets_bzl(&target_rows)?;
+    let evidence_sink_policy = evidence_sink_policy_json();
+    let bazelignore = bazelignore_entries(root, &manifests)?;
+    Ok(GeneratedModel {
+        bazelignore,
+        action_network_policy,
+        configured_targets,
+        evidence_sink_policy,
+        no_shell_inventory,
+        package_policy_targets,
+        product_targets,
+        source_census,
+    })
+}
+
+fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box<dyn Error>> {
+    let mut graph = BTreeMap::new();
+    for (hub, manifest, _) in HUBS {
+        let mut command = Command::new("cargo");
+        command.current_dir(root).args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--offline",
+        ]);
+        if *hub == "walker" {
+            command.arg("--no-deps");
+        } else {
+            command.args(["--filter-platform", GENERATOR_METADATA_TARGET]);
+        }
+        let output = command
+            .args(["--manifest-path", manifest])
+            .output()
+            .map_err(|error| format!("could not run cargo metadata for {hub}: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "cargo metadata for {hub} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+            .into());
+        }
+        let document: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("cannot parse cargo metadata for {hub}: {error}"))?;
+        let packages = document
+            .get("packages")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("cargo metadata for {hub} has no packages"))?;
+        let proc_macro_packages = packages
+            .iter()
+            .filter(|package| {
+                package.get("source").and_then(Value::as_str).is_some()
+                    && package
+                        .get("targets")
+                        .and_then(Value::as_array)
+                        .is_some_and(|targets| {
+                            targets.iter().any(|target| {
+                                target
+                                    .get("kind")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|kinds| {
+                                        kinds.iter().any(|kind| kind.as_str() == Some("proc-macro"))
+                                    })
+                            })
+                        })
+            })
+            .filter_map(|package| package.get("name").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        for package in packages {
+            let Some(manifest_path) = package.get("manifest_path").and_then(Value::as_str) else {
+                continue;
+            };
+            let manifest_path = Path::new(manifest_path);
+            let Ok(relative) = manifest_path.strip_prefix(root) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            let Some(package_name) = package.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let mut normal = BTreeSet::new();
+            let mut dev = BTreeSet::new();
+            let mut optional = BTreeSet::new();
+            if let Some(dependencies) = package.get("dependencies").and_then(Value::as_array) {
+                for dependency in dependencies {
+                    let Some(name) = dependency.get("name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if dependency.get("kind").and_then(Value::as_str) == Some("dev") {
+                        dev.insert(name.to_owned());
+                    } else {
+                        normal.insert(name.to_owned());
+                    }
+                    if dependency
+                        .get("optional")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        optional.insert(name.to_owned());
+                    }
+                }
+            }
+            let package_dir = Path::new(&relative)
+                .parent()
+                .ok_or_else(|| format!("Cargo manifest has no parent: {relative}"))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let proc_macro = normal
+                .iter()
+                .chain(dev.iter())
+                .filter(|name| proc_macro_packages.contains(*name))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            graph.insert(
+                relative,
+                DependencyInfo {
+                    package_name: package_name.to_owned(),
+                    package_dir,
+                    hub: (*hub).to_owned(),
+                    normal: normal.into_iter().collect(),
+                    dev: dev.into_iter().collect(),
+                    optional,
+                    proc_macro,
+                },
+            );
+        }
+    }
+    if graph.is_empty() {
+        return Err("cargo metadata produced an empty first-party dependency graph".into());
+    }
+    Ok(graph)
+}
+
+fn hermeticity_artifact(root: &Path) -> Result<String, Box<dyn Error>> {
+    let hubs = HUBS
+        .iter()
+        .map(|(name, _, cargo_lock)| {
+            let side_lock = root.join(format!("bazel/cargo/{name}.lock"));
+            let text = fs::read_to_string(&side_lock).unwrap_or_default();
+            let document = if text.trim().is_empty() {
+                Value::Object(serde_json::Map::new())
+            } else {
+                serde_json::from_str(&text).map_err(|error| {
+                    format!(
+                        "cannot parse Bazel-side lock for hermeticity inventory {name}: {error}"
+                    )
+                })?
+            };
+            let crates = document
+                .get("crates")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let packages = crates
+                .values()
+                .map(|record| {
+                    let package_name = record
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "Bazel crate record has no name".to_owned())?;
+                    let version =
+                        record
+                            .get("version")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                format!("Bazel crate record {package_name} has no version")
+                            })?;
+                    let source = record
+                        .get("repository")
+                        .filter(|repository| !repository.is_null())
+                        .map(|_| {
+                            record
+                                .get("package_url")
+                                .and_then(Value::as_str)
+                                .unwrap_or("registry")
+                                .to_owned()
+                        });
+                    let build_script_target = record
+                        .get("targets")
+                        .and_then(Value::as_array)
+                        .is_some_and(|targets| {
+                            targets.iter().any(|target| {
+                                target
+                                    .as_object()
+                                    .is_some_and(|target| target.contains_key("BuildScript"))
+                            })
+                        });
+                    let required_annotations = (build_script_target && source.is_some())
+                        .then(|| lock_annotations(record.get("build_script_attrs")));
+                    Ok(hermeticity::PackageInput {
+                        name: package_name.to_owned(),
+                        version: version.to_owned(),
+                        source,
+                        build_script_target,
+                        required_annotations,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(hermeticity::HubInput {
+                hub: hermeticity_hub(name)?,
+                lock_attrs: hermeticity::HubLockAttrs {
+                    lockfile: format!("bazel/cargo/{name}.lock"),
+                    cargo_lockfile: (*cargo_lock).to_owned(),
+                    skip_cargo_lockfile_overwrite: true,
+                },
+                packages,
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    let input = hermeticity::InventoryInput {
+        hubs,
+        observed_action_environment: hermeticity::pinned_action_env_allowlist()
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+    };
+    let artifact = hermeticity::generated_artifact(&input)
+        .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
+    Ok(artifact.contents)
+}
+
+fn hermeticity_hub(name: &str) -> Result<hermeticity::Hub, Box<dyn Error>> {
+    match name {
+        "product" => Ok(hermeticity::Hub::Product),
+        "walker" => Ok(hermeticity::Hub::Walker),
+        _ => Err(format!("unknown hermeticity hub {name:?}").into()),
+    }
+}
+
+fn lock_annotations(attrs: Option<&Value>) -> hermeticity::RequiredAnnotations {
+    let mut annotations = hermeticity::RequiredAnnotations::default();
+    let Some(attrs) = attrs else {
+        return annotations;
+    };
+    for (field, destination) in [
+        ("data_glob", &mut annotations.build_script_data),
+        ("tools", &mut annotations.build_script_tools),
+        ("toolchains", &mut annotations.build_script_toolchains),
+    ] {
+        if let Some(values) = attrs.get(field).and_then(Value::as_array) {
+            for value in values.iter().filter_map(Value::as_str) {
+                destination.insert(value.to_owned());
+            }
+        }
+    }
+    if let Some(values) = attrs.get("env").and_then(Value::as_object) {
+        for (name, value) in values {
+            annotations
+                .build_script_env
+                .insert(name.clone(), value.as_str().unwrap_or_default().to_owned());
+        }
+    }
+    annotations.build_script_use_cc_toolchain = attrs
+        .get("use_cc_toolchain")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    annotations.build_script_use_default_shell_env = attrs
+        .get("use_default_shell_env")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    annotations
+}
+
+fn validate_generator_inputs(root: &Path) -> Result<(), Box<dyn Error>> {
+    let require_hub_locks = root.join("MODULE.bazel.lock").is_file();
+    for (name, manifest, lock) in HUBS {
+        let manifest_path = root.join(manifest);
+        let lock_path = root.join(lock);
+        let manifest_text = fs::read_to_string(&manifest_path)
+            .map_err(|error| format!("cannot read Cargo metadata root {manifest}: {error}"))?;
+        let lock_text = fs::read_to_string(&lock_path)
+            .map_err(|error| format!("cannot read Cargo lock {lock}: {error}"))?;
+        let package_names = package_names(root, manifest, &manifest_text);
+        let lock_packages = lock_packages(&lock_text);
+        if lock_packages.is_empty() {
+            return Err(format!("Cargo lock {lock} has no package records").into());
+        }
+        let missing = package_names
+            .into_iter()
+            .filter(|name| !lock_packages.iter().any(|(lock_name, _)| lock_name == name))
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let code = if *name == "product" {
+                "D2B-CARGODRIFT-PRODUCT"
+            } else {
+                "D2B-CARGODRIFT-WALKER"
+            };
+            return Err(adr0054_drift_message(code)
+                .expect("Cargo drift diagnostic is closed")
+                .to_owned()
+                .into());
+        }
+        let side_lock = root.join(format!("bazel/cargo/{name}.lock", name = name));
+        let Ok(side_text) = fs::read_to_string(&side_lock) else {
+            if require_hub_locks {
+                let code = if *name == "product" {
+                    "D2B-BZLDRIFT-PRODUCT-HUB"
+                } else {
+                    "D2B-BZLDRIFT-WALKER-HUB"
+                };
+                return Err(adr0054_drift_message(code)
+                    .expect("hub drift diagnostic is closed")
+                    .into());
+            }
+            continue;
+        };
+        if side_text.trim().is_empty() {
+            let code = if *name == "product" {
+                "D2B-BZLDRIFT-PRODUCT-HUB"
+            } else {
+                "D2B-BZLDRIFT-WALKER-HUB"
+            };
+            return Err(adr0054_drift_message(code)
+                .expect("hub drift diagnostic is closed")
+                .into());
+        }
+        if let Some(recorded) = recorded_lock_digest(&side_text) {
+            let actual = sha256_hex(lock_text.as_bytes());
+            if recorded != actual {
+                let code = if *name == "product" {
+                    "D2B-BZLDRIFT-PRODUCT-HUB"
+                } else {
+                    "D2B-BZLDRIFT-WALKER-HUB"
+                };
+                return Err(adr0054_drift_message(code)
+                    .expect("hub drift diagnostic is closed")
+                    .into());
+            }
+        }
+    }
+
+    validate_toolchains(root)
+}
+
+fn validate_toolchains(root: &Path) -> Result<(), Box<dyn Error>> {
+    let stable = fs::read_to_string(root.join("packages/rust-toolchain.toml"))?;
+    let nightly = fs::read_to_string(root.join("packages/d2b-api-surface/rust-toolchain.toml"))?;
+    let stable_channel = channel(&stable).ok_or("stable Rust toolchain channel is missing")?;
+    let nightly_channel = channel(&nightly).ok_or("nightly Rust toolchain channel is missing")?;
+    if stable_channel != STABLE_TOOLCHAIN {
+        return Err(format!(
+            "stable Rust toolchain mismatch: expected {STABLE_TOOLCHAIN}, found {stable_channel}"
+        )
+        .into());
+    }
+    if nightly_channel != NIGHTLY_TOOLCHAIN {
+        return Err(format!(
+            "nightly Rust toolchain mismatch: expected {NIGHTLY_TOOLCHAIN}, found {nightly_channel}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn channel(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("channel = "))
+        .and_then(|value| value.trim().strip_prefix('"'))
+        .and_then(|value| value.strip_suffix('"'))
+        .map(str::to_owned)
+}
+
+fn discover_manifests(root: &Path) -> Result<Vec<ManifestInfo>, Box<dyn Error>> {
+    let mut paths = BTreeSet::new();
+    for (_, manifest, _) in HUBS {
+        let relative = Path::new(manifest);
+        let text = fs::read_to_string(root.join(relative))?;
+        if package_name(&text).is_some() {
+            paths.insert(relative.to_string_lossy().into_owned());
+            continue;
+        }
+        for member in workspace_members(&text) {
+            let package = relative
+                .parent()
+                .ok_or("workspace Cargo manifest has no parent")?
+                .join(member)
+                .join("Cargo.toml");
+            let package = normalize_relative(&package)?;
+            paths.insert(package);
+        }
+    }
+    paths
+        .into_iter()
+        .map(|relative| {
+            let text = fs::read_to_string(root.join(&relative))?;
+            parse_manifest(&relative, &text, root)
+        })
+        .collect()
+}
+
+fn parse_manifest(relative: &str, text: &str, root: &Path) -> Result<ManifestInfo, Box<dyn Error>> {
+    let package_name =
+        package_name(text).ok_or_else(|| format!("Cargo package name is missing in {relative}"))?;
+    let sections = toml_sections(text);
+    let lib_doctest = sections
+        .iter()
+        .find(|(name, _)| name == "[lib]")
+        .map(|(_, block)| value_bool(block, "doctest").unwrap_or(true));
+    let mut tests = target_sections(&sections, "[[test]]");
+    let package_dir = Path::new(relative)
+        .parent()
+        .ok_or("Cargo package manifest has no parent")?
+        .to_string_lossy()
+        .into_owned();
+    let explicit_tests = tests
+        .iter()
+        .map(|target| target.path.clone())
+        .collect::<BTreeSet<_>>();
+    for target in implicit_test_targets(root, &package_dir)? {
+        if !explicit_tests.contains(&target.path) {
+            tests.push(target);
+        }
+    }
+    Ok(ManifestInfo {
+        relative: relative.to_owned(),
+        package_dir,
+        package_name,
+        lib_doctest,
+        tests,
+        bins: target_sections(&sections, "[[bin]]"),
+        benches: target_sections(&sections, "[[bench]]"),
+    })
+}
+
+fn implicit_test_targets(
+    root: &Path,
+    package_dir: &str,
+) -> Result<Vec<TargetInfo>, Box<dyn Error>> {
+    let tests_dir = root.join(package_dir).join("tests");
+    if !tests_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut targets = Vec::new();
+    for entry in fs::read_dir(tests_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file() || path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let name = stem.to_owned();
+        targets.push(TargetInfo {
+            name,
+            path: format!("tests/{}.rs", stem),
+            harness: true,
+            required_features: false,
+        });
+    }
+    targets.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(targets)
+}
+
+fn target_sections(sections: &[(String, String)], target_kind: &str) -> Vec<TargetInfo> {
+    sections
+        .iter()
+        .filter(|(name, _)| name == target_kind)
+        .filter_map(|(_, block)| {
+            let name = value_string(block, "name")?;
+            let default_path = match target_kind {
+                "[[bin]]" => format!("src/bin/{name}.rs"),
+                "[[bench]]" => format!("benches/{name}.rs"),
+                _ => format!("tests/{name}.rs"),
+            };
+            let path = value_string(block, "path").unwrap_or(default_path);
+            Some(TargetInfo {
+                name,
+                path,
+                harness: value_bool(block, "harness").unwrap_or(true),
+                required_features: block.contains("required-features"),
+            })
+        })
+        .collect()
+}
+
+fn render_build(
+    manifest: &ManifestInfo,
+    root: &Path,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> Result<GeneratedBuild, Box<dyn Error>> {
+    if manifest.relative == "packages/d2b-priv-broker/Cargo.toml" {
+        return render_broker_build(manifest, root, dependencies);
+    }
+    if manifest.relative == "packages/d2b-guest-shell-runner/Cargo.toml" {
+        return render_guest_build(manifest, root, dependencies);
+    }
+
+    let build_path = format!("{}/BUILD.bazel", manifest.package_dir);
+    let mut source_files = Vec::new();
+    let source_root = root.join(&manifest.package_dir);
+    collect_rs_files(&source_root, &source_root, &mut source_files)?;
+    source_files.sort();
+    let package = dependencies
+        .get(&manifest.relative)
+        .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+    let deps = dependency_labels(package, dependencies, &[]);
+    let proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], false);
+    let mut content = String::from("# Generated by cargo xtask gen-bazel. Do not edit.\n");
+    content.push_str("package(default_visibility = [\"//visibility:public\"])\n\n");
+    content.push_str("load(\"@rules_rust//rust:defs.bzl\", \"rust_library\", \"rust_test\")\n\n");
+    content.push_str("rust_library(\n");
+    content.push_str(&format!(
+        "    name = {},\n",
+        bazel_string(&manifest.package_name)
+    ));
+    content.push_str(&format!(
+        "    crate_name = {},\n",
+        bazel_string(&rust_crate_name(&manifest.package_name))
+    ));
+    content.push_str("    edition = \"2024\",\n");
+    content.push_str("    srcs = [\n");
+    for source in source_files {
+        content.push_str("        ");
+        content.push_str(&bazel_string(&source));
+        content.push_str(",\n");
+    }
+
+    content.push_str("    ],\n");
+    append_deps(&mut content, &deps);
+    append_proc_macro_deps(&mut content, &proc_macro_deps);
+    content.push_str(")\n");
+    for target in &manifest.bins {
+        let target_name = if target.name == manifest.package_name {
+            format!("{}-bin", target.name)
+        } else {
+            target.name.clone()
+        };
+        content.push_str("\nrust_test(\n");
+        content.push_str(&format!("    name = {},\n", bazel_string(&target_name)));
+        content.push_str("    edition = \"2024\",\n");
+        content.push_str(&format!("    srcs = [{}],\n", bazel_string(&target.path)));
+        append_deps(&mut content, &[format!(":{}", manifest.package_name)]);
+        content.push_str(")\n");
+    }
+    for target in &manifest.tests {
+        content.push_str("\nrust_test(\n");
+        content.push_str(&format!("    name = {},\n", bazel_string(&target.name)));
+        content.push_str("    edition = \"2024\",\n");
+        content.push_str(&format!("    srcs = [{}],\n", bazel_string(&target.path)));
+        append_deps(&mut content, &[format!(":{}", manifest.package_name)]);
+        content.push_str(")\n");
+    }
+    if manifest.package_name == "d2b-core" {
+        append_context_library(
+            &mut content,
+            &manifest.package_name,
+            "d2b-core-test-support",
+            "test-support",
+            &source_files_for_package(root, &manifest.package_dir, true)?,
+            &deps,
+            &proc_macro_deps,
+        );
+    }
+    if manifest.package_name == "d2b-host" {
+        append_context_library(
+            &mut content,
+            &manifest.package_name,
+            "d2b-host-fake-backends",
+            "fake-backends",
+            &source_files_for_package(root, &manifest.package_dir, true)?,
+            &deps,
+            &proc_macro_deps,
+        );
+    }
+    Ok(GeneratedBuild {
+        path: build_path,
+        content,
+    })
+}
+
+fn render_broker_build(
+    manifest: &ManifestInfo,
+    root: &Path,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> Result<GeneratedBuild, Box<dyn Error>> {
+    let package = dependencies
+        .get(&manifest.relative)
+        .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+    let sources = source_files_for_package(root, &manifest.package_dir, false)?;
+    let normal_deps = dependency_labels(package, dependencies, &[]);
+    let normal_proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], false);
+    let mut content = build_header();
+    append_context_library(
+        &mut content,
+        &manifest.package_name,
+        "d2b-priv-broker-lib",
+        "",
+        &sources,
+        &normal_deps,
+        &normal_proc_macro_deps,
+    );
+    append_binary(
+        &mut content,
+        "d2b-priv-broker",
+        "d2b-priv-broker",
+        "src/main.rs",
+        &std::iter::once(":d2b-priv-broker-lib".to_owned())
+            .chain(normal_deps.iter().cloned())
+            .collect::<Vec<_>>(),
+        &[],
+    );
+
+    let contexts = [
+        ("", "d2b-priv-broker-default-lib", "tests", "tests"),
+        (
+            "layer1-bootstrap",
+            "d2b-priv-broker-layer1-lib",
+            "tests_layer1",
+            "tests_layer1",
+        ),
+        (
+            "fake-backends",
+            "d2b-priv-broker-fakebackends-lib",
+            "tests_fakebackends",
+            "tests_fakebackends",
+        ),
+    ];
+    let test_targets = manifest
+        .tests
+        .iter()
+        .map(|target| target.name.clone())
+        .collect::<Vec<_>>();
+    for (feature, library, suite, _suite_alias) in contexts {
+        let local_overrides = if feature == "fake-backends" {
+            &[("d2b-host", "d2b-host-fake-backends")][..]
+        } else {
+            &[][..]
+        };
+        let context_deps = dependency_labels(package, dependencies, local_overrides);
+        let context_proc_macro_deps =
+            proc_macro_dependency_labels(package, dependencies, local_overrides, false);
+        let test_overrides = local_overrides;
+        let test_deps = test_dependency_labels(package, dependencies, test_overrides);
+        let test_proc_macro_deps =
+            proc_macro_dependency_labels(package, dependencies, test_overrides, false);
+        append_context_library(
+            &mut content,
+            &manifest.package_name,
+            library,
+            feature,
+            &sources,
+            &context_deps,
+            &context_proc_macro_deps,
+        );
+        for target in &manifest.tests {
+            let target_name = if feature.is_empty() {
+                format!("{}_default", target.name)
+            } else {
+                format!("{}_{}", target.name, feature.replace('-', "_"))
+            };
+            append_test(
+                &mut content,
+                &target_name,
+                library,
+                &target.path,
+                feature,
+                &test_deps,
+                &test_proc_macro_deps,
+                Some(("d2b-priv-broker", "CARGO_BIN_EXE_d2b-priv-broker")),
+            );
+        }
+        content.push_str("\ntest_suite(\n");
+        content.push_str(&format!("    name = {},\n", bazel_string(suite)));
+        content.push_str("    tests = [\n");
+        for target in &test_targets {
+            content.push_str("        ");
+            let target_name = if feature.is_empty() {
+                format!("{}_default", target)
+            } else {
+                format!("{}_{}", target, feature.replace('-', "_"))
+            };
+            content.push_str(&bazel_string(&format!(":{}", target_name)));
+            content.push_str(",\n");
+        }
+        content.push_str("    ],\n)\n");
+    }
+
+    Ok(GeneratedBuild {
+        path: format!("{}/BUILD.bazel", manifest.package_dir),
+        content,
+    })
+}
+
+fn render_guest_build(
+    manifest: &ManifestInfo,
+    root: &Path,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+) -> Result<GeneratedBuild, Box<dyn Error>> {
+    let package = dependencies
+        .get(&manifest.relative)
+        .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
+    let sources = source_files_for_package(root, &manifest.package_dir, false)?;
+    let default_deps = dependency_labels(package, dependencies, &[]);
+    let default_proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], false);
+    let real_deps =
+        dependency_labels_for_names(&package.normal, package, dependencies, &[], true, false);
+    let real_proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], true);
+    let mut content = build_header();
+    append_context_library(
+        &mut content,
+        &manifest.package_name,
+        "d2b-guest-shell-runner-lib",
+        "",
+        &sources,
+        &default_deps,
+        &default_proc_macro_deps,
+    );
+    append_binary(
+        &mut content,
+        "d2b-guest-shell-runner",
+        "d2b-guest-shell-runner",
+        "src/main.rs",
+        &std::iter::once(":d2b-guest-shell-runner-lib".to_owned())
+            .chain(default_deps.iter().cloned())
+            .collect::<Vec<_>>(),
+        &[],
+    );
+    append_context_library(
+        &mut content,
+        &manifest.package_name,
+        "d2b-guest-shell-runner-real-libshpool-lib",
+        "real-libshpool",
+        &sources,
+        &real_deps,
+        &real_proc_macro_deps,
+    );
+    append_binary(
+        &mut content,
+        "d2b-guest-shell-runner-real-libshpool",
+        "d2b-guest-shell-runner",
+        "src/main.rs",
+        &std::iter::once(":d2b-guest-shell-runner-real-libshpool-lib".to_owned())
+            .chain(real_deps.iter().cloned())
+            .collect::<Vec<_>>(),
+        &["real-libshpool".to_owned()],
+    );
+    for target in &manifest.tests {
+        append_test(
+            &mut content,
+            &target.name,
+            "d2b-guest-shell-runner-real-libshpool-lib",
+            &target.path,
+            "real-libshpool",
+            &test_dependency_labels_with_optional(package, dependencies, &[], true),
+            &real_proc_macro_deps,
+            Some((
+                "d2b-guest-shell-runner-real-libshpool",
+                "CARGO_BIN_EXE_d2b-guest-shell-runner",
+            )),
+        );
+    }
+    content.push_str("\ntest_suite(\n");
+    content.push_str("    name = \"tests\",\n");
+    content.push_str("    tests = [\n");
+    for target in &manifest.tests {
+        content.push_str("        ");
+        content.push_str(&bazel_string(&format!(":{}", target.name)));
+        content.push_str(",\n");
+    }
+    content.push_str("    ],\n)\n");
+    Ok(GeneratedBuild {
+        path: format!("{}/BUILD.bazel", manifest.package_dir),
+        content,
+    })
+}
+
+fn build_header() -> String {
+    String::from(
+        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
+         package(default_visibility = [\"//visibility:public\"])\n\n\
+         load(\"@rules_rust//rust:defs.bzl\", \"rust_binary\", \"rust_library\", \"rust_test\")\n",
+    )
+}
+
+fn rust_crate_name(package_name: &str) -> String {
+    package_name.replace('-', "_")
+}
+
+fn source_files_for_package(
+    root: &Path,
+    package_dir: &str,
+    include_main: bool,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let package_root = root.join(package_dir);
+    let source_root = package_root.join("src");
+    let mut source_files = Vec::new();
+    collect_rs_files(&source_root, &source_root, &mut source_files)?;
+    source_files
+        .retain(|source| (include_main || source != "main.rs") && !source.starts_with("bin/"));
+    source_files.sort();
+    Ok(source_files
+        .into_iter()
+        .map(|source| format!("src/{source}"))
+        .collect())
+}
+
+fn dependency_labels(
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+    local_overrides: &[(&str, &str)],
+) -> Vec<String> {
+    dependency_labels_for_names(
+        &package.normal,
+        package,
+        dependencies,
+        local_overrides,
+        false,
+        false,
+    )
+}
+
+fn test_dependency_labels(
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+    local_overrides: &[(&str, &str)],
+) -> Vec<String> {
+    test_dependency_labels_with_optional(package, dependencies, local_overrides, false)
+}
+
+fn test_dependency_labels_with_optional(
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+    local_overrides: &[(&str, &str)],
+    include_optional: bool,
+) -> Vec<String> {
+    let mut names = package.normal.clone();
+    names.extend(package.dev.iter().cloned());
+    names.sort();
+    names.dedup();
+    dependency_labels_for_names(
+        &names,
+        package,
+        dependencies,
+        local_overrides,
+        include_optional,
+        false,
+    )
+}
+
+fn dependency_labels_for_names(
+    names: &[String],
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+    local_overrides: &[(&str, &str)],
+    include_optional: bool,
+    include_proc_macro: bool,
+) -> Vec<String> {
+    let mut labels = names
+        .iter()
+        .filter_map(|dependency| {
+            if !include_optional && package.optional.contains(dependency) {
+                return None;
+            }
+            if !include_proc_macro && package.proc_macro.contains(dependency) {
+                return None;
+            }
+            if let Some((_, target)) = local_overrides.iter().find(|(name, _)| *name == dependency)
+                && let Some(local) = dependencies
+                    .values()
+                    .find(|candidate| candidate.package_name == *dependency)
+            {
+                return Some(format!("//{}:{}", local.package_dir, target));
+            }
+            if let Some(local) = dependencies
+                .values()
+                .find(|candidate| candidate.package_name == *dependency)
+            {
+                return Some(format!("//{}:{}", local.package_dir, local.package_name));
+            }
+            Some(format!("@{}//:{}", package.hub, dependency))
+        })
+        .collect::<Vec<_>>();
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+fn proc_macro_dependency_labels(
+    package: &DependencyInfo,
+    dependencies: &BTreeMap<String, DependencyInfo>,
+    local_overrides: &[(&str, &str)],
+    include_optional: bool,
+) -> Vec<String> {
+    let names = package.proc_macro.iter().cloned().collect::<Vec<_>>();
+    dependency_labels_for_names(
+        &names,
+        package,
+        dependencies,
+        local_overrides,
+        include_optional,
+        true,
+    )
+}
+
+fn append_deps(content: &mut String, deps: &[String]) {
+    content.push_str("    deps = [\n");
+    for dep in deps {
+        content.push_str("        ");
+        content.push_str(&bazel_string(dep));
+        content.push_str(",\n");
+    }
+    content.push_str("    ],\n");
+}
+
+fn append_proc_macro_deps(content: &mut String, deps: &[String]) {
+    if deps.is_empty() {
+        return;
+    }
+    content.push_str("    proc_macro_deps = [\n");
+    for dep in deps {
+        content.push_str("        ");
+        content.push_str(&bazel_string(dep));
+        content.push_str(",\n");
+    }
+    content.push_str("    ],\n");
+}
+
+fn append_context_library(
+    content: &mut String,
+    package_name: &str,
+    target_name: &str,
+    feature: &str,
+    sources: &[String],
+    deps: &[String],
+    proc_macro_deps: &[String],
+) {
+    content.push_str("\nrust_library(\n");
+    content.push_str(&format!("    name = {},\n", bazel_string(target_name)));
+    content.push_str(&format!(
+        "    crate_name = {},\n",
+        bazel_string(&rust_crate_name(package_name))
+    ));
+    content.push_str("    edition = \"2024\",\n");
+    if !feature.is_empty() {
+        content.push_str(&format!(
+            "    crate_features = [{}],\n",
+            bazel_string(feature)
+        ));
+    }
+    content.push_str("    srcs = [\n");
+    for source in sources {
+        content.push_str("        ");
+        content.push_str(&bazel_string(source));
+        content.push_str(",\n");
+    }
+    content.push_str("    ],\n");
+    append_deps(content, deps);
+    append_proc_macro_deps(content, proc_macro_deps);
+    content.push_str(")\n");
+}
+
+fn append_binary(
+    content: &mut String,
+    target_name: &str,
+    package_name: &str,
+    source: &str,
+    deps: &[String],
+    features: &[String],
+) {
+    content.push_str("\nrust_binary(\n");
+    content.push_str(&format!("    name = {},\n", bazel_string(target_name)));
+    content.push_str(&format!(
+        "    crate_name = {},\n",
+        bazel_string(&rust_crate_name(package_name))
+    ));
+    content.push_str("    edition = \"2024\",\n");
+    if !features.is_empty() {
+        content.push_str("    crate_features = [\n");
+        for feature in features {
+            content.push_str("        ");
+            content.push_str(&bazel_string(feature));
+            content.push_str(",\n");
+        }
+        content.push_str("    ],\n");
+    }
+    content.push_str(&format!("    srcs = [{}],\n", bazel_string(source)));
+    append_deps(content, deps);
+    content.push_str(")\n");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_test(
+    content: &mut String,
+    target_name: &str,
+    library: &str,
+    source: &str,
+    feature: &str,
+    deps: &[String],
+    proc_macro_deps: &[String],
+    binary_provider: Option<(&str, &str)>,
+) {
+    content.push_str("\nrust_test(\n");
+    content.push_str(&format!("    name = {},\n", bazel_string(target_name)));
+    content.push_str("    edition = \"2024\",\n");
+    if !feature.is_empty() {
+        content.push_str(&format!(
+            "    crate_features = [{}],\n",
+            bazel_string(feature)
+        ));
+    }
+    if let Some((binary_provider, binary_env)) = binary_provider {
+        content.push_str("    env_inherit = [\"PATH\"],\n");
+        content.push_str(&format!(
+            "    env = {{\"{binary_env}\": \"$(rootpath :{binary_provider})\"}},\n"
+        ));
+        content.push_str(&format!(
+            "    rustc_env = {{\"{binary_env}\": \"$(rootpath :{binary_provider})\"}},\n"
+        ));
+    }
+    content.push_str(&format!("    srcs = [{}],\n", bazel_string(source)));
+    let mut all_deps = vec![format!(":{library}")];
+    all_deps.extend(deps.iter().cloned());
+    if let Some((binary_provider, _)) = binary_provider {
+        all_deps.push(format!(":{binary_provider}"));
+    }
+    append_deps(content, &all_deps);
+    append_proc_macro_deps(content, proc_macro_deps);
+    content.push_str(")\n");
+}
+
+fn collect_rs_files(
+    root: &Path,
+    current: &Path,
+    output: &mut Vec<String>,
+) -> Result<(), Box<dyn Error>> {
+    if !current.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_rs_files(root, &path, output)?;
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
+            output.push(
+                path.strip_prefix(root)
+                    .map_err(|_| "source path escaped Cargo package root")?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn governed_source_inventory(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let tracked = tracked_paths(root)?;
+    let mut sources = tracked
+        .into_iter()
+        .filter(|path| {
+            path.starts_with("packages/")
+                && path.ends_with(".rs")
+                && !Path::new(path).components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::Normal(value)
+                            if matches!(value.to_str(), Some("target" | "tests" | "fixtures" | ".git"))
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    if sources.is_empty() {
+        return Err("governed Rust source inventory is empty".into());
+    }
+    Ok(sources)
+}
+
+fn bazelignore_entries(
+    root: &Path,
+    manifests: &[ManifestInfo],
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut entries = BTreeSet::from([".scratch/".to_owned()]);
+    entries.insert("packages/target/".to_owned());
+    entries.insert("packages/d2b-priv-broker/target-layer1/".to_owned());
+    entries.insert("packages/d2b-priv-broker/target-fakebackends/".to_owned());
+    entries.insert("proofs/target/".to_owned());
+    entries.insert("labs/target/".to_owned());
+    for manifest in manifests {
+        entries.insert(format!("{}/target/", manifest.package_dir));
+    }
+    let mut cargo_manifests = Vec::new();
+    collect_named_files(root, "Cargo.toml", &mut cargo_manifests)?;
+    for manifest in cargo_manifests {
+        let relative = manifest
+            .strip_prefix(root)
+            .map_err(|_| "Cargo manifest escaped repository root")?;
+        let relative = relative
+            .parent()
+            .ok_or("Cargo manifest has no parent")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !relative.is_empty() {
+            entries.insert(format!("{relative}/target/"));
+        }
+    }
+    Ok(entries.into_iter().collect())
+}
+
+fn collect_named_files(
+    root: &Path,
+    name: &str,
+    output: &mut Vec<PathBuf>,
+) -> Result<(), Box<dyn Error>> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir()
+            && !matches!(
+                entry.file_name().to_str(),
+                Some(".git" | ".scratch" | "target")
+            )
+        {
+            collect_named_files(&path, name, output)?;
+        } else if file_type.is_file() && entry.file_name() == name {
+            output.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn package_names(root: &Path, manifest_relative: &str, manifest: &str) -> Vec<String> {
+    if let Some(name) = package_name(manifest) {
+        return vec![name];
+    }
+    workspace_members(manifest)
+        .into_iter()
+        .filter_map(|member| {
+            let path = root
+                .join(Path::new(manifest_relative).parent()?)
+                .join(member)
+                .join("Cargo.toml");
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|text| package_name(&text))
+        })
+        .collect()
+}
+
+fn package_name(text: &str) -> Option<String> {
+    toml_sections(text)
+        .into_iter()
+        .find(|(name, _)| name == "[package]")
+        .and_then(|(_, block)| value_string(&block, "name"))
+}
+
+fn workspace_members(text: &str) -> Vec<String> {
+    let Some(start) = text.find("members") else {
+        return Vec::new();
+    };
+    let remainder = &text[start..];
+    let Some(open) = remainder.find('[') else {
+        return Vec::new();
+    };
+    let remainder = &remainder[open..];
+    let Some(close) = remainder.find(']') else {
+        return Vec::new();
+    };
+    quoted_values(&remainder[..=close])
+}
+
+fn toml_sections(text: &str) -> Vec<(String, String)> {
+    let mut sections = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if let Some(name) = current_name.take() {
+                sections.push((name, current.clone()));
+            }
+            current.clear();
+            current_name = Some(trimmed.to_owned());
+        } else if current_name.is_some() {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if let Some(name) = current_name {
+        sections.push((name, current));
+    }
+    sections
+}
+
+fn value_string(block: &str, key: &str) -> Option<String> {
+    block.lines().find_map(|line| {
+        let line = line.trim();
+        let (name, value) = line.split_once('=')?;
+        if name.trim() != key {
+            return None;
+        }
+        let value = value.trim();
+        let value = value.strip_prefix('"')?;
+        let end = value.find('"')?;
+        Some(value[..end].to_owned())
+    })
+}
+
+fn value_bool(block: &str, key: &str) -> Option<bool> {
+    block.lines().find_map(|line| {
+        let (name, value) = line.trim().split_once('=')?;
+        if name.trim() != key {
+            return None;
+        }
+        match value.trim() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+fn quoted_values(text: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('"') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('"') else {
+            break;
+        };
+        values.push(rest[..end].to_owned());
+        rest = &rest[end + 1..];
+    }
+    values
+}
+
+fn lock_packages(text: &str) -> Vec<(String, String)> {
+    text.split("[[package]]")
+        .skip(1)
+        .filter_map(|block| {
+            let name = value_string(block, "name")?;
+            let version = value_string(block, "version")?;
+            Some((name, version))
+        })
+        .collect()
+}
+
+fn recorded_lock_digest(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        if !line.contains("cargo_lock_sha256") && !line.contains("cargo-lock-sha256") {
+            return None;
+        }
+        let value = line
+            .split(|character: char| !character.is_ascii_hexdigit())
+            .find(|part| part.len() == 64)?;
+        Some(value.to_ascii_lowercase())
+    })
+}
+
+fn normalize_relative(path: &Path) -> Result<String, Box<dyn Error>> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(value) => components.push(value.to_string_lossy()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if components.pop().is_none() {
+                    return Err("workspace member escapes repository root".into());
+                }
+            }
+            _ => return Err("workspace member is not a relative path".into()),
+        }
+    }
+    Ok(components.join("/"))
+}
+
+fn bazel_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn is_generator_owned(path: &str) -> bool {
+    APPROVED_OUTPUT_PATHS.contains(&path)
+}
+
+fn tracked_paths(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output()
+        .map_err(|error| format!("could not enumerate tracked files: {error}"))?;
+    if !output.status.success() {
+        let mut files = Vec::new();
+        collect_files_without_git(root, root, &mut files)?;
+        files.sort();
+        return Ok(files);
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            String::from_utf8(entry.to_vec()).map_err(|_| "tracked path is not valid UTF-8".into())
+        })
+        .collect()
+}
+
+fn collect_files_without_git(
+    root: &Path,
+    current: &Path,
+    output: &mut Vec<String>,
+) -> Result<(), Box<dyn Error>> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some(".git" | ".scratch" | "target")) {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            collect_files_without_git(root, &path, output)?;
+        } else if entry.file_type()?.is_file() {
+            output.push(
+                path.strip_prefix(root)
+                    .map_err(|_| "fallback tracked path escaped root")?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn tracked_digests(root: &Path) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn Error>> {
+    let mut digests = BTreeMap::new();
+    for relative in tracked_paths(root)? {
+        match fs::read(root.join(&relative)) {
+            Ok(bytes) => {
+                digests.insert(relative, Sha256::digest(bytes).into());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(digests)
+}
+
+fn mutation_snapshot(root: &Path) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn Error>> {
+    let mut paths = Vec::new();
+    collect_files_without_git(root, root, &mut paths)?;
+    paths.sort();
+    let mut digests = BTreeMap::new();
+    for relative in paths {
+        let bytes = fs::read(root.join(&relative))?;
+        digests.insert(relative, Sha256::digest(bytes).into());
+    }
+    Ok(digests)
+}
+
+fn changed_outside(
+    before: &BTreeMap<String, [u8; 32]>,
+    after: &BTreeMap<String, [u8; 32]>,
+    allowed: Option<&str>,
+) -> Vec<String> {
+    let paths = before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    paths
+        .into_iter()
+        .filter(|path| Some(path.as_str()) != allowed)
+        .filter(|path| before.get(path) != after.get(path))
+        .collect()
+}
+
+fn unexpected_mutation_message(paths: &[String]) -> String {
+    let mut message = adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
+        .expect("unexpected mutation diagnostic is closed")
+        .to_owned();
+    if !paths.is_empty() {
+        message.push_str("\nChanged paths: ");
+        message.push_str(&paths.join(", "));
+    }
+    message
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn repin_accepts_only_the_closed_hub_set() {
+        for hub in ["product", "walker"] {
+            assert_eq!(parse_repin(&["--hub".into(), hub.into()]).unwrap(), hub);
+        }
+        for hub in ["", "all", "workspace", "main", "broker", "guest"] {
+            assert!(
+                parse_repin(&["--hub".into(), hub.into()]).is_err(),
+                "unexpectedly accepted hub {hub:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_options_are_absolute_and_worktree_derived() {
+        let options = startup_options(Path::new("/worktree"));
+        assert!(options.output_user_root.is_absolute());
+        assert!(options.output_base.is_absolute());
+        assert!(options.output_user_root.starts_with("/worktree"));
+        assert!(options.output_base.starts_with("/worktree"));
+        assert_eq!(
+            options.startup_args(),
+            vec![
+                "--output_user_root=/worktree/.scratch/bazel/output-user-root",
+                "--output_base=/worktree/.scratch/bazel/output-base",
+            ]
+        );
+        assert_eq!(
+            options.repin_command_args(true),
+            vec![
+                "mod".to_owned(),
+                "deps".to_owned(),
+                "--lockfile_mode=off".to_owned(),
+            ]
+        );
+        assert_eq!(
+            options.module_refresh_command_args(),
+            vec![
+                "mod".to_owned(),
+                "deps".to_owned(),
+                "--lockfile_mode=update".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn generator_models_have_stable_order_and_exact_ownership() {
+        let model = GeneratedModel {
+            bazelignore: vec!["target/".into(), ".scratch/".into()],
+            action_network_policy: "{}\n".into(),
+            configured_targets: "{}\n".into(),
+            evidence_sink_policy: "{}\n".into(),
+            no_shell_inventory: "{}\n".into(),
+            package_policy_targets: "PACKAGE_POLICY_TARGETS = []\n".into(),
+            product_targets: "PRODUCT_TARGETS = []\n".into(),
+            source_census: "{}\n".into(),
+        };
+        let outputs = model.render().expect("rendered model");
+        assert_eq!(outputs.len(), APPROVED_OUTPUT_PATHS.len());
+        assert_eq!(
+            outputs.keys().cloned().collect::<Vec<_>>(),
+            APPROVED_OUTPUT_PATHS
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert!(outputs["bazel/generated/BUILD.bazel"].contains("exports_files"));
+        assert!(
+            !outputs
+                .keys()
+                .any(|path| path.contains("action-network-inventory"))
+        );
+    }
+
+    #[test]
+    fn derived_change_check_allows_only_the_named_hub_lock() {
+        let mut before = BTreeMap::new();
+        before.insert("bazel/cargo/product.lock".to_owned(), [1; 32]);
+        before.insert("Cargo.lock".to_owned(), [2; 32]);
+        let mut after = before.clone();
+        after.insert("bazel/cargo/product.lock".to_owned(), [3; 32]);
+        assert_eq!(
+            changed_outside(&before, &after, Some("bazel/cargo/product.lock")),
+            Vec::<String>::new()
+        );
+        after.insert("Cargo.lock".to_owned(), [4; 32]);
+        assert_eq!(
+            changed_outside(&before, &after, Some("bazel/cargo/product.lock")),
+            vec!["Cargo.lock".to_owned()]
+        );
+    }
+
+    #[test]
+    fn census_records_excluded_entries_without_hand_written_counts() {
+        let census = Census::new(
+            vec!["packages/d2b-core/Cargo.toml#d2b-core-smoke".into()],
+            vec![(
+                "packages/d2b-core/Cargo.toml#d2b-core-fuzz-manifest".into(),
+                "required features are not enabled by the Cargo gate selector".into(),
+            )],
+        );
+        let json = census.json();
+        assert!(json.contains("\"executed\""));
+        assert!(json.contains("\"outOfCensus\""));
+        assert!(json.contains("d2b-core-fuzz-manifest"));
+        assert!(!json.contains("\"count\""));
+    }
+
+    #[test]
+    fn generator_input_set_is_the_product_and_walker_hubs() {
+        assert_eq!(HUBS.len(), 2);
+        assert_eq!(
+            HUBS.iter()
+                .map(|(_, manifest, lock)| (*manifest, *lock))
+                .collect::<Vec<_>>(),
+            vec![
+                ("packages/Cargo.toml", "packages/Cargo.lock"),
+                (
+                    "tests/tools/no-bash-ast-walker/Cargo.toml",
+                    "tests/tools/no-bash-ast-walker/Cargo.lock"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn metadata_parser_derives_harness_and_doctest_census_entries() {
+        let manifest = r#"
+[package]
+name = "sample"
+
+[lib]
+doctest = true
+
+[[test]]
+name = "run"
+path = "tests/run.rs"
+harness = false
+
+[[test]]
+name = "fuzz"
+path = "fuzz.rs"
+harness = false
+required-features = ["fuzz"]
+
+[[bench]]
+name = "bench"
+harness = false
+"#;
+        let parsed =
+            parse_manifest("packages/sample/Cargo.toml", manifest, Path::new(".")).unwrap();
+        assert_eq!(parsed.lib_doctest, Some(true));
+        assert_eq!(parsed.tests.len(), 2);
+        assert_eq!(parsed.benches.len(), 1);
+        let model = GeneratedModel {
+            bazelignore: vec![".scratch/".into()],
+            action_network_policy: "{}\n".into(),
+            configured_targets: "{}\n".into(),
+            evidence_sink_policy: "{}\n".into(),
+            no_shell_inventory: "{}\n".into(),
+            package_policy_targets: "PACKAGE_POLICY_TARGETS = []\n".into(),
+            product_targets: "PRODUCT_TARGETS = []\n".into(),
+            source_census: "{}\n".into(),
+        };
+        assert!(model.validate().is_ok());
+    }
+
+    #[test]
+    fn stale_side_lock_digest_is_detectable_without_rewriting_inputs() {
+        let expected = sha256_hex(b"cargo-lock");
+        assert_eq!(
+            recorded_lock_digest(&format!("# cargo_lock_sha256: {expected}\n")),
+            Some(expected)
+        );
+        assert_ne!(
+            recorded_lock_digest(
+                "# cargo_lock_sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"
+            ),
+            Some(sha256_hex(b"cargo-lock"))
+        );
+        assert_eq!(channel("channel = \"1.97.0\"\n"), Some("1.97.0".to_owned()));
+        assert_eq!(
+            channel("channel = \"nightly-2026-02-16\"\n"),
+            Some("nightly-2026-02-16".to_owned())
+        );
+    }
+
+    #[test]
+    fn empty_or_incomplete_bazelignore_models_are_rejected() {
+        let mut model = GeneratedModel {
+            bazelignore: vec!["packages/target/".into()],
+            action_network_policy: "{}\n".into(),
+            configured_targets: "{}\n".into(),
+            evidence_sink_policy: "{}\n".into(),
+            no_shell_inventory: "{}\n".into(),
+            package_policy_targets: "PACKAGE_POLICY_TARGETS = []\n".into(),
+            product_targets: "PRODUCT_TARGETS = []\n".into(),
+            source_census: "{}\n".into(),
+        };
+        assert!(model.validate().is_err());
+        model.bazelignore.push(".scratch/".into());
+        assert!(model.validate().is_ok());
+    }
+}
