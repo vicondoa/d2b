@@ -1181,5 +1181,5 @@ table because it preserves upstream D106 rather than adding a new boundary.
 | SC-024 | FR-039, FR-040 - locally added |
 | SC-025 | FR-043 - locally added; candidate-bound enforcement through T580/T555/T556 |
 | SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
-| SC-030 - SC-034 | FR-066 - FR-074; T603 receipt/editor-mediated amended-plan resume and T590-T602 plus T604-T605 exact-candidate acceptance |
+| SC-030 - SC-034 | FR-066 - FR-074; T603 receipt/editor-mediated amended-plan resume and T589-T602 plus T604-T605 exact-candidate acceptance |
 | SC-035 | FR-075; candidate-bound close evidence at T028/T029, T035/T036, T070/T071, T220/T604/T600/T602/T219, and T479/T480 |
