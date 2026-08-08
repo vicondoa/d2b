@@ -171,7 +171,7 @@ else
   if ! previous_fields="$(read_address "$previous_address")"; then
     exit 2
   fi
-  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
+  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip _recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
   if [ "$recorded_round" != "$previous_round" ]; then
     echo "$previous_address records round $recorded_round, expected $previous_round" >&2
     exit 2
@@ -189,6 +189,11 @@ else
   fi
   if [ -z "$recorded_selection" ] || [ ! -f "$recorded_selection" ]; then
     echo "previous review does not record a readable lifecycle selection" >&2
+    exit 2
+  fi
+  actual_recorded_selection_sha="$(sha256sum "$recorded_selection" | cut -d' ' -f1)"
+  if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
+    echo "previous review selection bytes disagree with address.json" >&2
     exit 2
   fi
   previous_roster="$(
