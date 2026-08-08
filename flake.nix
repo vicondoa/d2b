@@ -322,7 +322,10 @@
               mapfile -t candidates < <(
                 find target -type f -path "*/release/${binName}" -perm -0100
               )
-              test "''${#candidates[@]}" -eq 1
+              if test "''${#candidates[@]}" -ne 1; then
+                printf '%s\n' D2B-STATIC-INSTALL-CENSUS >&2
+                exit 1
+              fi
               install -Dm755 "''${candidates[0]}" "$out/bin/${binName}"
               runHook postInstall
             '';
@@ -332,9 +335,15 @@
               test -x "$bin"
               "$readelf" -h "$bin" > "$TMPDIR/${binName}.header"
               grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' \
-                "$TMPDIR/${binName}.header"
+                "$TMPDIR/${binName}.header" || {
+                  printf '%s\n' D2B-STATIC-ELF-TYPE >&2
+                  exit 1
+                }
               grep -Eq "^[[:space:]]*Machine:[[:space:]]+${staticElfMachine}$" \
-                "$TMPDIR/${binName}.header"
+                "$TMPDIR/${binName}.header" || {
+                  printf '%s\n' D2B-STATIC-ELF-MACHINE >&2
+                  exit 1
+                }
               "$readelf" -l "$bin" > "$TMPDIR/${binName}.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
                 echo "${binName}: unexpected ELF interpreter" >&2
@@ -388,7 +397,10 @@
                 find target -type f \
                   -path "*/release/d2b-guest-shell-runner" -perm -0100
               )
-              test "''${#candidates[@]}" -eq 1
+              if test "''${#candidates[@]}" -ne 1; then
+                printf '%s\n' D2B-STATIC-INSTALL-CENSUS >&2
+                exit 1
+              fi
               install -Dm755 "''${candidates[0]}" \
                 "$out/bin/d2b-guest-shell-runner"
               runHook postInstall
@@ -399,9 +411,15 @@
               test -x "$bin"
               "$readelf" -h "$bin" > "$TMPDIR/d2b-guest-shell-runner.header"
               grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' \
-                "$TMPDIR/d2b-guest-shell-runner.header"
+                "$TMPDIR/d2b-guest-shell-runner.header" || {
+                  printf '%s\n' D2B-STATIC-ELF-TYPE >&2
+                  exit 1
+                }
               grep -Eq "^[[:space:]]*Machine:[[:space:]]+${staticElfMachine}$" \
-                "$TMPDIR/d2b-guest-shell-runner.header"
+                "$TMPDIR/d2b-guest-shell-runner.header" || {
+                  printf '%s\n' D2B-STATIC-ELF-MACHINE >&2
+                  exit 1
+                }
               "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
                 echo "d2b-guest-shell-runner: unexpected ELF interpreter" >&2
