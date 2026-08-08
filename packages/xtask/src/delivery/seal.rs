@@ -45,6 +45,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
@@ -85,7 +86,7 @@ pub struct SealedValidation {
 /// [`merge-eligibility`](super::eligibility) needs the sealed base and head
 /// object IDs and the byte-identical content inputs to run the history proof
 /// of spec section 12.6 without re-reading the snapshot.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealRecord {
     pub artifact_kind: String,
@@ -99,6 +100,62 @@ pub struct SealRecord {
     pub panel: PanelAttestation,
     pub panel_request_sha256: String,
     pub evidence: Vec<SealedLane>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealRecordWire {
+    artifact_kind: String,
+    schema_version: u32,
+    program: String,
+    wave: String,
+    candidate_id: CandidateId,
+    content_id: ContentId,
+    snapshot_sha256: SnapshotSha256,
+    material: CandidateMaterial,
+    panel: PanelAttestation,
+    panel_request_sha256: String,
+    evidence: Vec<SealedLane>,
+}
+
+/// Selects the nested panel family before strict seal DTO deserialization.
+///
+/// The seal itself keeps its existing top-level field set. Its embedded panel
+/// object is the only panel-format discriminator.
+impl<'de> Deserialize<'de> for SealRecord {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let panel_value = value
+            .as_object()
+            .and_then(|object| object.get("panel"))
+            .ok_or_else(|| serde::de::Error::custom("wave seal is missing its panel object"))?;
+        let expected = panel::probe_panel_format(panel_value, "wave seal panel")
+            .map_err(serde::de::Error::custom)?;
+        let wire: SealRecordWire = serde_json::from_value(value)
+            .map_err(|error| serde::de::Error::custom(format!("invalid wave seal: {error}")))?;
+        let actual = wire.panel.format().map_err(serde::de::Error::custom)?;
+        if actual != expected {
+            return Err(serde::de::Error::custom(
+                "wave seal panel format changed while reading the seal",
+            ));
+        }
+        Ok(Self {
+            artifact_kind: wire.artifact_kind,
+            schema_version: wire.schema_version,
+            program: wire.program,
+            wave: wire.wave,
+            candidate_id: wire.candidate_id,
+            content_id: wire.content_id,
+            snapshot_sha256: wire.snapshot_sha256,
+            material: wire.material,
+            panel: wire.panel,
+            panel_request_sha256: wire.panel_request_sha256,
+            evidence: wire.evidence,
+        })
+    }
 }
 
 impl SealRecord {
@@ -128,6 +185,18 @@ impl SealRecord {
             ));
         }
         candidate.validate_artifact_address(&self.wave, &self.candidate_id, "wave seal")?;
+        let request: panel::PanelRequest =
+            candidate.read_json(PANEL_REQUEST_FILE).map_err(|error| {
+                DeliveryError::new(format!(
+                    "wave seal has no readable panel request for its embedded panel: {error}"
+                ))
+            })?;
+        request.validate()?;
+        if request.format()? != self.panel.format()? || request.roles != self.panel.roles {
+            return Err(DeliveryError::new(
+                "wave seal mixes a panel request and embedded panel from different format or roster families",
+            ));
+        }
         self.panel.validate()?;
         for lane in &self.evidence {
             for validation in &lane.validations {
@@ -251,7 +320,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
         evidence::EvidenceRecord,
-        model::{CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_ROLES},
+        model::{CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_CURRENT_ROLES},
         panel::tests::{
             candidate_with_snapshot, candidate_with_snapshot_from, record_files, write_record_dir,
         },
@@ -344,7 +413,14 @@ pub(crate) mod tests {
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         record.validate(&candidate).expect("sealed record is valid");
         assert_eq!(record.candidate_id, snapshot.candidate_id);
-        assert_eq!(record.panel.records.len(), PANEL_ROLES.len());
+        assert_eq!(record.panel.records.len(), PANEL_CURRENT_ROLES.len());
+        assert_eq!(record.panel.panel_format_version, Some(1));
+        let serialized = serde_json::to_value(&record).expect("seal JSON");
+        assert!(
+            serialized.get("panel_format_version").is_none(),
+            "the top-level seal field set must remain unchanged"
+        );
+        assert_eq!(serialized["panel"]["panel_format_version"], 1);
         assert!(record.panel.unanimous);
         assert_eq!(record.evidence.len(), 2);
     }
@@ -480,7 +556,7 @@ pub(crate) mod tests {
         let (candidate, snapshot) = sealable(&scratch);
         std::fs::remove_file(candidate.panel_dir().join("kernel.json")).expect("remove record");
         let error = seal(&candidate, &snapshot).expect_err("missing record");
-        assert!(error.message().contains("exactly 10 records"), "{error}");
+        assert!(error.message().contains("exactly 13 records"), "{error}");
     }
 
     #[test]
@@ -567,7 +643,7 @@ pub(crate) mod tests {
             .expect("re-imported lanes seal the rebased snapshot");
         assert_eq!(record.snapshot_sha256, rebased.snapshot_sha256);
         assert_eq!(record.candidate_id, snapshot.candidate_id);
-        assert_eq!(record.panel.records.len(), PANEL_ROLES.len());
+        assert_eq!(record.panel.records.len(), PANEL_CURRENT_ROLES.len());
     }
 
     /// The nested layout addresses a record by lane and validation, so
