@@ -1393,8 +1393,10 @@ pub(crate) mod tests {
             selection_table_version: crate::delivery::model::PANEL_SELECTION_TABLE_VERSION,
             candidate_class: "code".to_owned(),
             classification_inputs: serde_json::json!({
-                "changed_paths": [],
+                "changed_paths": ["src/panel.txt"],
                 "signals": [],
+                "candidate_class": "code",
+                "ambiguous": false,
             }),
             ambiguity_widened: false,
             profiles: PANEL_CURRENT_ROLES

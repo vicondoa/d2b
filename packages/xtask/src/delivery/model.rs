@@ -447,7 +447,13 @@ struct SelectionTrigger {
 struct SelectionInputs {
     changed_paths: Vec<String>,
     signals: Vec<String>,
+    candidate_class: String,
+    ambiguous: bool,
+    full_candidate: Option<Box<Self>>,
+    fix_delta: Option<Box<Self>>,
 }
+
+const CANDIDATE_CLASSES: [&str; 4] = ["code", "configuration", "documentation", "ambiguous"];
 
 fn authoritative_selection_table() -> Result<SelectionTable> {
     let table: SelectionTable =
@@ -517,9 +523,8 @@ fn validate_selection_table(table: &SelectionTable) -> Result<()> {
         validate_selection_seat(table, seat, "optional")?;
     }
 
-    const FLOOR_CLASSES: [&str; 4] = ["code", "configuration", "documentation", "ambiguous"];
-    if table.floors.len() != FLOOR_CLASSES.len()
-        || FLOOR_CLASSES
+    if table.floors.len() != CANDIDATE_CLASSES.len()
+        || CANDIDATE_CLASSES
             .iter()
             .any(|candidate_class| !table.floors.contains_key(*candidate_class))
     {
@@ -527,7 +532,7 @@ fn validate_selection_table(table: &SelectionTable) -> Result<()> {
             "authoritative panel selection table floors must define exactly the four candidate classes",
         ));
     }
-    for candidate_class in FLOOR_CLASSES {
+    for candidate_class in CANDIDATE_CLASSES {
         let floor = table
             .floors
             .get(candidate_class)
@@ -646,30 +651,46 @@ fn table_roles(names: &[String], label: &str) -> Result<Vec<PanelRole>> {
         .collect()
 }
 
-fn selection_inputs(value: &Value) -> Result<SelectionInputs> {
-    let object = value.as_object().ok_or_else(|| {
-        DeliveryError::new("panel selection classification_inputs must be an object")
-    })?;
+fn parse_classification_inputs(
+    value: &Value,
+    label: &str,
+    allow_nested: bool,
+    allow_empty_fix_delta_paths: bool,
+) -> Result<SelectionInputs> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| DeliveryError::new(format!("{label} must be an object")))?;
+    for key in object.keys() {
+        let known = matches!(
+            key.as_str(),
+            "changed_paths" | "signals" | "candidate_class" | "ambiguous"
+        ) || (allow_nested && matches!(key.as_str(), "full_candidate" | "fix_delta"));
+        if !known {
+            return Err(DeliveryError::new(format!(
+                "{label} contains unknown field {key:?}"
+            )));
+        }
+    }
+    for key in ["changed_paths", "signals", "candidate_class", "ambiguous"] {
+        if !object.contains_key(key) {
+            return Err(DeliveryError::new(format!("{label} must contain {key}")));
+        }
+    }
+
     let raw_changed_paths = object
         .get("changed_paths")
         .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeliveryError::new(
-                "panel selection classification_inputs must contain a changed_paths array",
-            )
-        })?
+        .ok_or_else(|| DeliveryError::new(format!("{label} changed_paths must be an array")))?
         .iter()
         .map(|value| {
             let path = value.as_str().ok_or_else(|| {
-                DeliveryError::new(
-                    "panel selection classification_inputs changed_paths entries must be strings",
-                )
+                DeliveryError::new(format!("{label} changed_paths entries must be strings"))
             })?;
-            validate_bounded_string(path, "panel selection changed path")?;
+            validate_bounded_string(path, &format!("{label} changed path"))?;
             if path.chars().any(char::is_control) {
-                return Err(DeliveryError::new(
-                    "panel selection changed paths must not contain control characters",
-                ));
+                return Err(DeliveryError::new(format!(
+                    "{label} changed paths must not contain control characters"
+                )));
             }
             Ok(path.to_owned())
         })
@@ -681,29 +702,25 @@ fn selection_inputs(value: &Value) -> Result<SelectionInputs> {
         .into_iter()
         .collect::<Vec<_>>();
     if raw_changed_paths != canonical_changed_paths {
-        return Err(DeliveryError::new(
-            "panel selection classification_inputs changed_paths must be unique and sorted",
-        ));
+        return Err(DeliveryError::new(format!(
+            "{label} changed_paths must be unique and sorted"
+        )));
     }
 
     let raw_signals = object
         .get("signals")
         .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeliveryError::new("panel selection classification_inputs must contain a signals array")
-        })?
+        .ok_or_else(|| DeliveryError::new(format!("{label} signals must be an array")))?
         .iter()
         .map(|value| {
             let signal = value.as_str().ok_or_else(|| {
-                DeliveryError::new(
-                    "panel selection classification_inputs signals entries must be strings",
-                )
+                DeliveryError::new(format!("{label} signals entries must be strings"))
             })?;
-            validate_bounded_string(signal, "panel selection signal")?;
+            validate_bounded_string(signal, &format!("{label} signal"))?;
             if signal.chars().any(char::is_control) {
-                return Err(DeliveryError::new(
-                    "panel selection signals must not contain control characters",
-                ));
+                return Err(DeliveryError::new(format!(
+                    "{label} signals must not contain control characters"
+                )));
             }
             Ok(signal.to_owned())
         })
@@ -715,31 +732,141 @@ fn selection_inputs(value: &Value) -> Result<SelectionInputs> {
         .into_iter()
         .collect::<Vec<_>>();
     if raw_signals != canonical_signals {
-        return Err(DeliveryError::new(
-            "panel selection classification_inputs signals must be unique, lowercase, and sorted",
-        ));
+        return Err(DeliveryError::new(format!(
+            "{label} signals must be unique, lowercase, and sorted"
+        )));
     }
 
-    if let Some(candidate_class) = object.get("candidate_class") {
-        let candidate_class = candidate_class.as_str().ok_or_else(|| {
-            DeliveryError::new(
-                "panel selection classification_inputs candidate_class must be a string",
-            )
-        })?;
-        validate_bounded_string(candidate_class, "panel selection candidate class")?;
+    let candidate_class = object
+        .get("candidate_class")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DeliveryError::new(format!("{label} candidate_class must be a string")))?;
+    validate_bounded_string(candidate_class, &format!("{label} candidate class"))?;
+    if !CANDIDATE_CLASSES.contains(&candidate_class) {
+        return Err(DeliveryError::new(format!(
+            "{label} candidate_class {candidate_class:?} is unsupported"
+        )));
     }
-    if let Some(ambiguous) = object.get("ambiguous")
-        && !ambiguous.is_boolean()
+    let ambiguous = object
+        .get("ambiguous")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| DeliveryError::new(format!("{label} ambiguous must be boolean")))?;
+    // A verification selection with no supplied delta carries an empty
+    // fix_delta sentinel using the full candidate class with a non-widening
+    // ambiguity bit, so that sentinel is the one permitted exception.
+    if ambiguous != (candidate_class == "ambiguous")
+        && !(allow_empty_fix_delta_paths
+            && raw_changed_paths.is_empty()
+            && raw_signals.is_empty()
+            && candidate_class == "ambiguous"
+            && !ambiguous)
     {
-        return Err(DeliveryError::new(
-            "panel selection classification_inputs ambiguous must be boolean",
-        ));
+        return Err(DeliveryError::new(format!(
+            "{label} candidate_class and ambiguous disagree"
+        )));
     }
+    if matches!(candidate_class, "code" | "configuration")
+        && raw_changed_paths.is_empty()
+        && (!allow_empty_fix_delta_paths || !raw_signals.is_empty())
+    {
+        return Err(DeliveryError::new(format!(
+            "{label} {candidate_class} classification must contain changed paths"
+        )));
+    }
+
+    let full_candidate = object
+        .get("full_candidate")
+        .map(|value| {
+            parse_classification_inputs(value, &format!("{label}.full_candidate"), false, false)
+                .map(Box::new)
+        })
+        .transpose()?;
+    let fix_delta = object
+        .get("fix_delta")
+        .map(|value| {
+            parse_classification_inputs(value, &format!("{label}.fix_delta"), false, true)
+                .map(Box::new)
+        })
+        .transpose()?;
 
     Ok(SelectionInputs {
         changed_paths: canonical_changed_paths,
         signals: canonical_signals,
+        candidate_class: candidate_class.to_owned(),
+        ambiguous,
+        full_candidate,
+        fix_delta,
     })
+}
+
+fn selection_inputs(value: &Value, phase: &str) -> Result<SelectionInputs> {
+    parse_classification_inputs(
+        value,
+        "panel selection classification_inputs",
+        phase == "verification",
+        false,
+    )
+}
+
+fn validate_nested_classification_consistency(inputs: &SelectionInputs) -> Result<()> {
+    if inputs.full_candidate.is_none() && inputs.fix_delta.is_none() {
+        return Ok(());
+    }
+
+    let mut changed_paths = BTreeSet::new();
+    let mut signals = BTreeSet::new();
+    let mut nested_classes = Vec::new();
+    let mut ambiguous = false;
+    for nested in [
+        inputs.full_candidate.as_deref(),
+        inputs.fix_delta.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        changed_paths.extend(nested.changed_paths.iter().cloned());
+        signals.extend(nested.signals.iter().cloned());
+        nested_classes.push(nested.candidate_class.as_str());
+        ambiguous |= nested.ambiguous;
+    }
+    let changed_paths = changed_paths.into_iter().collect::<Vec<_>>();
+    if inputs.changed_paths != changed_paths {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs changed_paths must equal the union of its \
+             nested full_candidate and fix_delta paths",
+        ));
+    }
+    let signals = signals.into_iter().collect::<Vec<_>>();
+    if inputs.signals != signals {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs signals must equal the union of its nested \
+             full_candidate and fix_delta signals",
+        ));
+    }
+    if inputs.ambiguous != ambiguous {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs ambiguous must equal nested classifications",
+        ));
+    }
+    let expected_class = if nested_classes.contains(&"ambiguous") {
+        "ambiguous"
+    } else if nested_classes.contains(&"code") {
+        "code"
+    } else {
+        inputs
+            .full_candidate
+            .as_deref()
+            .or(inputs.fix_delta.as_deref())
+            .map(|nested| nested.candidate_class.as_str())
+            .expect("nested classification exists")
+    };
+    if inputs.candidate_class != expected_class {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs candidate_class must agree with nested \
+             classifications",
+        ));
+    }
+    Ok(())
 }
 
 fn trigger_matches(trigger: &SelectionTrigger, inputs: &SelectionInputs) -> bool {
@@ -903,7 +1030,18 @@ impl PanelSelectionV1 {
                 "panel selection candidate class is not supported",
             ));
         }
-        let inputs = selection_inputs(&self.classification_inputs)?;
+        let inputs = selection_inputs(&self.classification_inputs, &self.phase)?;
+        if self.candidate_class != inputs.candidate_class {
+            return Err(DeliveryError::new(
+                "panel selection candidate_class disagrees with classification_inputs",
+            ));
+        }
+        if self.ambiguity_widened != inputs.ambiguous {
+            return Err(DeliveryError::new(
+                "panel selection ambiguity_widened disagrees with classification_inputs",
+            ));
+        }
+        validate_nested_classification_consistency(&inputs)?;
         let table_order = table
             .mandatory_seats
             .iter()
@@ -2016,6 +2154,12 @@ mod tests {
     ) -> PanelSelectionV1 {
         let material = material();
         let digests = material.digests().expect("digests");
+        let changed_paths =
+            if changed_paths.is_empty() && matches!(candidate_class, "code" | "configuration") {
+                vec!["src/panel.txt"]
+            } else {
+                changed_paths.to_vec()
+            };
         PanelSelectionV1 {
             artifact_kind: PANEL_SELECTION_ARTIFACT_KIND.to_owned(),
             schema_version: PANEL_SELECTION_SCHEMA_VERSION,
@@ -2031,6 +2175,8 @@ mod tests {
             classification_inputs: serde_json::json!({
                 "changed_paths": changed_paths,
                 "signals": signals,
+                "candidate_class": candidate_class,
+                "ambiguous": candidate_class == "ambiguous",
             }),
             ambiguity_widened: candidate_class == "ambiguous",
             profiles: roster
@@ -2260,6 +2406,169 @@ mod tests {
             .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
             .expect_err("duplicate profiles must fail closed");
         assert!(error.message().contains("repeats profile"), "{error}");
+    }
+
+    #[test]
+    fn selection_validation_rejects_inconsistent_classification_metadata() {
+        let mut class_mismatch = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &["src/panel.txt"],
+            &[],
+            &[],
+        );
+        class_mismatch.classification_inputs["candidate_class"] =
+            serde_json::json!("documentation");
+        assert!(
+            class_mismatch
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "top-level and nested candidate classes must agree"
+        );
+
+        let mut ambiguity_mismatch = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &["src/panel.txt"],
+            &[],
+            &[],
+        );
+        ambiguity_mismatch.ambiguity_widened = true;
+        assert!(
+            ambiguity_mismatch
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "top-level and nested ambiguity must agree"
+        );
+
+        for candidate_class in ["code", "configuration"] {
+            let mut empty_paths = selection(
+                &PANEL_CURRENT_ROLES[..10],
+                candidate_class,
+                &["src/panel.txt"],
+                &[],
+                &[],
+            );
+            empty_paths.classification_inputs["changed_paths"] = serde_json::json!([]);
+            assert!(
+                empty_paths
+                    .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                    .is_err(),
+                "{candidate_class} classifications need a changed path"
+            );
+        }
+
+        let mut unknown_field = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &["src/panel.txt"],
+            &[],
+            &[],
+        );
+        unknown_field.classification_inputs["unexpected"] = serde_json::json!(true);
+        assert!(
+            unknown_field
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "unknown classification fields must fail closed"
+        );
+    }
+
+    #[test]
+    fn selection_validation_checks_nested_full_candidate_and_fix_delta_classifications() {
+        let mut verification = selection(
+            &PANEL_CURRENT_ROLES,
+            "code",
+            &["docs/guide.md", "src/panel.txt"],
+            &[],
+            &["markdown"],
+        );
+        verification.phase = "verification".to_owned();
+        verification.classification_inputs = serde_json::json!({
+            "changed_paths": ["docs/guide.md", "src/panel.txt"],
+            "signals": [],
+            "candidate_class": "code",
+            "ambiguous": false,
+            "full_candidate": {
+                "changed_paths": ["src/panel.txt"],
+                "signals": [],
+                "candidate_class": "code",
+                "ambiguous": false,
+            },
+            "fix_delta": {
+                "changed_paths": ["docs/guide.md"],
+                "signals": [],
+                "candidate_class": "documentation",
+                "ambiguous": false,
+            },
+        });
+        verification
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("consistent nested classifications");
+
+        let mut stale_union = verification.clone();
+        stale_union.classification_inputs["changed_paths"] = serde_json::json!(["src/panel.txt"]);
+        assert!(
+            stale_union
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "top-level paths must include both nested classifications"
+        );
+
+        let mut unknown_nested_field = verification.clone();
+        unknown_nested_field.classification_inputs["full_candidate"]["unexpected"] =
+            serde_json::json!(true);
+        assert!(
+            unknown_nested_field
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "nested classification fields must be closed"
+        );
+
+        let mut empty_full_candidate = verification.clone();
+        empty_full_candidate.classification_inputs["full_candidate"]["changed_paths"] =
+            serde_json::json!([]);
+        assert!(
+            empty_full_candidate
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "a code full-candidate classification needs a changed path"
+        );
+
+        let mut inconsistent_nested_ambiguity = verification.clone();
+        inconsistent_nested_ambiguity.classification_inputs["fix_delta"]["candidate_class"] =
+            serde_json::json!("ambiguous");
+        assert!(
+            inconsistent_nested_ambiguity
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .is_err(),
+            "nested candidate class and ambiguity must agree"
+        );
+
+        let mut empty_fix_delta =
+            selection(&PANEL_CURRENT_ROLES, "code", &["src/panel.txt"], &[], &[]);
+        empty_fix_delta.phase = "verification".to_owned();
+        empty_fix_delta.classification_inputs = serde_json::json!({
+            "changed_paths": ["src/panel.txt"],
+            "signals": [],
+            "candidate_class": "code",
+            "ambiguous": false,
+            "full_candidate": {
+                "changed_paths": ["src/panel.txt"],
+                "signals": [],
+                "candidate_class": "code",
+                "ambiguous": false,
+            },
+            "fix_delta": {
+                "changed_paths": [],
+                "signals": [],
+                "candidate_class": "code",
+                "ambiguous": false,
+            },
+        });
+        empty_fix_delta
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("the standard no-op fix delta remains readable");
     }
 
     fn mandatory_only_snapshot_digests() -> CandidateDigests {
