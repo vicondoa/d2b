@@ -8,7 +8,7 @@
   "derivationSha256Method": "raw-drv-file-sha256",
   "source": {
     "path": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
-    "sha256": "332ea0314d180c231d2ed02702aedcc4a99981cd5cc5bd73dacd8a5681d38a1a",
+    "sha256": "b1aaa752fa545cf6795dca244cbd5538446771e54a84b9a3b07fdef2f59a77ef",
     "plantPath": "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c",
     "plantSha256": "e0e1936105b3b70f6f6923c4e0b60a0c4ebc71a9ebae092149eed3981935106e"
   },
@@ -117,13 +117,13 @@
   },
   "nativeOutputs": {
     "x86_64-linux": {
-      "derivationSha256": "19ffe5e5ce569e9bda8cd56d1abdab0830ca29fd34399d6f4cbacdd5c8ca88fb",
+      "derivationSha256": "36714b347a225fce7c2f3212b3cf8f707e2b26706a58194a80d679b8f08cce6b",
       "narSha256": "07d391c26b87960cb4b3c251ceff12f659b2e67a7668e8267dec044803d7eb11",
       "executableSha256": "8c3769dd8b513a0e4ffe76ba7745c99322607e09f332e7a6ad4bad4ce2aa9534",
       "staticElfSha256": "735e88a4fcc432ba33b5e4362f3e158131476ade666e6fad1e49119799f406d5"
     },
     "aarch64-linux": {
-      "derivationSha256": "e529041e03c6453b2dfcd068547eb9ce18bacdbacfdea110c3c1cf0bdc6a4d6d",
+      "derivationSha256": "ae0c080e279fec4bdfe06b86f9a2aaecf0c68fea927e0bdcb83433939e129ed4",
       "narSha256": "801b635a33fa714d28784db3df068c398fa2b7e667e26367960d90d8b45b81c5",
       "executableSha256": "2257f62d0fdf9a439170941cb185603b905f725ebf897b796b4520c258c1b956",
       "staticElfSha256": "b21a6fff8ba5024f16c50a06e4ce3696d72655fdf98cff19e7440d79f984da0e",
