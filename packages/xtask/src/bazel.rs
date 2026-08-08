@@ -1896,19 +1896,21 @@ fn generate_model(root: &Path) -> Result<GeneratedModel, Box<dyn Error>> {
 fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box<dyn Error>> {
     let mut graph = BTreeMap::new();
     for (hub, manifest, _) in HUBS {
-        let output = Command::new("cargo")
-            .current_dir(root)
-            .args([
-                "metadata",
-                "--format-version",
-                "1",
-                "--locked",
-                "--offline",
-                "--filter-platform",
-                GENERATOR_METADATA_TARGET,
-                "--manifest-path",
-                manifest,
-            ])
+        let mut command = Command::new("cargo");
+        command.current_dir(root).args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--offline",
+        ]);
+        if *hub == "walker" {
+            command.arg("--no-deps");
+        } else {
+            command.args(["--filter-platform", GENERATOR_METADATA_TARGET]);
+        }
+        let output = command
+            .args(["--manifest-path", manifest])
             .output()
             .map_err(|error| format!("could not run cargo metadata for {hub}: {error}"))?;
         if !output.status.success() {

@@ -300,4 +300,6 @@ fn generator_metadata_is_offline_and_linux_target_filtered() {
     assert!(source.contains("\"--offline\""));
     assert!(source.contains("\"--filter-platform\""));
     assert!(source.contains("GENERATOR_METADATA_TARGET"));
+    assert!(source.contains("if *hub == \"walker\""));
+    assert!(source.contains("command.arg(\"--no-deps\")"));
 }
