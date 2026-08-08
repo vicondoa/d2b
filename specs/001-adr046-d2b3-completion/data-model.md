@@ -4042,6 +4042,10 @@ the live repair slot.
 The source release permit binds the intermediate broker-target receipt and these identities:
 
 ```text
+releasedSourceCensusSha256 =
+  SHA-256("d2b:host-generation:continuity-source-released-census:v1\0" ||
+  live_acquisition_count_u16_be || live_replay_binding_count_u16_be)
+
 ContinuitySourceReleaseAttemptIdV1 =
   SHA-256("d2b:host-generation:audit-continuity-source-release-attempt:v1\0" ||
   coordinator_private_id || continuity_source_binding_attempt_id ||
@@ -4068,8 +4072,10 @@ Source-release pre/outcome audit uses only
 `continuitySourceBindingAttemptSha256`,
 `brokerTargetsCompactedSha256`, and closed target/prefix/outcome enums.
 The source release outcome tag is exactly `0x01` released or `0x02` already released.
-Both successful tags require the exact empty source lifecycle census; degradation is a
-separate source-lifecycle failure and has no successful outcome digest.
+Both successful tags require `liveAcquisitionCount = 0`,
+`liveReplayBindingCount = 0`, and a fresh recomputation of the exact
+`releasedSourceCensusSha256`; both counts are unsigned two-byte big-endian integers.
+Degradation is a separate source-lifecycle failure and has no successful outcome digest.
 `brokerTargetsCompactedSha256` is the named audit projection of the immutable
 `ContinuityTargetsCompactedReceiptV1` defined below. It exists only after every selected
 broker target has its intent, unlink, parent durability, census reduction, and receipt
@@ -4079,15 +4085,28 @@ receives the private attempt only inside the consumed sealed permit; no public D
 operator input, generic broker call, or digest reconstruction can mint one. Using the
 source-binding and targets-compacted vectors and the source durability generation specified
 in this section gives `brokerTargetsCompactedSha256 =
-905adc8a2fcec1ee60f1a43a5994cba7be854adf37f0751fcf336a9ab1718617`,
+cbc55aa33d7d9dda98a2c876bfb6b20a1f994297ff66018597fd20ece439be14`,
 `ContinuitySourceReleaseAttemptIdV1 =
-ce785f74ee3f480e64adf6cdbf4522c426ef416f13fa448ee45651055776c1cb`
+190bc9456986adefc001d77468fda73f6bd5b0da999b6edb776a10efdf77f32b`
 and `continuitySourceReleaseAttemptSha256 =
-83219a67e22a4e411a3d3fb3a84a6fdf81775555fa7ea2382eadf29de183670e`.
+319f5dc95cc70dba68ce425ea4fb4909ddc5523f43da7f4e624d21408654db80`.
+The literal source-release outcome input is
+`liveAcquisitionCount = 0`, `liveReplayBindingCount = 0`, and
+`sourceReleaseOutcomeTag = 0x01`. Its expected lowercase outputs are:
+
+| Identity | Expected bytes |
+| --- | --- |
+| `releasedSourceCensusSha256` | `4d7dc751fd303dfb8c4da27759f38ec8fd3ff56b94183b7dfe83c9c904b8ad48` |
+| `continuitySourceReleaseOutcomeRecordSha256` | `35abcbaa1a9235e998dbf1a1995d7b39f29405f22db3a0485303084bd25cd58f` |
+| `continuitySourceReleaseOutcomeSha256` | `510cd9e72d09cf2f163f01000a015cad0fb4cf8b742cd89c2b91ea6305203e95` |
+
 An independent literal source-release vector perturbs the targets-compacted projection,
 release private/audit domains, coordinator, binding attempt, target receipt, durability
-generation and framing, and every field order; cross-field substitutions and one removal
-poison cover each check.
+generation and framing, both census counts and their two-byte framing, successful outcome
+tag, and every field order. It substitutes the private attempt, audit attempt, target
+receipt, census, outcome record, and audit outcome into every other same-width position.
+Independent count-nonzero, census-substitution, tag-substitution, field-removal, and
+downstream-proof substitution poisons cover each check.
 
 The source-binding vector reuses the continuity vector's `coordinatorPrivateId`,
 `dispositionAuthoritySha256`, `retentionEpochSha256`, `priorWatermarkSha256`,
@@ -4160,10 +4179,39 @@ clone, accessor, conversion, serde, cross-coordinator, lifetime-escape, and reus
 the source release permit. It accepts no path, bytes, leaf, prefix, selector, role claim, or
 repair body. Direct editing, copying, truncating, renaming, unlinking, recreating, or
 reconciling the source root or lifecycle leaves by a site administrator is forbidden. At
-most one reconciliation pre/outcome pair is live per attempt. Its fixed reserved pair is
-recyclable only after the outcome is file-and-directory-durably exported and the source
-lifecycle has advanced beyond or durably superseded the reconciled prefix; withholding
-either prerequisite performs no recycle or source mutation.
+most one reconciliation pre/outcome pair is live per attempt. The private reconciliation
+identity binds the source-binding attempt, the exact first-missing lifecycle transition, a
+checked unsigned 32-bit `recoveryGeneration`, and the prior reconciliation outcome digest
+(canonical zero for generation zero). Its closed outcome is exactly
+`Advanced { resultingPrefix } | RetrySelected { failureClass,
+nextRecoveryGeneration }`. `Advanced` is valid only after the source lifecycle durably
+passes the selected transition. `RetrySelected` is the durable supersession transition for
+the same still-missing source prefix: it requires
+`nextRecoveryGeneration = recoveryGeneration + 1`, preserves the failed pin, bind, or
+release prefix unchanged, and authorizes no source mutation by itself. Overflow is a
+no-mutation integrity incident, never generation wrap or pair accumulation.
+
+The fixed reserved pair is recyclable only after its outcome is
+file-and-directory-durably exported and either the lifecycle has durably advanced or the
+exported outcome is the exact `RetrySelected` supersession. The next generation may publish
+pre-audit only after the old pair's unlink, held-parent sync, and reduced census are
+durable. That existing per-attempt source lifecycle census stores exactly one current
+reconciliation head containing the exported prior outcome digest and selected next
+generation; it is part of the already charged source pair state, not an append history or
+additional broker-root record. The exported outcome is the durable mutation intent for
+recycling its own pair, so pair absence before census is accepted only against that exact
+exported outcome. A crash resumes the first missing export, supersession, pair-unlink,
+parent-sync, census-head commit, or next-pre step. Repeated startup, idle, or Admin wakes
+therefore retain one pair, monotonically advance only after a durably exported failure,
+and converge on success without consuming another reserved pair. Withholding outcome
+export, lifecycle advance, or same-prefix supersession performs no recycle, generation
+advance, source mutation, or next pre-audit; successful recycling requires export plus
+exactly one of advance or supersession. The read-independent matrix separately withholds
+export while advance is durable, advance while export is durable, export while a
+same-prefix `RetrySelected` supersession is durable, and supersession while export is
+durable. It succeeds only after export plus advance in the success branch, or export plus
+the exact next-generation supersession in the repeated-failure branch, and crashes a fresh
+process before and after every recycle, parent-sync, census, and next-pre boundary.
 
 The coordinator method returns one private
 `BindHostGenerationImmutableAuditContinuityRepairPermit<'coordinator>` that owns an
@@ -4249,6 +4297,11 @@ pair, and the head-switch intent/receipt. General publication cannot consume thi
 and checked admission of the complete 12-record/98,304-byte charge precedes root mutation.
 At every durable prefix there is at most one candidate commitment, one recycling
 transaction, and two generation-head banks.
+Admission with exactly 12 available records and 98,304 available encoded bytes succeeds.
+Admission with 11 available records and 98,304 bytes, or 12 records and 98,303 bytes,
+refuses before replay-key pre-audit, CSPRNG use, candidate creation, root census mutation,
+or any covered audit append. Record and byte checks are independent, use literal test
+values rather than production constants, and each has its own removal poison.
 
 `RecycleHostGenerationImmutableAuditContinuityReplayKeyCandidateV1` is the only operation
 that may reclaim a `SupersededNoFinal` commitment. Its private and audit identities are:
@@ -4280,6 +4333,14 @@ head selection is derived from the unique highest valid generation whose predece
 digest matches the other bank; while both banks exist, the older valid bank is the crash
 fallback. Equal, disconnected, substituted, or independently advanced banks degrade before
 candidate mutation.
+`ReplayKeyCandidateRecyclingFailureClassV1` is exactly `hierarchy | write | file-sync |
+link | reopen | unlink | directory-sync | census | conflict | audit-publication`.
+Failure before a successful unlink may publish the immutable failed outcome for that
+candidate generation. Once unlink succeeds, a later storage, census, conflict, or outcome
+audit-publication failure cannot settle or supersede the recycler: the original mutation
+intent remains pending and restart resumes that same operation through parent
+revalidation, parent sync, census, head switch, and outcome. No new candidate generation
+or recycler identity is legal until `Completed`.
 A completed
 outcome whose audit segment file and directory are durable permits removal of the
 transaction-local supersession, selection, intent, receipt, and census leaves; the selected
@@ -4313,7 +4374,11 @@ head bank, zero obsolete candidate commitments, zero recycle prefix leaves, the 
 12-record/98,304-byte reserve fully reusable, and a strictly increasing generation.
 Missing final-absence proof, reuse before parent sync/census/head switch/audit export,
 simultaneous candidates, bank substitution, or retained obsolete state is a no-mutation
-failure with its own hook and removal poison.
+failure with its own hook and removal poison. Separate literal admission probes accept the
+exact 12-record/98,304-byte reserve and refuse the one-record-short and one-byte-short
+cases before any mutation. Recycler probes inject every class above at each reachable
+prefix; every post-unlink case resumes the original intent in a fresh process and cannot
+append a new recycler generation.
 
 The frozen replay-key publication-attempt vector uses the continuity vector's
 `coordinatorPrivateId`, sets `immutableRootIdentitySha256` to bytes `00` through `1f`,
@@ -4662,6 +4727,25 @@ reject a kind/identity mismatch. Every common receipt, recovery edge, and final 
 binds `continuityCompactionOperationSha256`, never an untagged digest relabeled from another
 mode.
 
+In every formula below, `private_compaction_operation_id` is exactly the 32-byte private id
+selected by that sealed sum: `ContinuityCompactionAttemptIdV1` for tag `0x01`,
+`ContinuityDegradedAttemptReclamationIdV1` for tag `0x02`, or
+`ContinuityCompactionRecoveryGenerationIdV1` for tag `0x03`. The kind is independently
+bound by `continuityCompactionOperationSha256` and
+`continuityCompactionSelectionSha256`; no formula accepts a caller-supplied untagged id or
+a private id from another variant. In a recovery identity,
+`priorCompactionOperationSha256` is the tagged common projection of the immediately
+settled predecessor, `priorCompactionOutcomeAuditSha256` is that predecessor's immutable
+matching outcome projection, `completedTargetReceiptSetSha256` is the canonical
+ordinal-prefix receipt set committed by that predecessor, and `residualTargetSetSha256`
+is the canonical suffix of the predecessor's original target set beginning at its first
+uncompleted ordinal. The recovery selection repeats that exact receipt set as
+`priorCompletedTargetReceiptSetSha256`, binds the same original target set and terminal
+record, and replaces only the freshly validated current-head proof. Constructors reject a
+receipt outside the completed prefix, a residual target inside it, a gap, a substituted
+selection, a predecessor outcome from another operation, and any finalize, reclamation, or
+recovery identity relabeling.
+
 The complete immutable selection and its audit projection are:
 
 ```text
@@ -4750,8 +4834,12 @@ absence. Post-unlink tag `0x01` is `AbsentAfterSelectedUnlink`. Outcome tags are
 compacted, `0x02` already compacted, and `0x03` degraded. Compacted and already-compacted
 have empty variant payloads and the canonical empty residual set. Degraded payload is
 `target_ordinal_u8 || target_kind_tag_u8 || failure_class_tag_u8`; failure tags are `0x01`
-head-changed, `0x02` target-changed, `0x03` unlink, `0x04` directory-sync, `0x05` census,
-and `0x06` audit-publication. Counts are one byte because the target set is capped at four.
+head-changed, `0x02` target-changed, and `0x03` unlink. A degraded outcome is legal only
+while the named target is still present exact and before a successful unlink. Post-unlink
+`hierarchy`, `write`, `file-sync`, `link`, `reopen`, `directory-sync`, `census`,
+`conflict`, or `audit-publication` failures while publishing parent/census/receipt/outcome
+state are pending prefixes of the original operation and have no degraded outcome tag.
+Counts are one byte because the target set is capped at four.
 Unknown, duplicate, missing, reordered, or out-of-range members are invalid rather than
 alternative encodings.
 
@@ -4999,6 +5087,15 @@ continuityAttemptReservedSliceReleaseAttemptSha256 =
     "d2b:audit:host-generation:continuity-attempt-reserved-slice-release-attempt:v1\0" ||
     private_continuity_attempt_reserved_slice_release_attempt_id)
 
+continuityAttemptReservedSliceAppliedLedgerSha256 =
+  SHA-256(
+    "d2b:host-generation:continuity-attempt-reserved-slice-applied-ledger:v1\0" ||
+    prior_reservation_ledger_sha256 || reservation_attempt_id ||
+    continuity_repair_attempt_sha256 || reservation_generation_u64_be ||
+    released_record_count_u32_be || released_encoded_byte_count_u64_be ||
+    broker_targets_compacted_sha256 ||
+    continuity_source_release_outcome_sha256)
+
 continuityAttemptReservedSliceReleaseOutcomeRecordSha256 =
   SHA-256(
     "d2b:host-generation:continuity-attempt-reserved-slice-release-outcome:v1\0" ||
@@ -5014,7 +5111,11 @@ continuityAttemptReservedSliceReleaseOutcomeSha256 =
 
 Its private ledger entry binds the exact repair sequence, reserved record/byte slice,
 reservation generation, targets-compacted receipt, source-release outcome, prior ledger,
-and resulting ledger. Its prefix is exactly `Absent | PreAudited | LedgerApplied |
+and resulting ledger. The resulting ledger digest is exactly
+`continuityAttemptReservedSliceAppliedLedgerSha256`; the record count is unsigned
+four-byte big-endian, the encoded-byte count and generation are unsigned eight-byte
+big-endian, and checked subtraction must reproduce the persisted resulting ledger before
+`LedgerApplied`. Its prefix is exactly `Absent | PreAudited | LedgerApplied |
 CompletedReleased`. Its outcome is exactly `Released { appliedLedgerSha256 } | Degraded {
 class }`, where class is `ledger-conflict | census | audit-publication |
 standing-reserve-missing | standing-reserve-overdrawn |
@@ -5101,12 +5202,16 @@ selects degraded reclamation; and begins with the canonical empty receipt set. T
 uses evidence leaf bytes `00` through `1f`, parent identity bytes `e0` through `ff`,
 `PresentExact`, and resulting census
 `0261cd8a73bb28cacb8c80b321f7a5da0fca264f3113995f3b3046d73b4416ac`.
-Its first outcome is degraded at target zero/evidence/unlink. Recovery generation one uses
-fresh head-proof bytes `d0` through `ef`, then completes source binding, watermark, and
-attempt-census targets in order. Their parent identities are respectively bytes `a0`
-through `bf`, `b0` through `cf`, and `c0` through `df`; their resulting censuses are bytes
-`40` through `5f`, bytes `50` through `6f`, and the canonical empty census. The literal
-lowercase outputs are:
+Its first outcome is degraded at target zero/evidence/unlink while that target is still
+present: the completed receipt set is empty, no target-zero receipt exists, and the
+residual set contains all four original targets. Recovery generation one uses fresh
+head-proof bytes `d0` through `ef` and completes evidence, source binding, watermark, and
+attempt-census targets in order. Their parent identities are respectively bytes `e0`
+through `ff`, `a0` through `bf`, `b0` through `cf`, and `c0` through `df`; their resulting
+censuses are the target-zero digest above, bytes `40` through `5f`, bytes `50` through
+`6f`, and canonical empty census
+`147f09b8db794ac55a5fc12ef6176fcfb94ba7284749d9848b72fce522245afa`.
+The literal lowercase outputs are:
 
 | Identity | Expected bytes |
 | --- | --- |
@@ -5122,38 +5227,47 @@ lowercase outputs are:
 | `governedSetCensusAuditSha256` | `e57290fe380d0f69a3fbfc9b3dbfc5c0e88d133d17d91eb3bd9c44188e07b16d` |
 | `terminalOutcomeRecordAuditSha256` | `87b7039b567ff190a1d71a348a7352624634a186e7afcc9e042a5f86c3dcf039` |
 | target-zero mutation intent | `68fb5078627aeda0a795b32b925a7e2e4e6fc74665daf6e64d0073243a131b30` |
-| target-zero receipt | `a0c93f615a0b9a740aa2098fc2fa926f0f5974a07a378e0810b1cb6813febbd6` |
-| one-receipt `completedTargetReceiptSetSha256` | `3ca3f5277bcc5eb9e531b4b443a29f0e53cc2befbcaa405a6a06eadc887ed732` |
-| `residualTargetSetSha256` | `26e77835cac062996b3b4ff9bc0752f23d90e972dbfb556affb1c80098d8adf6` |
-| degraded `continuityCompactionOutcomeSha256` | `30be09f01bab7df47600e57f22bf6c8f6b777eefe5b23290f87b5ce78116466e` |
-| `continuityCompactionOutcomeAuditSha256` | `622c588e1e712a5c19c8ebf4eb64e10b647aca1fd7ff1da8c7145cc96571229f` |
-| `ContinuityCompactionRecoveryGenerationIdV1` | `32b36a0c3cf4cfae7266b3c0e0f67f3cfa1bf0f43bea4200fe4f6d0291eaff47` |
-| `continuityCompactionRecoveryGenerationSha256` | `cd84029c05cb7f0671f27e172b68a26c5342554910b7add09baf688dce197188` |
-| recovery `continuityCompactionOperationSha256` | `443f62b0b49ccdf023fc1e80048e7a53cb6d80341e702229351f533980b3ab12` |
-| recovery `continuityCompactionSelectionSha256` | `932ff48276ba2a163dc78dbb568ee54f6bbf695b3db6af9e742615c8c6be3564` |
-| target-one mutation intent | `77184a79c7dd55ae07a064d40f3b835a42d78253b777997d088e8875936043da` |
-| target-one receipt | `42718c75b4f7ca1ac5e7d85a9392ff657ec7c1810ef57c635fb3ec3ea05e7731` |
-| target-two mutation intent | `4106bdda2ac520e712579056b89508470b1bdd640261c8aa23074a1c541d6aa4` |
-| target-two receipt | `32cb43a9ddff9b8b7923d0e0190b85bb8a8aed122c6c99bee53b2ea4b5b25e4c` |
-| target-three mutation intent | `f76ef23819b1b44f0e4624626bca9af6fd6d95303a525a041d2c2e3e3db5f544` |
-| target-three receipt | `8b4ad4b05ba12f7e81bea9df0b9f13abd89a47e5f2329bbc85bec95e1b3db6ed` |
-| all-target `completedTargetReceiptSetSha256` | `b737c07a35c2b58e49d8b6bbb9c0f35d7d208dd209fe4d558decfd8e3da42244` |
-| `completedTargetReceiptSetAuditSha256` | `55d2f8558c2fc373c19a1a1246dd7d2090fa505fe828d91fe2ef2e8f44bfb115` |
-| `residualTargetSetAuditSha256` | `58ffa3db65f6e6a35539835e38759c10ef8fca01febf62d27721c018f2c401e2` |
-| `ContinuityTargetsCompactedReceiptSha256` | `7f26e5d189a778bdfb7218776b466b89a11481562c44cc3e9041937bf02cfdda` |
-| `brokerTargetsCompactedSha256` | `905adc8a2fcec1ee60f1a43a5994cba7be854adf37f0751fcf336a9ab1718617` |
+| all-target `residualTargetSetSha256` | `f30362b2624b0fdadc233be59064142f734641410ea6cbda9167f1b7ecc39ade` |
+| degraded `continuityCompactionOutcomeSha256` | `3165e44929b378d68265f2e1166985f1e1fd70176b5562e1bc908eecf6522c62` |
+| `continuityCompactionOutcomeAuditSha256` | `a766f24f8608563cbd1101b755df5c11ba0ace03c47054bd6cc7ec0ca96f887d` |
+| `ContinuityCompactionRecoveryGenerationIdV1` | `25efa1a99f582694c074c31e2c429cee94af3c79187feb0cb0658001181569f6` |
+| `continuityCompactionRecoveryGenerationSha256` | `113116536aeba52b35797e238dd8f23e1a79f9bc81fe235daca785ffbbc8eabd` |
+| recovery `continuityCompactionOperationSha256` | `1d7b054c4773016f037be515e19d472ed6868ad8521c7e627c45db3413f5b9c4` |
+| recovery `continuityCompactionSelectionSha256` | `dbc9f24807b2cb9c057e934701603326123379b5d8f8001a4f3fabae28f6294b` |
+| recovery `continuityCompactionSelectionAuditSha256` | `b92afc76edec0ceaa3cf4247b1efd40d2fbf392e8bcc22c87283d9affe9b72a6` |
+| recovery target-zero mutation intent | `ce5ce04ae6f8f9f96fd658ba3da25995e247f98da8e6bf8722895691f017a6b7` |
+| recovery target-zero receipt | `22b961543a04e53d9a36c247a5c247249a63119a558f5ca7e1aea5fb69d94af3` |
+| target-one mutation intent | `113ea303f886f567da3c9bb6a913a41425d2e328abd9f93d39d23521a7dc9c63` |
+| target-one receipt | `c6194919c9cc45c710fbd071c00e7a893bbdf2e76a79bb828b9cd334f08db5a3` |
+| target-two mutation intent | `390435a508070c0ccf9eebe840891890ad07ee76db4664b442175f886c811ddf` |
+| target-two receipt | `7de9e6523a4dcf077915553e450b5508ff0be14e3fef75ec140910fe3daf3fa0` |
+| target-three mutation intent | `6fb5439e8bfa994b084df0e95566a62d359eb39c4ef2076518f69f3e1235a130` |
+| target-three receipt | `d7854b9c23932095e8ba30012bf3182aab86b88293b22e162904cbc7d9512b78` |
+| all-target `completedTargetReceiptSetSha256` | `bc3cee421fb296291c84af034e08e64bec4fd16c30dae6762b9eecf11c48c508` |
+| `completedTargetReceiptSetAuditSha256` | `a2503e453f984702ae491b1ff9d6626fbeda681ce808fce21146c6546de0f967` |
+| `residualTargetSetAuditSha256` | `c0c6f13911c63c750b23af0bbd4c570c942dc50480b8dbb42b134c84c53a69b4` |
+| `ContinuityTargetsCompactedReceiptSha256` | `b0eadc687891d0344d559ddc5ba6cfe77b8bd17034782b5e16a95accddf6ed6f` |
+| `brokerTargetsCompactedSha256` | `cbc55aa33d7d9dda98a2c876bfb6b20a1f994297ff66018597fd20ece439be14` |
 
-The same fixture sets source-release-outcome bytes `90` through `af`, reservation-attempt
-bytes `c0` through `df`, and prior-ledger bytes `e0` through `ff`. It expects
-`ContinuityAttemptReservedSliceReleaseProofSha256 =
-54bad4bc3f535b23a69fa556cbed16f24f2abbe5b045879cebf59c42c4eddef5`,
-`ContinuityAttemptReservedSliceReleaseAttemptIdV1 =
-3032258783d5154b374a0f8705123a9c54292b006558c782cc21f904c4b90bcb`,
-and `continuityAttemptReservedSliceReleaseAttemptSha256 =
-f2b93bb0027af0ec52aa1abb9f363190d1dfaad5f43365c30a29ecea3ab60676`.
-With attempt-slice outcome bytes `a0` through `bf`, the final
-`brokerCompactionCompletionSha256` is
-`834f999f309d6cbdbae5feff87e38a661bb01fea36278ca5b5063903d712ca6d`.
+The same fixture consumes the literal source-release output above rather than arbitrary
+bytes: `continuitySourceReleaseOutcomeSha256 =
+510cd9e72d09cf2f163f01000a015cad0fb4cf8b742cd89c2b91ea6305203e95`.
+It sets `reservationAttemptId` to bytes `c0` through `df`,
+`priorReservationLedgerSha256` to bytes `e0` through `ff`,
+`reservationGeneration = 0x2122232425262728`, `releasedRecordCount = 40`, and
+`releasedEncodedByteCount = 209920`. The count and byte values are the literal sum of the
+fixed per-attempt rows in `ContinuityReplacementFutureChargeV1`, not opaque fixture
+digests. Its literal expected lowercase outputs are:
+
+| Identity | Expected bytes |
+| --- | --- |
+| `ContinuityAttemptReservedSliceReleaseProofSha256` | `e0bea159dbe7b07af775c0ca38601c161249d5ebfa539eeeffa13176b36bb2eb` |
+| `ContinuityAttemptReservedSliceReleaseAttemptIdV1` | `8c15450b03fd9adc2b621096dbec182fce165d244ddbed81e18e468223af7944` |
+| `continuityAttemptReservedSliceReleaseAttemptSha256` | `5d17629af6945d052c1ddd8852dc95e130384f590bf8d6cf9e88942f441dab51` |
+| `continuityAttemptReservedSliceAppliedLedgerSha256` | `99fd5e7b2966b091f019a6094e3083d751f5b8aa827e0c46482caba092c731f1` |
+| `continuityAttemptReservedSliceReleaseOutcomeRecordSha256` | `606680ff0d4b7061aecf5857cce5fdc33c6ccf00c52b3d42f6e2c8d2391fcdc6` |
+| `continuityAttemptReservedSliceReleaseOutcomeSha256` | `440754ffcbdbb83f6063948d46028b4f665c942ebc6f80fcc13cf4ee77194204` |
+| `brokerCompactionCompletionSha256` | `5f6ef24ee8132f511e3d3717671f6e779a319472492b0e31ffdbe6fc17ca837f` |
 
 One literal expected-value table, one separately authored canonical-byte fixture, and
 production are mutually read-independent. Negative vectors perturb each private/audit
@@ -5168,12 +5282,17 @@ perturbation, substitution, framing check, and order check must fail.
 The reclamation/recovery fixture separately perturbs every new private/audit domain,
 operation kind, outcome/failure/observation/absence tag, ordinal, count and integer framing,
 selection/census/export/target/head/intent/receipt/residual/prior-outcome member, recovery
-generation, source-release outcome, reservation, and ledger. It substitutes every 32-byte
-digest into every other position, swaps reclamation and recovery operation projections,
+generation, released-source census counts, source-release record and outcome, reservation,
+reservation generation, released record/byte counts, prior/applied ledger, slice-release
+record and outcome, and final completion. It substitutes every 32-byte digest into every
+other position, including source-release and attempt-slice outcomes in each downstream
+proof/completion field, swaps reclamation and recovery operation projections,
 removes/reorders/duplicates the first, intermediate, and final receipt or residual target,
-and poisons each check independently. The literal fixture, expected table, and production
-implementation are mutually read-independent; one removal poison per vector,
-perturbation, substitution, framing, order, and mode-tag check is mandatory.
+and poisons each check independently. No arbitrary downstream digest bytes are accepted as
+a vector input. The literal fixture, expected table, and production implementation are
+mutually read-independent; one removal poison per vector, perturbation, substitution,
+framing, order, mode-tag, source-release chain, and ledger-release chain check is
+mandatory.
 
 The operation publishes fixed redacted
 `coordinator-immutable-audit-continuity-compaction/pre-mutation` audit before unlink. It
@@ -5189,8 +5308,12 @@ selected evidence state, full current-head record, full successor chain, export 
 prior completed-target receipts. The matching outcome repeats the audit projections and
 adds exactly `Compacted | AlreadyCompacted | Degraded { targetOrdinal, targetKind,
 failure, completedTargetReceiptSetAuditSha256, residualTargetSetAuditSha256 }`, where failure is
-exactly `head-changed | target-changed | unlink | directory-sync | census |
-audit-publication`, plus `continuityCompactionOutcomeAuditSha256`. Neither audit record
+exactly `head-changed | target-changed | unlink`, plus
+`continuityCompactionOutcomeAuditSha256`. `head-changed` and `target-changed` occur before
+mutation intent; `unlink` requires the selected target still present exact after the failed
+call. A storage, `census`, `conflict`, or `audit-publication` error after successful unlink is
+instead a typed cleanup-pending response carrying the original operation and
+durable target prefix; it may not publish a degraded compaction outcome. Neither audit record
 stores or accepts a transient presence/absence observation.
 
 Immediately before every target mutation, the operation revalidates the complete target set
@@ -5215,7 +5338,8 @@ final census/outcome commit. A head advance, predecessor-link change, target sub
 or change to a not-yet-removed target stops before the next mutation with the exact closed
 class; it never broadens the selection or authorizes deletion of a now-current watermark.
 
-The restart classifier is exactly `PreOnly | Target { ordinal, SelectionValidated } |
+`ContinuityCompactionLifecycleV1` and its restart classifier are exactly `PreOnly |
+Target { ordinal, SelectionValidated } |
 Target { ordinal, MutationIntentDurable } | Target {
 ordinal, AbsentUnderIntentParentUnconfirmed } | Target {
 ordinal, ParentDurableOldCensus } | Target {
@@ -5233,11 +5357,24 @@ crash after parent durability commits only that target's census reduction, and a
 after census commits the same target receipt. Restart advances only across prior targets
 with matching durable intents and receipts. After the last receipt it publishes
 `TargetsCompacted`, then resumes source release and attempt-slice release in that order.
+`TargetsCompacted` is the only state that can mint
+`ContinuitySourceReleasePermit<'coordinator>`; `Complete` is unavailable at that point and
+is not a source-release prerequisite. `SourceReleasePending` advances only to
+`AttemptSliceReleasePending` after the exact released-source outcome, and
+`AttemptSliceReleasePending` advances only to `Complete` after
+`CompletedReleased`. No earlier state can construct the final completion receipt or free
+the live slot.
 Response loss after `Complete` returns the stored result with zero write. Failure
 preserves every not-yet-removed target and every confirmed prior absence, blocks later
-mutation, and never weakens any capacity ceiling. After remediation, only the recovery
-generation defined above may continue residual targets; repeating the settled degraded
-identity is a no-write replay of its degraded outcome.
+mutation, and never weakens any capacity ceiling. A settled degraded outcome contains
+exactly the receipt prefix before the still-present failed target, and its residual set
+begins at that target. Only such a pre-unlink settled outcome may admit the recovery
+generation defined above; repeating it is a no-write replay. After a successful unlink,
+the target is absent only under its original durable mutation intent, is not yet part of
+the completed receipt set, and no residual selection or recovery generation may be
+published. Remediation and every fresh-process restart resume the original tagged
+operation through parent revalidation/sync, census, receipt, later targets,
+`TargetsCompacted`, source release, attempt-slice release, and `Complete`.
 
 The read-independent lifecycle case has separate hooks and removal poisons for missing and
 mismatched pre export, repaired missing and mismatched watermark export, degraded unexpected
@@ -5253,7 +5390,16 @@ pre/outcome publication, each target present, each target absent with old census
 target intent and unlink, both per-target anchored-parent revalidations, every parent sync,
 every per-target census and receipt commit, every fresh-process target/ordinal prefix,
 targets-compacted receipt, source release, attempt-slice release, and completed no-write
-replay. A source `Released`/attempt-slice-pending case proves that no slot, reserved byte,
+replay. For each ordinal, independent post-unlink hierarchy/write/file-sync/link/reopen,
+directory-sync/census/conflict, receipt-publication, and outcome-audit-publication
+injections restart a fresh process on
+the original operation and complete its parent, census, and receipt prefix without
+publishing a degraded outcome or recovery generation. Companion pre-unlink
+`head-changed`, `target-changed`, and failed-`unlink` cases prove the failed target remains
+present, the completed receipt set is the exact prior ordinal prefix, and the residual set
+begins at that target before recovery is admitted. Every completed-receipt omission,
+extra receipt, residual-prefix overlap/gap, foreign intent, and post-unlink recovery
+substitution has an independent poison. A source `Released`/attempt-slice-pending case proves that no slot, reserved byte,
 repair sequence, source acquisition, or next cleanup operation changes before the exact
 slice-release outcome; the same fixture succeeds only after that final prerequisite. A
 recovery-recycling matrix independently withholds prior outcome export, first/intermediate/
@@ -5407,7 +5553,10 @@ ContinuityRepairSettlementPublicationBoundaryV1 =
   | audit-publication
 
 ContinuityRepairSettlementV1 =
-    PendingDecisionSelection {
+    PendingDecisionBasis {
+      state: ContinuityRepairDecisionBasisPublicationStateV1
+    }
+  | PendingDecisionSelection {
       state: ContinuityRepairDecisionSelectionStateV1
     }
   | PreparationIncomplete {
@@ -5428,12 +5577,20 @@ ContinuityRepairSettlementV1 =
 No settlement variant converts to, is embedded by, or implements a conversion into
 `ContinuityRepairTerminalFailureV1`. `pending-settlement`, intent publication, and terminal
 outcome publication are not terminal retention or publication classes.
+`ContinuityRepairDecisionBasisIncompletePrefixV1`,
 `ContinuityRepairDecisionSelectionIncompletePrefixV1`,
 `ContinuityRepairOutcomeIntentIncompletePrefixV1`, and
 `ContinuityRepairTerminalOutcomeIncompletePrefixV1` are each exactly `Absent |
 HierarchyDurable | InodeWritten | FileDurable | FinalLinked | FinalReopened |
 ParentDurable | AncestorsDurable | Conflict`. `Complete` is deliberately not a member of
 any pending type; it transitions to the next state or completed no-write replay.
+`ContinuityRepairDecisionBasisPublicationStateV1` is the sealed sum `Publishing {
+candidateBasisSha256,
+prefix: ContinuityRepairDecisionBasisIncompletePrefixV1 } | Conflict {
+existingBasisSha256, candidateBasisSha256 }`. Until the basis is durable, this state
+contains no public intended outcome, terminal failure, or action; only the intrinsic
+prefix/boundary may be projected. Its exact public settlement token is
+`decision-basis-pending`.
 `ContinuityRepairDecisionSelectionStateV1` is the sealed sum `Publishing {
 basis: ContinuityRepairDecisionBasisV1,
 prefix: ContinuityRepairDecisionSelectionIncompletePrefixV1 } | Conflict {
@@ -5486,13 +5643,34 @@ final can be mutated. The selection-state `Conflict` variant may be created only
 revalidating a nonidentical no-replace selection final against that durable basis. Neither
 the basis nor selection-state sum has public fields, construction, conversion, serde, or a
 caller-supplied action.
-Failure to make the selected basis durable is a preparation failure with no selection
-publication and no new source acquisition; it never re-derives an outcome from a later
-source observation.
 
-Only after `Selected` is file-and-directory durable does the broker publish no-replace
-`ContinuityRepairDecisionSelectionV1` through the common publication protocol. This is the
-first durable public decision state. It contains the exact complete typed outcome above,
+Its identity and crash-stable publication are:
+
+```text
+continuityRepairDecisionBasisSha256 =
+  SHA-256("d2b:host-generation:continuity-repair-decision-basis:v1\0" ||
+  continuity_repair_attempt_sha256 ||
+  continuity_source_binding_receipt_sha256 ||
+  deadline_plan_tag_u8 || deadline_plan_payload ||
+  terminal_outcome_record_sha256)
+```
+
+The deadline tag and payload use the canonical terminal-record encoding above. The basis
+uses the common no-replace publication protocol and
+`ContinuityRepairDecisionBasisIncompletePrefixV1`; pre-link restart discards only an
+unnamed inode and republishes the same selected canonical bytes held by the live operation,
+while post-link restart accepts only the exact final and resumes reopen and directory
+durability. A nonidentical final becomes only the sealed basis-state `Conflict`, preserves
+both digests, and authorizes no selection mutation. Failure before basis durability returns
+`PendingDecisionBasis` with no intended outcome and no terminal failure projection.
+Restart derives a public intended outcome only after reopening the exact durable basis; it
+never projects a transient selected failure. No selection hierarchy, selection final, new
+source acquisition, prune, watermark, intent, or terminal publication is legal while the
+basis is pending.
+
+Only after `ContinuityRepairDecisionBasisV1` is file-and-directory durable does the broker
+publish no-replace `ContinuityRepairDecisionSelectionV1` through the common publication
+protocol. This is the first durable public decision state. It contains the exact complete typed outcome above,
 `terminalOutcomeRecordSha256`, deadline plan, and matching repair/source-binding
 identities, with no response action or sensitive body. Until its exact final and directory
 chain are durable, failure is `PendingDecisionSelection` carrying the basis-selected
@@ -5528,8 +5706,8 @@ If a hard source, hierarchy, write, file-sync, link, reopen, directory-sync, or 
 failure occurs after pre, the intended outcome is the one reachable degraded variant and
 advances no watermark. If a repaired watermark is complete, the intended outcome is the
 matching repaired variant. Failure before decision-pre durability returns typed
-`PendingDecisionSelection` until selection durability, then typed
-`PreparationIncomplete`. Failure after decision-pre durability returns the applicable
+`PendingDecisionBasis` until basis durability, `PendingDecisionSelection` until selection
+durability, then typed `PreparationIncomplete`. Failure after decision-pre durability returns the applicable
 typed pending form, blocks every later mutation, and restart reloads the exact selection
 before acquiring evidence or dispatching another repair. It publishes only the unchanged
 decision-pre, intent, and terminal outcome. In particular, a watermark-complete repaired decision can
@@ -5537,20 +5715,22 @@ never settle as degraded, and a degraded decision can never acquire or validate 
 watermark during settlement. The watermark final is never republished or replaced.
 
 Fresh-process source-change cases mutate source availability, version, authority, replay
-binding, and returned bytes after the durable decision basis but before every
-decision-selection boundary. Each must render and publish only the basis-selected outcome
-or its sealed selection `Conflict`; none may observe the changed source, choose a different
-failure, reacquire evidence, or advance a watermark. Separate conflict cases cover a
-foreign selection final before link, after link, and after every directory boundary, with
-zero replacement and zero intent/terminal publication.
+binding, and returned bytes before every decision-basis and decision-selection boundary.
+Before basis durability, the only response is basis-pending without an intended outcome;
+after basis durability, each case must render and publish only the basis-selected outcome
+or its sealed selection `Conflict`. None may project a transient failure, reacquire
+evidence, choose a different outcome after the basis is durable, or advance a watermark.
+Separate conflict cases cover a foreign basis or selection final before link, after link,
+and after every directory boundary, with zero replacement and zero later publication.
 
 Strict response schemas and human/JSON goldens pin completed repaired, completed degraded,
-pending-decision-selection, preparation-incomplete, pending-intent, and pending-terminal
-forms. Independent fresh-process cases cover every decision-selection boundary,
+pending-decision-basis, pending-decision-selection, preparation-incomplete,
+pending-intent, and pending-terminal forms. Independent fresh-process cases cover every
+decision-basis and decision-selection boundary,
 decision-pre audit failure, and every outcome-intent and terminal publication boundary for
 each repaired variant and each degraded variant, restart from every incomplete selection,
-durable selection, decision-pre, or intent, byte-identical selection/intent/terminal
-publication, response loss, and completed no-write replay. Separate cases pin repaired
+durable basis, durable selection, decision-pre, or intent, byte-identical
+basis/selection/intent/terminal publication, response loss, and completed no-write replay. Separate cases pin repaired
 settlement after immutable watermark completion and degraded settlement after evidence
 durability with zero watermark. They poison any changed variant, failure, deadline plan,
 prune proof, repaired watermark, publication stage, intrinsic prefix/boundary, or action.
@@ -5569,6 +5749,7 @@ Absent
      BeforeDay90:
        -> WatermarkPublication(<exact prefix>)
        -> WatermarkApplied
+       -> OutcomeDecisionBasisDurable(RepairedBeforeDay90)
        -> OutcomeDecisionSelectionDurable(RepairedBeforeDay90)
        -> OutcomeDecisionPreDurable(RepairedBeforeDay90)
        -> OutcomeIntentPublication(<exact prefix>)
@@ -5578,6 +5759,7 @@ Absent
        -> MandatoryPruneWholeSetProofDurable
        -> WatermarkPublication(<exact prefix>)
        -> WatermarkApplied
+       -> OutcomeDecisionBasisDurable(RepairedAfterMandatoryPrune)
        -> OutcomeDecisionSelectionDurable(RepairedAfterMandatoryPrune)
        -> OutcomeDecisionPreDurable(RepairedAfterMandatoryPrune)
        -> OutcomeIntentPublication(<exact prefix>)
@@ -5590,19 +5772,20 @@ A post-pre failure may instead journal one reachable degraded decision with zero
 advance and settle that exact outcome, or return preparation-incomplete/pending if the
 corresponding publication cannot complete. Restart reacquires the coordinator,
 reconstructs the exact handle and attempt, revalidates the source/broker binding and any
-durable evidence, prune, watermark, decision selection, decision-pre, and intent final, and resumes only the
+durable evidence, prune, watermark, decision basis, decision selection, decision-pre, and intent final, and resumes only the
 first missing step. Pre-only, binding-only, evidence-only, prune-complete, every watermark
-publication boundary, watermark-without-selection, every decision-selection boundary,
+publication boundary, watermark-without-basis, every decision-basis boundary,
+basis-without-selection, every decision-selection boundary,
 selection-without-decision-pre, decision-pre-without-intent, every intent
 publication boundary, intent-without-outcome, every terminal publication boundary,
-decision-selection pending, preparation-incomplete, both later pending-settlement variants,
+decision-basis pending, decision-selection pending, preparation-incomplete, both later pending-settlement variants,
 and completed-response-loss
 prefixes are independent fresh-process cases. Binding without a source receipt, evidence
 without binding/pre, watermark without pre/evidence, watermark before required prune,
 day-90 success without durable whole-set proof and empty census, before-day-90 use of an
-unrelated prune, duplicate binding/pre/evidence/watermark/selection/decision/intent/outcome,
+unrelated prune, duplicate binding/pre/evidence/watermark/basis/selection/decision/intent/outcome,
 nonidentical source replay, binding/sequence/predecessor/handle mismatch,
-selection/decision/intent/outcome mismatch, terminal/settlement failure substitution,
+basis/selection/decision/intent/outcome mismatch, terminal/settlement failure substitution,
 deadline/outcome cross-pair, or a second dispatch degrades the root and blocks later
 mutation. The lifecycle malformed-prefix case has an independently named hook and removal
 poison for each listed ordering or pairing conflict. Completed response loss returns the
@@ -5820,9 +6003,9 @@ derived from the effective intrinsic boundary:
 | Settlement state/boundary | Exact `action` |
 | --- | --- |
 | decision-pre audit failure | `repair-retention-audit-and-reconcile` |
-| decision-selection, outcome-intent, or terminal-outcome at `hierarchy`, `write`, `file-sync`, `link`, `reopen`, or `directory-sync` | `repair-retention-storage-and-reconcile` |
-| decision-selection, outcome-intent, or terminal-outcome at `conflict` | `preserve-and-escalate-continuity-publication-conflict` |
-| decision-selection, outcome-intent, or terminal-outcome at `audit-publication` | `repair-retention-audit-and-reconcile` |
+| decision-basis, decision-selection, outcome-intent, or terminal-outcome at `hierarchy`, `write`, `file-sync`, `link`, `reopen`, or `directory-sync` | `repair-retention-storage-and-reconcile` |
+| decision-basis, decision-selection, outcome-intent, or terminal-outcome at `conflict` | `preserve-and-escalate-continuity-publication-conflict` |
+| decision-basis, decision-selection, outcome-intent, or terminal-outcome at `audit-publication` | `repair-retention-audit-and-reconcile` |
 
 Pre-repair continuity infrastructure has two additional closed failure domains.
 `ContinuityReplayKeyFailureClassV1` is exactly `entropy-unavailable | hierarchy | write |
@@ -5841,6 +6024,13 @@ ordered broker-target/source/attempt-slice cleanup and, if blocked, renders that
 owning failure instead of the trigger or its internal continuation label. Replay-key
 reservation uses the existing root-publication capacity or
 standing-reserve admission class and likewise never enters the infrastructure enum.
+The source's exact combined-attempt boundary accepts 141,312 encoded bytes and reports
+`source-capacity -> repair-continuity-authoritative-source-contract` at 141,313 before
+acquisition pre-audit. A 257th live source pair or repair slot is not `source-capacity` and
+is not repairable by pruning alone: it drives broker targets, source release, and
+attempt-slice release in that order and returns the exact first compaction,
+source-lifecycle, or capacity-release blocker. The next source acquisition is
+admitted only after all three cleanup phases complete.
 Their total actions are:
 
 | Infrastructure failure | Exact `action` |
@@ -5871,6 +6061,56 @@ schemas, snapshots, constructors, deserializers, and human/JSON goldens.
 Constructor, wire, human/JSON, and deserialization matrices cover every row and reject a
 replay-key class in the source domain, a source class in settlement or capacity, a reserved
 subset class in infrastructure, and every action substitution.
+
+Continuity cleanup projection is a third closed domain rather than a replay-key, source, or
+settled-repair failure:
+
+```text
+ContinuityCleanupStageV1 =
+    replay-key-candidate-recycling
+  | broker-compaction
+  | capacity-release
+
+ContinuityCleanupFailureClassV1 =
+    head-changed
+  | target-changed
+  | hierarchy
+  | write
+  | file-sync
+  | link
+  | reopen
+  | unlink
+  | directory-sync
+  | census
+  | conflict
+  | audit-publication
+  | ledger-conflict
+  | standing-reserve-missing
+  | standing-reserve-overdrawn
+  | standing-reserve-duplicated
+  | standing-reserve-unaccounted
+```
+
+Valid pairs are exactly
+`replay-key-candidate-recycling/(hierarchy | write | file-sync | link | reopen | unlink |
+directory-sync | census | conflict | audit-publication)`,
+`broker-compaction/(head-changed | target-changed | hierarchy | write | file-sync | link |
+reopen | unlink | directory-sync | census | conflict | audit-publication)`, and
+`capacity-release/(ledger-conflict | census | audit-publication |
+standing-reserve-missing | standing-reserve-overdrawn |
+standing-reserve-duplicated | standing-reserve-unaccounted)`.
+`head-changed | target-changed | conflict` map to
+`preserve-and-escalate-continuity-publication-conflict`;
+`hierarchy | write | file-sync | link | reopen | unlink | directory-sync` map to
+`repair-retention-storage-and-reconcile`; `census` maps to
+`repair-retention-census-and-reconcile`; `audit-publication` maps to
+`repair-retention-audit-and-reconcile`; and `ledger-conflict` plus every
+standing-reserve corruption class map to
+`preserve-and-escalate-audit-integrity-incident`. Constructors, strict schemas, wire
+snapshots, human/JSON goldens, and deserializers accept every listed pair and reject every
+cross-stage class and action substitution. Post-unlink broker-compaction and candidate
+recycler responses carry the original durable operation prefix and resume that operation;
+they are never settled degraded outcomes.
 
 The sealed private age-anchor state is the only wall-clock carrier. No response or audit
 projection carries a path, member bytes, artifact bytes, wall-clock value, errno, uid, pid,
@@ -7074,8 +7314,8 @@ continuity malformed-prefix id independently hooks binding-without-source-receip
 source-only and broker-only binding, evidence-without-binding/pre,
 watermark-before-evidence, watermark-before-required-prune, before-day-90 unrelated prune,
 day-90 success without the whole-set proof or empty census, duplicate
-binding/pre/evidence/watermark/decision-selection/decision-pre/intent/outcome,
-decision-selection/decision/intent/outcome
+binding/pre/evidence/watermark/decision-basis/decision-selection/decision-pre/intent/outcome,
+decision-basis/decision-selection/decision/intent/outcome
 mismatch, source replay change, replay-binding/handle/sequence/predecessor mismatch,
 terminal/settlement failure substitution, multi-member omission/reorder/substitution, and
 every deadline/outcome cross-pair.
@@ -7100,7 +7340,7 @@ negatives, replay-key candidate/create/sync/recycling/outcome prefixes,
 zero-pre-link/one-post-link counts, pre-parent exact reuse or bounded absent recycling
 before resampling, repeated commitment/crash/absent-final constant-state completion,
 post-parent absent degradation, and
-secure-posture/missing/partial/replaced negatives. It also owns decision-selection,
+secure-posture/missing/partial/replaced negatives. It also owns decision-basis, decision-selection,
 durable decision basis, decision-pre, intent, terminal, and final-absence publication at
 every common boundary,
 intrinsic incomplete-prefix actions, completed-prefix rejection, and repaired/degraded

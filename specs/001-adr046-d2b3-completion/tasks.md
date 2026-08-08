@@ -1953,7 +1953,10 @@ table before the operation exists.
   `PublishHostGenerationImmutableAuditContinuityReplayKeyV1` owns key creation as a typed
   no-replace, fd-anchored, capacity-charged pre/outcome operation before the root becomes
   usable. Before root mutation it reserves the exact 12-record/98,304-byte candidate
-  lifecycle maximum. It obtains exactly 32 CSPRNG bytes only after pre-audit, uses an
+  lifecycle maximum. Literal admission tests accept exactly 12 records and 98,304 bytes,
+  refuse 11 records with 98,304 bytes and 12 records with 98,303 bytes independently
+  before pre-audit/CSPRNG/root mutation, and poison each boundary. It obtains exactly 32
+  CSPRNG bytes only after pre-audit, uses an
   unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` mode-0600 root-owned regular inode with link count
   zero through write/file sync, durably publishes
   a broker-private candidate commitment binding publication attempt, generation,
@@ -1975,8 +1978,11 @@ table before the operation exists.
   commitment, one recycling prefix, and two head banks exist. Repeated commitment/crash/
   absent-final fresh-process tests exceed the root ceiling numerically while retained state
   remains constant, capacity is fully restored after each cycle, and publication eventually
-  completes. After parent durability absence is integrity degradation and never rotates or
-  replaces.
+  completes. Recycler `hierarchy | write | file-sync | link | reopen | unlink |
+  directory-sync | census | conflict | audit-publication` injections cover every prefix;
+  after successful unlink the same durable mutation intent must resume parent sync, census,
+  head switch, and outcome in a fresh process without a new candidate generation. After
+  parent durability absence is integrity degradation and never rotates or replaces.
   The key is sealed, durable across process death, absent from
   audit/export/wire/response/log/metric/span/panic/Debug, and required to prevent an audit
   reader from reconstructing the handle.
@@ -2032,6 +2038,15 @@ table before the operation exists.
   unlink/sync/census/outcome prefix, release before targets-compacted, foreign receipt,
   source outage, response loss, exact no-write replay, and admission of pair 257 only after
   one release. Compile-fail/API negatives and poisons cover every permit-mint/reuse route.
+  Sealed source-prefix reconciliation binds a checked 32-bit recovery generation, exact
+  first-missing transition, and prior outcome. Its closed outcome either proves lifecycle
+  advance or durably selects the next generation for the same failed prefix. At most one
+  pre/outcome pair is retained. Fresh-process matrices separately withhold outcome export,
+  lifecycle advance, and same-prefix supersession, perform no recycle or source mutation
+  while either prerequisite is missing, and admit pair recycling only after export plus
+  advance or export plus exact supersession. Repeated startup, idle, and selector-free
+  Admin wakes crash at every recycle/sync/census/next-pre boundary and converge with
+  constant retained capacity.
   Caller
   evidence, root, a direct broker client, or the site backup administrator's claim can never
   publish an anchor. Compiler/API negatives separately
@@ -2057,7 +2072,11 @@ table before the operation exists.
   boundary converts into either terminal enum. Once a terminal outcome is reachable it
   first durably publishes sealed `ContinuityRepairDecisionBasisV1` with the complete typed
   outcome, including exact degraded failure branch/class, before attempting the vulnerable
-  no-replace `ContinuityRepairDecisionSelectionV1` publication. Until that
+  no-replace `ContinuityRepairDecisionSelectionV1` publication. The basis has its own
+  canonical identity, no-replace incomplete prefix, and sealed `Publishing | Conflict`
+  state. Before its file and directory chain are durable, the only legal public form is
+  decision-basis-pending with intrinsic boundary and no intended outcome or terminal
+  failure. Until the selection
   common-publication final is durable, only `PendingDecisionSelection` carrying the
   basis-selected intended outcome and intrinsic incomplete prefix is legal, and restart may
   resume no other repair mutation. The sealed decision-selection state sum includes
@@ -2077,12 +2096,14 @@ table before the operation exists.
   watermark-complete repaired
   decision settles repaired unchanged; a degraded-after-evidence decision settles with zero
   accepted watermark and remains compaction-reachable. Fresh-process cases cover
-  every decision-selection boundary, decision-pre failure, every boundary for every
-  repaired and degraded intent, restart from each durable prefix, response loss, and
-  no-write completed replay. Separate source-change and foreign-final cases after durable
-  basis selection prove no new evidence, outcome, or failure is selected and no conflict
-  is replaced. Strict schemas, wire snapshots, the exact
-  exit-`0` repaired and exit-`4` decision-selection-pending/
+  every decision-basis and decision-selection boundary, decision-pre failure, every
+  boundary for every repaired and degraded intent, restart from each durable prefix,
+  response loss, and
+  no-write completed replay. Separate source-change and foreign-final cases before every
+  basis boundary and after durable basis selection prove no transient failure is projected,
+  no new evidence/outcome/failure is selected after durability, and no conflict is
+  replaced. Strict schemas, wire snapshots, the exact
+  exit-`0` repaired and exit-`4` decision-basis-pending/decision-selection-pending/
   preparation-incomplete/pending/degraded human/JSON forms in
   `contracts/operator-cli.md`, constructors, and hard-failure tests pin every variant,
   terminal failure branch/class, settlement stage/intrinsic boundary, intended outcome, and
@@ -2090,14 +2111,26 @@ table before the operation exists.
   T595's already assigned helper ownership renders those exact public forms and action tokens,
   while `contracts/operator-cli.md` maps replay-key, reserved-subset, source
   pin/bind/release, cleanup-blocker, settlement storage, conflict, and audit actions to their
-  named external owners and procedures. T592's closed wire variants distinguish replay-key
+  named versioned external owners, procedures, and exact selector-free T595 wake command.
+  Goldens pin the complete `repair-continuity-authoritative-source-contract` and
+  `repair-continuity-source-storage-and-reconcile` action tokens, owners, versioned
+  procedures, and exact command, rejecting added selectors or substitutions.
+  T592's closed wire variants distinguish replay-key
   unavailable, source-lifecycle unavailable, reserved capacity, cleanup pending,
-  decision-selection pending, preparation-incomplete, later settlement pending, and
-  settled degraded; constructors reject every cross-domain class, illegal stage/class,
-  completed pending prefix, and mismatched derived action. Replay-key outcome-audit
-  publication has its explicit `audit-publication` class; source release has explicit
-  `unlink` and `census` classes. Strict stage/class matrices, schemas, snapshots, and
-  human/JSON goldens accept only lifecycle-reachable pairs. The
+  decision-basis pending, decision-selection pending, preparation-incomplete, later
+  settlement pending, and settled degraded; constructors reject every cross-domain class,
+  illegal stage/class,
+  completed pending prefix, basis-pending intended outcome/failure, and mismatched derived
+  action. Replay-key outcome-audit publication has its explicit `audit-publication` class;
+  source release has explicit `unlink` and `census` classes. Cleanup has exact
+  `replay-key-candidate-recycling | broker-compaction | capacity-release` stages:
+  candidate recycling admits every hierarchy/write/file-sync/link/reopen/unlink/
+  directory-sync/census/conflict/audit-publication boundary, broker compaction adds
+  `head-changed | target-changed`, and capacity release admits
+  `ledger-conflict | census | audit-publication` plus all four
+  standing-reserve corruption classes. Strict stage/class matrices, schemas, snapshots,
+  constructors, and human/JSON goldens accept every lifecycle-reachable pair and reject
+  every cross-pair or action substitution. The
   `continuity-repair-attempt-limit` class and
   `resume-oldest-continuity-cleanup` continuation label are private trigger-only control
   tokens: public response constructors, serializers, deserializers, schemas, snapshots, and
@@ -2120,8 +2153,14 @@ table before the operation exists.
   degraded-reclamation, target-intent/receipt sets, recovery generation,
   targets-compacted/final-completion, attempt-slice release, and
   restoration-settlement formulas have frozen read-independent known-answer
-  vectors, every domain/member/tag/count/framing/order perturbation, excluded-self/body-field
-  check, first/intermediate/final member removal/reorder, cross-field substitution, and one
+  vectors. Source release uses literal zero pin/replay census counts and expected
+  census/record/audit-outcome hashes. Attempt-slice release consumes that exact output,
+  literal prior/reservation ledger inputs, generation, released record/byte counts, and
+  expected applied-ledger/record/audit-outcome hashes; final completion consumes only those
+  tested outputs, never arbitrary digest bytes. Independent downstream substitution and
+  removal poisons cover both chains in addition to every
+  domain/member/tag/count/framing/order perturbation, excluded-self/body-field check,
+  first/intermediate/final member removal/reorder, cross-field substitution, and one
   removal poison each.
 
   `CompactHostGenerationImmutableAuditContinuityV1` consumes its own sealed
@@ -2144,7 +2183,12 @@ table before the operation exists.
   then durably publishes a target mutation intent binding the exact present pre-unlink
   observation before unlinking. It reopens/revalidates/syncs the anchored parent, commits
   that target's reduced census and immutable receipt, and advances; pre-receipt absence is
-  legal only under that exact intent. Every
+  legal only under that exact intent. `head-changed | target-changed | unlink` may settle
+  degraded only before a successful unlink while the failed target remains present; the
+  completed receipts are the exact prior ordinal prefix and the residual begins at that
+  target. Post-unlink storage, census, conflict, receipt-publication, and audit-publication
+  failures remain pending under the original operation and cannot create a degraded
+  outcome or recovery generation. Every
   target/ordinal/present/intent-durable/absent-without-intent/
   absent-under-intent-parent-unsynced/
   parent-durable-old-census/census-committed/receipt-committed prefix restarts
@@ -2171,7 +2215,13 @@ table before the operation exists.
   zero watermark and hooks pre/outcome, every target
   prefix/intent/unlink/parent revalidation/sync/census/receipt, every fresh-process target
   ordinal, durable `TargetsCompacted`, source release, attempt-slice release, overall
-  `Complete`, and response loss with poisons. A `Released` source with pending
+  `Complete`, and response loss with poisons. Each post-unlink failure restarts a fresh
+  process and resumes the original parent/census/receipt prefix; completed-prefix,
+  residual-gap/overlap, foreign-intent, and post-unlink recovery substitutions each fail
+  independently. The reclamation vector must encode target-zero unlink failure with zero
+  completed receipts and all four residual targets, then bind recovery generation one and
+  all four successful receipts; no zero-target receipt may coexist with that first failure.
+  A `Released` source with pending
   attempt-slice release cannot free capacity, reuse a slot, advance the repair sequence, or
   admit a source acquisition; success occurs only after the exact slice-release outcome.
   After every completed
