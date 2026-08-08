@@ -482,6 +482,9 @@
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         lib = pkgs.lib;
+        bazelSeccomp = mkBazelSeccomp system;
+        bazelExecSupervisor =
+          import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
         d2bModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
