@@ -29,11 +29,13 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const agentsDir = join(root, ".github", "agents");
 const skillsDir = join(root, ".github", "skills");
+const selectionTableJson = join(root, ".github", "skills", "d2b-panel-round", "selection-table.json");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
 const tier0DashGate = join(root, "tests", "tools", "tier0-first-pass.sh");
 const dashPolicyTest = join(root, "packages", "d2b-contract-tests", "tests", "policy_dash_gate.rs");
 const promptCorpusScript = join(root, "scripts", "copilot", "prompt-corpus.mjs");
 const promptCorpusManifest = join(root, "scripts", "copilot", "prompt-corpus-manifest.json");
+const panelPromptSource = join(root, "docs", "adr", "specs", "0053-panel-prompt-sources.md");
 
 const CAVEMAN_VENDOR_ROOT = join(root, "third_party", "caveman", "v1.10.0");
 const CAVEMAN_VENDOR_FILES = {
@@ -49,8 +51,9 @@ const CAVEMAN_VENDOR_METADATA = {
 };
 const CAVEMAN_AGENT_NAMES = [
   "d2b-implementer", "d2b-integrator",
-  "panel-docs", "panel-kernel", "panel-networking", "panel-nixos",
-  "panel-observability", "panel-product", "panel-rust", "panel-security",
+  "panel-agentic", "panel-build", "panel-docs", "panel-kernel",
+  "panel-networking", "panel-nixos", "panel-observability", "panel-product",
+  "panel-reliability", "panel-security", "panel-simplicity",
   "panel-software", "panel-test",
 ];
 const CAVEMAN_BLOCK_START = "<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->";
@@ -174,6 +177,122 @@ function readPolicy() {
   };
 }
 
+function readSelectionPolicy() {
+  if (!existsSync(selectionTableJson)) {
+    fail(
+      `${selectionTableJson} does not exist. The current panel roster must come from ` +
+      `the versioned selection table.`,
+    );
+    return null;
+  }
+  let table;
+  try {
+    table = JSON.parse(readFileSync(selectionTableJson, "utf8"));
+  } catch (e) {
+    fail(`${selectionTableJson} is not valid JSON: ${e.message}.`);
+    return null;
+  }
+  if (!table || typeof table !== "object" || Array.isArray(table)) {
+    fail(`${selectionTableJson} must contain a JSON object.`);
+    return null;
+  }
+  if (
+    table.artifact_kind !== "d2b-panel/selection-table" ||
+    table.selection_table_version !== 2
+  ) {
+    fail(
+      `${selectionTableJson} must declare d2b-panel/selection-table version 2.`,
+    );
+  }
+  const mandatory = table.mandatory_seats;
+  const optional = table.optional_seats;
+  const fillOrder = table.fill_order;
+  if (
+    !Array.isArray(mandatory) ||
+    !Array.isArray(optional) ||
+    !Array.isArray(fillOrder)
+  ) {
+    fail(`${selectionTableJson} must declare mandatory_seats, optional_seats, and fill_order arrays.`);
+    return null;
+  }
+  const expectedMandatory = [
+    "software", "test", "product", "docs", "security",
+    "observability", "simplicity",
+  ];
+  const expectedOptional = [
+    "reliability", "agentic", "nixos", "networking", "kernel", "build",
+  ];
+  if (mandatory.join(",") !== expectedMandatory.join(",")) {
+    fail(`${selectionTableJson} mandatory seat order does not match the current contract.`);
+  }
+  if (optional.join(",") !== expectedOptional.join(",")) {
+    fail(`${selectionTableJson} optional seat order does not match the current contract.`);
+  }
+  if (fillOrder.join(",") !== optional.join(",")) {
+    fail(`${selectionTableJson} fill_order must equal optional_seats in order.`);
+  }
+  const roles = [...mandatory, ...optional];
+  if (new Set(roles).size !== roles.length || roles.length !== 13) {
+    fail(`${selectionTableJson} must declare exactly thirteen unique current seats.`);
+  }
+  if (roles.includes("rust") || !roles.includes("build")) {
+    fail(`${selectionTableJson} current roster must include build and exclude rust.`);
+  }
+  const buildPaths = table.seats?.build?.triggers
+    ?.filter((trigger) => trigger.kind === "path")
+    .flatMap((trigger) => trigger.patterns ?? []) ?? [];
+  for (const requiredPath of [
+    "rust-toolchain.toml",
+    ".cargo/config.toml",
+    "tests/layer1-jobs.json",
+    "tests/test-rust.sh",
+    "Makefile",
+    "flake.nix",
+    "packages/xtask/src/main.rs",
+    "packages/xtask/src/delivery/**",
+    "tests/static.sh",
+    "tests/test-lint.sh",
+  ]) {
+    if (!buildPaths.includes(requiredPath)) {
+      fail(
+        `${selectionTableJson} build triggers are missing canonical path ${requiredPath}.`,
+      );
+    }
+  }
+  const networkingSignals = table.seats?.networking?.triggers
+    ?.filter((trigger) => trigger.kind === "signal")
+    .flatMap((trigger) => trigger.values ?? []) ?? [];
+  for (const requiredSignal of ["routing", "mtu", "mss"]) {
+    if (!networkingSignals.includes(requiredSignal)) {
+      fail(
+        `${selectionTableJson} networking triggers are missing canonical signal ${requiredSignal}.`,
+      );
+    }
+  }
+  const networkingPaths = table.seats?.networking?.triggers
+    ?.filter((trigger) => trigger.kind === "path")
+    .flatMap((trigger) => trigger.patterns ?? []) ?? [];
+  for (const requiredPath of [
+    "**/*route*",
+    "**/*routing*",
+    "**/*mtu*",
+    "**/*mss*",
+  ]) {
+    if (!networkingPaths.includes(requiredPath)) {
+      fail(
+        `${selectionTableJson} networking triggers are missing canonical path ${requiredPath}.`,
+      );
+    }
+  }
+  return {
+    roles,
+    mandatory,
+    optional,
+    floors: table.floors,
+    seats: table.seats,
+  };
+}
+
 function parseFrontmatter(text, label) {
   if (!text.startsWith("---\n")) {
     fail(`${label}: no YAML frontmatter. Begin the file with a "---" line, the name, description, model and tools keys, and a closing "---".`);
@@ -261,7 +380,7 @@ if (!existsSync(agentsDir)) {
 // silently diverged into ten different thresholds. Three seats ended up with
 // no threshold at all, so anything they noticed became a blocking
 // recommendation, and since signoff is true iff recommendations is empty,
-// each one cost a full extra round across all ten seats.
+// each one cost a full extra verification pass across the selected roster.
 
 const BAR_HEADING = "## The bar for a finding";
 const BAR_NEXT_HEADING = "## Output";
@@ -286,6 +405,63 @@ const headingOffsets = (text, heading) => {
 };
 
 const panelAgents = [...agents.entries()].filter(([n]) => n.startsWith("panel-"));
+
+const INVARIANT_CHECKLIST_MARKERS = {
+  "panel-nixos": "<!-- panel nixos invariant checklist -->",
+  "panel-observability": "<!-- panel observability invariant checklist -->",
+};
+for (const [agentName, marker] of Object.entries(INVARIANT_CHECKLIST_MARKERS)) {
+  const agent = agents.get(agentName);
+  if (!agent) {
+    fail(`${agentName}: invariant checklist agent is missing.`);
+    continue;
+  }
+  const occurrences = agent.text.split(marker).length - 1;
+  if (occurrences !== 1) {
+    fail(
+      `${agent.file}: invariant checklist marker must occur exactly once; found ${occurrences}.`,
+    );
+  }
+}
+
+const SUBSTANTIVE_SEAT_CHECKLISTS = {
+  "panel-nixos": [
+    "The net VM's `10-eth-dhcp` neutralizer",
+    "A new `systemd.services.*` for",
+    "`videoSidecar` must",
+    "**TPM** state is per-VM and persistent",
+  ],
+  "panel-observability": [
+    "**Unbounded label cardinality.**",
+    "**Sensitive values in observable surfaces.**",
+    "**Audit records that lose their properties.**",
+    "**Degraded reporting.**",
+  ],
+  "panel-networking": [
+    "**Environment isolation weakened.**",
+    "**The net VM's uplink.**",
+    "**MTU and MSS.**",
+    "**Address and prefix handling.**",
+  ],
+  "panel-kernel": [
+    "**Process identity races.**",
+    "**cgroup v2 phase confusion.**",
+    "**Filesystem edge cases that only appear in production.**",
+    "**Signal handling.**",
+  ],
+};
+for (const [agentName, phrases] of Object.entries(SUBSTANTIVE_SEAT_CHECKLISTS)) {
+  const agent = agents.get(agentName);
+  if (!agent) continue;
+  for (const phrase of phrases) {
+    if (!agent.text.includes(phrase)) {
+      fail(
+        `${agent.file}: substantive repository checklist phrase is missing: ${phrase}. ` +
+        "Restore the concrete seat guidance; a marker comment alone is not protection.",
+      );
+    }
+  }
+}
 
 const bars = new Map();
 for (const [name, a] of panelAgents) {
@@ -377,6 +553,7 @@ for (const name of agents.keys()) {
 }
 
 const policy = readPolicy();
+const selectionPolicy = readSelectionPolicy();
 
 for (const r of rows) {
   const a = agents.get(r.agent);
@@ -428,17 +605,56 @@ for (const r of rows) {
   }
 }
 
-// Every roster seat must have an agent.
-if (policy && policy.roles.length) {
-  for (const role of policy.roles) {
+// Every current selection-table seat must have an agent. The Rust delivery
+// surface may still expose the exact historical ten-seat roster while the
+// compatibility slice is in flight; that is not a current dispatch roster.
+if (selectionPolicy && selectionPolicy.roles.length) {
+  for (const role of selectionPolicy.roles) {
+    const focus = selectionPolicy.seats?.[role]?.focus;
+    const prompt = agents.get(`panel-${role}`)?.text ?? "";
+    const normalizedFocus = focus?.replace(/\s+/g, " ").trim();
+    const normalizedPrompt = prompt.replace(/\s+/g, " ");
+    if (normalizedFocus && !normalizedPrompt.includes(normalizedFocus)) {
+      fail(
+        `panel-${role} does not carry the authoritative selection-table focus; ` +
+        `copy the focus text from selection-table.json without changing it`,
+      );
+    }
+  }
+  for (const role of selectionPolicy.roles) {
     if (!agents.has(`panel-${role}`)) {
-      fail(`PANEL_ROLES names seat "${role}" but there is no .github/agents/panel-${role}.agent.md. Add that agent, or remove the seat from PANEL_ROLES.`);
+      fail(
+        `selection table names seat "${role}" but there is no ` +
+        `.github/agents/panel-${role}.agent.md. Add that agent, or remove the ` +
+        `seat from the selection table.`,
+      );
     }
   }
   for (const name of agents.keys()) {
-    if (name.startsWith("panel-") && !policy.roles.includes(name.slice("panel-".length))) {
-      fail(`agent "${name}" is not a seat in PANEL_ROLES; the roster is closed. Remove the agent, or add the seat to PANEL_ROLES in the same change.`);
+    if (
+      name.startsWith("panel-") &&
+      !selectionPolicy.roles.includes(name.slice("panel-".length))
+    ) {
+      fail(
+        `agent "${name}" is not a current selection-table seat; the roster is ` +
+        `closed. Remove the agent, or add the seat to the selection table.`,
+      );
     }
+  }
+}
+
+if (policy && selectionPolicy) {
+  const legacyRoles = [
+    "software", "test", "nixos", "networking", "security",
+    "rust", "product", "docs", "observability", "kernel",
+  ];
+  const current = selectionPolicy.roles.join(",");
+  const delivery = policy.roles.join(",");
+  if (delivery !== current && delivery !== legacyRoles.join(",")) {
+    fail(
+      `delivery PANEL_ROLES [${policy.roles.join(", ")}] is neither the current ` +
+      `selection-table roster nor the exact historical compatibility roster.`,
+    );
   }
 }
 
@@ -793,27 +1009,21 @@ if (!existsSync(initOptionsJson)) {
         }
       }
 
-      // The seat roster is mirrored as an array rather than a scalar, so it
-      // needs its own comparison. A helper roster short of the sealed one
-      // writes an incomplete record set and the gate rejects the wave for a
-      // missing seat; a longer one writes a record for a seat that is not on
-      // the roster. Compare in order, because the two are in order today and
-      // a reordering is itself drift worth surfacing.
-      const rolesBlock = src.match(/const\s+ROLES\s*=\s*\[([\s\S]*?)\];/);
-      if (!rolesBlock) {
+      // The current roster is deliberately not mirrored as a second array.
+      // make-records must consume the same lifecycle-selection artifact as
+      // delivery rather than reintroducing a fixed helper roster.
+      if (!src.includes('readSelection(selectionPath)') ||
+          !src.includes('selection.roster') ||
+          !src.includes("panel_format_version")) {
+        // The last marker is checked below as a spelling guard. It is kept
+        // separate so a future refactor cannot accidentally remove the
+        // selected-roster handoff while leaving the import in place.
         fail(
-          `make-records.mjs: cannot parse ROLES; the seat-roster drift check cannot run. Restore the ROLES array, or update the pattern in check-bindings.mjs in the same change.`,
+          "make-records.mjs must consume selection.roster from a lifecycle selection artifact; it must not mirror a fixed current roster",
         );
-      } else {
-        const mineRoles = [...rolesBlock[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-        if (mineRoles.join(",") !== policy.roles.join(",")) {
-          fail(
-            `make-records.mjs ROLES is [${mineRoles.join(", ")}] but model.rs ` +
-            `PANEL_ROLES is [${policy.roles.join(", ")}]. A drifted roster is only ` +
-            `discovered while sealing a wave, and it either drops a seat from the ` +
-            `record set or attests one the gate does not accept. Bring the helper roster back into the sealed order.`,
-          );
-        }
+      }
+      if (!src.includes("--selection")) {
+        fail("make-records.mjs must require the --selection handoff");
       }
     }
 
@@ -916,6 +1126,59 @@ function requireText(path, text, label = path) {
   const source = readFileSync(path, "utf8");
   if (!source.includes(text)) {
     fail(`${label} is missing required binding text: ${text}`);
+  }
+}
+
+// ADR 0055 replaces the old fixed-seat verdict contract. Keep this small
+// source check next to the binding gate so a prompt corpus refresh cannot
+// accidentally preserve an operative legacy instruction.
+if (!existsSync(panelPromptSource)) {
+  fail(`${panelPromptSource} is missing; the panel prompt source contract cannot be checked.`);
+} else {
+  const source = readFileSync(panelPromptSource, "utf8");
+  for (const required of [
+    "ADR 0055",
+    "selected roster",
+    "complete discovery",
+    "shared ledger",
+    "scoped verification",
+    "Build seat source guidance",
+    "citation-only prose does not",
+  ]) {
+    if (!source.toLowerCase().includes(required.toLowerCase())) {
+      fail(`panel prompt source is missing required current guidance: ${required}`);
+    }
+  }
+  const stalePatterns = [
+    ["fixed-roster contract", /\bfixed (?:roster|ten-seat)\b/i],
+    ["relevant verdict field", /\brelevant\s*:/i],
+    ["prior_resolutions verdict field", /\bprior_resolutions\b/],
+    [
+      "four-field legacy verdict contract",
+      /\brelevant\s*:[\s\S]{0,600}\bprior_resolutions\b/i,
+    ],
+    ["held-reviewer contract", /\bheld[- ]reviewer\b/i],
+    ["held-seat contract", /\bheld[- ]seat\b/i],
+    ["repeated-round contract", /\brepeated (?:open-ended )?rounds?\b/i],
+    ["old verification contract", /\bold verification\b/i],
+  ];
+  for (const [label, pattern] of stalePatterns) {
+    for (const match of source.matchAll(
+      new RegExp(
+        pattern.source,
+        pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+      ),
+    )) {
+      const start = Math.max(0, match.index - 220);
+      const end = Math.min(source.length, match.index + match[0].length + 220);
+      const context = source.slice(start, end);
+      if (!/\bwithdraw(?:n|s|ing)?\b/i.test(context)) {
+        fail(
+          `panel prompt source keeps an operative ${label}; replace it with ADR 0055 guidance or mark the old contract withdrawn`,
+        );
+        break;
+      }
+    }
   }
 }
 
@@ -1082,11 +1345,17 @@ const panelOutputSchema = (role) => [
   `}`,
   "```",
 ].join("\n");
+const panelVerificationOutputContract =
+  "During verification, add `verified_issue_statuses` with exactly one entry for\n" +
+  "every ledger issue and add `late_findings` as an array.";
 for (const [name, agent] of panelAgents) {
   const role = name.slice("panel-".length);
   const output = agent.text.match(/## Output\n\nReturn exactly one JSON object and nothing else:\n\n```json\n[\s\S]*?\n```\n?/);
   if (!output || !output[0].includes(panelOutputSchema(role))) {
     fail(`${agent.file}: panel verdict JSON output schema changed or is missing.`);
+  }
+  if (!agent.text.includes(panelVerificationOutputContract)) {
+    fail(`${agent.file}: panel verification output extension changed or is missing.`);
   }
 }
 

@@ -1,7 +1,7 @@
 # Panel review
 
-Panel sign-off contract: phase gate, fix round scope, default ten-role roster
-and focus, and harness notes for swarm or unattended runs.
+Panel sign-off contract: phase gate, Discover-Fix-Verify lifecycle, selected
+roster and focus, and future producer parity.
 
 Binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel review":
 a phase closes only on unanimous sign-off, `signoff` is `true` iff
@@ -17,7 +17,9 @@ section 12.3.
 
 Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. The
 integrator MUST NOT begin the next phase until every selected reviewer returns
-`signoff: true` (N/N for the panel size; the default roster is 10).
+`signoff: true` (N/N for the selected roster size). The current role domain is
+the thirteen-seat selection table; the lifecycle selection artifact chooses
+the ordered roster and the roster may only widen.
 
 For plan-driven work, a "phase" is usually one wave from the plan's graph
 (`Wave 0`, `Wave 1`, ...). For plans touching fewer than three files, one phase
@@ -25,14 +27,16 @@ covering the whole plan is acceptable.
 
 For each phase:
 
-1. **Plan review** - panel reviews the plan; iterate until N/N
-   sign-off. The integrator may not dispatch implementation subagents
-   until this gate passes.
+1. **Plan review** - panel runs one comprehensive discovery over the plan,
+   batches any fixes, and performs scoped verification until N/N sign-off.
+   The integrator may not dispatch implementation subagents until this gate
+   passes.
 2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
 3. **Integration** - integrator merges subagent output.
-4. **Work review** - panel reviews the integrated diff; iterate via
-   fix-subagents until N/N sign-off.
+4. **Work review** - panel runs one comprehensive discovery over the
+   integrated candidate, batches fixes, and performs scoped verification until
+   N/N sign-off.
 5. **Advance** - only now may the integrator begin the next phase's
    plan review.
 
@@ -46,23 +50,16 @@ rather than duplicating the validation themselves. This keeps panel
 review from stampeding the shared Nix store, cargo target, and git
 worktrees while parallel implementation agents are still active.
 
-A panel round after the first is a **delta review**, and its prompt MUST
-carry two explicit ranges rather than only the full branch diff:
+A verification iteration after discovery MUST carry two explicit ranges:
 
-- `git diff <the commit that reviewer last reviewed>..HEAD` - the delta,
-  which is what the reviewer actually reviews. It is the only thing that
-  can have introduced a new defect or failed to close an old one.
+- `git diff <the commit that reviewer last reviewed>..HEAD` - the fix delta,
+  used to verify ledger resolutions and regressions.
 - `git diff <base>..HEAD` - the full branch, for context when the delta
   touches something whose correctness depends on code outside it.
 
-The integrator therefore MUST record the tip commit each round reviewed, so
-the next round can be scoped against it. A prose summary of what changed is
-a statement of intent, not evidence: prompts MUST instruct reviewers to read
-the delta themselves rather than trust the summary, because a fix that
-silently touched something the summary omits is exactly what a delta review
-exists to catch. Prompts MUST also instruct reviewers to verify their own
-prior findings against the tree by inspection rather than marking them
-closed because the prompt says they were fixed.
+The integrator records each reviewed tip so verification can be scoped against
+it. A prose summary is intent, not evidence: reviewers inspect the fix delta,
+the full candidate, the shared ledger, and the implementation responses.
 
 Where the integrator disputes a finding, the prompt MUST state the rebuttal
 and its evidence and ask the reviewer to judge it on the merits - explicitly
@@ -72,19 +69,17 @@ one to save face is worse than admitting the error; equally, a reviewer must
 not withdraw a valid finding merely because the integrator pushed back.
 
 The Copilot panel stages one canonical `review-request.md` for the whole
-roster and one `reviewer-notes/<seat>.md` file per reviewer. The request names
+selected roster and one `reviewer-notes/<seat>.md` file per reviewer. The request names
 the exact delta and full ranges, validation evidence, deliverable, finding
 threshold, no-rerun rule, and prior-verdict obligation. The integrator
 dispatches the exact generated `dispatch-prompt.txt` to every seat rather than
-reconstructing those instructions in ten free-form prompts. For a later
+reconstructing those instructions in free-form prompts. For a later
 review, staging fails unless the supplied previous tip matches the prior
 `address.json` and every seat's prior verdict is present.
 
-Any content change to the reviewed tree invalidates every prior sign-off in
-that phase, including sign-offs from reviewers whose focus the change did
-not touch. Those reviewers still re-report, but their prompt should scope
-them to the delta and permit a short confirmation that their area is
-unaffected.
+Any content change invalidates sign-off for that candidate. The lifecycle
+roster remains selected, may widen, and verifies the new candidate without
+running a second discovery.
 
 Selected panel lanes may use optional full transient communication through the
 `d2b-caveman` contract. An explicit `normal` or `off` request wins. This is a
@@ -105,13 +100,54 @@ Each engineer returns a JSON sign-off record shaped like:
 ```
 
 By policy, `signoff` is `true` iff `recommendations` is `[]`.
-Otherwise, `recommendations[]` carries the actionable findings. If any
-reviewer returns findings, the integrator spawns follow-up
-implementation agents, lands the fixes, reruns the tests, and starts
-another panel round. Green tests do not waive this gate; a phase closes
-only on unanimous sign-off.
+Otherwise, `recommendations[]` carries merge-blocking conditions. Discovery
+findings enter the shared ledger, implementation resolves them in a batch,
+and the selected lifecycle roster performs scoped verification. Green tests
+do not waive this gate; a phase closes only on unanimous sign-off.
 
-## Fix rounds are scoped to the findings
+## Discover-Fix-Verify lifecycle
+
+ADR 0055 makes one comprehensive discovery the start of a lifecycle. The
+orchestrator creates the versioned selection artifact, dispatches every
+selected seat with the full candidate and supplied validation evidence, and
+requires an explicit complete result from every seat. `{ complete: true,
+findings: [] }` is a valid zero-finding result; an absent seat result is not.
+
+Discovery findings are merged into one shared ledger with deterministic `R`
+identifiers and complete source attribution. Implementation receives the full
+ledger and records exactly one supported disposition, justification, changed
+surface, and evidence for every issue. The integrator then reruns selection
+over the full candidate and every fix delta, unions each result with the
+lifecycle roster, and never removes a selected seat.
+
+Verification receives the complete ledger, all responses, validation and
+self-review evidence, the latest delta, full candidate context, and each
+reviewer's prior obligations. It checks resolutions, dispositions, evidence,
+regressions, and unsafe late `BLOCKER` or `MAJOR` findings. A pre-existing late
+`MINOR` or `NIT` remains non-blocking history. Sign-off remains true exactly
+when the blocking recommendation list is empty.
+
+The current selection table defines these thirteen seats:
+`software`, `test`, `product`, `docs`, `security`, `observability`,
+`simplicity`, `reliability`, `agentic`, `nixos`, `networking`, `kernel`, and
+`build`. Code and configuration floors are ten, documentation floor is eight,
+and ambiguity widens selection. Build-system and build-contract changes
+select `build`; citation-only prose does not. Rust review is a `software`
+profile. Historical fixed-ten delivery artifacts remain readable separately
+and retain `rust`.
+
+The lifecycle selection is the one roster authority:
+
+```text
+.scratch/panel/<lifecycle>/selections/<candidate-id>/<snapshot-sha256>.json
+```
+
+`stage-diffs.sh`, `make-records.mjs`, and xtask `panel-request` consume the
+same artifact. Current delivery request, record, attestation, and embedded
+seal panel objects carry `panel_format_version: 1`; legacy fixed-ten objects
+omit it. The workspace delivery schema remains version `2`.
+
+## Fix passes are scoped to the ledger
 
 A fix round MUST address the findings the panel actually raised, and
 nothing else. Do not take a finding as licence to harden the surrounding
@@ -147,11 +183,11 @@ as an observation in the summary, not as a blocking recommendation.
 ### The bar is one shared, gate-enforced block
 
 That paragraph is a SHOULD, and for the Copilot panel it is not left to
-each prompt author to honour. Every `.github/agents/panel-*.agent.md`
+each prompt author to honour. Every current `.github/agents/panel-*.agent.md`
 carries a `## The bar for a finding` section, and
-`scripts/copilot/check-bindings.mjs` requires all ten to be
+`scripts/copilot/check-bindings.mjs` requires them to be
 **byte-identical**. Editing one seat's copy fails `make test-lint` until
-the other nine match.
+the current set matches.
 
 The enforcement exists because the prose version did not hold. The bar
 was written once and then restated per seat, and it diverged into ten
@@ -159,8 +195,8 @@ different thresholds: two seats carried the full rule, three carried a
 partial variant each excluding a different thing, one substituted its own
 test, and **four carried no threshold at all**. A seat with no stated bar
 treats anything it notices as blocking, and because `signoff` is `true`
-iff `recommendations` is `[]`, each of those cost a full extra round
-across all ten seats. That is the mechanism behind the drift toward
+iff `recommendations` is `[]`, each of those cost another selected-roster
+verification iteration. That is the mechanism behind the drift toward
 peripheral nits described above: not reviewers being pedantic, but
 reviewers correctly applying ten different thresholds because that is what
 they were given.
@@ -177,16 +213,15 @@ repo, and both belong to every seat rather than to one:
   delta claims a property, check the property.
 
 A change to the bar is a deliberate change to what the panel blocks on.
-Make it in all ten files in one commit; the gate will not let you do
-otherwise.
+Make it in every current panel agent file in one commit; the gate will not let
+you do otherwise.
 
 Escape hatches are narrow:
 
-- **Swarm-driven work** satisfies the per-round gate with swarm's
-  five-seat phase council instead of a ten-role panel round. See
-  [Running the panel under swarm](#running-the-panel-under-swarm). The
-  substitution covers only the per-round gate; the binding wave panel is
-  untouched.
+- **Future Gas City orchestration** may drive the gate only after it consumes
+  the same selection table and lifecycle artifacts and produces the same
+  selected-roster result. No smaller council substitutes for the current
+  standard Copilot implementation.
 - **Trivial fixes** (typo, one-line, no semantic change) may skip the
   panel gate.
 - **Time-critical hotfixes** (production breakage) may skip the
@@ -231,183 +266,42 @@ already lost, check the rebase autostash before concluding it is gone: a
 rebase run during the wave captures the whole dirty tree, and that has
 already recovered one slice's uncommitted output in this program.
 
-## Default panel
+## Selection-table role domain
 
 | Engineer          | Focus |
 |-------------------|-------|
-| `software`        | Shell + Nix shape of every new module, daemon instrumentation, idempotency of sidecars, error handling in metric exporters. |
-| `test`            | Coverage of new option schema, vsock CID collision cases, restart-policy gates, manifest schema drift, and what could regress invisibly. |
-| `nixos`           | Module wiring, `lib.mkForce` / `lib.mkDefault` correctness, option declarations, systemd unit composition, and activation ordering. |
-| `networking`      | Network surface changes, firewall posture across envs, DHCP/DNS regressions, bridge isolation, and routing invariants. |
-| `security`        | Attack surface, host-relay trust posture, capability sets / syscall filters, authz boundaries, telemetry-label PII review, and retention defaults. |
-| `rust`            | Rust API shape, error propagation, unsafe/FFI boundaries, schema generation, workspace dependency direction, and testability. |
-| `product`         | Operator UX, naming surface, migration/deprecation policy, default-off opt-in shape, and actionable error messages. |
-| `docs`            | Diataxis adherence in `docs/{reference,how-to,explanation}/`, CHANGELOG entries, schema md↔json drift, and AGENTS.md updates landing with load-bearing changes. |
-| `observability`   | Cardinality of metric labels, span attribute hygiene (no secrets/cmd output/store paths), log/audit shape, retention, and dashboard/exporter correctness. |
-| `kernel`          | pidfd, cgroup, namespace, mount, signal, ioctl, and filesystem semantics; kernel-version assumptions and Linux API edge cases. |
+| `software`        | Correctness, control flow, error propagation, APIs, unsafe and FFI boundaries, dependency direction, and testability. |
+| `test`            | Coverage, invisible regressions, planted negatives, gate placement, and validation evidence. |
+| `product`         | Scope, operator UX, naming, migration, contracts, and actionable errors. |
+| `docs`            | Documentation placement, changelog and ADR coverage, terminology, links, schema drift, process markers, and ASCII dashes. |
+| `security`        | Exploitability, attacker model, authorization, trust boundaries, secrets, and PII. |
+| `observability`   | Metrics, spans, logs, audit shape, cardinality, redaction, retention, and diagnostics. |
+| `simplicity`      | Reuse, deletion, abstraction count, dependency adoption, indirection, and unnecessary machinery. |
+| `reliability`    | Ownership, cleanup, restart and adoption, idempotency, ordering, concurrency, partial failure, and durable state. |
+| `agentic`         | Agent profiles, prompt contracts, instruction layering, orchestration, handoffs, and mechanical enforcement. |
+| `nixos`           | NixOS module and option semantics, priorities, activation ordering, assertions, and evaluated configuration. |
+| `networking`      | Reachability, firewall, address and port allocation, routing, MTU and MSS, and coexistence. |
+| `kernel`          | Syscalls, descriptor and lock semantics, signals, mounts, filesystems, races, and kernel-version assumptions. |
+| `build`           | Build graphs, CI scheduling, toolchains, targets, hermeticity, caches, dependencies, packaging, and release artifacts. |
 
 Older commits and [CHANGELOG.md](CHANGELOG.md) entries may reference
-the historical six-engineer security-hardening roster (`nixos`, `rust`,
-`software`, `test`, `networking`, `security`) or the earlier
-observability-specific roster. The unified default panel above
-supersedes both for new work.
+the historical ten-seat or six-engineer rosters. The selection-table domain
+above supersedes them for current work. Legacy delivery artifacts remain
+readable under their strict fixed-ten compatibility format, including `rust`.
 
 Host-local roster files under `/etc/nixos/scripts/` are operator
 configuration and are out of scope for this repository; keep repo docs
 focused on the review contract rather than paydro-specific files.
 
-## Running the panel under swarm
+## Future Gas City parity
 
-There are three review surfaces in this repository and they are strictly
-ranked. Read this ordering before wiring any harness.
-
-1. **The binding ten-role panel** - `cargo run --manifest-path
-   packages/Cargo.toml -p xtask -- delivery wave panel-request` /
-   `panel-attest` / `seal`. This is the authority for an ADR 0046 wave.
-   It runs **once, at wave close**, against the wave's one immutable
-   snapshot, and it is enforced in code by
-   `packages/xtask/src/delivery/panel.rs`: exactly one record per role
-   for all ten roles, `signoff` true iff `recommendations` is `[]`,
-   unanimous ten of ten, every record bound to the same
-   `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
-   reasoning effort pinned to `github-copilot` /
-   `gpt-5.6-sol` / `xhigh`. The panel model is deliberately
-   not the coding model, so a lane cannot both author a change and
-   attest to it. No override, no force flag, and no partial
-   pass. Historical `gemini-3.1-pro-preview` / `high` request-record
-   sets remain accepted only as an exact compatibility pair.
-   See [`docs/specs/ADR-046-validation-and-delivery.md`](../specs/ADR-046-validation-and-delivery.md)
-   section 12.3.
-2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
-   above. Where ADR 0046 restricts the *binding* panel to one per wave,
-   this rule allows a panel per implementation round. This is the loop
-   swarm automates.
-3. **Swarm's five-seat phase council** - the per-round gate whenever
-   swarm drives the work. It stands in for surface 2 and has no bearing
-   on surface 1.
-
-**Swarm runs surface 2, not surface 1.** Under swarm the five-seat
-council is the per-round gate: no ten-role panel round is required
-between implementation rounds, which is the whole point of running the
-harness. Surface 1 is unchanged, because ADR 0046 section 12.3 already
-restricts the binding panel to exactly one run at wave close and never
-per implementation round. A green phase council is therefore not a
-sealed wave, and `phase_complete` passing is not `delivery wave seal`
-passing.
-
-**The 10 roles at wave close.** The ten-role roster is no longer run
-every round. It runs once, at wave close, to produce the records
-surface 1 consumes: dispatch one read-only lane per roster role via
-`dispatch_lanes_async`, seeded with that role's focus cell from the
-table above plus the integrator's validation evidence. Lanes are
-read-only by contract, which keeps them off the shared Nix store, cargo
-target directory, and heavy gate semaphore. Lane ids are free-form, so
-all 10 roles vote independently and each lane's verdict maps one-to-one
-onto a `panel-attest` record.
-
-To keep those records attestable, the reviewing agents must use the binding
-table in `.github/skills/d2b-panel-round/SKILL.md`. It pins each read-only
-lane to provider `github-copilot`, model `gpt-5.6-sol`, reasoning effort
-`xhigh`, and context tier `default`; the panel agent frontmatter also
-restricts each seat to `view`, `grep`, and `glob`. A lane on any other
-binding produces a record `panel-attest` will reject, so do not let model or
-effort fallback silently downgrade a panel lane.
-
-**The per-round council, and what it costs.**
-`submit_phase_council_verdicts` has a closed five-member roster
-(`critic`, `reviewer`, `sme`, `test_engineer`, `explorer`) and
-deduplicates by member, so ten distinct votes cannot be cast against it.
-Each seat carries the concerns of the roster roles nearest it:
-
-| Seat            | Covers                          |
-|-----------------|---------------------------------|
-| `reviewer`      | `software`, `rust`              |
-| `test_engineer` | `test`                          |
-| `sme`           | `nixos`, `networking`, `kernel` |
-| `critic`        | `security`, `product`           |
-| `explorer`      | `docs`, `observability`         |
-
-A seat MUST NOT return `APPROVE` while any concern it covers is open.
-Accept the tradeoff knowingly: five synthesizers can agree where ten
-independent reviewers would have dissented, and the observability
-precedent above is exactly that failure shape. That is why this council
-gates a round and not a wave, and why the ten-role panel still runs
-before the seal.
-
-**Verdict rule.** Swarm's default is more permissive than this file: a
-`CONCERNS` verdict carrying only MEDIUM/LOW findings still passes. The
-repository rule, and the rule `panel.rs` enforces, is `signoff: true`
-iff `recommendations` is `[]`. Set
-`council.phaseConcernsAllowComplete: false` so `CONCERNS` blocks like
-`REJECT`; that is a required part of the project config.
-
-**Gate wiring.** Enable the gates before the QA profile locks
-(`set_qa_gates` is ratchet-tighter and rejects all writes once critic
-approval or drift evidence locks it):
-
-```
-phase_council, final_council, drift_check,
-hallucination_guard, critic_pre_plan, sme_enabled
-```
-
-`phase_complete` then refuses to close a phase without
-`.swarm/evidence/<phase>/phase-council.json`.
-
-**Plan review.** Swarm has no gate that blocks dispatch on a
-phase-scoped plan panel; `critic_pre_plan` is a single critic, once,
-project-wide. Encode the plan gate as work instead: make task `N.1` of
-every phase the plan-review task, declare the plan itself as its
-acceptance criteria via `declare_council_criteria`, and give every
-implementation task in that phase a `depends` edge on it. Per-task
-council then enforces the plan gate before any coder is dispatched.
-
-**Waves and file ownership.** `epic_decide_phase` followed by
-`epic_plan_waves` is the direct implementation of the parallelization
-graph, and a `declare_scope` call per task is the file-ownership map
-described in [Integrator-prep-first pattern](#integrator-prep-first-pattern-w3-onwards).
-Record `epic_record_divergence` after each task completes; declared
-scope versus files actually touched is calibration data the manual
-process never captured.
-
-## Unattended multi-day runs
-
-Long plans are expected to run for days with the operator away. Two
-things make that work, and one thing makes "zero interaction"
-unachievable.
-
-**Removing the routine prompts.** Set `execution_profile.auto_proceed:
-true` on the plan to drop the phase-boundary confirmation, and enable
-Full-Auto (`full_auto.enabled: true`, `mode: "supervised"`) so safe
-in-scope operations stop asking. Writes to protected paths still route
-through the read-only `critic_oversight` agent rather than blocking.
-
-**Escalation is a pause, not a stop-the-world.** Keep
-`full_auto.escalation_mode: "pause"` and `full_auto.denials.on_limit:
-"pause"`. `terminate` kills a multi-day run outright; `pause` parks it
-recoverably, and `.swarm/` state survives process restarts.
-
-**Zero user interaction is not achievable, by design on both sides.**
-`full_auto.escalation_mode` admits only `pause` and `terminate`, there
-is no autonomous mode, and `council.escalateOnMaxRounds` is declared
-but not implemented - exhausting `council.maxRounds` without an
-`APPROVE` surfaces a message for the operator and refuses to
-auto-advance. Surface 1 is stricter still: a wave cannot seal without
-ten human-attested records, so the binding panel is a deliberate
-human-in-the-loop stop that no configuration removes. That matches this
-file's own rule that green tests never waive the gate. Plan for
-**batched escalation**: the run parks on unresolved disagreement,
-`/swarm status` reports why, and the operator services the queue when
-convenient. Raising `council.maxRounds` to 5 lets more disagreements
-self-resolve before parking; it does not remove the park.
-
-**Context.** A days-long session will cross the context budget's
-critical threshold. Treat phase boundaries as the handoff points rather
-than fighting the guard mid-phase.
-
-**Heavy lanes.** Advisory panel lanes are read-only and take no heavy
-gate slot. Any reviewer explicitly asked to run a validation is subject
-to the normal two-slot semaphore in [Heavy lanes](#heavy-lanes), and an
-unattended run must not exceed it.
+Gas City panel orchestration is not implemented in this repository. A future
+producer may replace the standard Copilot dispatcher only if it consumes the
+same versioned selection table and lifecycle artifacts, produces the same
+ordered roster for the same inputs, requires one explicit complete result per
+selected seat, and emits the same ledger, response, verification, and delivery
+record formats. A five-seat council or other compressed roster is not
+equivalent and cannot satisfy the gate.
 
 ## Commit-tag mapping
 
@@ -436,12 +330,12 @@ form (e.g. `... ( W2fu4 H10 )`).
 
 ## Tooling note
 
-The panel contract is implementation-neutral: any harness that
-preserves the roster, the unanimity rule, the no-rerun discipline, and
-the two gates per phase is acceptable.
+The panel contract is producer-neutral only at the defined artifact seam. A
+future producer must preserve deterministic selection, the complete-result
+rule, the shared ledger, scoped verification, unanimity, and both gates.
 
-The in-repo reference implementation is the Copilot surface: ten
-`.github/agents/panel-<role>.agent.md` files, one per roster role, each
+The in-repo implementation is the Copilot surface: current
+`.github/agents/panel-<role>.agent.md` files, one per role domain entry, each
 carrying its own domain checklist and `tools: [view, grep, glob]`, driven
 by `.github/skills/d2b-panel-round/`. The binding table in that skill is
 the tracked, reviewable surface for panel behaviour, and
@@ -450,15 +344,5 @@ agents and the delivery policy constants. See
 [copilot-agents.md](./copilot-agents.md). Change those files in the same
 commit as any change to this section.
 
-The ADR 0046 program does not run swarm. Where this section describes
-swarm's five-seat council, treat it as documenting an available harness
-rather than the configuration in use; the per-round gate is run
-directly, and the binding wave panel is dispatched as ten read-only
-`panel` lanes.
-
-A second, host-local implementation lives in
-`/etc/nixos/scripts/panel-review.{md,sh}` and
-`/etc/nixos/scripts/panel-aggregate.sh`. That tooling is paydro's
-host-specific implementation, not an upstream d2b dependency. In it the
-roster is selected per plan via `ENGINEERS_FILE` and each engineer's
-focus file comes from `panel-roles/<engineer>.md`.
+Host-local panel scripts are operator configuration and are not an upstream
+d2b implementation or compatibility target.

@@ -265,12 +265,12 @@ function compareExpectedMembership(manifest) {
     console.error("prompt corpus file records do not exactly match membership.");
     return false;
   }
-  if (expected.length !== 32 ||
+  if (expected.length !== 35 ||
       expected.filter((path) => path === "AGENTS.md" || path.endsWith("/AGENTS.md")).length !== 3 ||
       expected.filter((path) => path.startsWith("docs/contributing/")).length !== 8 ||
-      expected.filter((path) => path.startsWith(".github/agents/")).length !== 13 ||
+      expected.filter((path) => path.startsWith(".github/agents/")).length !== 16 ||
       expected.filter((path) => path.startsWith(".github/skills/d2b-")).length !== 8) {
-    console.error("prompt corpus dynamic enumeration is not the approved 32-file shape.");
+    console.error("prompt corpus dynamic enumeration is not the approved 35-file shape.");
     return false;
   }
   return true;
