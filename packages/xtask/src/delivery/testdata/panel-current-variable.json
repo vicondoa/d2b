@@ -1,1 +1,435 @@
-{"request":{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-request","schema_version":2,"program":"ADR046","wave":"W0","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","provider":"github-copilot","model_version":"gpt-5.6-sol","reasoning_effort":"xhigh","roles":["software","test","product","docs","security","observability","simplicity","build"],"record_artifact_kind":"d2b-delivery/panel-receipt","record_schema_version":2,"record_files":["software.json","test.json","product.json","docs.json","security.json","observability.json","simplicity.json","build.json"]},"records":[{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"software","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-software-0","receipt_locator":"github-copilot://runs/software/0","output_sha256":"0000000000000000000000000000000000000000000000000000000000000001","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"test","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-test-1","receipt_locator":"github-copilot://runs/test/1","output_sha256":"0000000000000000000000000000000000000000000000000000000000000002","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"product","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-product-2","receipt_locator":"github-copilot://runs/product/2","output_sha256":"0000000000000000000000000000000000000000000000000000000000000003","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"docs","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-docs-3","receipt_locator":"github-copilot://runs/docs/3","output_sha256":"0000000000000000000000000000000000000000000000000000000000000004","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"security","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-security-4","receipt_locator":"github-copilot://runs/security/4","output_sha256":"0000000000000000000000000000000000000000000000000000000000000005","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"observability","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-observability-5","receipt_locator":"github-copilot://runs/observability/5","output_sha256":"0000000000000000000000000000000000000000000000000000000000000006","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"simplicity","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-simplicity-6","receipt_locator":"github-copilot://runs/simplicity/6","output_sha256":"0000000000000000000000000000000000000000000000000000000000000007","signoff":true,"recommendations":[]},{"panel_format_version":1,"artifact_kind":"d2b-delivery/panel-receipt","schema_version":2,"role":"build","candidate_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","model_version":"gpt-5.6-sol","provider":"github-copilot","reasoning_effort":"xhigh","run_id":"run-build-7","receipt_locator":"github-copilot://runs/build/7","output_sha256":"0000000000000000000000000000000000000000000000000000000000000008","signoff":true,"recommendations":[]}],"attestation":{"panel_format_version":1,"roles":["software","test","product","docs","security","observability","simplicity","build"],"records":[{"role":"software","file":"software.json","sha256":"0000000000000000000000000000000000000000000000000000000000000001","run_id":"run-software-0"},{"role":"test","file":"test.json","sha256":"0000000000000000000000000000000000000000000000000000000000000002","run_id":"run-test-1"},{"role":"product","file":"product.json","sha256":"0000000000000000000000000000000000000000000000000000000000000003","run_id":"run-product-2"},{"role":"docs","file":"docs.json","sha256":"0000000000000000000000000000000000000000000000000000000000000004","run_id":"run-docs-3"},{"role":"security","file":"security.json","sha256":"0000000000000000000000000000000000000000000000000000000000000005","run_id":"run-security-4"},{"role":"observability","file":"observability.json","sha256":"0000000000000000000000000000000000000000000000000000000000000006","run_id":"run-observability-5"},{"role":"simplicity","file":"simplicity.json","sha256":"0000000000000000000000000000000000000000000000000000000000000007","run_id":"run-simplicity-6"},{"role":"build","file":"build.json","sha256":"0000000000000000000000000000000000000000000000000000000000000008","run_id":"run-build-7"}],"unanimous":true},"seal_panel":{"panel_format_version":1,"roles":["software","test","product","docs","security","observability","simplicity","build"],"records":[{"role":"software","file":"software.json","sha256":"0000000000000000000000000000000000000000000000000000000000000001","run_id":"run-software-0"},{"role":"test","file":"test.json","sha256":"0000000000000000000000000000000000000000000000000000000000000002","run_id":"run-test-1"},{"role":"product","file":"product.json","sha256":"0000000000000000000000000000000000000000000000000000000000000003","run_id":"run-product-2"},{"role":"docs","file":"docs.json","sha256":"0000000000000000000000000000000000000000000000000000000000000004","run_id":"run-docs-3"},{"role":"security","file":"security.json","sha256":"0000000000000000000000000000000000000000000000000000000000000005","run_id":"run-security-4"},{"role":"observability","file":"observability.json","sha256":"0000000000000000000000000000000000000000000000000000000000000006","run_id":"run-observability-5"},{"role":"simplicity","file":"simplicity.json","sha256":"0000000000000000000000000000000000000000000000000000000000000007","run_id":"run-simplicity-6"},{"role":"build","file":"build.json","sha256":"0000000000000000000000000000000000000000000000000000000000000008","run_id":"run-build-7"}],"unanimous":true}}
+{
+  "request": {
+    "panel_format_version": 1,
+    "lifecycle_binding": {
+      "candidate_bytes_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "selection_bytes_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "selection": {
+        "artifact_kind": "d2b-panel/lifecycle-selection",
+        "schema_version": 1,
+        "lifecycle_id": "fixture-lifecycle",
+        "phase": "discovery",
+        "program": "ADR046",
+        "wave": "W0",
+        "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "selection_table_version": 2,
+        "candidate_class": "documentation",
+        "classification_inputs": {
+          "changed_paths": ["BUILD.md"],
+          "signals": [],
+          "candidate_class": "documentation",
+          "ambiguous": false
+        },
+        "ambiguity_widened": false,
+        "profiles": {
+          "software": ["markdown"],
+          "test": [],
+          "product": [],
+          "docs": [],
+          "security": [],
+          "observability": [],
+          "simplicity": [],
+          "build": []
+        },
+        "roster": [
+          "software",
+          "test",
+          "product",
+          "docs",
+          "security",
+          "observability",
+          "simplicity",
+          "build"
+        ]
+      }
+    },
+    "artifact_kind": "d2b-delivery/panel-request",
+    "schema_version": 2,
+    "program": "ADR046",
+    "wave": "W0",
+    "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "provider": "github-copilot",
+    "model_version": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh",
+    "roles": [
+      "software",
+      "test",
+      "product",
+      "docs",
+      "security",
+      "observability",
+      "simplicity",
+      "build"
+    ],
+    "record_artifact_kind": "d2b-delivery/panel-receipt",
+    "record_schema_version": 2,
+    "record_files": [
+      "software.json",
+      "test.json",
+      "product.json",
+      "docs.json",
+      "security.json",
+      "observability.json",
+      "simplicity.json",
+      "build.json"
+    ]
+  },
+  "records": [
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "software",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-software-0",
+      "receipt_locator": "github-copilot://runs/software/0",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "test",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-test-1",
+      "receipt_locator": "github-copilot://runs/test/1",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "product",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-product-2",
+      "receipt_locator": "github-copilot://runs/product/2",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "docs",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-docs-3",
+      "receipt_locator": "github-copilot://runs/docs/3",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "security",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-security-4",
+      "receipt_locator": "github-copilot://runs/security/4",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "observability",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-observability-5",
+      "receipt_locator": "github-copilot://runs/observability/5",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "simplicity",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-simplicity-6",
+      "receipt_locator": "github-copilot://runs/simplicity/6",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+      "signoff": true,
+      "recommendations": []
+    },
+    {
+      "panel_format_version": 1,
+      "artifact_kind": "d2b-delivery/panel-receipt",
+      "schema_version": 2,
+      "role": "build",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model_version": "gpt-5.6-sol",
+      "provider": "github-copilot",
+      "reasoning_effort": "xhigh",
+      "run_id": "run-build-7",
+      "receipt_locator": "github-copilot://runs/build/7",
+      "output_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+      "signoff": true,
+      "recommendations": []
+    }
+  ],
+  "attestation": {
+    "panel_format_version": 1,
+    "lifecycle_binding": {
+      "candidate_bytes_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "selection_bytes_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "selection": {
+        "artifact_kind": "d2b-panel/lifecycle-selection",
+        "schema_version": 1,
+        "lifecycle_id": "fixture-lifecycle",
+        "phase": "discovery",
+        "program": "ADR046",
+        "wave": "W0",
+        "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "selection_table_version": 2,
+        "candidate_class": "documentation",
+        "classification_inputs": {
+          "changed_paths": ["BUILD.md"],
+          "signals": [],
+          "candidate_class": "documentation",
+          "ambiguous": false
+        },
+        "ambiguity_widened": false,
+        "profiles": {
+          "software": ["markdown"],
+          "test": [],
+          "product": [],
+          "docs": [],
+          "security": [],
+          "observability": [],
+          "simplicity": [],
+          "build": []
+        },
+        "roster": [
+          "software",
+          "test",
+          "product",
+          "docs",
+          "security",
+          "observability",
+          "simplicity",
+          "build"
+        ]
+      }
+    },
+    "roles": [
+      "software",
+      "test",
+      "product",
+      "docs",
+      "security",
+      "observability",
+      "simplicity",
+      "build"
+    ],
+    "records": [
+      {
+        "role": "software",
+        "file": "software.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+        "run_id": "run-software-0"
+      },
+      {
+        "role": "test",
+        "file": "test.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+        "run_id": "run-test-1"
+      },
+      {
+        "role": "product",
+        "file": "product.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+        "run_id": "run-product-2"
+      },
+      {
+        "role": "docs",
+        "file": "docs.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+        "run_id": "run-docs-3"
+      },
+      {
+        "role": "security",
+        "file": "security.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+        "run_id": "run-security-4"
+      },
+      {
+        "role": "observability",
+        "file": "observability.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+        "run_id": "run-observability-5"
+      },
+      {
+        "role": "simplicity",
+        "file": "simplicity.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+        "run_id": "run-simplicity-6"
+      },
+      {
+        "role": "build",
+        "file": "build.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "run_id": "run-build-7"
+      }
+    ],
+    "unanimous": true
+  },
+  "seal_panel": {
+    "panel_format_version": 1,
+    "lifecycle_binding": {
+      "candidate_bytes_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "selection_bytes_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "selection": {
+        "artifact_kind": "d2b-panel/lifecycle-selection",
+        "schema_version": 1,
+        "lifecycle_id": "fixture-lifecycle",
+        "phase": "discovery",
+        "program": "ADR046",
+        "wave": "W0",
+        "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "selection_table_version": 2,
+        "candidate_class": "documentation",
+        "classification_inputs": {
+          "changed_paths": ["BUILD.md"],
+          "signals": [],
+          "candidate_class": "documentation",
+          "ambiguous": false
+        },
+        "ambiguity_widened": false,
+        "profiles": {
+          "software": ["markdown"],
+          "test": [],
+          "product": [],
+          "docs": [],
+          "security": [],
+          "observability": [],
+          "simplicity": [],
+          "build": []
+        },
+        "roster": [
+          "software",
+          "test",
+          "product",
+          "docs",
+          "security",
+          "observability",
+          "simplicity",
+          "build"
+        ]
+      }
+    },
+    "roles": [
+      "software",
+      "test",
+      "product",
+      "docs",
+      "security",
+      "observability",
+      "simplicity",
+      "build"
+    ],
+    "records": [
+      {
+        "role": "software",
+        "file": "software.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+        "run_id": "run-software-0"
+      },
+      {
+        "role": "test",
+        "file": "test.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+        "run_id": "run-test-1"
+      },
+      {
+        "role": "product",
+        "file": "product.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+        "run_id": "run-product-2"
+      },
+      {
+        "role": "docs",
+        "file": "docs.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+        "run_id": "run-docs-3"
+      },
+      {
+        "role": "security",
+        "file": "security.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+        "run_id": "run-security-4"
+      },
+      {
+        "role": "observability",
+        "file": "observability.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+        "run_id": "run-observability-5"
+      },
+      {
+        "role": "simplicity",
+        "file": "simplicity.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+        "run_id": "run-simplicity-6"
+      },
+      {
+        "role": "build",
+        "file": "build.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "run_id": "run-build-7"
+      }
+    ],
+    "unanimous": true
+  }
+}
