@@ -653,10 +653,10 @@ fn table_roles(names: &[String], label: &str) -> Result<Vec<PanelRole>> {
         .collect()
 }
 
-/// Mirrors the POSIX `path.normalize` behavior used by the JavaScript
-/// lifecycle helper after it has converted backslashes to slashes.
+/// Mirrors POSIX `path.normalize` behavior for the JavaScript lifecycle
+/// helper. Backslash is a literal filename character; only `/` separates
+/// path segments.
 fn normalize_classification_path(path: &str) -> String {
-    let path = path.replace('\\', "/");
     let absolute = path.starts_with('/');
     let trailing_separator = path.ends_with('/');
     let mut components = Vec::new();
@@ -691,6 +691,15 @@ fn normalize_classification_path(path: &str) -> String {
         normalized.push('/');
     }
     normalized
+}
+
+fn contains_c0_c1_control(value: &str) -> bool {
+    value.chars().any(|character| {
+        matches!(
+            character,
+            '\u{0000}'..='\u{001f}' | '\u{007f}'..='\u{009f}'
+        )
+    })
 }
 
 fn is_documentation_path(path: &str) -> bool {
@@ -757,7 +766,7 @@ fn parse_classification_inputs(
                 DeliveryError::new(format!("{label} changed_paths entries must be strings"))
             })?;
             validate_bounded_string(path, &format!("{label} changed path"))?;
-            if path.chars().any(char::is_control) {
+            if contains_c0_c1_control(path) {
                 return Err(DeliveryError::new(format!(
                     "{label} changed paths must not contain control characters"
                 )));
@@ -800,7 +809,7 @@ fn parse_classification_inputs(
                 DeliveryError::new(format!("{label} signals entries must be strings"))
             })?;
             validate_bounded_string(signal, &format!("{label} signal"))?;
-            if signal.chars().any(char::is_control) {
+            if contains_c0_c1_control(signal) {
                 return Err(DeliveryError::new(format!(
                     "{label} signals must not contain control characters"
                 )));
@@ -2745,12 +2754,18 @@ mod tests {
             "{error}"
         );
 
-        for path in [
-            "src\\panel.rs",
-            "./src/panel.rs",
-            "src//panel.rs",
-            "src/panel.rs/",
-        ] {
+        let literal_backslash = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &[r"src\panel.rs"],
+            &[],
+            &["rust"],
+        );
+        literal_backslash
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("a backslash is a literal POSIX filename character");
+
+        for path in ["./src/panel.rs", "src//panel.rs", "src/panel.rs/"] {
             let noncanonical = selection(&PANEL_CURRENT_ROLES[..10], "code", &[path], &[], &[]);
             let error = noncanonical
                 .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
@@ -2785,6 +2800,41 @@ mod tests {
             assert!(
                 error.message().contains("lowercase, and sorted"),
                 "{signal:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_validation_rejects_c0_and_c1_controls_in_paths_and_signals() {
+        for control in ['\u{0000}', '\u{0080}', '\u{009f}'] {
+            let path = format!("src/panel{control}.rs");
+            let path_error = selection(
+                &PANEL_CURRENT_ROLES[..10],
+                "code",
+                &[path.as_str()],
+                &[],
+                &[],
+            )
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("C0 and C1 controls must be rejected in paths");
+            assert!(
+                path_error.message().contains("control characters"),
+                "{control:?}: {path_error}"
+            );
+
+            let signal = format!("rust{control}");
+            let signal_error = selection(
+                &PANEL_CURRENT_ROLES[..10],
+                "code",
+                &["src/panel.rs"],
+                &[signal.as_str()],
+                &[],
+            )
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("C0 and C1 controls must be rejected in signals");
+            assert!(
+                signal_error.message().contains("control characters"),
+                "{control:?}: {signal_error}"
             );
         }
     }
