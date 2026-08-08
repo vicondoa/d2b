@@ -518,7 +518,7 @@ else
     "- Implementation responses: \`$responses_path\`" \
     "- Self-verification: \`$self_verification_path\`" \
     "- Verification requests: \`$verification_dir/<your-seat>.json\`" \
-    "- Approval artifact: \`$approval_path\`"
+    "- Approval output after verdict collection: \`$approval_path\`"
 fi)
 
 ## Required review behaviour

@@ -323,7 +323,7 @@ try {
     "later request names verification artifacts and allows the new seat",
     secondRequest.includes("Phase: `verification`") &&
       secondRequest.includes("Immutable discovery ledger:") &&
-      secondRequest.includes("Approval artifact:") &&
+      secondRequest.includes("Approval output after verdict collection:") &&
       !secondRequest.includes("missing previous verdict for seat build"),
   );
 
