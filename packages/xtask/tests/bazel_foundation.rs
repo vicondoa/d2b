@@ -290,3 +290,14 @@ fn generator_preview_is_the_only_generation_side_effect() {
     });
     assert!(before.is_none() || after.is_some());
 }
+
+#[test]
+fn generator_metadata_is_offline_and_linux_target_filtered() {
+    let source = include_str!("../src/bazel.rs");
+    assert!(
+        source.contains("const GENERATOR_METADATA_TARGET: &str = \"x86_64-unknown-linux-gnu\"")
+    );
+    assert!(source.contains("\"--offline\""));
+    assert!(source.contains("\"--filter-platform\""));
+    assert!(source.contains("GENERATOR_METADATA_TARGET"));
+}

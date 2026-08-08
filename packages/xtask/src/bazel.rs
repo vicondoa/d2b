@@ -30,6 +30,7 @@ const HUBS: &[(&str, &str, &str)] = &[
 
 const STABLE_TOOLCHAIN: &str = "1.97.0";
 const NIGHTLY_TOOLCHAIN: &str = "nightly-2026-02-16";
+const GENERATOR_METADATA_TARGET: &str = "x86_64-unknown-linux-gnu";
 const PREVIEW_ROOT: &str = ".scratch/bazel/generated-preview";
 const OUTPUT_MANIFEST_PATH: &str = "bazel/generated/output-manifest.json";
 
@@ -1903,6 +1904,8 @@ fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box
                 "1",
                 "--locked",
                 "--offline",
+                "--filter-platform",
+                GENERATOR_METADATA_TARGET,
                 "--manifest-path",
                 manifest,
             ])
