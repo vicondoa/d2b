@@ -3272,10 +3272,13 @@ table before the operation exists.
   read-only six-name boundary fixture; an omitted basis projection, a five-name registry,
   a wrong boundary/predecessor, one subvisitor satisfying another, or removal of any
   poison fails before a golden can count. Every intent/basis boundary pins the exit-`4`
-  decision-basis-pending strict schema and exact human/JSON golden. Intent and basis final
-  removal after `ParentDurable` and after `AncestorsDurable` instead render the exact
-  decision-durability integrity response for all four record/boundary pairs and reject
-  recreation, relink, reselection, settlement, retry, successor, or identifier fields.
+  decision-basis-pending strict schema and exact human/JSON golden. At a live
+  `ParentDurable`-only prefix, intent or basis final absence accepts byte-identical
+  reconstruction; the `ParentDurable` incident requires a separately durable downstream
+  consumer proving prior consumption of the exact parent-durable final. Removal after that
+  proof or after `AncestorsDurable` instead renders the exact decision-durability integrity
+  response for all four record/boundary pairs and rejects recreation, relink, reselection,
+  settlement, retry, successor, or identifier fields.
   T595's pinned production-AF_UNIX test exercises those four DTOs in both modes under the
   existing pinned real-binary test id as the literal eight-row matrix assigned above, with
   exit `4`, exact bytes, and the complete forbidden-field list; renderer-only coverage is
