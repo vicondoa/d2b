@@ -65,12 +65,6 @@ use super::{
 /// transcript; anything larger is a malformed artifact rather than a review.
 const MAX_RECOMMENDATIONS: usize = 64;
 
-/// Exact lifecycle inputs retained beside the request. The request and its
-/// attestation carry their digests and validated selection; the raw bytes stay
-/// candidate-addressed so every consuming stage can detect substitution.
-const PANEL_CANDIDATE_FILE: &str = "panel-candidate.json";
-const PANEL_SELECTION_FILE: &str = "panel-selection.json";
-
 /// Every panel record file is named after the role that produced it, so a
 /// mislabeled or duplicated role is refused by name as well as by content.
 pub fn record_file_name(role: PanelRole) -> String {
@@ -154,55 +148,6 @@ impl PanelFormat {
     }
 }
 
-/// Current-panel provenance copied unchanged from request to attestation.
-///
-/// The selection value is retained so every reader can re-run the
-/// authoritative table checks. The digests bind the exact candidate and
-/// selection files accepted by `panel-request`; those bytes are retained
-/// beside the request and re-read before attestation and sealing.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PanelLifecycleBinding {
-    pub candidate_bytes_sha256: String,
-    pub selection_bytes_sha256: String,
-    pub selection: PanelSelectionV1,
-}
-
-impl PanelLifecycleBinding {
-    fn new(candidate_bytes: &[u8], selection_bytes: &[u8], selection: PanelSelectionV1) -> Self {
-        Self {
-            candidate_bytes_sha256: sha256_bytes(candidate_bytes),
-            selection_bytes_sha256: sha256_bytes(selection_bytes),
-            selection,
-        }
-    }
-
-    fn validate_for(
-        &self,
-        program: &str,
-        wave: &str,
-        digests: &CandidateDigests,
-        roles: &[PanelRole],
-    ) -> Result<()> {
-        validate_sha256(
-            &self.candidate_bytes_sha256,
-            "panel lifecycle candidate-bytes digest",
-        )?;
-        validate_sha256(
-            &self.selection_bytes_sha256,
-            "panel lifecycle selection-bytes digest",
-        )?;
-        self.selection
-            .validate_for_snapshot(program, wave, digests)?;
-        if self.selection.roster != roles {
-            return Err(DeliveryError::new(
-                "current panel roster must exactly match the authoritative lifecycle selection",
-            ));
-        }
-        Ok(())
-    }
-}
-
 /// The candidate-bound panel request written by `panel-request`.
 ///
 /// `panel_format_version` is optional in this in-memory view only so the
@@ -214,8 +159,6 @@ impl PanelLifecycleBinding {
 pub struct PanelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_format_version: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifecycle_binding: Option<PanelLifecycleBinding>,
     pub artifact_kind: String,
     pub schema_version: u32,
     pub program: String,
@@ -236,7 +179,6 @@ pub struct PanelRequest {
 #[serde(deny_unknown_fields)]
 struct CurrentPanelRequest {
     panel_format_version: u32,
-    lifecycle_binding: PanelLifecycleBinding,
     artifact_kind: String,
     schema_version: u32,
     program: String,
@@ -276,7 +218,6 @@ impl From<CurrentPanelRequest> for PanelRequest {
     fn from(value: CurrentPanelRequest) -> Self {
         Self {
             panel_format_version: Some(value.panel_format_version),
-            lifecycle_binding: Some(value.lifecycle_binding),
             artifact_kind: value.artifact_kind,
             schema_version: value.schema_version,
             program: value.program,
@@ -299,7 +240,6 @@ impl From<LegacyPanelRequest> for PanelRequest {
     fn from(value: LegacyPanelRequest) -> Self {
         Self {
             panel_format_version: None,
-            lifecycle_binding: None,
             artifact_kind: value.artifact_kind,
             schema_version: value.schema_version,
             program: value.program,
@@ -339,35 +279,10 @@ impl PanelRequest {
         Self::for_snapshot_with_roles(snapshot, &PANEL_ROLES, PanelFormat::Legacy)
     }
 
-    #[cfg(test)]
     fn for_snapshot_with_roles(
         snapshot: &SnapshotView,
         roles: &[PanelRole],
         format: PanelFormat,
-    ) -> Self {
-        let lifecycle_binding = match format {
-            PanelFormat::Legacy => None,
-            PanelFormat::Current => {
-                let selection = test_selection_for_roles(snapshot, roles);
-                let candidate_bytes =
-                    serde_json::to_vec(snapshot).expect("test candidate must serialize");
-                let selection_bytes =
-                    serde_json::to_vec(&selection).expect("test selection must serialize");
-                Some(PanelLifecycleBinding::new(
-                    &candidate_bytes,
-                    &selection_bytes,
-                    selection,
-                ))
-            }
-        };
-        Self::for_snapshot_with_binding(snapshot, roles, format, lifecycle_binding)
-    }
-
-    fn for_snapshot_with_binding(
-        snapshot: &SnapshotView,
-        roles: &[PanelRole],
-        format: PanelFormat,
-        lifecycle_binding: Option<PanelLifecycleBinding>,
     ) -> Self {
         let (model_version, reasoning_effort) = match format {
             PanelFormat::Legacy => (
@@ -381,7 +296,6 @@ impl PanelRequest {
         };
         Self {
             panel_format_version: format.panel_format_version(),
-            lifecycle_binding,
             artifact_kind: PANEL_REQUEST_ARTIFACT_KIND.to_owned(),
             schema_version: DELIVERY_SCHEMA_VERSION,
             program: snapshot.program().to_owned(),
@@ -447,22 +361,6 @@ impl PanelRequest {
             &self.reasoning_effort,
         )?;
         validate_roster_for_format(&self.roles, format, "panel request")?;
-        match (format, &self.lifecycle_binding) {
-            (PanelFormat::Current, Some(binding)) => {
-                binding.validate_for(&self.program, &self.wave, &self.digests(), &self.roles)?
-            }
-            (PanelFormat::Current, None) => {
-                return Err(DeliveryError::new(
-                    "current panel request is missing its authoritative lifecycle binding",
-                ));
-            }
-            (PanelFormat::Legacy, None) => {}
-            (PanelFormat::Legacy, Some(_)) => {
-                return Err(DeliveryError::new(
-                    "legacy panel request must not carry a current lifecycle binding",
-                ));
-            }
-        }
         let expected = self
             .roles
             .iter()
@@ -475,77 +373,6 @@ impl PanelRequest {
             ));
         }
         Ok(())
-    }
-
-    /// Re-reads the exact lifecycle inputs retained in candidate state.
-    ///
-    /// This is separate from [`Self::validate`] because a deserialized request
-    /// can validate its strict shape without filesystem authority. Every
-    /// candidate-consuming path calls both.
-    fn validate_retained_inputs(&self, candidate: &CandidateDir) -> Result<()> {
-        let Some(binding) = &self.lifecycle_binding else {
-            return Ok(());
-        };
-        let candidate_bytes = candidate
-            .read_bytes(PANEL_CANDIDATE_FILE)
-            .map_err(|error| {
-                DeliveryError::new(format!(
-                    "current panel request has no retained candidate bytes; rerun panel-request \
-                 ({error})"
-                ))
-            })?;
-        if sha256_bytes(&candidate_bytes) != binding.candidate_bytes_sha256 {
-            return Err(DeliveryError::new(
-                "retained panel candidate bytes do not match the current request binding",
-            ));
-        }
-        let bound_snapshot: SnapshotView =
-            serde_json::from_slice(&candidate_bytes).map_err(|error| {
-                DeliveryError::new(format!(
-                    "retained panel candidate bytes are not a strict snapshot: {error}"
-                ))
-            })?;
-        bound_snapshot.validate(candidate)?;
-        if bound_snapshot.program() != self.program
-            || bound_snapshot.wave() != self.wave
-            || bound_snapshot.digests() != self.digests()
-        {
-            return Err(DeliveryError::new(
-                "retained panel candidate bytes do not match the current request candidate",
-            ));
-        }
-
-        let selection_bytes = candidate
-            .read_bytes(PANEL_SELECTION_FILE)
-            .map_err(|error| {
-                DeliveryError::new(format!(
-                    "current panel request has no retained lifecycle selection bytes; rerun \
-                 panel-request ({error})"
-                ))
-            })?;
-        if selection_bytes.len() > MAX_JSON_BYTES {
-            return Err(DeliveryError::new(format!(
-                "retained panel lifecycle selection exceeds {MAX_JSON_BYTES} bytes"
-            )));
-        }
-        if sha256_bytes(&selection_bytes) != binding.selection_bytes_sha256 {
-            return Err(DeliveryError::new(
-                "retained panel lifecycle selection bytes do not match the current request \
-                 binding",
-            ));
-        }
-        let selection: PanelSelectionV1 =
-            serde_json::from_slice(&selection_bytes).map_err(|error| {
-                DeliveryError::new(format!(
-                    "retained panel lifecycle selection is not strict JSON: {error}"
-                ))
-            })?;
-        if selection != binding.selection {
-            return Err(DeliveryError::new(
-                "retained panel lifecycle selection was substituted after panel-request",
-            ));
-        }
-        binding.validate_for(&self.program, &self.wave, &self.digests(), &self.roles)
     }
 }
 
@@ -764,8 +591,6 @@ pub struct AttestedRecord {
 pub struct PanelAttestation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_format_version: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifecycle_binding: Option<PanelLifecycleBinding>,
     pub roles: Vec<PanelRole>,
     pub records: Vec<AttestedRecord>,
     pub unanimous: bool,
@@ -775,7 +600,6 @@ pub struct PanelAttestation {
 #[serde(deny_unknown_fields)]
 struct CurrentPanelAttestation {
     panel_format_version: u32,
-    lifecycle_binding: PanelLifecycleBinding,
     roles: Vec<PanelRole>,
     records: Vec<AttestedRecord>,
     unanimous: bool,
@@ -793,7 +617,6 @@ impl From<CurrentPanelAttestation> for PanelAttestation {
     fn from(value: CurrentPanelAttestation) -> Self {
         Self {
             panel_format_version: Some(value.panel_format_version),
-            lifecycle_binding: Some(value.lifecycle_binding),
             roles: value.roles,
             records: value.records,
             unanimous: value.unanimous,
@@ -805,7 +628,6 @@ impl From<LegacyPanelAttestation> for PanelAttestation {
     fn from(value: LegacyPanelAttestation) -> Self {
         Self {
             panel_format_version: None,
-            lifecycle_binding: None,
             roles: value.roles,
             records: value.records,
             unanimous: value.unanimous,
@@ -829,32 +651,6 @@ impl PanelAttestation {
     pub fn validate(&self) -> Result<()> {
         let format = self.format()?;
         validate_roster_for_format(&self.roles, format, "panel attestation")?;
-        match (format, &self.lifecycle_binding) {
-            (PanelFormat::Current, Some(binding)) => {
-                let selection = &binding.selection;
-                binding.validate_for(
-                    &selection.program,
-                    &selection.wave,
-                    &CandidateDigests {
-                        content_id: selection.content_id.clone(),
-                        candidate_id: selection.candidate_id.clone(),
-                        snapshot_sha256: selection.snapshot_sha256.clone(),
-                    },
-                    &self.roles,
-                )?;
-            }
-            (PanelFormat::Current, None) => {
-                return Err(DeliveryError::new(
-                    "current panel attestation is missing its authoritative lifecycle binding",
-                ));
-            }
-            (PanelFormat::Legacy, None) => {}
-            (PanelFormat::Legacy, Some(_)) => {
-                return Err(DeliveryError::new(
-                    "legacy panel attestation must not carry a current lifecycle binding",
-                ));
-            }
-        }
         if self.records.len() != self.roles.len() {
             return Err(DeliveryError::new(
                 "panel attestation record count must match its ordered roster",
@@ -1006,7 +802,6 @@ pub fn validate_record_set(
         &request.candidate_id,
         "panel request and record set",
     )?;
-    request.validate_retained_inputs(candidate)?;
     if files.len() != request.roles.len() {
         return Err(DeliveryError::new(format!(
             "panel needs exactly {} records, one per role, found {}",
@@ -1109,7 +904,6 @@ pub fn validate_record_set(
 
     Ok(PanelAttestation {
         panel_format_version: request.panel_format_version,
-        lifecycle_binding: request.lifecycle_binding.clone(),
         roles: request.roles.clone(),
         records,
         unanimous: true,
@@ -1171,7 +965,6 @@ pub fn stored_request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Resu
         &request.candidate_id,
         "stored panel request",
     )?;
-    request.validate_retained_inputs(candidate)?;
     if request.content_identity() != snapshot.content_identity() {
         return Err(DeliveryError::new(
             "the stored panel request reviewed different content than this snapshot; a content \
@@ -1265,74 +1058,32 @@ fn request_checked(
 /// The production CLI has no path around [`request_with_selection`].
 #[cfg(test)]
 pub fn request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<WorkflowOutput> {
-    let selection = test_selection_for_roles(snapshot, &PANEL_CURRENT_ROLES);
-    let candidate_bytes = candidate.read_bytes(SNAPSHOT_FILE)?;
-    let selection_bytes = serde_json::to_vec(&selection)?;
-    let roles = selection.roster.clone();
-    let request = PanelRequest::for_snapshot_with_binding(
-        snapshot,
-        &roles,
-        PanelFormat::Current,
-        Some(PanelLifecycleBinding::new(
-            &candidate_bytes,
-            &selection_bytes,
-            selection,
-        )),
-    );
-    write_request(
-        candidate,
-        snapshot,
-        request,
-        &candidate_bytes,
-        &selection_bytes,
-    )
+    let request = PanelRequest::for_snapshot(snapshot);
+    write_request(candidate, snapshot, request)
 }
 
 /// Reads and validates the one lifecycle selection consumed by
-/// `panel-request`, then retains its exact bytes and binds its validated value
-/// and exact candidate bytes into the request.
+/// `panel-request`, then writes its exact ordered roster into the closed
+/// version-1 request fields.
 pub fn request_with_selection(
     candidate: &CandidateDir,
     snapshot: &SnapshotView,
     selection_path: &Path,
 ) -> Result<WorkflowOutput> {
-    let selection_bytes = read_file_limited(selection_path, "panel selection")?;
-    let selection: PanelSelectionV1 = serde_json::from_slice(&selection_bytes)
-        .map_err(|error| DeliveryError::new(format!("invalid panel selection: {error}")))?;
+    let selection: PanelSelectionV1 = read_json_file(selection_path, "panel selection")?;
     selection.validate_for_snapshot(snapshot.program(), snapshot.wave(), &snapshot.digests())?;
-    let candidate_bytes = candidate.read_bytes(SNAPSHOT_FILE)?;
-    let roles = selection.roster.clone();
-    let request = PanelRequest::for_snapshot_with_binding(
-        snapshot,
-        &roles,
-        PanelFormat::Current,
-        Some(PanelLifecycleBinding::new(
-            &candidate_bytes,
-            &selection_bytes,
-            selection,
-        )),
-    );
-    write_request(
-        candidate,
-        snapshot,
-        request,
-        &candidate_bytes,
-        &selection_bytes,
-    )
+    let request =
+        PanelRequest::for_snapshot_with_roles(snapshot, &selection.roster, PanelFormat::Current);
+    write_request(candidate, snapshot, request)
 }
 
 fn write_request(
     candidate: &CandidateDir,
     snapshot: &SnapshotView,
     request: PanelRequest,
-    candidate_bytes: &[u8],
-    selection_bytes: &[u8],
 ) -> Result<WorkflowOutput> {
     request.validate()?;
     candidate.validate_artifact_address(&request.wave, &request.candidate_id, "panel request")?;
-    candidate.write_bytes(PANEL_CANDIDATE_FILE, candidate_bytes)?;
-    candidate.write_bytes(PANEL_SELECTION_FILE, selection_bytes)?;
-    request.validate_retained_inputs(candidate)?;
     candidate.write_json(PANEL_REQUEST_FILE, &request)?;
     WorkflowOutput::ok(WaveCommand::PanelRequest)
         .with_digests(&snapshot.digests())
@@ -1533,57 +1284,6 @@ fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-fn test_selection_for_roles(snapshot: &SnapshotView, roles: &[PanelRole]) -> PanelSelectionV1 {
-    let documentation = roles.len() == 8;
-    PanelSelectionV1 {
-        artifact_kind: crate::delivery::model::PANEL_SELECTION_ARTIFACT_KIND.to_owned(),
-        schema_version: crate::delivery::model::PANEL_SELECTION_SCHEMA_VERSION,
-        lifecycle_id: "test-lifecycle".to_owned(),
-        phase: "discovery".to_owned(),
-        program: snapshot.program().to_owned(),
-        wave: snapshot.wave().to_owned(),
-        candidate_id: snapshot.candidate_id.clone(),
-        content_id: snapshot.content_id.clone(),
-        snapshot_sha256: snapshot.snapshot_sha256.clone(),
-        selection_table_version: crate::delivery::model::PANEL_SELECTION_TABLE_VERSION,
-        candidate_class: if documentation {
-            "documentation"
-        } else {
-            "code"
-        }
-        .to_owned(),
-        classification_inputs: if documentation {
-            serde_json::json!({
-                "changed_paths": ["README.md"],
-                "signals": [],
-                "candidate_class": "documentation",
-                "ambiguous": false,
-            })
-        } else {
-            serde_json::json!({
-                "changed_paths": ["src/panel.txt"],
-                "signals": [],
-                "candidate_class": "code",
-                "ambiguous": false,
-            })
-        },
-        ambiguity_widened: false,
-        profiles: roles
-            .iter()
-            .map(|role| {
-                let profiles = if documentation && *role == PanelRole::Software {
-                    vec!["markdown".to_owned()]
-                } else {
-                    Vec::new()
-                };
-                (role.as_str().to_owned(), profiles)
-            })
-            .collect(),
-        roster: roles.to_vec(),
-    }
-}
-
-#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
@@ -1747,30 +1447,6 @@ pub(crate) mod tests {
         stored_request(candidate, snapshot).expect("stored request")
     }
 
-    fn retain_request_inputs(candidate: &CandidateDir, request: &PanelRequest) {
-        let Some(binding) = &request.lifecycle_binding else {
-            return;
-        };
-        let candidate_bytes = candidate
-            .read_bytes(SNAPSHOT_FILE)
-            .expect("candidate bytes");
-        let selection_bytes = serde_json::to_vec(&binding.selection).expect("selection bytes");
-        assert_eq!(
-            sha256_bytes(&candidate_bytes),
-            binding.candidate_bytes_sha256
-        );
-        assert_eq!(
-            sha256_bytes(&selection_bytes),
-            binding.selection_bytes_sha256
-        );
-        candidate
-            .write_bytes(PANEL_CANDIDATE_FILE, &candidate_bytes)
-            .expect("retain candidate bytes");
-        candidate
-            .write_bytes(PANEL_SELECTION_FILE, &selection_bytes)
-            .expect("retain selection bytes");
-    }
-
     #[test]
     fn a_refused_panel_read_names_the_label_not_the_path() {
         // Point a bounded read at a directory. The read refuses it, and the
@@ -1809,11 +1485,6 @@ pub(crate) mod tests {
         let stored = stored_request(&candidate, &snapshot).expect("stored request");
         assert_eq!(stored.roles, PANEL_CURRENT_ROLES.to_vec());
         assert_eq!(stored.panel_format_version, Some(1));
-        let lifecycle = stored
-            .lifecycle_binding
-            .as_ref()
-            .expect("current lifecycle binding");
-        assert_eq!(lifecycle.selection.roster, stored.roles);
         assert_eq!(stored.provider, PANEL_PROVIDER_POLICY);
         assert_eq!(stored.model_version, PANEL_MODEL_POLICY);
         assert_eq!(stored.reasoning_effort, PANEL_REASONING_EFFORT_POLICY);
@@ -1843,23 +1514,6 @@ pub(crate) mod tests {
         let request = stored_request(&candidate, &snapshot).expect("stored request");
         assert_eq!(request.panel_format_version, Some(1));
         assert_eq!(request.roles, PANEL_CURRENT_ROLES[..10].to_vec());
-        let lifecycle = request
-            .lifecycle_binding
-            .as_ref()
-            .expect("current lifecycle binding");
-        assert_eq!(lifecycle.selection, selection);
-        assert_eq!(
-            lifecycle.selection_bytes_sha256,
-            sha256_bytes(&fs::read(&selection_path).expect("selection bytes"))
-        );
-        assert_eq!(
-            lifecycle.candidate_bytes_sha256,
-            sha256_bytes(
-                &candidate
-                    .read_bytes(SNAPSHOT_FILE)
-                    .expect("candidate bytes")
-            )
-        );
         assert_eq!(
             request.record_files,
             request
@@ -1907,144 +1561,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_current_request_rejects_roster_or_exact_selection_substitution() {
-        let scratch = Scratch::new("panel-request-selection-substitution");
-        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
-        let selection = current_selection(&snapshot);
-        let selection_path = scratch.path.join("selection.json");
-        fs::write(
-            &selection_path,
-            serde_json::to_vec(&selection).expect("selection"),
-        )
-        .expect("selection file");
-        request_with_selection(&candidate, &snapshot, &selection_path).expect("panel request");
-
-        let mut request = stored_request(&candidate, &snapshot).expect("stored request");
-        request.roles.remove(0);
-        request.record_files.remove(0);
-        let error = request
-            .validate()
-            .expect_err("a caller cannot substitute a smaller selected roster");
-        assert!(
-            error
-                .message()
-                .contains("authoritative lifecycle selection"),
-            "{error}"
-        );
-
-        let mut substituted = selection;
-        substituted.lifecycle_id = "substituted-lifecycle".to_owned();
-        candidate
-            .write_bytes(
-                PANEL_SELECTION_FILE,
-                &serde_json::to_vec(&substituted).expect("substituted selection"),
-            )
-            .expect("replace retained selection");
-        let error = stored_request(&candidate, &snapshot)
-            .expect_err("exact retained selection bytes cannot be substituted");
-        assert!(
-            error.message().contains("selection bytes do not match"),
-            "{error}"
-        );
-
-        candidate
-            .write_bytes(
-                PANEL_SELECTION_FILE,
-                &fs::read(&selection_path).expect("original selection bytes"),
-            )
-            .expect("restore retained selection");
-        let mut substituted_candidate = candidate
-            .read_bytes(SNAPSHOT_FILE)
-            .expect("candidate bytes");
-        substituted_candidate.push(b'\n');
-        candidate
-            .write_bytes(PANEL_CANDIDATE_FILE, &substituted_candidate)
-            .expect("replace retained candidate");
-        let error = stored_request(&candidate, &snapshot)
-            .expect_err("exact retained candidate bytes cannot be substituted");
-        assert!(
-            error.message().contains("candidate bytes do not match"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn current_request_revalidation_enforces_mandatory_triggered_and_floor_rosters() {
-        fn remove_role(request: &mut PanelRequest, role: PanelRole) {
-            request.roles.retain(|selected| *selected != role);
-            request
-                .record_files
-                .retain(|file| *file != record_file_name(role));
-            let selection = &mut request
-                .lifecycle_binding
-                .as_mut()
-                .expect("current binding")
-                .selection;
-            selection.roster.retain(|selected| *selected != role);
-            selection.profiles.remove(role.as_str());
-        }
-
-        let snapshot = snapshot();
-
-        let mut missing_mandatory = PanelRequest::for_snapshot(&snapshot);
-        remove_role(&mut missing_mandatory, PanelRole::Software);
-        let error = missing_mandatory
-            .validate()
-            .expect_err("mandatory seats cannot be removed");
-        assert!(
-            error.message().contains("mandatory seat software"),
-            "{error}"
-        );
-
-        let mut missing_triggered = PanelRequest::for_snapshot(&snapshot);
-        {
-            let selection = &mut missing_triggered
-                .lifecycle_binding
-                .as_mut()
-                .expect("current binding")
-                .selection;
-            selection.classification_inputs = serde_json::json!({
-                "changed_paths": ["BUILD"],
-                "signals": [],
-                "candidate_class": "code",
-                "ambiguous": false,
-            });
-        }
-        remove_role(&mut missing_triggered, PanelRole::Build);
-        let error = missing_triggered
-            .validate()
-            .expect_err("triggered seats cannot be removed");
-        assert!(
-            error.message().contains("triggered optional seat build"),
-            "{error}"
-        );
-
-        let mut below_floor = PanelRequest::for_snapshot_with_roles(
-            &snapshot,
-            &PANEL_CURRENT_ROLES[..8],
-            PanelFormat::Current,
-        );
-        {
-            let selection = &mut below_floor
-                .lifecycle_binding
-                .as_mut()
-                .expect("current binding")
-                .selection;
-            selection.candidate_class = "code".to_owned();
-            selection.classification_inputs = serde_json::json!({
-                "changed_paths": ["src/panel.txt"],
-                "signals": [],
-                "candidate_class": "code",
-                "ambiguous": false,
-            });
-        }
-        let error = below_floor
-            .validate()
-            .expect_err("the current candidate class floor must be rechecked");
-        assert!(error.message().contains("requires at least 10"), "{error}");
-    }
-
-    #[test]
     fn a_request_never_leaves_the_external_state_directory() {
         let scratch = Scratch::new("panel-request-location");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
@@ -2077,7 +1593,6 @@ pub(crate) mod tests {
         let attestation = attested_records(&candidate, &request).expect("attested");
         assert!(attestation.unanimous);
         assert_eq!(attestation.records.len(), PANEL_CURRENT_ROLES.len());
-        assert_eq!(attestation.lifecycle_binding, request.lifecycle_binding);
         attestation.validate().expect("round trip");
     }
 
@@ -2148,7 +1663,6 @@ pub(crate) mod tests {
         let scratch = Scratch::new("panel-reject");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let request = PanelRequest::for_snapshot(&snapshot);
-        retain_request_inputs(&candidate, &request);
         let mut files = record_files(&snapshot);
         mutate(&mut files, &snapshot);
         validate_record_set(&candidate, &request, &files).expect_err("record set must be rejected")
@@ -2170,7 +1684,6 @@ pub(crate) mod tests {
         let scratch = Scratch::new("panel-complete-set");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let request = PanelRequest::for_snapshot(&snapshot);
-        retain_request_inputs(&candidate, &request);
         let attestation = validate_record_set(&candidate, &request, &record_files(&snapshot))
             .expect("unanimous set");
         assert_eq!(attestation.roles, PANEL_CURRENT_ROLES.to_vec());
@@ -2184,7 +1697,6 @@ pub(crate) mod tests {
         for roles in [&PANEL_CURRENT_ROLES[..8], &PANEL_CURRENT_ROLES[..10]] {
             let request =
                 PanelRequest::for_snapshot_with_roles(&snapshot, roles, PanelFormat::Current);
-            retain_request_inputs(&candidate, &request);
             let attestation = validate_record_set(
                 &candidate,
                 &request,
@@ -2511,11 +2023,8 @@ pub(crate) mod tests {
             let record_json = serde_json::to_value(&bundle.records[0]).expect("record JSON");
             if expected_format == PanelFormat::Legacy {
                 assert!(request_json.get("panel_format_version").is_none());
-                assert!(request_json.get("lifecycle_binding").is_none());
                 assert!(attestation_json.get("panel_format_version").is_none());
-                assert!(attestation_json.get("lifecycle_binding").is_none());
                 assert!(seal_panel_json.get("panel_format_version").is_none());
-                assert!(seal_panel_json.get("lifecycle_binding").is_none());
                 assert!(record_json.get("panel_format_version").is_none());
                 assert!(
                     bundle.request.roles.contains(&PanelRole::Rust),
@@ -2523,17 +2032,8 @@ pub(crate) mod tests {
                 );
             } else {
                 assert_eq!(request_json["panel_format_version"], 1);
-                assert!(request_json.get("lifecycle_binding").is_some());
                 assert_eq!(attestation_json["panel_format_version"], 1);
-                assert_eq!(
-                    bundle.request.lifecycle_binding,
-                    bundle.attestation.lifecycle_binding
-                );
                 assert_eq!(seal_panel_json["panel_format_version"], 1);
-                assert_eq!(
-                    bundle.attestation.lifecycle_binding,
-                    bundle.seal_panel.lifecycle_binding
-                );
                 assert_eq!(record_json["panel_format_version"], 1);
                 assert!(
                     bundle.request.roles.iter().all(|role| role.is_current()),
@@ -2545,6 +2045,138 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn byte_real_legacy_request_and_seal_deserialize_and_validate() {
+        let request_bytes = include_bytes!("testdata/panel-legacy-request.json");
+        let request: PanelRequest =
+            serde_json::from_slice(request_bytes).expect("legacy request fixture");
+        request.validate().expect("legacy request");
+        assert_eq!(
+            request.format().expect("request format"),
+            PanelFormat::Legacy
+        );
+        assert_eq!(request.roles, PANEL_ROLES);
+
+        let seal_bytes = include_bytes!("testdata/panel-legacy-seal.json");
+        let seal: crate::delivery::seal::SealRecord =
+            serde_json::from_slice(seal_bytes).expect("legacy seal fixture");
+        assert_eq!(
+            seal.panel.format().expect("seal panel format"),
+            PanelFormat::Legacy
+        );
+        assert_eq!(
+            seal.panel_request_sha256,
+            sha256_bytes(request_bytes),
+            "the seal must bind the exact request fixture bytes"
+        );
+        assert_eq!(request.program, seal.program);
+        assert_eq!(request.wave, seal.wave);
+        assert_eq!(request.candidate_id, seal.candidate_id);
+        assert_eq!(request.content_id, seal.content_id);
+        assert_eq!(request.snapshot_sha256, seal.snapshot_sha256);
+
+        let scratch = Scratch::new("panel-byte-real-legacy");
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let candidate = state
+            .candidate(&seal.wave, &seal.candidate_id)
+            .expect("legacy candidate");
+        candidate
+            .write_bytes(PANEL_REQUEST_FILE, request_bytes)
+            .expect("write exact legacy request bytes");
+        seal.validate(&candidate).expect("legacy seal");
+    }
+
+    #[test]
+    fn lifecycle_fields_and_malformed_panel_families_fail_closed() {
+        let legacy_request_bytes = include_bytes!("testdata/panel-legacy-request.json");
+        let legacy_request: Value =
+            serde_json::from_slice(legacy_request_bytes).expect("legacy request value");
+        let current_bundle: Value =
+            serde_json::from_str(include_str!("testdata/panel-current-variable.json"))
+                .expect("current fixture bundle");
+
+        for field in ["lifecycle_binding", "selection", "selection_bytes_sha256"] {
+            let mut legacy = legacy_request.clone();
+            legacy[field] = serde_json::json!({});
+            assert!(
+                serde_json::from_value::<PanelRequest>(legacy).is_err(),
+                "legacy requests must reject unversioned {field}"
+            );
+
+            let mut current = current_bundle["request"].clone();
+            current[field] = serde_json::json!({});
+            assert!(
+                serde_json::from_value::<PanelRequest>(current).is_err(),
+                "version-1 requests must reject out-of-contract {field}"
+            );
+
+            let mut attestation = current_bundle["attestation"].clone();
+            attestation[field] = serde_json::json!({});
+            assert!(
+                serde_json::from_value::<PanelAttestation>(attestation).is_err(),
+                "version-1 attestations must reject out-of-contract {field}"
+            );
+        }
+
+        let seal_value: Value =
+            serde_json::from_slice(include_bytes!("testdata/panel-legacy-seal.json"))
+                .expect("legacy seal value");
+        for discriminator in [serde_json::json!(2), serde_json::json!("1")] {
+            let mut malformed = seal_value.clone();
+            malformed["panel"]["panel_format_version"] = discriminator;
+            assert!(
+                serde_json::from_value::<crate::delivery::seal::SealRecord>(malformed).is_err(),
+                "malformed or unknown seal panel versions must not fall back to legacy"
+            );
+        }
+
+        let mut unversioned_selection = seal_value.clone();
+        unversioned_selection["panel"]["selection"] = serde_json::json!({});
+        assert!(
+            serde_json::from_value::<crate::delivery::seal::SealRecord>(unversioned_selection)
+                .is_err(),
+            "legacy seal panels must reject unversioned selection state"
+        );
+
+        let seal: crate::delivery::seal::SealRecord =
+            serde_json::from_value(seal_value).expect("legacy seal");
+        let mut current_request_value = legacy_request;
+        current_request_value["panel_format_version"] = serde_json::json!(1);
+        current_request_value["model_version"] = serde_json::json!(PANEL_MODEL_POLICY);
+        current_request_value["reasoning_effort"] =
+            serde_json::json!(PANEL_REASONING_EFFORT_POLICY);
+        let current_roles = PANEL_CURRENT_ROLES[..10].to_vec();
+        current_request_value["roles"] =
+            serde_json::to_value(&current_roles).expect("current roles");
+        current_request_value["record_files"] = serde_json::to_value(
+            current_roles
+                .iter()
+                .copied()
+                .map(record_file_name)
+                .collect::<Vec<_>>(),
+        )
+        .expect("current record files");
+        let current_request: PanelRequest =
+            serde_json::from_value(current_request_value).expect("current request");
+        current_request.validate().expect("valid current request");
+
+        let scratch = Scratch::new("panel-mixed-seal-family");
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let candidate = state
+            .candidate(&seal.wave, &seal.candidate_id)
+            .expect("candidate");
+        candidate
+            .write_json(PANEL_REQUEST_FILE, &current_request)
+            .expect("write current request");
+        let error = seal
+            .validate(&candidate)
+            .expect_err("a legacy seal must not validate against a current request");
+        assert!(
+            error.message().contains("different format or roster"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2589,7 +2221,6 @@ pub(crate) mod tests {
         ] {
             let mut request = PanelRequest::for_snapshot(&snapshot);
             mutate(&mut request);
-            retain_request_inputs(&candidate, &request);
             assert!(
                 validate_record_set(&candidate, &request, &record_files(&snapshot)).is_err(),
                 "a weakened request must be refused"
@@ -2785,7 +2416,7 @@ pub(crate) mod tests {
     /// `#[cfg(test)]`-only redirection for the duration of the run. The
     /// production refusal is untouched.
     #[test]
-    fn the_panel_request_entrypoint_runs_end_to_end_from_its_argument_vector() {
+    fn the_panel_request_entrypoint_consumes_the_javascript_selection_fixture() {
         use crate::delivery::{
             snapshot::{self, tests::GitFixture},
             storage::test_root_override,
@@ -2801,9 +2432,15 @@ pub(crate) mod tests {
         assert!(snapshot_ref.ends_with(SNAPSHOT_FILE), "{snapshot_ref}");
         let state = StateRoot::for_tests(&fixture.state()).expect("test state");
         let snapshot_path = state.resolve_artifact_ref(Path::new(&snapshot_ref));
-        let (_candidate, snapshot) = open_candidate(&state, &snapshot_path).expect("open snapshot");
-        let selection_path = fixture.state().join("selection.json");
-        write_current_selection(&selection_path, &snapshot);
+        let (candidate, snapshot) = open_candidate(&state, &snapshot_path).expect("open snapshot");
+        let selection_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/delivery/testdata/panel-selection-js.json");
+        let selection: PanelSelectionV1 =
+            read_json_file(&selection_path, "JavaScript panel selection fixture")
+                .expect("selection fixture");
+        selection
+            .validate_for_snapshot(snapshot.program(), snapshot.wave(), &snapshot.digests())
+            .expect("fixture must bind the Rust snapshot");
 
         let args = vec![
             "--snapshot".to_owned(),
@@ -2817,6 +2454,17 @@ pub(crate) mod tests {
         assert_eq!(output.operation.as_str(), "panel-request");
         let artifact = output.artifact.expect("panel request artifact reference");
         assert!(artifact.ends_with(PANEL_REQUEST_FILE), "{artifact}");
+        let request: PanelRequest = candidate
+            .read_json(PANEL_REQUEST_FILE)
+            .expect("generated panel request");
+        assert_eq!(request.roles, selection.roster);
+        let request_json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(request_json["panel_format_version"], 1);
+        assert!(
+            request_json.get("lifecycle_binding").is_none()
+                && request_json.get("selection").is_none(),
+            "selection input must not expand the closed panel request contract"
+        );
     }
 
     /// The same entrypoint, driven the same way, must still refuse an unmerged

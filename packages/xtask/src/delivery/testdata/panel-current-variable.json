@@ -1,50 +1,6 @@
 {
   "request": {
     "panel_format_version": 1,
-    "lifecycle_binding": {
-      "candidate_bytes_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "selection_bytes_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "selection": {
-        "artifact_kind": "d2b-panel/lifecycle-selection",
-        "schema_version": 1,
-        "lifecycle_id": "fixture-lifecycle",
-        "phase": "discovery",
-        "program": "ADR046",
-        "wave": "W0",
-        "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        "selection_table_version": 2,
-        "candidate_class": "documentation",
-        "classification_inputs": {
-          "changed_paths": ["BUILD.md"],
-          "signals": [],
-          "candidate_class": "documentation",
-          "ambiguous": false
-        },
-        "ambiguity_widened": false,
-        "profiles": {
-          "software": ["markdown"],
-          "test": [],
-          "product": [],
-          "docs": [],
-          "security": [],
-          "observability": [],
-          "simplicity": [],
-          "build": []
-        },
-        "roster": [
-          "software",
-          "test",
-          "product",
-          "docs",
-          "security",
-          "observability",
-          "simplicity",
-          "build"
-        ]
-      }
-    },
     "artifact_kind": "d2b-delivery/panel-request",
     "schema_version": 2,
     "program": "ADR046",
@@ -218,50 +174,6 @@
   ],
   "attestation": {
     "panel_format_version": 1,
-    "lifecycle_binding": {
-      "candidate_bytes_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "selection_bytes_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "selection": {
-        "artifact_kind": "d2b-panel/lifecycle-selection",
-        "schema_version": 1,
-        "lifecycle_id": "fixture-lifecycle",
-        "phase": "discovery",
-        "program": "ADR046",
-        "wave": "W0",
-        "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        "selection_table_version": 2,
-        "candidate_class": "documentation",
-        "classification_inputs": {
-          "changed_paths": ["BUILD.md"],
-          "signals": [],
-          "candidate_class": "documentation",
-          "ambiguous": false
-        },
-        "ambiguity_widened": false,
-        "profiles": {
-          "software": ["markdown"],
-          "test": [],
-          "product": [],
-          "docs": [],
-          "security": [],
-          "observability": [],
-          "simplicity": [],
-          "build": []
-        },
-        "roster": [
-          "software",
-          "test",
-          "product",
-          "docs",
-          "security",
-          "observability",
-          "simplicity",
-          "build"
-        ]
-      }
-    },
     "roles": [
       "software",
       "test",
@@ -326,50 +238,6 @@
   },
   "seal_panel": {
     "panel_format_version": 1,
-    "lifecycle_binding": {
-      "candidate_bytes_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "selection_bytes_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "selection": {
-        "artifact_kind": "d2b-panel/lifecycle-selection",
-        "schema_version": 1,
-        "lifecycle_id": "fixture-lifecycle",
-        "phase": "discovery",
-        "program": "ADR046",
-        "wave": "W0",
-        "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        "selection_table_version": 2,
-        "candidate_class": "documentation",
-        "classification_inputs": {
-          "changed_paths": ["BUILD.md"],
-          "signals": [],
-          "candidate_class": "documentation",
-          "ambiguous": false
-        },
-        "ambiguity_widened": false,
-        "profiles": {
-          "software": ["markdown"],
-          "test": [],
-          "product": [],
-          "docs": [],
-          "security": [],
-          "observability": [],
-          "simplicity": [],
-          "build": []
-        },
-        "roster": [
-          "software",
-          "test",
-          "product",
-          "docs",
-          "security",
-          "observability",
-          "simplicity",
-          "build"
-        ]
-      }
-    },
     "roles": [
       "software",
       "test",

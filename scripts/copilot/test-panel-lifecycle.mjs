@@ -65,6 +65,15 @@ const REPOSITORY_ROOT = join(
   "..",
   "..",
 );
+const RUST_SELECTION_FIXTURE = join(
+  REPOSITORY_ROOT,
+  "packages",
+  "xtask",
+  "src",
+  "delivery",
+  "testdata",
+  "panel-selection-js.json",
+);
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -698,6 +707,31 @@ console.log("panel lifecycle: selection artifact");
 const root = mkdtempSync(join(tmpdir(), "d2b-panel-lifecycle-"));
 let priorSelection;
 try {
+  const rustSelection = createSelection(
+    {
+      program: "ADR046",
+      wave: "W0",
+      candidate_id:
+        "b14017729b4312480b217eb378d89da8e629ca0ccb082a66230a297450d9270e",
+      content_id:
+        "2a7104db2b2fb08db7062bf0080594f4c002abede9328b579fee4700725a1c40",
+      snapshot_sha256:
+        "c6364dcb391510507604fbd15d5cc8fba1617ede694403fcb2296332cecd04c8",
+      changed_paths: ["packages/xtask/src/delivery/panel.rs"],
+      signals: [],
+      candidate_class: "code",
+      ambiguous: false,
+      lifecycle_id: "rust-panel-interop",
+      phase: "discovery",
+    },
+    { root },
+  );
+  check(
+    "Rust panel-request selection fixture is exact JavaScript producer output",
+    readFileSync(rustSelection.path, "utf8") ===
+      readFileSync(RUST_SELECTION_FIXTURE, "utf8"),
+  );
+
   const initial = makeSelection(root);
   priorSelection = initial.selection;
   check(
@@ -1896,7 +1930,6 @@ try {
       encoding: "utf8",
     }).trim();
     const cliCandidate = join(cliRoot, "candidate.json");
-    const cliDiscoveryVerdicts = join(cliRoot, "discovery-verdicts.json");
     const cliDiscoveryResults = join(cliRoot, "discovery-results.json");
     const cliGroups = join(cliRoot, "groups.json");
     const cliLedger = join(cliRoot, "ledger.json");
@@ -2041,9 +2074,8 @@ try {
         discoveryRequestBindsEvidence(),
       `${stagedDiscoveryRequest.stdout}${stagedDiscoveryRequest.stderr}`,
     );
-    writeFileSync(
-      cliDiscoveryVerdicts,
-      stableStringify(Object.fromEntries(discoveryRoster.map((seat) => [seat, {
+    const discoveryVerdictObjects = Object.fromEntries(
+      discoveryRoster.map((seat) => [seat, {
         engineer: seat,
         signoff: seat !== "software",
         summary: seat === "software"
@@ -2058,16 +2090,122 @@ try {
               fix: "Validate source coverage.",
             }]
           : [],
-      }]))),
+      }]),
     );
-    runCli("adapt-discovery", cliDiscoveryVerdicts, cliDiscoveryResults);
-    const discoveryVerdictObjects = JSON.parse(readFileSync(cliDiscoveryVerdicts, "utf8"));
     for (const seat of discoveryRoster) {
       writeFileSync(
         join(cliFirstRound, "verdicts", `${seat}.json`),
         stableStringify(discoveryVerdictObjects[seat]),
       );
     }
+    runCli(
+      "adapt-discovery",
+      join(cliFirstRound, "verdicts"),
+      cliDiscoveryResults,
+      "--selection",
+      join(cliFirstRound, "selection.json"),
+    );
+    check(
+      "adapt-discovery reads the canonical staged verdict directory in roster order",
+      JSON.parse(readFileSync(cliDiscoveryResults, "utf8"))
+        .results.map((result) => result.seat).join(",") === discoveryRoster.join(","),
+    );
+    const adaptDiscoveryDirectory = (directory, output) => spawnSync("node", [
+      LIFECYCLE_CLI,
+      "adapt-discovery",
+      directory,
+      output,
+      "--selection",
+      join(cliFirstRound, "selection.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    const incompleteDiscoveryVerdicts = join(cliRoot, "incomplete-discovery-verdicts");
+    cpSync(join(cliFirstRound, "verdicts"), incompleteDiscoveryVerdicts, {
+      recursive: true,
+    });
+    rmSync(join(incompleteDiscoveryVerdicts, `${discoveryRoster.at(-1)}.json`));
+    const incompleteDiscovery = adaptDiscoveryDirectory(
+      incompleteDiscoveryVerdicts,
+      join(cliRoot, "incomplete-discovery-results.json"),
+    );
+    check(
+      "adapt-discovery refuses an incomplete selected-seat directory",
+      incompleteDiscovery.status !== 0 &&
+        /missing selected seat/.test(
+          `${incompleteDiscovery.stdout}${incompleteDiscovery.stderr}`,
+        ),
+    );
+    const unselectedSeat = readSelectionTable().optional_seats.find(
+      (seat) => !discoveryRoster.includes(seat),
+    );
+    const unselectedDiscoveryVerdicts = join(cliRoot, "unselected-discovery-verdicts");
+    cpSync(join(cliFirstRound, "verdicts"), unselectedDiscoveryVerdicts, {
+      recursive: true,
+    });
+    writeFileSync(
+      join(unselectedDiscoveryVerdicts, `${unselectedSeat}.json`),
+      stableStringify({
+        engineer: unselectedSeat,
+        signoff: true,
+        summary: "No discovery findings.",
+        recommendations: [],
+      }),
+    );
+    const unselectedDiscovery = adaptDiscoveryDirectory(
+      unselectedDiscoveryVerdicts,
+      join(cliRoot, "unselected-discovery-results.json"),
+    );
+    check(
+      "adapt-discovery refuses an unselected verdict filename",
+      unselectedDiscovery.status !== 0 &&
+        /unselected seat/.test(
+          `${unselectedDiscovery.stdout}${unselectedDiscovery.stderr}`,
+        ),
+    );
+    const mismatchedDiscoveryVerdicts = join(cliRoot, "mismatched-discovery-verdicts");
+    cpSync(join(cliFirstRound, "verdicts"), mismatchedDiscoveryVerdicts, {
+      recursive: true,
+    });
+    const mismatchedSeat = discoveryRoster.at(-1);
+    writeFileSync(
+      join(mismatchedDiscoveryVerdicts, `${mismatchedSeat}.json`),
+      stableStringify({
+        ...discoveryVerdictObjects[mismatchedSeat],
+        engineer: unselectedSeat,
+      }),
+    );
+    const mismatchedDiscovery = adaptDiscoveryDirectory(
+      mismatchedDiscoveryVerdicts,
+      join(cliRoot, "mismatched-discovery-results.json"),
+    );
+    check(
+      "adapt-discovery refuses a filename and declared-seat mismatch",
+      mismatchedDiscovery.status !== 0 &&
+        /filename and selected seat must agree/.test(
+          `${mismatchedDiscovery.stdout}${mismatchedDiscovery.stderr}`,
+        ),
+    );
+    const duplicateDiscoveryDirectory = join(cliRoot, "duplicate-discovery-verdicts");
+    cpSync(join(cliFirstRound, "verdicts"), duplicateDiscoveryDirectory, {
+      recursive: true,
+    });
+    writeFileSync(
+      join(duplicateDiscoveryDirectory, `${discoveryRoster[1]}.json`),
+      stableStringify({
+        ...discoveryVerdictObjects[discoveryRoster[1]],
+        engineer: discoveryRoster[0],
+      }),
+    );
+    const duplicateDiscovery = adaptDiscoveryDirectory(
+      duplicateDiscoveryDirectory,
+      join(cliRoot, "duplicate-discovery-results.json"),
+    );
+    check(
+      "adapt-discovery refuses duplicate declared seats",
+      duplicateDiscovery.status !== 0 &&
+        /duplicate declared seat/.test(
+          `${duplicateDiscovery.stdout}${duplicateDiscovery.stderr}`,
+        ),
+    );
     writeFileSync(
       cliGroups,
       stableStringify([{
@@ -2259,10 +2397,82 @@ try {
       join(cliRound, "current-candidate.json"),
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
-      "approval CLI exposes a passing artifact",
+      "approval CLI exits 0 and exposes an approved artifact",
       approvalResult.status === 0 &&
         JSON.parse(readFileSync(cliApproval, "utf8")).approved === true,
       `${approvalResult.stdout}${approvalResult.stderr}`,
+    );
+    const blockedVerificationResultsPath = join(
+      cliRoot,
+      "blocked-verification-results.json",
+    );
+    const blockedVerificationResults = JSON.parse(
+      readFileSync(cliVerificationResults, "utf8"),
+    );
+    blockedVerificationResults.results[0].signoff = false;
+    blockedVerificationResults.results[0].verified_issue_statuses.R1 = "open";
+    blockedVerificationResults.results[0].recommendations = [{
+      severity: "high",
+      where: "src/panel.js:1",
+      what: "The source mapping remains open.",
+      why: "The ledger issue is not resolved.",
+      fix: "Complete and verify the source mapping fix.",
+    }];
+    writeFileSync(
+      blockedVerificationResultsPath,
+      stableStringify(blockedVerificationResults),
+    );
+    const blockedApprovalPath = join(cliRoot, "blocked-approval.json");
+    const blockedApprovalResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      blockedVerificationResultsPath,
+      blockedApprovalPath,
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI exits 3 and writes a valid blocked artifact",
+      blockedApprovalResult.status === 3 &&
+        JSON.parse(readFileSync(blockedApprovalPath, "utf8")).approved === false,
+      `${blockedApprovalResult.stdout}${blockedApprovalResult.stderr}`,
+    );
+    const invalidApprovalInvocation = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      join(cliRound, "verification-results.json"),
+      join(cliRoot, "invalid-invocation-approval.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI exits 2 for an invalid invocation",
+      invalidApprovalInvocation.status === 2 &&
+        /approval requires --candidate/.test(
+          `${invalidApprovalInvocation.stdout}${invalidApprovalInvocation.stderr}`,
+        ),
+    );
+    const invalidApprovalResponses = join(cliRoot, "invalid-approval-responses.json");
+    writeFileSync(invalidApprovalResponses, "{\n");
+    const invalidApprovalInput = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      invalidApprovalResponses,
+      join(cliRound, "verification-results.json"),
+      join(cliRoot, "invalid-input-approval.json"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI exits 2 for invalid input",
+      invalidApprovalInput.status === 2,
+      `${invalidApprovalInput.stdout}${invalidApprovalInput.stderr}`,
     );
     runCli(
       "metrics",

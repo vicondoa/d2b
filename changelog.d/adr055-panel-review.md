@@ -13,3 +13,5 @@
   `panel_format_version: 1` while legacy fixed-ten records remain readable
   without that field and retain `rust`; the workspace delivery schema remains
   version `2`.
+- Defined approval CLI exit statuses as `0` for approved, `3` for a valid but
+  blocked gate, and `2` for an invalid invocation or input.

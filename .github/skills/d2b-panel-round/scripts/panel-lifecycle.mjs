@@ -4696,33 +4696,58 @@ function readJsonDirectory(path, label) {
   );
 }
 
-function readVerificationVerdicts(path, selection) {
-  const isDirectory = existsSync(path) && statSync(path).isDirectory();
-  const verdicts = readJsonDirectory(path, "actual verification verdicts");
-  if (!isDirectory) return verdicts;
+function validateSelectedVerdictDirectory(verdicts, selection, label) {
   const expected = new Set(selection.roster);
   const actual = Object.keys(verdicts);
   for (const seat of actual) {
     if (!expected.has(seat)) {
-      error(
-        `actual verification verdict directory contains unselected seat "${seat}"`,
-      );
+      error(`${label} directory contains unselected seat "${seat}"`);
     }
+  }
+  const declaredSeats = new Set();
+  for (const seat of actual) {
+    const declared = verdicts[seat]?.engineer ?? verdicts[seat]?.seat;
+    if (declaredSeats.has(declared)) {
+      error(`${label} directory contains duplicate declared seat "${declared}"`);
+    }
+    declaredSeats.add(declared);
+  }
+  for (const seat of actual) {
     const declared = verdicts[seat]?.engineer ?? verdicts[seat]?.seat;
     if (declared !== seat) {
       error(
-        `actual verification verdict ${seat}.json declares seat "${declared}"; ` +
+        `${label} ${seat}.json declares seat "${declared}"; ` +
         "filename and selected seat must agree",
       );
     }
   }
   const missing = selection.roster.filter((seat) => !actual.includes(seat));
   if (missing.length > 0) {
-    error(
-      `actual verification verdict directory is missing selected seat(s): ${missing.join(", ")}`,
-    );
+    error(`${label} directory is missing selected seat(s): ${missing.join(", ")}`);
   }
   return verdicts;
+}
+
+function readDiscoveryVerdicts(path, selection) {
+  if (!existsSync(path) || !statSync(path).isDirectory()) {
+    error("actual discovery verdicts must be a canonical per-seat verdict directory");
+  }
+  return validateSelectedVerdictDirectory(
+    readJsonDirectory(path, "actual discovery verdicts"),
+    selection,
+    "actual discovery verdict",
+  );
+}
+
+function readVerificationVerdicts(path, selection) {
+  const isDirectory = existsSync(path) && statSync(path).isDirectory();
+  const verdicts = readJsonDirectory(path, "actual verification verdicts");
+  if (!isDirectory) return verdicts;
+  return validateSelectedVerdictDirectory(
+    verdicts,
+    selection,
+    "actual verification verdict",
+  );
 }
 
 function usage() {
@@ -4730,12 +4755,13 @@ function usage() {
     "usage:",
     "  panel-lifecycle.mjs select <candidate.json> <lifecycle-id> [--phase discovery|verification] [--previous-selection PATH] [--fix-delta PATH] [--git-range RANGE]",
     "  panel-lifecycle.mjs discovery-request <selection.json> <candidate.json> <output.json>",
-    "  panel-lifecycle.mjs adapt-discovery <verdicts.json> <output.json>",
+    "  panel-lifecycle.mjs adapt-discovery <verdicts-dir> <output.json> --selection PATH",
     "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json>",
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
     "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
     "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH",
     "  panel-lifecycle.mjs approval <selection.json> <ledger.json> <responses.json> <verification-results.json> <output.json> --candidate PATH",
+    "    approval exit codes: 0 approved; 3 valid but blocked; 2 invalid invocation or input",
     "  panel-lifecycle.mjs metrics --selection PATH --ledger PATH --responses PATH --verification-results PATH --output PATH [--implementation-history PATH] [--verification-history PATH]",
     "  panel-lifecycle.mjs import-legacy <legacy-dir-or-json> [candidate.json] <output.json>",
     "  panel-lifecycle.mjs validate-selection <selection.json>",
@@ -4811,11 +4837,19 @@ async function main(argv) {
       return;
     }
     if (command === "adapt-discovery") {
-      const verdicts = readJson(argv[1], "actual discovery verdicts");
+      const selectionPath = flagValue(argv.slice(3), "--selection");
+      if (!argv[1] || !argv[2] || !selectionPath) {
+        error("adapt-discovery requires a verdict directory, output, and --selection");
+      }
+      const selection = readSelection(selectionPath);
+      if (selection.phase !== "discovery") {
+        error("adapt-discovery requires a discovery selection");
+      }
+      const verdicts = readDiscoveryVerdicts(argv[1], selection);
       writeCreateOrCompare(argv[2], {
         artifact_kind: DISCOVERY_RESULT_ARTIFACT,
         schema_version: SELECTION_SCHEMA_VERSION,
-        results: adaptDiscoveryResults(verdicts),
+        results: adaptDiscoveryResults(verdicts, { selection }),
       });
       console.log(argv[2]);
       return;
@@ -4982,7 +5016,8 @@ async function main(argv) {
     error(`unknown command "${command}"\n${usage()}`);
   } catch (cause) {
     console.error(`error: ${cause.message}`);
-    process.exitCode = 1;
+    process.exitCode =
+      command === "approval" || command === "approve" ? 2 : 1;
   }
 }
 

@@ -188,6 +188,10 @@ node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
   --approval "$ROUND/approval.json"
 ```
 
+The `approval` command exits `0` when the valid artifact is approved, `3`
+when the valid artifact is blocked, and `2` for an invalid invocation or
+input. Exit `3` is a normal negative gate result, not a tooling failure.
+
 ## Discover once
 
 The first staged request gives every selected seat the full candidate, full
@@ -213,6 +217,21 @@ for later rounds. Every seat must return exactly one explicit result:
 `findings: []` is a positive zero-finding result. A missing result is an
 error, never an inferred empty result. Findings include severity, impact,
 recommendation, source ordinal, raw text, and attribution.
+
+Adapt the canonical per-seat verdict directory without hand-copying or
+aggregating reviewer output:
+
+```bash
+ROUND=.scratch/panel/<round-id>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  adapt-discovery "$ROUND/verdicts" "$ROUND/discovery-results.json" \
+  --selection "$ROUND/selection.json"
+```
+
+The directory must contain exactly one regular `<seat>.json` file for every
+selected seat and no other entries. Each verdict's declared seat must match
+its filename; missing, unselected, mismatched, or duplicate seats are errors.
 
 The orchestrator supplies deduplication groups. The lifecycle helper validates
 that every source finding maps to exactly one group, then assigns contiguous

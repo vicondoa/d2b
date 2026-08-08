@@ -185,6 +185,11 @@ The existing verdict invariant remains:
 only merge-blocking conditions. Non-blocking MINOR and NIT history remains in
 the ledger rather than keeping `recommendations` non-empty.
 
+For valid inputs, the approval CLI writes the approval artifact and exits `0`
+when approved or `3` when valid but blocked. It exits `2` for an invalid
+invocation or input. Automation treats `3` as the normal blocked-gate result,
+not as a tooling failure.
+
 ### Generated artifacts and compatibility
 
 Scripts automatically generate the discovery request, merged ledger,
