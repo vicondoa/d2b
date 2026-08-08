@@ -481,6 +481,24 @@ publication after parent durability. Strict schemas, wire snapshots, constructor
 deserializers, and human/JSON goldens accept every listed pair and reject every other
 stage/class pair or action substitution. The overflow golden uses `u32::MAX`, exits `4`,
 and carries no intended outcome, terminal failure, next generation, or mutable identifier.
+The pinned Type-3 real-binary case id is exactly
+`source_prefix_reconciliation_recovery_generation_overflow_real_binary`. It feeds the
+closed overflow DTO through the hermetic AF_UNIX public-socket path to
+`d2b-host-generation-deploy`; a renderer unit or direct response construction is
+ineligible. Human mode exits `4` with exactly these newline-terminated bytes:
+
+```text
+host generation handoff immutable audit continuity source lifecycle unavailable
+stage: source-prefix-reconciliation
+failure-class: recovery-generation-overflow
+action: preserve-and-escalate-audit-integrity-incident
+```
+
+JSON mode exits `4` with exactly these bytes and no trailing newline:
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-source-lifecycle-unavailable","stage":"source-prefix-reconciliation","failureClass":"recovery-generation-overflow","action":"preserve-and-escalate-audit-integrity-incident"}`.
+Both real-binary goldens reject `intendedOutcome`, `intended-outcome`, `settlement`,
+`pending`, `successor`, `retry`, `nextGeneration`, `next-generation`, every source or
+repair identifier, and every extra field or line.
 
 Replay-key candidate recycling, broker compaction/recovery, or a resumable
 attempt-capacity release failure exits `4` and never masquerades as a settled continuity
@@ -576,17 +594,41 @@ until the exact private `ContinuityRepairDecisionBasisV1` final and directory ch
 durable. The private `ContinuityRepairDecisionBasisIntentV1` final and directory chain are
 the write-ahead decision commit; an in-memory candidate before intent durability is not a
 selected outcome. Before intent parent durability, restart accepts an absent or exact final:
-absence means no decision committed and replays the preceding durable repair state, while
-an exact final resumes durability. After the intent directory chain is durable, every
-later basis state reloads that frozen intent. Before basis parent durability, restart
-accepts absence or the exact basis and recreates absence byte-identically only from the
-durable intent. The closed intent and basis boundary set is exactly
+absence means no decision commit survived and replays the exact preceding durable repair
+result to reconstruct the same canonical intent bytes without source access, evidence
+replay, outcome reselection, or settlement mutation, while an exact final resumes
+durability. After the intent directory chain is durable, every later basis state reloads
+that frozen intent. Before basis parent durability, restart accepts absence or the exact
+basis and recreates absence byte-identically only from the durable intent. At
+`ParentDurable` and `AncestorsDurable`, both finals are required and absence uses the
+decision-durability integrity form below. The closed intent and basis boundary set is exactly
 `hierarchy | write | file-sync | link | reopen | directory-sync | conflict |
 audit-publication`; every member has this one legal response shape and exact exit. The
 boundary is derived from either the sealed `Progress` prefix or sealed `Conflict` state.
 Progress prefixes exclude `Conflict`. A `conflict` state preserves its durable predecessor
 plus existing and candidate private digests, publishes no intended outcome, and maps only to
 `preserve-and-escalate-continuity-publication-conflict`.
+
+Loss of a decision-basis intent or decision-basis final after a durable directory boundary
+is not basis-pending. It exits `4` with exactly:
+
+```text
+host generation handoff immutable audit continuity decision durability integrity incident
+publication-stage: decision-basis
+record: <CLOSED_DECISION_DURABILITY_RECORD>
+durable-boundary: <CLOSED_DECISION_DURABILITY_BOUNDARY>
+failure-class: final-missing-after-durable-boundary
+action: preserve-and-escalate-audit-integrity-incident
+```
+
+Its JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-durability-integrity-incident","publicationStage":"decision-basis","record":"<CLOSED_DECISION_DURABILITY_RECORD>","durableBoundary":"<CLOSED_DECISION_DURABILITY_BOUNDARY>","failureClass":"final-missing-after-durable-boundary","action":"preserve-and-escalate-audit-integrity-incident"}`.
+`CLOSED_DECISION_DURABILITY_RECORD` is exactly `decision-basis-intent | decision-basis`;
+`CLOSED_DECISION_DURABILITY_BOUNDARY` is exactly
+`parent-durable | ancestors-durable`, and all four pairs are valid. The form contains no
+intended outcome, terminal failure, candidate digest, predecessor, settlement, retry,
+successor, or identifier. It authorizes no recreation, relink, reselection, settlement
+publication, or later repair mutation.
 
 Decision selection publication pending exits `4` before an intended outcome is publicly
 committed. Its human form is exactly:

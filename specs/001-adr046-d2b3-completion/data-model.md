@@ -4091,11 +4091,11 @@ receives the private attempt only inside the consumed sealed permit; no public D
 operator input, generic broker call, or digest reconstruction can mint one. Using the
 source-binding and targets-compacted vectors and the source durability generation specified
 in this section gives `brokerTargetsCompactedSha256 =
-f6c5d3177f29a2c50c096f054c91188840975d974083711d061972f33261222a`,
+5f04253aa226aba438e4bc85e55041d8a581b56ccd0729161ccc9a3c5d7a6223`,
 `ContinuitySourceReleaseAttemptIdV1 =
-7cd9c91f95a9e9cf840a2f5a4939678c14435ea6945d379c461d30062e430bc4`
+09d62866f414518292809355c84267085d398378f5be0a44ad5813dc8db36e30`
 and `continuitySourceReleaseAttemptSha256 =
-f957bd9c1828e90588311e66a7c11e99e4b10348a49626fe764fc5fc53d7ac2f`.
+34fcc6edac2b7d885c4956bc44b734a8ecc9e5fa935df6a2b4d821dc42a82394`.
 The literal source-release outcome input is
 `liveAcquisitionCount = 0`, `liveReplayBindingCount = 0`, and
 `sourceReleaseOutcomeTag = 0x01`. Its expected lowercase outputs are:
@@ -4103,8 +4103,8 @@ The literal source-release outcome input is
 | Identity | Expected bytes |
 | --- | --- |
 | `releasedSourceCensusSha256` | `4d7dc751fd303dfb8c4da27759f38ec8fd3ff56b94183b7dfe83c9c904b8ad48` |
-| `continuitySourceReleaseOutcomeRecordSha256` | `f7565ab0846f52a140f42ec0427da886292529092a686ad2ba8668bc7ffe0cee` |
-| `continuitySourceReleaseOutcomeSha256` | `31310ada698fa12b645f3b659790ebff10a717e037e7b773e27d5e723acfbc79` |
+| `continuitySourceReleaseOutcomeRecordSha256` | `e352ce1ad797e20ec6caafe7ce3ef882996bd9af29f87c5e24d8603cbdb4112b` |
+| `continuitySourceReleaseOutcomeSha256` | `303571fa69c60af7583cf6aee8574809211e172ac396f39c54dad7d856f32e88` |
 
 An independent literal source-release vector perturbs the targets-compacted projection,
 release private/audit domains, coordinator, binding attempt, target receipt, durability
@@ -4872,9 +4872,36 @@ target-set/head/export/census/terminal digests, complete selected leaf records, 
 transient observations never enter audit. Audit may contain only the named audit
 projections above and the closed tags defined here.
 
-Target mutation, receipt, residual selection, and outcome use these canonical encodings:
+Target mutation, receipt, residual selection, and outcome use these canonical encodings.
+The anchored parent and every post-unlink census are typed canonical values, not opaque
+fixture digests:
 
 ```text
+AnchoredParentIdentityV1 = {
+  mountId: u64,
+  deviceMajor: u32,
+  deviceMinor: u32,
+  inode: u64,
+  uid: u32,
+  gid: u32,
+  mode: u32,
+  linkCount: u64
+}
+
+anchoredParentIdentitySha256 =
+  SHA-256("d2b:host-generation:continuity-compaction-anchored-parent-identity:v1\0" ||
+  parent_mount_id_u64_be ||
+  parent_device_major_u32_be || parent_device_minor_u32_be ||
+  parent_inode_u64_be || parent_uid_u32_be || parent_gid_u32_be ||
+  parent_mode_u32_be || parent_link_count_u64_be)
+
+continuityCompactionAttemptCensusSha256 =
+  SHA-256("d2b:host-generation:continuity-compaction-attempt-census:v1\0" ||
+  continuity_repair_attempt_sha256 || continuity_compaction_selection_sha256 ||
+  remaining_target_count_u8 ||
+  for each remaining target in target-kind order:
+    target_kind_tag_u8 || expected_leaf_record_sha256)
+
 continuityCompactionTargetMutationIntentSha256 =
   SHA-256("d2b:host-generation:continuity-compaction-target-mutation-intent:v1\0" ||
   private_compaction_operation_id || continuity_compaction_selection_sha256 ||
@@ -4912,6 +4939,22 @@ continuityCompactionOutcomeAuditSha256 =
   continuity_compaction_operation_sha256 ||
   continuity_compaction_outcome_sha256)
 ```
+
+Every identity member after the domain is fixed-width. All integer fields are unsigned
+big-endian at the width named above; `mode` contains the complete file-type and permission
+bits, and no serializer bytes, path, timestamp, padding, host-endian value, or implicit
+length enters either formula. The parent identity is computed from the freshly reopened
+held dirfd and must match before unlink and after absence;
+`anchored_parent_identity_sha256` in the mutation and receipt formulas is exactly
+`anchoredParentIdentitySha256`. The census is freshly
+canonicalized from held descriptors after the named target is absent. In each target
+receipt, `resulting_census_sha256` is exactly that
+`continuityCompactionAttemptCensusSha256`; in
+`ContinuityTargetsCompactedReceiptSha256`, `final_attempt_census_sha256` is exactly the
+same formula with `remaining_target_count_u8 = 0` and no target entries. The count is one
+byte because the closed target set contains at most four members. Unknown, duplicate,
+missing, reordered, already-receipted, or unselected entries refuse rather than producing
+another census.
 
 Ordinals are zero-based one-byte integers. Target and operation tags are the closed values
 defined in this section. Observation tag `0x01` is `PresentExact`; an intent cannot encode
@@ -5249,6 +5292,16 @@ error kind, or pending settlement field. They use the distinct
 `audit-continuity-capacity-integrity-incident` operator shape in
 `contracts/operator-cli.md`.
 
+Each of the five terminal classes has an independent fresh-process negative. Restart from
+the durable incident must return the same class while preserving the byte-identical prior
+and resulting ledger observations and the full charged slice. For each class, separate
+hooks prove zero continuation, zero retry, zero successor release identity, zero source
+acquisition or source mutation, zero next-cleanup dispatch, and zero slot reuse. Each hook
+has its own removal poison, so one terminal class or one generic incident test cannot
+satisfy another. These are subvisitors of the existing
+`lifecycle/continuity/evidence-retention-export-compaction-restart` id; they add no registry
+id.
+
 Overall completion is then:
 
 ```text
@@ -5330,9 +5383,26 @@ The independent reclamation/receipt/recovery vector reuses the same coordinator,
 terminal outcome, export set, four-target set, and current-head proof; uses the initial
 governed census `b744729a18a0ebe8069f92a741147a3be5749450e250e07f24adb6801c54b284`;
 selects degraded reclamation; and begins with the canonical empty receipt set. Target zero
-uses evidence leaf bytes `00` through `1f`, parent identity bytes `e0` through `ff`,
-`PresentExact`, and resulting census
-`0261cd8a73bb28cacb8c80b321f7a5da0fca264f3113995f3b3046d73b4416ac`.
+uses evidence leaf bytes `00` through `1f` and `PresentExact`. All four targets use the
+same typed parent vector:
+
+```text
+parentMountId = 0x0102030405060708
+parentDeviceMajor = 0x11121314
+parentDeviceMinor = 0x21222324
+parentInode = 0x3031323334353637
+parentUid = 0
+parentGid = 0
+parentMode = 0x000041c0
+parentLinkCount = 2
+anchoredParentIdentitySha256 =
+  117bbff60a288347a4001aabcca3245f5d84d742bcca74f8c96bdf386a4bb4d2
+```
+
+`parentMode` is exactly directory type plus mode `0700`; every integer is encoded at the
+fixed width in the formula above. Under the reclamation selection, target-zero removal
+canonically leaves target kinds `0x02`, `0x03`, and `0x04` and derives resulting census
+`271698a1efb3fb87d5bc82a4037adc6fe250b1ab812cbd11d4f3a926ff53e1ed`.
 Its first outcome is degraded at target zero/evidence/unlink while that target is still
 present: the completed receipt set is empty, no target-zero receipt exists, and the
 residual set contains all four original targets. This is a pre-unlink failed call, not a
@@ -5341,11 +5411,11 @@ reclamation operation from its durable target intent through parent sync, census
 target-zero receipt, with no degraded outcome or recovery identity. Recovery generation
 one uses fresh
 head-proof bytes `d0` through `ef` and completes evidence, source binding, watermark, and
-attempt-census targets in order. Their parent identities are respectively bytes `e0`
-through `ff`, `a0` through `bf`, `b0` through `cf`, and `c0` through `df`; their resulting
-censuses are the target-zero digest above, bytes `40` through `5f`, bytes `50` through
-`6f`, and canonical empty census
-`147f09b8db794ac55a5fc12ef6176fcfb94ba7284749d9848b72fce522245afa`.
+attempt-census targets in order. Under the recovery selection, the remaining ordered
+target-kind sets after ordinals zero through three are respectively
+`[0x02,0x03,0x04]`, `[0x03,0x04]`, `[0x04]`, and `[]`. The formula above derives every
+resulting census and the final attempt census from those literal members; no census digest
+is an independent input.
 The literal lowercase outputs are:
 
 | Identity | Expected bytes |
@@ -5361,7 +5431,10 @@ The literal lowercase outputs are:
 | `requiredExportSetAuditSha256` | `2fcaab94f26530d6a04d1c49eca2740ee7e1627bd0032cb1949efaaf1c97429b` |
 | `governedSetCensusAuditSha256` | `e57290fe380d0f69a3fbfc9b3dbfc5c0e88d133d17d91eb3bd9c44188e07b16d` |
 | `terminalOutcomeRecordAuditSha256` | `87b7039b567ff190a1d71a348a7352624634a186e7afcc9e042a5f86c3dcf039` |
-| target-zero mutation intent | `28fe929ca16a48c5449fd254938675899424abe4d13f770c018ce270ad8a3e4a` |
+| `anchoredParentIdentitySha256` | `117bbff60a288347a4001aabcca3245f5d84d742bcca74f8c96bdf386a4bb4d2` |
+| reclamation target-zero mutation intent | `5c5e5bcf22985ab23b4957f693414c129f7ea58ce182d9f2706633f3c82eb773` |
+| reclamation target-zero `resultingCensusSha256` | `271698a1efb3fb87d5bc82a4037adc6fe250b1ab812cbd11d4f3a926ff53e1ed` |
+| reclamation post-unlink target-zero receipt | `258a3cbcefe16de55ba9ccd075c7fe441255cc6248fc19566544c3c2e95f4336` |
 | all-target `residualTargetSetSha256` | `f30362b2624b0fdadc233be59064142f734641410ea6cbda9167f1b7ecc39ade` |
 | degraded `continuityCompactionOutcomeSha256` | `51796179fa529afe3cd82232acd75699e97fbacb207cbcf8fd7b14cf726e4579` |
 | `continuityCompactionOutcomeAuditSha256` | `c3b468dfb7eee9d1ec7fdbbb36caa711d680615f6062f5f8e54191d1896492e9` |
@@ -5370,23 +5443,27 @@ The literal lowercase outputs are:
 | recovery `continuityCompactionOperationSha256` | `036d7f61bce8e1ed6a97d276ba91ec595a64abc02dea0c0e693eed29157a87fc` |
 | recovery `continuityCompactionSelectionSha256` | `58eed8fdfad20d115c849cfa7d8c9550307c7497d6a9312a2d3c5899a0027e04` |
 | recovery `continuityCompactionSelectionAuditSha256` | `8fa9702d810e3c6fe937cfea336c04599069b631e041f2c9325d118303f99b5a` |
-| recovery target-zero mutation intent | `093a8007a94592a6e647d90495839f60b4e6f3a30141eefb16398d7f44785be0` |
-| recovery target-zero receipt | `af486e21b348d5c349a693026b3db7fac100f9415950eac01adfd1c772a2a6d0` |
-| target-one mutation intent | `7b0ec3265684dca371287cc848777b66366bf281e3734b341182d286b6b5ee23` |
-| target-one receipt | `2de2d8dfb378a946baa9f524b7760c776a8c7f4091fe6b508afb3f7ad1e2f5da` |
-| target-two mutation intent | `105f432fc63b1f41926811458afc14826db581ad61b861be620aac3bc700a9c1` |
-| target-two receipt | `c5553a1f7bb5809e1b10c53f9793bf872228c9fb875dddcbaca68c34976fd1fd` |
-| target-three mutation intent | `b4c5473299f6f3afe94a5fee4ebab61ed3fb965f842d044dc0cb1954a7058189` |
-| target-three receipt | `c088244e4b704be6093494c72d396dd66be1eefa9a480c9b93ad71a90cdd4cc4` |
-| all-target `completedTargetReceiptSetSha256` | `49bb406e3451d7f1ad1edf8991ab528c8b79a5cdfcf2453b3b44e804a7107c87` |
-| `completedTargetReceiptSetAuditSha256` | `3c90086a4e7d6ce0e5d52f463eaca1893bf4d985d94d5d4d6f535ba23bc9c784` |
+| recovery target-zero `resultingCensusSha256` | `07aeb6afbac3c35c30d1b003f0c6d2e1f282584990b3ba45371962c647b49aa9` |
+| recovery target-one `resultingCensusSha256` | `40c192da6a4b4aedaaaf28e2e36c26fa22e3edd73bd651a693e5bec71c1b3882` |
+| recovery target-two `resultingCensusSha256` | `5274840cf7e5190ed78142fb56868c4b337518883db2cd62d4a33f5a35ac69a3` |
+| recovery target-three `resultingCensusSha256` and `finalAttemptCensusSha256` | `401851540f947c73929a84ecf89d3d0fcc5f23e4e0e9fccd39b50a2f0ac9a240` |
+| recovery target-zero mutation intent | `4bdba91a8b752caa42f079b22ba63bc266a32131b4a57b19d26f1e181ed58b3d` |
+| recovery target-zero receipt | `f1fbb6eee6a76f6b8325f67b81f2c172121ca100b0990842b5f06da3efca0a1f` |
+| target-one mutation intent | `8eddd1fda840918dfb1e3f569a39a99592ecbbcad14cfae8b1fc17df1d7268a9` |
+| target-one receipt | `1d1c7a5860efb8632cc51eca5488c48313c47d909f8f44907313aac06f7dab94` |
+| target-two mutation intent | `0bc389a3664942fbe1be5345169a1a1ec3a8b07d11e122a79e5a0595857f2dd5` |
+| target-two receipt | `5eeecb9eae7fe678dcf0a07ae79453cc0f666c72835e3bb670434fef2f29a5c1` |
+| target-three mutation intent | `bf5468b64be4c81240e483c68fa6fe683f4c18f90acb461d7a872582ddb6a013` |
+| target-three receipt | `102530d413ce2a0c79cbf2a7142be147004f7a94a6111bc2e6d64c9ae191aa1e` |
+| all-target `completedTargetReceiptSetSha256` | `0cc056397bb6d95ca2477cf7a1a18b975acf928f0e3ecea875422863b7eaff57` |
+| `completedTargetReceiptSetAuditSha256` | `79589216f18917039d2402a27b071826cbc318ec5751d327274782eca7110627` |
 | `residualTargetSetAuditSha256` | `c0c6f13911c63c750b23af0bbd4c570c942dc50480b8dbb42b134c84c53a69b4` |
-| `ContinuityTargetsCompactedReceiptSha256` | `70208e808abf56c8e4ab2b86efbfbab444e86ea958840d5c992987a322c561c5` |
-| `brokerTargetsCompactedSha256` | `f6c5d3177f29a2c50c096f054c91188840975d974083711d061972f33261222a` |
+| `ContinuityTargetsCompactedReceiptSha256` | `2fbe82eaf643f4db47788ac5491525161261d7dbc796e9f9e392d3f77df5f66a` |
+| `brokerTargetsCompactedSha256` | `5f04253aa226aba438e4bc85e55041d8a581b56ccd0729161ccc9a3c5d7a6223` |
 
 The same fixture consumes the literal source-release output above rather than arbitrary
 bytes: `continuitySourceReleaseOutcomeSha256 =
-31310ada698fa12b645f3b659790ebff10a717e037e7b773e27d5e723acfbc79`.
+303571fa69c60af7583cf6aee8574809211e172ac396f39c54dad7d856f32e88`.
 It sets `reservationAttemptId` to bytes `c0` through `df`,
 `priorReservationLedgerSha256` to bytes `e0` through `ff`,
 `reservationGeneration = 0x2122232425262728`, `releasedRecordCount = 41`, and
@@ -5396,13 +5473,13 @@ digests. Its literal expected lowercase outputs are:
 
 | Identity | Expected bytes |
 | --- | --- |
-| `ContinuityAttemptReservedSliceReleaseProofSha256` | `6b054603798b051fbbea89ad570b83ccd3c2a458419b4aa22936eb0b77ba2fee` |
-| `ContinuityAttemptReservedSliceReleaseAttemptIdV1` | `456ea75cddf8d5f4f67d24edc380d25984953ecf1cfeab2a7f02ac37a8c4be82` |
-| `continuityAttemptReservedSliceReleaseAttemptSha256` | `39a44b04b7fc8b9861e20fca4ba0569a15d749f45e47a4f53e963615d760b8f5` |
-| `continuityAttemptReservedSliceAppliedLedgerSha256` | `14699fe360280d095b52687b4da416a0b3dfb674a6f8466b532eb797724dc03c` |
-| `continuityAttemptReservedSliceReleaseOutcomeRecordSha256` | `30356429aa721801aaf4dbf5890680ab31eebd4243b0b6a6e0b186940c9945c5` |
-| `continuityAttemptReservedSliceReleaseOutcomeSha256` | `299a997967e62d55c904a1d6e21eeb6424a029af29d3cc75f21809e1e2fd0287` |
-| `brokerCompactionCompletionSha256` | `3c06d7a8d5567d6565303b04e35b6f18f87902d859b8cfa96575e5003e642c25` |
+| `ContinuityAttemptReservedSliceReleaseProofSha256` | `f71b5b9cc75b4e9bb8be0f0903a804f4a06639d917cc5c7ee63cdf156381fe7c` |
+| `ContinuityAttemptReservedSliceReleaseAttemptIdV1` | `8dd9af88d878776ac53fe392ca61e0af353bd8afa8da6f4dfe48c52e52173c1c` |
+| `continuityAttemptReservedSliceReleaseAttemptSha256` | `9a91ecbe1af38030392df4578fd09468b606cbf55e458a9f46a59f6dac2c497f` |
+| `continuityAttemptReservedSliceAppliedLedgerSha256` | `2cdcf151eeef16d8f1232602abe74d54f754bb507ca7a50b87462b8288dd29b4` |
+| `continuityAttemptReservedSliceReleaseOutcomeRecordSha256` | `d2536358a282af6cc971809ac318020844d9f7a6b7f0f6dcd4a831c51b663dd7` |
+| `continuityAttemptReservedSliceReleaseOutcomeSha256` | `d207e565cc47ef9b1549bd032381af11f7c18ca0053298000e78d43cad79339b` |
+| `brokerCompactionCompletionSha256` | `56f00aa0a343b0dff01aa3c9e7f02f9383d363ba9c5f26388687110121f9ac1b` |
 
 One literal expected-value table, one separately authored canonical-byte fixture, and
 production are mutually read-independent. Negative vectors perturb each private/audit
@@ -5423,10 +5500,15 @@ record and outcome, and final completion. It substitutes every 32-byte digest in
 other position, including source-release and attempt-slice outcomes in each downstream
 proof/completion field, swaps reclamation and recovery operation projections,
 removes/reorders/duplicates the first, intermediate, and final receipt or residual target,
-and poisons each check independently. No arbitrary downstream digest bytes are accepted as
-a vector input. The literal fixture, expected table, and production implementation are
-mutually read-independent; one removal poison per vector, perturbation, substitution,
-framing, order, mode-tag, source-release chain, and ledger-release chain check is
+and poisons each check independently. Independent anchored-parent vectors perturb the
+domain, mount id, device major/minor, inode, uid, gid, complete mode bits, link count, every
+fixed-width big-endian encoding, and field order. Independent census vectors perturb the
+domain, repair attempt, selection, one-byte count, every target kind/digest, empty-census
+framing, order, omission, duplication, and the `resultingCensusSha256` versus
+`finalAttemptCensusSha256` alias. No arbitrary parent, census, or downstream digest bytes
+are accepted as vector inputs. The literal fixture, expected table, and production
+implementation are mutually read-independent; one removal poison per vector, perturbation,
+substitution, framing, order, mode-tag, source-release chain, and ledger-release chain check is
 mandatory.
 
 The operation publishes fixed redacted
@@ -5809,6 +5891,24 @@ reconstruction. Thus every `Conflict` carries its exact durable predecessor plus
 existing and candidate digests, and no conflict can overlap a progress prefix or omit the
 existing final.
 
+Durable-final loss is a separate closed integrity algebra:
+
+```text
+ContinuityRepairDecisionDurabilityIncidentV1 =
+    IntentFinalMissingAfterParentDurable
+  | IntentFinalMissingAfterAncestorsDurable
+  | BasisFinalMissingAfterParentDurable
+  | BasisFinalMissingAfterAncestorsDurable
+```
+
+The four variants map exactly to record `decision-basis-intent | decision-basis` crossed
+with durable boundary `parent-durable | ancestors-durable`. Every variant derives only
+`final-missing-after-durable-boundary` and
+`preserve-and-escalate-audit-integrity-incident`; no constructor accepts a caller-supplied
+record, boundary, failure, or action. This incident is neither `PendingDecisionBasis` nor a
+publication `Conflict`, terminal repair outcome, or settlement state. Its exact public
+human/JSON response is fixed in `contracts/operator-cli.md`.
+
 This is the write-ahead basis lifecycle, not a transient outcome-selection wrapper. The
 complete typed outcome becomes selected only when the exact no-replace
 `ContinuityRepairDecisionBasisIntentV1` final and its complete directory chain are durable.
@@ -5826,16 +5926,24 @@ accepts a second failure-boundary value, so state/boundary disagreement is
 unrepresentable.
 
 Restart after either decision-intent or basis `FinalLinked` always attempts an exact final
-reopen before classifying the next step. Before that final's parent directory is durable,
-both absence and the byte-identical exact final are valid crash results. Exact survival
-resumes reopen and directory durability. Intent absence means no decision was committed:
-the broker replays the exact preceding durable repair state and may create a newly computed
-candidate, but it does not claim no-reselection. Basis absence is recreated
-byte-identically only from the already file-and-directory-durable intent. Absence after
-`ParentDurable`, a nonidentical final at any point, or a predecessor mismatch is integrity
-degradation and never recreation or replacement. Only after the intent reaches
-`AncestorsDurable` is its selection frozen; only after the basis reaches
-`AncestorsDurable` may that selected outcome enter decision-selection publication.
+reopen before classifying the next step. At `FinalLinked` and `FinalReopened`, before
+parent-directory durability, absence and the byte-identical exact final are the only valid
+results. Exact survival resumes the first missing reopen or directory sync. Intent absence
+means no decision commit survived: the broker replays the exact preceding durable repair
+result and reconstructs the same canonical intent bytes from its sealed predecessor,
+including `terminalOutcomeRecordSha256`; it performs no source access, evidence replay,
+outcome reselection, or settlement mutation. Basis absence is recreated byte-identically
+only from that exact durable intent. No durable intent or basis bytes are presumed to exist
+when the pre-parent final is absent.
+
+At `ParentDurable`, including the interval before ancestor sync, and at
+`AncestorsDurable`, the byte-identical final is mandatory. Absence returns the matching
+`ContinuityRepairDecisionDurabilityIncidentV1` variant and performs zero recreation,
+relink, source access, reselection, decision-selection publication, or later settlement.
+A nonidentical final at any point or a predecessor mismatch remains the matching sealed
+publication `Conflict`; it is not relabeled as absence. The intent selection freezes only
+when its complete directory chain reaches `AncestorsDurable`; only after the basis also
+reaches `AncestorsDurable` may that frozen outcome enter decision-selection publication.
 A nonidentical intent, basis, selection, outcome-intent, or terminal final derives only the
 matching sealed `Conflict` carrying predecessor/existing/candidate, preserves both values,
 and performs no replacement or later settlement mutation.
@@ -5913,13 +6021,15 @@ operation; it cannot project an intended outcome or terminal failure.
 
 At `FinalLinked` and `FinalReopened` restart first reopens the named final and accepts
 absence or the exact candidate. An absent pre-parent-durable intent proves that no decision
-commit survived and causes replay from the preceding durable repair state before a new
-candidate is linked. An exact surviving intent resumes directory durability. Once
-`ParentDurable` exists, absence is an integrity incident; once `AncestorsDurable` exists,
-the exact intent is the frozen selection source. Every basis state reconstructs solely from
-that durable intent. A basis restart before its own parent durability likewise accepts
-absence or the exact final and recreates absence byte-identically from the durable intent;
-after parent durability absence is an integrity incident.
+commit survived and causes replay of the exact preceding durable repair result; the intent
+is reconstructed byte-identically from that sealed result and relinked without source
+access, evidence replay, outcome reselection, or settlement mutation. An exact surviving
+intent resumes directory durability. Before its own parent durability, a basis restart
+likewise accepts absence or the exact final and recreates absence byte-identically only from
+the durable intent. At both `ParentDurable` and `AncestorsDurable`, intent and basis require
+the exact final; absence returns the matching closed decision-durability integrity incident
+and never recreates or relinks. Once intent `AncestorsDurable` exists, its exact final is
+the frozen selection source. Every later basis state reconstructs solely from it.
 
 A nonidentical intent final becomes only the intent publisher's sealed `Conflict` and
 preserves the predecessor plus both intent digests. A nonidentical basis final becomes only
@@ -6008,20 +6118,27 @@ watermark during settlement. The watermark final is never republished or replace
 Fresh-process source-change cases mutate source availability, version, authority, replay
 binding, and returned bytes before every decision-basis and decision-selection boundary.
 Before write-ahead intent directory-chain durability, the only response is basis-pending
-without an intended outcome or terminal failure. At each intent and basis
+without an intended outcome or terminal failure. Those mutations cannot influence
+pre-parent intent recovery: an absent intent replays only the sealed preceding durable
+repair result and reconstructs the same canonical bytes without touching the changed
+source. At each intent and basis
 after-link-before-reopen and after-reopen-before-parent-sync point, paired tests simulate
 both link absence and exact-final survival. Intent absence replays the preceding durable
-repair state and may select only the newly recomputed candidate because no prior decision
-was committed; exact survival resumes without relink. Basis absence republishes only from
-the durable intent; exact survival resumes without relink. After intent
+repair result and recreates only the same deterministic candidate because no prior
+decision was committed; exact survival resumes without relink. Basis absence republishes
+only from the durable intent; exact survival resumes without relink. Separate fresh-process
+removal cases delete the intent and basis final after `ParentDurable` and again after
+`AncestorsDurable`. Each must return its exact decision-durability integrity response with
+zero recreation, relink, source access, outcome reselection, decision-selection
+publication, or settlement hook. After intent
 `AncestorsDurable`, every fresh process must preserve its selected outcome through every
 basis boundary. After basis durability, each case must render and publish only the
 basis-selected outcome or its sealed selection `Conflict`. None may project a transient
 failure, reacquire evidence, choose a different outcome after intent durability, or advance
 a watermark. Separate conflict cases cover a foreign intent, basis, or selection final
 before link, after link, and after every directory boundary, with zero replacement and zero
-later publication. Each absence, survival, conflict, and state/boundary check has an
-independent hook and removal poison.
+later publication. Each accepted-absence, exact-survival, conflict, post-parent-removal,
+post-ancestor-removal, and state/boundary check has an independent hook and removal poison.
 
 Strict response schemas and human/JSON goldens pin completed repaired, completed degraded,
 pending-decision-basis, pending-decision-selection, preparation-incomplete,
@@ -7534,7 +7651,13 @@ its write-ahead intent and basis final without becoming a seventh subvisitor. Th
 read-independent pin contains all six names; a five-name registry, an omitted
 `decision-basis`, a renamed member, or one visit satisfying another fails before any case
 counts. Each subvisitor has an independent missing-visit, wrong-boundary, wrong-predecessor,
-and poison-removal assertion.
+and poison-removal assertion. At every decision-basis intent and basis boundary, the
+decision-basis subvisitor also pins the exact exit-`4` decision-basis-pending response
+schema and human/JSON golden. Its paired pre-parent absence/exact-survival hooks and its
+post-`ParentDurable` and post-`AncestorsDurable` final-removal hooks are independent for
+intent and basis. The latter four hooks require the exact decision-durability integrity
+response and zero recreation, relink, reselection, or settlement; each hook and response
+assertion has a separate removal poison. No registry id is added.
 
 `tests/golden/delivery/host-generation-immutable-audit-lifecycle-case-ids.txt`
 contains exactly these 88 newline-terminated ids in order:

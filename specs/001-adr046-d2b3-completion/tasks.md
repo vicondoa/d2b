@@ -2109,14 +2109,19 @@ table before the operation exists.
   directory-chain durability, and
   every basis progress state after that reloads the exact intent without source access or outcome
   reselection. At intent after-link-before-reopen and after-reopen-before-parent-sync,
-  restart accepts absence or the exact final. Absence means no decision committed and
-  replays the preceding durable repair state before computing a new candidate; exact
-  survival resumes durability. Selection freezes only after the intent directory chain is
-  durable. At the same two basis points, absence is recreated byte-identically only from
-  that durable intent and exact survival resumes; absence after parent durability is an
-  integrity incident. Before the basis file and directory chain are durable, the only legal
-  public form is decision-basis-pending with intrinsic boundary and no intended outcome or
-  terminal failure. No preparation-incomplete form is legal without a durable decision
+  restart accepts absence or the exact final. Absence means no decision commit survived:
+  it replays the exact preceding durable repair result and reconstructs the same canonical
+  intent bytes from that sealed predecessor, with no source access, evidence replay, outcome
+  reselection, or settlement mutation; exact survival resumes durability. Selection freezes
+  only after the intent directory chain is durable. At the same two basis points, absence is
+  recreated byte-identically only from that durable intent and exact survival resumes.
+  After `ParentDurable` and again after `AncestorsDurable`, both intent and basis require the
+  exact final. Absence returns the closed record/boundary-specific
+  `audit-continuity-repair-decision-durability-integrity-incident` exit-`4` response from
+  `contracts/operator-cli.md`, with zero recreation, relink, source access, reselection,
+  decision-selection publication, or settlement. Before the basis file and directory chain
+  are durable, the only legal public form is decision-basis-pending with intrinsic boundary
+  and no intended outcome or terminal failure. No preparation-incomplete form is legal without a durable decision
   selection. Until the selection
   common-publication final is durable, only `PendingDecisionSelection` carrying the
   basis-selected intended outcome and intrinsic incomplete prefix is legal, and restart may
@@ -2142,6 +2147,8 @@ table before the operation exists.
   accepted watermark and remains compaction-reachable. Fresh-process cases cover
   every decision-basis-intent, decision-basis, and decision-selection boundary, paired
   link-absence and exact-survival restarts before each intent/basis parent sync,
+  paired intent/basis final-removal restarts after `ParentDurable` and after
+  `AncestorsDurable`,
   decision-pre failure, every
   boundary for every repaired and degraded intent, restart from each durable prefix,
   response loss, and
@@ -2149,7 +2156,8 @@ table before the operation exists.
   basis-intent boundary, every later basis boundary, and after durable basis selection
   prove no transient failure is projected, no new evidence/outcome/failure is selected
   after write-ahead intent directory-chain durability, and no conflict is replaced. Each
-  absence/survival/predecessor/conflict hook has an independent removal poison. The independent literal
+  absence/survival/post-parent-removal/post-ancestor-removal/predecessor/conflict hook has
+  an independent removal poison. The independent literal
   `continuityRepairDecisionBasisIntentSha256` and
   `continuityRepairDecisionBasisSha256` formula/vectors pin every input, expected hash,
   same-width substitution, field order, framing, omission, and removal poison; the
@@ -2172,10 +2180,12 @@ table before the operation exists.
   T592's closed wire variants distinguish replay-key
   unavailable, source-lifecycle unavailable, reserved capacity, cleanup pending, terminal
   capacity integrity incident,
-  decision-basis pending, decision-selection pending, preparation-incomplete, later
+  decision-basis pending, decision-durability integrity incident, decision-selection
+  pending, preparation-incomplete, later
   settlement pending, and settled degraded; constructors reject every cross-domain class,
   illegal stage/class,
-  completed pending prefix, basis-pending intended outcome/failure, and mismatched derived
+  completed pending prefix, basis-pending intended outcome/failure, a durability incident
+  with an unknown record/boundary or any recreation/retry field, and mismatched derived
   action. Replay-key outcome-audit publication has its explicit `audit-publication` class;
   source release has explicit `unlink` and `census` classes, and
   `source-prefix-reconciliation/recovery-generation-overflow` has the exact integrity
@@ -2191,8 +2201,14 @@ table before the operation exists.
   `ledger-conflict` and all four standing-reserve corruption classes use the distinct
   terminal `audit-continuity-capacity-integrity-incident` human/JSON shape with no pending
   or settlement field. They keep the slice charged and admit no successor identity or
-  retry command. Schema and golden negatives reject a terminal class in cleanup-pending and
-  a resumable class in the terminal incident. The
+  retry command. For each of `ledger-conflict`, `standing-reserve-missing`,
+  `standing-reserve-overdrawn`, `standing-reserve-duplicated`, and
+  `standing-reserve-unaccounted`, an independent fresh-process negative preserves the
+  byte-identical ledger and full charged slice and proves zero continuation, retry,
+  successor release identity, source acquisition or mutation, next-cleanup dispatch, and
+  slot reuse. Every class/forbidden-effect pair has its own hook and removal poison under
+  the existing lifecycle id; no registry id is added. Schema and golden negatives reject a
+  terminal class in cleanup-pending and a resumable class in the terminal incident. The
   `continuity-repair-attempt-limit` class and
   `resume-oldest-continuity-cleanup` continuation label are private trigger-only control
   tokens: public response constructors, serializers, deserializers, schemas, snapshots, and
@@ -2296,6 +2312,13 @@ table before the operation exists.
   A `Released` source with pending
   attempt-slice release cannot free capacity, reuse a slot, advance the repair sequence, or
   admit a source acquisition; success occurs only after the exact slice-release outcome.
+  The same existing compaction/restart visitor runs five separate fresh processes from the
+  terminal attempt-slice classes `ledger-conflict`, `standing-reserve-missing`,
+  `standing-reserve-overdrawn`, `standing-reserve-duplicated`, and
+  `standing-reserve-unaccounted`. Each asserts an unchanged charged slice and ledger and
+  independently poisons continuation, retry, successor release identity, source
+  acquisition/mutation, next-cleanup dispatch, and slot reuse; no class may borrow another
+  class's visit.
   After every completed
   ordinal and before final commit, tests independently advance the head, alter a predecessor
   link, and substitute each residual target; each stops before another unlink. Restoring
@@ -2315,7 +2338,15 @@ table before the operation exists.
   matching body; no independent mode, generic operation id, nullable recovery body, or
   kind/body mismatch is accepted. Canonical formulas define the private-id and
   mode-specific-projection mapping for all three variants, every alias used by selection
-  and recovery, and compacted/already/degraded payload bytes. Read-independent schema,
+  and recovery, and compacted/already/degraded payload bytes. The typed
+  `AnchoredParentIdentityV1` formula pins domain-separated mount id, device major/minor,
+  inode, uid, gid, complete mode bits, link count, unsigned big-endian widths, and field
+  order. The domain-separated attempt-census formula pins the repair attempt, immutable
+  selection, one-byte remaining-target count, target-kind order, and each expected leaf
+  digest; `resultingCensusSha256` and `finalAttemptCensusSha256` are derived aliases, never
+  opaque fixture inputs. Literal vectors carry every derived parent/census and downstream
+  expected hash, with independent domain/member/width/order/framing/substitution/removal
+  poisons. Read-independent schema,
   serde, constructor, and known-answer vectors pin finalize, reclamation, and recovery
   private ids, tagged common operation hashes, selections, target intents/receipts,
   outcomes, targets-compacted, and final completion. Unknown/missing/dual variants,
@@ -2931,6 +2962,19 @@ table before the operation exists.
   selection-pending and
   preparation-incomplete are exercised only with their required durable basis or selection.
   A direct renderer test cannot satisfy these cases.
+  The same pinned real binary has the literal test id
+  `source_prefix_reconciliation_recovery_generation_overflow_real_binary`. A fresh
+  hermetic AF_UNIX server feeds T592's exact
+  `source-prefix-reconciliation/recovery-generation-overflow` DTO through the production
+  transport and shared renderer in both modes. Human mode exits `4` with exact
+  newline-terminated bytes
+  `host generation handoff immutable audit continuity source lifecycle unavailable\nstage: source-prefix-reconciliation\nfailure-class: recovery-generation-overflow\naction: preserve-and-escalate-audit-integrity-incident\n`.
+  JSON mode exits `4` with exact no-trailing-newline bytes
+  `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-source-lifecycle-unavailable","stage":"source-prefix-reconciliation","failureClass":"recovery-generation-overflow","action":"preserve-and-escalate-audit-integrity-incident"}`.
+  Both goldens reject `intendedOutcome`, `intended-outcome`, `settlement`, `pending`,
+  `successor`, `retry`, `nextGeneration`, `next-generation`, every source or repair
+  identifier, and every extra field or line. A direct renderer or fabricated response is
+  ineligible.
   The pin lists
   every new test id literally; regenerate it from
   `(cd packages && cargo nextest list -p d2b --message-format oneline)`, then run
@@ -3152,7 +3196,7 @@ table before the operation exists.
   `contracts/operator-cli.md`: replay-key unavailable, reserved-subset capacity, source
   pin/binding/release and source-prefix-reconciliation unavailable, cleanup pending,
   terminal capacity integrity incident,
-  decision-basis pending, decision-selection pending,
+  decision-basis pending, decision-durability integrity incident, decision-selection pending,
   decision-pre preparation-incomplete, outcome-intent/terminal pending, settled degraded,
   and repaired. Repaired exits `0`; every other continuity form exits `4`. Decision-
   selection pending includes the intended outcome from T592's durable sealed decision
@@ -3169,7 +3213,12 @@ table before the operation exists.
   without becoming a seventh name. A literal six-name renderer registry must equal T589's
   read-only six-name boundary fixture; an omitted basis projection, a five-name registry,
   a wrong boundary/predecessor, one subvisitor satisfying another, or removal of any
-  poison fails before a golden can count. Hierarchy/write/file-sync/link/reopen/directory-sync settlement maps
+  poison fails before a golden can count. Every intent/basis boundary pins the exit-`4`
+  decision-basis-pending strict schema and exact human/JSON golden. Intent and basis final
+  removal after `ParentDurable` and after `AncestorsDurable` instead render the exact
+  decision-durability integrity response for all four record/boundary pairs and reject
+  recreation, relink, reselection, settlement, retry, successor, or identifier fields.
+  Hierarchy/write/file-sync/link/reopen/directory-sync settlement maps
   to storage repair, conflict to preservation/escalation, and audit-publication to audit
   repair; no all-audit fallback is accepted. Goldens and deserializers reject a source,
   replay-key, reserved-capacity, cleanup-pending, terminal-capacity-incident, terminal
@@ -3220,7 +3269,10 @@ table before the operation exists.
   real binary's input bounds/mode/link/type, every forbidden option, Admin success, every
   denied caller and closed broker-error projection, conflict preservation,
   success/already-restored, retention and publication actions, response-loss replay, and
-  acquisition/submission/repair/escalation goldens. T595 consumes T592's typed broker op and
+  acquisition/submission/repair/escalation goldens. It also pins literal id
+  `source_prefix_reconciliation_recovery_generation_overflow_real_binary` and proves the
+  exact human/JSON exit-`4` integrity projection through that same production AF_UNIX path,
+  not a renderer unit. T595 consumes T592's typed broker op and
   cannot mutate the pointer locally. The Type-1 `host-generation-rebuild-ref.nix` case remains option grammar only and
   is ineligible for runtime handoff evidence. The Type-10
   `tests/host-integration/host-generation-handoff.nix` leg alone proves the actual existing
