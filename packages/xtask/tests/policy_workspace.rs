@@ -183,6 +183,7 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
     assert!(toolchain.contains("nightly-2026-02-16"));
     for required in [
         "workspace-metadata.json",
+        "input-fingerprint.txt",
         "roots.json",
         "public-api.txt",
         "capability-api.txt",

@@ -2,6 +2,20 @@
 
 - Status: Accepted
 - Date: 2026-08-02
+- Partially superseded by: [ADR 0055](0055-discover-fix-verify-panel-review.md)
+  replaces D7 through D9 only for panel-review trust and lifecycle, and D21
+  for panel selection. It withdraws any requirement that standard panel
+  review use a protected controller, privileged principal, authority service,
+  authority receipt, root audit sink, capability authorization, or complex
+  recovery and retention machinery. D21's seven mandatory seats,
+  surface-dependent floors, select-every-trigger rule, conservative
+  classification, profiles, deterministic roster mechanics, pinned reviewer
+  identity, and candidate-bound evidence remain; ADR 0055's thirteen-seat
+  pool, optional `build`, shared ledger, and discover-fix-verify lifecycle are
+  authoritative. Gas City remains unimplemented and must eventually consume
+  the same selection table and artifact formats. The classification of Gas
+  City as contributor infrastructure and unrelated orchestration and
+  publication decisions remain.
 - Amended: 2026-08-04. The panel roster changes from a closed ten-role set to
   a **selected subset of a twelve-role pool**: seven mandatory seats plus
   every optional seat a deterministic trigger table selects, under a
@@ -41,9 +55,9 @@
   the two wire positions required for an unresolved prior finding are duplicate
   judgements, and that the internal verdict may store resolved and superseding
   dispositions in independent collections.
-  Every other decision in this record
-  stands unchanged, and nothing here is superseded. None of this is implemented
-  yet; the committed code still carries the ten-role roster, `PanelRole::Rust`
+  Except for the portions superseded by ADR 0055 above, every other decision
+  in this record stands unchanged. None of this is implemented yet; the
+  committed code still carries the ten-role roster, `PanelRole::Rust`
   included, re-measured on the
   amendment date. Supporting source and prompt-construction material lives in
   [`specs/0053-panel-prompt-sources.md`](specs/0053-panel-prompt-sources.md).
@@ -1573,8 +1587,9 @@ rather than a novel demand.
 
 **D21. The panel roster is a selected subset of a twelve-role pool under a
 surface-dependent floor, and selection is controller-owned.** *Added by the
-2026-08-04 amendment. It amends D7 and D8 and is the single place the panel
-composition contract lives.*
+2026-08-04 amendment. ADR 0055 partially supersedes this historical basis and
+is authoritative for the thirteen-seat pool, optional `build`, selector
+authority, and discover-fix-verify lifecycle.*
 
 A fixed roster of ten was wrong in both directions at once. On an ADR-text
 change it ran `kernel`, `networking` and `nixos` against prose those seats have

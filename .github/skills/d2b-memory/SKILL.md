@@ -15,9 +15,13 @@ Three registers under `.specify/memory/`, one skill, four operations.
 /d2b-memory file-issue <id>
 ```
 
-The registers exist because the alternative is that every run rediscovers the
-same friction, and every deferral is either forgotten or silently carried
-forever. They are:
+The registers prevent every run from rediscovering the same friction and every
+deferral from being forgotten or silently carried forever:
+
+<!-- D2B-FEATURE-ARTIFACT-ROUTING: d2b-spec-edit-exclusive-v1 -->
+The `fold` operation may prepare an insertion for an active plan or tasks
+artifact, but `/d2b-spec-edit` performs every feature-directory write. Memory
+registers remain outside that feature root and keep their existing ownership.
 
 | Register | Holds |
 |---|---|
@@ -27,12 +31,12 @@ forever. They are:
 
 ## What may be recorded
 
-**Classification metadata only.** Never transcripts, never validation output,
-never attestation payloads, never diffs. An entry is a category, a wave
-address, a one-line statement, a disposition, and an owner. If an entry needs
-a paragraph of context to be actionable, it is a task, not a memory entry.
+**Classification metadata only.** Never transcripts, validation output,
+attestation payloads, or diffs. An entry is a category, wave address, one-line
+statement, disposition, and owner. If it needs a paragraph to be actionable,
+it is a task, not a memory entry.
 
-Categories, carried forward from the existing register taxonomy:
+Categories, carried forward from the register taxonomy:
 `signoff`, `build`, `test`, `merge`, `codegen`, `disk`.
 
 Dispositions: `open`, `folded`, `filed`, `resolved`, `wontfix`.
@@ -47,56 +51,48 @@ in-flight program.
 | spec001w2 | test | 2026-02-14 | Contract lane needs a fixture build every run | open |  |
 ```
 
-Record at the moment it happens, not at the end. A friction point noticed
-during a fix round and not written down is lost, and it is the single most
-common thing lost.
+Record it when it happens, not at the end. A friction point noticed during a
+fix round and not recorded is lost.
 
-**A finding is not a memory entry.** Critical and high panel findings are
-never deferrable and never auto-filed. They are fixed in the round that raised
-them.
+**A finding is not a memory entry.** Critical and high panel findings are never
+deferrable or auto-filed; fix them in the round that raised them.
 
-**A defect discovered while fixing something else goes here.** That is the
-mechanism that lets a fix round stay scoped to the findings it answers without
-losing the defect.
+**A defect discovered while fixing something else goes here.** This keeps a fix
+round scoped to its findings without losing the defect.
 
-**A register never shrinks to nothing on its own.** Rows are dispositioned in
-place rather than deleted, so a register with no rows means history was lost,
-and `check-bindings.mjs` fails on it. If a register really is empty on purpose,
-say so with a line reading exactly:
+**A register never shrinks to nothing on its own.** Disposition rows in place,
+rather than deleting them; no rows means history was lost, and
+`check-bindings.mjs` fails. If a register is intentionally empty, declare it
+with exactly:
 
 ```
 <!-- d2b-register: intentionally empty -->
 ```
 
-outside any fenced block. It excuses an absent row, never an absent table: a
-register with no header row still fails. Remove the marker when the first row
-returns, because the gate refuses a register that declares itself empty and has
-rows. That refusal is deliberate - a marker left behind would silently licence
-the next truncation.
+outside any fenced block. It excuses an absent row, never an absent table: no
+header still fails. Remove the marker when the first row returns; the gate
+refuses a register declaring itself empty while holding rows. That refusal is
+deliberate - a stale marker would silently license the next truncation.
 
 ## triage
 
-Read the open set and assign a disposition. Three rules decide it:
+Read the open set and assign a disposition. Three rules decide:
 
 1. **A category recurring across three waves stops being friction and becomes
-   a task.** Promote it into the plan. This is what keeps the register from
-   becoming a graveyard, and it is not a judgement call: count the rows.
-2. **Anything blocking the next wave folds now.** It is not memory; it is
-   scope.
-3. **Everything else that is genuinely low priority leaves the plan
-   entirely** and becomes a GitHub issue. An item that stays `open` across
-   three triages without being promoted or filed is being avoided; force it to
-   one or the other.
+   a task.** Promote it into the plan. This is a count, not a judgement call.
+2. **Anything blocking the next wave folds now.** It is scope, not memory.
+3. **Everything else that is genuinely low priority leaves the plan** and
+   becomes a GitHub issue. An item `open` across three triages without promotion
+   or filing is being avoided; force one outcome.
 
 ## fold
 
-Emit the open, foldable set as planning input for the next feature or wave:
-a short list of concrete items, each with its category, its recurrence count,
-and the wave that raised it. That output goes to the architect, who decides
-whether each becomes a task.
+Emit the open, foldable set as planning input for the next feature or wave: a
+short list of concrete items with category, recurrence count, and raising wave.
+The architect decides whether each becomes a task.
 
-Folding **does not** silently add tasks to a plan. It produces the input to
-that decision, so the plan's task list stays something a person approved.
+Folding **does not** silently add tasks to a plan. It supplies the decision
+input, so a person still approves the plan's task list.
 
 Mark folded rows `folded` with the target wave in the disposition column.
 

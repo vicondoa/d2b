@@ -28,7 +28,7 @@
 // It is a plain node script with no test framework because the repository does
 // not add tooling for one gate. It runs from `make test-lint`.
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -69,6 +69,16 @@ const GATE = "scripts/copilot/check-bindings.mjs";
 const REQUIRED_INPUTS = [
   ".github/agents",
   ".github/skills",
+  "AGENTS.md",
+  "tests/AGENTS.md",
+  "labs/venus-vulkan-video/AGENTS.md",
+  "docs/contributing",
+  "third_party/caveman/v1.10.0",
+  "tests/tools/tier0-first-pass.sh",
+  "packages/d2b-contract-tests/tests/policy_dash_gate.rs",
+  "scripts/copilot/prompt-corpus.mjs",
+  "scripts/copilot/prompt-corpus-manifest.json",
+  "docs/adr/specs/0053-panel-prompt-sources.md",
   "packages/xtask/src/delivery/model.rs",
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
@@ -85,6 +95,16 @@ const REQUIRED_INPUTS = [
 const REQUIRED_FAILURE_TEXT = {
   ".github/agents": ".github/agents does not exist",
   ".github/skills": "the panel record helper is required",
+  "AGENTS.md": "prompt corpus check failed",
+  "tests/AGENTS.md": "prompt corpus check failed",
+  "labs/venus-vulkan-video/AGENTS.md": "prompt corpus check failed",
+  "docs/contributing": "prompt corpus check failed",
+  "third_party/caveman/v1.10.0": "Caveman vendor root",
+  "tests/tools/tier0-first-pass.sh": "tests/tools/tier0-first-pass.sh is missing",
+  "packages/d2b-contract-tests/tests/policy_dash_gate.rs": "policy_dash_gate.rs is missing",
+  "scripts/copilot/prompt-corpus.mjs": "prompt-corpus.mjs is missing",
+  "scripts/copilot/prompt-corpus-manifest.json": "prompt-corpus-manifest.json is missing",
+  "docs/adr/specs/0053-panel-prompt-sources.md": "panel prompt source",
   "packages/xtask/src/delivery/model.rs": "cannot read model.rs",
   "packages/xtask/src/delivery/panel.rs": "cannot read panel.rs",
   "packages/xtask/src/delivery/mod.rs": "cannot read mod.rs",
@@ -98,18 +118,18 @@ const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
 ];
 
-const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
+const SELECTION_TABLE = ".github/skills/d2b-panel-round/selection-table.json";
+const CURRENT_PANEL_SEATS = [
+  "agentic", "build", "docs", "kernel", "networking", "nixos",
+  "observability", "product", "reliability", "security", "simplicity",
+  "software", "test",
+];
 
 // The marker a register uses to declare that it is empty on purpose. The gate
 // compares against its own copy, so spelling it once here means a case cannot
 // drift into asserting a string the gate never matches, which would look like
 // coverage while testing nothing.
 const EMPTY_MARKER = "<!-- d2b-register: intentionally empty -->";
-
-// The regex the gate itself uses to find the roster. Sharing the shape is
-// deliberate: if the gate can parse the declaration, so can the harness, and
-// if it cannot, both fail rather than one silently disagreeing.
-const ROLES_DECL = /const\s+ROLES\s*=\s*\[[\s\S]*?\];/;
 
 let failures = 0;
 
@@ -151,54 +171,51 @@ function mutateJson(dir, relativePath, fn) {
   writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-// Replace the helper's ROLES declaration with arbitrary text. Taking the whole
-// declaration lets a case rewrite it into a shape the guard's regex cannot
-// parse, which is the drift a refactor actually produces.
-//
-// The rewrite must actually change the file. A mutation that silently produced
-// the original text would leave the fixture unmutated, the gate would exit 0,
-// and the case would report a failure whose stated cause is wrong. Assert it
-// instead, so a no-op mutation names itself.
-function setRolesBlock(dir, text) {
-  const path = join(dir, HELPER);
-  const src = readFileSync(path, "utf8");
-  if (!ROLES_DECL.test(src)) {
-    throw new Error("fixture: ROLES declaration not found in make-records.mjs");
-  }
-  const next = src.replace(ROLES_DECL, text);
-  if (next === src) {
-    throw new Error("fixture: the mutation did not change make-records.mjs");
+function mutateFile(dir, relativePath, fn) {
+  const path = join(dir, relativePath);
+  const source = readFileSync(path, "utf8");
+  const next = fn(source);
+  if (next === source) {
+    throw new Error(`fixture: mutation of ${relativePath} was a no-op`);
   }
   writeFileSync(path, next);
 }
 
-// The roster the negative cases perturb is read out of the fixture rather than
-// written down here.
-//
-// Writing it down would make a third copy, alongside `model.rs` and
-// `make-records.mjs`, and drift between copies is the exact class the guard
-// under test exists to catch. Nothing in this suite would notice such a drift:
-// the baseline case mutates nothing, so it never evaluates the array at all,
-// and the negative cases still pass, because perturbing a stale roster also
-// mismatches `model.rs`. The suite would stay green while testing a roster the
-// repo had stopped using.
-//
-// Deriving it removes the third copy instead of documenting it.
-function rosterFromFixture(dir) {
-  const src = readFileSync(join(dir, HELPER), "utf8");
-  const block = src.match(ROLES_DECL);
-  if (!block) {
-    throw new Error("fixture: cannot read the roster from make-records.mjs");
-  }
-  const roles = [...block[0].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  if (roles.length < 2) {
-    throw new Error(`fixture: roster has ${roles.length} seats; cannot perturb it`);
-  }
-  return roles;
+function removeFile(dir, relativePath) {
+  const path = join(dir, relativePath);
+  rmSync(path);
 }
 
-function rolesLiteral(roles) {
-  return `const ROLES = [\n  ${roles.map((r) => `"${r}"`).join(", ")},\n];`;
+function mutateSelectionRoster(dir, mutate) {
+  mutateJson(dir, SELECTION_TABLE, mutate);
+}
+
+function checkCurrentPromptShape(dir) {
+  const panelSeats = readdirSync(join(dir, ".github", "agents"))
+    .filter((file) => file.startsWith("panel-") && file.endsWith(".agent.md"))
+    .map((file) => file.slice("panel-".length, -".agent.md".length))
+    .sort();
+  if (panelSeats.join(",") !== [...CURRENT_PANEL_SEATS].sort().join(",")) {
+    failures += 1;
+    console.error(
+      `FAIL current panel pool shape: expected [${CURRENT_PANEL_SEATS.join(", ")}], got [${panelSeats.join(", ")}]`,
+    );
+  }
+  const manifest = JSON.parse(
+    readFileSync(join(dir, "scripts/copilot/prompt-corpus-manifest.json"), "utf8"),
+  );
+  const membership = manifest.membership ?? [];
+  if (
+    membership.length !== 35 ||
+    membership.filter((path) => path.startsWith(".github/agents/")).length !== 16 ||
+    membership.some((path) => path.endsWith("panel-rust.agent.md")) ||
+    !membership.some((path) => path.endsWith("panel-build.agent.md"))
+  ) {
+    failures += 1;
+    console.error(
+      `FAIL current prompt corpus shape: expected 35 files and sixteen agent files with build and without current rust`,
+    );
+  }
 }
 
 // Append a row to a memory register in the fixture. Both register cases below
@@ -218,7 +235,7 @@ function writeRegister(dir, reg, text) {
 
 // Rewrite one panel seat's shared finding-bar section inside the fixture. The
 // bar is what tells a seat which observations block the round and which belong
-// in the summary. The gate requires all ten to be byte-identical, because the
+// in the summary. The gate requires every selected seat to be byte-identical, because the
 // bar was originally restated per seat and silently diverged into ten
 // thresholds, three of which were absent entirely. Both mutations below are
 // that drift.
@@ -237,6 +254,15 @@ function mutateBar(dir, seat, fn) {
   writeFileSync(p, next);
 }
 
+function cavemanBlock(dir, agent = "d2b-implementer") {
+  const source = readFileSync(join(dir, ".github", "agents", `${agent}.agent.md`), "utf8");
+  const start = source.indexOf("<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->");
+  const endMarker = "<!-- END D2B-CAVEMAN-COMMUNICATION -->";
+  const end = source.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error("fixture: optional Caveman block is missing");
+  return source.slice(start, end + endMarker.length);
+}
+
 // A negative case asserts both a nonzero exit and a substring from the roster
 // guard itself. Exit status alone would pass if the gate failed for some
 // unrelated reason, which is precisely how a guard that no longer fires hides.
@@ -245,6 +271,331 @@ const CASES = [
     name: "baseline: an unmutated fixture passes",
     mutate: () => {},
     expectExit: 0,
+  },
+  {
+    name: "modified admitted Caveman blob is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "third_party/caveman/v1.10.0/LICENSE", (text) => `${text}x`),
+    expectExit: 1,
+    expectText: "hash mismatch",
+  },
+  {
+    name: "missing Caveman license is rejected",
+    mutate: (dir) => removeFile(dir, "third_party/caveman/v1.10.0/LICENSE"),
+    expectExit: 1,
+    expectText: "Caveman vendor file LICENSE is missing",
+  },
+  {
+    name: "extra Caveman runtime file is rejected",
+    mutate: (dir) =>
+      writeFileSync(
+        join(dir, "third_party", "caveman", "v1.10.0", "scripts.py"),
+        "runtime\n",
+      ),
+    expectExit: 1,
+    expectText: "outside the closed allowlist",
+  },
+  {
+    name: "changed shell dash admission hash is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "tests/tools/tier0-first-pass.sh",
+        (text) => text.replaceAll(
+          "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+          "0".repeat(64),
+        ),
+      ),
+    expectExit: 1,
+    expectText: "tier-0 dash gate is missing required binding text",
+  },
+  {
+    name: "missing optional Caveman agent marker is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/agents/panel-build.agent.md", (text) => {
+        const start = text.indexOf("<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->");
+        const endMarker = "<!-- END D2B-CAVEMAN-COMMUNICATION -->";
+        const end = text.indexOf(endMarker, start) + endMarker.length;
+        return `${text.slice(0, start)}${text.slice(end)}`;
+      }),
+    expectExit: 1,
+    expectText: "Caveman-enabled agent set",
+  },
+  {
+    name: "duplicated optional Caveman agent marker is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-build.agent.md",
+        (text) => `${text}\n${cavemanBlock(dir, "panel-build")}\n`,
+      ),
+    expectExit: 1,
+    expectText: "must have exactly one start and end marker",
+  },
+  {
+    name: "Caveman marker on architect is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/d2b-architect.agent.md",
+        (text) => `${text}\n${cavemanBlock(dir)}\n`,
+      ),
+    expectExit: 1,
+    expectText: "unapproved agent",
+  },
+  {
+    name: "panel verdict JSON drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-test.agent.md",
+        (text) => text.replace('"signoff": true', '"approved": true'),
+      ),
+    expectExit: 1,
+    expectText: "panel verdict JSON output schema changed",
+  },
+  {
+    name: "panel verification output extension drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-test.agent.md",
+        (text) => text.replace(
+          "During verification, add `verified_issue_statuses`",
+          "During verification, omit `verified_issue_statuses`",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "panel verification output extension changed",
+  },
+  {
+    name: "non-owner direct feature write claim is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/speckit-plan/SKILL.md",
+        (text) => text.replace(
+          "existing=editor",
+          "existing=direct-write",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "feature-artifact routing marker is missing or duplicated",
+  },
+  {
+    name: "clarify per-answer integration instruction is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-clarify/SKILL.md", (text) =>
+        `${text}\nIntegration after EACH accepted answer (incremental update approach):\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "clarify direct checklist save is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-clarify/SKILL.md", (text) =>
+        `${text}\nSave the updated checklist file.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "clarify per-write validation is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-clarify/SKILL.md", (text) =>
+        `${text}\nValidation (performed after EACH write plus final pass):\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "specify unconditional template copy is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-specify/SKILL.md", (text) =>
+        `${text}\nCopy the resolved \`spec-template\` file to \`SPECIFY_FEATURE_DIRECTORY/spec.md\` as the starting point\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "specify unconditional spec creation is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-specify/SKILL.md", (text) =>
+        `${text}\nThe spec directory and file are always created by this command.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "plan direct existing-artifact write is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-plan/SKILL.md", (text) =>
+        `${text}\nWrite an existing plan.md directly.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "tasks direct existing-artifact write is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-tasks/SKILL.md", (text) =>
+        `${text}\nWrite an existing tasks file directly.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "implement direct task-artifact write is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-implement/SKILL.md", (text) =>
+        `${text}\nWrite tasks.md or another existing feature artifact directly.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "converge direct append section is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-converge/SKILL.md", (text) =>
+        `${text}\n### 7. Append Convergence Tasks (or report converged)\nAppend to the **end** of \`tasks.md\`.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "checklist direct append wording is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-checklist/SKILL.md", (text) =>
+        `${text}\nEach invocation either creates a new file or appends to an existing one.\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "analyze manual artifact edit is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, ".github/skills/speckit-analyze/SKILL.md", (text) =>
+        `${text}\nManually edit tasks.md to add coverage for 'performance-metrics'\n`),
+    expectExit: 1,
+    expectText: "contradictory direct-write instruction",
+  },
+  {
+    name: "editor root escape wording is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/d2b-spec-edit/SKILL.md",
+        (text) => text.replace(
+          "FEATURE_DIR`: one existing directory under the repository's `specs/`",
+          "FEATURE_DIR`: one existing directory under the repository root",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "missing fail-closed ownership text",
+  },
+  {
+    name: "prompt corpus membership drift is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, "scripts/copilot/prompt-corpus-manifest.json", (manifest) => {
+        manifest.membership.push("not-in-corpus.md");
+      }),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt heading fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/README.md", (text) =>
+        text.replace("# Contributing docs", "# Changed heading")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt fenced command fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/gates-and-lints.md", (text) =>
+        text.replace("make check-tier0", "make check-tier0 --changed")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt inline-code fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "AGENTS.md", (text) =>
+        text.replace("git+file://$ROOT", "git+file://$ROOT2")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt link fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/architecture.md", (text) =>
+        text.replace(
+          "https://github.com/vicondoa/entrablau.nix",
+          "https://github.com/vicondoa/entrablau.nix-bad",
+        )),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt number fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/copilot-agents.md", (text) =>
+        text.includes("35 files")
+          ? text.replace("35 files", "36 files")
+          : text.includes("13 agents")
+            ? text.replace("13 agents", "14 agents")
+            : `${text}\n36 files\n`),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt normative-token fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "AGENTS.md", (text) =>
+        text.replace("MUST", "SHOULD")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt list hierarchy fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "AGENTS.md", (text) =>
+        text.replace("- **Existing code is canon.**", "  - **Existing code is canon.**")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt table-shape fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/copilot-agents.md", (text) =>
+        text.replace("| --- | --- |", "| --- | --- | --- |")),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "prompt JSON-example fingerprint drift is rejected",
+    mutate: (dir) =>
+      mutateFile(dir, "docs/contributing/panel-review.md", (text) =>
+        text.replace('"engineer": "software"', '"engineer": "tester"')),
+    expectExit: 1,
+    expectText: "prompt corpus check failed",
+  },
+  {
+    name: "panel prompt source missing current build guidance is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/adr/specs/0053-panel-prompt-sources.md",
+        (text) => text.replace(
+          "### Build seat source guidance",
+          "### Removed seat source guidance",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "missing required current guidance",
+  },
+  {
+    name: "operative legacy panel prompt contract is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/adr/specs/0053-panel-prompt-sources.md",
+        (text) => `${text}\nThe relevant: false held-reviewer repeated rounds contract remains operative.\n`,
+      ),
+    expectExit: 1,
+    expectText: "keeps an operative",
   },
   {
     name: "an additional installed integration is rejected",
@@ -346,41 +697,173 @@ const CASES = [
   },
   {
     name: "a dropped seat is rejected",
-    mutate: (dir) => {
-      const roster = rosterFromFixture(dir);
-      setRolesBlock(dir, rolesLiteral(roster.slice(0, -1)));
-    },
+    mutate: (dir) => mutateSelectionRoster(dir, (table) => {
+      table.optional_seats.pop();
+      table.fill_order.pop();
+    }),
     expectExit: 1,
-    expectText: "make-records.mjs ROLES is [",
+    expectText: "exactly thirteen",
   },
   {
     name: "an extra seat is rejected",
-    mutate: (dir) => {
-      const roster = rosterFromFixture(dir);
-      setRolesBlock(dir, rolesLiteral([...roster, "performance"]));
-    },
+    mutate: (dir) => mutateSelectionRoster(dir, (table) => {
+      table.optional_seats.push("performance");
+      table.fill_order.push("performance");
+    }),
     expectExit: 1,
-    expectText: "make-records.mjs ROLES is [",
+    expectText: "exactly thirteen",
   },
   {
     name: "a reordered roster is rejected",
-    mutate: (dir) => {
-      const swapped = rosterFromFixture(dir);
-      [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
-      setRolesBlock(dir, rolesLiteral(swapped));
-    },
+    mutate: (dir) => mutateSelectionRoster(dir, (table) => {
+      [table.mandatory_seats[0], table.mandatory_seats[1]] =
+        [table.mandatory_seats[1], table.mandatory_seats[0]];
+    }),
     expectExit: 1,
-    expectText: "make-records.mjs ROLES is [",
+    expectText: "mandatory seat order",
   },
   {
-    name: "a roster the guard cannot parse is rejected rather than skipped",
-    mutate: (dir) => setRolesBlock(dir, "const ROLES = PANEL_SEATS.slice();"),
+    name: "a selection table the guard cannot parse is rejected rather than skipped",
+    mutate: (dir) =>
+      writeFileSync(
+        join(dir, SELECTION_TABLE),
+        '{"artifact_kind":"d2b-panel/selection-table",\n',
+      ),
     expectExit: 1,
-    expectText: "cannot parse ROLES",
+    expectText: "is not valid JSON",
   },
+  {
+    name: "selection-table focus drift is rejected",
+    mutate: (dir) =>
+      mutateSelectionRoster(dir, (table) => {
+        table.seats.software.focus = "Different focus";
+      }),
+    expectExit: 1,
+    expectText: "authoritative selection-table focus",
+  },
+  {
+    name: "nixos invariant checklist marker drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-nixos.agent.md",
+        (text) => text.replace("<!-- panel nixos invariant checklist -->", ""),
+      ),
+    expectExit: 1,
+    expectText: "invariant checklist marker",
+  },
+  {
+    name: "observability invariant checklist marker duplication is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-observability.agent.md",
+        (text) => `${text}\n<!-- panel observability invariant checklist -->\n`,
+      ),
+    expectExit: 1,
+    expectText: "invariant checklist marker",
+  },
+  {
+    name: "nixos substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-nixos.agent.md",
+        (text) => text.replace(
+          "The net VM's `10-eth-dhcp` neutralizer",
+          "The net VM uplink neutralizer",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  {
+    name: "observability substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-observability.agent.md",
+        (text) => text.replace(
+          "**Unbounded label cardinality.**",
+          "Unbounded labels.",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  {
+    name: "networking substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-networking.agent.md",
+        (text) => text.replace(
+          "**MTU and MSS.**",
+          "Packet sizing.",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  {
+    name: "kernel substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-kernel.agent.md",
+        (text) => text.replace(
+          "**Process identity races.**",
+          "Process identity.",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  ...[
+    ["rust-toolchain.toml", "rust-toolchain.toml"],
+    [".cargo/config.toml", ".cargo/config.toml"],
+    ["tests/layer1-jobs.json", "tests/layer1-jobs.json"],
+    ["tests/test-rust.sh", "tests/test-rust.sh"],
+    ["Makefile", "Makefile"],
+    ["flake.nix", "flake.nix"],
+    ["packages/xtask/src/main.rs", "packages/xtask/src/main.rs"],
+    ["packages/xtask/src/delivery/**", "packages/xtask/src/delivery/**"],
+    ["tests/static.sh", "tests/static.sh"],
+    ["tests/test-lint.sh", "tests/test-lint.sh"],
+  ].map(([name, pattern]) => ({
+    name: `build trigger ${name} is required`,
+    mutate: (dir) =>
+      mutateSelectionRoster(dir, (table) => {
+        for (const trigger of table.seats.build.triggers) {
+          if (trigger.kind === "path") {
+            trigger.patterns = trigger.patterns.filter((entry) => entry !== pattern);
+          }
+        }
+      }),
+    expectExit: 1,
+    expectText: `canonical path ${pattern}`,
+  })),
+  ...[
+    ["network route", "**/*route*"],
+    ["network routing", "**/*routing*"],
+    ["network mtu", "**/*mtu*"],
+    ["network mss", "**/*mss*"],
+  ].map(([name, pattern]) => ({
+    name: `${name} trigger is required`,
+    mutate: (dir) =>
+      mutateSelectionRoster(dir, (table) => {
+        for (const trigger of table.seats.networking.triggers) {
+          if (trigger.kind === "path") {
+            trigger.patterns = trigger.patterns.filter((entry) => entry !== pattern);
+          }
+        }
+      }),
+    expectExit: 1,
+    expectText: `networking triggers are missing canonical path ${pattern}`,
+  })),
   {
     name: "a seat missing the shared finding bar is rejected",
-    mutate: (dir) => mutateBar(dir, "rust", (t, s, e) => t.slice(0, s) + t.slice(e + 1)),
+    mutate: (dir) => mutateBar(dir, "build", (t, s, e) => t.slice(0, s) + t.slice(e + 1)),
     expectExit: 1,
     expectText: 'no "## The bar for a finding" section',
   },
@@ -389,7 +872,7 @@ const CASES = [
     mutate: (dir) =>
       mutateBar(
         dir,
-        "rust",
+        "build",
         (t, s, e) => `${t.slice(0, e)}\nUse whatever threshold you judge appropriate.\n${t.slice(e)}`,
       ),
     expectExit: 1,
@@ -964,6 +1447,7 @@ for (const c of ALL_CASES) {
   const dir = buildFixture(c.omit);
   try {
     if (c.mutate) c.mutate(dir);
+    if (c.name.startsWith("baseline:")) checkCurrentPromptShape(dir);
     const { status, out } = run(dir);
     ran += 1;
     if (c.expectNonZero && status === 0) {

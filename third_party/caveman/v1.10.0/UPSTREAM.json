@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/JuliusBrussee/caveman",
+  "tag": "v1.10.0",
+  "commit": "fcf7663366c217dc8f334a11028de52ed950ceab",
+  "files": {
+    "LICENSE": "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+    "skills/caveman/SKILL.md": "daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce",
+    "skills/caveman-compress/SKILL.md": "3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688"
+  }
+}

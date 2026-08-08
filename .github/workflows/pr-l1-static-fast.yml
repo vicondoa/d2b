@@ -57,16 +57,19 @@ jobs:
     needs: [tier0]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      D2B_LINT_CHANGED_CLIPPY: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Lint gate (preflight + parse + shellcheck)
+      - name: Fast lint gate (API hint + fmt + local changed-scope clippy)
         run: make test-lint
 
   test-changelog:

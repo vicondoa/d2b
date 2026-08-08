@@ -14199,7 +14199,7 @@
       "destinations" : [
         "`packages/xtask/src/delivery/panel.rs`"
       ],
-      "detailedDesign" : "`panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3), while retaining exact-pair compatibility for historical `gemini-3.1-pro-preview`/`high` request-record sets.",
+      "detailedDesign" : "`panel-request --selection` parses one strict lifecycle selection, validates its candidate digests, selection versions, and ordered current roster, then writes the existing request fields with `panel_format_version: 1`; `panel-attest` validates exactly that request roster, rejecting wrong model/candidate binding, duplicate provider/run provenance, mixed families, or inconsistent `signoff`/`recommendations`, per §12.3. Delivery readers probe the bounded JSON discriminator before selecting strict current or legacy DTOs. Preserved compatibility keeps schema version 2 and the exact historical ten-role legacy roster including `rust`. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-validation-and-delivery"
       ],
@@ -14223,7 +14223,7 @@
       "destinations" : [
         "`packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs`"
       ],
-      "detailedDesign" : "`seal` requires all ten panel records unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt.",
+      "detailedDesign" : "`seal` requires all records for the request's selected roster unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt.",
       "entryContracts" : [
         "ADR-046-validation-and-delivery"
       ],

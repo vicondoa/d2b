@@ -22,7 +22,7 @@ the anti-serialization file-overlap graph; the shared-prep pattern for
 contended files; codegen/schema pin management; current-code deletion gates;
 the full validation matrix from Tier0 through manual hardware/live/cloud
 tiers; the sole heavy-gate mechanism; the immutable candidate snapshot,
-validator-evidence, and ten-role panel/attest/seal/eligibility process; PR
+validator-evidence, and selected-roster panel/attest/seal/eligibility process; PR
 opening versus final-lane semantics; merge order; post-wave
 branch/worktree/GC cleanup policy; and the release/cutover gate.
 
@@ -93,7 +93,8 @@ friction accumulated while delivering `ADR046-W0`-`ADR046-W7`, in the
 categories signoff, build, test, merge, codegen, and disk - are triaged and
 fixed at `ADR046-W7` close rather than read off a `Depends on` edge. Its
 only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
-§4 template unchanged, including exactly one binding ten-role panel (§12.3).
+§4 template unchanged, including exactly one binding selected-roster panel
+(§12.3).
 
 ### 3.2 Wave assignment table
 
@@ -305,17 +306,17 @@ an anti-serialization violation (see §6 and `ADR046-streamline-013`).
 Every wave (`ADR046-W0`…`ADR046-W8`) uses this template. `ADR046-W8` is no
 exception: having no spec members satisfies its spec-scoped entry and exit
 clauses vacuously, but every remaining clause - snapshot immutability,
-validator lanes, exactly one binding ten-role panel, seal, and merge
+validator lanes, exactly one binding selected-roster panel, seal, and merge
 eligibility - applies to it unchanged.
 
 Waves are **pipelined**, not strictly serial. A wave's implementation may
 begin before its predecessor's panel completes, under all four of these
 conditions:
 
-1. At least five of the predecessor's ten roster reviews have returned.
+1. At least five of the predecessor's selected-roster reviews have returned.
 2. The predecessor's integration tests pass on its converged tree.
 3. The successor issues no panel request, produces no seal, and merges
-   nothing until the predecessor is sealed at 10/10 unanimity with zero
+   nothing until the predecessor is sealed at unanimous selected-roster signoff with zero
    recommendations **and** merged to the integration lineage.
 4. The successor rebases onto the updated integration lineage **before** its
    own panel runs, so the panel binds to a snapshot that already contains
@@ -359,7 +360,7 @@ known cost for an unbounded, unknown one.
 2. The immutable candidate snapshot (§12.1) for this wave's integrated tree
    has all required CI, local, and host validator lanes reporting (pending is
    acceptable only while the PR is open, per §13; not at wave close).
-3. The ten-role panel (§12.3) has returned unanimous `signoff: true` against
+3. The selected-roster panel (§12.3) has returned unanimous `signoff: true` against
    that exact snapshot, with zero outstanding `recommendations`.
 4. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`
    (§12.4) has verified that every work item assigned to this wave is `Merged`,
@@ -1202,7 +1203,7 @@ guard - every heavy lane in every wave shares the exact same two slots, so
 concurrent waves' heavy validation cannot silently oversubscribe the shared
 Nix store, cargo target, or KVM device.
 
-## 12. Candidate snapshot, validator evidence, ten-role panel, attest/seal/eligibility
+## 12. Candidate snapshot, validator evidence, selected panel, attest/seal/eligibility
 
 ### 12.1 Immutable candidate snapshot
 
@@ -1278,19 +1279,29 @@ gating each other:
    integrator on the development host and imported as evidence via
    `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import` (built as work item
    `ADR046-delivery-003`, §17).
-3. **The ten-role panel** (§12.3), run against the same snapshot.
+3. **The selected-roster panel** (§12.3), run against the same snapshot.
 
 A pending lane is valid only while the wave's PR stack is open (§13.1); it
 never permits merge (§13.3). Command/result evidence is imported into an
 external, candidate-ID-addressed state directory - never committed to Git,
 copied into generated artifacts, or pasted into a PR body (§12.5).
 
-### 12.3 Ten-role final panel, bound to Gemini 3.1 Pro Preview
+ADR 0055 makes the panel workflow one Discover-Fix-Verify lifecycle. The
+selected seats receive the full candidate and evidence for one comprehensive
+discovery. Findings merge into one stable shared ledger; implementation records
+batched dispositions and self-verification for every ledger issue; verification
+receives the complete ledger, responses, evidence, latest delta, and full
+candidate context. Selection reruns over the full candidate and each fix delta,
+but the lifecycle roster only widens. A complete zero-finding result is valid,
+while a missing selected-seat result is refused. Late pre-existing MINOR and
+NIT observations remain non-blocking history.
+
+### 12.3 Selected-roster final panel, bound to the panel request
 
 Every ADR 0046 wave's binding panel - run exactly once, at wave close,
 against the wave's one immutable snapshot, never per implementation round -
-uses this repository's existing ten-role default roster (`AGENTS.md` →
-"Panel review" → "Default panel"), with every role's provider/model bound by
+uses the ordered roster in its versioned lifecycle selection artifact, with
+every role's provider/model bound by
 the wave's `panel-request` record to:
 
 ```text
@@ -1309,31 +1320,39 @@ reviewing roster to a different model means a lane cannot both author a change
 and attest to it, and `panel-attest` rejects any record carrying the coding
 model. Keep the two pins distinct when either is changed.
 
-| Role | Focus (unchanged from this repository's existing default panel) |
+| Role | Focus |
 | --- | --- |
-| `software` | Shell + Nix shape, daemon instrumentation, sidecar idempotency, metric-exporter error handling |
-| `test` | New option-schema coverage, restart-policy gates, manifest/schema drift, invisible-regression risk |
-| `nixos` | Module wiring, `lib.mkForce`/`lib.mkDefault` correctness, option declarations, activation ordering |
-| `networking` | Network surface changes, firewall posture, DHCP/DNS regressions, bridge isolation, routing invariants |
-| `security` | Attack surface, capability sets/syscall filters, authz boundaries, PII/telemetry-label review, retention |
-| `rust` | API shape, error propagation, unsafe/FFI boundaries, schema generation, workspace-dependency direction |
-| `product` | Operator UX, naming surface, migration/deprecation policy, actionable errors |
-| `docs` | Diataxis adherence, CHANGELOG, schema md↔json drift, AGENTS.md updates landing with load-bearing changes |
-| `observability` | Metric-label cardinality, span-attribute hygiene, log/audit shape, retention, exporter correctness |
-| `kernel` | pidfd, cgroup, namespace, mount, signal, ioctl, filesystem semantics; kernel-version assumptions |
+| `software` | Correctness, control flow, APIs, error propagation, dependency direction, unsafe and FFI boundaries, and language profiles including Rust |
+| `test` | Coverage, invisible regressions, planted negatives, gate placement, and validation evidence |
+| `product` | Scope, operator UX, naming, migration, delivery contracts, and actionable errors |
+| `docs` | Documentation placement, changelog and ADR coverage, terminology, links, schema drift, process markers, and ASCII dashes |
+| `security` | Exploitability, attacker model, authorization, trust boundaries, secrets, and PII |
+| `observability` | Metrics, spans, logs, audit shape, cardinality, redaction, retention, and diagnostics |
+| `simplicity` | Reuse, deletion, abstraction count, dependency adoption, indirection, and unnecessary machinery |
+| `reliability` | Ownership, cleanup, restart and adoption, idempotency, ordering, concurrency, partial failure, and durable state |
+| `agentic` | Agent profiles, prompt contracts, instruction layering, orchestration, handoffs, and mechanical enforcement |
+| `nixos` | NixOS module and option semantics, priorities, activation ordering, assertions, and evaluated configuration |
+| `networking` | Reachability, firewall, address and port allocation, routing, MTU and MSS, and coexistence |
+| `kernel` | Syscalls, descriptor and lock semantics, signals, mounts, filesystems, races, and kernel-version assumptions |
+| `build` | Build graphs, CI scheduling, toolchains, targets, hermeticity, caches, dependencies, packaging, and release artifacts |
 
-`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request` writes the candidate-bound request
-(binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ten-role
-roster, and the required `gpt-5.6-sol` model at reasoning effort `xhigh`).
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request \
+--snapshot PATH --selection PATH` writes the candidate-bound request
+(binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ordered
+selected roster, and the required `gpt-5.6-sol` model at reasoning effort
+`xhigh`).
 It is the first of the wave's three exit gates: it refuses the request unless
-every prior-wave work item is `Merged` (§12.1), so ten reviewers cannot bind to
-a snapshot a predecessor finding can still invalidate.
+every prior-wave work item is `Merged` (§12.1), so reviewers cannot bind to a
+snapshot a predecessor finding can still invalidate. The selection artifact
+must use schema version `1` and selection-table version `2`, and its candidate
+digests and ordered roster must validate against the snapshot.
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest` validates a directory containing
-exactly one record per role, each shaped exactly as this repository's sibling
-ADR-0045-lineage panel-receipt artifact:
+exactly one current record per role in the stored request, each shaped exactly
+as this repository's sibling ADR-0045-lineage panel-receipt artifact:
 
 ```json
 {
+  "panel_format_version": 1,
   "artifact_kind": "d2b-delivery/panel-receipt",
   "schema_version": 2,
   "role": "software",
@@ -1353,16 +1372,22 @@ ADR-0045-lineage panel-receipt artifact:
 
 `signoff` is `true` iff `recommendations` is `[]`; any finding requires a
 content change, which creates a new snapshot and invalidates every prior
-validation/panel record for that wave. Green tests never waive this gate -
-every wave, including a documentation-only or single-crate wave, requires
-unanimous 10/10 signoff before its exit criteria (§4) are met. Building this
-tooling (if not already present) is work item `ADR046-delivery-004`/`-005`
-(§17), copy/adapted from the equivalent sibling-lineage tooling per D001/D041.
+validation/panel record for that wave. Green tests never waive this gate.
+The selected roster must be unanimous before its exit criteria (§4) are met.
+Current request, record, attestation, and the embedded seal panel carry
+`panel_format_version: 1`. Legacy schema-version-2 request, record,
+attestation, and seal panel artifacts omit that field and retain exactly the
+historical ten roles including `rust`. The workspace delivery schema remains
+version `2`; no lifecycle or selection fields are copied into it. Building
+this tooling (if not already present) is work item
+`ADR046-delivery-004`/`-005` (§17), copy/adapted from the equivalent
+sibling-lineage tooling per D001/D041.
 
 ### 12.4 Seal, merge target, and merge eligibility
 
-`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal` requires all ten panel records
-present, unanimous, and bound to the same `candidate_id`/`content_id`/
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`
+requires all records for the request's selected roster present, unanimous, and
+bound to the same `candidate_id`/`content_id`/
 `snapshot_sha256`, plus every §12.2 validator lane reporting success on that
 exact snapshot. It also reads the implementation graph and work-item state
 manifest from the snapshot's integrated Git tree and rejects the seal unless
@@ -1477,7 +1502,7 @@ to finish first. This is the same ordering this repository's existing
 
 ### 13.2 Final lanes
 
-GitHub CI, the local/host validators, and the ten-role panel then run
+GitHub CI, the local/host validators, and the selected-roster panel then run
 concurrently against that exact snapshot (§12.2/§12.3). The PR may report
 these lanes as pending while it stays open; pending is never sufficient to
 merge (§13.3).
@@ -1546,7 +1571,7 @@ close, and d2b 3.0 does not release, until all of:
    external evidence (not required to be green in CI, but required to be
    evidenced), and the reset/cutover scenarios (§10.13) defined by
    `ADR-046-reset-and-cutover`.
-4. The ten-role panel (§12.3) has returned unanimous signoff on the
+4. The selected-roster panel (§12.3) has returned unanimous signoff on the
    `ADR046-W8` snapshot with zero recommendations, and
    `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal` + `merge-eligibility` both pass.
 5. `CHANGELOG.md` carries a new version header under the project's existing
@@ -1569,10 +1594,10 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Item | Treatment |
 | --- | --- |
 | Current anchor | This repository's `AGENTS.md` "Panel review" (8/N-role phase gate, no candidate snapshot/seal), "Stacked PR workflow for large waves," "Worktrees for parallel agents," `tests/AGENTS.md`/`tests/README.md` Layer-1/Layer-2 taxonomy, and `Makefile` targets (`make check-tier0`, `test-unit`, `test-lint`, `test-rust`, `test-proofs`, `test-flake`, `test-drift`, `test-policy`, `check`, `check-static`, `test`, `test-integration`, `test-host-integration`) |
-| Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool have since landed in this repository under `packages/xtask` and are `production-reachable` (copy/adapted from this codebase's sibling ADR-0045 lineage under D001/D041, not invented fresh); their remaining work is hardening, not creation |
+| Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the selected-roster panel and its lifecycle selection are `production-reachable` (verified in the selection table, contributor contract, and delivery code); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool have since landed in this repository under `packages/xtask` and are `production-reachable` (copy/adapted from this codebase's sibling ADR-0045 lineage under D001/D041, not invented fresh); their remaining work is hardening, not creation |
 | Behavior retained | Layer-1-first bias, closed drift/meta-gate set, hermetic mocking discipline, commit-before-build convention, no-AI-metadata-in-Git convention, worktree/branch hygiene, `KillMode=process` restart-continuation semantics |
-| Required delta | The `xtask delivery` subcommands, the `xtask heavy-gate` semaphore, and the attest/seal/eligibility/history-proof tooling have landed; the remaining delta is process contract rather than net-new tooling: candidate-snapshot immutability hardening, the ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), and the exact `ADR046-W0`-`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
-| Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; extend the existing ten-role panel table unchanged |
+| Required delta | The `xtask delivery` subcommands, the `xtask heavy-gate` semaphore, and the attest/seal/eligibility/history-proof tooling have landed; the remaining delta is process contract rather than net-new tooling: candidate-snapshot immutability hardening, the selected-roster panel bound to one fixed model/provider and run exactly once per wave (not per implementation round), the one-discovery shared-ledger lifecycle, and the exact `ADR046-W0`-`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
+| Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; consume the versioned selected-roster table and lifecycle selection |
 | Replacement/deletion | Nothing in this repository's current validation/delivery tooling is removed by this spec; `ADR046-delivery-00x` work items (§17) are additive tooling built alongside, not instead of, the existing `Makefile`/panel-review process, until `ADR046-W7` explicitly retires any tooling the migration map marks `DELETE`/`REPLACE` |
 | Feasibility proof | The sibling-lineage candidate-snapshot/panel/seal contract supplies the reuse design named in §11/§12; `ADR-046-feasibility-and-spikes` owns the ADR-0046-specific redb/reconciliation/session/package/state numeric proofs cited in §10.4 |
 | Future owner | Work items in §17 |
@@ -1661,8 +1686,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask delivery wave panel-request`/`panel-attest` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/panel.rs` |
-| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3), while retaining exact-pair compatibility for historical `gemini-3.1-pro-preview`/`high` request-record sets. |
-| Integration | Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal` |
+| Detailed design | `panel-request --selection` parses one strict lifecycle selection, validates its candidate digests, selection versions, and ordered current roster, then writes the existing request fields with `panel_format_version: 1`; `panel-attest` validates exactly that request roster, rejecting wrong model/candidate binding, duplicate provider/run provenance, mixed families, or inconsistent `signoff`/`recommendations`, per §12.3. Delivery readers probe the bounded JSON discriminator before selecting strict current or legacy DTOs. Preserved compatibility keeps schema version 2 and the exact historical ten-role legacy roster including `rust`. Primary reuse disposition: `adapt`. |
+| Integration | Every wave's exit criteria (§4) require unanimous attested records for the request's selected roster before `wave seal` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |
 | Removal proof | Not applicable |
@@ -1679,7 +1704,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask delivery wave seal`, `merge-eligibility`, and history/byte-identity proof implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` |
-| Detailed design | `seal` requires all ten panel records unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
+| Detailed design | `seal` requires all records for the request's selected roster unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | `make check` gains no new required step for ordinary contributors; this tooling is invoked only by the wave integrator per §4/§13 |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |

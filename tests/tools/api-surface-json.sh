@@ -10,6 +10,19 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
 cd "$ROOT"
 
+case "${D2B_API_SURFACE_UPDATE:-0}" in
+  0)
+    bash "$ROOT/tests/tools/api-surface-input-fingerprint.sh" --check
+    ;;
+  1)
+    bash "$ROOT/tests/tools/api-surface-input-fingerprint.sh" --write
+    ;;
+  *)
+    fail "D2B_API_SURFACE_UPDATE must be 0 or 1" || true
+    exit 2
+    ;;
+esac
+
 pin=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
   packages/d2b-api-surface/rust-toolchain.toml | head -1)
 [ "$pin" = "nightly-2026-02-16" ] || {
@@ -37,13 +50,6 @@ private_dir="$scratch/private"
 mkdir -p "$public_dir" "$private_dir"
 metadata="$scratch/workspace-metadata.json"
 golden="$ROOT/tests/golden/api-surface"
-case "${D2B_API_SURFACE_UPDATE:-0}" in
-  0|1) ;;
-  *)
-    fail "D2B_API_SURFACE_UPDATE must be 0 or 1" || true
-    exit 2
-    ;;
-esac
 target_root=${D2B_API_SURFACE_TARGET_DIR:-$ROOT/.scratch/rust-test-cache/api-surface-$pin}
 case "$target_root" in
   /*) ;;

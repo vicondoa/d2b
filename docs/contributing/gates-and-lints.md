@@ -1,10 +1,10 @@
 # Gates and lints
 
-Detailed reference for the heavy-lane semaphore and the policy lints whose
-exemption rules are easy to get wrong. The binding summary, the Layer-1 job
-list, and the enforcing/advisory rule live in
+Reference for the heavy-lane semaphore and policy lints whose exemptions are
+easy to get wrong. The binding summary, Layer-1 job list, and
+enforcing/advisory rule live in
 [`../../AGENTS.md`](../../AGENTS.md) under "Build and validate"; read that
-first. This file explains the parts that need more than a rule.
+first. This file covers the parts needing more than a rule.
 
 `tests/layer1-jobs.json` remains authoritative for the job list and its
 enforcement classification. Where this file disagrees with that manifest or
@@ -12,25 +12,24 @@ with the `Makefile`, those win.
 
 ## Build and validate, in detail
 
-Use the top-level `Makefile` targets. The shell scripts under `tests/`
-are implementation details unless a target or `tests/AGENTS.md` tells
-you to run one directly.
+Use top-level `Makefile` targets. Shell scripts under `tests/` are
+implementation details unless a target or `tests/AGENTS.md` says to run one.
 
-`nix develop` gives you the toolchain every gate expects - the pinned Rust
-release, plus sccache, cargo-nextest, cargo-deny, cargo-audit, shellcheck
-and jq. The gate scripts each re-enter a nix shell and bootstrap a private
-toolchain when those are missing, so working inside the dev shell skips
-that setup. Normal dev/test profiles retain line tables for panic locations but
-omit full dependency DWARF; use `cargo build --profile debugging` or
-`cargo test --profile debugging` when a debugger needs full symbols.
+`nix develop` provides the pinned Rust release plus sccache, cargo-nextest,
+cargo-deny, cargo-audit, shellcheck, and jq. Gate scripts re-enter a nix shell
+and bootstrap a private toolchain when missing, so a dev shell skips that setup.
+Normal dev/test
+profiles retain panic line tables but omit dependency DWARF; use
+`cargo build --profile debugging` or `cargo test --profile debugging` for full
+debugger symbols.
 
-Rust tests run under `cargo-nextest`. Two surfaces are not nextest surfaces
-and get explicit companion runs, so do not "simplify" them away: **doctests**
-(several `compile_fail` ones are capability seals) and **`harness = false`
-binaries** (`d2b-core-smoke` carries real fail-closed minijail assertions).
-The harness-free set is derived from `nextest list` rather than pinned. The
-privileged broker workspace deliberately stays on `cargo test`: its tests
-are not process-per-test safe, and it runs 528 tests in about 1.4 s.
+Rust tests run under `cargo-nextest`. Two surfaces need explicit companion
+runs, so do not "simplify" them away: **doctests** (several `compile_fail`
+ones are capability seals) and **`harness = false` binaries**
+(`d2b-core-smoke` carries fail-closed minijail assertions). The harness-free
+set comes from `nextest list`, not a pin. The privileged broker workspace stays
+on `cargo test`: its tests are not process-per-test safe, and it runs 528 tests
+in about 1.4 s.
 
 `make test-runtime-ledger` also stays on `cargo test`, and that is load
 bearing. It enforces an aggregate process-CPU budget, and nextest's
@@ -38,16 +37,16 @@ one-process-per-test model costs about 1.9x the CPU for the same census
 (measured: 1.2 s against 2.3 s). Porting it would mean roughly doubling the
 budget and losing that much sensitivity, for no speedup.
 
-When a failure only reproduces inside the gate's own toolchain environment,
-use `tests/tools/repro-rust-gate-env.sh <command>` rather than re-running
+When a failure reproduces only inside the gate toolchain, use
+`tests/tools/repro-rust-gate-env.sh <command>` instead of re-running
 `make test-rust`.
 
 ```bash
 # Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
 # Read each job's current enforcement classification from that manifest.
 make check-tier0
-make check-inventory
 make test-lint
+make check-inventory
 make test-changelog
 make test-rust
 make test-proofs
@@ -74,6 +73,22 @@ make check-static
 # host/manual pre-PR targets below before opening an agent-owned PR.
 make test
 ```
+
+Local `make check` runs `test-lint` as a serial fail-fast phase before
+inventory and the long parallel jobs. That lane checks every gated Rust
+workspace with `cargo fmt --check`, runs clippy only for changed main-workspace
+and guest-shell-runner packages, and compares the exact main-workspace API
+census inputs with the fingerprint written by `make api-surface-pin`. The later
+full Rust and API-census leaves remain authoritative. CI omits the changed-scope
+clippy duplicate because its lint job has no shared Cargo cache; the required
+full Rust shard still runs workspace-wide clippy.
+
+The tier-0 dash scan admits only the three pinned Caveman provenance blobs
+under `third_party/caveman/v1.10.0/`, and only by exact path plus SHA-256 from
+`UPSTREAM.json`. It does not admit an upstream runtime or relax the repository
+rule for any other path. `node scripts/copilot/check-bindings.mjs` checks the
+closed vendor allowlist and the communication, feature-editor, panel, and
+prompt-corpus contracts.
 
 `tests/layer1-jobs.json` is authoritative for both the job list and its
 classification. A job is enforcing unless it carries `"enforcement":
@@ -268,7 +283,7 @@ guard.
 The slot namespace is fixed at `/run/d2b-heavy-gates/uid-<uid>/`. The root
 and per-uid directory are root-owned and non-writable by unprivileged users;
 the two `slot-*` files are pre-created for the target uid at mode `0600`.
-There is no runtime-directory or temporary-directory fallback. The NixOS
+No runtime-directory or temporary-directory fallback. The NixOS
 module provisions the root with systemd-tmpfiles, then activation provisions
 directories and slots for configured lifecycle users that NSS can resolve.
 An unavailable network-backed user is deferred rather than failing

@@ -1,499 +1,847 @@
 # Runner Environment and Per-Case Evidence Contract
 
-One Bazel test action per carrier means the build event stream and the
-per-target result document carry one result per target. Per-case attribution
-therefore has to come from what the repository-owned runner publishes, not from
-stdout. This contract is what makes "a single failing case names itself"
-mechanically true.
+ADR 0054 changes where product crates resolve, not the runner isolation
+contract established by ADR 0052.
+
+## Context selection
+
+- Main and guest carriers run one fresh process per exact libtest case.
+- Broker default, layer1, and fake contexts run one process per test binary,
+  bounded internal threads, carry exactly `tags = ["exclusive"]`, and never
+  overlap each other or any other test.
+- Broker and guest targets are native first-party targets with explicit
+  configured dependencies and features.
+- The external `@product` union cannot select a test topology.
+- Walker execution comes from the separate `@walker` hub.
 
 ## Child environment
 
-- Each child environment derives from the Bazel test environment. Only the
-  declared test environment is forwarded; the wrapper's incidental host
-  environment is not.
-- Each case receives its own directory beneath `TEST_TMPDIR`. That is what
-  makes per-case process freshness equivalent to the current per-case
-  isolation, which gives each case its own temporary handling.
-- The test binary is resolved through runfiles and then opened once, and the
-  descriptor that verification examined is the descriptor that runs. Nothing is
-  resolved by an absolute execution-root path, which is not a declared input
-  and does not survive a different sandbox, and nothing is re-resolved by name
-  at spawn time. See "Binary provider resolution and execution" below.
-- Concurrency stays bounded by the same `D2B_RUST_BUDGET`-derived control the
-  gate already uses. Per-target concurrency never multiplies `--local_test_jobs`
-  into an unbounded process count.
+- Derive from the Bazel test environment and forward only declared values.
+- Give every case its own directory beneath `TEST_TMPDIR`.
+- Resolve each test binary from declared runfiles.
+- Use `D2B_RUST_BUDGET` as the only concurrency control.
+- Validate the budget once as a positive integer with value-redacted errors,
+  propagate the effective value to Bazel jobs, local test jobs, runner
+  process-per-case concurrency, and broker libtest threads, and prove the
+  combined live process count never exceeds it. Scheduler-only, suite-only,
+  invalid-value, and multiplicative-limit mutations are rejected.
 
-## Binary provider resolution and execution
+## Provider contract
 
-The locator's two arms and the runner's child-binary resolution all reach a
-provider the same way, and the way is a **single open**. `RunfilesView` decides
-which provider; `FileSystem` opens it once, verifies the open descriptor, and
-executes that same descriptor. No provider is named by path twice, and nothing
-in this design stats a path and then hands the path to a spawner.
+The locator selects Cargo or Bazel mode once. A Bazel miss never falls back to
+Cargo.
 
-That ordering is the whole point. Checking a path and then executing the path
-is two resolutions of one name, and between them the name can be rebound. This
-is not a theoretical gap here: `packages/target/` holds real, executable,
-out-of-date binaries for the entire shadow stage, and a concurrent Cargo build
-replaces entries in it by rename while the gate is running. Measured directly:
-after the provider path is replaced by a different executable, executing a
-retained descriptor still runs the original verified bytes, while a freshly
-path-opened descriptor runs the replacement. The check-then-spawn-by-path shape
-therefore verifies one file and runs another, silently, and exits zero.
+The shared filesystem boundary:
 
-### The single-open rule
+1. validates a nonempty declared runfiles-relative provider key with no
+   absolute or `..` component;
+2. opens one provider descriptor with `O_RDONLY|O_CLOEXEC`;
+3. resolves with `RESOLVE_NO_MAGICLINKS` only and deliberately without
+   `RESOLVE_BENEATH` or `RESOLVE_NO_SYMLINKS`, because a Bazel runfiles leaf
+   symlink may escape the anchor;
+4. on the forced component-walk fallback, opens each intermediate component
+   with `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`, permits the declared leaf symlink,
+   opens the leaf `O_RDONLY|O_CLOEXEC` without `O_NOFOLLOW`, and then applies
+   every handle check;
+5. refuses `ENOSYS` from `execveat` and names the kernel requirement;
+6. checks regular-file kind, executable mode, freshness, and exact digest;
+7. brackets the digest read with matching descriptor metadata;
+8. returns an unforgeable verified handle; and
+9. consumes the handle into the reviewed safe command-fd mapping, which gives
+   the immutable static C supervisor a private descriptor sharing the verified
+   descriptor's original open file description while preserving declared
+   stdio; the supervisor forks once and the child executes it with `execveat`
+   and `AT_EMPTY_PATH`.
 
-- `RunfilesView` in `packages/d2b-bazel-support/src/runfiles.rs` yields a
-  runfiles-root anchor and one declared relative path. The supplied states are
-  a declared entry present, a declared entry missing, and a runfiles
-  environment that indicates no Bazel test at all. Mode is chosen once from
-  that last state; a missing entry in Bazel mode is a hard failure that names
-  the declared runfiles-relative path and never falls back to the Cargo arm.
-  The Cargo
-  arm supplies the same anchor-and-relative pair by splitting the
-  `CARGO_BIN_EXE_<name>` value the call-site macro expands, so both arms enter
-  the filesystem boundary through one signature.
-- `FileSystem::open_provider(anchor, relative)` in
-  `packages/d2b-bazel-support/src/fsops.rs` performs exactly one
-  `openat2(anchor_fd, relative, O_RDONLY|O_CLOEXEC, RESOLVE_NO_MAGICLINKS)`
-  and returns a `ProviderHandle`. `O_RDONLY` and not `O_PATH`, because identity
-  is a digest of the provider's bytes and an `O_PATH` descriptor cannot be
-  read. Measured: `pread` on an `O_PATH` descriptor returns `EBADF` while
-  `execveat` on it succeeds, so choosing `O_PATH` would force a second open to
-  compute the digest and reintroduce the gap this rule closes.
-- The resolve policy is `RESOLVE_NO_MAGICLINKS`, deliberately not
-  `RESOLVE_NO_SYMLINKS` and not `RESOLVE_BENEATH`. A Bazel runfiles tree is a
-  symlink forest whose links point into the output base, outside the runfiles
-  root. Measured against exactly that shape: `RESOLVE_BENEATH` fails `EXDEV`
-  and `RESOLVE_NO_SYMLINKS` fails `ELOOP`, so either would refuse every real
-  runfiles provider. Link refusal is not what protects a provider; handle
-  identity is, because whatever the link resolved to at open time is the only
-  thing ever measured or executed. Magic links stay refused so a
-  `/proc/<pid>/fd/<n>` entry cannot be laundered into a provider; measured,
-  `RESOLVE_NO_MAGICLINKS` refuses that path with `ELOOP` where a plain open
-  succeeds.
-- A declared relative path that is absolute, empty, or carries a `..` component
-  is refused before the open. The anchored form is what keeps an absolute
-  execution-root path out of the design.
-- Where `openat2` is unavailable the boundary takes its forced component-walk
-  route, which is the same route cleanup and the result writer already
-  exercise, and the resolve policy still decides what that route accepts:
-  `O_NOFOLLOW` on every intermediate component under both policies, and
-  `O_NOFOLLOW` on the **final** component only under the strict policy. A
-  provider open therefore reaches the same leaf on either route, and a strict
-  caller gets the same leaf refusal on either route. "The resolve policy on
-  both routes" below states that rule once, for every call site.
+No provider path is returned. No `Command` by path, `fexecve`, or
+`/proc/self/fd` fallback is permitted.
 
-### Verification binds to the descriptor, never to the path
+`VerifiedExecutable` is an API seal, not only a runtime convention. Its fields
+and minting trait remain private to the provider module. Its public inherent
+API allowlist is empty: callers receive it from the provider and can only pass
+it by value to the execution function. The defining crate exposes no
+descriptor extraction or access, unchecked constructor, path conversion or
+accessor, `Deref`, `Borrow<OwnedFd>`, `AsFd`, `AsRawFd`, `IntoRawFd`,
+`Default`, `From`, `Into`, `AsRef`, `Clone`, `Copy`, `Debug`, `Display`,
+`Serialize`, or `Deserialize`.
 
-Every check runs against the open descriptor, through the same boundary:
+The compiler-derived API census under `packages/d2b-api-surface/` is the
+authority. `VerifiedExecutable` is a capability root. Its public item snapshot
+must contain only the opaque type and the by-value provider/execution
+signatures, its explicit locally-authored trait-implementation allowlist is
+empty, and its compiler-emitted auto/blanket implementation set is pinned
+exactly for the selected toolchain. Any added public field, method, associated
+item, re-export, explicit trait implementation, or changed auto/blanket set is
+an API-surface failure. Focused rustdoc `compile_fail` examples prove the
+downstream type-system properties that the census alone cannot: callers cannot
+construct the type, access or extract its descriptor, coerce it through
+`Deref`/`Borrow`/`AsFd`, clone it, serialize or format it, convert an
+unverified path or descriptor into it, or implement the sealed minting trait.
+There are no Cargo-shelling compile fixtures.
 
-- `fstat` on the handle. A provider that is not a regular file is refused.
-- Executable mode from that same `fstat`. This is the early, well-named
-  refusal, not the only one: measured, `execveat` on a mode `0644` regular file
-  and on a directory descriptor both return `EACCES`, so the kernel remains the
-  authoritative permission decision and its errno is mapped to the same reason.
-- Freshness compares the handle's `st_mtim` against the newest declared input's
-  `st_mtim`, each declared input opened once and `fstat`ed on its own handle
-  through the same boundary.
-- Identity is the digest of the provider's bytes, read with `pread` from offset
-  zero to `st_size` on the same handle, compared against the value the coverage
-  map records for that provider. A short or over-long read is a refusal.
-- The handle is `fstat`ed again immediately after the digest read, and
-  `st_dev`, `st_ino`, `st_size`, `st_mtim`, and `st_ctim` must equal the
-  pre-read values. This closes the one mutation an open descriptor does not by
-  itself exclude, an in-place rewrite of the same inode. Measured: writing
-  eight bytes into an already-open regular file changes the bytes a later
-  `pread` on that descriptor returns and moves `st_mtim` while `st_ino` is
-  unchanged.
-- Verification consumes the `ProviderHandle` and returns a
-  `VerifiedExecutable`. That type has no public constructor, no conversion from
-  a path, and no accessor that yields a path, so a caller cannot hold one
-  without having passed every check on the descriptor it wraps, and cannot
-  recover a path from one in order to spawn by name. A compile-level test
-  asserts both.
+`VerifiedExecutable` and its only consuming public API are co-located in one
+dependency-leaf crate. No other crate can name a consuming trait or method.
+The safe Rust API consumes the handle by value and invokes
+`d2b-bazel-exec-supervisor` only from the exact immutable Nix store path
+supplied by the pinned toolchain artifact. It accepts no helper path parameter
+and reads no environment override. A closed source census permits exactly this
+one Rust invocation site.
 
-### Execution is the same descriptor
+The helper is not a Rust crate. One tiny reviewed C source under
+`tests/tools/d2b-bazel-exec-supervisor/` is built by the dedicated
+`pkgs/d2b-bazel-exec-supervisor` static Nix derivation. It is build/test
+tooling and is absent from the product workspace and product Bazel hub. The
+committed identity binds the exact C source digest, derivation dependency
+closure hashes, output NAR hash, executable hash, protocol version, and
+native-system identity. The exact store path is embedded from that toolchain
+artifact; the record persists no complete store path.
 
-`FileSystem::spawn_verified` is the only execution route for a first-party
-provider in this design. It takes a `VerifiedExecutable` and executes it with
-`execveat(fd, "", argv, envp, AT_EMPTY_PATH)`.
+### Patched-sandbox containment precondition
 
-- No `std::process::Command`, no `fexecve`, and no `/proc/self/fd/<n>` path.
-  glibc's `fexecve` falls back to `/proc/self/fd/<n>` when `execveat` is
-  unavailable, and that fallback is a reopen by path, which is the exact route
-  this rule removes. If `execveat` returns `ENOSYS` the runner refuses and
-  names the kernel requirement rather than taking any fallback.
-- The exec operation lives on the same trait as the open and the checks, not on
-  a second injectable boundary. Two boundaries would let a composition satisfy
-  both fakes while still executing by path; one boundary makes "hold a verified
-  handle" and "reach an execution route" the same reachability question.
-- Measured: `execveat` with `AT_EMPTY_PATH` on an `O_RDONLY|O_CLOEXEC`
-  descriptor succeeds, and that descriptor is **absent** from the child's
-  descriptor table, because the exec image is resolved before close-on-exec
-  descriptors are flushed. The same descriptor executes repeatedly, which is
-  what preserves process-per-case: one open and one digest per provider per
-  carrier invocation, one fresh `fork` and `execveat` per case, and every case
-  runs the bytes that were digested once.
-- Measured control from the same run: a descriptor opened without `O_CLOEXEC`
-  **is** present in the child. Close-on-exec is therefore asserted, not
-  assumed.
-- Measured limitation, recorded rather than worked around: a `#!` script
-  executed from a close-on-exec descriptor fails `ENOENT`, because the
-  interpreter reopens the descriptor by its `/proc` path after the flush.
-  First-party providers are compiled binaries, so this never binds. A provider
-  whose exec returns `ENOENT` from a valid descriptor is refused with that
-  reason named, and the `rules_rust`-generated stable-channel doctest runner
-  stays outside this path entirely because Bazel executes it, not this runner.
+Live supervisor execution is valid only beneath the exact Nix-patched Bazel
+Linux `sandboxed` strategy. Every governed action gets a fresh PID namespace.
+The patched namespace PID 1 is the sandbox monitor, remains outside the action
+command process tree, and is the crash-surviving owner of setup, the Rust
+runner, the supervisor, the target, and every descendant. The monitor is the
+only abnormal-teardown authority.
 
-### Descriptor and child ownership
+The normal path belongs to the supervisor: it sends TERM, waits the fixed
+normal grace, sends unconditional KILL, and reaps the target. If action setup
+or the action command exits before that protocol completes, including Rust
+parent or supervisor crash at any protocol stage, the sandbox monitor starts
+abnormal teardown. It sends namespace-local SIGKILL to every process other
+than itself and makes nonblocking reap progress. Exactly one fixed 10,000 ms
+monotonic ceiling bounds userspace TERM/KILL/monitor escalation and the
+close-or-quarantine decision only. It never bounds kernel task exit,
+namespace destruction, or reap.
 
-- Every descriptor this path opens is close-on-exec: the runfiles-root anchor,
-  the provider handle, the per-case directory descriptor, and the errno pipe.
-- The parent owns the provider handle for the whole carrier invocation and
-  closes it through the boundary after the last child that used it is reaped,
-  which is still before any output descriptor is opened.
-- Between `fork` and `execveat` the child does only async-signal-safe work:
-  `setpgid(0, 0)` into the dedicated group the deadline path already requires,
-  `dup2` of the three stdio descriptors the parent prepared, `fchdir` into the
-  per-case directory descriptor, and `execveat`. It opens no path, allocates
-  nothing, and takes no lock; `argv` and `envp` are built in the parent as
-  NUL-terminated arrays.
-- On `execveat` failure the child writes the raw errno to a close-on-exec pipe
-  and `_exit`s. The parent maps that errno to a named refusal rather than
-  reporting a bare nonzero child exit.
-- The child inherits the three stdio descriptors and nothing else.
+If a consuming wait has not proved every member and PID 1 reaped at that
+ceiling, including when an uninterruptible `D`-state task delays kernel
+cleanup, outer `linux-sandbox` enters typed `pending-kernel-cleanup`, remains
+live as the sole wait owner, and quarantines the sandbox and its outputs. The
+action can never report success or reuse those resources. The original live
+monitor continues non-consuming observation and alone performs the eventual
+consuming wait. Only that wait may publish the fixed consuming-reap release
+and transition cleanup to `complete-after-quarantine`; the action remains
+failed. No retry may start before that release, and no operator, replacement
+process, reboot, manual flag, cgroup, PID file, host PID, or host process group
+may release quarantine or replace the wait owner. A kill/reap operation
+failure takes the same quarantine path. There is no configurable second
+grace.
 
-### Provider refusal reasons
+Rust never sends a signal to a numeric PID or PGID. On a post-spawn protocol
+or wait failure it closes owned descriptors, preserves the first typed cause,
+and returns the whole Bazel action nonzero immediately. That action exit is
+the handoff to the sandbox monitor. Cargo tests use injected process,
+transport, and containment mocks only. The live proof invokes the real
+Nix-patched Bazel Linux sandbox and observes namespace teardown.
 
-This rule binds **first-party providers**: the binaries this repository builds
-and this gate executes. The pinned `bazel` client that the Make wrapper,
-`cargo xtask bazel-repin`, and `cargo xtask bazel-module-refresh` spawn is a
-dev-shell tool resolved by the wrapper, not a first-party provider; it keeps
-its ordinary `Command` construction, which is also the one site permitted to
-set the scoped repin child environment.
+The startup and configured-strategy gates bind `CLONE_NEWPID`, the patched
+PID-1 teardown code, the fixed userspace ceiling, the closed quarantine state,
+and the absence of every strategy fallback. A runtime sandbox integration
+plants helper crash before `READY`, after `READY`, after `EXECUTED`, during
+supervisor TERM grace, and while direct and double-forked descendants remain
+live. Ordinary plants must leave the monitor and outer sandbox observably
+reaped and make the descendant's inherited liveness fd reach EOF. The
+beyond-ceiling plant must instead prove owned `pending-kernel-cleanup`, no
+reaped claim, no success, and no reuse before the planted kernel stall
+self-resolves after a deterministic barrier and the same live monitor
+publishes consuming-reap release. No release API or replacement waiter exists.
+Separate mutations remove the PID namespace, teardown patch, quarantine state,
+no-reuse rule, or alter the ceiling, and select each forbidden fallback
+strategy; each mutation fails without signaling any host process.
 
-| Reason | Named remediation |
-| --- | --- |
-| Runfiles entry missing in Bazel mode | Declare the binary as `data` on the test target; the declared runfiles-relative path is named. |
-| Provider is not a regular file | Correct the `data` declaration for the target. |
-| Provider is not executable | Rebuild the target; the mode is reported and the path is not. |
-| Provider older than its newest declared input | Rebuild the target. |
-| Provider digest differs from the coverage map | Rebuild the target, then regenerate the coverage map. |
-| Handle metadata changed across the digest read | Rerun; a writer modified the provider in place. |
-| `execveat` returned `ENOSYS` | The gate requires a kernel providing `execveat`; no path fallback is taken. |
-| `execveat` returned `EACCES`, `ENOEXEC`, `ENOENT`, or `ETXTBSY` | Rebuild the target; the errno is named and no path is printed. |
+The Rust parent validates declared stdin, stdout, and stderr and creates the
+fixed supervisor status channel. The exact pinned reviewed safe
+`command-fds` API maps the consumed verified open file description to its
+fixed private fd outside 0, 1, and 2. `std::process::Command` preserves the
+three declared stdio streams and spawns the exact helper path. A process-wide
+serialization guard encloses the entire signal handoff. Under that guard, the
+spawning thread uses the already reviewed safe
+`nix::sys::signal::SigSet` API to capture its exact prior mask, block the full
+managed set `SIGHUP`, `SIGINT`, `SIGTERM`, and `SIGQUIT`, spawn the helper, and
+restore the exact prior mask after either successful or failed spawn before
+releasing the guard. Capture, block, spawn, restoration, and guard failures are
+closed typed parent failures; restoration is attempted on every outcome and a
+failed restoration cannot report success. Every new Rust crate retains
+`unsafe_code = "forbid"`; first-party Rust defines no raw fork, `pre_exec`,
+signal callback, disposition mutation, or unsafe helper exception.
+Injected tests cover capture failure, block failure, poisoned-guard refusal,
+spawn success and spawn failure with exact restoration, restoration failure
+after each spawn outcome, and two launches held at deterministic barriers.
+The overlap case proves one process-wide guard: the second launch cannot
+capture, block, or spawn until the first has attempted restoration, and the
+first cannot unlock before that attempt. Mutations replacing the shared guard
+with per-launch guards or moving unlock before restoration fail. All tests use
+the same safe APIs and add no unsafe code.
 
-No reason string carries an absolute path, the runfiles root, a resolved
-absolute runfiles location, an environment value, or a descriptor number, per
-FR-029.
+The helper starts and remains single-threaded with the managed set inherited
+blocked. Its first setup operation is observation-only inspection of every
+managed signal disposition. If any is `SIG_IGN`, it emits
+`HELPER_SIGNAL_INHERITED_IGNORED`, closes its inherited owned descriptors, and
+fails before fork; it never resets an ignored managed disposition and
+continues. It then verifies that the full managed set is inherited blocked.
+Only after both checks pass may it validate private-fd and stdio ownership,
+restore default dispositions for every catchable signal, explicitly ignore
+`SIGPIPE`, restore `SIGCHLD` to `SIG_DFL` with neither `SA_NOCLDWAIT` nor
+`SA_NOCLDSTOP`, install the fixed synchronous signal consumer, and establish
+the final mask. The managed set stays blocked for synchronous consumption and
+every other catchable signal is unblocked.
 
-Two path-shaped strings are deliberately not the same thing, and the split
-resolves what would otherwise read as a contradiction between the row above and
-the rule beside it. The **declared runfiles-relative path** is repository
-content: it is the string the target's own `data` declaration produces, it is
-byte-identical on every machine and in every sandbox, and it is the subject of
-the remedy, so a refusal that omits it tells a contributor to declare something
-without saying what. The **runfiles root** and any **resolved absolute runfiles
-location** are local values in the same sense a home directory is, and they are
-forbidden here, in the per-case result document, and in a wave note alike. A
-refusal that names `_main/packages/d2b-bazel-runner/d2b-exec-probe` is
-actionable and carries nothing local; one that names the directory that path
-was resolved beneath has published a worktree location into CI output, panel
-comments, and PR bodies. Every reference in this feature's artifacts uses
-"declared runfiles-relative path" for the first and "runfiles root" or
-"resolved absolute runfiles location" for the second, and neither name is used
-for the other.
+The supervisor creates exactly one `O_CLOEXEC|O_NONBLOCK` child exec-error
+pipe before forking exactly once. There is no group-confirmation pipe: the
+kernel ptrace stop is the sole child-release barrier. The child calls
+`setpgid(0, 0)`, installs declared stdin/stdout/stderr at 0/1/2, marks the
+private executable fd `FD_CLOEXEC`, closes every supervisor-only and
+non-surviving descriptor, calls
+`ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restores the empty signal
+mask and default dispositions for every catchable signal, and only then raises
+the initial `SIGSTOP`. This descriptor setup, `PTRACE_TRACEME`, final signal
+restoration, and `SIGSTOP` order is mandatory. At that stop every fallible
+pre-exec setup operation is complete; after release the next operation is
+`execveat(private_fd, "", argv, envp, AT_EMPTY_PATH)`. A child setup,
+`PTRACE_TRACEME`, initial-stop, or exec failure writes exactly one fixed-size
+`CHILD_*` exec-error record with bounded `EINTR`/`EAGAIN`/short-write handling
+under the absolute monotonic deadline, then calls `_exit`. There is no target
+path, reopen, `fexecve`, `/proc/self/fd`, or fallback.
 
-### Hermetic provider tests
+The supervisor closes its exec-error writer after fork, independently calls
+`setpgid(child, child)`, and consumes direct-child wait states. Before
+`READY`, it requires all of the following under the original absolute exec
+deadline:
 
-**No provider test writes an executable to a live path, and no provider check
-executes a live path it did not first verify.** Every state below is a state of
-the `FileSystem` fake in `packages/d2b-bazel-support/src/fsops.rs` or the
-`RunfilesView` fake beside it. The fake models inodes rather than paths:
-`open_provider` resolves a relative path to an in-memory inode record once and
-returns a handle bound to that record, and `stat_handle`, `read_handle`, and
-`spawn_verified` all read the record the handle names. A path rebound after the
-open is therefore representable, and its effect is observable.
+1. `getpgid(child) == child`;
+2. one initial ptrace wait state with `WIFSTOPPED`, `WSTOPSIG == SIGSTOP`, and
+   ptrace event value zero;
+3. successful
+   `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`
+   while that child remains stopped; and
+4. no child error record, managed termination request, early exit, fault,
+   other signal stop, or deadline expiry.
 
-Supplied states: an absent entry; a non-regular provider; a non-executable
-mode; a modification time older than the newest declared input; bytes whose
-digest differs from the recorded identity; **a path rebound to a different
-inode after `open_provider` returned**; metadata that changes between the two
-`fstat` calls around the digest read; a short read; the forced component-walk
-route under each of the two resolve policies; a leaf that is a symlink to a
-regular file outside the anchor; an intermediate component that is a symlink;
-and `spawn_verified` returning `ENOSYS`, `EACCES`, `ENOEXEC`, `ENOENT`, and
-`ETXTBSY`.
+Those observations confirm both the exact live process group and the
+parent-child tracing state. `ESRCH`, `EPERM`, any other `setpgid` error, group
+mismatch, missing or wrong initial stop, ptrace option failure, or early child
+death is a typed helper failure with direct-child consume-reap and descriptor
+cleanup. A pending managed signal at entry, in the Rust-to-helper handoff
+window, during normalization, the setpgid race, or the initial trace stop
+records one `termination-requested` transition. Before a child exists it
+refuses without forking; after a group exists it performs fixed child-group
+SIGKILL and direct-child consume-reap, emits no `READY`, and exits with the
+closed helper failure status.
 
-Three cases bind the walk route to its policy parameter, because the route is
-where an earlier draft of this contract silently exempted the leaf. Under the
-provider policy the walk route opens the leaf symlink and yields the same inode
-the `openat2` route yields, **and every identity check still runs on that
-handle**: kind, mode, freshness, the digest compared against the coverage map,
-and the bracketing `fstat`. Under the strict policy the same leaf symlink is
-refused `ELOOP` and nothing is read. And an intermediate symlink is refused
-under both policies, with `ENOTDIR` from the `O_DIRECTORY` open rather than
-`ELOOP`.
+Only after all four confirmations may the supervisor emit exactly one framed
+`READY`. A completed `READY` write precedes
+`ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`, whose fourth argument is
+the explicitly pointer-typed zero signal and which releases the child from the
+kernel stop. From release through
+accepted exec, the single-threaded supervisor runs one deadline-bounded loop
+over its synchronous managed-signal source, nonblocking exec-error reader,
+and `waitpid` trace states. Each
+iteration drains a pending managed signal before accepting a trace event. The
+first such signal queues one closed `pre-exec-termination-requested` state.
+A traced-child signal-delivery stop for any managed signal before the exec
+event queues the same state and is not reinjected; later managed signals
+coalesce. The helper forwards no signal and starts no TERM grace in this state.
+It instead kills the confirmed child group, consume-reaps the tracee,
+suppresses `EXECUTED`, target terminal status, and target-executed audit
+publication, and emits typed `HELPER_PRE_EXEC_TERMINATION`. Cleanup failure
+preserves that first cause and hands remaining containment to the patched
+sandbox monitor.
 
-Planted mutations each test must reject: re-resolving the declared path at exec
-time instead of executing the handle; computing the digest from a second open;
-falling back to `/proc/self/fd/<n>` or to `std::process::Command` when
-`execveat` is unavailable; clearing `O_CLOEXEC` on the provider handle;
-dropping the post-read `fstat` comparison; closing the handle and reopening it
-before the last child is spawned; reporting a `spawn_verified` errno as a
-generic nonzero child exit; **exempting the leaf from `O_NOFOLLOW` on the walk
-route regardless of policy**, which the strict case must fail; **applying
-`O_NOFOLLOW` to the leaf on the walk route regardless of policy**, which the
-provider case must fail; and **skipping the digest or the bracketing `fstat`
-when the leaf resolved through a symlink**, which is the shortcut that would
-turn the provider policy's accepted leaf into an unverified one.
+The exec-error pipe remains a single-record failure protocol. Its reader
+accepts only empty EOF or exactly one fixed failure record followed by EOF and
+uses one additional byte only to distinguish overlong input. EOF after any
+failure-record byte is partial. A held writer, second record, unknown record,
+timeout, or I/O failure is typed. Empty EOF is only evidence that the writer
+closed; it is never execution success and never causes `EXECUTED`.
 
-The stale-provider case in particular stays a supplied state: the fake reports
-an out-of-date, wrong-digest executable at the Cargo path while the fake
-runfiles view reports no entry. Writing a real stale binary into
-`packages/target/` would manufacture, on the shared host, precisely the hazard
-the locator exists to refuse, and an interrupted run would leave it there for
-the next suite to find. This is the same rule that keeps `ENOSPC` and `EINTR`
-off the real disk, applied to the one directory the shadow stage keeps full of
-real, out-of-date binaries.
+Exec success is exactly one consumed direct-child wait state satisfying all of
+`WIFSTOPPED`, `WSTOPSIG == SIGTRAP`, and
+`status >> 16 == PTRACE_EVENT_EXEC`, after `PTRACE_O_TRACEEXEC` was installed
+and after the sole child exec site invoked the verified private descriptor.
+The event is the kernel's successful exec transition for that exact
+`execveat` attempt. Before this event:
 
-### The one deliberately non-hermetic test
+- `WIFEXITED` or `WIFSIGNALED`, including injected `SIGKILL` and OOM-like
+  kill, causes a final deadline-bounded drain of the error pipe; a complete
+  `CHILD_*` record wins, while empty EOF is `HELPER_PRE_EXEC_DEATH`;
+- `SIGSYS`, a synchronous fault, an unrecognized signal-delivery stop, a plain
+  `SIGTRAP`, an event other than `PTRACE_EVENT_EXEC`, or a second initial stop
+  is `HELPER_PTRACE_EVENT`;
+- EOF without the event remains pending until a child failure, a valid event,
+  or the original deadline, and therefore cannot false-confirm; and
+- a fixed child error record preserves its exact `CHILD_*` cause even if EOF,
+  an exit wait state, or an invalid trace state arrives before the decoder
+  finishes that record.
 
-Every claim above about `execveat` is a claim about the kernel, not about
-repository logic, and a fake cannot prove a kernel. One test therefore drives
-the host-backed implementation:
-`packages/d2b-bazel-runner/tests/exec_handle.rs` opens a provider handle on
-`packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, a first-party probe
-binary that prints its own descriptor table with the device and inode each
-descriptor names, and asserts that the exec succeeded, that the provider inode
-appears in no child descriptor, that a second exec of the same handle succeeds,
-and that a deliberately non-close-on-exec control descriptor does appear. It
-arranges nothing: the probe is an ordinary declared input built by the same
-graph as every other first-party binary, and the child inspects itself rather
-than the parent inspecting the child. A design this size does not get to rest
-on an unmeasured claim about a syscall.
+At the valid exec-event stop the target has not run user code. The supervisor
+calls `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` exactly once. Its
+third argument is the explicitly pointer-typed zero address and its fourth
+argument is the explicitly pointer-typed zero signal. A
+detach failure is typed `HELPER_PTRACE_DETACH`; it emits no `EXECUTED`, kills
+and consume-reaps the owned group, and leaves incomplete containment to the
+sandbox. A successful detach injects no signal, removes tracing, and resumes
+the target without changing its signal state or later wait status. Only after
+that successful detach does the supervisor emit framed `EXECUTED`. The target
+may then exit immediately; the supervisor still emits `EXECUTED` before the
+terminal frame and performs the ordinary non-ptrace consuming wait. Fast
+target exit cannot race ahead of execution proof because the kernel holds the
+target at the exec event until detach.
+
+Every exec-error read, ptrace transition, trace wait, and supervisor-status
+write uses the same original absolute exec deadline: `EINTR` retries only
+after a budget check, `EAGAIN` waits only for the remaining budget, and a
+short operation advances an exact byte cursor without resetting time.
+
+The status pipe is a distinct framed stream and never uses the exec-error
+pipe's one-byte overlong probe. Every frame has this fixed eight-byte header:
+four ASCII bytes `D2BS`, version byte `1`, one type byte, and one unsigned
+16-bit big-endian payload length. The closed types are `READY = 1` with
+length zero, `EXECUTED = 2` with length zero, `EXITED = 3` with one unsigned
+exit-code byte, and `SIGNALED = 4` with one signal byte in `1..64`. Any other
+magic, version, type, length, or signal value is malformed.
+
+The Rust parent owns one stateful decoder with a fixed 27-byte buffer, enough
+for three maximum-size frames and therefore for encoded `READY` plus
+`EXECUTED` plus one terminal frame. Reads may
+fragment at every byte or coalesce all three frames. The decoder retains every
+unconsumed complete or partial frame, parses as many complete frames as are
+available, and advances only through
+`Start -> Ready -> Executed -> Terminal -> EOF`. Buffer exhaustion, a frame
+before its predecessor, a duplicate, bytes after terminal, EOF with a partial
+frame, or EOF before terminal is typed failure. After terminal, the parent
+drains to EOF before accepting the stream; the supervisor closes its writer
+before mirroring status. This framing, rather than a byte beyond a record,
+detects status overrun without consuming the first byte of a valid coalesced
+frame.
+
+A status writer completes each frame or returns typed timeout, `EPIPE`, or I/O
+failure. Only a valid kernel `PTRACE_EVENT_EXEC` followed by successful
+zero-signal detach causes exactly one `EXECUTED` frame. Partial,
+overlong, duplicate, malformed, unknown, held-open-writer, timeout, or I/O
+failure on either protocol is a typed helper failure at that protocol's
+closed stage. A queued pre-exec termination, empty EOF without an exec event,
+wrong event, pre-exec death, or detach failure causes no `EXECUTED` frame.
+
+The supervisor remains alive after `EXECUTED`. It forwards only `SIGHUP`,
+`SIGINT`, `SIGTERM`, and `SIGQUIT` to the target process group. Case-deadline
+expiry starts the existing fixed TERM/full-grace/unconditional-KILL sequence.
+An external `SIGTERM` starts the same sequence even when the case has no
+deadline: TERM is forwarded once, the complete fixed grace elapses, and KILL
+is unconditional if the group could still exist. The supervisor waits and
+reaps the direct child, emits one fixed terminal status, and mirrors the exact
+target result: the same normal exit code or the same terminating signal.
+Inherited blocked or ignored termination state cannot reach either supervisor
+or target because both masks and dispositions were normalized. A signal,
+wait, reap, terminal-write, or exact-status-mirroring failure is a typed helper
+failure.
+
+Rust accepts no inferred exec result. Helper crash, helper exit, or status
+channel EOF before `EXECUTED` is always a typed helper failure, regardless of
+the helper process status. A target that execs and immediately exits with the
+same status as a planted helper crash is accepted only when `READY`,
+`EXECUTED`, the terminal record, and the mirrored status all agree.
+
+### Ptrace admission, call shape, and recovery ownership contract
+
+Every C call supplies all four libc ptrace arguments in their ABI positions,
+with explicit pointer-width casts for both pointer-valued varargs:
+
+1. child admission is
+   `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`;
+2. option installation is
+   `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`;
+3. release is
+   `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`; and
+4. detach is
+   `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)`.
+
+No variadic argument may be omitted or supplied as an uncast integer in a
+pointer-valued position. Tests bind each complete call's exact request and pid
+values and its address/data positions and pointer types. Independent mutations
+omit each position where C would still compile, replace a pointer cast with an
+integer literal, exchange address and data, replace the `TRACEME` zero pid or
+the owned child pid, name a nonchild, place options in the address argument,
+or put a nonzero signal in `CONT` or `DETACH`; every mutation must fail.
+
+This protocol is supported only on native `x86_64-linux` and
+`aarch64-linux` with Linux 3.19 or newer. Nix evaluation owns unsupported
+system refusal. Toolchain startup owns the minimum-kernel check, the closed
+Yama check, and the real parent-child capability probe, in that order, before
+the C helper starts. The startup probe performs the same exact four-argument
+`TRACEME`/initial-stop/`SETOPTIONS`/`CONT`/exec-event/`DETACH` sequence
+against the immutable probe; version text alone is not capability evidence.
+When Yama is present, unprivileged `kernel.yama.ptrace_scope` must be `0` or
+`1`; values `2` and `3` refuse before a governed action. The patched sandbox,
+not the helper, owns refusal when the realized seccomp-policy identity or
+four-request argument policy differs from the pinned policy.
+
+These five pre-helper predicates have distinct toolchain or sandbox codes,
+fixed causing inputs, repairs, and phase-valid reruns in
+`recovery-deadline.md`. They must never render a `HELPER_*` code. Once the
+helper has started, initial-stop, option, continuation, event, and detach
+failures remain the distinct helper-owned codes in that contract.
+The design relies only on the natural parent-child `PTRACE_TRACEME`
+relationship, grants no `CAP_SYS_PTRACE`, and does not attach to a sibling or
+host process.
+
+The action seccomp filter retains every network denial. Its static ptrace rule
+allows only these request and enforceable constant-argument combinations:
+
+- `PTRACE_TRACEME` with pid zero, address `(void *)0`, and data `(void *)0`;
+- `PTRACE_SETOPTIONS` with address `(void *)0` and data
+  `(void *)(uintptr_t)PTRACE_O_TRACEEXEC`;
+- `PTRACE_CONT` with address `(void *)0` and data `(void *)0`; and
+- `PTRACE_DETACH` with address `(void *)0` and data `(void *)0`.
+
+The filter does not compare the dynamic pid for `SETOPTIONS`, `CONT`, or
+`DETACH`; classic seccomp cannot derive the future fork result or a
+parent-child relationship. Dynamic identity is instead enforced by the
+supervisor's owned fork result, `getpgid(child) == child`, the direct-parent
+relationship, the traced initial stop, sole wait ownership, and the exact
+`PTRACE_EVENT_EXEC` event for that wait-owned child. Native host-conformance
+and mutations substitute a wrong pid and a nonchild and require refusal; they
+must not claim that static seccomp matched the child pid.
+
+Every attach, seize, memory/register access, syscall tracing, or other ptrace
+request is denied. Existing `execveat`, `wait4`/`waitid`, `setpgid`/`getpgid`,
+signal, polling, and descriptor syscalls remain allowed. No socket, socketcall,
+io_uring, `pidfd_getfd`, capability, namespace, or network exception is added.
+The source, protocol identity, seccomp-policy identity, kernel minimum,
+four-request plus constant-argument ptrace rule, dynamic-child relation, Yama
+assumption, both native-system startup results, host conformance result, every
+negative and mutation result, and every recovery-code byte test are bound into
+execution evidence and are mandatory qualification inputs.
+
+No runfiles, worktree, copied, symlinked, caller-supplied, or fd-0 helper
+transport is permitted. A closed invocation-site policy derives the complete
+Rust/Bazel/Make/workflow spawn census and permits direct helper invocation only
+at the typed consumer implementation site. The helper is unprivileged, but a
+direct invocation elsewhere remains a policy failure.
+
+Tests prove the API consumes the handle and exposes no descriptor; the mapped
+private fd refers to the original verified open file description; a marker on
+declared stdin reaches the target unchanged; stdout and stderr retain their
+declared destinations; and provider, private executable, exec-error, status,
+and auxiliary descriptors are absent from the target. The host conformance
+test rebinds and mutates the provider path after verification and proves
+execution still uses the verified open file description while no path appears
+in argv, environment, evidence, or diagnostics. Mutations cover missing/wrong
+helper output, copied or rebound helper, runfiles/worktree path, any second
+Rust invocation site, fd-0 transport, absent/wrong private fd, reopen, `/proc`,
+path fallback, non-CLOEXEC private and auxiliary descriptors, leaked provider
+fd, replaced stdin, held-open exec-error writer, partial/overlong/malformed
+exec-error and supervisor transport, helper EOF/crash before `EXECUTED`, fast
+same-exit-status target versus helper crash, closed status reader, inherited
+ignored or `SA_NOCLDWAIT` `SIGCHLD`, inherited blocked or ignored `SIGTERM`,
+target-ignore-TERM escalation with no case deadline, forwarding or starting
+grace before `EXECUTED`, treating empty EOF without an exec event as success,
+missing `PTRACE_O_TRACEEXEC`, plain or wrong ptrace event, pre-exec
+`SIGKILL`/`SIGSYS`/fault/normal exit, OOM-like kill injection, failed detach,
+unsupported Yama mode, forbidden ptrace request, publishing a false
+target-executed audit event, disallowed or lost signal forwarding, target-status
+mismatch, a per-launch signal guard, unlock-before-restoration, and any
+first-party Rust unsafe allowance. Deterministic post-`READY` tests hold the
+child at the kernel initial stop, inject each managed signal, and require one
+queued setup termination, helper-owned group kill/reap, no grace, no
+`EXECUTED`, no target terminal frame, and no target-executed audit event.
+Separate releases inject every pre-exec death/fault class, empty EOF without
+an exec event, a missing/wrong event, detach failure, and an execing target
+that exits on its first instruction. The positive proves the exact event and
+successful detach precede `EXECUTED`; mutations accepting EOF, any stop, or
+detach failure must fail.
+Crash before `READY`, after `READY`, after `EXECUTED`, during grace, and with
+long-lived descendants is covered by real patched-sandbox integration rather
+than a Cargo mock.
+
+### Rust parent stage, owner, and closure contract
+
+| Stage | Owned resources and success transition | Injected failure cleanup |
+| --- | --- | --- |
+| `Verified` | Consumed handle exclusively owns the provider `OwnedFd`. | Identity or argument failure drops the provider once; no channel or child exists. |
+| `HelperIdentity` | Exact immutable store path and every C source/derivation-dependency/output/protocol digest match. | Missing, wrong, copied, symlinked, runfiles, worktree, or rebound output drops the provider; no spawn. |
+| `Prepared` | Rust owns provider fd, status reader/writer, mapping configuration, and declared stdio. | `PARENT_PREPARE`; close provider and both channel ends without changing stdio ownership. |
+| `SignalHandoff` | Under the one process-wide launch guard, the spawning thread captures its exact mask with safe `nix::sys::signal::SigSet`, blocks the full managed set, and keeps it blocked through `Command::spawn`. | `PARENT_SIGNAL_HANDOFF`; after either spawn result, restore the exact captured mask before releasing the guard. Capture, block, poisoned-guard, or restoration failure is typed, emits no raw OS text, and cannot report success. A second launch cannot enter capture while the first is between block and restoration attempt. |
+| `Spawned` | `std::process::Child` becomes the sole supervisor wait owner. Still under the guard, Rust attempts exact spawning-thread mask restoration before unlock, then closes its mapped provider and helper-side status copies and retains only the reader plus `Child`. | `PARENT_SPAWN` before a child exists or `PARENT_CLOSE` after spawn; restoration is attempted for both outcomes. A restoration failure after successful spawn fails the action with the child still wait-owned; after failed spawn it preserves the spawn cause and attaches handoff cleanup. Owned fds close and Rust never signals a PID or PGID. |
+| `Ready` | The stateful decoder consumes one complete framed `READY`; supervisor remains wait-owned through `Child`. | `PARENT_READY` for EOF, exit, timeout, partial header/payload, buffer overflow, malformed header, duplicate, unknown, or out-of-order status; close owned fds and return the action nonzero so sandbox teardown owns survivors. |
+| `Executed` | The retained decoder consumes one complete framed `EXECUTED` after `READY`; no target status is inferred from helper wait status. | `PARENT_EXECUTED` for EOF, exit, timeout, malformed input, or any frame before `EXECUTED`; close and return nonzero without a Rust signal operation. |
+| `Terminal` | The decoder consumes one framed `EXITED` or `SIGNALED`, rejects retained or later trailing bytes, drains to EOF, then waits for the supervisor and verifies exact status equality. | `PARENT_TERMINAL`, `PARENT_WAIT`, or `PARENT_STATUS`; block publication, close owned fds, and return nonzero to the sandbox owner. |
+| `Cleaned` | Status reader closes once and the supervisor is reaped by the successful wait path. | `PARENT_CLEANUP` attaches to the first failure; close is attempted once, raw OS text is never rendered, and Rust never performs numeric signal cleanup. |
+
+### C supervisor stage, error, owner, and closure contract
+
+| Stage | Owned resources and success transition | Typed failure and mandatory cleanup |
+| --- | --- | --- |
+| `InheritedSignals` | As its first setup operation, the supervisor observes every managed disposition while the full managed set remains inherited blocked. | `HELPER_SIGNAL_INHERITED_IGNORED` if any managed disposition is `SIG_IGN`, or `HELPER_SIGNAL_HANDOFF` if the inherited mask is incomplete; close fixed inherited fds and fail before fork. An ignored managed disposition is never reset-and-continued. |
+| `Adopted` | After signal-handoff verification, the supervisor owns mapped executable fd, status writer, argv/environment, and declared stdio. | `HELPER_ADOPT` for absent/colliding/wrong descriptors; close all owned fds; no fork. |
+| `Normalized` | While the managed set remains blocked, the supervisor installs default dispositions, ignored `SIGPIPE`, waitable default `SIGCHLD`, and the synchronous consumer, then establishes the final mask. | `HELPER_SIGNAL_NORMALIZE`; close all owned fds; no fork. |
+| `ExecPipe` | Supervisor creates and owns exactly one `O_CLOEXEC|O_NONBLOCK` exec-error reader/writer pair. The kernel trace stop replaces the former confirmation pipe. | `HELPER_EXEC_PIPE`; close the pair and prior resources; no fork. |
+| `Forked` | Exactly one target child exists. Supervisor owns child pid, exec-error reader, and Rust status writer; child owns the error writer, executable fd, and stdio copies. | `HELPER_FORK` before child creation, or a later typed failure followed by direct-child consume-reap and closure of every supervisor fd. |
+| `ChildSetup` | Child calls `setpgid`, installs 0/1/2, marks the executable fd CLOEXEC, closes supervisor-only fds, calls `ptrace(PTRACE_TRACEME, 0, (void *)0, (void *)0)`, restores final signal state, and only then raises `SIGSTOP`. After the stop, its next operation is the sole `execveat`. | Fixed `CHILD_GROUP`, `CHILD_SIGNAL`, `CHILD_STDIO`, `CHILD_CLOEXEC`, `CHILD_CLOSE`, `CHILD_PTRACE`, or `CHILD_STOP` exec-error record; bounded exact write; `_exit`. |
+| `TraceReady` | Supervisor confirms the exact group and direct-parent/wait-owned child, consumes only the expected initial `SIGSTOP` with event zero, calls `ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC)`, emits framed `READY`, then releases with `ptrace(PTRACE_CONT, child, (void *)0, (void *)0)`. | `HELPER_GROUP_ESRCH`, `HELPER_GROUP_EPERM`, `HELPER_GROUP_ERROR`, `HELPER_GROUP_EARLY_EXIT`, `HELPER_PTRACE_STOP`, `HELPER_PTRACE_OPTIONS`, or `HELPER_PTRACE_CONT`; emit no `READY` unless group, parent, wait ownership, and tracing state are confirmed, and kill/consume-reap after any post-fork failure. |
+| `Execveat` | Released child immediately calls `execveat` on the same verified open file description. Successful exec closes the error writer and produces the kernel `PTRACE_EVENT_EXEC` stop before target user code runs. | Fixed `CHILD_EXECVEAT` record, including typed `ENOSYS`; bounded exact write; `_exit`; no fallback. |
+| `ExecEvent` | The deadline-bounded loop drains managed signals first, treats error-pipe EOF only as writer closure, and accepts only the wait-owned direct child's `WIFSTOPPED`, `SIGTRAP`, and exact `PTRACE_EVENT_EXEC`. It then calls `ptrace(PTRACE_DETACH, child, (void *)0, (void *)0)` once; only successful detach permits framed `EXECUTED`. | `HELPER_PRE_EXEC_TERMINATION`, `HELPER_PRE_EXEC_DEATH`, `HELPER_PTRACE_EVENT`, or `HELPER_PTRACE_DETACH`; suppress `EXECUTED` and terminal/audit publication, kill and consume-reap the group, and preserve the first cause. Transport failures remain `HELPER_EXEC_TIMEOUT`, `HELPER_EXEC_PARTIAL`, `HELPER_EXEC_OVERLONG`, `HELPER_EXEC_UNKNOWN`, `HELPER_EXEC_EPIPE`, or `HELPER_EXEC_IO`. Empty EOF, wrong/missing event, pre-exec death, or detach failure can never transition. |
+| `Supervising` | Supervisor owns the live target group and status writer, forwards only the four allowed termination signals, and applies the fixed escalation on case expiry or external `SIGTERM`, including when no case deadline exists. | `HELPER_SIGNAL_FORWARD` or `HELPER_DEADLINE`; full grace and unconditional target-group kill when required, direct-child reap, typed failure. |
+| `Reaped` | Supervisor has exact terminal wait status and no live child; it writes the framed `EXITED` or `SIGNALED` terminal, closes the status writer, and mirrors that status. | `HELPER_WAIT`, `HELPER_REAP`, `HELPER_TERMINAL_WRITE`, or `HELPER_STATUS_MIRROR`; retain the first cause and close every remaining fd. |
+| `Closed` | No provider/private/pipe/status descriptor, trace relationship, or unreaped child remains. | `HELPER_CLEANUP` is attached to the first failure; cleanup, detach where legal, and consume-reap are attempted on every reachable path without replacing the first cause. |
+
+No successful stage owns an unclosed parent-only fd or an unreaped child.
+No child path returns through C after fork: it either execs or calls `_exit`.
+
+### Patched sandbox stage, error, owner, and closure contract
+
+| Stage | Owned resources and success transition | Typed failure and mandatory cleanup |
+| --- | --- | --- |
+| `PtracePolicyVerified` | Before helper spawn, outer `linux-sandbox` verifies the pinned seccomp-policy identity, the four request values, and only the statically enforceable constant pid/address/data constraints while retaining every no-network denial. It makes no future-child-pid claim. | `SANDBOX_PTRACE_POLICY`; emit no helper spawn. Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run `make test-flake`; then run the phase-valid closed slice command selected verbatim from the command-version table. |
+| `NamespaceCreated` | Outer `linux-sandbox` owns exactly one fresh `CLONE_NEWPID` child and the PID-1 synchronization pipes. | `SANDBOX_NAMESPACE`; no action exec and reap any created monitor. |
+| `MonitorReady` | Namespace PID 1 owns the action command and is the adoption point for every orphan; outer sandbox wait-owns PID 1. | `SANDBOX_MONITOR`; close synchronization fds, force namespace-init exit, and outer-reap. |
+| `ActionRunning` | PID 1 waits and reaps descendants while the action command runs; normal target escalation remains supervisor-owned. | Abnormal setup/action exit, including parent or supervisor crash, transitions once to `Aborting`. |
+| `Aborting` | PID 1 sends namespace-local SIGKILL to all other namespace members and performs nonblocking reap progress. The fixed 10,000 ms ceiling bounds userspace TERM/KILL/monitor escalation and the decision to close or quarantine; it does not bound kernel task exit or reap. | `SANDBOX_KILL`, `SANDBOX_REAP`, or `SANDBOX_CEILING`; retain the first cause and never claim a namespace member or PID 1 reaped without a consuming wait result. |
+| `PendingKernelCleanup` | At the userspace ceiling, any namespace member or PID 1 still not observably reaped enters closed result `pending-kernel-cleanup`. The original live outer `linux-sandbox` monitor remains the sole wait owner, marks the sandbox and outputs quarantined, continues non-consuming observation, and permits neither success nor sandbox/output reuse. | `SANDBOX_PENDING_KERNEL_CLEANUP`; follow [`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`](../../../docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine), drain new admission without terminating the monitor, and wait for that same monitor's fixed consuming-reap release before confirming release and rerunning. No reboot, retry-before-release, replacement waiter, or manual release is permitted. |
+| `Closed` | A consuming wait proved PID 1 reaped, no synchronization fd or outer waitable child remains, and cleanup is `complete` or `complete-after-quarantine`. Entry through quarantine keeps the action result nonzero permanently. | `SANDBOX_CLEANUP` attaches to the first sandbox failure; no host PID, PID file, or host process group is signaled. |
+
+### Governed pending-kernel-cleanup runbook contract
+
+Sequential T120 creates the exact governed section
+[`docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`](../../../docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine);
+this plan does not edit that contributing document. The section gives these
+ordered steps and no release shortcut:
+
+1. Keep the original job and patched `linux-sandbox` monitor live. Do not
+   cancel, restart, reboot, retry, or start a replacement waiter.
+2. In that original job's sanitized stderr, inspect the byte-exact
+   `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` diagnostic, require closed
+   state `pending-kernel-cleanup`, and follow only its fixed repository link.
+3. Drain the affected CI worker/provider from new admission without
+   terminating the original job. A job-exclusive GitHub-hosted allocation is
+   already drained by leaving that job running and admitting no retry. Any
+   future shared provider must expose a drain-without-terminate control;
+   absence of one leaves recovery blocked.
+4. Wait on the original job. Observation remains non-consuming; only its
+   original live monitor may wait and reap.
+5. Confirm that same monitor published the byte-exact
+   `D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE` record with
+   `cleanup=complete-after-quarantine` and
+   `quarantine=entered-and-released-after-consuming-reap`. No other record
+   releases quarantine.
+6. Only after step 5, rerun the exact closed slice command printed by the
+   original diagnostic. If release never appears, keep admission drained and
+   do not retry.
+
+The T120 policy test resolves the repository-relative file and normalized
+anchor exactly once, byte-matches the pending diagnostic, runbook link, and
+release record, and rejects an absent runbook, reboot remedy,
+retry-before-release, manual release, replacement waiter, or a consuming
+observer other than the original monitor.
+
+All absent, non-regular, non-executable, stale, wrong-digest, rebound-path,
+short-read, metadata-change, and exec-stage cases are injected. Host-backed
+conformance exercises the exact static supervisor against a declared
+first-party probe. It covers exact spawning-thread mask capture/block/restore
+after successful and failed spawn, capture/block/poison/restoration failures,
+and overlapping-launch restore-before-unlock mutations under the one
+serialization guard; a
+deterministic managed-`SIG_IGN` disposition refusal before fork; a
+deterministic `SIGTERM` delivery in the block-to-helper handoff window;
+closed-reader `EPIPE`; inherited ignored and `SA_NOCLDWAIT` `SIGCHLD`;
+inherited blocked `SIGTERM`; a target that ignores TERM with no case deadline;
+parent-first and child-first setpgid races; typed `ESRCH`, `EPERM`, other-error,
+mismatched-group, and early-child-exit cleanup; a pending
+signal before group/trace confirmation; exact descriptor setup,
+`PTRACE_TRACEME`, final child signal restoration, and initial `SIGSTOP` order;
+successful
+`PTRACE_O_TRACEEXEC`, `READY`-before-`PTRACE_CONT`, exact kernel
+`PTRACE_EVENT_EXEC`, zero-signal detach, and detach-before-`EXECUTED` order;
+every managed signal while held at the deterministic initial stop, with one
+setup request, helper kill/reap, no grace, no `EXECUTED` or target terminal
+frame, and no target-executed audit event; pre-exec `SIGKILL`, `SIGSYS`, fault,
+normal exit, OOM-like kill, empty EOF without an exec event, missing/wrong
+event, and detach failure, each with no false execution confirmation; each
+exact `EINTR`, `EAGAIN`, short,
+fragmented and coalesced status frame, partial single-record exec-error,
+duplicate, malformed, and held-writer transport boundary;
+a target that exits on its first instruction with the planted helper-crash
+status after the event and detach; exact signal forwarding and target status;
+unchanged declared stdin;
+separate stdout and stderr; absence of every provider, private, exec-error,
+and status descriptor; and presence only of a planted descriptor explicitly
+declared to survive. Native x86_64 and aarch64 cases bind Linux >= 3.19, the parent-child Yama
+modes, the static four-request plus enforceable constant-argument ptrace
+seccomp allowance, supervisor-owned dynamic child identity, wrong-pid and
+nonchild refusal, unchanged network denial, and rejection of Yama 2/3 and
+every other ptrace request. They separately
+exercise unsupported system, old kernel, Yama refusal, startup-probe failure,
+and patched-sandbox ptrace-policy drift before helper spawn, then the helper
+initial-stop, options, continuation, event, and detach failures after spawn.
+Every case byte-matches its own code, fixed causing input, correction, and
+phase-valid rerun, rejects every other row's remedy, and is qualification
+bound. Exact call-position and pointer-type tests and every omit,
+integer-in-pointer-position, exchange, wrong-pid, nonchild,
+options-in-address, and nonzero-signal mutation are qualification bound too.
+
+The host-backed supervisor cases do not claim crash containment. A separate
+real Bazel sandbox integration runs the action through the exact patched
+`linux-sandbox`, plants helper crash before `READY`, after `READY`, after
+`EXECUTED`, and during TERM grace, and leaves both direct and double-forked
+long-lived descendants. The ordinary plants prove namespace kill, consuming
+PID-1 and outer-monitor reap, and liveness-fd EOF. A separate deterministic
+beyond-ceiling plant withholds the monitor's reap completion until after the
+userspace ceiling, proves typed `pending-kernel-cleanup`, owned quarantine,
+no success and no reuse, and absence of any reaped claim, then releases the
+wait and proves `complete-after-quarantine` while the action remains failed.
+Namespace removal, teardown-patch removal, changed-ceiling,
+pending-state/remediation removal, and strategy-fallback builds must each make
+that integration fail. Cargo unit tests exercise only mocks and cannot satisfy
+this live done condition.
+
+Every auxiliary descriptor is close-on-exec: the runfiles anchor, provider,
+freshness-input handles, per-case directory, stdio setup copies not intended
+for the child, and exec-error pipe. A behavioral child enumerates its own
+descriptor table. One mutation clears `O_CLOEXEC` at each auxiliary-descriptor
+position in turn and must make that test fail. Source-marker checks are not
+accepted as proof of descriptor inheritance.
+
+Provider tests separately force the `openat2` and component-walk routes. The
+fallback cases prove intermediate symlink refusal, declared leaf-symlink
+acceptance followed by full identity verification, and identical
+same-open-file-description execution through the private descriptor. Mutations
+that add `RESOLVE_BENEATH` or
+`RESOLVE_NO_SYMLINKS`, place `O_NOFOLLOW` on the provider leaf, reopen for
+digest or exec, use a path/`fexecve`/`/proc` fallback, or fall back after
+`ENOSYS` must fail.
+
+Every provider refusal is nonzero, redacted, and actionable:
+
+| Reason | Stable input named | Exact recovery |
+| --- | --- | --- |
+| Runfiles entry missing in Bazel mode | Declared runfiles-relative provider key | `make test-bazel-rust-main`, `make test-bazel-rust-api`, `make test-bazel-rust-broker`, or `make test-bazel-rust-aux`, selected only by the closed coverage-map slice enum after declaring the key as `data`. |
+| Provider is not a regular file | Declared runfiles-relative provider key | The same exact closed slice command after correcting the named target's `data` declaration. |
+| Provider is not executable | Declared runfiles-relative provider key and mode | The same exact closed slice command after rebuilding the named target. |
+| Provider is older than its newest declared input | Declared runfiles-relative provider key | The same exact closed slice command after rebuilding the named target. |
+| Provider digest differs from the coverage map | Declared runfiles-relative provider key and coverage-map row | `(cd packages && cargo xtask gen-bazel --check)`, then the exact closed slice command after regenerating and reviewing the coverage map. |
+| Handle metadata changed across digest read | Declared runfiles-relative provider key | The exact closed slice command; if it repeats, correct the writer named by the repository-relative coverage row and rerun that same command. |
+| `execveat` returned `ENOSYS` | Stable kernel requirement | The exact closed slice command on a supported kernel providing `execveat`; no path fallback is available. |
+| Other typed exec errno | Declared runfiles-relative provider key and errno class | The exact closed slice command after rebuilding the named target. |
+
+The renderer accepts only the closed versioned slice-command enum; there is no
+free-form command string. Before alias removal, command version 1 renders the
+existing shadow slice target. Alias removal atomically updates every renderer
+and byte-exact test to command version 2's corresponding enduring
+`make test-rust-slice-{main,api,broker,aux}` target. No repository state may
+name a target absent from that state. The declared runfiles-relative provider key is
+repository content and is permitted in the refusal. The runfiles root,
+resolved absolute location, descriptor number, argv, environment value, and
+child output remain forbidden. Exact-message tests cover every reason in every
+slice and reject an omitted key, omitted action, omitted rerun, borrowed
+remedy, nonliteral command, or leaked local value.
+
+Provider resolution is intentionally distinct from evidence and cleanup
+resolution. Per-case directories, JUnit parents, execution-manifest parents,
+and cleanup subtrees retain
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`, with an
+equivalent strict forced walk.
 
 ## Per-case result document
 
-- One JUnit document is written to the path Bazel supplies in
-  `XML_OUTPUT_FILE`, with one case element per enumerated case.
-- Outcomes are explicit `passed`, `failed`, and `ignored`. An ignored case is
-  never reported as passed and never omitted.
-- Permitted content is the stable case name, the outcome, a bounded duration,
-  and bounded sanitized failure text.
-- The canonical forbidden set is environment values, command-line arguments,
-  absolute paths, Nix store paths, socket paths, the runfiles root and any
-  resolved absolute runfiles or worktree location, systemd unit names, process
-  identifiers, user identifiers, opaque handles, terminal bytes, shell names,
-  and raw child output. None of it enters a case element, `system-out`, or
-  `system-err`. The permitted content list above is closed, so no path-shaped
-  string of any kind reaches this document; the declared runfiles-relative path
-  a provider refusal may name is a runner refusal reason, not case content.
-- Raw child stdout and stderr stay in Bazel's ordinary `test.log` artifact,
-  reached through the failed target's test-log link or the Actions artifact, so
-  removing raw output from the structured result does not remove the
-  contributor's diagnostic path. This split is a contract, not an
-  implementation detail: the structured document is bounded and redacted
-  because machines consume it, and `test.log` is unbounded and unredacted
-  because a human reads it after a failure. Every wave that ships or promotes
-  this behavior states both halves in its release note, so a contributor
-  reading the changelog learns where the raw output went rather than
-  discovering it is missing.
+Write one JUnit document to `XML_OUTPUT_FILE` after all children are reaped.
+Each enumerated case has one explicit `passed`, `failed`, or `ignored` entry.
+
+Permitted content:
+
+- stable case name;
+- outcome;
+- bounded duration;
+- bounded sanitized failure text from a closed diagnostic-code table.
+
+Forbidden content:
+
+- environment values or argv;
+- absolute, worktree, runfiles-root, store, or socket paths;
+- process or user identifiers;
+- opaque handles;
+- unit names;
+- shell names;
+- terminal bytes;
+- raw child output.
+
+No sink receives raw child output. The runner sanitizes and bounds the stream
+before writing JUnit, Bazel `test.log`, or emitted execution and qualification
+evidence. `bazel/generated/evidence-sink-policy.json` is the committed
+authority for each sink's maximum bytes, maximum records, closed permitted
+fields, truncation code, and retention class. Retention classes are closed:
+
+| Class | Sink | Maximum age | Maximum count and scope |
+| --- | --- | ---: | --- |
+| `junit-v1` | JUnit | 14 days | 128 files per slice output root |
+| `test-log-v1` | `test.log` | 14 days | 128 files per slice output root |
+| `evidence-v1` | unsealed execution and qualification evidence | 30 days | 32 files per workflow and head digest |
+| `exporter-diagnostic-v1` | exporter diagnostics | 7 days | 64 records per workflow and head digest |
+
+Sealed, schema-bounded source records under this specification are state
+documents, not raw sink payloads; they remain one atomically replaced record
+per declared path. Every other persisted sink must name exactly one class.
+Before publication, descriptor-relative expiry removes owned entries older
+than the class age and then retains only the newest permitted count. Failure
+to classify, inspect, or expire refuses publication. CI upload configuration
+uses the same literal age. Injected-clock tests cover just-inside, exact-bound,
+and expired ages; count-minus-one, exact-count, and count-plus-one inventories;
+newest retention; unowned/link refusal; and expiry failure with no
+publication. Initial limits are generated
+from measured sanitized fixtures and committed with the measurements; a limit
+or permitted-field change requires the measured old and new values, an
+explicit allowed delta, and review in the same change. Truncation emits only
+the stable `D2B-BZLEVIDENCE-TRUNCATED` code and never a prefix or suffix of
+forbidden bytes.
+
+The planted fixture places distinct forbidden values in environment, argv,
+failure text, stdout, and stderr. It first proves every value reached the
+pre-sanitization stream, then proves every value is absent from JUnit,
+`test.log`, emitted manifest evidence, emitted qualification evidence, and
+all exporter diagnostics. Each sink is also proved at or below its committed
+byte and record limit.
+
+Test outcome and evidence publication are separate typed results.
+`testVerdict` is the underlying `passed`, `failed`, `ignored`, or
+`interrupted` result and is never rewritten by an exporter. `evidenceStatus`
+is a closed tagged union inside one `EvidenceSinkResult`. The common record
+carries `sinkKind` and `retentionClass` exactly once:
+
+```text
+{
+  "sinkKind": "<closed>",
+  "retentionClass": "<closed>",
+  "testVerdict": "<closed>",
+  "evidenceStatus": {
+    "kind": "complete",
+    "sinkPolicySha256": "<sha256>"
+  }
+}
+```
+
+or:
+
+```text
+{
+  "sinkKind": "<closed>",
+  "retentionClass": "<closed>",
+  "testVerdict": "<closed>",
+  "evidenceStatus": {
+    "kind": "degraded",
+    "code": "<closed-code>",
+    "policyRowSha256": "<sha256>",
+    "retryCommand": "<closed-command>"
+  }
+}
+```
+
+`sinkKind` determines exactly one retention class through the committed sink
+policy; a mismatched pair refuses. Neither variant repeats either field. The
+complete variant rejects degradation-only fields. The degraded variant
+requires every field above and rejects complete-only fields, unknown fields,
+unknown codes, and free-form commands. A sanitizer, bound, retention, write,
+rename, exporter, or workflow-publication failure preserves `testVerdict` and
+produces the structurally valid degraded variant. Surface completion and
+qualification reject degraded evidence but report the evidence refusal
+separately rather than claiming the underlying test failed. Execution-manifest
+v1 remains byte- and schema-compatible: the tagged status is a sidecar
+publication result and is never added to manifest v1.
+
+The exact redacted remediation table is:
+
+| Code | Stable input named | Exact recovery |
+| --- | --- | --- |
+| `D2B-BZLEVIDENCE-SANITIZE` | Repository-relative carrier definition and sink kind | Correct the sanitizer or closed permitted-field table, then run the exact closed slice command selected from the provider table. |
+| `D2B-BZLEVIDENCE-LIMIT` | Repository-relative `bazel/generated/evidence-sink-policy.json` row and sink kind | Reduce the emitted diagnostic, or run `(cd packages && cargo xtask gen-bazel --check)` after reviewing measured policy changes, then run the exact closed slice command. |
+| `D2B-BZLEVIDENCE-RETENTION` | Repository-relative sink-policy row and retention class | Correct the owned retention inventory, then run the exact closed slice command. |
+| `D2B-BZLEVIDENCE-PUBLISH` | Stable carrier label and sink kind | Correct the publication backend, run the exact closed slice command, and require the complete tagged variant. |
+| `D2B-BZLEVIDENCE-NO-VERDICT` | Stable workflow name and protected branch | `git fetch origin v3`, then `(cd packages && cargo xtask bazel-qualification-validate)`; if the fixed record remains incomplete, merge a new protected `v3` commit and rerun the same validator. |
+
+Messages contain none of the forbidden planted values, no `$!`, run ID,
+attempt ID, absolute path, Nix store path, cache key, token, opaque handle, or
+raw exporter error. Artifact and validator failures render a fixed code,
+repository-relative policy row, and SHA-256 only. Exact-message tests cover
+every code/slice combination and reject an omitted stable input, omitted
+command, borrowed remedy, leaked value, free-form command, or malformed or
+success-shaped status variant.
+
+Runner tests explicitly cover:
+
+- prior manifest invalidation before dispatch;
+- attribution when one surface has several carriers;
+- sorted atomic partial manifest v1 publication after success, failure, and
+  handled interruption;
+- preservation of the original nonzero test or interruption status when
+  publication also fails;
+- exact ignored-case fidelity in listing, JUnit, and surface census;
+- a planted failed result whose environment, argv, paths, identifiers,
+  handles, shell name, terminal bytes, and raw output contain every forbidden
+  redaction value. The fixture first proves every value is present, then proves
+  all are absent from JUnit, `test.log`, emitted evidence, and exporter
+  diagnostics.
 
 ## Filesystem semantics
 
-- `TEST_TMPDIR` is opened once as an anchored directory with close-on-exec.
-  Each per-case directory is created descriptor-relative without following
-  symlinks or magic links, and an existing case directory is refused rather
-  than reused.
-- The parent of `XML_OUTPUT_FILE` is opened as a second anchored close-on-exec
-  directory descriptor with the same link refusals.
-- No output descriptor is opened until every child has been reaped.
-- A close-on-exec same-directory temporary is written, synced, and installed
-  with `renameat`. Creation and replacement are descriptor-relative.
-- A bounded creation loop chooses another unpredictable name after `EEXIST`.
-  Exhausting the bound fails **without unlinking any colliding path**, because
-  no temporary was created and the runner owns nothing.
-- After successful creation, a separate bounded write loop advances the buffer
-  after a short write and retries `EINTR` and `EAGAIN`.
-- `ENOSPC`, exhausted write retries, and every unhandled post-creation
-  filesystem error unlink only the runner-created temporary with `unlinkat`
-  before failing the carrier, so no partial evidence remains and no foreign
-  path is removed.
-- Open, write, sync, rename, unlink, directory enumeration, the anchored
-  provider open, the metadata and byte reads the provider checks need, and the
-  `execveat` of a verified handle sit behind one injectable filesystem trait in
-  `packages/d2b-bazel-support/src/fsops.rs`, so errno mapping, ownership state,
-  call ordering, and the open-to-exec binding are hermetically testable rather
-  than requiring a full disk or signal races on the shared host.
-- That trait is shared with cleanup, with the topology provider checks, with
-  the locator, and with the wave-note policy lint, all of which enforce the
-  same anchored close-on-exec, link-refusal, escape-refusal, and
-  own-what-you-unlink properties on the same syscalls. One implementation means
-  one set of planted mutations proves every caller, and a later fix cannot land
-  in one copy only. It lives in the neutral `packages/d2b-bazel-support/`
-  crate, which declares no first-party dependency, so the locator reaches it
-  without depending on the runner and `packages/d2b-contract-tests` reaches it
-  as a dev-dependency only. See `recovery-deadline.md` for the cleanup side of
-  the same boundary and `workspace-and-tool-pinning.md` for the wave-note side.
-- The link-refusal policy is per call site, not global, and each site states
-  its policy. Directories the runner creates and files the repository commits
-  are opened with `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS`,
-  because the runner owns those paths and no link belongs on them. Providers
-  are opened with `RESOLVE_NO_MAGICLINKS` alone, because a runfiles tree is a
-  symlink forest and the two stricter policies were measured to refuse every
-  real provider. A site that silently used the other site's policy would either
-  refuse every Bazel provider or accept a symlinked note, so the policy is a
-  parameter the fake supplies and each caller's choice is asserted. That one
-  parameter also decides the leaf on the forced component-walk route, so a
-  route change cannot silently move a call site to the other policy.
-- No provider negative and no note-corpus negative depends on live host
-  filesystem state either. `ENOSPC`, short writes, `EINTR` and `EAGAIN`
-  retries, `EEXIST` collisions, replacement races, every absent,
-  non-executable, out-of-date, or wrong-identity provider, the post-open path
-  rebind, and every `spawn_verified` errno are produced by the injected fake.
+`TEST_TMPDIR` and the output parent are anchored close-on-exec descriptors.
+Strict paths refuse symlink, magic-link, and `..` traversal on both the
+`openat2` and forced component-walk routes. Temporary creation, write, sync,
+rename, and cleanup are descriptor-relative.
 
-### The resolve policy on both routes
+Creation collisions, short writes, `EINTR`, `EAGAIN`, `ENOSPC`, terminal
+write failures, link parents, existing case directories, and cleanup ownership
+are injected and mutation-tested.
 
-The resolve policy is one parameter with two routes, and it means the same
-thing on each.
+## No-shell scope
 
-| Policy | Callers | `openat2` route | Forced component-walk route |
-| --- | --- | --- | --- |
-| Strict | Cleanup, the per-case directories, the `XML_OUTPUT_FILE` parent, the wave-note lint | `RESOLVE_BENEATH\|RESOLVE_NO_SYMLINKS\|RESOLVE_NO_MAGICLINKS` | `O_NOFOLLOW` on every component **including the leaf** |
-| Provider | `open_provider` and each declared input its freshness check opens | `RESOLVE_NO_MAGICLINKS` | `O_NOFOLLOW` on every component **except the leaf** |
+Repository-owned wrapper, runner, cleanup, timeout, and process-control code
+invokes no shell. The `rules_rust` stable-channel generated doctest runner
+remains the recorded ADR 0052 difference. ADR 0017's governed source set is
+unchanged.
 
-Intermediate components carry `O_NOFOLLOW` under both policies. The leaf is the
-only component the policy moves, and it is the whole difference. Measured on
-the reference host against a runfiles-shaped leaf symlink whose target lies
-outside the anchor:
+An enforcing source and behavioral test inventories repository-owned spawn
+sites and rejects `sh`, `bash`, `-c`, shell-script wrappers, and indirect shell
+helpers. The upstream generated doctest runner is the only recorded exception
+and is not repository-owned.
 
-| Call | Result |
-| --- | --- |
-| `openat2` leaf, `RESOLVE_NO_MAGICLINKS` | opens; `st_ino` is the outside target |
-| `openat2` leaf, `RESOLVE_NO_SYMLINKS` | `ELOOP` |
-| `openat2` leaf, `RESOLVE_BENEATH` | `EXDEV` |
-| `openat` leaf, no `O_NOFOLLOW` | opens; the **same** `st_ino` |
-| `openat` leaf, `O_NOFOLLOW` | `ELOOP` |
-| `openat` intermediate directory symlink, `O_DIRECTORY\|O_NOFOLLOW` | `ENOTDIR` |
+That inventory is generated, committed, and drift-checked at
+`bazel/generated/no-shell-inventory.json`. Its governed-source and
+declared-input sets are nonempty. Its spawn-site set is exact and may contain
+zero entries for an individual governed source. It records:
 
-The leaf flag is therefore the exact lever that reproduces the policy
-difference on the walk route. Hardcoding the leaf exemption, which an earlier
-draft of this contract did, hands every strict caller a weaker guarantee on one
-of its two routes: a symlinked wave note, a symlinked per-case directory, or a
-symlinked `XML_OUTPUT_FILE` parent would be followed out of the anchor instead
-of refused, and the four-way errno distinguishability the wave-note lint
-depends on would collapse into "it read something". The last row is recorded
-because the errno differs by position: `O_DIRECTORY` reaches the refusal before
-`O_NOFOLLOW` does, so an intermediate symlink is `ENOTDIR` while a leaf symlink
-is `ELOOP`, and a test that asserts one errno for both asserts something the
-kernel does not do.
+1. `governedSources` - every repository-owned runner, cleanup, timeout, and
+   process-control source subject to this rule, derived from the first-party
+   configured-target census, not from a hand-maintained list;
+2. `declaredInputs` - the exact declared inputs of the no-shell carrier; and
+3. `scanResults` - exactly one successful record for every governed source,
+   including a zero-site record when the source has no spawn construct; and
+4. `spawnSites` - every discovered process-spawn construct, each naming its
+   governed source, span, spawned program expression, and a typed
+   `shellInvocation` verdict; any true verdict refuses.
 
-**One property the walk route cannot reproduce, recorded rather than papered
-over.** `RESOLVE_NO_MAGICLINKS` has no `openat` flag. Measured: a leaf symlink
-whose body names `/proc/<pid>/fd/<n>` is refused `ELOOP` by `openat2` under
-`RESOLVE_NO_MAGICLINKS`, opens successfully on the walk route's permissive
-leaf, and yields a handle carrying the target's own `st_ino` and the target's
-own `fstatfs` filesystem type, indistinguishable from a handle opened through a
-leaf symlink that names the target directly. No descriptor-side test closes
-that, so none is added: a partial check shaped like a magic-link refusal is
-worse than a recorded difference, because it would be cited as one. Two things
-bound it. Handle identity, which is what protects a provider in the first
-place, is unchanged on this route: the laundered descriptor is still checked
-for regular-file kind and executable mode, digested from offset zero to
-`st_size`, compared against the value the coverage map records, and `fstat`ed
-again after the read, so a descriptor that does not carry the recorded provider
-bytes never reaches `spawn_verified`. And the kernel floor closes the
-production case outright: ADR 0008 pins supported hosts at `6.6`, with the v1.1
-uplift raising that to `6.9`, while `openat2` landed in `5.6`, so no supported
-host takes the walk route at all. It exists so the walk's ordering and errno
-mapping are provable through the fake, not to serve a kernel this project
-supports.
+`governedSources` and `declaredInputs` are equal in both directions. Every
+`spawnSites[].source` belongs to that set, but the spawn-site source projection
+is not required to contain a source with zero sites. `scanResults` has exactly
+one successful entry for every governed source and no ungoverned entry. A
+fresh scan derives the exact keyed spawn-site set from source path, span, and
+spawned-program expression; that set and the committed `spawnSites` set are
+equal in both directions. A walk, open, read, or parse failure produces a
+failed scan result and refuses rather than shrinking either comparison.
 
-The strict policy has no such gap. `O_NOFOLLOW` on every component including
-the leaf refuses a symlink of any kind before it is traversed, which is exactly
-what cleanup, the two output-path opens, and the wave-note lint require, and it
-is why those callers are strict.
+Six plants are mandatory and each must fail at its own diagnostic:
 
-## Publication is enforcing
+```text
+no-shell-inventory-empty
+no-shell-inventory-missing-entry
+no-shell-inventory-extra-entry
+no-shell-inventory-unguarded-spawn
+no-shell-inventory-missing-zero-site-record
+no-shell-inventory-planted-shell
+```
 
-Publication is part of the enforcing test contract, not optional telemetry:
+Both the raw `scanResults` record count and the unique scan-source count must
+equal the governed-source count. A duplicate record is a refusal even when the
+unique projection still matches.
 
-- a carrier whose tests pass but whose required structured result cannot be
-  published **fails**, rather than returning a success-shaped result with
-  missing evidence;
-- when tests already failed, a publication failure preserves the test failure
-  as the primary diagnosis and reports the publication failure as an additional
-  bounded runner error.
-
-This is deliberate and is not softened to a warning. One Bazel test action per
-carrier means the event stream carries one verdict per target; every finer
-attribution the eighteen-surface manifest consumes comes from this document.
-A carrier that exits zero with no document has not produced a degraded signal,
-it has produced no evidence, and `execution-manifest-binding.md` cannot mark
-that surface complete from nothing. Warning instead would let a run report
-`passed` for a surface nothing observed, which is precisely the empty-success
-class this migration exists to remove, and it would fail in the one direction
-reviewers do not check. The cost is bounded and named: the publication failure
-is reported as a runner error distinct from a test failure, it never displaces
-an existing test failure, and it carries a code-specific recovery message.
-
-Two properties stop the rule from becoming a flake source. The document is
-written only after every child is reaped, through the injected filesystem
-boundary, into a same-directory close-on-exec temporary that is synced and
-installed with `renameat`, so there is no window in which a contended
-filesystem yields a partial document the carrier accepts. And every terminal
-error on that path is a mapped errno with a planted mutation behind it, so
-"publication failed" is a specific reproducible condition rather than an
-unexplained nonzero exit.
-
-Two injected outcome tests bind that ordering and must land with the runner
-implementation: one starts from an all-passing case set and forces publication
-failure, requiring a nonzero carrier result; the other starts from a planted
-test failure and forces publication failure, requiring the original test
-failure and exit classification to remain primary.
-
-## Required behavioral tests
-
-A committed planted failed-case fixture contains every member of the canonical
-forbidden set in its environment, argv, output, and failure text. The test
-first asserts every planted value is present in the unredacted fixture, then
-requires every value absent from the JUnit bytes, the stable case name,
-outcome, and duration present, and raw output recoverable only from the planted
-`test.log` path. Asserting absence without first proving presence proves
-nothing.
-
-Separate injected cases prove each of: refusal of symlink and magic-link
-parents; refusal of an existing case directory; buffer advancement after a
-short write; bounded `EINTR` and `EAGAIN` retries; temporary-name collision
-retries; failure on `ENOSPC`; no unlink when creation never succeeded;
-temporary unlink on every terminal post-creation error; descriptor-relative
-`renameat`; sync before rename; close-on-exec on every opened descriptor; no
-output descriptor before every child is reaped; and refusal of an anchored `..`
-escape. Each property carries a planted mutation the test must reject. The
-provider states, mutations, and the one host-backed `execveat` conformance test
-are listed under "Binary provider resolution and execution" above and carry the
-same requirement.
-
-Three further injected cases bind the resolve policy to the forced
-component-walk route, and they belong to every strict caller, not only to the
-provider path. On the walk route, a leaf symlink under the strict policy is
-refused `ELOOP` for a per-case directory, for the `XML_OUTPUT_FILE` parent, and
-for a wave note; the same leaf symlink under the provider policy opens and
-every identity check still runs against the resulting handle; and an
-intermediate symlink is refused under both policies. The planted mutation is
-the hardcoded leaf exemption: a walk route that drops `O_NOFOLLOW` on the final
-component regardless of policy must fail all three strict assertions.
-
-## Scope of "no shell"
-
-"No shell" binds repository-owned code and only that: no repository-owned Make
-wrapper, case runner, cleanup helper, timeout wrapper, or process-control path
-invokes a shell or is implemented as a shell script. On a stable channel
-`rust_doc_test` declares a generated `.rustdoc_test.sh` as its test executable
-and the compiled alternative is nightly-only, so that generated runner is a
-recorded deliberate difference rather than a violation. ADR 0017's scan set is
-unchanged and is not widened to output trees: a generated runner in a Bazel
-output tree is untracked, is outside `packages/`, and is not a `.rs` file, so
-it is excluded by construction and no new exclusion is added.
+The integrator commits the generated inventory with the rest of
+`bazel/generated/`; slices produce `.scratch/` previews only. Its digest and
+plant results enter the qualification evidence set.

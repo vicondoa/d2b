@@ -1,27 +1,28 @@
 # Copilot agents, skills, and the autopilot process
 
-The canonical definition surface for this repository's ADR, panel, and
-delivery process. Everything here is committed, so a fresh clone behaves
-identically and nothing depends on an operator's local settings.
+Canonical definition surface for the repository's ADR, panel, and delivery
+process. Everything is committed, so fresh clones behave identically without
+local operator settings.
 
-Copilot is the sole supported and authoritative agent surface. The legacy
-integration was retired and its tracked files were removed; no second command
-path is preserved or selected by this repository.
+Copilot is the sole supported agent surface. The legacy integration was retired
+with its tracked files removed; no second command path remains.
 
 ## What is here
 
 ```
-.github/agents/          13 agents: 3 roles + 10 panel seats
+.github/agents/          16 agents: 3 roles + 13 current panel seats
 .github/skills/          d2b-adr, d2b-panel-round, d2b-wave-delivery,
-                         d2b-memory, d2b-autopilot, plus speckit-*
+                         d2b-memory, d2b-autopilot, d2b-caveman,
+                         d2b-caveman-compress, d2b-spec-edit, plus speckit-*
 scripts/copilot/         check-bindings.mjs, autopilot.sh
+                         prompt-corpus.mjs and its checked-in manifest
 .specify/memory/         deferred-work, friction-log, engineering-debt
 ```
 
 ## The two processes, and why they are separate
 
 **An ADR is its own run.** `/d2b-adr` drafts a record, adds the index row that
-has a coverage guard, updates anything it supersedes, runs the ten-lane panel,
+has a coverage guard, updates anything it supersedes, runs the selected-roster panel,
 and opens a PR. Its output is a merged ADR number. An architectural decision
 usually outlives the feature that provoked it and often lands before anyone
 knows which features will consume it, so coupling its lifetime to a feature
@@ -34,7 +35,7 @@ it, like any other blocker.
 
 ## Authoring a feature
 
-Interactive, because this is where judgement belongs. Track A, the full path:
+Interactive, because this is where judgment belongs. Track A, the full path:
 
 ```
 /speckit-specify   <what you want built>      -> specs/NNN-slug/spec.md
@@ -42,11 +43,10 @@ Interactive, because this is where judgement belongs. Track A, the full path:
 /speckit-plan                                 -> plan.md, research.md, contracts/
 /speckit-tasks                                -> tasks.md, grouped into waves
 /speckit-analyze                              -> cross-artifact consistency
-/d2b-panel-round plan                         -> ten lanes review the plan
+/d2b-panel-round plan                         -> selected seats review the plan
 ```
 
-Track B is spec-kit's own documented shorter path, and drops `clarify` and
-`analyze`:
+Track B is spec-kit's documented shorter path and drops `clarify` and `analyze`:
 
 ```
 /speckit-specify   <what you want built>
@@ -55,13 +55,69 @@ Track B is spec-kit's own documented shorter path, and drops `clarify` and
 /d2b-panel-round plan
 ```
 
-Iterate on the plan until the panel is unanimous. **That gate is what makes
-the next step safe to leave alone.**
+Iterate until the panel is unanimous. **That gate makes the next step safe to
+leave alone.**
 
-The `/speckit-*` steps run in the parent session. When that session is bound
-to `gpt-5.6-sol` at `xhigh` with the 1M `long_context` tier, it already carries
-the architect binding and no dispatch is needed. When it is not, dispatch
-`d2b-architect` explicitly for `specify` and `plan`.
+The `/speckit-*` steps run in the parent session. A session bound to
+`gpt-5.6-sol` at `xhigh` with the 1M `long_context` tier already carries the
+architect binding. Otherwise dispatch `d2b-architect` explicitly for `specify`
+and `plan`.
+
+## Optional Caveman communication
+
+`d2b-caveman` adapts pinned upstream communication rules to Copilot without
+Anthropic, Claude CLI, Python, external install, network access, or third-party
+content upload. Full communication is optional and applies only to transient
+messages in these lanes:
+
+| Surface | Default communication |
+| --- | --- |
+| `d2b-implementer` | `caveman-full-optional` |
+| `d2b-integrator` | `caveman-full-optional` |
+| all current `panel-*` seats | `caveman-full-optional` |
+| `d2b-autopilot` and `d2b-panel-round` dispatches | `caveman-full-optional` |
+| `d2b-architect` and `d2b-spec-edit` | `normal` |
+
+An explicit `normal` or `off` request wins; no gate grades brevity. Persisted
+code, commands, paths, identifiers, exact errors, negations, exceptions,
+schemas, commits, release notes, contributor docs, ADRs, feature artifacts, and
+panel JSON remain normal and exact. The only persisted-prose exception is the
+checked-in governed prompt corpus.
+
+The upstream files are provenance only:
+`third_party/caveman/v1.10.0/UPSTREAM.json` pins the repository, tag, commit,
+and hashes. `d2b-caveman-compress` works only on the manifest corpus, snapshots
+under `.scratch/`, uses the current Copilot session, and requires a
+side-by-side semantic audit. It never invokes an upstream runtime.
+
+## Feature artifact ownership
+
+`d2b-spec-edit` is user-invocable and dispatches `d2b-architect` at
+`gpt-5.6-sol` / `xhigh` / `long_context` with `normal` communication. It
+resolves one active directory under `specs/`, snapshots allowed paths, rejects
+absolute paths, `..`, symlink escapes, ADRs, source, contributor docs, and
+every other path outside that directory, verifies the changed-path set, and
+never reverts foreign work. It accepts one batch and returns changed sections,
+checklist transitions, changed files, deliberately untouched related files,
+and requested validation.
+
+The designated `speckit-*` commands may create only absent artifacts. After a
+file exists, all feature-directory writes route through the editor. `clarify`
+collects answers and submits one batch; `analyze` is read-only; `implement`
+reports checkbox changes; `converge` prepares exact append content; `autopilot`
+and memory fold route writes through the editor. No freshness sidecar, digest
+chain, or artifact-state file is introduced.
+
+## Prompt corpus
+
+The checked-in manifest is an exact membership list for 35 files: three
+`AGENTS.md` files, all eight `docs/contributing/*.md` files, all sixteen
+`.github/agents/*.agent.md` files, and all eight `.github/skills/d2b-*/SKILL.md`
+files. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,
+links and URLs, list hierarchy and count, table shape, literals, normative
+operators and negations, and exact JSON or output examples. It does not grade
+style or token reduction. Imported `speckit-*` prose stays uncompressed except
+for routing edits.
 
 ## Executing it
 
@@ -70,12 +126,14 @@ the architect binding and no dispatch is needed. When it is not, dispatch
 ```
 
 One command runs every stage of every wave, including the seal and the memory
-fold. Per wave: dispatch implementer lanes per the file-ownership map, run the
-wave's validation, dispatch the ten-lane panel on the staged diff, route
-findings into scoped fix lanes, revalidate, commit with the correct trailing
-tag, push, open the PR, wait for checks, merge, seal, record wave memory,
-advance. Between waves it writes a checkpoint, so `--resume` continues after a
-context handoff.
+fold. Per wave: dispatch implementer lanes per the file-ownership map, create
+one selected-roster lifecycle, run one comprehensive discovery, merge the
+shared ledger, hand batch responses and self-verification to implementation,
+run scoped verification, then run the wave's validation and delivery gate.
+Route only raised findings into scoped fix lanes, revalidate, commit with the
+correct trailing tag, push, open the PR, wait for checks, merge, seal, record
+wave memory, and advance. Between waves it writes a checkpoint, so `--resume`
+continues after a context handoff.
 
 It stops on a mechanical condition, never on judgement.
 
@@ -211,10 +269,12 @@ honour.
 
 ## Panel seats
 
-Ten agents, one per roster role, each with its own domain checklist anchored
-to this repository's invariants. They are **read-only by construction**:
+The current thirteen seats each have a domain checklist anchored to this
+repository's invariants. Selection is deterministic and request-bound; a
+current panel excludes `rust`, whose depth is a `software` profile. They are
+**read-only by construction**:
 `tools: [view, grep, glob]` removes shell entirely, so they cannot run a
-build. That is better than instructing them not to, and it keeps ten lanes off
+build. That is better than instructing them not to, and it keeps selected lanes off
 the shared Nix store, the cargo target directory, and the heavy-gate
 semaphore while implementation is still running.
 
@@ -222,23 +282,77 @@ Evidence is pre-staged so every reviewer in a round provably sees
 byte-identical bytes:
 
 ```
-bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round>
-node .github/skills/d2b-panel-round/scripts/make-records.mjs .scratch/panel/<round>
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
+  --discovery-request <request.json> \
+  --lifecycle <lifecycle-id> --selection <selection.json> \
+  --candidate <current-candidate.json>
+```
+
+Verification staging supplies the complete canonical handoff:
+
+```
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
+  --lifecycle <lifecycle-id> --selection <selection.json> \
+  --candidate <current-candidate.json> \
+  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --self-verification <self-verification.json> \
+  --verification-dir <verification-requests>
 ```
 
 Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
 `reviewer-notes/<seat>.md`. The integrator edits the evidence and any
 seat-specific rebuttal, then dispatches every reviewer with the exact generated
-prompt. Later reviews fail closed unless `<prev-tip>` matches the previous
-recorded tip and every seat's prior verdict is available, so the incremental
-range and prior-finding instructions cannot be replaced by a free-form
-summary.
+prompt. It materializes supplied exact artifacts as round-local
+`selection.json`, `current-candidate.json`, `discovery-request.json`,
+`discovery-ledger.json`,
+`responses.json`, and `self-verification.json` before `.complete`. Discovery
+staging requires a readable `--discovery-request`; verification staging
+requires a readable complete per-seat `--verification-dir`, which is staged
+under `verification/`. Once `.complete` exists, staging may compare or reuse
+canonical artifacts but never add a missing one. The dispatch prompt is usable
+only when the round's `.complete`
+marker exists; an unmarked scratch directory is non-authoritative and must be
+cleaned up before retrying. Later reviews fail closed unless `<prev-tip>` matches
+the previous recorded tip and every seat's prior verdict is available, so the
+incremental range and prior-finding instructions cannot be replaced by a
+free-form summary.
 
-Ten separate reviewers is a deliberate cost. This repository's own history is
-the argument: an early panel returned zero sign-offs with eleven high findings
-that the static gate caught none of, and the five-seat council is documented
-as a known synthesis risk where five synthesizers can agree where ten
-independent reviewers would have dissented.
+After verification verdicts are collected, copy this sequence without changing
+the canonical ledger path or any of the artifact paths:
+
+```bash
+ROUND=.scratch/panel/<round>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  adapt-verification "$ROUND/discovery-ledger.json" "$ROUND/verdicts" \
+  "$ROUND/verification-results.json" \
+  --selection "$ROUND/selection.json" --candidate "$ROUND/current-candidate.json"
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  approval "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" \
+  "$ROUND/approval.json" --candidate "$ROUND/current-candidate.json"
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  metrics --selection "$ROUND/selection.json" \
+  --ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json" \
+  --verification-results "$ROUND/verification-results.json" \
+  --output "$ROUND/metrics.json"
+node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
+  --selection "$ROUND/selection.json" --ledger "$ROUND/discovery-ledger.json" \
+  --responses "$ROUND/responses.json" \
+  --verification-results "$ROUND/verification-results.json" \
+  --approval "$ROUND/approval.json"
+```
+
+The verification command that precedes this sequence requires
+`--candidate`, `--prior-selection`, `--prior-verdicts`, and `--delta`; none of
+those inputs has an empty default. The staged full diff is the canonical full
+candidate context rather than a duplicate request field.
+
+Independent selected reviewers are a deliberate cost. This repository's own
+history is the argument: an early panel returned zero sign-offs with eleven
+high findings that the static gate caught none of. A future producer must
+preserve the selected roster rather than compressing it into a smaller
+synthesis council.
 
 ## Delivery memory
 
@@ -250,8 +364,9 @@ The rule that keeps them from becoming a graveyard: **a category recurring
 across three waves stops being friction and becomes a task.** That is a count,
 not a judgement.
 
-Critical and high panel findings are never deferrable and never auto-filed.
-They are fixed in the round that raised them.
+BLOCKER findings are never deferred or auto-filed. A MAJOR may be Deferred
+only with the recorded maintainer or merge-owner acceptance defined by ADR
+0055; otherwise it remains blocking.
 
 A defect discovered while fixing something else goes into a register, not into
 the current fix round. That is the mechanism that lets a fix round stay scoped

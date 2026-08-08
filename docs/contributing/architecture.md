@@ -3,10 +3,10 @@
 Naming rules the framework enforces at eval time, what belongs in this repo
 versus a sibling flake, and how the daemon-supervised VM lifecycle is shaped.
 
-The binding summary is in [`../../AGENTS.md`](../../AGENTS.md). The
-daemon-only end-state itself is recorded in
+The binding summary is in [`../../AGENTS.md`](../../AGENTS.md). The daemon-only
+end-state is recorded in
 [`../adr/0015-daemon-only-clean-break.md`](../adr/0015-daemon-only-clean-break.md),
-which is the authority if this file drifts from it.
+which is authoritative if this file drifts.
 
 ## Naming conventions
 
@@ -37,12 +37,11 @@ bundle-relative artefact paths, broker op IDs) see
 
 ## Component split & sibling flakes
 
-The **core framework** in this repo covers: graphics, tpm, usbip,
-audio, network, the auto-declared net VM, the per-VM store, the
-CLI, the manifest contract.
+The **core framework** covers graphics, tpm, usbip, audio, network, the
+auto-declared net VM, the per-VM store, the CLI, and the manifest contract.
 
-Anything **identity- or workload-specific** lives in a sibling
-flake and is composed per-VM:
+Anything **identity- or workload-specific** lives in a sibling flake and is
+composed per-VM:
 
 - [`vicondoa/entrablau.nix`][entrablau] - Microsoft Entra ID
   joins (Himmelblau + TPM-bound machine credential).
@@ -57,18 +56,18 @@ Optional **desktop companion** pieces also live in sibling flakes:
 - `vicondoa/weezterm` - WeezTerm package/provider integration used by the
   terminal launcher when a d2b-aware terminal build is desired.
 
-Consumer flakes that combine these pieces keep a single nixpkgs and toolkit
-revision by using `inputs.d2b.inputs.nixpkgs.follows = "nixpkgs"`,
+Consumer flakes combining these pieces keep one nixpkgs and toolkit revision
+with `inputs.d2b.inputs.nixpkgs.follows = "nixpkgs"`,
 `inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs"`, and
 `inputs.d2b-wlterm.inputs.d2b-toolkit.follows = "d2b-toolkit"`. WeezTerm
 follows only `nixpkgs`; its flake does not expose a toolkit input. The exact
 copy-paste boilerplate lives in
 [`docs/how-to/configure-desktop-terminal-integration.md`](../how-to/configure-desktop-terminal-integration.md).
 
-The composition pattern is intentionally one-way: d2b core does not import
-identity, workload, or desktop companion flakes. Identity/workload flakes can
-stay d2b-agnostic; desktop companions consume only d2b's public CLI/socket
-contracts. Consumers compose workload modules on a specific VM:
+Composition is one-way: d2b core does not import identity, workload, or desktop
+companion flakes. Identity/workload flakes stay d2b-agnostic; desktop
+companions consume only d2b public CLI/socket contracts. Consumers compose
+workload modules on a specific VM:
 
 ```nix
 d2b.vms.work.config.imports = [
@@ -76,24 +75,20 @@ d2b.vms.work.config.imports = [
 ];
 ```
 
-If you're tempted to add a new sibling-shaped concern (e.g. a
-specific desktop environment, a particular dev-shell flavour) to
-the core framework, consider whether it belongs in its own flake
-instead. The bar for landing it in core is: "every d2b user
-plausibly wants this, and the framework cannot do the right thing
-without it."
+Before adding a sibling-shaped concern (e.g. a specific desktop environment or
+dev-shell flavor) to core, consider its own flake. The core bar is: "every d2b
+user plausibly wants this, and the framework cannot do the right thing without
+it."
 
 [entrablau]: https://github.com/vicondoa/entrablau.nix
 
 ## VM lifecycle (daemon-supervised)
 
-`d2bd` is the sole supervisor for every per-VM lifecycle DAG.
-There are no framework-declared per-VM systemd units: child
-processes (cloud-hypervisor, virtiofsd, swtpm, vhost-user-sound,
-USBIP attach) are spawned by the broker via `SpawnRunner`, handed
-back to `d2bd` over `SCM_RIGHTS` as pidfds, and reconciled
-against the persisted DAG state under
-`/var/lib/d2b/supervisor/state.json`.
+`d2bd` solely supervises every per-VM lifecycle DAG. No framework-declared
+per-VM systemd units: child processes (cloud-hypervisor, virtiofsd, swtpm,
+vhost-user-sound, USBIP attach) are spawned by the broker via `SpawnRunner`, handed
+back to `d2bd` over `SCM_RIGHTS` as pidfds, and reconciled against persisted
+DAG state under `/var/lib/d2b/supervisor/state.json`.
 
 Stop is provider-aware for local primary VMM runners. Normal
 `d2b vm stop` asks Cloud Hypervisor guests to shut down via the CH
@@ -120,23 +115,20 @@ per-VM units are emitted):
   does not dispatch stale runner intents after a switch, and it never
   holds in-flight session state across requests.
 
-Drift detection moves from per-VM symlinks into the daemon's
-state file. `d2b vm list` flags any VM where the running
-closure differs from the latest declared closure with
-`[pending restart]`; `d2b vm status <vm>` prints both store
-paths and the exact remediation command (`d2b vm restart <vm>`
-for a clean down+up, `d2b vm switch <vm>` for a per-VM closure
-rebuild + live activation).
+Drift detection moves from per-VM symlinks into the daemon state file.
+`d2b vm list` flags a VM whose running closure differs from the latest declared
+closure with `[pending restart]`; `d2b vm status <vm>` prints both store paths
+and the exact remediation command (`d2b vm restart <vm>` for clean down+up,
+`d2b vm switch <vm>` for per-VM closure rebuild plus live activation).
 
 ## Adding new per-VM behaviour
 
 New per-VM work belongs **inside the daemon's DAG executor**
-(`packages/d2bd/src/supervisor/`), with any privileged side
-effects routed through a typed `d2b-priv-broker` op declared
-in `packages/d2b-contracts/` and audited in
-`/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce
-a new `systemd.services.*` declaration in `nixos-modules/` for
-per-VM work. The denylist coverage lives in
+(`packages/d2bd/src/supervisor/`), with privileged effects routed through a
+typed `d2b-priv-broker` op declared in `packages/d2b-contracts/` and audited in
+`/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce a
+`systemd.services.*` declaration in `nixos-modules/` for per-VM work. Denylist
+coverage lives in
 `packages/d2b-contract-tests/tests/policy_units.rs`; run the enabled
 fixture-contract lane when changing this surface. See
 [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
@@ -144,9 +136,7 @@ for the DAG node taxonomy and
 [`docs/reference/privileges.md`](../reference/privileges.md) for
 the broker op catalogue.
 
-Adding or reclassifying a spawned runner `ProcessRole` also requires
-matching process-builder and runner-matrix coverage: add/extend the
-typed Rust argv builder in `packages/d2b-host/src/*_argv.rs` and
-the role coverage policy/contract tests under
-`packages/d2b-contract-tests/tests/` in the same change.
-
+Adding or reclassifying a spawned runner `ProcessRole` also needs matching
+process-builder and runner-matrix coverage: add/extend the typed Rust argv
+builder in `packages/d2b-host/src/*_argv.rs` and role coverage policy/contract
+tests under `packages/d2b-contract-tests/tests/` in the same change.

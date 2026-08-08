@@ -1,17 +1,16 @@
 # AGENTS.md - `labs/venus-vulkan-video/` isolation contract
 
 This lab is an **experimental prototype**, not part of the d2b framework. It is
-governed by this file *in addition to* the repo-root `AGENTS.md`. Where the two
-conflict for files under `labs/venus-vulkan-video/`, this file wins.
+governed by this file and the repo-root `AGENTS.md`; for files under
+`labs/venus-vulkan-video/`, this file wins conflicts.
 
 Read this before changing anything in this directory.
 
 ## What this lab is
 
-An attempt to make **stock, unmodified upstream Firefox** inside a guest VM
-decode H.264 on the host NVIDIA GPU via `VK_KHR_video_decode_h264` forwarded
-through Venus/virtio-gpu, replacing the current forked-Firefox + virtio-media
-V4L2 path.
+An attempt to make **stock, unmodified upstream Firefox** in a guest VM decode
+H.264 on the host NVIDIA GPU via `VK_KHR_video_decode_h264` forwarded through
+Venus/virtio-gpu, replacing the forked-Firefox + virtio-media V4L2 path.
 
 The work spans three upstream projects, forked under `vicondoa/`:
 
@@ -25,10 +24,9 @@ The work spans three upstream projects, forked under `vicondoa/`:
 
 ### 1. This lab is NOT production, and must never become production by accident
 
-The code paths built here deserialize a **guest-controlled** Vulkan Video
-command stream inside a host process holding an open GPU fd. Until the hardening
-wave completes and an explicit production review passes, this must never be
-enabled for any d2b VM whose guest is untrusted.
+The code paths deserialize a **guest-controlled** Vulkan Video command stream in
+a host process holding an open GPU fd. Until hardening completes and explicit
+production review passes, never enable this for an untrusted d2b VM guest.
 
 **Do not** wire any of this into `nixos-modules/`, add a `d2b.vms.<vm>.*`
 option for it, or reference it from the root flake.
@@ -36,8 +34,8 @@ option for it, or reference it from the root flake.
 ### 2. No host switch
 
 Nothing here may require `nixos-rebuild switch`, an `/etc/nixos` edit, a new
-systemd unit, or any persistent host configuration change. The lab runs entirely
-from `nix build` outputs launched as the operator's own user.
+systemd unit, or persistent host configuration. The lab runs from `nix build`
+outputs launched as the operator's own user.
 
 The one privileged action is a **reversible, non-persistent** ACL grant on
 `/dev/kvm` (`host/grant-kvm.sh`), auto-revoked by the launcher on exit. See
@@ -47,7 +45,7 @@ not a resolved one.
 ### 3. Complete isolation from the d2b control plane
 
 The lab must never read or write `/etc/d2b`, `/var/lib/d2b`, the `d2bd` public
-socket, or the privileged broker. It does not use d2b's VM lifecycle at all.
+socket, or the privileged broker; it does not use d2b's VM lifecycle.
 
 Note the lab **shares hardware** with any running d2b VMs (`/dev/kvm`, the
 render node, `/dev/udmabuf`, RAM, the GPU). That is expected contention, and the
@@ -56,8 +54,8 @@ launcher warns about it. Stop live d2b VMs before taking measurements.
 ### 4. Nix source hygiene - mutable state lives OUTSIDE the repo
 
 The repo-root `AGENTS.md` documents the `path:` fetcher hazard: a bare path
-reference copies the **entire working tree** into the Nix store. A multi-GB
-build directory inside `labs/` would be catastrophic for eval times.
+copies the **entire working tree** into the Nix store. A multi-GB build
+directory inside `labs/` would be catastrophic for eval times.
 
 Therefore:
 
@@ -72,9 +70,9 @@ Therefore:
 - **Banned:** `path:` refs, bare `builtins.getFlake <path>`, and `src = self`
   for bulky sources.
 
-Note `git ls-files --cached --others --exclude-standard` (used by the repo's
-whole-tree policy lint) sees **untracked but non-ignored** files, so stray build
-output inside `labs/` would be scanned as well as copied.
+Note `git ls-files --cached --others --exclude-standard` (used by the whole-tree
+policy lint) sees **untracked but non-ignored** files, so stray build output in
+`labs/` is scanned as well as copied.
 
 ### 5. Host and guest package sets are strictly separate
 
