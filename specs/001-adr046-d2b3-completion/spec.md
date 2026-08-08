@@ -674,15 +674,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   unchanged 168-case broker registry MUST cover only their literal role denial,
   request-shape, artifact binding, legacy backup/restoration publication, append-only
   supersession, conflict, and completed no-write cases. A separate read-independent
-  207-case durable-record/boundary registry MUST cover every listed amendment record class
+  216-case durable-record/boundary registry MUST cover every listed amendment record class
   at all nine publication boundaries, including reservation, both release reasons,
-  settlement, repair-resume, and continuity-repair pre/evidence/outcome. A separate
-  read-independent 78-case lifecycle registry MUST cover aggregate capacity, all five
-  standing-reserve states and derived actions, cycle-unique reservation success/refusal/
-  retry, release/retry, retention-anchor conflict, continuity crash prefixes and permit
+  settlement, repair-resume, and continuity-repair pre/evidence/watermark/outcome. A separate
+  read-independent 88-case lifecycle registry MUST cover aggregate capacity and continuity
+  evidence limits, all five standing-reserve states and derived actions, cycle-unique
+  reservation success/refusal/retry, malformed-prefix hooks/poisons for both releases and
+  continuity, retention-anchor conflict, continuity evidence export/compaction and permit
   compiler/API negatives, prune-permit negatives, transport-loss artifact resubmission,
-  private-identifier leakage canaries, and shrinkage poisons. The 156-case status registry,
-  unchanged 168-case registry, 207-case registry, and 78-case registry MUST NOT substitute
+  private-identifier/body leakage canaries, and shrinkage poisons. The 156-case status registry,
+  unchanged 168-case registry, 216-case registry, and 88-case registry MUST NOT substitute
   for one another.
 
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4

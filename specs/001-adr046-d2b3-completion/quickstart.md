@@ -787,8 +787,13 @@ provenance/restored-member and outcome/settlement records without
 replacing an existing mismatched, unauthenticated, or noncontiguous member. Every append and
 the repair/backup/dispatch/prune-audit records share one exact-final restart protocol.
 Conflicting bytes are preserved. Invalid request, artifact, authorization, state-race, or
-capacity refusals have zero coordinator/audit/provenance mutation; an accepted attempt that
-later fails or conflicts records exactly one fixed outcome. A pre-only crash has no broker
+capacity refusals have zero coordinator/restoration/provenance mutation. Noncapacity
+refusals and standing-reserve exhaustion also have zero audit mutation. An audited
+retention-limit refusal writes only its capacity pre/outcome pair, leaves the reservation
+ledger and covered restoration unchanged, and is the narrowly named
+`RefusedZeroMutation`; standing-reserve exhaustion is a separate no-write pre-audit
+admission refusal that keeps the same operation and generation for retry. An accepted
+restoration attempt that later fails or conflicts records exactly one fixed outcome. A pre-only crash has no broker
 response and remains blocked until the immediate byte-identical Admin resubmission above;
 daemon restart does not settle it automatically and the operator does not wait for restart
 settlement. A durable degraded settlement is nonterminal: after the named storage repair,
@@ -797,13 +802,15 @@ converges to restored without duplicate provenance.
 
 The unchanged 168-case broker registry owns only its literal caller, nineteen request-shape,
 artifact/binding, conflict, legacy backup/restoration publication, and no-write cases. The
-mandatory independent 207-case durable-record/boundary registry adds every listed
+mandatory independent 216-case durable-record/boundary registry adds every listed
 amendment record class at every publication boundary, including reservation, both releases,
-settlement, repair-resume, and continuity-repair pre/evidence/outcome. The mandatory
-independent 78-case lifecycle registry adds aggregate limits, all five standing-reserve
-states, cycle-unique capacity success/refusal/retry, retention-anchor conflict, continuity
-and permit seals, transport-response-loss recovery, private-identifier canaries, and
-shrinkage poisons. None of these three registries substitutes for another.
+settlement, repair-resume, and continuity-repair pre/evidence/watermark/outcome. The
+mandatory independent 88-case lifecycle registry adds aggregate and continuity-evidence
+limits, all five standing-reserve states, cycle-unique capacity success/refusal/retry,
+malformed-prefix hooks and poisons for both release machines and continuity ordering,
+retention-anchor conflict, continuity evidence export/compaction, continuity and permit
+seals, transport-response-loss recovery, private-identifier/body canaries, and shrinkage
+poisons. None of these three registries substitutes for another.
 
 The broker-private linear `HostGenerationImmutableAuditBackupOwner` retains at most 256
 members and 16,777,216 encoded bytes per intent and at most 64 intents, 4,096 members, and
@@ -832,7 +839,7 @@ restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exac
 pointer-repair, repairable-absence, bounded audit-restoration, and integrity-incident
 goldens. The separate two-row restoration and two-row prune audit-edge fixtures plus the unchanged
 168-case broker registry prove their literal privileged restoration cases. The mandatory
-207-case record-boundary and 78-case lifecycle registries prove the supplemental
+216-case record-boundary and 88-case lifecycle registries prove the supplemental
 publication, capacity, continuity, capability, taxonomy, and redaction obligations; neither
 the 156-case status registry nor the 168-case registry can substitute. The Type-1 Nix
 case proves only

@@ -424,14 +424,15 @@ merge-target registration, merge eligibility, and merge.
     socket. Its two-row restoration and two-row prune audit-edge fixtures plus the unchanged
     168-case broker registry cover only their literal caller, nineteen request-shape,
     artifact/binding, legacy backup/restoration publication, conflict, and no-write cases.
-    The mandatory read-independent 207-case record-boundary registry covers each listed
+    The mandatory read-independent 216-case record-boundary registry covers each listed
     amendment class at all nine publication boundaries, including reservation, both
-    releases, settlement, repair-resume, and continuity-repair pre/evidence/outcome. The
-    mandatory read-independent 78-case lifecycle registry covers aggregate limits, all
-    standing-reserve classes/actions, cycle-unique reservation success/refusal/retry,
-    retention-anchor conflict, continuity and permit seals, transport-loss resubmission,
-    private-identifier canaries, and shrinkage. The 156, 168, 207, and 78 registries cannot
-    substitute for one another. Backup retention is bounded per
+    releases, settlement, repair-resume, and continuity-repair
+    pre/evidence/watermark/outcome. The mandatory read-independent 88-case lifecycle registry
+    covers aggregate and continuity-evidence limits, all standing-reserve classes/actions,
+    cycle-unique reservation success/refusal/retry, malformed release/continuity prefixes,
+    retention-anchor conflict, continuity evidence compaction and permit seals,
+    transport-loss resubmission, private-identifier/body canaries, and shrinkage. The 156,
+    168, 216, and 88 registries cannot substitute for one another. Backup retention is bounded per
     intent by 256 members and 16,777,216 bytes and at the root by 64 intents, 4,096 members,
     and 268,435,456 bytes; an additional aggregate record/byte ceiling covers every private
     publication-root class. A replacement-bound fixed real-time/boot-time age anchor governs

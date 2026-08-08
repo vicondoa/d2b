@@ -325,7 +325,7 @@ human/JSON goldens pin these bytes and exit.
 The command accepts one path and optional `--json`; selector, authority/key/token,
 member/failure override, `--force`, or extra input exits `2`. Root instead exits `4` with
 the distinct `use-unprivileged-local-admin-restoration-session` action. Unauthorized,
-invalid artifact, conflict, retention capacity/degradation, and restoration publication
+invalid artifact, conflict, retention capacity/admission/degradation, and restoration publication
 pending/degraded exits are `4` with only the fixed actions and closed failure classes in
 `data-model.md`; success exits `0` and directs the operator to rerun
 `--repair-authorized-handoff`.
@@ -357,6 +357,19 @@ action: <ACTION_FROM_RETENTION_TABLE>
 
 Capacity JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-capacity","failureClass":"<CLOSED_RETENTION_CAPACITY_CLASS>","action":"<ACTION_FROM_RETENTION_CAPACITY_TABLE>"}`.
+This audited refusal has zero ledger and restoration mutation but retains its exact capacity
+pre/outcome pair. Standing-reserve exhaustion is the separate no-write pre-audit admission
+form:
+
+```text
+host generation handoff immutable audit capacity admission unavailable
+failure-class: standing-reserve-exhausted
+action: repair-retention-audit-and-reconcile
+```
+
+Its JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-capacity-admission-refused","failureClass":"standing-reserve-exhausted","action":"repair-retention-audit-and-reconcile"}`.
+It carries no capacity attempt digest or generation transition.
 Degradation JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-degraded","failureClass":"<CLOSED_RETENTION_DEGRADED_CLASS>","action":"<ACTION_FROM_RETENTION_TABLE>"}`.
 Restoration publication pending/degraded uses the exact
@@ -381,14 +394,16 @@ the typed redacted report/action and blocks later mutation.
 The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
 168-case broker registry preserve their exact ids and own only their literal caller,
 request, artifact, legacy backup/restoration publication, conflict, and no-write cases.
-They are supplemented, not replaced, by the mandatory read-independent 207-case
-durable-record/boundary registry and 78-case lifecycle registry in `data-model.md`. The 207
+They are supplemented, not replaced, by the mandatory read-independent 216-case
+durable-record/boundary registry and 88-case lifecycle registry in `data-model.md`. The 216
 cases own all nine boundaries for each listed amendment record class, including reservation,
-both release reasons, settlement, repair-resume, and continuity-repair pre/evidence/outcome.
-The 78 cases own aggregate storage, standing-reserve exhaustion and corruption taxonomy,
-cycle-unique capacity success/refusal/retry, retention-anchor conflict, continuity and both
-permit seals, transport-loss resubmission, private-identifier canaries, and family
-shrinkage. The 156-case status registry and unchanged 168-case registry cannot substitute
+both release reasons, settlement, repair-resume, and continuity-repair
+pre/evidence/watermark/outcome. The 88 cases own aggregate storage and continuity-evidence
+limits, standing-reserve exhaustion and corruption taxonomy, cycle-unique capacity
+success/refusal/retry, malformed release/continuity prefixes, retention-anchor conflict,
+continuity evidence compaction and both permit seals, transport-loss resubmission,
+private-identifier/body canaries, and family shrinkage. The 156-case status registry and
+unchanged 168-case registry cannot substitute
 for either supplemental registry.
 
 An
@@ -400,8 +415,10 @@ Retention rendering is a total mapping. `CLOSED_RETENTION_CAPACITY_CLASS` is exa
 `intent-member-limit | intent-byte-limit | root-intent-limit | root-member-limit |
 root-byte-limit | root-publication-record-limit | root-publication-byte-limit |
 restoration-record-limit | restoration-byte-limit | restoration-attempt-limit |
-pending-staging-record-limit | pending-staging-byte-limit |
-standing-reserve-exhausted`. `CLOSED_RETENTION_DEGRADED_CLASS` is exactly
+continuity-evidence-record-limit | continuity-evidence-byte-limit |
+continuity-repair-attempt-limit | pending-staging-record-limit |
+pending-staging-byte-limit`. `CLOSED_CAPACITY_ADMISSION_CLASS` is exactly
+`standing-reserve-exhausted`. `CLOSED_RETENTION_DEGRADED_CLASS` is exactly
 `clock-rollback | clock-watermark | epoch-invalid | clock-forward-discontinuity |
 clock-continuity-ambiguous | clock-overflow | unlink | directory-sync | census |
 audit-publication | pending-settlement | standing-reserve-missing |
@@ -410,7 +427,7 @@ standing-reserve-unaccounted`:
 
 | Closed failure class | Exact action |
 | --- | --- |
-| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
+| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `continuity-evidence-record-limit`, `continuity-evidence-byte-limit`, `continuity-repair-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
 | `standing-reserve-exhausted` | `repair-retention-audit-and-reconcile` |
 | `clock-rollback`, `clock-watermark`, `epoch-invalid`, `clock-forward-discontinuity`, `clock-continuity-ambiguous` | `repair-retention-clock-discontinuity` |
 | `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |

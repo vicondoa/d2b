@@ -1063,8 +1063,8 @@ epoch, fixed prune pre/outcome audit, private non-observable restoration evidenc
 digest/enum-only audit provenance, under-lock coordinator/backup revalidation, closed
 restoration wire errors, generated-schema/wire parity, and pending/degraded settlement.
 T589 owns the frozen strict schemas/snapshots/goldens, literal unchanged 168-id restoration
-broker expected set, supplemental 207-id durable-record/boundary expected set, and
-supplemental 78-id lifecycle expected set. T595's sole file map additionally includes new
+broker expected set, supplemental 216-id durable-record/boundary expected set, and
+supplemental 88-id lifecycle expected set. T595's sole file map additionally includes new
 `packages/d2b/tests/host_generation_restoration_cli.rs` and
 `tests/golden/pinned/host-generation-restoration-cli.txt`; that Type-3 test invokes
 `CARGO_BIN_EXE_d2b-host-generation-deploy` through a hermetic public socket and is enforced
@@ -1103,6 +1103,32 @@ fixed degraded outcome with zero watermark mutation, deadline-preserving prune, 
 prefixes, and a by-value instance-bound permit. The CLI
 renders one exact exit-4 response-loss human/JSON form with no invented publication class
 and directs immediate byte-identical Admin resubmission. No task id or dependency changes.
+
+**R30 continuity, capacity, and redaction correction:** the unchanged 168-id registry still
+owns only its literal legacy cases. The supplemental record-boundary registry is now exactly
+216 ids: 24 independent classes by nine boundaries, adding immutable continuity-watermark
+publication and partial-prefix reconciliation. The lifecycle registry is now exactly 88 ids,
+adding continuity-evidence 1/2-record, 131,072/131,073-byte and 256/257-attempt boundaries,
+malformed-prefix machines for both releases and continuity, and one evidence export/
+compaction restart family. Every grouped malformed and compaction hook has its own removal
+poison.
+
+Continuity pre-audit binds a deterministically reconstructible private replay handle and one
+deadline/prune-plan variant. Fresh-process replay cannot ask a changed source to select new
+bytes. The immutable watermark uses exact-final publication, all nine durability boundaries,
+and completed no-write replay. Outcome variants couple before-day-90 versus mandatory-prune
+posture, and the total closed source/retention/publication failure tree includes pending
+outcome settlement. Continuity evidence is charged, size/attempt bounded, retained until the
+governed prune plus file-and-directory-durable digest export, and compacted with restart
+reconciliation. Independent body canaries cover raw evidence, both clocks, boot identity,
+and authority proof with sealed `Debug`/`Display`.
+
+`RefusedZeroMutation` now explicitly means zero reservation-ledger and covered-operation
+mutation while its capacity pre/outcome audit pair remains durable. Standing-reserve
+exhaustion is a separate pre-audit no-write admission refusal with no generation advance.
+Private prune and restoration-settlement attempts each have one canonical two-step
+domain-separated identity and complete identifier/preimage/encoding/surface canaries. No
+task id or dependency changes.
 
 The external source-floor row now requires issuer-authenticated canonical receipts, strict
 schemas/golden vectors at the external-owner paths in `data-model.md`, and a
@@ -1913,10 +1939,10 @@ reservation reconstruction, immutable-zero-mutation reservation release, and thr
 prune/reservation shrinkage poisons. Active plan, task, contract, and checklist references use
 168; the dated R26 row remains historical.
 
-R29 leaves those 168 literal ids unchanged and narrows their active claim to the cases they
+R30 leaves those 168 literal ids unchanged and narrows their active claim to the cases they
 actually enumerate. Active plan, task, contract, quickstart, coverage, and completion
-checklist references additionally require the read-independent 207-id durable-record/
-boundary and 78-id lifecycle registries with the responsibilities pinned in
+checklist references additionally require the read-independent 216-id durable-record/
+boundary and 88-id lifecycle registries with the responsibilities pinned in
 `data-model.md`; neither supplemental registry may be replaced by the 168-id broker or
 156-id status registry. Task ids remain exactly 605, and every external blocker and
 disposition above remains unchanged.

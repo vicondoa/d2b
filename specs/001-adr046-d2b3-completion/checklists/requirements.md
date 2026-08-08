@@ -76,12 +76,13 @@
   and independent two-edge restoration/two-edge prune fixtures plus an unchanged 168-case
   matrix covering its literal caller, request-shape, signature, binding, legacy publication,
   conflict, and replay cases
-- [x] Mandatory read-independent 207-case record-boundary and 78-case lifecycle registries
+- [x] Mandatory read-independent 216-case record-boundary and 88-case lifecycle registries
   supplement rather than replace the 168-case matrix: they pin reservation/release/
-  settlement/repair-resume and continuity-repair publication boundaries, aggregate and
-  standing-reserve taxonomy, cycle-unique capacity success/refusal/retry, retention-anchor
-  conflict, continuity and permit API/compiler negatives, transport-loss resubmission,
-  private-identifier canaries, and shrinkage
+  settlement/repair-resume and continuity-repair pre/evidence/watermark/outcome publication
+  boundaries, aggregate/continuity-evidence limits and standing-reserve taxonomy,
+  cycle-unique capacity success/refusal/retry, malformed release/continuity prefixes,
+  retention-anchor conflict, continuity evidence compaction and permit API/compiler
+  negatives, transport-loss resubmission, private-identifier/body canaries, and shrinkage
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
   lifetime-bound `SidecarCleanupOwner<'guard>`; named legacy state is never renamed or

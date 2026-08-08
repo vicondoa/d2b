@@ -1159,13 +1159,15 @@ invalid competing/malformed/unauthenticated censuses. The Admin-only bounded res
 client, two-edge restoration and two-edge prune audit fixtures, and independent 168-case
 broker registry retain only their literal private-evidence/provenance, role-denial,
 request-shape, artifact-binding, legacy publication, conflict, and no-write cases. The
-mandatory independent 207-case record-boundary registry covers the listed amendment record
+mandatory independent 216-case record-boundary registry covers the listed amendment record
 classes at every publication boundary, including reservation, both releases, settlement,
-repair-resume, and continuity-repair pre/evidence/outcome. The mandatory independent
-78-case lifecycle registry covers aggregate storage, standing-reserve taxonomy, cycle-unique
-capacity success/refusal/retry, retention-anchor conflict, continuity and capability seals,
-transport-loss resubmission, private-identifier canaries, and shrinkage. The 156, unchanged
-168, 207, and 78 registries have distinct responsibilities and cannot substitute.
+repair-resume, and continuity-repair pre/evidence/watermark/outcome. The mandatory
+independent 88-case lifecycle registry covers aggregate storage and continuity-evidence
+limits, standing-reserve taxonomy, cycle-unique capacity success/refusal/retry, malformed
+release/continuity prefixes, retention-anchor conflict, continuity evidence compaction and
+capability seals, transport-loss resubmission, private-identifier/body canaries, and
+shrinkage. The 156, unchanged 168, 216, and 88 registries have distinct responsibilities
+and cannot substitute.
 Incomplete rollback proof is never recovery-capable.
 These refinements add no work-item or task id.
 
