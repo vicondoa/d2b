@@ -142,6 +142,24 @@ else
   exit 1
 fi
 
+# --- panel lifecycle behavior ---------------------------------------------
+# Selection, one comprehensive discovery, ledger responses, scoped
+# verification, and legacy continuation are covered by one focused Node
+# harness. It is intentionally separate from the delivery crate tests.
+log "--> panel lifecycle behavior"
+if [ -f "$ROOT/scripts/copilot/test-panel-lifecycle.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/test-panel-lifecycle.mjs" >/dev/null
+    ok "panel lifecycle behavior"
+  else
+    fail "node not found; scripts/copilot/test-panel-lifecycle.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/test-panel-lifecycle.mjs"
+  exit 1
+fi
+
 # --- panel record assembly ------------------------------------------------
 # make-records.mjs produces the artifacts that seal a wave. Its fail-closed
 # behaviour is the only thing standing between a lane that silently ran at

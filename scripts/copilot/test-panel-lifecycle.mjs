@@ -1,0 +1,835 @@
+#!/usr/bin/env node
+// Focused behavior coverage for the standard Copilot panel lifecycle.
+
+import {
+  appendLateFindings,
+  calculateMetrics,
+  createDiscoveryRequest,
+  createResponseTemplate,
+  createSelection,
+  evaluateApproval,
+  importLegacyRound,
+  lateFindingAdmission,
+  mergeDiscoveryLedger,
+  prepareVerification,
+  readSelection,
+  readSelectionTable,
+  selectRoster,
+  selectLifecycleRoster,
+  stableStringify,
+  validateDiscoveryResults,
+  validateFixScope,
+  validateMonotonicRoster,
+  validateResponses,
+  validateSelfVerification,
+  validateVerificationResults,
+  writeVerificationArtifacts,
+  writeCreateOrCompare,
+} from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let failures = 0;
+const check = (name, ok, detail = "") => {
+  if (ok) {
+    console.log(`  ok   ${name}`);
+  } else {
+    failures += 1;
+    console.error(`  FAIL ${name}${detail ? `: ${detail}` : ""}`);
+  }
+};
+
+function rejects(name, fn, pattern) {
+  try {
+    fn();
+    check(name, false, "accepted invalid input");
+  } catch (cause) {
+    check(name, pattern.test(cause.message), cause.message);
+  }
+}
+
+function candidate(overrides = {}) {
+  return {
+    program: "SPEC004",
+    wave: "spec004w1",
+    candidate_id: "candidate-1",
+    content_id: "content-1",
+    snapshot_sha256: "a".repeat(64),
+    changed_paths: ["src/panel.js"],
+    ...overrides,
+  };
+}
+
+function completeResults(roster, findingSeat = null) {
+  return Object.fromEntries(
+    roster.map((seat) => [
+      seat,
+      {
+        seat,
+        complete: true,
+        findings: seat === findingSeat
+          ? [{
+              source_id: `${seat}:1`,
+              source_ordinal: 1,
+              raw_text: "The generated request can lose a source.",
+              attribution: seat,
+              severity: "MAJOR",
+              impact: "A source could disappear from the shared ledger.",
+              recommendation: "Validate the source mapping before generation.",
+            }]
+          : [],
+      },
+    ]),
+  );
+}
+
+function makeSelection(root, overrides = {}) {
+  return createSelection(
+    {
+      ...candidate(overrides),
+      lifecycle_id: "spec004w1",
+      phase: overrides.phase ?? "discovery",
+    },
+    { root },
+  );
+}
+
+function makeLedger() {
+  return {
+    artifact_kind: "d2b-panel/issue-ledger",
+    schema_version: 1,
+    lifecycle_id: "spec004w1",
+    selection_schema_version: 1,
+    selection_table_version: 2,
+    program: "SPEC004",
+    wave: "spec004w1",
+    candidate_id: "candidate-1",
+    content_id: "content-1",
+    snapshot_sha256: "a".repeat(64),
+    roster: [
+      "software",
+      "test",
+      "product",
+      "docs",
+      "security",
+      "observability",
+      "simplicity",
+      "reliability",
+      "agentic",
+      "nixos",
+    ],
+    sources: [
+      {
+        source_id: "software:1",
+        seat: "software",
+        source_ordinal: 1,
+        raw_text: "blocker",
+        attribution: "software",
+        severity: "BLOCKER",
+        impact: "unsafe",
+        recommendation: "fix",
+      },
+      {
+        source_id: "test:1",
+        seat: "test",
+        source_ordinal: 1,
+        raw_text: "major",
+        attribution: "test",
+        severity: "MAJOR",
+        impact: "wrong",
+        recommendation: "verify",
+      },
+      {
+        source_id: "docs:1",
+        seat: "docs",
+        source_ordinal: 1,
+        raw_text: "minor",
+        attribution: "docs",
+        severity: "MINOR",
+        impact: "small",
+        recommendation: "clean up",
+      },
+      {
+        source_id: "product:1",
+        seat: "product",
+        source_ordinal: 1,
+        raw_text: "nit",
+        attribution: "product",
+        severity: "NIT",
+        impact: "small",
+        recommendation: "clarify",
+      },
+    ],
+    issues: [
+      {
+        id: "R1",
+        description: "blocker",
+        severity: "BLOCKER",
+        impact: "unsafe",
+        recommendation: "fix",
+        source_finding_ids: ["software:1"],
+        late: false,
+      },
+      {
+        id: "R2",
+        description: "major",
+        severity: "MAJOR",
+        impact: "wrong",
+        recommendation: "verify",
+        source_finding_ids: ["test:1"],
+        late: false,
+      },
+      {
+        id: "R3",
+        description: "minor",
+        severity: "MINOR",
+        impact: "small",
+        recommendation: "clean up",
+        source_finding_ids: ["docs:1"],
+        late: false,
+      },
+      {
+        id: "R4",
+        description: "nit",
+        severity: "NIT",
+        impact: "small",
+        recommendation: "clarify",
+        source_finding_ids: ["product:1"],
+        late: false,
+      },
+    ],
+    complete: true,
+  };
+}
+
+function allVerificationResults(roster, lateFindings = {}) {
+  return Object.fromEntries(
+    roster.map((seat) => [
+      seat,
+      {
+        seat,
+        complete: true,
+        summary: "Verified.",
+        recommendations: [],
+        late_findings: lateFindings[seat] ?? [],
+      },
+    ]),
+  );
+}
+
+console.log("panel lifecycle: selection table");
+{
+  const code = selectRoster(candidate());
+  check("code floor selects ten seats", code.roster.length === 10);
+  check(
+    "mandatory seats are present",
+    code.mandatory_seats.every((seat) => code.roster.includes(seat)),
+  );
+  check(
+    "code floor uses deterministic fill order",
+    code.floor_filled.join(",") === "reliability,agentic,nixos",
+  );
+
+  const documentation = selectRoster(
+    candidate({ changed_paths: ["docs/guide.md"] }),
+  );
+  check("documentation floor selects eight seats", documentation.roster.length === 8);
+
+  const triggerPaths = {
+    reliability: ["src/restart-handler.js"],
+    agentic: [".github/skills/example/SKILL.md"],
+    nixos: ["nixos-modules/example.nix"],
+    networking: ["src/firewall-rules.js"],
+    kernel: ["src/pidfd-handler.rs"],
+    build: ["Makefile"],
+  };
+  for (const [seat, paths] of Object.entries(triggerPaths)) {
+    const result = selectRoster(candidate({ changed_paths: paths }));
+    check(`the ${seat} path trigger selects its seat`, result.triggered_optional.includes(seat));
+  }
+  const signals = [
+    "stateful",
+    "agent",
+    "nixos",
+    "network",
+    "kernel",
+    "build-contract",
+  ];
+  const signalSeats = [
+    "reliability",
+    "agentic",
+    "nixos",
+    "networking",
+    "kernel",
+    "build",
+  ];
+  const signalResult = selectRoster(candidate({ signals }));
+  for (const seat of signalSeats) {
+    check(`the ${seat} signal trigger selects its seat`, signalResult.triggered_optional.includes(seat));
+  }
+  const citation = selectRoster(
+    candidate({
+      changed_paths: ["docs/build-notes.md"],
+      signals: ["citation", "build"],
+    }),
+  );
+  check("citation-only prose does not select build", !citation.triggered_optional.includes("build"));
+
+  const ambiguous = selectRoster(
+    candidate({ changed_paths: ["src/panel.js"], ambiguous: true }),
+  );
+  check("ambiguous classification widens", ambiguous.ambiguity_widened);
+  check("ambiguous classification uses the wider floor", ambiguous.roster.length === 10);
+  const lifecycleSelection = selectLifecycleRoster({
+    full_candidate: candidate(),
+    fix_delta: { changed_paths: ["Makefile"] },
+    previous_roster: code.roster,
+  });
+  check("lifecycle selection examines the full candidate and fix delta", lifecycleSelection.roster.includes("build"));
+}
+
+console.log("panel lifecycle: selection artifact");
+const root = mkdtempSync(join(tmpdir(), "d2b-panel-lifecycle-"));
+let priorSelection;
+try {
+  const initial = makeSelection(root);
+  priorSelection = initial.selection;
+  check(
+    "selection is rendered at the candidate-bound lifecycle address",
+    initial.path.endsWith(
+      "/.scratch/panel/spec004w1/selections/candidate-1/" +
+      `${"a".repeat(64)}.json`,
+    ),
+  );
+  check("selection schema version is one", initial.selection.schema_version === 1);
+  check("selection table version is two", initial.selection.selection_table_version === 2);
+  check("selection is readable after rendering", readSelection(initial.path).candidate_id === "candidate-1");
+  const repeated = makeSelection(root);
+  check("identical selection regeneration is a compare", repeated.created === false);
+  rejects(
+    "conflicting selection regeneration is refused",
+    () => makeSelection(root, { changed_paths: ["Makefile"] }),
+    /conflicting generated bytes/,
+  );
+
+  const widened = createSelection(
+    {
+      ...candidate({
+        snapshot_sha256: "b".repeat(64),
+        changed_paths: ["Makefile"],
+      }),
+      lifecycle_id: "spec004w1",
+      phase: "verification",
+      previous_roster: initial.selection.roster,
+    },
+    { root },
+  );
+  check("build fix widening keeps every prior seat", initial.selection.roster.every((seat) => widened.selection.roster.includes(seat)));
+  check("build fix widening adds build", widened.selection.roster.includes("build"));
+  rejects(
+    "roster narrowing is refused",
+    () => validateMonotonicRoster(
+      initial.selection.roster,
+      initial.selection.roster.slice(0, -1),
+      readSelectionTable(),
+    ),
+    /roster narrowing|mandatory/,
+  );
+
+  console.log("panel lifecycle: comprehensive discovery and ledger");
+  const request = createDiscoveryRequest({
+    selection: initial.selection,
+    candidate: candidate(),
+    context: { full_candidate: "staged" },
+    validation_evidence: ["node tests"],
+  });
+  check("discovery request is comprehensive", request.comprehensive === true && request.full_candidate === true);
+  check("discovery request states the one comprehensive instruction", /comprehensive/.test(request.instruction) && /later rounds/.test(request.instruction));
+
+  const zeroResults = completeResults(initial.selection.roster);
+  const zeroSources = validateDiscoveryResults(initial.selection, zeroResults);
+  check("explicit zero-finding results are accepted", zeroSources.length === 0);
+  const withFinding = completeResults(initial.selection.roster, "software");
+  const testResult = withFinding.test;
+  testResult.findings = [{
+    source_id: "test:1",
+    source_ordinal: 1,
+    raw_text: "The generated request can lose a source.",
+    attribution: "test",
+    severity: "MAJOR",
+    impact: "A source could disappear from the shared ledger.",
+    recommendation: "Validate the source mapping before generation.",
+  }];
+  rejects(
+    "a missing selected-seat discovery result is refused",
+    () => {
+      const missing = { ...withFinding };
+      delete missing[initial.selection.roster.at(-1)];
+      validateDiscoveryResults(initial.selection, missing);
+    },
+    /missing complete discovery result/,
+  );
+  rejects(
+    "an incomplete selected-seat discovery result is refused",
+    () => validateDiscoveryResults(initial.selection, {
+      ...withFinding,
+      software: { ...withFinding.software, complete: false },
+    }),
+    /complete: true/,
+  );
+  const groups = [
+    {
+      source_finding_ids: ["software:1", "test:1"],
+      description: "One shared source-mapping defect.",
+      severity: "MAJOR",
+      impact: "The ledger could lose attribution.",
+      recommendation: "Validate the exact source mapping.",
+    },
+  ];
+  const ledger = mergeDiscoveryLedger({
+    selection: initial.selection,
+    results: withFinding,
+    groups,
+  });
+  check("deduplication creates one stable R identifier", ledger.issues[0].id === "R1");
+  check("deduplication preserves both source attributions", ledger.issues[0].source_finding_ids.join(",") === "software:1,test:1");
+  const ledgerAgain = mergeDiscoveryLedger({
+    selection: initial.selection,
+    results: withFinding,
+    groups,
+  });
+  check("identical ledger inputs are byte-stable", stableStringify(ledger) === stableStringify(ledgerAgain));
+  rejects(
+    "an unmapped source finding is refused",
+    () => mergeDiscoveryLedger({
+      selection: initial.selection,
+      results: withFinding,
+      groups: [{ source_finding_ids: ["software:1"] }],
+    }),
+    /mapping is incomplete/,
+  );
+  rejects(
+    "a source mapped into two groups is refused",
+    () => mergeDiscoveryLedger({
+      selection: initial.selection,
+      results: withFinding,
+      groups: [
+        { source_finding_ids: ["software:1", "test:1"] },
+        { source_finding_ids: ["software:1"] },
+      ],
+    }),
+    /more than one/,
+  );
+  const ledgerPath = join(root, "ledger.json");
+  writeCreateOrCompare(ledgerPath, ledger);
+  rejects(
+    "conflicting ledger bytes are refused",
+    () => writeCreateOrCompare(ledgerPath, { ...ledger, complete: false }),
+    /conflicting generated bytes/,
+  );
+
+  console.log("panel lifecycle: responses and strict acceptance");
+  const responseInput = makeLedger();
+  const fixed = {
+    issue_id: "R1",
+    disposition: "Fixed",
+    changed_surface: ["src/panel.js"],
+    justification: "The source mapping is now validated.",
+    evidence: "targeted Node test",
+  };
+  const factual = {
+    issue_id: "R2",
+    disposition: "Invalid",
+    justification: "The report describes behavior that is not present.",
+    verified_factual_status: "Verified against the full candidate.",
+    evidence: "source inspection",
+  };
+  const minor = {
+    issue_id: "R3",
+    disposition: "Deferred",
+    justification: "This non-blocking cleanup is recorded for later.",
+  };
+  const nit = {
+    issue_id: "R4",
+    disposition: "Withdrawn",
+    justification: "The wording is already correct.",
+    verified_factual_status: "Verified against the candidate.",
+    evidence: "source inspection",
+  };
+  const responses = [fixed, factual, minor, nit];
+  check("all supported response dispositions validate", validateResponses(responseInput, responses).length === 4);
+  check(
+    "response template covers every ledger issue",
+    createResponseTemplate(responseInput).responses.length === responseInput.issues.length,
+  );
+  check("fixed blocker is approvable", evaluateApproval({
+    selection: initial.selection,
+    ledger: responseInput,
+    responses,
+    verification_results: allVerificationResults(initial.selection.roster),
+  }).approved === true);
+  for (const disposition of ["Invalid", "Withdrawn"]) {
+    const factualBlocker = {
+      issue_id: "R1",
+      disposition,
+      justification: `The BLOCKER is factually ${disposition.toLowerCase()}.`,
+      verified_factual_status: "Verified against the full candidate.",
+      evidence: "source inspection",
+    };
+    check(
+      `verified ${disposition} BLOCKER is approvable`,
+      evaluateApproval({
+        selection: initial.selection,
+        ledger: responseInput,
+        responses: [factualBlocker, factual, minor, nit],
+        verification_results: allVerificationResults(initial.selection.roster),
+      }).approved === true,
+    );
+  }
+  rejects(
+    "a missing ledger response is refused",
+    () => validateResponses(responseInput, responses.slice(0, -1)),
+    /missing implementation responses/,
+  );
+  rejects(
+    "fixed without evidence is refused",
+    () => validateResponses(responseInput, [{ ...fixed, evidence: "" }, factual, minor, nit]),
+    /requires non-blank evidence/,
+  );
+  rejects(
+    "invalid without factual verification is refused",
+    () => validateResponses(responseInput, [{ ...fixed }, { ...factual, verified_factual_status: "" }, minor, nit]),
+    /requires verified_factual_status/,
+  );
+  rejects(
+    "deferred blocker cannot be accepted",
+    () => {
+      const result = evaluateApproval({
+        selection: initial.selection,
+        ledger: responseInput,
+        responses: [
+          { ...fixed, issue_id: "R1", disposition: "Deferred", changed_surface: undefined },
+          factual,
+          minor,
+          nit,
+        ],
+        verification_results: allVerificationResults(initial.selection.roster),
+      });
+      if (result.blocking_issues.includes("R1")) {
+        throw new Error("Deferred BLOCKER approved");
+      }
+    },
+    /Deferred BLOCKER approved/,
+  );
+
+  const majorLedger = {
+    ...responseInput,
+    issues: [{ ...responseInput.issues[1], id: "R1" }],
+    sources: [responseInput.sources[1]],
+  };
+  const acceptedMajor = {
+    issue_id: "R1",
+    disposition: "Deferred",
+    justification: "The merge owner accepts the documented residual risk.",
+    acceptance: {
+      accepter: "merge-owner",
+      capacity: "merge owner",
+      justification: "The risk is bounded and tracked.",
+    },
+  };
+  check("accepted Deferred MAJOR validates", validateResponses(majorLedger, [acceptedMajor]).length === 1);
+  check("accepted Deferred MAJOR approves", evaluateApproval({
+    selection: initial.selection,
+    ledger: majorLedger,
+    responses: [acceptedMajor],
+    verification_results: allVerificationResults(initial.selection.roster),
+  }).approved === true);
+  const acceptedRejectedMajor = {
+    ...acceptedMajor,
+    disposition: "Intentionally rejected",
+  };
+  check(
+    "accepted Intentionally rejected MAJOR approves",
+    evaluateApproval({
+      selection: initial.selection,
+      ledger: majorLedger,
+      responses: [acceptedRejectedMajor],
+      verification_results: allVerificationResults(initial.selection.roster),
+    }).approved === true,
+  );
+  for (const disposition of ["Invalid", "Withdrawn"]) {
+    const factualMajor = {
+      issue_id: "R1",
+      disposition,
+      justification: `The MAJOR is factually ${disposition.toLowerCase()}.`,
+      verified_factual_status: "Verified against the full candidate.",
+      evidence: "source inspection",
+    };
+    check(
+      `verified ${disposition} MAJOR needs no acceptance`,
+      evaluateApproval({
+        selection: initial.selection,
+        ledger: majorLedger,
+        responses: [factualMajor],
+        verification_results: allVerificationResults(initial.selection.roster),
+      }).approved === true,
+    );
+  }
+  const acceptanceMutations = [
+    undefined,
+    null,
+    [],
+    "accepted",
+    { capacity: "merge owner", justification: "x" },
+    { accepter: "x", capacity: "merge owner" },
+    { accepter: "x", capacity: "merge owner", justification: "x", extra: "no" },
+    { accepter: 1, capacity: "merge owner", justification: "x" },
+    { accepter: "x", capacity: 1, justification: "x" },
+    { accepter: "x", capacity: "merge owner", justification: 1 },
+    { accepter: " ", capacity: "merge owner", justification: "x" },
+    { accepter: "x", capacity: "merge owner", justification: " " },
+    { accepter: "x", capacity: "", justification: "x" },
+    { accepter: "x", capacity: " ", justification: "x" },
+    { accepter: "x", capacity: "repository owner", justification: "x" },
+  ];
+  for (const [index, acceptance] of acceptanceMutations.entries()) {
+    rejects(
+      `malformed acceptance ${index + 1} is refused`,
+      () => validateResponses(majorLedger, [{ ...acceptedMajor, acceptance }]),
+      /acceptance|capacity/,
+    );
+  }
+  rejects(
+    "Intentionally rejected without acceptance is refused at approval",
+    () => {
+      const result = evaluateApproval({
+        selection: initial.selection,
+        ledger: majorLedger,
+        responses: [{ ...acceptedMajor, disposition: "Intentionally rejected", acceptance: undefined }],
+        verification_results: allVerificationResults(initial.selection.roster),
+      });
+      if (result.approved) throw new Error("unaccepted MAJOR approved");
+    },
+    /requires acceptance/,
+  );
+
+  console.log("panel lifecycle: self-verification, scope, late findings, and metrics");
+  const selfVerification = {
+    tests: ["node scripts/copilot/test-panel-lifecycle.mjs"],
+    lint: "shell syntax and Node checks passed",
+    formatting: "not applicable",
+    static_analysis: "check-bindings planned for integration",
+    build: "not applicable",
+    uncovered_areas: ["delivery xtask is another slice"],
+    self_review: "inspected the complete changed surface",
+  };
+  check("self-verification requires and accepts every field", validateSelfVerification(selfVerification).build === "not applicable");
+  rejects(
+    "self-verification with a missing field is refused",
+    () => validateSelfVerification({ ...selfVerification, build: undefined }),
+    /build/,
+  );
+  check(
+    "fix scope accepts declared paths",
+    validateFixScope({ latest_delta_paths: ["src/panel.js"], allowed_paths: ["src/panel.js"] }).latest_delta_paths.length === 1,
+  );
+  rejects(
+    "unrelated fix scope is refused",
+    () => validateFixScope({ latest_delta_paths: ["src/unrelated.js"], allowed_paths: ["src/panel.js"] }),
+    /unrelated paths|new lifecycle/,
+  );
+  rejects(
+    "pre-existing late NIT is refused",
+    () => lateFindingAdmission({ severity: "NIT", category: "style", previously_missed: true }),
+    /not admissible/,
+  );
+  check(
+    "introduced late NIT is admitted as a non-discovery regression",
+    lateFindingAdmission({ severity: "NIT", introduced_regression: true }).late === true,
+  );
+  check(
+    "previously missed late MAJOR is admitted",
+    lateFindingAdmission({ severity: "MAJOR", previously_missed: true }).late === true,
+  );
+  const appended = appendLateFindings(responseInput, [{
+    severity: "MAJOR",
+    previously_missed: true,
+    seat: "software",
+    raw_text: "A late unsafe issue.",
+    impact: "Approval would be unsafe.",
+    recommendation: "Fix the issue.",
+  }]);
+  check("late issue receives the next stable R identifier", appended.issues.at(-1).id === "R5");
+  rejects(
+    "re-admitting the same late source is refused",
+    () => appendLateFindings(appended, [{
+      severity: "MAJOR",
+      previously_missed: true,
+      seat: "software",
+      raw_text: "A late unsafe issue.",
+      impact: "Approval would be unsafe.",
+      recommendation: "Fix the issue.",
+    }]),
+    /already exists/,
+  );
+  const metrics = calculateMetrics({
+    ledger: appended,
+    responses: [{ issue_id: "R1", disposition: "Fixed" }],
+    review_iterations: 2,
+    implementation_iterations: 2,
+  });
+  check("metrics count late blockers and majors", metrics.late_major_count === 1 && metrics.late_unique_findings === 1);
+  check("metrics calculate fixed issues per iteration", metrics.average_fixed_issues_per_implementation_iteration === 0.5);
+  check("zero implementation iterations produce 0.0", calculateMetrics({ ledger: responseInput, implementation_iterations: 0 }).average_fixed_issues_per_implementation_iteration === 0.0);
+
+  console.log("panel lifecycle: scoped verification");
+  const verificationSelection = createSelection(
+    {
+      ...candidate({ snapshot_sha256: "c".repeat(64), changed_paths: ["src/panel.js"] }),
+      lifecycle_id: "spec004w1",
+      phase: "verification",
+      previous_roster: initial.selection.roster,
+    },
+    { root },
+  );
+  const verificationInput = prepareVerification({
+    selection: verificationSelection.selection,
+    ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+    responses,
+    self_verification: selfVerification,
+    latest_delta_paths: ["src/panel.js"],
+    previous_status: {},
+  });
+  check("verification receives the complete ledger", verificationInput.requests[0].ledger.issues.length === 4);
+  check("verification keeps discovery closed", verificationInput.requests[0].comprehensive_discovery_already_complete === true);
+  const verified = validateVerificationResults(
+    verificationSelection.selection,
+    allVerificationResults(verificationSelection.selection.roster),
+  );
+  check("every selected seat supplies complete verification", verified.length === verificationSelection.selection.roster.length);
+  const verificationDir = join(root, "verification");
+  const writtenVerification = writeVerificationArtifacts(verificationDir, {
+    selection: verificationSelection.selection,
+    ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+    responses,
+    self_verification: selfVerification,
+    latest_delta_paths: ["src/panel.js"],
+  });
+  check(
+    "verification generation writes one request per selected seat",
+    writtenVerification.written.length === verificationSelection.selection.roster.length,
+  );
+  rejects(
+    "a missing verification seat is refused",
+    () => validateVerificationResults(
+      verificationSelection.selection,
+      Object.fromEntries(
+        Object.entries(allVerificationResults(verificationSelection.selection.roster)).slice(0, -1),
+      ),
+    ),
+    /missing verification result/,
+  );
+} finally {
+  rmSync(root, { recursive: true, force: true });
+}
+
+console.log("panel lifecycle: legacy continuation");
+{
+  const legacyRecords = [
+    ["software", "[critical] unsafe source"],
+    ["test", "[HIGH] missing negative"],
+    ["nixos", "[medium] module wording"],
+    ["networking", "[low] route name"],
+    ["security", "critical without bracket"],
+    ["rust", "[LoW] rust style"],
+    ["product", "[criticality] not exact"],
+    ["docs", " [high] leading space"],
+    ["observability", "[medium] metric"],
+    ["kernel", "[critical] syscall"],
+  ].map(([role, recommendation], index) => ({
+    role,
+    output_sha256: String(index + 1).repeat(64).slice(0, 64),
+    recommendations: [recommendation],
+  }));
+  const imported = importLegacyRound(
+    { records: legacyRecords },
+    {
+      candidate: candidate({ changed_paths: ["Makefile"] }),
+    },
+  );
+  check("complete legacy ten-seat import is recognized", imported.complete === true && imported.discovery_required === false);
+  check("legacy source identity includes digest, seat, and ordinal", imported.sources[0].source_id.includes("software:1"));
+  check("legacy raw recommendation text is preserved", imported.sources[0].raw_text === "[critical] unsafe source");
+  check("legacy attribution is preserved", imported.sources[0].raw_attribution === "software");
+  check("exact critical prefix maps to BLOCKER", imported.sources.find((source) => source.seat === "software").severity === "BLOCKER");
+  check("exact high prefix maps to MAJOR", imported.sources.find((source) => source.seat === "test").severity === "MAJOR");
+  check("exact medium prefix maps to MINOR", imported.sources.find((source) => source.seat === "nixos").severity === "MINOR");
+  check("exact low prefix maps to NIT", imported.sources.find((source) => source.seat === "rust").severity === "NIT");
+  check("unbracketed or non-exact prefix maps to migration MAJOR", imported.sources.find((source) => source.seat === "security").migration_assigned_severity === true);
+  check("legacy rust maps responsibility to software Rust profile", imported.responsibilities.some((item) => item.legacy_seat === "rust" && item.current_seat === "software" && item.profile === "rust"));
+  check("legacy rust profile is bound to current software", imported.profiles.software.includes("rust"));
+  check("current build selection widens the imported roster", imported.lifecycle_roster.includes("build"));
+  const importedWithPriorSelection = importLegacyRound(
+    { records: legacyRecords },
+    {
+      selection: priorSelection,
+      candidate: candidate({ changed_paths: ["Makefile"] }),
+    },
+  );
+  check(
+    "legacy import widens a prior selection when the current candidate triggers build",
+    importedWithPriorSelection.lifecycle_roster.includes("build"),
+  );
+  const importedAgain = importLegacyRound(
+    { records: legacyRecords },
+    { candidate: candidate({ changed_paths: ["Makefile"] }) },
+  );
+  check("repeated legacy import has stable bytes", stableStringify(imported) === stableStringify(importedAgain));
+  const legacyDir = mkdtempSync(join(tmpdir(), "d2b-legacy-round-"));
+  try {
+    mkdirSync(join(legacyDir, "records"));
+    writeFileSync(
+      join(legacyDir, "address.json"),
+      JSON.stringify({ panel_format_version: undefined }),
+    );
+    writeFileSync(
+      join(legacyDir, "records", "software.json"),
+      JSON.stringify(legacyRecords[0]),
+    );
+    const directoryImport = importLegacyRound(legacyDir, {
+      candidate: candidate({ changed_paths: ["src/panel.js"] }),
+    });
+    check("legacy directory import reads only its records directory", directoryImport.sources.length === 1);
+  } finally {
+    rmSync(legacyDir, { recursive: true, force: true });
+  }
+
+  const partial = importLegacyRound(
+    { records: legacyRecords.slice(0, 2) },
+    { candidate: candidate({ changed_paths: ["src/panel.js"] }) },
+  );
+  check("partial legacy import retains completed sources", partial.sources.length === 2);
+  check("partial legacy import requests one current discovery", partial.discovery_required === true && partial.discovery_mode === "run-one-current-discovery");
+  rejects(
+    "current panel format is not accepted as legacy",
+    () => importLegacyRound({ records: [{ ...legacyRecords[0], panel_format_version: 1 }] }),
+    /current format|legacy fallback/,
+  );
+  rejects(
+    "duplicate legacy role is refused",
+    () => importLegacyRound({ records: [legacyRecords[0], legacyRecords[0]] }),
+    /duplicate record/,
+  );
+}
+
+if (failures > 0) {
+  console.error(`\ntest-panel-lifecycle: ${failures} failure(s)`);
+  process.exit(1);
+}
+console.log("\ntest-panel-lifecycle: all cases passed");

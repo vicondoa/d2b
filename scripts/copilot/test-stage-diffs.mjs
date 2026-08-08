@@ -85,6 +85,11 @@ try {
   check("first review stages successfully", first.status === 0, first.text);
 
   const firstDir = join(repo, ".scratch", "panel", "spec001w1-r1");
+  const firstAddress = JSON.parse(readFileSync(join(firstDir, "address.json"), "utf8"));
+  check(
+    "first review records its lifecycle id",
+    firstAddress.lifecycle_id === "spec001w1",
+  );
   const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
   const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
   check(
@@ -101,6 +106,11 @@ try {
       firstRequest.includes(
         "Do not rerun validation unless your seat-specific",
       ),
+  );
+  check(
+    "first request asks for full-candidate comprehensive discovery",
+    firstRequest.includes("full candidate") &&
+      firstRequest.includes("every reasonably discoverable actionable finding"),
   );
   check(
     "dispatch prompt points at the complete request",

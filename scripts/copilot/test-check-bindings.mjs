@@ -28,7 +28,7 @@
 // It is a plain node script with no test framework because the repository does
 // not add tooling for one gate. It runs from `make test-lint`.
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -78,6 +78,7 @@ const REQUIRED_INPUTS = [
   "packages/d2b-contract-tests/tests/policy_dash_gate.rs",
   "scripts/copilot/prompt-corpus.mjs",
   "scripts/copilot/prompt-corpus-manifest.json",
+  "docs/adr/specs/0053-panel-prompt-sources.md",
   "packages/xtask/src/delivery/model.rs",
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
@@ -103,6 +104,7 @@ const REQUIRED_FAILURE_TEXT = {
   "packages/d2b-contract-tests/tests/policy_dash_gate.rs": "policy_dash_gate.rs is missing",
   "scripts/copilot/prompt-corpus.mjs": "prompt-corpus.mjs is missing",
   "scripts/copilot/prompt-corpus-manifest.json": "prompt-corpus-manifest.json is missing",
+  "docs/adr/specs/0053-panel-prompt-sources.md": "panel prompt source",
   "packages/xtask/src/delivery/model.rs": "cannot read model.rs",
   "packages/xtask/src/delivery/panel.rs": "cannot read panel.rs",
   "packages/xtask/src/delivery/mod.rs": "cannot read mod.rs",
@@ -116,18 +118,18 @@ const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
 ];
 
-const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
+const SELECTION_TABLE = ".github/skills/d2b-panel-round/selection-table.json";
+const CURRENT_PANEL_SEATS = [
+  "agentic", "build", "docs", "kernel", "networking", "nixos",
+  "observability", "product", "reliability", "security", "simplicity",
+  "software", "test",
+];
 
 // The marker a register uses to declare that it is empty on purpose. The gate
 // compares against its own copy, so spelling it once here means a case cannot
 // drift into asserting a string the gate never matches, which would look like
 // coverage while testing nothing.
 const EMPTY_MARKER = "<!-- d2b-register: intentionally empty -->";
-
-// The regex the gate itself uses to find the roster. Sharing the shape is
-// deliberate: if the gate can parse the declaration, so can the harness, and
-// if it cannot, both fail rather than one silently disagreeing.
-const ROLES_DECL = /const\s+ROLES\s*=\s*\[[\s\S]*?\];/;
 
 let failures = 0;
 
@@ -184,54 +186,36 @@ function removeFile(dir, relativePath) {
   rmSync(path);
 }
 
-// Replace the helper's ROLES declaration with arbitrary text. Taking the whole
-// declaration lets a case rewrite it into a shape the guard's regex cannot
-// parse, which is the drift a refactor actually produces.
-//
-// The rewrite must actually change the file. A mutation that silently produced
-// the original text would leave the fixture unmutated, the gate would exit 0,
-// and the case would report a failure whose stated cause is wrong. Assert it
-// instead, so a no-op mutation names itself.
-function setRolesBlock(dir, text) {
-  const path = join(dir, HELPER);
-  const src = readFileSync(path, "utf8");
-  if (!ROLES_DECL.test(src)) {
-    throw new Error("fixture: ROLES declaration not found in make-records.mjs");
-  }
-  const next = src.replace(ROLES_DECL, text);
-  if (next === src) {
-    throw new Error("fixture: the mutation did not change make-records.mjs");
-  }
-  writeFileSync(path, next);
+function mutateSelectionRoster(dir, mutate) {
+  mutateJson(dir, SELECTION_TABLE, mutate);
 }
 
-// The roster the negative cases perturb is read out of the fixture rather than
-// written down here.
-//
-// Writing it down would make a third copy, alongside `model.rs` and
-// `make-records.mjs`, and drift between copies is the exact class the guard
-// under test exists to catch. Nothing in this suite would notice such a drift:
-// the baseline case mutates nothing, so it never evaluates the array at all,
-// and the negative cases still pass, because perturbing a stale roster also
-// mismatches `model.rs`. The suite would stay green while testing a roster the
-// repo had stopped using.
-//
-// Deriving it removes the third copy instead of documenting it.
-function rosterFromFixture(dir) {
-  const src = readFileSync(join(dir, HELPER), "utf8");
-  const block = src.match(ROLES_DECL);
-  if (!block) {
-    throw new Error("fixture: cannot read the roster from make-records.mjs");
+function checkCurrentPromptShape(dir) {
+  const panelSeats = readdirSync(join(dir, ".github", "agents"))
+    .filter((file) => file.startsWith("panel-") && file.endsWith(".agent.md"))
+    .map((file) => file.slice("panel-".length, -".agent.md".length))
+    .sort();
+  if (panelSeats.join(",") !== [...CURRENT_PANEL_SEATS].sort().join(",")) {
+    failures += 1;
+    console.error(
+      `FAIL current panel pool shape: expected [${CURRENT_PANEL_SEATS.join(", ")}], got [${panelSeats.join(", ")}]`,
+    );
   }
-  const roles = [...block[0].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  if (roles.length < 2) {
-    throw new Error(`fixture: roster has ${roles.length} seats; cannot perturb it`);
+  const manifest = JSON.parse(
+    readFileSync(join(dir, "scripts/copilot/prompt-corpus-manifest.json"), "utf8"),
+  );
+  const membership = manifest.membership ?? [];
+  if (
+    membership.length !== 35 ||
+    membership.filter((path) => path.startsWith(".github/agents/")).length !== 16 ||
+    membership.some((path) => path.endsWith("panel-rust.agent.md")) ||
+    !membership.some((path) => path.endsWith("panel-build.agent.md"))
+  ) {
+    failures += 1;
+    console.error(
+      `FAIL current prompt corpus shape: expected 35 files and sixteen agent files with build and without current rust`,
+    );
   }
-  return roles;
-}
-
-function rolesLiteral(roles) {
-  return `const ROLES = [\n  ${roles.map((r) => `"${r}"`).join(", ")},\n];`;
 }
 
 // Append a row to a memory register in the fixture. Both register cases below
@@ -251,7 +235,7 @@ function writeRegister(dir, reg, text) {
 
 // Rewrite one panel seat's shared finding-bar section inside the fixture. The
 // bar is what tells a seat which observations block the round and which belong
-// in the summary. The gate requires all ten to be byte-identical, because the
+// in the summary. The gate requires every selected seat to be byte-identical, because the
 // bar was originally restated per seat and silently diverged into ten
 // thresholds, three of which were absent entirely. Both mutations below are
 // that drift.
@@ -328,7 +312,7 @@ const CASES = [
   {
     name: "missing optional Caveman agent marker is rejected",
     mutate: (dir) =>
-      mutateFile(dir, ".github/agents/panel-rust.agent.md", (text) => {
+      mutateFile(dir, ".github/agents/panel-build.agent.md", (text) => {
         const start = text.indexOf("<!-- BEGIN D2B-CAVEMAN-COMMUNICATION -->");
         const endMarker = "<!-- END D2B-CAVEMAN-COMMUNICATION -->";
         const end = text.indexOf(endMarker, start) + endMarker.length;
@@ -342,8 +326,8 @@ const CASES = [
     mutate: (dir) =>
       mutateFile(
         dir,
-        ".github/agents/panel-rust.agent.md",
-        (text) => `${text}\n${cavemanBlock(dir, "panel-rust")}\n`,
+        ".github/agents/panel-build.agent.md",
+        (text) => `${text}\n${cavemanBlock(dir, "panel-build")}\n`,
       ),
     expectExit: 1,
     expectText: "must have exactly one start and end marker",
@@ -534,7 +518,11 @@ const CASES = [
     name: "prompt number fingerprint drift is rejected",
     mutate: (dir) =>
       mutateFile(dir, "docs/contributing/copilot-agents.md", (text) =>
-        text.replace("13 agents", "14 agents")),
+        text.includes("35 files")
+          ? text.replace("35 files", "36 files")
+          : text.includes("13 agents")
+            ? text.replace("13 agents", "14 agents")
+            : `${text}\n36 files\n`),
     expectExit: 1,
     expectText: "prompt corpus check failed",
   },
@@ -569,6 +557,28 @@ const CASES = [
         text.replace('"engineer": "software"', '"engineer": "tester"')),
     expectExit: 1,
     expectText: "prompt corpus check failed",
+  },
+  {
+    name: "panel prompt source missing current build guidance is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/adr/specs/0053-panel-prompt-sources.md",
+        (text) => text.replace(/\bbuild\b/i, "removed-build"),
+      ),
+    expectExit: 1,
+    expectText: "missing required current guidance",
+  },
+  {
+    name: "operative legacy panel prompt contract is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/adr/specs/0053-panel-prompt-sources.md",
+        (text) => `${text}\nThe relevant: false held-reviewer repeated rounds contract remains operative.\n`,
+      ),
+    expectExit: 1,
+    expectText: "keeps an operative",
   },
   {
     name: "an additional installed integration is rejected",
@@ -670,41 +680,53 @@ const CASES = [
   },
   {
     name: "a dropped seat is rejected",
-    mutate: (dir) => {
-      const roster = rosterFromFixture(dir);
-      setRolesBlock(dir, rolesLiteral(roster.slice(0, -1)));
-    },
+    mutate: (dir) => mutateSelectionRoster(dir, (table) => {
+      table.optional_seats.pop();
+      table.fill_order.pop();
+    }),
     expectExit: 1,
-    expectText: "make-records.mjs ROLES is [",
+    expectText: "exactly thirteen",
   },
   {
     name: "an extra seat is rejected",
-    mutate: (dir) => {
-      const roster = rosterFromFixture(dir);
-      setRolesBlock(dir, rolesLiteral([...roster, "performance"]));
-    },
+    mutate: (dir) => mutateSelectionRoster(dir, (table) => {
+      table.optional_seats.push("performance");
+      table.fill_order.push("performance");
+    }),
     expectExit: 1,
-    expectText: "make-records.mjs ROLES is [",
+    expectText: "exactly thirteen",
   },
   {
     name: "a reordered roster is rejected",
-    mutate: (dir) => {
-      const swapped = rosterFromFixture(dir);
-      [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
-      setRolesBlock(dir, rolesLiteral(swapped));
-    },
+    mutate: (dir) => mutateSelectionRoster(dir, (table) => {
+      [table.mandatory_seats[0], table.mandatory_seats[1]] =
+        [table.mandatory_seats[1], table.mandatory_seats[0]];
+    }),
     expectExit: 1,
-    expectText: "make-records.mjs ROLES is [",
+    expectText: "mandatory seat order",
   },
   {
-    name: "a roster the guard cannot parse is rejected rather than skipped",
-    mutate: (dir) => setRolesBlock(dir, "const ROLES = PANEL_SEATS.slice();"),
+    name: "a selection table the guard cannot parse is rejected rather than skipped",
+    mutate: (dir) =>
+      writeFileSync(
+        join(dir, SELECTION_TABLE),
+        '{"artifact_kind":"d2b-panel/selection-table",\n',
+      ),
     expectExit: 1,
-    expectText: "cannot parse ROLES",
+    expectText: "is not valid JSON",
+  },
+  {
+    name: "selection-table focus drift is rejected",
+    mutate: (dir) =>
+      mutateSelectionRoster(dir, (table) => {
+        table.seats.software.focus = "Different focus";
+      }),
+    expectExit: 1,
+    expectText: "authoritative selection-table focus",
   },
   {
     name: "a seat missing the shared finding bar is rejected",
-    mutate: (dir) => mutateBar(dir, "rust", (t, s, e) => t.slice(0, s) + t.slice(e + 1)),
+    mutate: (dir) => mutateBar(dir, "build", (t, s, e) => t.slice(0, s) + t.slice(e + 1)),
     expectExit: 1,
     expectText: 'no "## The bar for a finding" section',
   },
@@ -713,7 +735,7 @@ const CASES = [
     mutate: (dir) =>
       mutateBar(
         dir,
-        "rust",
+        "build",
         (t, s, e) => `${t.slice(0, e)}\nUse whatever threshold you judge appropriate.\n${t.slice(e)}`,
       ),
     expectExit: 1,
@@ -1288,6 +1310,7 @@ for (const c of ALL_CASES) {
   const dir = buildFixture(c.omit);
   try {
     if (c.mutate) c.mutate(dir);
+    if (c.name.startsWith("baseline:")) checkCurrentPromptShape(dir);
     const { status, out } = run(dir);
     ran += 1;
     if (c.expectNonZero && status === 0) {

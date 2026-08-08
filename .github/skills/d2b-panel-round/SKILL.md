@@ -1,176 +1,257 @@
 ---
 name: d2b-panel-round
-description: Run one d2b panel review round. Stages the delta and full diffs, dispatches all ten reviewer seats as independent read-only lanes pinned to the panel model and effort, collects verdicts, and renders the round report. Use for a plan gate, a wave work gate, or an ADR review.
+description: Run the standard Copilot Discover-Fix-Verify panel using the selected roster, one comprehensive discovery, a shared ledger, and scoped verification.
 user-invocable: true
 ---
 
-# Panel round
+# Panel lifecycle
 
-One ten-role panel gate round. A phase closes only on unanimous sign-off:
-`signoff` is `true` **iff** `recommendations` is `[]`.
+This skill runs one lifecycle, not a sequence of open-ended rediscovery
+rounds. The lifecycle has one comprehensive discovery, a batch of fixes, and
+scoped verification. Its roster starts with discovery selection and can only
+widen when a full candidate or fix delta triggers another seat.
 
 Usage:
 
 ```
-/d2b-panel-round plan                 review the plan, before any implementation
-/d2b-panel-round work                 review the integrated diff for a wave
-/d2b-panel-round adr <path>           review an ADR draft
+/d2b-panel-round plan
+/d2b-panel-round work
+/d2b-panel-round adr <path>
 ```
 
-## The binding table
+The plan, work, and ADR entrypoints all use the same lifecycle helper. No
+service, daemon, broker, socket, principal, authority protocol, signature, or
+runtime surface is involved.
 
-**This table is the configuration.** Every dispatch sets all four columns
-explicitly. It is committed here for review against
-`packages/xtask/src/delivery/model.rs`.
+## Authoritative selection and dispatch table
+
+`.github/skills/d2b-panel-round/selection-table.json` is the version-2 source
+for seat classes, floors, fill order, focus, triggers, and profiles. The
+orchestrator selects the roster from that table. Agents do not select their
+own relevance.
 
 | Seat | `agent_type` | `model` | `reasoning_effort` | `context_tier` | `communication` |
 |---|---|---|---|---|---|
 | software | `panel-software` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | test | `panel-test` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
-| nixos | `panel-nixos` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
-| networking | `panel-networking` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
-| security | `panel-security` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
-| rust | `panel-rust` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | product | `panel-product` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | docs | `panel-docs` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| security | `panel-security` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | observability | `panel-observability` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| simplicity | `panel-simplicity` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| reliability | `panel-reliability` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| agentic | `panel-agentic` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| nixos | `panel-nixos` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| networking | `panel-networking` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
+| build | `panel-build` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 
-**Never omit a parameter.** A subagent does not inherit session effort. An
-omitted `reasoning_effort` silently uses the model default, `medium`, while the
-record attests `high`: a plausible-looking false attestation rather than an
-error.
+The current pool has seven mandatory seats. Code and operative configuration
+have a floor of ten; documentation-only candidates have a floor of eight.
+Every matching optional trigger is selected even when the floor is already
+met. Fill order is `reliability`, `agentic`, `nixos`, `networking`, `kernel`,
+then `build`. Ambiguity widens selection. Citation-only prose does not trigger
+the build seat; an actual build contract or explicit build signal does.
 
-Legacy records from `gemini-3.1-pro-preview` at `high` remain readable as an
-exact compatibility pair. Never dispatch a new lane on it or mix one member
-with the current binding.
-
-`scripts/copilot/check-bindings.mjs` validates this table against agent files
-and xtask policy constants. Run it after editing either.
+Rust responsibility is a `software` profile. The retired legacy Rust seat
+remains readable only while importing historical records; it is not dispatched
+by this current table.
 
 <!-- D2B-CAVEMAN-DISPATCH: caveman-full-optional -->
 Resolve the caller's communication request before dispatch. Pass explicit
 `normal` or `off` unchanged; either overrides optional
-`caveman-full-optional`. Do not score brevity or claim compressed wording in a
-verdict or report.
+`caveman-full-optional`. Communication mode never changes persisted artifacts,
+selection, ledger, verdict, or panel JSON.
 
-## Procedure
+## Lifecycle artifacts
 
-### 1. Establish the round address
-
-Every round uses a qualified wave token, lowercase, program and wave fused:
-`adr046w1`, `spec001w1`, `spec001w3fu2`. Legacy bare `W0` through `W8` remain
-valid for program `ADR046`; do not rewrite them.
-
-Set `ROUND` to the qualified token plus the round ordinal, for example
-`spec001w1-r2`.
-
-### 2. Stage the evidence
+Create one lifecycle selection for each reviewed candidate state:
 
 ```
-bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <ROUND>
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select <candidate.json> <lifecycle-id>
 ```
 
-`<base>` is the branch base; `<prev-tip>` is the previous round's reviewed
-commit, or the base for round 1. This writes `.scratch/panel/<ROUND>/`
-containing `delta.diff`, `full.diff`, `evidence.md`, `address.json`,
-`review-request.md`, `dispatch-prompt.txt`, and one file per seat under
-`reviewer-notes/`.
+The helper renders selection schema version `1` at:
 
-For later rounds, the script requires `<prev-tip>` to match the immediately
-previous recorded tip and every seat to have a prior verdict. That makes
-`delta.diff` evidence rather than a caller-supplied range claim.
+```
+.scratch/panel/<lifecycle>/selections/<candidate-id>/<snapshot-sha256>.json
+```
 
-Reviewers have no shell. Staging gives ten lanes byte-identical evidence and
-keeps them off the shared Nix store, cargo target, and heavy-gate semaphore
-while implementation runs.
+Generation is deterministic and create-or-compare. Existing different bytes
+are a hard failure. The artifact binds the lifecycle, phase, program, wave,
+candidate digest triple, selection-table version, classification inputs,
+profiles, and ordered roster.
 
-Write the integrator's validation evidence into `evidence.md` before
-dispatching: the exact commands run and their pass or fail results. State what
-was **not** covered too. A reviewer who cannot tell whether the change was
-validated is required to raise that as a finding.
+Stage the candidate with the same lifecycle and selection:
 
-Edit `reviewer-notes/<seat>.md` only when that seat needs an integrator
-rebuttal or an explicit reviewer-specific validation request. Do not put a
-change summary there.
+```
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <round-id> \
+  --lifecycle <lifecycle-id> --selection <selection.json>
+```
 
-### 3. Dispatch all ten seats in one batch
+`address.json` records `lifecycle_id`. The selection path is passed unchanged
+to both consumers:
 
-Dispatch every row of the table in a single response so the lanes run in
-parallel. Use the exact contents of
-`.scratch/panel/<ROUND>/dispatch-prompt.txt` as every task prompt. Do not
-hand-author, summarize, shorten, or supplement reviewer prompts.
+```
+node .github/skills/d2b-panel-round/scripts/make-records.mjs \
+  <round-dir> --selection <selection.json>
+delivery wave panel-request --selection <selection.json>
+```
 
-The generated `review-request.md` is the complete shared instruction source.
-It names the exact delta and full ranges, the validation evidence, the phase
-deliverable, the seat-specific notes, the finding bar, the no-rerun rule, and,
-after the first round, the prior verdict each seat must verify. The task prompt
-has one job: direct the reviewer to that complete request.
+Both consumers must refuse a candidate, selection schema, selection-table
+version, or ordered-roster mismatch. Records are current workspace
+schema-version `2` objects with `panel_format_version: 1`.
 
-Do not summarise the change and ask reviewers to trust it. A prose summary is
-intent; reading the delta catches silent scope changes.
+## Discover once
 
-### 4. Collect and record
+The first staged request gives every selected seat the full candidate, full
+context, validation evidence, and seat focus. Generate the request with:
 
-Each lane returns one JSON verdict object. Write it to
-`.scratch/panel/<ROUND>/verdicts/<seat>.json`.
+```
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  discovery-request <selection.json> <candidate.json> <request.json>
+```
 
-Then write `.scratch/panel/<ROUND>/observed.json`, recording what each lane
-**actually** ran at:
+The discovery instruction is comprehensive: spend the effort now, report
+every reasonably discoverable actionable finding, and do not save observations
+for later rounds. Every seat must return exactly one explicit result:
 
 ```json
 {
-  "security": {
-    "model": "gpt-5.6-sol",
-    "reasoning_effort": "xhigh",
-    "run_id": "...",
-    "receipt_locator": "github-copilot://..."
-  }
+  "seat": "software",
+  "complete": true,
+  "findings": []
 }
 ```
 
-**Take these values from the harness, never from the reviewer.** The
-dispatch result reports the model the lane resolved to; that is the
-authoritative record. A reviewer's own statement about which model it is
-running is **confabulated and must not be used**: in the round that
-introduced this skill, five of ten seats named a model other than the one
-the harness reported for them, including two that named a different vendor
-entirely. Models cannot introspect their own binding. Asking them to is a
-plausible-looking source of exactly the false attestation the observed
-table exists to prevent.
+`findings: []` is a positive zero-finding result. A missing result is an
+error, never an inferred empty result. Findings include severity, impact,
+recommendation, source ordinal, raw text, and attribution.
+
+The orchestrator supplies deduplication groups. The lifecycle helper validates
+that every source finding maps to exactly one group, then assigns contiguous
+stable lifecycle-local identifiers `R1`, `R2`, and so on:
 
 ```
-node .github/skills/d2b-panel-round/scripts/make-records.mjs .scratch/panel/<ROUND>
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  merge-ledger <selection.json> <discovery-results.json> \
+  <dedup-groups.json> <ledger.json>
 ```
 
-That validates every verdict (`signoff` true iff `recommendations` empty, seat
-in the closed roster, one record per seat, all ten present, reviewer text within
-its length ceilings) and joins it to the candidate address. It takes the
-**observed** model and effort and fails closed rather than defaulting to policy,
-so a wrongly bound lane cannot be attested as correct.
+All source attribution and source-to-issue mappings remain in the ledger.
+Identical inputs produce identical bytes and conflicting regeneration is
+refused.
 
-### 5. Report and route
+Generate the response template and per-seat verification requests from the
+same ledger:
 
-Render the round report with per-seat verdicts, findings by severity, and this
-round's reviewed tip. **Record that tip** for the next delta.
+```
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  response-template <ledger.json> <responses.json>
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification <selection.json> <ledger.json> <responses.json> \
+  <self-verification.json> <verification-dir>
+```
 
-If any seat returned findings, the round did not pass. Land scoped fixes,
-rerun the smallest relevant validation, and run another round.
+## Fix and verify the ledger
 
-## Rules that bind the integrator, not the reviewers
+Implementation receives the complete ledger at once. Every issue gets exactly
+one disposition from this closed set:
 
-**Any content change invalidates every prior sign-off in the phase**, including
-from untouched seats. They re-report on the delta and may briefly confirm their
-area is unaffected.
+- `Fixed`: changed surface and non-blank evidence;
+- `Intentionally rejected`: concrete non-blank justification;
+- `Deferred`: concrete non-blank justification;
+- `Withdrawn`: verified factual status and non-blank evidence; or
+- `Invalid`: verified factual status and non-blank evidence.
 
-**A fix round addresses only the findings raised.** A genuine defect found
-while fixing something else is out of scope; record it in the memory register
-and land it separately. Otherwise each round grows the diff and the gate
-recedes while the deliverable sits finished.
+Missing responses and disposition-specific justification, evidence, or
+factual status fail closed. A `BLOCKER` approves only as Fixed, or factually
+verified Invalid or Withdrawn. A `MAJOR` also permits unresolved Intentionally
+rejected or Deferred only with this exact plain recorded object:
 
-**Do not run `git add -A` while a gate is running.** Gates write scratch
-directories into the worktree. Stage the specific paths the fix touched.
+```json
+{
+  "accepter": "claimed-repository-user",
+  "capacity": "repository maintainer",
+  "justification": "Recorded reason for accepting the remaining risk."
+}
+```
 
-**Green tests never waive this gate.** The canonical precedent in this repo is
-a panel round that returned zero sign-offs with eleven high findings that the
-static gate caught none of.
+The object has exactly those three fields. Each value is a string;
+`accepter` and `justification` are non-blank after trimming; `capacity` is
+exactly `repository maintainer` or `merge owner`. It is shape-checked process
+data only. No identity lookup, signature, GitHub API, service, or authority is
+involved.
+
+Before verification, record tests, lint, formatting, static analysis, build,
+uncovered areas, and self-review. Fix scope is the ledger's declared changed
+surface. Unrelated delta paths refuse verification and name a new or
+explicitly rescoped lifecycle.
+
+Rerun selection over the full current candidate and every fix delta. Union
+each result with the prior lifecycle roster. A seat may join, but no seat
+leaves.
+
+Verification consumes the full ledger, every response, validation and
+self-review evidence, latest delta, full candidate context, and each seat's
+prior status. It checks resolution and regressions; it does not reopen
+discovery. A late issue is admitted only for an introduced regression, a
+previously missed BLOCKER or MAJOR, or an unsafe correctness, security,
+data-loss, or reliability condition. Pre-existing MINOR, NIT, style, optional,
+and theoretical out-of-scope observations remain non-blocking ledger history.
+
+The lifecycle records initial and late findings, late BLOCKER and MAJOR
+counts, review and implementation iterations, and average fixed issues per
+implementation iteration. A zero implementation-iteration denominator is
+`0.0`. Metrics never affect approval.
+
+## Legacy continuation
+
+Import is version-first and never rewrites historical bytes:
+
+```
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  import-legacy <legacy-round-dir> [candidate.json] <import.json>
+```
+
+Complete legacy ten-seat records become discovery input without rerunning
+discovery. Partial records retain every completed source and run one current
+discovery. A source identity is the immutable record digest, legacy seat, and
+recommendation ordinal. Raw recommendation text and attribution remain
+unchanged.
+
+Only an exact bracketed prefix at byte zero maps historical severity:
+`[critical]` to `BLOCKER`, `[high]` to `MAJOR`, `[medium]` to `MINOR`, and
+`[low]` to `NIT`, with ASCII case folding. Every other spelling is
+migration-assigned `MAJOR`. Legacy `rust` remains attributed to `rust` while
+current verification responsibility is `software` with the Rust profile.
+Current candidate selection is unioned into the imported roster, including
+`build` when a build contract is present.
+
+## Dispatch and verdict
+
+Dispatch only the seats in the current selection artifact. Panel agents are
+read-only and must inspect staged evidence rather than run validation. Each
+selected seat returns exactly one JSON verdict:
+
+```json
+{
+  "engineer": "software",
+  "signoff": true,
+  "summary": "What was reviewed and the overall posture.",
+  "recommendations": []
+}
+```
+
+`signoff` is true if and only if `recommendations` is empty. Generate records
+only after every selected seat has a verdict and observed binding:
+
+```
+node .github/skills/d2b-panel-round/scripts/make-records.mjs \
+  <round-dir> --selection <selection.json>
+```
+
+Do not hand-copy findings or responses. Green validation never substitutes for
+selected-roster verification.

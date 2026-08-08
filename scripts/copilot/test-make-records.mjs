@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Coverage for make-records.mjs, the helper that turns ten reviewer verdicts
-// into the records `delivery wave panel-attest` consumes.
+// Coverage for make-records.mjs, the helper that turns a selected roster of
+// reviewer verdicts into the records `delivery wave panel-attest` consumes.
 //
 //   node scripts/copilot/test-make-records.mjs
 //
@@ -23,8 +23,9 @@ const root = join(here, "..", "..");
 const script = join(root, ".github", "skills", "d2b-panel-round", "scripts", "make-records.mjs");
 
 const ROLES = [
-  "software", "test", "nixos", "networking", "security",
-  "rust", "product", "docs", "observability", "kernel",
+  "software", "test", "product", "docs", "security", "observability",
+  "simplicity", "reliability", "agentic", "nixos", "networking", "kernel",
+  "build",
 ];
 
 let failures = 0;
@@ -45,6 +46,7 @@ function buildRound(mutate) {
   const state = {
     address: {
       round: "spec001w1r1",
+      lifecycle_id: "spec001w1",
       base: "a".repeat(40),
       previous_tip: "b".repeat(40),
       tip: "c".repeat(40),
@@ -57,6 +59,28 @@ function buildRound(mutate) {
       snapshot_sha256: "f".repeat(64),
       program: "SPEC001",
       wave: "spec001w1",
+    },
+    selection: {
+      artifact_kind: "d2b-panel/lifecycle-selection",
+      schema_version: 1,
+      lifecycle_id: "spec001w1",
+      phase: "discovery",
+      program: "SPEC001",
+      wave: "spec001w1",
+      candidate_id: "cand-0001",
+      content_id: "content-0001",
+      snapshot_sha256: "f".repeat(64),
+      selection_table_version: 2,
+      candidate_class: "code",
+      classification_inputs: {
+        changed_paths: ["src/lib.rs"],
+        signals: ["rust"],
+        candidate_class: "code",
+        ambiguous: false,
+      },
+      ambiguity_widened: false,
+      profiles: Object.fromEntries(ROLES.map((role) => [role, role === "software" ? ["rust"] : []])),
+      roster: ROLES,
     },
     observed: Object.fromEntries(ROLES.map((r, i) => [r, {
       model: "gpt-5.6-sol",
@@ -76,6 +100,7 @@ function buildRound(mutate) {
 
   writeFileSync(join(dir, "address.json"), JSON.stringify(state.address, null, 2));
   writeFileSync(join(dir, "candidate.json"), JSON.stringify(state.candidate, null, 2));
+  writeFileSync(join(dir, "selection.json"), JSON.stringify(state.selection, null, 2));
   writeFileSync(join(dir, "observed.json"), JSON.stringify(state.observed, null, 2));
   for (const [role, v] of Object.entries(state.verdicts)) {
     writeFileSync(join(dir, "verdicts", `${role}.json`), JSON.stringify(v, null, 2));
@@ -85,7 +110,7 @@ function buildRound(mutate) {
 
 function run(dir) {
   try {
-    const stdout = execFileSync("node", [script, dir], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = execFileSync("node", [script, dir, "--selection", join(dir, "selection.json")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return { code: 0, out: stdout, err: "" };
   } catch (e) {
     return { code: e.status ?? 1, out: e.stdout ?? "", err: e.stderr ?? "" };
@@ -121,6 +146,7 @@ console.log("make-records: the happy path");
       const rec = JSON.parse(readFileSync(join(recordsDir, "security.json"), "utf8"));
       check("the record carries the observed effort", rec.reasoning_effort === "xhigh", JSON.stringify(rec.reasoning_effort));
       check("the record carries the candidate address", rec.candidate_id === "cand-0001");
+      check("the record carries current panel format version", rec.panel_format_version === 1);
       check("the record digests the verdict", typeof rec.output_sha256 === "string" && rec.output_sha256.length === 64);
     }
   } finally {
@@ -135,8 +161,8 @@ console.log("make-records: a structured finding reaches the seal as a string");
   // written through verbatim passes every check here and then fails
   // deserialization at the seal. This case is the guard against that.
   const dir = buildRound((s) => {
-    s.verdicts.rust.signoff = false;
-    s.verdicts.rust.recommendations = [{
+    s.verdicts.agentic.signoff = false;
+    s.verdicts.agentic.recommendations = [{
       severity: "critical",
       where: "packages/d2b-core/src/lib.rs:1",
       what: "the thing is wrong",
@@ -149,7 +175,7 @@ console.log("make-records: a structured finding reaches the seal as a string");
     // Exit 3 is the designed non-unanimous verdict: the records are written,
     // the round does not pass. The point of this case is the record contents.
     check("a round carrying an object finding still writes records", r.code === 3, `exit ${r.code}: ${r.err}`);
-    const p = join(dir, "records", "rust.json");
+    const p = join(dir, "records", "agentic.json");
     if (existsSync(p)) {
       const rec = JSON.parse(readFileSync(p, "utf8"));
       const got = rec.recommendations[0];
@@ -169,7 +195,7 @@ console.log("make-records: a structured finding reaches the seal as a string");
         JSON.stringify(got),
       );
     } else {
-      check("a record was written for the seat carrying the object finding", false, "records/rust.json missing");
+      check("a record was written for the seat carrying the object finding", false, "records/agentic.json missing");
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -203,14 +229,14 @@ rejects(
 );
 rejects(
   "a lane that ran on the wrong model cannot be attested",
-  (s) => { s.observed.rust.model = "claude-opus-5"; },
+  (s) => {   s.observed.agentic.model = "claude-opus-5"; },
   /claude-opus-5|policy pins/i,
 );
 rejects(
   "legacy model and current effort cannot be mixed",
   (s) => {
-    s.observed.rust.model = "gemini-3.1-pro-preview";
-    s.observed.rust.reasoning_effort = "xhigh";
+    s.observed.agentic.model = "gemini-3.1-pro-preview";
+    s.observed.agentic.reasoning_effort = "xhigh";
   },
   /legacy|compatibility pair|xhigh/i,
 );
@@ -287,6 +313,26 @@ rejects(
   "a missing candidate address fails closed",
   (s) => { delete s.candidate.candidate_id; },
   /candidate_id/i,
+);
+rejects(
+  "a selection candidate mismatch fails closed",
+  (s) => { s.selection.candidate_id = "other-candidate"; },
+  /selection candidate mismatch|candidate_id/i,
+);
+rejects(
+  "a selection schema mismatch fails closed",
+  (s) => { s.selection.schema_version = 2; },
+  /schema_version/i,
+);
+rejects(
+  "a selection table version mismatch fails closed",
+  (s) => { s.selection.selection_table_version = 1; },
+  /selection table version|selection_table_version/i,
+);
+rejects(
+  "a selection roster mismatch fails closed",
+  (s) => { s.selection.roster = s.selection.roster.slice(0, -1); },
+  /mandatory|roster/i,
 );
 
 {

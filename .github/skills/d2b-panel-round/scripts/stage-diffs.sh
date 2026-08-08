@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stage byte-identical review evidence for one panel round.
 #
-#   stage-diffs.sh <base> <prev-tip> <round-id>
+#   stage-diffs.sh <base> <prev-tip> <round-id> [--lifecycle <lifecycle-id>]
+#                  [--selection <selection.json>]
 #
 # <base>      branch base commit or ref
 # <prev-tip>  commit the previous round reviewed; pass <base> for round 1
@@ -10,24 +11,61 @@
 # Panel reviewers have no shell. Everything they read is written here.
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id>" >&2
+if [ "$#" -lt 3 ]; then
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> [--lifecycle <lifecycle-id>] [--selection <selection.json>]" >&2
   exit 2
 fi
 
 base="$1"
 prev="$2"
 round="$3"
+shift 3
 
 case "$round" in
   */*|..*|"") echo "refusing round id with a path separator: $round" >&2; exit 2 ;;
 esac
+
+lifecycle=""
+selection_path=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --lifecycle)
+      [ "$#" -ge 2 ] || { echo "--lifecycle requires a value" >&2; exit 2; }
+      lifecycle="$2"
+      shift 2
+      ;;
+    --selection)
+      [ "$#" -ge 2 ] || { echo "--selection requires a path" >&2; exit 2; }
+      selection_path="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ "$round" =~ ^([[:alnum:]]+)-r([1-9][0-9]*)$ ]]; then
   wave="${BASH_REMATCH[1]}"
   round_number=$((10#${BASH_REMATCH[2]}))
 else
   echo "round id must end in -r<N>, for example spec001w1-r2: $round" >&2
+  exit 2
+fi
+
+if [ -z "$lifecycle" ]; then
+  lifecycle="$wave"
+fi
+case "$lifecycle" in
+  */*|..*|"") echo "refusing lifecycle id with a path separator: $lifecycle" >&2; exit 2 ;;
+esac
+if [[ "$lifecycle" == *\"* || "$lifecycle" == *\\* || "$lifecycle" == *$'\n'* ]]; then
+  echo "refusing lifecycle id with JSON control characters: $lifecycle" >&2
+  exit 2
+fi
+if [[ "$selection_path" == *\"* || "$selection_path" == *\\* || "$selection_path" == *$'\n'* ]]; then
+  echo "refusing selection path with JSON control characters: $selection_path" >&2
   exit 2
 fi
 
@@ -51,14 +89,14 @@ try {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
 }
-for (const key of ["round", "base", "previous_tip", "tip"]) {
+for (const key of ["round", "lifecycle_id", "base", "previous_tip", "tip"]) {
   if (typeof value[key] !== "string" || value[key].length === 0) {
     console.error(`${path}: address.json is missing ${key}`);
     process.exit(1);
   }
 }
 process.stdout.write(
-  [value.round, value.base, value.previous_tip, value.tip].join("\t"),
+  [value.round, value.lifecycle_id, value.base, value.previous_tip, value.tip].join("\t"),
 );
 NODE
 }
@@ -84,9 +122,13 @@ else
   if ! previous_fields="$(read_address "$previous_address")"; then
     exit 2
   fi
-  IFS=$'\t' read -r recorded_round _ _ recorded_tip <<<"$previous_fields"
+  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip <<<"$previous_fields"
   if [ "$recorded_round" != "$previous_round" ]; then
     echo "$previous_address records round $recorded_round, expected $previous_round" >&2
+    exit 2
+  fi
+  if [ "$recorded_lifecycle" != "$lifecycle" ]; then
+    echo "$previous_address records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
     exit 2
   fi
   if [ "$prev_sha" != "$recorded_tip" ]; then
@@ -98,16 +140,59 @@ else
   fi
 fi
 
-mapfile -t panel_seats < <(
-  find "$root/.github/agents" -maxdepth 1 -type f -name 'panel-*.agent.md' \
-    -printf '%f\n' |
-    sed -e 's/^panel-//' -e 's/\.agent\.md$//' |
-    sort
-)
+if [ -n "$selection_path" ]; then
+  if [ ! -f "$selection_path" ]; then
+    echo "missing lifecycle selection: $selection_path" >&2
+    exit 2
+  fi
+  selected_roster="$(
+    node - "$selection_path" <<'NODE'
+const fs = require("node:fs");
+const path = process.argv[2];
+let selection;
+try {
+  selection = JSON.parse(fs.readFileSync(path, "utf8"));
+} catch (error) {
+  console.error(`${path}: invalid lifecycle selection: ${error.message}`);
+  process.exit(1);
+}
+if (selection?.schema_version !== 1 ||
+    selection?.selection_table_version !== 2 ||
+    !Array.isArray(selection?.roster)) {
+  console.error(`${path}: unsupported lifecycle selection`);
+  process.exit(1);
+}
+for (const seat of selection.roster) {
+  if (typeof seat !== "string" || !seat) {
+    console.error(`${path}: lifecycle selection has an invalid roster`);
+    process.exit(1);
+  }
+  process.stdout.write(`${seat}\n`);
+}
+NODE
+  )" || {
+    echo "cannot read selected lifecycle roster from $selection_path" >&2
+    exit 2
+  }
+  mapfile -t panel_seats <<<"$selected_roster"
+else
+  mapfile -t panel_seats < <(
+    find "$root/.github/agents" -maxdepth 1 -type f -name 'panel-*.agent.md' \
+      -printf '%f\n' |
+      sed -e 's/^panel-//' -e 's/\.agent\.md$//' |
+      sort
+  )
+fi
 if [ "${#panel_seats[@]}" -eq 0 ]; then
   echo "no panel seat agents found under $root/.github/agents" >&2
   exit 2
 fi
+for seat in "${panel_seats[@]}"; do
+  if [ ! -f "$root/.github/agents/panel-$seat.agent.md" ]; then
+    echo "selected roster seat has no panel agent: $seat" >&2
+    exit 2
+  fi
+done
 
 if [ "$round_number" -gt 1 ]; then
   for seat in "${panel_seats[@]}"; do
@@ -124,8 +209,9 @@ if [ -f "$out/address.json" ]; then
   if ! existing_fields="$(read_address "$out/address.json")"; then
     exit 2
   fi
-  IFS=$'\t' read -r existing_round existing_base existing_prev existing_tip <<<"$existing_fields"
+  IFS=$'\t' read -r existing_round existing_lifecycle existing_base existing_prev existing_tip <<<"$existing_fields"
   if [ "$existing_round" != "$round" ] ||
+     [ "$existing_lifecycle" != "$lifecycle" ] ||
      [ "$existing_base" != "$base_sha" ] ||
      [ "$existing_prev" != "$prev_sha" ] ||
      [ "$existing_tip" != "$tip" ]; then
@@ -176,6 +262,8 @@ trap 'rm -f -- "$addr_tmp"' EXIT
 cat > "$addr_tmp" <<JSON
 {
   "round": "$round",
+  "lifecycle_id": "$lifecycle",
+  "selection_path": "$selection_path",
   "base": "$base_sha",
   "previous_tip": "$prev_sha",
   "tip": "$tip",
@@ -242,7 +330,7 @@ trap 'rm -f -- "$addr_tmp" "$request_tmp" "$dispatch_tmp"' EXIT
 cat > "$request_tmp" <<MD
 # Panel review request
 
-This is the complete shared request for \`$round\`. Read the artifacts below
+This is the complete shared request for \`$round\` in lifecycle \`$lifecycle\`. Read the artifacts below
 with \`view\`; do not substitute a prose summary for them.
 
 ## Review address
@@ -251,24 +339,30 @@ with \`view\`; do not substitute a prose summary for them.
 - Delta range: \`$prev_sha..$tip\`
 - Full branch context: \`$out/full.diff\`
 - Full range: \`$base_sha..$tip\`
+- Lifecycle selection: \`${selection_path:-not supplied to staging; use the recorded lifecycle selection}\`
 - Validation evidence and phase deliverable: \`$out/evidence.md\`
 - Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
 - Commit list: \`$out/commits.txt\`
 
 ## Required review behaviour
 
-1. Read the delta in full. The delta is the review target; the full diff is
-   context only.
-2. Read the validation evidence and phase deliverable. Missing or insufficient
+1. Read the full candidate in \`$out/full.diff\` in full. On discovery, this
+   full candidate is the review target, not only the incremental delta. Report
+   every reasonably discoverable actionable finding now; do not save
+   observations for later rounds.
+2. Read the incremental delta in \`$out/delta.diff\` as well. On verification,
+   review it for resolution, regressions, and unsafe late BLOCKER or MAJOR
+   findings without reopening comprehensive discovery.
+3. Read the validation evidence and phase deliverable. Missing or insufficient
    coverage is a finding. Do not rerun validation unless your seat-specific
    notes explicitly ask you to.
-3. Read your seat-specific notes. Judge any rebuttal on its merits.
-4. Inspect the tree and the diff rather than trusting a summary of what was
+4. Read your seat-specific notes. Judge any rebuttal on its merits.
+5. Inspect the tree and the diff rather than trusting a summary of what was
    intended to change.
-5. Confine findings to defects in the delta that would cause incorrect
+6. Confine findings to defects in the candidate or delta that would cause incorrect
    behaviour, mask a regression, or weaken a stated invariant. Put other
    observations in the summary.
-6. Return exactly the JSON verdict required by your panel agent and no other
+7. Return exactly the JSON verdict required by your panel agent and no other
    text. \`signoff\` is true if and only if \`recommendations\` is empty.
 MD
 

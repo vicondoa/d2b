@@ -1,0 +1,411 @@
+{
+  "artifact_kind": "d2b-panel/selection-table",
+  "selection_table_version": 2,
+  "mandatory_seats": [
+    "software",
+    "test",
+    "product",
+    "docs",
+    "security",
+    "observability",
+    "simplicity"
+  ],
+  "optional_seats": [
+    "reliability",
+    "agentic",
+    "nixos",
+    "networking",
+    "kernel",
+    "build"
+  ],
+  "floors": {
+    "code": 10,
+    "configuration": 10,
+    "documentation": 8,
+    "ambiguous": 10
+  },
+  "fill_order": [
+    "reliability",
+    "agentic",
+    "nixos",
+    "networking",
+    "kernel",
+    "build"
+  ],
+  "seats": {
+    "software": {
+      "class": "mandatory",
+      "focus": "Correctness, control flow, error propagation, APIs, unsafe and FFI boundaries, language conventions, dependency direction, and testability.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {
+        "rust": {
+          "paths": [
+            "**/*.rs",
+            "Cargo.toml",
+            "Cargo.lock",
+            "**/Cargo.toml",
+            "**/Cargo.lock"
+          ],
+          "signals": [
+            "rust",
+            "cargo"
+          ]
+        },
+        "nix": {
+          "paths": [
+            "**/*.nix",
+            "flake.nix",
+            "flake.lock"
+          ],
+          "signals": [
+            "nix",
+            "nixos"
+          ]
+        },
+        "bash": {
+          "paths": [
+            "**/*.sh",
+            "Makefile"
+          ],
+          "signals": [
+            "bash",
+            "shell"
+          ]
+        },
+        "javascript": {
+          "paths": [
+            "**/*.js",
+            "**/*.mjs",
+            "**/package.json"
+          ],
+          "signals": [
+            "javascript",
+            "node"
+          ]
+        },
+        "typescript": {
+          "paths": [
+            "**/*.ts",
+            "**/*.tsx"
+          ],
+          "signals": [
+            "typescript"
+          ]
+        },
+        "json": {
+          "paths": [
+            "**/*.json"
+          ],
+          "signals": [
+            "json"
+          ]
+        },
+        "markdown": {
+          "paths": [
+            "**/*.md",
+            "**/*.mdx"
+          ],
+          "signals": [
+            "markdown"
+          ]
+        }
+      }
+    },
+    "test": {
+      "class": "mandatory",
+      "focus": "Coverage of behavior and failure paths, invisible regressions, planted negatives, gate placement, and whether cited validation proves the change.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {}
+    },
+    "product": {
+      "class": "mandatory",
+      "focus": "Scope, operator experience, CLI and exit codes, external contracts, migration, defaults, naming surface, and actionable errors.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {}
+    },
+    "docs": {
+      "class": "mandatory",
+      "focus": "Diataxis placement, changelog and ADR index coverage, prose/schema drift, terminology, links, process-marker rules, and ASCII-only dashes.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {}
+    },
+    "security": {
+      "class": "mandatory",
+      "focus": "Concrete attack surface, authorization and capability boundaries, privilege separation, sandboxing, secrets, PII, and audit exposure.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {}
+    },
+    "observability": {
+      "class": "mandatory",
+      "focus": "Metric cardinality, spans, logs, audit shape, redaction, retention, exporters, and diagnosability.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {}
+    },
+    "simplicity": {
+      "class": "mandatory",
+      "focus": "Small maintainable design, reuse, deletion, and avoidance of duplicated contracts, dependency sprawl, and unnecessary machinery.",
+      "triggers": [
+        {
+          "kind": "always"
+        }
+      ],
+      "profiles": {}
+    },
+    "reliability": {
+      "class": "optional",
+      "focus": "Resource ownership, cleanup, restart and adoption, idempotency, ordering, concurrency, partial failure, and durable state.",
+      "triggers": [
+        {
+          "kind": "path",
+          "patterns": [
+            "**/*lifecycle*",
+            "**/*storage*",
+            "**/*state*",
+            "**/*restart*",
+            "**/*migration*",
+            "**/*synchron*",
+            "**/*cleanup*",
+            "**/*concurr*",
+            "**/*lock*",
+            "**/*lease*",
+            "**/*durab*",
+            "**/*process*"
+          ]
+        },
+        {
+          "kind": "signal",
+          "values": [
+            "stateful",
+            "lifecycle",
+            "process",
+            "storage",
+            "synchronization",
+            "cleanup",
+            "restart",
+            "migration",
+            "concurrency",
+            "durable-state"
+          ]
+        }
+      ],
+      "profiles": {}
+    },
+    "agentic": {
+      "class": "optional",
+      "focus": "Agents, prompts, skills, instructions, context construction, orchestration, handoffs, and mechanical enforcement of prompt claims.",
+      "triggers": [
+        {
+          "kind": "path",
+          "patterns": [
+            ".github/agents/**",
+            ".github/skills/**",
+            "scripts/copilot/**",
+            "docs/contributing/copilot-agents.md",
+            "docs/adr/specs/**"
+          ]
+        },
+        {
+          "kind": "signal",
+          "values": [
+            "agent",
+            "agents",
+            "prompt",
+            "skill",
+            "copilot",
+            "gas-city",
+            "contributor-orchestration"
+          ]
+        }
+      ],
+      "profiles": {}
+    },
+    "nixos": {
+      "class": "optional",
+      "focus": "NixOS options, module merging, mkDefault and mkForce, assertions, evaluation, activation ordering, and unit invariants.",
+      "triggers": [
+        {
+          "kind": "path",
+          "patterns": [
+            "**/*.nix",
+            "flake.nix",
+            "flake.lock",
+            "nix/**",
+            "nixos-modules/**",
+            "pkgs/**",
+            "templates/**"
+          ]
+        },
+        {
+          "kind": "signal",
+          "values": [
+            "nix",
+            "nixos",
+            "flake",
+            "module",
+            "package-expression",
+            "template"
+          ]
+        }
+      ],
+      "profiles": {}
+    },
+    "networking": {
+      "class": "optional",
+      "focus": "Bridges, firewalls, DHCP, DNS, routes, MTU and MSS, sockets, isolation, and host-network coexistence.",
+      "triggers": [
+        {
+          "kind": "path",
+          "patterns": [
+            "**/*network*",
+            "**/*firewall*",
+            "**/*route*",
+            "**/*resolver*",
+            "**/*socket*",
+            "**/*interface*",
+            "**/*bridge*",
+            "**/*dhcp*",
+            "**/*dns*"
+          ]
+        },
+        {
+          "kind": "signal",
+          "values": [
+            "network",
+            "firewall",
+            "routing",
+            "resolver",
+            "socket",
+            "interface",
+            "bridge",
+            "dhcp",
+            "dns"
+          ]
+        }
+      ],
+      "profiles": {}
+    },
+    "kernel": {
+      "class": "optional",
+      "focus": "Syscalls, pidfd, cgroup v2, namespaces, mounts, signals, ioctl, filesystems, and kernel-version assumptions.",
+      "triggers": [
+        {
+          "kind": "path",
+          "patterns": [
+            "**/*kernel*",
+            "**/*syscall*",
+            "**/*pidfd*",
+            "**/*cgroup*",
+            "**/*namespace*",
+            "**/*mount*",
+            "**/*signal*",
+            "**/*ioctl*",
+            "**/*filesystem*"
+          ]
+        },
+        {
+          "kind": "signal",
+          "values": [
+            "kernel",
+            "syscall",
+            "pidfd",
+            "cgroup",
+            "namespace",
+            "mount",
+            "signal",
+            "ioctl",
+            "filesystem"
+          ]
+        }
+      ],
+      "profiles": {}
+    },
+    "build": {
+      "class": "optional",
+      "focus": "Build graphs and orchestration, CI scheduling, toolchains, targets, hermeticity, runfiles, sandboxing, caches, dependencies, packaging, and release artifacts.",
+      "triggers": [
+        {
+          "kind": "path",
+          "patterns": [
+            "BUILD",
+            "BUILD.*",
+            "**/BUILD",
+            "**/BUILD.*",
+            "MODULE.bazel",
+            "MODULE.bazel.*",
+            "**/MODULE.bazel",
+            "**/MODULE.bazel.*",
+            "WORKSPACE",
+            "WORKSPACE.*",
+            "**/WORKSPACE",
+            "**/WORKSPACE.*",
+            "**/*.bzl",
+            ".bazelrc",
+            "**/.bazelrc",
+            "Makefile",
+            "**/Makefile",
+            "make/**",
+            ".github/workflows/**",
+            "Cargo.toml",
+            "Cargo.lock",
+            "**/Cargo.toml",
+            "**/Cargo.lock",
+            "flake.nix",
+            "flake.lock",
+            "nix/**",
+            "pkgs/**",
+            "packaging/**",
+            "release/**",
+            "**/package.json",
+            "**/*-lock.json",
+            "**/*-lock.yaml",
+            "**/*-lock.yml"
+          ]
+        },
+        {
+          "kind": "signal",
+          "values": [
+            "build-contract",
+            "build-orchestration",
+            "build-system",
+            "ci-build",
+            "toolchain",
+            "target",
+            "hermeticity",
+            "runfiles",
+            "sandbox",
+            "cache",
+            "dependency-lock",
+            "packaging",
+            "release-artifact"
+          ]
+        }
+      ],
+      "citation_only_prose_does_not_trigger": true,
+      "profiles": {}
+    }
+  }
+}
