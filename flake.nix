@@ -81,8 +81,7 @@
           inherit target;
           staticRustFlags =
             "-C relocation-model=pie -C link-self-contained=yes "
-            + "-C linker=${staticToolchain}/lib/rustlib/${hostTarget}/bin/rust-lld "
-            + "-C link-arg=-static-pie";
+            + "-C linker=${staticToolchain}/lib/rustlib/${hostTarget}/bin/rust-lld";
         };
       mkBazelSeccomp = system:
         if builtins.elem system systems then
