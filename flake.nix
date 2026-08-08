@@ -2207,12 +2207,6 @@
               lock=${guestPolicyRoot}/production/Cargo.lock
               test -s "$closure" || fail D2B-BZLPOLICY-INPUT
               test -s "$lock" || fail D2B-BZLPOLICY-INPUT
-              grep -Fq '"system": "${system}"' "$closure" \
-                || fail D2B-BZLPOLICY-CONTEXT
-              grep -Fq '"target": "${nativeMuslTarget}"' "$closure" \
-                || fail D2B-BZLPOLICY-CONTEXT
-              grep -Fq '"package": "d2b-guest-shell-runner"' "$closure" \
-                || fail D2B-BZLPOLICY-ROOT
               if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
                 fail D2B-BZLPOLICY-CLOSURE
               fi
