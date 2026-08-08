@@ -251,7 +251,9 @@
             "${bazelExecSupervisor}/bin/d2b-bazel-exec-supervisor";
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
-        } // args);
+        } // args // {
+          nativeBuildInputs = [ pkgs.protobuf ] ++ (args.nativeBuildInputs or [ ]);
+        });
         brokerHostPackage = rustPlatform.buildRustPackage {
           pname = "d2b-priv-broker";
           version = "0.0.0-bootstrap";
@@ -827,7 +829,9 @@
           # get the sccache speedup from the config files.
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
-        } // args);
+        } // args // {
+          nativeBuildInputs = [ pkgs.protobuf ] ++ (args.nativeBuildInputs or [ ]);
+        });
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
