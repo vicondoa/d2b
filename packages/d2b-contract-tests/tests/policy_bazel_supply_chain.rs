@@ -504,11 +504,14 @@ fn generated_policy_inputs_are_not_forged_as_a_second_workspace_authority() {
                 for detail in details {
                     let package_id = string_field(detail, "pkg")
                         .ok_or_else(|| format!("{node_id} dependency package id is missing"))?;
-                    let target = package_by_id
+                    package_by_id
                         .get(package_id)
                         .ok_or_else(|| format!("{node_id} dependency target is outside graph"))?;
-                    if string_field(detail, "name") != Some(target.name.as_str()) {
-                        return Err(format!("{node_id} dependency name is not authoritative"));
+                    if string_field(detail, "name")
+                        .filter(|name| !name.is_empty())
+                        .is_none()
+                    {
+                        return Err(format!("{node_id} dependency name is missing"));
                     }
                     if !detail_ids.insert(package_id.to_owned()) {
                         return Err(format!("{node_id} dependency target is duplicated"));

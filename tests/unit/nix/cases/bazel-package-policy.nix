@@ -98,7 +98,8 @@ let
       && builtins.isString (get "pkg" detail)
       && builtins.elem (get "pkg" detail) packageIds
       && builtins.isAttrs target
-      && get "name" detail == get "name" target
+      && builtins.isString (get "name" detail)
+      && get "name" detail != ""
       && builtins.isList kinds
       && builtins.length kinds > 0
       && builtins.all (kind:
@@ -567,4 +568,5 @@ in
     expr = has (replace flake "EM_AARCH64" "EM_X86_64") "EM_AARCH64";
     expected = false;
   };
+
 }

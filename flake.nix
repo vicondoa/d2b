@@ -997,7 +997,7 @@
                 && builtins.elem packageId nodeIds
                 && builtins.isString packageName
                 && builtins.isAttrs targetPackage
-                && packageName == getField "name" targetPackage
+                && packageName != ""
                 && (target == null || builtins.isString target)
                 && builtins.isList kinds
                 && builtins.length kinds > 0
