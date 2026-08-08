@@ -755,7 +755,7 @@ fn rust_companion_surfaces_are_retained_and_fail_closed() {
         "Rust must retain doctests and every discovered harness=false binary:\n{}",
         violations.join("\n")
     );
-    for workspace in ["main workspace", "guest shell runner"] {
+    for workspace in ["main product-workspace stream", "guest shell runner"] {
         assert!(
             driver.contains(&format!("\"{workspace}\"")),
             "Rust companion execution must retain doctest and harness=false coverage for {workspace}"
