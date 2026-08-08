@@ -10,6 +10,44 @@ first. This file covers the parts needing more than a rule.
 enforcement classification. Where this file disagrees with that manifest or
 with the `Makefile`, those win.
 
+## Rust workspace and gate authorities
+
+The product Cargo workspace is rooted at `packages/Cargo.toml` and has one
+authoritative product lock at `packages/Cargo.lock`. It includes
+`d2b-priv-broker` and `d2b-guest-shell-runner`; their dedicated gate streams
+select the package, feature set, and gate-owned target directory from the root
+manifest and lock. `packages/Cargo.guest.lock` is a generated static-guest
+closure input only. The no-bash AST walker remains the separate workspace at
+`tests/tools/no-bash-ast-walker/`, with its own Cargo lock and Bazel hub.
+
+The Bazel dependency hubs are exactly `product` and `walker`. Their committed
+locks are `bazel/cargo/product.lock` and `bazel/cargo/walker.lock`;
+`MODULE.bazel.lock` consumes both and is refreshed last. A product manifest
+change refreshes `packages/Cargo.lock`, then `bazel/cargo/product.lock`, then
+`MODULE.bazel.lock`, while proving both walker inputs byte-identical. A walker
+manifest or lock change refreshes the walker Cargo lock, then
+`bazel/cargo/walker.lock`, then `MODULE.bazel.lock`, while proving both product
+inputs byte-identical. Initial or combined setup commits the product hub lock,
+the walker hub lock, and the module lock in that order. Every command is
+followed by a clean no-op check.
+
+The selected policy contexts are the broker GNU and guest musl paths for both
+`x86_64-linux` and `aarch64-linux`. They are package-scoped projections of the
+root lock, not additional workspace or hub authorities. The native arm lane
+realizes exactly six checks - the four package policy checks,
+`broker-host-artifact-contract`, and `guest-static-elf` - and runs
+`make test-rust-supply-chain` on the same verified head. It is enforcing and
+does not use a foreign system, remote builder, or advisory skip.
+
+The supported aggregate entrypoint is `make test-rust`; use
+`make test-rust-supply-chain` for the focused supply-chain leaf. Its audit
+helper resolves the flake's `packages.<system>.rustsec-advisory-db` output,
+pinned to RustSec `advisory-db` commit
+`831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`, and passes that
+store path to `cargo audit` with `--no-fetch`. Do not use an ambient advisory
+database.
+
 ## Build and validate, in detail
 
 Use top-level `Makefile` targets. Shell scripts under `tests/` are
@@ -27,9 +65,12 @@ Rust tests run under `cargo-nextest`. Two surfaces need explicit companion
 runs, so do not "simplify" them away: **doctests** (several `compile_fail`
 ones are capability seals) and **`harness = false` binaries**
 (`d2b-core-smoke` carries fail-closed minijail assertions). The harness-free
-set comes from `nextest list`, not a pin. The privileged broker workspace stays
-on `cargo test`: its tests are not process-per-test safe, and it runs 528 tests
-in about 1.4 s.
+set comes from `nextest list`, not a pin. The privileged broker package stays
+on serial `cargo test` through the root manifest with its package and feature
+selectors: its tests are not process-per-test safe. The guest shell runner
+likewise uses the root product manifest and lock with the `real-libshpool`
+feature as a package-selected stream. Both packages remain members of the
+unified product workspace; only the no-bash AST walker is separate.
 
 `make test-runtime-ledger` also stays on `cargo test`, and that is load
 bearing. It enforces an aggregate process-CPU budget, and nextest's
@@ -129,13 +170,14 @@ fixture behavior.
 ### The API census shard
 
 CI runs eight independent Rust leaf jobs behind the stable required
-`test-rust` rollup context: API, main workspace, broker, guest shell runner,
-no-bash AST, schema, inventory and supply chain. Each focused target receives
-the full runner budget and drops local-only dependency edges, so a shard does
-not repeat another shard's work. `make test-rust` remains the local aggregate.
+`test-rust` rollup context: API, main product workspace, broker
+package-selected stream, guest shell runner package-selected stream, no-bash
+AST, schema, inventory and supply chain. Each focused target receives the full
+runner budget and drops local-only dependency edges, so a shard does not repeat
+another shard's work. `make test-rust` remains the local aggregate.
 
 The API census is a separate shard because it shares nothing with the
-workspace build: it renders through the separately pinned nightly toolchain in
+product workspace build: it renders through the separately pinned nightly toolchain in
 `packages/d2b-api-surface/rust-toolchain.toml` into its own target directory
 under `.scratch/rust-test-cache/`, so it neither consumes nor produces
 artifacts that fmt, clippy or nextest use. Its cost is rustdoc rendering rather
@@ -196,10 +238,11 @@ kill and reap survivors before idempotent partial finalization.
 
 ### The realized flake check and its cache
 
-A **realized** flake check (currently only `video-binary-contract`, listed in
+A **realized** flake check (the six native package and ELF checks plus
+`video-binary-contract`, listed in
 `D2B_FLAKE_REALIZED_CHECKS` in `tests/tools/flake-check-classes.sh`) is built
-rather than merely instantiated, so it compiles the patched VMM packages. In
-CI that shard carries its must-build inputs between runs through
+rather than merely instantiated, so it compiles the dedicated native artifacts.
+In CI that shard carries its must-build inputs between runs through
 `tests/tools/realized-check-cache.sh`, which publishes only the outputs
 `cache.nixos.org` does not already serve - two packages, about 30 MB - rather
 than a whole-store cache. Keep it that size: the Actions cache is a hard
@@ -245,6 +288,23 @@ make test-host-integration  # runNixOSTest VM checks; NixOS + KVM host
 slow TCG if `/dev/kvm` is absent. Hardware and live-host tests remain
 explicit manual tiers and require a host with the matching devices or
 deployed d2b state.
+
+The native `test-flake-aarch64` job runs on `aarch64-linux`, realizes exactly
+these six checks, and runs `make test-rust-supply-chain`:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+The job binds the renderer and every result to one stable head. It has a
+60-minute bound, is enforcing rather than advisory, and refuses a foreign
+system, `--builders`, or a remote builder. The x86 realized lane and the
+native arm lane use the same six-check inventory for their respective systems.
 
 `make test-runtime-ledger` is the hermetic execution-budget Layer-1 job
 (also run by `make test-unit` / `make check` through
@@ -319,9 +379,10 @@ raw live script as `cargo run --manifest-path packages/Cargo.toml -p xtask
 -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
 
 The `cargo run --manifest-path packages/Cargo.toml` form is deliberate:
-there is no root cargo workspace, so the bare `cargo xtask` alias resolves
-only when the working directory is `packages/`, and running it from the
-repository root fails with `no such command: xtask`. Because cargo config
+the repository root has no Cargo workspace, while the product workspace is
+rooted at `packages/Cargo.toml`. The bare `cargo xtask` alias resolves only
+when the working directory is `packages/`, and running it from the repository
+root fails with `no such command: xtask`. Because cargo config
 discovery is cwd-based, invoking `xtask` from the root via `--manifest-path`
 silently drops the `sccache` configuration in `packages/.cargo/config.toml`;
 that is immaterial for the gate itself. When it matters for a specific

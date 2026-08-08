@@ -94,6 +94,53 @@ For stacks that require panel gates, the first PR in the stack usually carries
 the contract/ADR/plan update. Do not dispatch implementation PRs for later
 waves until the plan/ADR panel returns unanimous signoff.
 
+## Cargo and Bazel lock boundaries
+
+The product workspace is `packages/Cargo.toml` with
+`packages/Cargo.lock` as its only authoritative product Cargo lock. It
+contains the broker and guest shell runner. The no-bash AST walker remains
+separate at `tests/tools/no-bash-ast-walker/` with its own Cargo manifest and
+lock, while `packages/Cargo.guest.lock` is only the generated static-guest
+closure input.
+
+The only Bazel hubs are `product` and `walker`, backed by
+`bazel/cargo/product.lock` and `bazel/cargo/walker.lock`. Refresh authority is
+split: a product manifest change refreshes the root Cargo lock, product hub,
+and then `MODULE.bazel.lock`; a walker manifest or lock change refreshes the
+walker Cargo lock, walker hub, and then `MODULE.bazel.lock`. Initial or
+combined setup commits the product hub, walker hub, and module lock in that
+order. Each sequence proves the untouched authority byte-identical, runs each
+command again as a clean no-op, and commits no generated lock, pin, BUILD file,
+or coverage output from a scope slice.
+
+Package policy uses exact broker GNU and guest musl selected paths on
+`x86_64-linux` and `aarch64-linux`. Selected policy inputs are projections of
+the root lock, not additional workspace locks. The native arm gate realizes
+exactly these six system-specific checks and runs
+`make test-rust-supply-chain` on the same stable head:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+The four selected policy contexts are:
+
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool`
+
+The supply-chain target resolves the flake's
+`packages.<system>.rustsec-advisory-db` output, pinned to RustSec
+`advisory-db` commit `831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`, and runs its audit
+checks with `--no-fetch`.
+
 ## Screenshot and visual artifact hygiene
 
 Screenshots and other visual artifacts submitted as validation evidence or
@@ -247,13 +294,13 @@ fields that request panel, agent, or model metadata.
   `builtins.getFlake (toString $ROOT)` source-capture during
   flake-eval gates (W2fu4 H8/H9).
 - Rust worktrees do NOT share a cargo target directory. Each worktree
-  keeps its own `packages/target/`; compiled-output dedup across
-  worktrees comes from `sccache` (`$SCCACHE_DIR`, default
-  `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
-  `packages/.cargo/config.toml` and the sibling-workspace configs under
-  `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
-  `packages/d2b-core/fuzz/`. A shared target dir is deliberately
-  avoided: cargo's target-dir lock is workspace-wide, so two worktrees
+  keeps its own product target at `packages/target/`; compiled-output dedup
+  across worktrees comes from `sccache` (`$SCCACHE_DIR`, default
+  `~/.cache/d2b-sccache`). The broker's default, layer-1, and fake-backends
+  streams use stable package-selected target directories, the guest stream
+  uses its stable package-selected target directory, and the walker uses
+  `tests/tools/no-bash-ast-walker/target`. A shared target dir is deliberately
+  avoided: Cargo's target-dir lock is workspace-wide, so two worktrees
   building concurrently at different SHAs would serialize pessimistically
   and stomp each other's incremental caches. To bypass sccache locally
   (e.g. when bisecting a compiler issue), set `RUSTC_WRAPPER=` or
@@ -313,11 +360,10 @@ fields that request panel, agent, or model metadata.
   fail-closed - the marker is deleted at the start of every run, so if the
   forcing ever stops working the marker is absent and the seal fails rather
   than passing without proof.
-- The persistent-shell helper is intentionally excluded from the main
-  Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
-  manifest path (and with `--features real-libshpool` when checking the
-  real shpool bridge); the top-level Rust/static/supply-chain gates wire
-  it explicitly like the broker workspace.
+- The persistent-shell helper is a member of the product Rust workspace at
+  `packages/d2b-guest-shell-runner/`. Run its root-manifest package selection
+  with `--features real-libshpool` when checking the real shpool bridge; the
+  top-level Rust/static/supply-chain gates use the same selected stream.
 - The integrator MUST run `nix-collect-garbage` after each wave merge.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:
@@ -378,9 +424,12 @@ fields that request panel, agent, or model metadata.
 - `nix flake check` now builds real `cargo-deny` + `cargo-audit`
   derivations (via `checks.${system}.rust-deny` / `.rust-audit`).
   Each derivation fetches the pinned RustSec advisory DB snapshot
-  from the Nix store (no network at build time) and runs cargo-deny /
-  cargo-audit against both `packages/Cargo.lock` and
-  `packages/d2b-priv-broker/Cargo.lock`. The advisory DB is a
-  `fetchFromGitHub` pinned to a specific commit; update the rev + hash
-  in `flake.nix` periodically to pick up new advisories. Wall-clock
+  from the Nix store (no network at build time). The product checks use
+  `packages/Cargo.lock`; the static-guest checks use
+  `packages/Cargo.guest.lock`; package policy checks use the four selected
+  system-and-target inputs above. The advisory DB is a `fetchFromGitHub`
+  snapshot pinned to commit
+  `831c50f4a4304068f125e603add6a8839f08b3eb` and hash
+  `sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`. Update the rev and
+  hash in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).

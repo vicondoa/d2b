@@ -164,11 +164,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -268,11 +268,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -290,7 +290,7 @@ jobs:
       - name: Prune warm-local-only Rust cache trees
         run: |
           rm -rf             .scratch/rust-test-cache/api-surface-*/public-census             .scratch/rust-test-cache/api-surface-*/private-census
-      - name: Rust main workspace gate
+      - name: Rust main product-workspace gate
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust-main
@@ -375,11 +375,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -394,7 +394,7 @@ jobs:
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
-      - name: Rust broker workspace gate
+      - name: Rust broker package-selected stream (product workspace)
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust-broker
@@ -479,11 +479,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -498,7 +498,7 @@ jobs:
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
-      - name: Rust guest shell runner gate
+      - name: Rust guest shell runner package-selected stream (product workspace)
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust-guest-shell-runner
@@ -583,11 +583,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -687,11 +687,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -791,11 +791,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -895,11 +895,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -1059,11 +1059,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -1330,22 +1330,175 @@ jobs:
 
   test-flake-aarch64:
     needs: [tier0]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: aarch64 smoke eval
+      - name: Verify stable PR head
+        id: stable-head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          nix-instantiate --eval --strict \
-            -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath' \
-            >/dev/null
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+      - name: Install ELF tooling
+        run: sudo apt-get update && sudo apt-get install -y binutils
+      - name: Measure native artifacts
+        env:
+          MEASUREMENT_COMMIT: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$MEASUREMENT_COMMIT"
+          export CANDIDATE_COMMIT
+          CANDIDATE_COMMIT=$(
+            git log -1 --format=%H -- . \
+              ':(exclude).github/workflows/arm-artifact-measurement.yml' \
+              ':(exclude).github/workflows/pr-l1-static-fast.yml'
+          )
+          if ! nix build --no-link \
+            .#packages.aarch64-linux.d2b-priv-broker \
+            .#packages.aarch64-linux.d2b-guest-shell-runner-static
+          then
+            for attribute in \
+              .#packages.aarch64-linux.d2b-priv-broker \
+              .#packages.aarch64-linux.d2b-guest-shell-runner-static
+            do
+              derivation=$(nix path-info --derivation "$attribute" 2>/dev/null || true)
+              test -z "$derivation" || nix log "$derivation" || true
+            done
+            exit 1
+          fi
+          broker_out=$(nix path-info \
+            .#packages.aarch64-linux.d2b-priv-broker)
+          guest_out=$(nix path-info \
+            .#packages.aarch64-linux.d2b-guest-shell-runner-static)
+          flake_ref="git+file://$PWD"
+          broker_closure=$(nix build --impure --no-link --print-out-paths --expr "
+            let
+              f = builtins.getFlake \"$flake_ref\";
+              pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; };
+            in
+              pkgs.closureInfo {
+                rootPaths = [ f.packages.aarch64-linux.\"d2b-priv-broker\" ];
+              }
+          ")
+          guest_closure=$(nix build --impure --no-link --print-out-paths --expr "
+            let
+              f = builtins.getFlake \"$flake_ref\";
+              pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; };
+            in
+              pkgs.closureInfo {
+                rootPaths = [
+                  f.packages.aarch64-linux.\"d2b-guest-shell-runner-static\"
+                ];
+              }
+          ")
+          export BROKER_BINARY="$broker_out/bin/d2b-priv-broker"
+          export GUEST_BINARY="$guest_out/bin/d2b-guest-shell-runner"
+          export BROKER_CLOSURE="$broker_closure/store-paths"
+          export GUEST_CLOSURE="$guest_closure/store-paths"
+          export BROKER_POLICY=packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production/policy/metadata.json
+          export GUEST_POLICY=packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          def digest(path):
+              return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+          def closure(path):
+              raw = pathlib.Path(path).read_bytes()
+              return len([line for line in raw.splitlines() if line]), hashlib.sha256(raw).hexdigest()
+
+          def elf(binary, artifact, policy, closure_path):
+              header = subprocess.check_output(["readelf", "-h", binary], text=True)
+              program = subprocess.check_output(["readelf", "-l", binary], text=True)
+              dynamic = subprocess.run(
+                  ["readelf", "-d", binary],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+              )
+              type_match = re.search(r"^\s*Type:\s+(\S+)", header, re.MULTILINE)
+              machine_match = re.search(r"^\s*Machine:\s+(.+)$", header, re.MULTILINE)
+              interpreter_match = re.search(r"Requesting program interpreter: ([^\]]+)", program)
+              needed = sorted(re.findall(r"Shared library: \[([^\]]+)\]", dynamic.stdout))
+              count, closure_digest = closure(closure_path)
+              row = {
+                  "artifact": artifact,
+                  "binaryBytes": pathlib.Path(binary).stat().st_size,
+                  "binarySha256": digest(binary),
+                  "candidateCommit": os.environ["CANDIDATE_COMMIT"],
+                  "closureCount": count,
+                  "closureSha256": closure_digest,
+                  "elfMachine": "EM_AARCH64" if machine_match and machine_match.group(1).strip() == "AArch64" else machine_match.group(1).strip(),
+                  "elfType": "ET_" + type_match.group(1),
+                  "measurementCommand": "nix build --no-link .#packages.aarch64-linux." + (
+                      "d2b-priv-broker" if artifact == "broker-host-artifact-contract"
+                      else "d2b-guest-shell-runner-static"
+                  ),
+                  "needed": needed,
+                  "selectedPolicyDigest": digest(policy),
+                  "sizeGrowthAuthorization": None,
+                  "system": "aarch64-linux",
+              }
+              if interpreter_match:
+                  row["interpreter"] = pathlib.Path(interpreter_match.group(1)).name
+              return row
+
+          rows = [
+              elf(
+                  os.environ["BROKER_BINARY"],
+                  "broker-host-artifact-contract",
+                  os.environ["BROKER_POLICY"],
+                  os.environ["BROKER_CLOSURE"],
+              ),
+              elf(
+                  os.environ["GUEST_BINARY"],
+                  "guest-static-elf",
+                  os.environ["GUEST_POLICY"],
+                  os.environ["GUEST_CLOSURE"],
+              ),
+          ]
+          print("D2B_ARM_BASELINE_JSON=" + json.dumps({"rows": rows}, sort_keys=True, separators=(",", ":")))
+          PY
+      - name: Realize native aarch64 flake checks
+        env:
+          D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          nix build --no-link \
+            .#checks.aarch64-linux.broker-production-dependency-policy \
+            .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy \
+            .#checks.aarch64-linux.broker-production-package-policy \
+            .#checks.aarch64-linux.guest-real-libshpool-package-policy \
+            .#checks.aarch64-linux.broker-host-artifact-contract \
+            .#checks.aarch64-linux.guest-static-elf
+      - name: Run native aarch64 supply-chain gate
+        env:
+          D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          make test-rust-supply-chain
 
   test-drift:
     needs: [tier0]
@@ -1442,11 +1595,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -1546,11 +1699,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"

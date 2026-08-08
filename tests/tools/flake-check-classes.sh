@@ -20,7 +20,7 @@
 
 # Checks whose shard must realize the derivation. Keep this list minimal: each
 # entry costs a full build on every PR.
-D2B_FLAKE_REALIZED_CHECKS="video-binary-contract"
+D2B_FLAKE_REALIZED_CHECKS="broker-production-dependency-policy guest-shell-runner-static-dependency-policy broker-production-package-policy guest-real-libshpool-package-policy broker-host-artifact-contract guest-static-elf video-binary-contract"
 
 d2b_flake_check_is_realized() {
   local candidate=$1 name

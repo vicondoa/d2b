@@ -33,11 +33,17 @@ let
       (builtins.fromTOML (builtins.readFile ../packages/d2b-priv-broker/Cargo.toml))
         .package.version;
     src = packagesSrc;
-    sourceRoot = "source/d2b-priv-broker";
     cargoLock = {
-      lockFile = ../packages/d2b-priv-broker/Cargo.lock;
+      lockFile = ../packages/Cargo.lock;
+      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
-    cargoBuildFlags = [ "--no-default-features" ];
+    cargoBuildFlags = [
+      "--package"
+      "d2b-priv-broker"
+      "--bin"
+      "d2b-priv-broker"
+      "--no-default-features"
+    ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo

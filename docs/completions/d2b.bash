@@ -822,7 +822,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__mic)
-            opts="-h --json --help on off <VM>"
+            opts="-h --json --help on off"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -836,7 +836,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__off)
-            opts="-h --json --help <VM>"
+            opts="-h --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -850,7 +850,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__speaker)
-            opts="-h --json --help on off <VM>"
+            opts="-h --json --help on off"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -864,7 +864,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__status)
-            opts="-h --json --help [VM]"
+            opts="-h --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -966,7 +966,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__boot)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -980,7 +980,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__build)
-            opts="-h --json --human --help <VM>"
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1078,7 +1078,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__config__subcmd__approve)
-            opts="-h --to --json --help <VM>"
+            opts="-h --to --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1096,7 +1096,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__config__subcmd__diff)
-            opts="-h --against --json --help <VM>"
+            opts="-h --against --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1212,7 +1212,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__config__subcmd__reject)
-            opts="-h --json --help <VM>"
+            opts="-h --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1226,7 +1226,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__config__subcmd__status)
-            opts="-h --all --json --help [VM]"
+            opts="-h --all --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1240,7 +1240,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__config__subcmd__sync)
-            opts="-h --guest-path --host --user --key --known-hosts --dry-run --json --help <VM>"
+            opts="-h --guest-path --host --user --key --known-hosts --dry-run --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1274,7 +1274,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__console)
-            opts="-h --help <VM>"
+            opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1288,7 +1288,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__down)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1316,7 +1316,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__generations)
-            opts="-h --json --human --help <VM>"
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2792,7 +2792,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__keys__subcmd__rotate)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2806,7 +2806,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__keys__subcmd__show)
-            opts="-h --json --human --help <VM>"
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2820,7 +2820,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__launch)
-            opts="-h --item --json --human --help <TARGET>"
+            opts="-h --item --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2958,7 +2958,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__realm__subcmd__enter)
-            opts="-h --help <REALM>"
+            opts="-h --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3056,7 +3056,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__realm__subcmd__inspect)
-            opts="-h --json --human --help <REALM>"
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3084,7 +3084,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__realm__subcmd__run)
-            opts="-h --json --human --help <REALM> <ARGV>..."
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3098,7 +3098,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__restart)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3112,7 +3112,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__rollback)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3126,7 +3126,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__rotate__subcmd__known__subcmd__host)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3140,7 +3140,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__shell)
-            opts="-h --name --force --json --human --help <TARGET> attach list detach kill"
+            opts="-h --name --force --json --human --help attach list detach kill"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3158,7 +3158,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__status)
-            opts="-h --json --human --check-bridges --vm --help [VM]"
+            opts="-h --json --human --check-bridges --vm --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3232,7 +3232,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__store__subcmd__verify)
-            opts="-h --repair --json --human --help <VM>"
+            opts="-h --repair --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3246,7 +3246,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__switch)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3260,7 +3260,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__test)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3274,7 +3274,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__trust)
-            opts="-h --dry-run --apply --json --human --help <VM>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3288,7 +3288,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__up)
-            opts="-h --dry-run --apply --no-wait-api --json --human --help <VM>"
+            opts="-h --dry-run --apply --no-wait-api --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3316,7 +3316,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__usb__subcmd__attach)
-            opts="-h --dry-run --apply --json --human --help <VM> <BUSID>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3330,7 +3330,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__usb__subcmd__detach)
-            opts="-h --dry-run --apply --json --human --help <VM> <BUSID>"
+            opts="-h --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3512,7 +3512,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel)
-            opts="-h --current --dry-run --apply --json --human --help [SESSION_ID]"
+            opts="-h --current --dry-run --apply --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3638,7 +3638,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__test)
-            opts="-h --dry-run --json --human --help <VM>"
+            opts="-h --dry-run --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3680,7 +3680,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__display__subcmd__close)
-            opts="-h --json --human --help <SESSION_ID>"
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3768,7 +3768,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__exec)
-            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
+            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help"
             if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
                 opts="${opts} --stdout-offset --stderr-offset --max-len"
             fi
@@ -3969,7 +3969,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__restart)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3983,7 +3983,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__start)
-            opts="-h --dry-run --apply --no-wait-api --json --human --help <VM>"
+            opts="-h --dry-run --apply --no-wait-api --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3997,7 +3997,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__status)
-            opts="-h --json --human --help <VM>"
+            opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4011,7 +4011,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__vm__subcmd__stop)
-            opts="-f -h --dry-run --apply --force --json --human --help <VM>"
+            opts="-f -h --dry-run --apply --force --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

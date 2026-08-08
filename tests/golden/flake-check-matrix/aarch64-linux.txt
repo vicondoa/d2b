@@ -1,0 +1,38 @@
+# Flake-check pin: full names of flake.checks.aarch64-linux.*.
+# The hosted-runner dynamic matrix may intentionally filter this set.
+# Regenerate with: make flake-matrix-pin
+broker-host-artifact-contract
+broker-production-dependency-policy
+broker-production-package-policy
+eval-fixture-contracts
+eval-minimal
+eval-multi-env
+eval-multi-env-daemon
+eval-template
+eval-with-observability
+fixture-smoke
+fixture-smoke-full
+guest-control-vsock
+guest-exec-policy
+guest-real-libshpool-package-policy
+guest-rust-deny
+guest-shell-runner-static-dependency-policy
+guest-static-consumption
+guest-static-dependency-policy
+guest-static-elf
+harness-ubuntu-skeleton
+module-helper-wiring
+nix-unit
+nix-unit-daemon
+nix-unit-guest
+nix-unit-misc
+nix-unit-network
+nix-unit-runtime
+nix-unit-state
+provider-catalog-determinism
+rust-audit
+rust-build
+rust-clippy
+rust-deny
+rust-tests
+video-binary-contract

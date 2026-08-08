@@ -80,7 +80,7 @@ Two rules override everything else:
 │       ├── home-manager.nix        <- HM-as-NixOS-module inside the guest
 │       └── audio/{guest,host}.nix  <- vhost-user-sound + PipeWire mediation
 ├── pkgs/                           <- patched cloud-hypervisor / crosvm / vhost-device-sound
-├── packages/                       <- Rust workspace; pinned rust-toolchain.toml
+├── packages/                       <- unified product Rust workspace
 │   ├── d2b-core/              <- shared bundle DTOs, typed errors, privilege metadata
 │   ├── d2b-host/              <- host-side lifecycle primitives (argv, hardlink farm, ifnames)
 │   ├── d2b-contracts/          <- public + private wire contracts
@@ -109,10 +109,14 @@ implementation details unless a target or `tests/AGENTS.md` says otherwise.
 `nix develop` provides the toolchain every gate expects. Gate scripts bootstrap
 a private toolchain when missing, so a dev shell skips that setup.
 
-CI runs eight independent Rust leaf jobs - API, main workspace, broker, guest
+The unified product workspace is `packages/Cargo.toml` with root lock
+`packages/Cargo.lock`; broker and guest are members. `packages/Cargo.guest.lock`
+is generated input only. The no-bash AST walker at
+`tests/tools/no-bash-ast-walker` is separate, with its own lock and hub.
+
+CI runs eight Rust leaf jobs - API, main workspace, broker, guest
 shell runner, no-bash AST, schema, inventory, and supply chain - behind the
-required `test-rust` rollup. Each leaf gets full runner budget and no local-only
-dependency edges. `make test-rust` remains the local aggregate; use
+required `test-rust` rollup. `make test-rust` remains the aggregate; use
 `make test-rust-<leaf>` to rerun one CI leaf. See
 [gates and lints](./docs/contributing/gates-and-lints.md).
 
@@ -351,7 +355,7 @@ is warning, not contract.
 | [Unsafe-local provider, launcher, and persistent-shell helper](docs/contributing/critical-subsystems.md#unsafe-local-provider-launcher-and-persistent-shell-helper) | `nixos-modules/options-realms-workloads.nix` | `unsafe-local` is explicit and default-denied. |
 | [Manifest contract](docs/contributing/critical-subsystems.md#manifest-contract) | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix` | Version-pinned via `manifestVersion`. |
 | [Manifest bundle - private artifacts](docs/contributing/critical-subsystems.md#manifest-bundle---private-artifacts) | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/` bundle DTOs + `nixos-modules/bundle*.nix` | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. |
-| [Control plane - `d2bd` + `d2b-priv-broker`](docs/contributing/critical-subsystems.md#control-plane---d2bd-d2b-priv-broker) | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace) | **only** persistent root surfaces framework declares. |
+| [Control plane - `d2bd` + `d2b-priv-broker`](docs/contributing/critical-subsystems.md#control-plane---d2bd-d2b-priv-broker) | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (product workspace) | **only** persistent root surfaces framework declares. |
 | [Storage lifecycle / restart / synchronization](docs/contributing/critical-subsystems.md#storage-lifecycle-restart-synchronization) | Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + broker storage/sync ops | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. |
 | [Eval-time assertions](docs/contributing/critical-subsystems.md#eval-time-assertions) | `nixos-modules/assertions.nix` | These are framework's contract with consumers. |
 | [Guest-control exec session table](docs/contributing/critical-subsystems.md#guest-control-exec-session-table) | `packages/d2bd/src/{exec_session,exec_session_real}.rs` | Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use same backend with launcher authority. guestd runs every exec as workload user, never root. |

@@ -4,8 +4,9 @@
 # GNU Make owns the Rust DAG. This file owns leaf environment setup and the
 # explicit leaf modes only: fast-lint, api-surface, main-workspace, broker,
 # guest-shell-runner, no-bash-ast, schema-reproducibility, supply-chain,
-# inventory-stub, and fixture-contracts. The fixture mode emits the contract
-# and CLI surfaces separately.
+# inventory-stub, and fixture-contracts. The broker and guest modes select
+# package streams from the unified product workspace. The fixture mode emits
+# the contract and CLI surfaces separately.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
@@ -123,15 +124,14 @@ fi
 
 manifest="$ROOT/packages/Cargo.toml"
 lock_file="$ROOT/packages/Cargo.lock"
+guest_lock_file="$ROOT/packages/Cargo.guest.lock"
 deny_config="$ROOT/packages/deny.toml"
 broker_manifest="$ROOT/packages/d2b-priv-broker/Cargo.toml"
-broker_lock_file="$ROOT/packages/d2b-priv-broker/Cargo.lock"
 broker_deny_config="$ROOT/packages/d2b-priv-broker/deny.toml"
 guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
-guest_shell_runner_lock_file="$ROOT/packages/d2b-guest-shell-runner/Cargo.lock"
 guest_shell_runner_deny_config="$ROOT/packages/d2b-guest-shell-runner/deny.toml"
 no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
-for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config"; do
+for required in "$manifest" "$lock_file" "$guest_lock_file" "$deny_config" "$broker_manifest" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"; do
   if [ ! -f "$required" ]; then
     fail "missing Rust workspace input: $required"
     exit 1
@@ -160,24 +160,30 @@ fi
 # CARGO_TARGET_DIR, so a random per-run target dir would change the cache key
 # and defeat cross-run hits. Stable, distinct dirs keep the key stable (cache
 # hits) while still avoiding lock contention. They are gitignored and reused
-# across runs like the default broker/workspace target dirs.
+# across runs like the default product-workspace and broker-stream target dirs.
 broker_target_dir=$(d2b_cargo_target_dir broker)
 broker_layer1_target_dir="${broker_target_dir%/}-layer1"
 broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
 guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
 no_bash_target_dir="$ROOT/tests/tools/no-bash-ast-walker/target"
 
-# Keep fixture-dependent contract crates out of generic workspace tests.
+# Keep broker, guest, and fixture-dependent contract crates out of generic
+# product-workspace tests. Their dedicated package-selected streams below
+# retain their exact feature- and harness-specific coverage.
 # Full D2B_FIXTURES delivery to the sandbox/CI is tracked separately.
-workspace_test_excludes=(--exclude d2b-contract-tests)
+workspace_test_excludes=(
+  --exclude d2b-contract-tests
+  --exclude d2b-priv-broker
+  --exclude d2b-guest-shell-runner
+)
 
 d2b_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 # No Rust compiler warning is advisory in this gate. Clippy already receives
 # `-D warnings`; this also covers cargo check/build/test, doctests, nextest,
-# standalone workspaces, and build scripts. Compile-fail fixtures replace this
-# inherited value with their exact mutation flags so expected diagnostics stay
-# attributable to the capability seal they exercise.
+# product-workspace streams, gate-tool streams, and build scripts. Compile-fail
+# fixtures replace this inherited value with their exact mutation flags so
+# expected diagnostics stay attributable to the capability seal they exercise.
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"
 export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings"
 
@@ -313,9 +319,10 @@ cleanup_package_test_scratch() {
 }
 
 # sccache: a per-crate compilation cache (keyed on source + flags), shared
-# across the main + broker workspaces and all feature passes - so the broker's
-# rebuilds of crates the main workspace already compiled (d2b-core/host/ipc)
-# and its three separate-target-dir feature passes become cache hits. Used
+# across the main product workspace and broker package streams - so the
+# broker's rebuilds of crates the main product workspace already compiled
+# (d2b-core/host/ipc) and its three separate-target-dir feature passes become
+# cache hits. Used
 # locally by default. In CI it is OFF unless D2B_CI_SCCACHE=1 is set, because it
 # only helps when a persistent backend survives across runs. CI opts in by
 # pointing SCCACHE_DIR at a directory it restores/saves via actions/cache - we
@@ -352,7 +359,7 @@ else
   # --manifest-path to every invocation, and there is no $ROOT/.cargo/config.toml
   # - so relying on the config would silently disable the wrapper for the whole
   # gate. The four shim copies are byte-identical, so one absolute path serves
-  # every workspace.
+  # every Rust stream.
   _wrapper_shim="$ROOT/packages/.cargo/rustc-wrapper.sh"
   export RUSTC_WRAPPER="$_wrapper_shim" CARGO_BUILD_RUSTC_WRAPPER="$_wrapper_shim"
   if [ "$_ci_active" = 1 ]; then
@@ -378,9 +385,9 @@ assert_pinned_rust_toolchain
 #     filters them out (see packages/.config/nextest.toml). `cargo test` runs
 #     them, so they need an explicit invocation to stay gated.
 #
-# Both companions are wired per workspace, and the harness=false set is
-# DISCOVERED from cargo metadata rather than hard-coded, so a newly added
-# harness=false target cannot silently drop out of the gate.
+# Both companions are wired per selected workspace stream, and the
+# harness=false set is DISCOVERED from cargo metadata rather than hard-coded,
+# so a newly added harness=false target cannot silently drop out of the gate.
 require_nextest() {
   if cargo nextest --version >/dev/null 2>&1; then
     return 0
@@ -395,8 +402,8 @@ require_nextest() {
   exit 1
 }
 
-# Emit the harness=false test targets of a workspace as "<package>\t<binary>"
-# rows, for execution with a plain `cargo test --test`.
+# Emit the harness=false test targets of a selected workspace stream as
+# "<package>\t<binary>" rows, for execution with a plain `cargo test --test`.
 #
 # Such a target exposes no libtest interface, so cargo-nextest builds it but
 # reports zero test cases and never runs it. Selecting on kind == "test" is what
@@ -417,7 +424,7 @@ nextest_unrunnable_targets() {
   fi
   # Validate the shape the filter below actually reads, not just the top-level
   # key. A schema change that renamed any of these would otherwise let jq match
-  # nothing and exit 0, which reads identically to "this workspace has no
+  # nothing and exit 0, which reads identically to "this stream has no
   # harness-free targets" and would silently empty the gate surface.
   if ! printf '%s' "$listing" | jq -e '
         ."rust-suites" | length > 0
@@ -439,8 +446,8 @@ nextest_unrunnable_targets() {
 }
 
 # Run the surfaces cargo-nextest cannot: doctests, then any harness=false
-# binaries. `label` names the workspace for the log line; the remaining
-# arguments select the workspace and feature set and are shared with the
+# binaries. `label` names the selected stream for the log line; the remaining
+# arguments select its workspace and feature set and are shared with the
 # preceding nextest invocation.
 run_nextest_companions() {
   local label="$1" manifest_path="$2"
@@ -464,19 +471,20 @@ run_nextest_companions() {
     cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin"
     ran=$((ran + 1))
   done <<<"$targets"
-  if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then
+  if [ "$ran" -eq 0 ] && [ "$label" = "main product-workspace stream" ]; then
     fail "$label: harness=false discovery was empty; refusing to report a passing companion surface"
     return 1
   fi
   ok "$label companions (doctests + $ran harness=false binaries)"
 }
 
-# The privileged broker is a SEPARATE workspace with three independent feature
-# passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
-# They share nothing with the main workspace and nothing with each other. The
-# streams stay serial by default because their tests manipulate process-global
-# signal/reap state; an explicit timing-only opt-in can use their separate target
-# directories. With sccache the shared crates are cache hits across all streams.
+# The privileged broker uses three package-selected feature streams from the
+# unified product workspace (default, layer1-bootstrap, fake-backends), each on
+# its OWN target dir. The target directories are separate from the main product
+# workspace and from each other. The streams stay serial by default because
+# their tests manipulate process-global signal/reap state; an explicit
+# timing-only opt-in can use their separate target directories. With sccache the
+# shared crates are cache hits across all streams.
 # Running serially in the foreground means a failing stream aborts the gate at
 # the point of failure, with its output already on the gate's own stream.
 #
@@ -502,25 +510,28 @@ run_nextest_companions() {
 # identical outcome and an unchanged test phase (85 s against 89 s). The
 # fake-backends stream never had one, which is why it was already the fastest.
 broker_stream_default() {
-  cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" -p d2b-priv-broker --no-default-features -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" -p d2b-priv-broker --no-default-features --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_stream_fakebackends() {
-  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features fake-backends -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" -p d2b-priv-broker --no-default-features --features fake-backends -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
 }
 broker_streams=(default layer1 fakebackends)
 
 guest_shell_runner_gate() {
-  cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  log "--> cargo fmt -p d2b-guest-shell-runner --check"
+  (
+    cd "$ROOT/packages"
+    cargo fmt -p d2b-guest-shell-runner --check
+  )
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --locked --manifest-path "$manifest" -p d2b-guest-shell-runner --no-default-features --features real-libshpool
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
-    "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
+    "guest shell runner" "$manifest" --locked -p d2b-guest-shell-runner \
+    --no-default-features --features real-libshpool
 }
 
 run_fixture_contract_tests() {
@@ -636,10 +647,13 @@ run_fast_lint_gate() {
     exit 1
   }
 
-  log "--> cargo fmt --check (gated Rust workspaces)"
+  log "--> cargo fmt --check (gated Rust streams)"
   cargo fmt --manifest-path "$manifest" --all --check
   cargo fmt --manifest-path "$broker_manifest" --all --check
-  cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
+  (
+    cd "$ROOT/packages"
+    cargo fmt -p d2b-guest-shell-runner --check
+  )
   cargo fmt --manifest-path "$no_bash_manifest" --all --check
   ok "cargo fmt --check"
 
@@ -688,7 +702,11 @@ run_fast_lint_gate() {
   )
 
   if [ "$main_workspace_changed" -eq 1 ]; then
-    main_package_args=(--workspace)
+    main_package_args=(
+      --workspace
+      --exclude d2b-priv-broker
+      --exclude d2b-guest-shell-runner
+    )
   elif [ "${#main_packages[@]}" -gt 0 ]; then
     while IFS= read -r package; do
       [ -n "$package" ] || continue
@@ -697,21 +715,19 @@ run_fast_lint_gate() {
   fi
 
   if [ "${#main_package_args[@]}" -gt 0 ]; then
-    log "--> cargo clippy --locked --all-targets (changed main workspace scope)"
+    log "--> cargo clippy --locked --all-targets (changed main product-workspace scope)"
     CARGO_TARGET_DIR="$workspace_target_dir" \
       cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked \
         --manifest-path "$manifest" "${main_package_args[@]}" --all-targets -- -D warnings
-    ok "changed main workspace clippy"
+    ok "changed main product-workspace clippy"
   else
-    log "  changed main workspace clippy: no Rust package changes"
+    log "  changed main product-workspace clippy: no Rust package changes"
   fi
 
   if [ "$guest_shell_runner_changed" -eq 1 ]; then
     log "--> cargo clippy --all-targets --features real-libshpool (changed guest shell runner)"
     CARGO_TARGET_DIR="$guest_shell_runner_target_dir" \
-      cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" \
-        --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets \
-        --features real-libshpool -- -D warnings
+      cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" -p d2b-guest-shell-runner --no-default-features --features real-libshpool --all-targets -- -D warnings
     ok "changed guest shell runner clippy"
   else
     log "  changed guest shell runner clippy: no Rust package changes"
@@ -752,8 +768,8 @@ run_main_workspace_gate() {
 # silently regenerated. flake.nix vendors the committed lockfile, so a lock
 # that cargo quietly rewrites here cannot be reproduced by a Nix build.
 rust_surface_start rust-main-clippy
-log "--> cargo clippy --locked --workspace --all-targets -- -D warnings"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+log "--> cargo clippy --locked --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" --workspace --all-targets --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings
 rust_surface_success rust-main-clippy
 ok "cargo clippy"
 
@@ -762,13 +778,13 @@ log "--> cargo nextest run --workspace ${workspace_test_excludes[*]}"
 workspace_test_started=$SECONDS
 CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 CARGO_TARGET_DIR="$workspace_target_dir" run_nextest_companions \
-  "main workspace" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
-ok "workspace tests (duration: $((SECONDS - workspace_test_started))s)"
+  "main product-workspace stream" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
+ok "main product-workspace tests (duration: $((SECONDS - workspace_test_started))s)"
 
-cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
-cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
+cleanup_cargo_special_files "main product-workspace cargo test" "$workspace_target_dir"
+cleanup_package_test_scratch "main product-workspace cargo test" "$ROOT/packages/d2bd/target"
 rust_surface_success rust-main-workspace-tests
-  log "test-rust main-workspace OK (duration: $((SECONDS - suite_started))s)"
+  log "test-rust main product-workspace OK (duration: $((SECONDS - suite_started))s)"
 }
 
 run_no_bash_ast_gate() {
@@ -776,9 +792,9 @@ rust_surface_start rust-no-bash-ast
 # no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
 # is covered by d2b-contract-tests/tests/policy_source.rs, but the
 # AST-level walk (which catches cross-line / obfuscated bash-exec sites the
-# per-line regex cannot) lives in the standalone tests/tools/no-bash-ast-walker
-# cargo tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run
-# it here so the AST coverage stays gated. Fails closed on any bash-literal
+# per-line regex cannot) lives in the separate tests/tools/no-bash-ast-walker
+# gate tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run it
+# here so the AST coverage stays gated. Fails closed on any bash-literal
 # Command::new site under packages/.
 log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
 CARGO_TARGET_DIR="$no_bash_target_dir" \
@@ -790,8 +806,9 @@ ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 }
 
 run_broker_gate() {
-# Broker workspace: run the three feature passes (default, layer1-bootstrap,
-# fake-backends) - each on its own target dir - serially. Tests inside each
+# Broker package-selected product-workspace streams: run the three feature
+# passes (default, layer1-bootstrap, fake-backends) - each on its own target
+# dir - serially. Tests inside each
 # cargo-test process manipulate process-global SIGCHLD/reap state, so do not
 # overlap the three harnesses unless a dedicated isolation review proves it safe.
 # The fail-closed
@@ -809,76 +826,117 @@ for _stream in "${broker_streams[@]}"; do
     *) fail "unknown broker stream: $_stream"; exit 1 ;;
   esac
   rust_surface_start "$_surface"
-  log "--> broker cargo ($_stream feature pass, serial)"
+  log "--> broker package stream ($_stream feature pass, serial)"
   "broker_stream_$_stream"
   rust_surface_success "$_surface"
-  ok "broker cargo ($_stream feature pass)"
+  ok "broker package stream ($_stream feature pass)"
 done
-cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
-cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
-cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
+cleanup_cargo_special_files "broker package stream" "$broker_target_dir"
+cleanup_cargo_special_files "broker package stream (layer1)" "$broker_layer1_target_dir"
+cleanup_cargo_special_files "broker package stream (fake-backends)" "$broker_fakebackends_target_dir"
 }
 
 run_guest_shell_runner_gate() {
 require_nextest "$rust_mode"
 rust_surface_start rust-guest-shell-runner
-log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
+log "--> guest shell runner package stream (product workspace, real-libshpool feature)"
 guest_shell_runner_gate
-ok "guest shell runner cargo"
-cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
+ok "guest shell runner package stream"
+cleanup_cargo_special_files "guest shell runner package stream" "$guest_shell_runner_target_dir"
 rust_surface_success rust-guest-shell-runner
 }
 
 run_schema_reproducibility_gate() {
 rust_surface_start rust-schema-reproducibility
-schema_out="$ROOT/packages/xtask/out"
-schema_out_preexisting=0
-if [ -e "$schema_out" ]; then
-  schema_out_preexisting=1
-fi
-snapshot_schema_out() {
-  if [ ! -d "$schema_out" ]; then
-    return 0
+schema_root="$ROOT/docs/reference/schemas/v2"
+snapshot_schema_root() {
+  if [ ! -d "$schema_root" ]; then
+    fail "schema reproducibility: authoritative schema root is absent"
+    return 1
   fi
+  if [ -L "$schema_root" ]; then
+    fail "schema reproducibility: authoritative schema root is not a directory"
+    return 1
+  fi
+  local entries path
+  entries=$(find "$schema_root" -mindepth 1 -maxdepth 1 -type f -name '*.json' -print)
+  if [ -z "$entries" ]; then
+    fail "schema reproducibility: authoritative schema census is empty"
+    return 1
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -L "$path" ]; then
+      fail "schema reproducibility: schema output is not a regular file"
+      return 1
+    fi
+  done <<< "$entries"
   (
-    cd "$schema_out"
-    find . -type f -print0 \
+    cd "$schema_root"
+    find . -mindepth 1 -maxdepth 1 -type f -print0 \
       | LC_ALL=C sort -z \
       | xargs -0 -r sha256sum
   )
 }
 
 log "--> schema generation reproducibility"
+schema_snapshot_before=$(snapshot_schema_root)
 (cd "$ROOT/packages" && cargo xtask gen-schemas)
-schema_snapshot_1=$(snapshot_schema_out)
+schema_snapshot_1=$(snapshot_schema_root)
 (cd "$ROOT/packages" && cargo xtask gen-schemas)
-schema_snapshot_2=$(snapshot_schema_out)
-if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
-  fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
+schema_snapshot_2=$(snapshot_schema_root)
+if [ "$schema_snapshot_before" != "$schema_snapshot_1" ] ||
+  [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
+  fail "schema generation reproducibility: committed schema output is not reproducible"
   diff -u \
-    <(printf '%s\n' "$schema_snapshot_1") \
-    <(printf '%s\n' "$schema_snapshot_2") >&2 || true
+    <(printf '%s\n' "$schema_snapshot_before") \
+    <(printf '%s\n' "$schema_snapshot_1") >&2 || true
   exit 1
-fi
-if [ "$schema_out_preexisting" = "0" ]; then
-  rm -rf -- "$schema_out"
 fi
 rust_surface_success rust-schema-reproducibility
 ok "schema generation reproducibility"
 }
 
 run_supply_chain_gate() {
+local advisory_db_path=""
 cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    cargo deny --manifest-path "$manifest_path" check \
+      --config "$config_path" bans licenses sources
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      cargo deny --manifest-path "$manifest_path" check \
+      --config "$config_path" bans licenses sources
     ok "cargo deny check ($label)"
+  else
+    fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
+    exit 1
+  fi
+}
+
+cargo_deny_policy_check() {
+  local label="$1" metadata_path="$2" config_path="$3"
+  if command -v cargo-deny >/dev/null 2>&1; then
+    log "--> cargo deny check ($label; selected policy metadata)"
+    (
+      cd "$ROOT/packages"
+      cargo deny check --metadata-path "$metadata_path" \
+        --config "$config_path" bans licenses sources
+    )
+    ok "cargo deny check ($label; selected policy metadata)"
+  elif command -v nix >/dev/null 2>&1; then
+    log "--> cargo deny check ($label; selected policy metadata via nix shell)"
+    (
+      cd "$ROOT/packages"
+      nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
+        cargo deny check --metadata-path "$metadata_path" \
+        --config "$config_path" bans licenses sources
+    )
+    ok "cargo deny check ($label; selected policy metadata)"
   else
     fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
@@ -888,73 +946,228 @@ cargo_deny_check() {
 cargo_audit_check() {
   local label="$1" lock_path="$2"
   shift 2
-  local attempts=3 attempt audit_dir audit_out rc
-  if ! command -v cargo-audit >/dev/null 2>&1 && ! command -v nix >/dev/null 2>&1; then
-    fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
+  if ! command -v nix >/dev/null 2>&1; then
+    fail "cargo audit cannot run for $label: nix is unavailable for the pinned RustSec database"
     exit 1
   fi
-  audit_dir=$(d2b_mktemp ".cargo-audit.${label//[^A-Za-z0-9._-]/-}.XXXXXX")
-  audit_out="$audit_dir/output.log"
-  for attempt in $(seq 1 "$attempts"); do
-    log "--> cargo audit ($label)"
-    log "  attempt $attempt/$attempts"
-    if command -v cargo-audit >/dev/null 2>&1; then
-      set +e
-      cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
-      rc=$?
-      set -e
-    else
-      set +e
-      nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-        cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
-      rc=$?
-      set -e
-    fi
-    if [ "$rc" -eq 0 ]; then
-      cat "$audit_out"
-      ok "cargo audit ($label)"
-      return 0
-    fi
-    if [ "$rc" -eq 1 ]; then
-      cat "$audit_out" >&2
-      fail "cargo audit ($label) reported vulnerabilities"
-      return 1
-    fi
-    [ "$attempt" -lt "$attempts" ] || break
-    log "  RETRY: cargo audit ($label) after transient failure"
-    sleep 5
-  done
-  cat "$audit_out" >&2
-  fail "cargo audit ($label) failed after $attempts attempts"
-  return 1
+  if [ -z "$advisory_db_path" ]; then
+    local system flake_ref
+    system=$(nix eval --raw --impure --expr builtins.currentSystem)
+    flake_ref=$(d2b_flake_ref "$ROOT")
+    advisory_db_path=$(nix build --no-link --print-out-paths \
+      "${flake_ref}#packages.${system}.rustsec-advisory-db")
+    [ -d "$advisory_db_path/crates" ] || {
+      fail "pinned RustSec database is missing its advisory crate index"
+      exit 1
+    }
+  fi
+  log "--> cargo audit ($label; pinned RustSec database, no fetch)"
+  if command -v cargo-audit >/dev/null 2>&1; then
+    cargo audit --file "$lock_path" --db "$advisory_db_path" --no-fetch "$@"
+  else
+    nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
+      cargo audit --file "$lock_path" --db "$advisory_db_path" --no-fetch "$@"
+  fi
+  ok "cargo audit ($label)"
+}
+
+assert_policy_source_census() {
+  local label="$1" metadata_path="$2" lock_path="$3"
+  local metadata_census lock_rows lock_census metadata_unique lock_unique
+  [ -r "$metadata_path" ] || {
+    fail "missing or unreadable selected policy metadata for $label: $metadata_path"
+    exit 1
+  }
+  [ -r "$lock_path" ] || {
+    fail "missing or unreadable selected policy lock for $label: $lock_path"
+    exit 1
+  }
+  if ! command -v jq >/dev/null 2>&1; then
+    fail "jq is required to validate the selected source census for $label"
+    exit 1
+  fi
+  jq -e '(.identities | type == "array") and (.identities | length > 0)' \
+    "$metadata_path" >/dev/null || {
+    fail "selected policy source census is empty or malformed for $label"
+    exit 1
+  }
+  jq -e '(.sourceCensusSha256 | type == "string") and (.sourceCensusSha256 | test("^[0-9a-f]{64}$"))' \
+    "$metadata_path" >/dev/null || {
+    fail "selected policy source census digest is missing or malformed for $label"
+    exit 1
+  }
+  metadata_census=$(
+    jq -r '.identities[] | [.name, .version, (.source // "path")] | @tsv' \
+      "$metadata_path" | LC_ALL=C sort
+  )
+  lock_rows=$(
+    awk '
+      function emit() {
+        if (name != "" && version != "") {
+          if (source == "") source = "path"
+          printf "%s\t%s\t%s\t%s\n", name, version, source, checksum
+        }
+      }
+      /^\[\[package\]\]$/ {
+        emit()
+        inside = 1
+        name = ""
+        version = ""
+        source = ""
+        checksum = ""
+        next
+      }
+      inside && /^[[:space:]]*name[[:space:]]*=/ {
+        split($0, fields, "\"")
+        name = fields[2]
+        next
+      }
+      inside && /^[[:space:]]*version[[:space:]]*=/ {
+        split($0, fields, "\"")
+        version = fields[2]
+        next
+      }
+      inside && /^[[:space:]]*source[[:space:]]*=/ {
+        split($0, fields, "\"")
+        source = fields[2]
+        next
+      }
+      inside && /^[[:space:]]*checksum[[:space:]]*=/ {
+        split($0, fields, "\"")
+        checksum = fields[2]
+        next
+      }
+      END { emit() }
+    ' "$lock_path" | LC_ALL=C sort
+  )
+  lock_census=$(printf '%s\n' "$lock_rows" | cut -f1-3 | LC_ALL=C sort)
+  [ -n "$metadata_census" ] && [ -n "$lock_census" ] || {
+    fail "selected policy source census is empty for $label"
+    exit 1
+  }
+  while IFS=$'\t' read -r _name _version source checksum; do
+    case "$source" in
+      path) ;;
+      registry+*)
+        [ -n "$checksum" ] || {
+          fail "selected registry source has no checksum for $label"
+          exit 1
+        }
+        ;;
+      git+*)
+        [[ "$source" == *'?rev='* ]] || {
+          fail "selected git source has no pinned revision for $label"
+          exit 1
+        }
+        ;;
+      *)
+        fail "selected source kind is not pinned for $label"
+        exit 1
+        ;;
+    esac
+  done <<<"$lock_rows"
+  metadata_unique=$(printf '%s\n' "$metadata_census" | LC_ALL=C sort -u)
+  lock_unique=$(printf '%s\n' "$lock_census" | LC_ALL=C sort -u)
+  [ "$metadata_census" = "$metadata_unique" ] || {
+    fail "selected policy metadata source census contains duplicate identities for $label"
+    exit 1
+  }
+  [ "$lock_census" = "$lock_unique" ] || {
+    fail "selected policy lock source census contains duplicate identities for $label"
+    exit 1
+  }
+  [ "$metadata_census" = "$lock_census" ] || {
+    fail "selected policy metadata and lock source censuses differ for $label"
+    diff -u \
+      <(printf '%s\n' "$metadata_census") \
+      <(printf '%s\n' "$lock_census") >&2 || true
+    exit 1
+  }
+  ok "selected policy source census ($label)"
+}
+
+policy_metadata_path() {
+  printf '%s\n' "$ROOT/$1/policy/metadata.json"
+}
+
+policy_lock_path() {
+  printf '%s\n' "$ROOT/$1/policy/Cargo.lock"
+}
+
+run_policy_deny() {
+  local relative="$1" config_path="$2" label="$3"
+  local metadata_path lock_path
+  metadata_path=$(policy_metadata_path "$relative")
+  lock_path=$(policy_lock_path "$relative")
+  assert_policy_source_census "$label" "$metadata_path" "$lock_path"
+  cargo_deny_policy_check "$label" "$metadata_path" "$config_path"
+}
+
+run_policy_audit() {
+  local relative="$1" ignore="$2" label="$3"
+  local metadata_path lock_path
+  metadata_path=$(policy_metadata_path "$relative")
+  lock_path=$(policy_lock_path "$relative")
+  assert_policy_source_census "$label" "$metadata_path" "$lock_path"
+  if [ -n "$ignore" ]; then
+    cargo_audit_check "$label" "$lock_path" --ignore "$ignore"
+  else
+    cargo_audit_check "$label" "$lock_path"
+  fi
 }
 
 rust_surface_start rust-deny-main
-cargo_deny_check "main workspace" "$manifest" "$deny_config"
+cargo_deny_check "main product-workspace stream" "$manifest" "$deny_config"
 rust_surface_success rust-deny-main
+
+broker_policy_contexts=(
+  "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production"
+  "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production"
+)
+guest_policy_contexts=(
+  "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool"
+  "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool"
+)
+
 rust_surface_start rust-deny-broker
-cargo_deny_check "broker workspace" "$broker_manifest" "$broker_deny_config"
+for policy_context in "${broker_policy_contexts[@]}"; do
+  run_policy_deny "$policy_context" "$broker_deny_config" \
+    "broker package stream (product workspace) $policy_context"
+done
 rust_surface_success rust-deny-broker
+
 rust_surface_start rust-deny-guest
-cargo_deny_check "guest shell runner workspace" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
+for policy_context in "${guest_policy_contexts[@]}"; do
+  run_policy_deny "$policy_context" "$guest_shell_runner_deny_config" \
+    "guest package stream (product workspace) $policy_context"
+done
 rust_surface_success rust-deny-guest
 
 # Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users were
 # updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
 # a release on quick-xml >= 0.41.
 rust_surface_start rust-audit-main
-cargo_audit_check "main workspace" "$lock_file" \
+cargo_audit_check "main product-workspace lock" "$lock_file" \
   --ignore RUSTSEC-2026-0194 \
   --ignore RUSTSEC-2026-0195
 rust_surface_success rust-audit-main
+
 rust_surface_start rust-audit-broker
-cargo_audit_check "broker workspace" "$broker_lock_file"
+for policy_context in "${broker_policy_contexts[@]}"; do
+  run_policy_audit "$policy_context" "" \
+    "broker package stream (product workspace) $policy_context"
+done
 rust_surface_success rust-audit-broker
+
 # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
 # The helper pins and tracks that transitive unmaintained advisory explicitly
 # while evaluating libshpool feasibility.
 rust_surface_start rust-audit-guest
-cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
+cargo_audit_check "static-guest closure lock aggregate" "$guest_lock_file"
+for policy_context in "${guest_policy_contexts[@]}"; do
+  run_policy_audit "$policy_context" "RUSTSEC-2024-0384" \
+    "guest package stream (product workspace) $policy_context"
+done
 rust_surface_success rust-audit-guest
 }
 
@@ -965,9 +1178,10 @@ bash "$ROOT/tests/tools/stub-no-socket.sh"
 rust_surface_success rust-stub-no-socket
 ok "stub-no-socket"
 
-# Fail-closed Rust test inventory: every pinned workspace + broker test must
-# still exist (catches a silently-deleted test that would otherwise vanish from
-# coverage). The pinned set is committed under tests/golden/pinned/.
+# Fail-closed Rust test inventory: every pinned product-workspace and broker
+# package-stream test must still exist (catches a silently-deleted test that
+# would otherwise vanish from coverage). The pinned set is committed under
+# tests/golden/pinned/.
 rust_surface_start rust-assert-pinned
 log "--> tests/tools/assert-pinned-tests.sh"
 bash "$ROOT/tests/tools/assert-pinned-tests.sh"

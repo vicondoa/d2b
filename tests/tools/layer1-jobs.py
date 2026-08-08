@@ -174,6 +174,15 @@ MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
 # with single braces because this is ordinary module-level source, not f-string
 # text - see MATRIX_CHECK_SCOPE above for the same hazard.
 REALIZED_CACHE_DIR = "${{ runner.temp }}/d2b-realized-cache"
+AARCH64_NATIVE_SYSTEM = "aarch64-linux"
+AARCH64_NATIVE_CHECKS = (
+    "broker-production-dependency-policy",
+    "guest-shell-runner-static-dependency-policy",
+    "broker-production-package-policy",
+    "guest-real-libshpool-package-policy",
+    "broker-host-artifact-contract",
+    "guest-static-elf",
+)
 
 
 def nix_cache_hash_files(job: dict[str, Any]) -> str:
@@ -428,11 +437,11 @@ def rust_job(job: dict[str, Any]) -> str:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
-            packages/d2b-guest-shell-runner -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v2-rust-api-json"
@@ -725,7 +734,48 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
           fi"""
 
 
-def flake_aarch64_smoke_job(job: dict[str, Any]) -> str:
+def validate_aarch64_job(job: dict[str, Any]) -> None:
+    if job.get("runsOn") != "ubuntu-24.04-arm":
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 requires the native ubuntu-24.04-arm runner"
+        )
+    if job.get("timeoutMinutes") != 60:
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 requires a 60-minute timeout"
+        )
+    if job.get("enforcement") == "advisory":
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 must remain enforcing"
+        )
+    if job.get("nativeSystem") != AARCH64_NATIVE_SYSTEM:
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 has a missing or foreign native system"
+        )
+    if "system" in job and job["system"] != AARCH64_NATIVE_SYSTEM:
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 has a foreign native system"
+        )
+    for field in ("builders", "remoteBuilder", "remoteBuilders"):
+        if job.get(field):
+            raise SystemExit(
+                f"{MANIFEST}: test-flake-aarch64 must not use a remote builder"
+            )
+    if job.get("nativeChecks") != list(AARCH64_NATIVE_CHECKS):
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 must name exactly six native checks"
+        )
+    if job.get("stableHeadBinding") is not True:
+        raise SystemExit(
+            f"{MANIFEST}: test-flake-aarch64 must bind one stable PR head"
+        )
+
+
+def flake_aarch64_native_job(job: dict[str, Any]) -> str:
+    validate_aarch64_job(job)
+    checks = " \\\n".join(
+        f"            .#checks.{AARCH64_NATIVE_SYSTEM}.{check}"
+        for check in AARCH64_NATIVE_CHECKS
+    )
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
@@ -733,12 +783,34 @@ def flake_aarch64_smoke_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
+          fetch-depth: 0
+          ref: ${{{{ github.event.pull_request.head.sha || github.sha }}}}
 {nix_setup_step(job)}
-      - name: {job["displayName"]}
+      - name: Verify stable PR head
+        id: stable-head
+        env:
+          EXPECTED_HEAD: ${{{{ github.event.pull_request.head.sha || github.sha }}}}
         run: |
-          nix-instantiate --eval --strict \\
-            -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {{}}; in r.drvPath' \\
-            >/dev/null"""
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          printf 'commit=%s\\n' "$actual" >> "$GITHUB_OUTPUT"
+      - name: Realize native aarch64 flake checks
+        env:
+          D2B_STABLE_HEAD: ${{{{ steps.stable-head.outputs.commit }}}}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          nix build --no-link \\
+{checks}
+      - name: Run native aarch64 supply-chain gate
+        env:
+          D2B_STABLE_HEAD: ${{{{ steps.stable-head.outputs.commit }}}}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          make test-rust-supply-chain"""
 
 
 def check_rollup_job(manifest: dict[str, Any]) -> str:
@@ -833,7 +905,7 @@ RENDERERS = {
     "flake-x86-realized": flake_x86_realized_job,
     "flake-x86-outputs": flake_x86_outputs_job,
     "flake-x86-rollup": flake_x86_rollup_job,
-    "flake-aarch64-smoke": flake_aarch64_smoke_job,
+    "flake-aarch64-native": flake_aarch64_native_job,
 }
 
 
@@ -843,6 +915,8 @@ def render_workflow(manifest: dict[str, Any]) -> str:
     for job_id in manifest["ci"]["jobs"]:
         job = jobs[job_id]
         kind = job["ciKind"]
+        if job_id == "test-flake-aarch64":
+            validate_aarch64_job(job)
         renderer = RENDERERS.get(kind)
         if renderer is None:
             raise SystemExit(f"{MANIFEST}: no renderer for ciKind {kind!r}")

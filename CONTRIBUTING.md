@@ -25,61 +25,126 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 
 ## Running quality gates
 
-- `bash tests/static.sh` is the top-level Layer-1 gate.
-- It runs parse checks, smoke evals, assertion tests, manifest schema validation, and per-example flake checks.
+- `make check` is the PR-equivalent Layer-1 gate.
+- `make test-unit` is the post-preflight Layer-1 development umbrella.
+- `make check-static` retains the legacy/full-static `tests/static.sh` gate.
+- `make check` runs the manifest's parse checks, smoke evals, assertion tests,
+  manifest schema validation, and per-example flake checks.
 - See [tests/README.md](./tests/README.md) for the full test layering and optional Layer-2 integration tests.
 
 <a id="rust-workspace-checks"></a>
 
 ### Rust workspace checks
 
-The `packages/` Cargo workspace is gated by `tests/static.sh` and by
-`nix flake check --no-build --all-systems`. To run the gate locally:
+The product Cargo workspace is rooted at `packages/Cargo.toml` and uses
+`packages/Cargo.lock` as its only authoritative product lock. It includes the
+broker and guest shell runner. The no-bash AST walker is the separate gate-tool
+workspace under `tests/tools/no-bash-ast-walker/`; it is not another product
+workspace. `packages/Cargo.guest.lock` is a generated static-guest closure
+input, not a product workspace or hub authority.
+
+Use the Make targets for complete gates:
 
 ```bash
-cargo --manifest-path packages/Cargo.toml fmt --check
-cargo --manifest-path packages/Cargo.toml clippy --workspace --all-targets -- -D warnings
-cargo --manifest-path packages/Cargo.toml test --workspace
-cargo --manifest-path packages/Cargo.toml deny check
-cargo --manifest-path packages/Cargo.toml audit
-nix build .#checks.x86_64-linux.rust-build \
-          .#checks.x86_64-linux.rust-tests \
-          .#checks.x86_64-linux.rust-clippy \
-          .#checks.x86_64-linux.rust-deny \
-          .#checks.x86_64-linux.rust-audit
-for c in rust-build rust-tests rust-clippy rust-deny rust-audit; do
-  nix eval --raw ".#checks.aarch64-linux.${c}.drvPath" >/dev/null || exit 1
-done
+make test-rust
+make test-rust-supply-chain
+make test-policy
 ```
 
-The pinned toolchain in `packages/rust-toolchain.toml` is honored only
-when cargo is invoked with `--manifest-path packages/Cargo.toml` or from
-inside `packages/`. See
+For a focused package-selection pass, enter the pinned development shell from
+the repository root, then run the commands from `packages/`:
+
+```bash
+nix develop
+cd packages
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets \
+  --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings
+cargo nextest run --locked --workspace \
+  --exclude d2b-priv-broker --exclude d2b-guest-shell-runner
+cargo test --locked -p d2b-priv-broker --no-default-features -- --test-threads 1
+cargo test --locked -p d2b-priv-broker --no-default-features \
+  --features layer1-bootstrap -- --test-threads 1
+cargo test --locked -p d2b-priv-broker --no-default-features \
+  --features fake-backends -- --test-threads 1
+cargo fmt -p d2b-guest-shell-runner --check
+cargo clippy --locked -p d2b-guest-shell-runner --no-default-features \
+  --features real-libshpool --all-targets -- -D warnings
+cargo nextest run --locked -p d2b-guest-shell-runner \
+  --no-default-features --features real-libshpool
+cargo deny check --config deny.toml bans licenses sources
+cd ..
+```
+
+The focused commands select broker and guest packages from the unified product
+workspace. The supply-chain target additionally checks these exact generated
+policy contexts:
+
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool`
+
+Do not run `cargo audit` against an ambient advisory database. The supported
+`make test-rust-supply-chain` target resolves the flake's
+`packages.<system>.rustsec-advisory-db` output, pinned to RustSec
+`advisory-db` commit `831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`, and passes it to
+`cargo audit` with `--no-fetch`.
+
+The pinned toolchain in `packages/rust-toolchain.toml` is honored when Cargo
+runs from inside `packages/`. See
 [ADR 0009](docs/adr/0009-rust-toolchain-msrv-and-supply-chain.md) for
 toolchain, MSRV, and supply-chain policy.
 
-All d2b worktrees on paydro's host share Cargo build artifacts via
-repo-local `.cargo/config.toml` files:
+Each worktree keeps Cargo outputs local while sccache deduplicates compiled
+outputs. The product workspace uses `packages/target`; the dedicated broker
+and guest gate streams use stable package-selected target directories, and the
+walker uses `tests/tools/no-bash-ast-walker/target`:
 
-- `packages/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/workspace`
-- `packages/d2b-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/broker`
-- `packages/d2b-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
-- `packages/d2b-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/fuzz`
+Cargo's internal locking makes concurrent worktree builds safe, while stable
+target names keep sccache keys reusable and prevent feature-pass contention.
 
-Cargo's internal locking makes concurrent worktree builds safe, but a
-very old checkout may pay one slower rebuild while incremental state is
-refreshed in the shared cache.
-
-The persistent-shell feasibility helper is a standalone excluded workspace. Run
-it explicitly when iterating on that crate:
+The persistent-shell feasibility helper is a product-workspace member. Run its
+selected root-workspace stream explicitly when iterating on that crate:
 
 ```bash
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml fmt --check
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
-cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --config packages/d2b-guest-shell-runner/deny.toml
-cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
+cargo fmt --manifest-path packages/Cargo.toml -p d2b-guest-shell-runner --check
+cargo clippy --locked --manifest-path packages/Cargo.toml \
+  --package d2b-guest-shell-runner --no-default-features \
+  --features real-libshpool --all-targets -- -D warnings
+cargo test --locked --manifest-path packages/Cargo.toml \
+  --package d2b-guest-shell-runner --no-default-features --features real-libshpool
+cargo deny --metadata-path packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json \
+  check --config packages/d2b-guest-shell-runner/deny.toml
+cargo audit --file packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/Cargo.lock \
+  --no-fetch --ignore RUSTSEC-2024-0384
 ```
+
+The selected broker and guest policy inputs are generated for GNU and musl
+targets on both `x86_64-linux` and `aarch64-linux`. Package policy checks read
+only their exact system-and-target paths; the root lock and generated
+`Cargo.guest.lock` checks remain independent.
+
+The release workflow builds every product binary from `packages/Cargo.toml`
+with `--locked`, explicit package/bin/default-feature selectors, and copies
+from `packages/target/release`. Its cache has one `packages -> target`
+workspace mapping plus explicit broker and guest gate target directories.
+The native `test-flake-aarch64` job realizes exactly these six checks on
+`aarch64-linux`, then runs `make test-rust-supply-chain` on the same stable
+head:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+It does not use a foreign system, `--builders`, a remote builder, or an
+advisory classification.
 
 `bash tests/static.sh` also has a fast path for Rust-heavy gates:
 
@@ -99,6 +164,9 @@ before committing whenever you touch the corresponding Rust types,
 `clap` surface, or prose companion docs.
 
 **xtask subcommands**
+
+From the repository root, enter `nix develop`, then run `cd packages` before
+using these contributor-only generators:
 
 - `cargo xtask gen-cli-schemas`
 - `cargo xtask gen-error-codes`

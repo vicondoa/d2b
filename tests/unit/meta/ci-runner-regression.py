@@ -29,6 +29,29 @@ RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
 NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
 
+AARCH64_NATIVE_CHECKS = (
+    "broker-production-dependency-policy",
+    "guest-shell-runner-static-dependency-policy",
+    "broker-production-package-policy",
+    "guest-real-libshpool-package-policy",
+    "broker-host-artifact-contract",
+    "guest-static-elf",
+)
+
+POLICY_INDEPENDENT_BINARIES = (
+    "policy_dash_gate",
+    "policy_adr046_work_items",
+    "policy_changelog_gate",
+    "policy_adr046_spec_literals",
+    "policy_adr046_envelopes",
+    "policy_provider_crates",
+    "policy_resource_mutation_seal",
+    "policy_docs",
+    "policy_bazel_toolchain",
+    "policy_bazel_nix",
+    "policy_bazel_supply_chain",
+)
+
 
 EXECUTION_MANIFEST_HARNESS = r"""
 use strict;
@@ -280,6 +303,30 @@ def workflow_job_block(workflow: str, job_id: str) -> str:
     next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", remainder)
     end = match.end() + (next_job.start() if next_job else len(remainder))
     return workflow[match.start() : end]
+
+
+def policy_inventory_entries(source: str) -> list[str]:
+    match = re.search(
+        r"(?ms)^readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=\(\n"
+        r"(?P<body>.*?)\n\)",
+        source,
+    )
+    if match is None:
+        raise AssertionError("shared policy inventory declaration is missing")
+    return [
+        line.strip()
+        for line in match.group("body").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def assert_exact_policy_inventory(source: str) -> None:
+    entries = policy_inventory_entries(source)
+    if entries != list(POLICY_INDEPENDENT_BINARIES):
+        raise AssertionError(
+            "shared policy inventory must contain the exact ordered binary set "
+            f"once each; got {entries!r}"
+        )
 
 
 def executable_shell_source(source: str) -> str:
@@ -573,6 +620,165 @@ set -euo pipefail
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
         self.assertIn(".scratch/rust-test-cache", workflow)
         self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+
+    def test_shared_policy_inventory_contains_the_three_new_binaries_once(self) -> None:
+        library = (ROOT / "tests" / "lib.sh").read_text(encoding="utf-8")
+        assert_exact_policy_inventory(library)
+
+    def test_shared_policy_inventory_missing_extra_and_duplicate_fixtures_fail(self) -> None:
+        library = (ROOT / "tests" / "lib.sh").read_text(encoding="utf-8")
+        valid_lines = "\n".join(
+            f"  {binary}" for binary in POLICY_INDEPENDENT_BINARIES
+        )
+        valid = (
+            "readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(\n"
+            f"{valid_lines}\n"
+            ")\n"
+        )
+        assert_exact_policy_inventory(valid)
+
+        missing = library.replace("  policy_bazel_nix\n", "")
+        extra = library.replace(
+            "  policy_bazel_supply_chain\n",
+            "  policy_bazel_supply_chain\n  policy_bazel_extra\n",
+        )
+        duplicate = library.replace(
+            "  policy_bazel_toolchain\n",
+            "  policy_bazel_toolchain\n  policy_bazel_toolchain\n",
+        )
+        for label, mutated in (
+            ("missing", missing),
+            ("extra", extra),
+            ("duplicate", duplicate),
+        ):
+            with self.assertRaises(AssertionError, msg=label):
+                assert_exact_policy_inventory(mutated)
+            fixture = self.scratch / f"policy-{label}-lib.sh"
+            fixture.write_text(mutated, encoding="utf-8")
+            result = subprocess.run(
+                ["bash", "-c", 'set -euo pipefail; source "$1"', "--", str(fixture)],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                msg=f"production policy inventory accepted {label} fixture",
+            )
+
+        # Keep the fixture tied to the production declaration rather than
+        # allowing this regression to become an orphaned unit test.
+        self.assertIn(
+            "D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES",
+            library,
+        )
+
+    def test_aarch64_renderer_realizes_six_checks_and_supply_chain_on_one_head(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+        job = manifest["jobs"]["test-flake-aarch64"]
+        block = workflow_job_block(workflow, "test-flake-aarch64")
+
+        self.assertEqual(job["runsOn"], "ubuntu-24.04-arm")
+        self.assertEqual(job["timeoutMinutes"], 60)
+        self.assertNotEqual(job.get("enforcement"), "advisory")
+        self.assertNotIn("smoke-eval-aarch64.nix", block)
+        self.assertIn("nix build --no-link", block)
+        self.assertIn("make test-rust-supply-chain", block)
+        self.assertIn("github.event.pull_request.head.sha", block)
+        self.assertIn("git rev-parse HEAD", block)
+        self.assertIn("git status --porcelain", block)
+        self.assertNotRegex(block, r"(?m)^\s+--system(?:=|\s)")
+        self.assertNotRegex(block, r"(?m)^\s+--builders?(?:=|\s)")
+
+        for check in AARCH64_NATIVE_CHECKS:
+            self.assertEqual(
+                block.count(f".#checks.aarch64-linux.{check}"),
+                1,
+                msg=f"aarch64 realization must name {check} once",
+            )
+
+    def test_aarch64_advisory_classification_mutation_is_refused(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        mutated = json.loads(json.dumps(manifest))
+        mutated["jobs"]["test-flake-aarch64"]["enforcement"] = "advisory"
+        with self.assertRaises(SystemExit):
+            layer1_jobs.render_workflow(mutated)
+
+    def test_aarch64_wrong_runner_system_and_remote_builder_mutations_are_refused(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        mutations = (
+            ("runner", {"runsOn": "ubuntu-latest"}),
+            ("system", {"nativeSystem": "x86_64-linux"}),
+            ("builders", {"builders": ["ssh://builder.invalid"]}),
+            ("remote builder", {"remoteBuilder": "builder.invalid"}),
+        )
+        for label, change in mutations:
+            mutated = json.loads(json.dumps(manifest))
+            mutated["jobs"]["test-flake-aarch64"].update(change)
+            with self.assertRaises(SystemExit, msg=label):
+                layer1_jobs.render_workflow(mutated)
+
+    def test_rust_cache_renderer_has_one_workspace_and_explicit_gate_directories(self) -> None:
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+        rust_jobs = [
+            workflow_job_block(workflow, job_id)
+            for job_id in (
+                "test-rust-api-surface",
+                "test-rust-main",
+                "test-rust-broker",
+                "test-rust-guest-shell-runner",
+                "test-rust-no-bash-ast",
+                "test-rust-schema",
+                "test-rust-inventory",
+                "test-rust-supply-chain",
+            )
+        ]
+        for block in rust_jobs:
+            self.assertEqual(block.count("packages -> target"), 1)
+            self.assertNotIn("packages/d2b-priv-broker -> target", block)
+            for directory in (
+                "packages/d2b-priv-broker/target",
+                "packages/d2b-priv-broker/target-layer1",
+                "packages/d2b-priv-broker/target-fakebackends",
+                "packages/d2b-guest-shell-runner/target",
+            ):
+                self.assertIn(directory, block)
+
+    def test_release_workflow_uses_root_locked_selectors_and_release_target(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "release-host-binaries.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("packages/d2b-priv-broker/Cargo.toml", workflow)
+        self.assertEqual(workflow.count("packages -> target"), 1)
+        self.assertIn("packages/d2b-priv-broker/target", workflow)
+        self.assertIn("packages/d2b-priv-broker/target-layer1", workflow)
+        self.assertIn("packages/d2b-priv-broker/target-fakebackends", workflow)
+        self.assertIn("packages/d2b-guest-shell-runner/target", workflow)
+        self.assertNotIn("packages/d2b-priv-broker -> target", workflow)
+        for package, binary in (
+            ("d2bd", "d2bd"),
+            ("d2b", "d2b"),
+            ("d2b-wayland-proxy", "d2b-wayland-proxy"),
+            ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper"),
+            ("d2b-host", "d2b-activation-helper"),
+            ("d2b-priv-broker", "d2b-priv-broker"),
+        ):
+            self.assertIn(
+                f"--package {package} --bin {binary} --no-default-features",
+                workflow,
+            )
+        self.assertNotIn(
+            "packages/d2b-priv-broker/target/release/d2b-priv-broker",
+            workflow,
+        )
+        self.assertIn("packages/target/release/d2b-priv-broker", workflow)
 
     def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
@@ -1177,10 +1383,11 @@ printf '%s\n' "$sanitized_line"
         self.assertIn("not binary(video_binary_contract)", driver)
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         self.assertIn("video-binary-contract =", flake)
-        self.assertIn(
-            'D2B_FLAKE_REALIZED_CHECKS="video-binary-contract"',
-            (ROOT / "tests" / "tools" / "flake-check-classes.sh").read_text(encoding="utf-8"),
-        )
+        classes = (
+            ROOT / "tests" / "tools" / "flake-check-classes.sh"
+        ).read_text(encoding="utf-8")
+        for check in (*AARCH64_NATIVE_CHECKS, "video-binary-contract"):
+            self.assertIn(check, classes)
         self.assertIn(
             'd2b_flake_check_is_realized "$D2B_FLAKE_CHECK"',
             (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"),
@@ -1289,7 +1496,9 @@ printf '%s\n' "$sanitized_line"
         self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
         self.assertIn("--document-hidden-items", api_driver)
         self.assertIn("--document-private-items", api_driver)
-        self.assertIn("--workspace --lib --no-deps", api_driver)
+        self.assertEqual(api_driver.count("--exclude d2b-priv-broker"), 2)
+        self.assertEqual(api_driver.count("--exclude d2b-guest-shell-runner"), 2)
+        self.assertEqual(api_driver.count("--lib --no-deps"), 2)
         self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
         self.assertIn('D2B_API_SURFACE_TARGET_DIR must be an absolute path', api_driver)
         self.assertIn('D2B_API_SURFACE_UPDATE must be 0 or 1', api_driver)
@@ -1421,16 +1630,7 @@ printf '%s\n' "$sanitized_line"
             encoding="utf-8"
         )
         rust_driver = RUST_DRIVER.read_text(encoding="utf-8")
-        binaries = [
-            "policy_dash_gate",
-            "policy_adr046_work_items",
-            "policy_changelog_gate",
-            "policy_adr046_spec_literals",
-            "policy_adr046_envelopes",
-            "policy_provider_crates",
-            "policy_resource_mutation_seal",
-            "policy_docs",
-        ]
+        binaries = list(POLICY_INDEPENDENT_BINARIES)
 
         self.assertIn(
             "readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(",
@@ -1808,6 +2008,7 @@ esac
         for relative in (
             "packages/Cargo.toml",
             "packages/Cargo.lock",
+            "packages/Cargo.guest.lock",
             "packages/deny.toml",
             "packages/d2b-priv-broker/Cargo.toml",
             "packages/d2b-priv-broker/Cargo.lock",

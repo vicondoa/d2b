@@ -1,0 +1,20 @@
+# Module resolution is part of the committed build input.
+common --lockfile_mode=error
+common --check_direct_dependencies=error
+common --spawn_strategy=sandboxed
+common --strategy=Rustc=sandboxed
+common --strategy=RustcMetadata=sandboxed
+common --strategy=Clippy=sandboxed
+common --strategy=rustdoc=sandboxed
+common --strategy=rustfmt=sandboxed
+common --strategy=unpretty=sandboxed
+common --strategy=CargoBuildScript=sandboxed
+common --strategy=TestRunner=sandboxed
+
+# Keep ordinary local output concise without changing the server identity.
+build --show_timestamps
+test --test_output=errors
+
+# Named configurations are explicit and local; no global Rust channel is set.
+build:dbg --compilation_mode=dbg
+build:opt --compilation_mode=opt

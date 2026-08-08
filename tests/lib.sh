@@ -69,7 +69,12 @@ readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
   policy_provider_crates
   policy_resource_mutation_seal
   policy_docs
+  policy_bazel_toolchain
+  policy_bazel_nix
+  policy_bazel_supply_chain
 )
+
+readonly D2B_POLICY_INVENTORY_EXPECTED="policy_dash_gate policy_adr046_work_items policy_changelog_gate policy_adr046_spec_literals policy_adr046_envelopes policy_provider_crates policy_resource_mutation_seal policy_docs policy_bazel_toolchain policy_bazel_nix policy_bazel_supply_chain"
 
 d2b_repo_root() {
   printf '%s\n' "${ROOT:-${FLAKE:-$(dirname "$_LIB_HERE")}}"
@@ -211,14 +216,54 @@ fail() {
   return 1
 }
 
+# Keep the policy lane's shared binary list fail-closed. The fixture lane uses
+# the same list to exclude these repository scans, so a missing, extra, or
+# duplicate entry would either skip required policy or run it twice.
+d2b_validate_policy_inventory() {
+  local item expected_count=0
+  local -a expected=()
+  read -r -a expected <<< "$D2B_POLICY_INVENTORY_EXPECTED"
+  expected_count=${#expected[@]}
+
+  if [ "${#D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}" -ne "$expected_count" ]; then
+    fail "policy inventory must contain exactly $expected_count binaries"
+    return 1
+  fi
+
+  local -A seen=()
+  for item in "${D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES[@]}"; do
+    case "$item" in
+      policy_[a-z0-9_]* ) ;;
+      * )
+        fail "policy inventory contains an invalid binary name"
+        return 1
+        ;;
+    esac
+    if [ "${seen[$item]:-0}" -eq 1 ]; then
+      fail "policy inventory contains a duplicate binary"
+      return 1
+    fi
+    seen["$item"]=1
+  done
+
+  for item in "${expected[@]}"; do
+    if [ "${seen[$item]:-0}" -ne 1 ]; then
+      fail "policy inventory is missing a required binary"
+      return 1
+    fi
+  done
+}
+
+d2b_validate_policy_inventory
+
 # ---------- assertions ----------
 
 assert_eq() {
-  local actual="$1" expected="$2" msg="${3:-}"
-  if [ "$actual" = "$expected" ]; then
-    ok "${msg:-assert_eq} ('$actual')"
+  local actual_value="$1" expected_value="$2" msg="${3:-}"
+  if [ "$actual_value" = "$expected_value" ]; then
+    ok "${msg:-assert_eq} ('$actual_value')"
   else
-    fail "${msg:-assert_eq}: got '$actual', expected '$expected'"
+    fail "${msg:-assert_eq}: got '$actual_value', expected '$expected_value'"
   fi
 }
 

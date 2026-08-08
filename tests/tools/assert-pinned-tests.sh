@@ -71,56 +71,53 @@ collect_present() {
     present["${line#* }"]=1
   done
 }
-# Main workspace (packages/Cargo.toml). Include d2b-contract-tests in this
-# single listing even though the ordinary test pass excludes it: the pinned
-# inventory only needs a superset of the tests that each lane executes, and
-# one workspace listing avoids a second Cargo resolution/build pass.
-collect_present < <(
-  cd "$ROOT/packages"
-  cargo nextest list --workspace --message-format oneline
-)
-# Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
-# cargo workspace, excluded from the main one. Retired canaries pinned
-# ops::device / ops::modprobe #[test]s that live there, so the fail-closed
-# pinned gate must enumerate it too - otherwise those retirements would be
-# silently unguarded against deletion.
-#
-# `cargo metadata --all-features` (run by `nextest list`) can add a
-# transitive lock entry the committed lock omits (e.g. `itoa` under rustix's
-# full feature set), which would dirty the working tree. Snapshot + restore
-# the broker lock so listing is non-mutating by construction.
-broker_lock="$ROOT/packages/d2b-priv-broker/Cargo.lock"
-broker_lock_backup=""
-restore_broker_lock() {
-  if [ -n "$broker_lock_backup" ] && [ -f "$broker_lock_backup" ]; then
-    cp "$broker_lock_backup" "$broker_lock"
-    rm -f "$broker_lock_backup"
-  fi
-}
-if [ -f "$broker_lock" ]; then
-  broker_lock_backup="$ROOT/tests/.assert-pinned-broker-lock.${BASHPID:-$$}"
-  if [ -e "$broker_lock_backup" ]; then
-    echo "assert-pinned-tests: scratch path already exists: $broker_lock_backup" >&2
+
+# `nextest list --locked` is required to be non-mutating. Preserve all three
+# candidate views around both listings so a Cargo regression cannot silently
+# rewrite the candidate while asserting its inventory.
+candidate_tracked_before=$(git -C "$ROOT" diff --no-ext-diff)
+candidate_staged_before=$(git -C "$ROOT" diff --cached --no-ext-diff)
+candidate_untracked_before=$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)
+
+collect_root_listing() {
+  local listing
+  if ! listing=$(
+    cd "$ROOT/packages"
+    cargo nextest list --locked --workspace --message-format oneline
+  ); then
+    echo "assert-pinned-tests: root-workspace nextest listing failed" >&2
     exit 1
   fi
-  cp "$broker_lock" "$broker_lock_backup"
-  trap restore_broker_lock EXIT
-fi
-collect_present < <(
-  cd "$ROOT/packages/d2b-priv-broker"
-  # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
-  # test surface: the default real-wire tests, the layer1-bootstrap legacy
-  # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the
-  # `#![cfg(feature = "fake-backends")]`-gated hermetic integration tests
-  # (e.g. tests/pidfd_handoff_scm_rights.rs). test-rust.sh runs the
-  # default, layer1-bootstrap, AND fake-backends broker test passes, so every
-  # listed test is actually executed and can be guarded by the pinned gate.
-  cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline
-)
-if [ -n "$broker_lock_backup" ]; then
-  restore_broker_lock
-  broker_lock_backup=""
-  trap - EXIT
+  collect_present <<<"$listing"
+}
+
+# The product workspace is the only product Cargo lock authority. The generic
+# listing covers every root-workspace package, including the guest package.
+collect_root_listing
+
+collect_broker_listing() {
+  local listing
+  if ! listing=$(
+    cd "$ROOT/packages"
+    cargo nextest list --locked -p d2b-priv-broker --no-default-features --features layer1-bootstrap,fake-backends --message-format oneline
+  ); then
+    echo "assert-pinned-tests: broker nextest listing failed" >&2
+    exit 1
+  fi
+  collect_present <<<"$listing"
+}
+
+# The broker feature listing is selected from that same root workspace and
+# deliberately covers the union of the three serial broker contexts.
+collect_broker_listing
+candidate_tracked_after=$(git -C "$ROOT" diff --no-ext-diff)
+candidate_staged_after=$(git -C "$ROOT" diff --cached --no-ext-diff)
+candidate_untracked_after=$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)
+if [ "$candidate_tracked_before" != "$candidate_tracked_after" ] \
+  || [ "$candidate_staged_before" != "$candidate_staged_after" ] \
+  || [ "$candidate_untracked_before" != "$candidate_untracked_after" ]; then
+  echo "assert-pinned-tests: Cargo nextest inventory changed tracked, staged, or untracked candidate state" >&2
+  exit 1
 fi
 
 declare -A seen

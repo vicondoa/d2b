@@ -140,7 +140,7 @@ assert_no_runtime_state() {
 
 run_stub() {
   local bin="$1"
-  local expected="$2"
+  local expected_text="$2"
   local output rc
   local run_list_before=""
   local var_lib_list_before=""
@@ -166,7 +166,7 @@ run_stub() {
     printf '%s\n' "$output" >&2
     exit 1
   fi
-  assert_contains "$output" "$expected" "$bin stdout"
+  assert_contains "$output" "$expected_text" "$bin stdout"
   assert_no_runtime_state "$bin" "$run_list_before" "$var_lib_list_before" \
     "$xdg_before" "$tmp_before"
 }

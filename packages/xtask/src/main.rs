@@ -1,6 +1,14 @@
 use std::{
-    env, fs,
+    collections::{BTreeMap, BTreeSet},
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -88,23 +96,35 @@ use d2b_realm_core::{
         AuditSinkHealthReason, AuditStreamKind,
     },
 };
+use nix::{
+    errno::Errno,
+    fcntl::{FcntlArg, fcntl},
+    libc,
+};
 
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;
+use sha2::{Digest, Sha256};
 
+mod bazel;
+mod bazel_yanked;
 mod changelog;
 mod delivery;
 mod gen_spec_set;
 mod heavy_gate;
+mod hermeticity;
 mod implementation_graph;
 mod inventory;
+mod package_policy;
 mod process_marker_pin;
 mod provider_crate_policy;
 mod provider_packaging;
+mod schema;
 mod semantic_service_schemas;
 mod test_runtime_ledger;
 mod zone_schema;
 
+#[allow(dead_code)]
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 
@@ -350,7 +370,36 @@ struct RustItem {
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
-        [command] if command == "gen-schemas" => run_task("gen-schemas", gen_schemas),
+        [command, rest @ ..] if command == "gen-schemas" => {
+            run_task("gen-schemas", || schema::gen_schemas_with_args(rest))
+        }
+        [command, rest @ ..] if command == "gen-bazel" => {
+            run_task("gen-bazel", || bazel::gen_bazel(rest))
+        }
+        [command, rest @ ..] if command == "bazel-repin" => {
+            run_task("bazel-repin", || bazel_repin_with_executable_target(rest))
+        }
+        [command] if command == "bazel-module-refresh" => {
+            run_task("bazel-module-refresh", || bazel::bazel_module_refresh(&[]))
+        }
+        [command, rest @ ..] if command == "bazel-module-refresh" => {
+            run_task("bazel-module-refresh", || bazel::bazel_module_refresh(rest))
+        }
+        [command, rest @ ..] if command == "bazel-yanked-refresh" => {
+            run_task("bazel-yanked-refresh", || {
+                bazel_yanked::bazel_yanked_refresh(rest)
+            })
+        }
+        [command, rest @ ..] if command == "bazel-yanked-check" => {
+            run_task("bazel-yanked-check", || {
+                bazel_yanked::bazel_yanked_check(rest)
+            })
+        }
+        [command, rest @ ..] if command == "gen-package-policy-inputs" => {
+            run_task("gen-package-policy-inputs", || {
+                package_policy::gen_package_policy_inputs(rest)
+            })
+        }
         [command] if command == "gen-zone-storage-schema" => {
             run_task("gen-zone-storage-schema", gen_zone_storage_schema)
         }
@@ -414,10 +463,630 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas [--out-dir <path>]|gen-bazel [--check|--install]|bazel-repin --hub <name>|bazel-module-refresh|bazel-yanked-refresh|bazel-yanked-check|gen-package-policy-inputs [--check|--install]|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-attest|panel-request|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+fn bazel_repin_with_executable_target(
+    args: &[String],
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut fresh_executor = ProcessFreshBootstrapExecutor::from_environment();
+    bazel_repin_with_fresh_executor(args, None, &mut fresh_executor)
+}
+
+fn bazel_repin_with_fresh_executor(
+    args: &[String],
+    override_root: Option<PathBuf>,
+    fresh_executor: &mut dyn FreshBootstrapExecutor,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let hub = bazel::parse_repin(args)?;
+    let root = if let Some(root) = override_root {
+        root
+    } else if let Some(worktree) = env::var_os("D2B_BAZEL_WORKTREE") {
+        fs::canonicalize(worktree)?
+    } else {
+        fs::canonicalize(repo_root()?)?
+    };
+    reject_ambient_repin_before_bootstrap()?;
+    if let Some(output) = fresh_hub_bootstrap(&root, hub, fresh_executor)? {
+        return Ok(output);
+    }
+    let mut executor = ExecutableBazelExecutor;
+    bazel::bazel_repin_with_executor(&root, hub, &mut executor)
+}
+
+fn reject_ambient_repin_before_bootstrap() -> Result<(), Box<dyn std::error::Error>> {
+    if ["CARGO_BAZEL_REPIN", "REPIN", "CARGO_BAZEL_REPIN_ONLY"]
+        .iter()
+        .any(|name| env::var_os(name).is_some())
+    {
+        return Err(bazel::adr0054_drift_message("D2B-BZL-AMBIENT-REPIN")
+            .expect("ambient repin diagnostic is closed")
+            .into());
+    }
+    Ok(())
+}
+
+fn fresh_hub_bootstrap(
+    root: &Path,
+    hub: &str,
+    executor: &mut dyn FreshBootstrapExecutor,
+) -> Result<Option<Vec<PathBuf>>, Box<dyn std::error::Error>> {
+    let module_lock = root.join("MODULE.bazel.lock");
+    match fs::symlink_metadata(&module_lock) {
+        Ok(metadata) if metadata.file_type().is_file() => return Ok(None),
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "module lock path is not a regular file",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "module lock path cannot be inspected",
+            ));
+        }
+    }
+    let peer = match hub {
+        "product" => "walker",
+        "walker" => "product",
+        _ => return Ok(None),
+    };
+    if hub == "walker"
+        && !matches!(
+            fs::symlink_metadata(root.join("bazel/cargo/product.lock")),
+            Ok(metadata) if metadata.file_type().is_file()
+        )
+    {
+        return Err(
+            "D2B-BZL-FRESH-ORDER: product lock is required before walker bootstrap; \
+             run cargo xtask bazel-repin --hub product, then retry \
+             cargo xtask bazel-repin --hub walker"
+                .into(),
+        );
+    }
+    let root_lockfile = root.join(format!("bazel/cargo/{hub}.lock"));
+    let selected_exists = match fs::symlink_metadata(&root_lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => true,
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path is not a regular file",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path cannot be inspected",
+            ));
+        }
+    };
+    let peer_lockfile = root.join(format!("bazel/cargo/{peer}.lock"));
+    let peer_missing = match fs::symlink_metadata(&peer_lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => false,
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "peer lock path is not a regular file",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "peer lock path cannot be inspected",
+            ));
+        }
+    };
+    if selected_exists && !peer_missing {
+        return Ok(None);
+    }
+    validate_fresh_directories(root, hub)?;
+    let scratch = root.join(".scratch/bazel");
+    fs::create_dir_all(&scratch)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap scratch space"))?;
+    let guard_path = scratch.join("fresh-bootstrap.guard");
+    let guard = acquire_fresh_bootstrap_guard(&guard_path)
+        .map_err(|reason| fresh_bootstrap_error(hub, reason))?;
+    reclaim_fresh_staging(root, hub)?;
+    let before = fresh_content_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
+    let workspace = scratch.join("fresh-bootstrap-workspace");
+    match fs::symlink_metadata(&workspace) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            fs::remove_dir_all(&workspace)
+                .map_err(|_| fresh_bootstrap_error(hub, "cannot reclaim bootstrap workspace"))?;
+        }
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "bootstrap workspace is not a directory",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "bootstrap workspace cannot be inspected",
+            ));
+        }
+    }
+    fs::create_dir_all(&workspace)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
+    let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor);
+    let cleanup = fs::remove_dir_all(&workspace);
+    let after_child = fresh_content_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
+    if fresh_content_changed_outside_selected(&before, &after_child, hub) {
+        drop(guard);
+        return Err(bazel::adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
+            .expect("mutation diagnostic is closed")
+            .into());
+    }
+    if cleanup.is_err() {
+        drop(guard);
+        return Err(fresh_bootstrap_error(
+            hub,
+            "fresh bootstrap cleanup failed; retry the selected hub command",
+        ));
+    }
+    let generated = generated?;
+    let result = install_fresh_lock(root, hub, &generated);
+    let after_install = fresh_content_snapshot(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
+    drop(guard);
+    if fresh_content_changed_outside_selected(&before, &after_install, hub) {
+        return Err(bazel::adr0054_drift_message("D2B-BZL-UNEXPECTED-MUTATION")
+            .expect("mutation diagnostic is closed")
+            .into());
+    }
+    Ok(Some(result?))
+}
+
+fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
+    for (relative, optional) in [
+        (".scratch", true),
+        (".scratch/bazel", true),
+        ("bazel", false),
+        ("bazel/cargo", false),
+    ] {
+        match fs::symlink_metadata(root.join(relative)) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(fresh_bootstrap_error(
+                    hub,
+                    "bootstrap directory is not a directory",
+                ));
+            }
+            Err(error) if optional && error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(_) => {
+                return Err(fresh_bootstrap_error(
+                    hub,
+                    "bootstrap directory cannot be inspected",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+trait FreshBootstrapExecutor {
+    fn run(
+        &mut self,
+        workspace: &Path,
+        hub: &str,
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>>;
+}
+
+struct ProcessFreshBootstrapExecutor {
+    executable: PathBuf,
+}
+
+impl ProcessFreshBootstrapExecutor {
+    fn from_environment() -> Self {
+        Self {
+            executable: env::var_os("BAZEL")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("bazel")),
+        }
+    }
+}
+
+impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
+    fn run(
+        &mut self,
+        workspace: &Path,
+        hub: &str,
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+        let output_user_root = workspace.join("bazel-output-user-root");
+        let output_base = workspace.join("bazel-output-base");
+        let mut command = Command::new(&self.executable);
+        command
+            .env_clear()
+            .current_dir(workspace)
+            .args([
+                "--batch",
+                &format!("--output_user_root={}", output_user_root.display()),
+                &format!("--output_base={}", output_base.display()),
+                "--nohome_rc",
+                "mod",
+                "deps",
+                "--lockfile_mode=off",
+            ])
+            .env("CARGO_BAZEL_REPIN", "1")
+            .env("CARGO_BAZEL_REPIN_ONLY", hub)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        for name in [
+            "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+        ] {
+            if let Some(value) = env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command
+            .status()
+            .map_err(|_| fresh_bootstrap_error(hub, "cannot start pinned Bazel"))
+    }
+}
+
+fn fresh_bootstrap_in_workspace(
+    root: &Path,
+    workspace: &Path,
+    hub: &str,
+    executor: &mut dyn FreshBootstrapExecutor,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    prepare_fresh_workspace(root, workspace, hub)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot prepare isolated workspace"))?;
+    let status = executor.run(workspace, hub)?;
+    if !status.success() {
+        return Err(fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"));
+    }
+    match fs::symlink_metadata(workspace.join("MODULE.bazel.lock")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "bootstrap unexpectedly created the module lock",
+            ));
+        }
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "module lock output cannot be inspected",
+            ));
+        }
+    }
+    let lockfile = workspace.join(format!("bazel/cargo/{hub}.lock"));
+    match fs::symlink_metadata(&lockfile) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::read(&lockfile)
+            .map_err(|_| fresh_bootstrap_error(hub, "selected lock cannot be read")),
+        Ok(_) => Err(fresh_bootstrap_error(
+            hub,
+            "selected lock output is not a regular file",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(fresh_bootstrap_error(
+            hub,
+            "selected lock was not generated",
+        )),
+        Err(_) => Err(fresh_bootstrap_error(
+            hub,
+            "selected lock output cannot be inspected",
+        )),
+    }
+}
+
+fn install_fresh_lock(
+    root: &Path,
+    hub: &str,
+    bytes: &[u8],
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let destination = root.join(format!("bazel/cargo/{hub}.lock"));
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            let existing = fs::read(&destination)
+                .map_err(|_| fresh_bootstrap_error(hub, "cannot read selected lock"))?;
+            if existing == bytes {
+                sync_lock_directory(&destination, hub)?;
+                return Ok(Vec::new());
+            }
+        }
+        Ok(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path became occupied during bootstrap",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock path cannot be inspected",
+            ));
+        }
+    }
+    let temporary = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot stage selected lock"))?;
+    if file.write_all(bytes).is_err() || file.sync_all().is_err() {
+        let cleanup = fs::remove_file(&temporary);
+        if cleanup.is_err() {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock staging cleanup failed",
+            ));
+        }
+        return Err(fresh_bootstrap_error(hub, "cannot persist selected lock"));
+    }
+    if fs::rename(&temporary, &destination).is_err() {
+        let cleanup = fs::remove_file(&temporary);
+        if cleanup.is_err() {
+            return Err(fresh_bootstrap_error(
+                hub,
+                "selected lock staging cleanup failed",
+            ));
+        }
+        return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
+    }
+    sync_lock_directory(&destination, hub)?;
+    Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
+}
+
+fn sync_lock_directory(destination: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = OpenOptions::new()
+        .read(true)
+        .open(destination.parent().expect("lock has a parent"))
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot open lock directory for sync"))?;
+    directory
+        .sync_all()
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
+    Ok(())
+}
+
+fn reclaim_fresh_staging(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let staging = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap"));
+    match fs::symlink_metadata(&staging) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(&staging)
+            .map_err(|_| fresh_bootstrap_error(hub, "stale lock staging cannot be reclaimed")),
+        Ok(_) => Err(fresh_bootstrap_error(
+            hub,
+            "stale lock staging is not a regular file",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(fresh_bootstrap_error(
+            hub,
+            "stale lock staging cannot be inspected",
+        )),
+    }
+}
+
+fn fresh_bootstrap_error(hub: &str, reason: &str) -> Box<dyn std::error::Error> {
+    format!(
+        "D2B-BZL-FRESH-BOOTSTRAP: {hub} bootstrap {reason}; retry cargo xtask bazel-repin --hub {hub}"
+    )
+    .into()
+}
+
+fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, &'static str> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|_| "cannot open fresh bootstrap guard")?;
+    let lock = libc::flock {
+        l_type: libc::F_WRLCK as libc::c_short,
+        l_whence: libc::SEEK_SET as libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map_err(|error| {
+        if matches!(error, Errno::EACCES | Errno::EAGAIN) {
+            "another fresh bootstrap is active"
+        } else {
+            "cannot lock fresh bootstrap guard"
+        }
+    })?;
+    Ok(file)
+}
+
+fn fresh_content_snapshot(
+    root: &Path,
+) -> Result<BTreeMap<PathBuf, FreshEntry>, Box<dyn std::error::Error>> {
+    let mut paths = Vec::new();
+    collect_fresh_files(root, root, &mut paths)?;
+    let mut snapshot = BTreeMap::new();
+    for path in paths {
+        let absolute = root.join(&path);
+        let metadata = fs::symlink_metadata(&absolute)?;
+        let entry = if metadata.file_type().is_symlink() {
+            FreshEntry::Symlink(fs::read_link(absolute)?.as_os_str().as_bytes().to_vec())
+        } else if metadata.file_type().is_file() {
+            FreshEntry::File {
+                mode: metadata.mode() & 0o7777,
+                digest: Sha256::digest(fs::read(absolute)?).into(),
+            }
+        } else {
+            FreshEntry::Directory(metadata.mode() & 0o7777)
+        };
+        snapshot.insert(path, entry);
+    }
+    Ok(snapshot)
+}
+
+#[derive(Clone, Eq, PartialEq)]
+enum FreshEntry {
+    File { mode: u32, digest: [u8; 32] },
+    Symlink(Vec<u8>),
+    Directory(u32),
+}
+
+fn collect_fresh_files(
+    root: &Path,
+    current: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some(".git" | ".scratch" | "target")) {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if path != root {
+                paths.push(path.strip_prefix(root)?.to_path_buf());
+            }
+            collect_fresh_files(root, &path, paths)?;
+        } else if entry.file_type()?.is_file() || entry.file_type()?.is_symlink() {
+            paths.push(path.strip_prefix(root)?.to_path_buf());
+        } else {
+            return Err("unsupported filesystem node in bootstrap audit".into());
+        }
+    }
+    paths.sort();
+    Ok(())
+}
+
+fn fresh_content_changed_outside_selected(
+    before: &BTreeMap<PathBuf, FreshEntry>,
+    after: &BTreeMap<PathBuf, FreshEntry>,
+    hub: &str,
+) -> bool {
+    let selected = PathBuf::from(format!("bazel/cargo/{hub}.lock"));
+    let paths = before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    paths
+        .into_iter()
+        .filter(|path| path != &selected)
+        .any(|path| before.get(&path) != after.get(&path))
+}
+
+fn prepare_fresh_workspace(
+    root: &Path,
+    workspace: &Path,
+    hub: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(workspace.join("bazel/cargo"))?;
+    for name in [".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel"] {
+        fs::copy(root.join(name), workspace.join(name))?;
+    }
+    fs::copy(
+        root.join("bazel/cargo/BUILD.bazel"),
+        workspace.join("bazel/cargo/BUILD.bazel"),
+    )?;
+    fs::copy(
+        root.join("bazel/cargo/cargo_bazel.bzl"),
+        workspace.join("bazel/cargo/cargo_bazel.bzl"),
+    )?;
+    copy_tree_without_build_outputs(&root.join("packages"), &workspace.join("packages"))?;
+    copy_tree_without_build_outputs(
+        &root.join("tests/tools/no-bash-ast-walker"),
+        &workspace.join("tests/tools/no-bash-ast-walker"),
+    )?;
+
+    let source = fs::read_to_string(root.join("MODULE.bazel"))?;
+    let product = r#"crate.from_cargo(
+    name = "product",
+    manifests = ["//:packages/Cargo.toml"],
+    cargo_lockfile = "//:packages/Cargo.lock",
+    lockfile = "//bazel/cargo:product.lock",
+    skip_cargo_lockfile_overwrite = True,
+)
+"#;
+    let walker = r#"crate.from_cargo(
+    name = "walker",
+    manifests = ["//:tests/tools/no-bash-ast-walker/Cargo.toml"],
+    cargo_lockfile = "//:tests/tools/no-bash-ast-walker/Cargo.lock",
+    lockfile = "//bazel/cargo:walker.lock",
+    skip_cargo_lockfile_overwrite = True,
+)
+"#;
+    let remove = if hub == "product" { walker } else { product };
+    if source.matches(remove).count() != 1 {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "module hub shape is not recognized",
+        ));
+    }
+    let mut module = source.replacen(remove, "", 1);
+    let repos = r#"use_repo(crate, "product", "walker")"#;
+    if module.matches(repos).count() != 1 {
+        return Err(fresh_bootstrap_error(
+            hub,
+            "module hub imports are not recognized",
+        ));
+    }
+    module = module.replacen(repos, &format!(r#"use_repo(crate, "{hub}")"#), 1);
+    fs::write(workspace.join("MODULE.bazel"), module)?;
+    Ok(())
+}
+
+fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "target" || name == ".scratch" {
+            continue;
+        }
+        let source_path = entry.path();
+        let destination_path = destination.join(name);
+        if entry.file_type()?.is_dir() {
+            copy_tree_without_build_outputs(&source_path, &destination_path)?;
+        } else if entry.file_type()?.is_file() {
+            fs::copy(source_path, destination_path)?;
+        } else {
+            return Err(std::io::Error::other(
+                "unsupported filesystem entry in isolated workspace input",
+            ));
+        }
+    }
+    Ok(())
+}
+
+struct ExecutableBazelExecutor;
+
+impl bazel::BazelExecutor for ExecutableBazelExecutor {
+    fn run(
+        &mut self,
+        root: &Path,
+        startup_args: &[String],
+        command_args: &[String],
+        environment: &[(&str, &str)],
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+        let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+        let mut command = Command::new(executable);
+        command
+            .current_dir(root)
+            .args(startup_args)
+            .args(command_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        command
+            .status()
+            .map_err(|error| format!("could not start the Bazel child: {error}").into())
     }
 }
 
@@ -689,7 +1358,14 @@ where
 {
     match task() {
         Ok(files) => {
-            println!("{} generated {} file(s)", label, files.len());
+            println!("{} processed {} file(s)", label, files.len());
+            for path in files {
+                let display = repo_root()
+                    .ok()
+                    .and_then(|root| path.strip_prefix(root).ok())
+                    .unwrap_or(&path);
+                println!("{} path: {}", label, display.display());
+            }
             std::process::ExitCode::SUCCESS
         }
         Err(err) => {
@@ -706,6 +1382,7 @@ fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
         .ok_or_else(|| "cannot locate repo root".into())
 }
 
+#[allow(dead_code)]
 fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let out_dir = repo_root
@@ -1011,17 +1688,7 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
 fn patch_vm_exec_logs_bash_completion(
     generated: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let generated = replace_once(
-        generated,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-"#,
-        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
-            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
-                opts="${opts} --stdout-offset --stderr-offset --max-len"
-            fi
-"#,
-        "bash vm exec opts",
-    )?;
+    let generated = insert_after_bash_vm_exec_opts(generated)?;
     replace_once(
         generated,
         r#"                --cwd)
@@ -1040,6 +1707,47 @@ fn patch_vm_exec_logs_bash_completion(
 "#,
         "bash vm exec logs flag values",
     )
+}
+
+fn insert_after_bash_vm_exec_opts(
+    mut generated: String,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let marker = "        d2b__subcmd__vm__subcmd__exec)\n";
+    let block_start = generated
+        .find(marker)
+        .map(|index| index + marker.len())
+        .ok_or("could not patch generated completion: missing bash vm exec case")?;
+    let tail = &generated[block_start..];
+    let block_end = tail
+        .find("\n        d2b__")
+        .or_else(|| tail.find("\n        *)"))
+        .unwrap_or(tail.len());
+    let block = &tail[..block_end];
+    let matching_lines = block
+        .lines()
+        .scan(0, |offset, line| {
+            let start = *offset;
+            let end = start + line.len();
+            *offset = end + 1;
+            Some((start, end))
+        })
+        .filter(|(start, end)| {
+            let line = &block[*start..*end];
+            line.trim_start().starts_with("opts=\"")
+        })
+        .collect::<Vec<_>>();
+    if matching_lines.len() != 1 {
+        return Err("could not patch generated completion: missing bash vm exec opts".into());
+    }
+    let (_, line_end) = matching_lines[0];
+    generated.insert_str(
+        block_start + line_end + 1,
+        r#"            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
+                opts="${opts} --stdout-offset --stderr-offset --max-len"
+            fi
+"#,
+    );
+    Ok(generated)
 }
 
 fn patch_vm_exec_logs_fish_completion(
@@ -1673,4 +2381,338 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod fresh_bootstrap_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    struct FakeFreshExecutor {
+        fail: bool,
+        calls: usize,
+        mutate_root: Option<PathBuf>,
+    }
+
+    impl FreshBootstrapExecutor for FakeFreshExecutor {
+        fn run(
+            &mut self,
+            workspace: &Path,
+            hub: &str,
+        ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+            self.calls += 1;
+            if self.fail {
+                return Ok(Command::new("false").status()?);
+            }
+            if let Some(root) = &self.mutate_root {
+                fs::write(root.join("MODULE.bazel"), b"unexpected mutation")?;
+            }
+            fs::write(
+                workspace.join(format!("bazel/cargo/{hub}.lock")),
+                format!("{hub}-lock").as_bytes(),
+            )?;
+            Ok(Command::new("true").status()?)
+        }
+    }
+
+    fn bootstrap_fixture() -> PathBuf {
+        let source = repo_root().expect("repository root");
+        let root = create_exclusive_temp_dir("xtask-fresh-fixture").expect("fixture");
+        fs::create_dir_all(root.join("bazel/cargo")).expect("cargo directory");
+        for name in [".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel"] {
+            fs::copy(source.join(name), root.join(name)).expect("root input");
+        }
+        for name in ["BUILD.bazel", "cargo_bazel.bzl"] {
+            fs::copy(
+                source.join("bazel/cargo").join(name),
+                root.join("bazel/cargo").join(name),
+            )
+            .expect("cargo input");
+        }
+        copy_tree_without_build_outputs(&source.join("packages"), &root.join("packages"))
+            .expect("package inputs");
+        copy_tree_without_build_outputs(
+            &source.join("tests/tools/no-bash-ast-walker"),
+            &root.join("tests/tools/no-bash-ast-walker"),
+        )
+        .expect("walker inputs");
+        root
+    }
+
+    #[test]
+    fn routing_bootstraps_both_hubs_and_leaves_module_last() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: None,
+        };
+        assert_eq!(
+            bazel_repin_with_fresh_executor(
+                &["--hub".into(), "product".into()],
+                Some(root.clone()),
+                &mut executor,
+            )
+            .expect("product"),
+            vec![PathBuf::from("bazel/cargo/product.lock")]
+        );
+        assert!(!root.join("bazel/cargo/walker.lock").exists());
+        assert!(!root.join("MODULE.bazel.lock").exists());
+        assert_eq!(
+            bazel_repin_with_fresh_executor(
+                &["--hub".into(), "walker".into()],
+                Some(root.clone()),
+                &mut executor,
+            )
+            .expect("walker"),
+            vec![PathBuf::from("bazel/cargo/walker.lock")]
+        );
+        assert!(
+            fresh_hub_bootstrap(&root, "product", &mut executor)
+                .expect("complete pair")
+                .is_none()
+        );
+        assert_eq!(executor.calls, 2);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn routed_bootstrap_refuses_an_unrelated_content_mutation() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: Some(root.clone()),
+        };
+        let error = bazel_repin_with_fresh_executor(
+            &["--hub".into(), "product".into()],
+            Some(root.clone()),
+            &mut executor,
+        )
+        .expect_err("unrelated mutation");
+        assert!(error.to_string().contains("D2B-BZL-UNEXPECTED-MUTATION"));
+        assert_eq!(executor.calls, 1);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn failed_bootstrap_releases_guard_for_retry() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: true,
+            calls: 0,
+            mutate_root: None,
+        };
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert!(!root.join("bazel/cargo/product.lock").exists());
+        executor.fail = false;
+        assert!(
+            fresh_hub_bootstrap(&root, "product", &mut executor)
+                .expect("retry")
+                .is_some()
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn nonregular_lock_and_guard_contention_refuse_before_child() {
+        let root = bootstrap_fixture();
+        fs::create_dir_all(root.join("bazel/cargo/product.lock")).expect("nonregular lock");
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: None,
+        };
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert_eq!(executor.calls, 0);
+        fs::remove_dir_all(root.join("bazel/cargo/product.lock")).expect("remove lock directory");
+        fs::create_dir_all(root.join(".scratch/bazel")).expect("scratch");
+        let guard_path = root.join(".scratch/bazel/fresh-bootstrap.guard");
+        let guard = acquire_fresh_bootstrap_guard(&guard_path).expect("guard");
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert_eq!(executor.calls, 0);
+        drop(guard);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn process_executor_pins_the_bzlmod_bootstrap_contract() {
+        let workspace = create_exclusive_temp_dir("xtask-fresh-process").expect("workspace");
+        fs::create_dir_all(workspace.join("bazel/cargo")).expect("cargo directory");
+        let executable = workspace.join("fake-bazel");
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+            [ "$1" = "--batch" ] || exit 10
+            [ "${2#--output_user_root=/}" != "$2" ] || exit 11
+            [ "${3#--output_base=/}" != "$3" ] || exit 12
+            [ "$4" = "--nohome_rc" ] || exit 13
+            [ "$5" = "mod" ] || exit 14
+            [ "$6" = "deps" ] || exit 15
+            [ "$7" = "--lockfile_mode=off" ] || exit 16
+            [ "$CARGO_BAZEL_REPIN" = "1" ] || exit 18
+            [ "$CARGO_BAZEL_REPIN_ONLY" = "product" ] || exit 19
+            [ -z "$D2B_TEST_HOSTILE" ] || exit 20
+mkdir -p bazel/cargo
+printf product-lock > bazel/cargo/product.lock
+"#,
+        )
+        .expect("fake Bazel");
+        let mut permissions = fs::metadata(&executable)
+            .expect("fake metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).expect("fake executable");
+        let mut executor = ProcessFreshBootstrapExecutor { executable };
+        assert!(
+            executor
+                .run(&workspace, "product")
+                .expect("child")
+                .success()
+        );
+        assert_eq!(
+            fs::read(workspace.join("bazel/cargo/product.lock")).expect("lock"),
+            b"product-lock"
+        );
+        fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[test]
+    fn isolated_module_contains_only_the_selected_hub() {
+        let root = repo_root().expect("repository root");
+        let workspace = create_exclusive_temp_dir("xtask-fresh-module").expect("workspace");
+        prepare_fresh_workspace(root, &workspace, "product").expect("prepare product workspace");
+        let module = fs::read_to_string(workspace.join("MODULE.bazel")).expect("module");
+        assert!(module.contains("name = \"product\""));
+        assert!(!module.contains("name = \"walker\""));
+        assert!(module.contains("use_repo(crate, \"product\")"));
+        assert!(!workspace.join("MODULE.bazel.lock").exists());
+        fs::remove_dir_all(workspace).expect("cleanup");
+
+        let workspace = create_exclusive_temp_dir("xtask-fresh-module-walker").expect("workspace");
+        prepare_fresh_workspace(root, &workspace, "walker").expect("prepare walker workspace");
+        let module = fs::read_to_string(workspace.join("MODULE.bazel")).expect("module");
+        assert!(!module.contains("name = \"product\""));
+        assert!(module.contains("name = \"walker\""));
+        assert!(module.contains("use_repo(crate, \"walker\")"));
+        assert!(!workspace.join("MODULE.bazel.lock").exists());
+        fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
+    #[test]
+    fn regular_lock_install_is_idempotent() {
+        let root = create_exclusive_temp_dir("xtask-fresh-lock").expect("root");
+        fs::create_dir_all(root.join("bazel/cargo")).expect("cargo directory");
+        let first = install_fresh_lock(&root, "product", b"lock-v1").expect("first install");
+        assert_eq!(first, vec![PathBuf::from("bazel/cargo/product.lock")]);
+        let second = install_fresh_lock(&root, "product", b"lock-v1").expect("second install");
+        assert!(second.is_empty());
+        assert_eq!(
+            fs::read(root.join("bazel/cargo/product.lock")).expect("lock bytes"),
+            b"lock-v1"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn content_filter_allows_only_the_selected_output() {
+        let selected = PathBuf::from("bazel/cargo/product.lock");
+        let before = BTreeMap::from([(
+            selected.clone(),
+            FreshEntry::File {
+                mode: 0o644,
+                digest: [1_u8; 32],
+            },
+        )]);
+        let after = BTreeMap::from([(
+            selected,
+            FreshEntry::File {
+                mode: 0o600,
+                digest: [2_u8; 32],
+            },
+        )]);
+        assert!(!fresh_content_changed_outside_selected(
+            &before, &after, "product"
+        ));
+        let mut changed = after.clone();
+        changed.insert(
+            PathBuf::from("MODULE.bazel"),
+            FreshEntry::File {
+                mode: 0o644,
+                digest: [3_u8; 32],
+            },
+        );
+        assert!(fresh_content_changed_outside_selected(
+            &before, &changed, "product"
+        ));
+
+        let root = create_exclusive_temp_dir("xtask-fresh-content").expect("root");
+        fs::write(root.join("unrelated"), b"v1").expect("unrelated");
+        let before = fresh_content_snapshot(&root).expect("before");
+        let mut permissions = fs::metadata(root.join("unrelated"))
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(root.join("unrelated"), permissions).expect("mode");
+        let after = fresh_content_snapshot(&root).expect("after mode");
+        assert!(fresh_content_changed_outside_selected(
+            &before, &after, "product"
+        ));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn walker_first_refuses_before_child() {
+        let root = bootstrap_fixture();
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: None,
+        };
+        let error = bazel_repin_with_fresh_executor(
+            &["--hub".into(), "walker".into()],
+            Some(root.clone()),
+            &mut executor,
+        )
+        .expect_err("walker-first bootstrap");
+        assert!(error.to_string().contains("D2B-BZL-FRESH-ORDER"));
+        assert_eq!(executor.calls, 0);
+        assert!(!root.join("bazel/cargo/product.lock").exists());
+        assert!(!root.join("bazel/cargo/walker.lock").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn bash_vm_exec_patch_accepts_clap_option_reordering() {
+        let generated = r#"        d2b__subcmd__vm__subcmd__exec)
+            opts="--human --detach <VM> --json --cwd"
+            COMPREPLY=()
+        d2b__subcmd__vm__subcmd__start)
+"#;
+        let patched =
+            insert_after_bash_vm_exec_opts(generated.to_owned()).expect("patch reordered opts");
+        assert!(patched.contains(
+            r#"opts="--human --detach <VM> --json --cwd"
+            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then"#
+        ));
+    }
+
+    #[test]
+    fn bash_vm_exec_patch_refuses_missing_or_duplicate_option_lines() {
+        for generated in [
+            r#"        d2b__subcmd__vm__subcmd__exec)
+            COMPREPLY=()
+        d2b__subcmd__vm__subcmd__start)
+"#,
+            r#"        d2b__subcmd__vm__subcmd__exec)
+            opts="--detach <VM>"
+            opts="--detach <VM> --json"
+        d2b__subcmd__vm__subcmd__start)
+"#,
+        ] {
+            let error = insert_after_bash_vm_exec_opts(generated.to_owned())
+                .expect_err("invalid option census");
+            assert!(error.to_string().contains("missing bash vm exec opts"));
+        }
+    }
 }

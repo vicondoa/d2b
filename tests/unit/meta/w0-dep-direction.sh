@@ -85,11 +85,31 @@ is_member() {
   printf '%s\n' "$MEMBERS" | grep -qxF "$1"
 }
 
+is_first_party_name() {
+  case "$1" in
+    d2b | d2b-* | xtask) return 0 ;;
+  esac
+  is_member "$1"
+}
+
+# These crates form the complete build-tooling dependency spine. A missing
+# member must not become a silent skip, and an edge outside this exact map
+# would let a consumer reach around the selected lower-level boundary.
+REQUIRED_CRATES=(
+  d2b-bazel-support
+  d2b-bazel-exec
+  d2b-test-locator
+  d2b-bazel-runner
+)
+for required in "${REQUIRED_CRATES[@]}"; do
+  if ! is_member "$required"; then
+    violation "required build-tooling crate '$required' is absent from cargo metadata"
+  fi
+done
+
 # External (non-member) crates a pure contract crate must never depend on.
-# d2b-priv-broker lives in a SEPARATE workspace (excluded from
-# packages/Cargo.toml), so it never appears in the member set - name it
-# explicitly, along with any other d2b-* host/daemon crate caught by the
-# glob in check_dep below.
+# The d2b-* name rule below also catches first-party crates from a future
+# workspace split, while metadata remains authoritative for current members.
 is_external_forbidden() {
   case "$1" in
     prost | prost-types) return 0 ;;
@@ -133,6 +153,50 @@ check_lints() {
     violation "$crate: missing [lints] workspace = true"
   fi
 }
+
+expected_build_tooling_edges() {
+  case "$1" in
+    d2b-bazel-support)
+      ;;
+    d2b-bazel-exec)
+      printf '%s\n' d2b-bazel-support
+      ;;
+    d2b-test-locator)
+      printf '%s\n' d2b-bazel-exec d2b-bazel-support
+      ;;
+    d2b-bazel-runner)
+      printf '%s\n' d2b-bazel-exec d2b-bazel-support d2b-test-locator
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+check_exact_build_tooling_edges() {
+  local crate="$1" expected actual
+  if ! is_member "$crate"; then
+    return 0
+  fi
+  check_lints "$PKGS/$crate/Cargo.toml" "$crate"
+  expected=$(expected_build_tooling_edges "$crate" | sort -u)
+  actual=$(
+    printf '%s' "$META" | run_jq -r --arg c "$crate" '
+      .packages[] | select(.name == $c) | .dependencies[] | .name
+    ' | while IFS= read -r dep; do
+      if is_first_party_name "$dep"; then
+        printf '%s\n' "$dep"
+      fi
+    done | sort -u
+  )
+  if [ "$actual" != "$expected" ]; then
+    violation "$crate has an unexpected first-party dependency direction (expected exact build-tooling spine)"
+  fi
+}
+
+for required in "${REQUIRED_CRATES[@]}"; do
+  check_exact_build_tooling_edges "$required"
+done
 
 # Check a pure contract crate: every resolved non-dev dependency must be in
 # the allowed list, else it is a dependency-direction violation.

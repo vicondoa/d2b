@@ -1,0 +1,61 @@
+module(
+    name = "d2b",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.73.0")
+
+# rules_rust 0.73.0 ships an empty cargo-bazel URL table.  Replace its
+# non-reproducible source-bootstrap repository with this checksum-pinned
+# release binary before the crate-universe extension is evaluated.
+CARGO_BAZEL_URL = "https://github.com/bazelbuild/rules_rust/releases/download/0.73.0/cargo-bazel-x86_64-unknown-linux-gnu"
+CARGO_BAZEL_SHA256 = "dcf36eda09624c7cdd700103959a44a10b49a90d2efe1dd41c226a8cf4706846"
+
+cargo_bazel_repository = use_repo_rule(
+    "//bazel/cargo:cargo_bazel.bzl",
+    "cargo_bazel_repository",
+)
+cargo_bazel_repository(
+    name = "cargo_bazel_pinned",
+    url = CARGO_BAZEL_URL,
+    sha256 = CARGO_BAZEL_SHA256,
+)
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.97.0", "nightly/2026-02-16"],
+)
+use_repo(rust, "rust_toolchains")
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+crate.from_cargo(
+    name = "product",
+    manifests = ["//:packages/Cargo.toml"],
+    cargo_lockfile = "//:packages/Cargo.lock",
+    lockfile = "//bazel/cargo:product.lock",
+    skip_cargo_lockfile_overwrite = True,
+)
+
+crate.from_cargo(
+    name = "walker",
+    manifests = ["//:tests/tools/no-bash-ast-walker/Cargo.toml"],
+    cargo_lockfile = "//:tests/tools/no-bash-ast-walker/Cargo.lock",
+    lockfile = "//bazel/cargo:walker.lock",
+    skip_cargo_lockfile_overwrite = True,
+)
+use_repo(crate, "product", "walker")
+
+# The rules_rust extension creates this repository for its source bootstrap.
+# Make the only visible repository the checksum-verified binary above.
+crate_universe_non_repro = use_extension(
+    "@rules_rust//crate_universe/private:internal_extensions.bzl",
+    "cu_nr",
+)
+use_repo(crate_universe_non_repro, "cargo_bazel_bootstrap")
+override_repo(
+    crate_universe_non_repro,
+    cargo_bazel_bootstrap = "cargo_bazel_pinned",
+)

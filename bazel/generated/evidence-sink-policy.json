@@ -1,0 +1,67 @@
+{
+  "measured": false,
+  "rows": [
+    {
+      "maxAgeDays": 30,
+      "maxBytes": 262144,
+      "maxRecords": 32,
+      "permittedFields": [
+        "sinkKind",
+        "retentionClass",
+        "testVerdict",
+        "evidenceStatus"
+      ],
+      "retentionClass": "evidence-v1",
+      "scope": "workflow-and-head-digest",
+      "sinkKind": "execution-evidence",
+      "truncationCode": "D2B-BZLEVIDENCE-TRUNCATED"
+    },
+    {
+      "maxAgeDays": 7,
+      "maxBytes": 32768,
+      "maxRecords": 64,
+      "permittedFields": [
+        "sinkKind",
+        "retentionClass",
+        "testVerdict",
+        "evidenceStatus"
+      ],
+      "retentionClass": "exporter-diagnostic-v1",
+      "scope": "workflow-and-head-digest",
+      "sinkKind": "exporter-diagnostic",
+      "truncationCode": "D2B-BZLEVIDENCE-TRUNCATED"
+    },
+    {
+      "maxAgeDays": 14,
+      "maxBytes": 65536,
+      "maxRecords": 128,
+      "permittedFields": [
+        "sinkKind",
+        "retentionClass",
+        "testVerdict",
+        "evidenceStatus"
+      ],
+      "retentionClass": "junit-v1",
+      "scope": "slice-output-root",
+      "sinkKind": "junit",
+      "truncationCode": "D2B-BZLEVIDENCE-TRUNCATED"
+    },
+    {
+      "maxAgeDays": 14,
+      "maxBytes": 65536,
+      "maxRecords": 128,
+      "permittedFields": [
+        "sinkKind",
+        "retentionClass",
+        "testVerdict",
+        "evidenceStatus"
+      ],
+      "retentionClass": "test-log-v1",
+      "scope": "slice-output-root",
+      "sinkKind": "test-log",
+      "truncationCode": "D2B-BZLEVIDENCE-TRUNCATED"
+    }
+  ],
+  "schemaVersion": 1,
+  "status": "unmeasured"
+}

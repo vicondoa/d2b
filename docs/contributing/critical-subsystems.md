@@ -146,7 +146,7 @@ Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/s
 
 ## Control plane - `d2bd` + `d2b-priv-broker`
 
-**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh`
+**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (product workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh`
 
 The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. The legacy-unit policy lives in `packages/d2b-contract-tests/tests/policy_units.rs` and runs in the enforcing fixture-contract lane. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
@@ -240,3 +240,82 @@ is fail-closed (`path-safety-violation`,
 [`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)
 § "NetworkManager / systemd-networkd coexistence" and ADR 0013 for
 the rationale.
+
+## Bazel Rust workspace and native gate
+
+**Where:** `packages/Cargo.toml`, `packages/Cargo.lock`,
+`packages/Cargo.guest.lock`, `tests/tools/no-bash-ast-walker/`,
+`bazel/cargo/{product,walker}.lock`, `MODULE.bazel.lock`, the selected policy
+inputs under `packages/policy-inputs/`, and the existing Layer-1 gate
+surfaces.
+
+The product Cargo workspace is rooted at `packages/Cargo.toml` and includes
+the broker and guest shell runner. `packages/Cargo.lock` is the only
+authoritative product Cargo lock. `packages/Cargo.guest.lock` is generated
+static-guest closure input, not a workspace or hub authority. The no-bash AST
+walker remains a separate workspace with its own Cargo lock. Bazel has exactly
+the `product` and `walker` hubs; `main`, `broker`, and `guest` are retired hub
+identifiers, not additional authorities.
+
+Broker and guest policy are selected from the root lock for exact GNU and musl
+targets on both `x86_64-linux` and `aarch64-linux`. The selected inputs are:
+
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool`
+
+The native arm gate realizes exactly six system-specific checks, including
+`guest-static-elf`, runs `make test-rust-supply-chain` on the same stable head,
+binds every result, and refuses foreign systems, remote builders, and advisory
+classification. That supply-chain target uses the flake's pinned RustSec
+`advisory-db` snapshot at commit
+`831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=` and runs audits with
+`--no-fetch`. Release builds use the root manifest,
+`--locked`, explicit package/bin/default-feature selectors, and
+`packages/target/release`; the cache has one `packages -> target` workspace
+mapping plus explicit broker and guest gate target directories.
+
+## Bazel pending kernel cleanup quarantine
+
+The patched Bazel Linux sandbox owns abnormal action teardown in a fresh
+`CLONE_NEWPID` namespace. Namespace PID 1 kills every other member and makes
+nonblocking reap progress. The one fixed 10,000 ms ceiling covers userspace
+TERM/KILL/monitor escalation and the close-or-quarantine decision only. It
+does not bound kernel task exit, namespace destruction, or reap.
+
+When a consuming wait has not proved PID 1 reaped, the outer
+`linux-sandbox` monitor remains live as the sole wait owner and emits the
+typed `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` diagnostic. It quarantines
+the sandbox and outputs, keeps the action failed, and permits neither success
+nor reuse until that same monitor publishes the consuming-reap release.
+
+Follow this ordered runbook:
+
+1. Keep the original job and patched `linux-sandbox` monitor live. Do not
+   cancel, restart, reboot, retry, or start a replacement waiter.
+2. In the original job's sanitized stderr, inspect the byte-exact
+   `D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP` diagnostic. Require
+   `state=pending-kernel-cleanup` and follow only the fixed repository link
+   `docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine`.
+3. Drain the affected CI worker or provider from new admission without
+   terminating the original monitor. A GitHub-hosted job-exclusive
+   allocation is drained by leaving the original job running and admitting
+   no retry. A shared provider without a drain-without-terminate control
+   remains blocked.
+4. Wait on the original job. Observation is non-consuming; only its original
+   live monitor may perform the consuming wait and reap.
+5. Confirm that same monitor published the byte-exact
+   `D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE` record with
+   `cleanup=complete-after-quarantine` and
+   `quarantine=entered-and-released-after-consuming-reap`. No other record
+   releases quarantine.
+6. Only after step 5, rerun the exact closed slice command printed by the
+   original diagnostic. If release never appears, keep admission drained and
+   do not retry.
+
+Reboot, retry-before-release, replacement wait ownership, and manual release
+are prohibited. Entry through quarantine always leaves the Bazel action
+failed. No host PID, PID file, host process group, cgroup, or operator action
+is a release authority.

@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "policyId": "d2b-bazel-action-seccomp-v1",
+  "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
+  "policyAbiSha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f",
+  "defaultAction": "allow",
+  "denial": {
+    "action": "errno",
+    "errno": "EACCES",
+    "value": 13
+  },
+  "load": {
+    "after": "sandbox-construction",
+    "before": "action-command-exec",
+    "covers": [
+      "compile-build-command",
+      "test-setup-command",
+      "test-command",
+      "descendants"
+    ],
+    "noNewPrivs": true,
+    "noFallback": true
+  },
+  "x86X32SyscallBit": {
+    "rejectedBeforeDispatch": true,
+    "denial": {
+      "action": "errno",
+      "errno": "EACCES",
+      "value": 13
+    }
+  },
+  "inheritedDescriptorPreflight": {
+    "beforeFilterLoad": true,
+    "socketDescriptors": "deny",
+    "ioUringDescriptors": "deny",
+    "ioUringStates": [
+      "ordinary",
+      "sqpoll",
+      "registered-files",
+      "fixed-sockets"
+    ],
+    "failureCode": "D2B-BZLNET-PREFLIGHT"
+  },
+  "deniedSyscalls": [
+    "socket",
+    "socketpair",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "accept4",
+    "sendto",
+    "sendmsg",
+    "sendmmsg",
+    "recvfrom",
+    "recvmsg",
+    "recvmmsg",
+    "shutdown",
+    "getsockname",
+    "getpeername",
+    "setsockopt",
+    "getsockopt",
+    "pidfd_getfd",
+    "io_uring_setup",
+    "io_uring_enter",
+    "io_uring_register",
+    "socketcall"
+  ],
+  "ptrace": {
+    "syscall": "ptrace",
+    "requests": [
+      {
+        "name": "PTRACE_TRACEME",
+        "value": 0,
+        "pid": 0,
+        "address": {
+          "value": 0,
+          "type": "void *"
+        },
+        "data": {
+          "value": 0,
+          "type": "void *"
+        }
+      },
+      {
+        "name": "PTRACE_SETOPTIONS",
+        "value": 16896,
+        "pid": {
+          "dynamic": true,
+          "owner": "supervisor-owned-fork-result"
+        },
+        "address": {
+          "value": 0,
+          "type": "void *"
+        },
+        "data": {
+          "value": 16,
+          "type": "void *",
+          "expression": "(void *)(uintptr_t)PTRACE_O_TRACEEXEC"
+        }
+      },
+      {
+        "name": "PTRACE_CONT",
+        "value": 7,
+        "pid": {
+          "dynamic": true,
+          "owner": "supervisor-owned-fork-result"
+        },
+        "address": {
+          "value": 0,
+          "type": "void *"
+        },
+        "data": {
+          "value": 0,
+          "type": "void *"
+        }
+      },
+      {
+        "name": "PTRACE_DETACH",
+        "value": 17,
+        "pid": {
+          "dynamic": true,
+          "owner": "supervisor-owned-fork-result"
+        },
+        "address": {
+          "value": 0,
+          "type": "void *"
+        },
+        "data": {
+          "value": 0,
+          "type": "void *"
+        }
+      }
+    ],
+    "futureChildPidMatching": false,
+    "dynamicIdentity": [
+      "owned-fork-result",
+      "confirmed-process-group",
+      "direct-parent-relation",
+      "traced-initial-stop",
+      "sole-wait-owner",
+      "PTRACE_EVENT_EXEC"
+    ],
+    "forbiddenRequests": [
+      "PTRACE_ATTACH",
+      "PTRACE_SEIZE",
+      "PTRACE_PEEKDATA",
+      "PTRACE_PEEKTEXT",
+      "PTRACE_PEEKUSER",
+      "PTRACE_POKEDATA",
+      "PTRACE_POKETEXT",
+      "PTRACE_POKEUSER",
+      "PTRACE_GETREGS",
+      "PTRACE_SETREGS",
+      "PTRACE_GETFPREGS",
+      "PTRACE_SETFPREGS",
+      "PTRACE_GETSIGINFO",
+      "PTRACE_SETSIGINFO",
+      "PTRACE_GET_SYSCALL_INFO",
+      "PTRACE_SYSCALL",
+      "PTRACE_SINGLESTEP",
+      "PTRACE_LISTEN",
+      "PTRACE_INTERRUPT",
+      "PTRACE_KILL",
+      "PTRACE_SETOPTIONS-with-address",
+      "PTRACE_CONT-with-signal",
+      "PTRACE_DETACH-with-signal"
+    ]
+  },
+  "supportedSystems": [
+    "x86_64-linux",
+    "aarch64-linux"
+  ],
+  "linuxMinimum": "3.19",
+  "monitor": {
+    "namespace": "CLONE_NEWPID",
+    "pid1OwnsAbnormalTeardown": true,
+    "pid1OutsideActionTree": true,
+    "killScope": "namespace-local-every-member-other-than-pid1",
+    "nonblockingReapProgress": true,
+    "userspaceCeilingMs": 10000,
+    "ceilingScope": [
+      "TERM",
+      "KILL",
+      "monitor-escalation",
+      "close-or-quarantine"
+    ],
+    "kernelCleanupBounded": false,
+    "pendingState": "pending-kernel-cleanup",
+    "quarantineBeforeConsumingReap": true,
+    "successAfterQuarantine": false,
+    "reuseBeforeConsumingReap": false,
+    "replacementWaitOwner": false,
+    "manualRelease": false,
+    "reboot": false,
+    "releaseRecord": "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
+    "releaseCleanup": "complete-after-quarantine",
+    "releaseQuarantine": "entered-and-released-after-consuming-reap",
+    "runbook": "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
+  }
+}

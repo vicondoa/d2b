@@ -74,10 +74,11 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
           cache-directories: |
+            packages/d2b-priv-broker/target
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-guest-shell-runner/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
@@ -88,12 +89,12 @@ jobs:
           VERSION: ${{ needs.detect-version.outputs.version }}
         run: |
           set -euo pipefail
-          cargo build --release --package d2bd --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-wayland-proxy --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-unsafe-local-helper --manifest-path packages/Cargo.toml
-          cargo build --release --bin d2b-activation-helper --package d2b-host --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-priv-broker --manifest-path packages/d2b-priv-broker/Cargo.toml
+          cargo build --release --locked --manifest-path packages/Cargo.toml --package d2bd --bin d2bd --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml --package d2b --bin d2b --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml --package d2b-wayland-proxy --bin d2b-wayland-proxy --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml --package d2b-unsafe-local-helper --bin d2b-unsafe-local-helper --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml --package d2b-host --bin d2b-activation-helper --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml --package d2b-priv-broker --bin d2b-priv-broker --no-default-features
 
           rm -rf dist
           mkdir -p dist/bin
@@ -102,7 +103,7 @@ jobs:
           cp packages/target/release/d2b-wayland-proxy dist/bin/
           cp packages/target/release/d2b-unsafe-local-helper dist/bin/
           cp packages/target/release/d2b-activation-helper dist/bin/
-          cp packages/d2b-priv-broker/target/release/d2b-priv-broker dist/bin/
+          cp packages/target/release/d2b-priv-broker dist/bin/
 
           for binary in \
             d2bd \

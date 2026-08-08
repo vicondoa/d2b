@@ -1,0 +1,1605 @@
+{
+  "action_network": "none",
+  "aquery_actions": [
+    "nightly:CargoBuildScript",
+    "nightly:Clippy",
+    "nightly:Rustc",
+    "nightly:RustcMetadata",
+    "nightly:repository",
+    "nightly:rustdoc",
+    "nightly:rustdoc-test-compile",
+    "nightly:rustdoc-test-run",
+    "nightly:rustfmt",
+    "nightly:setup",
+    "nightly:test",
+    "nightly:unpretty",
+    "stable:CargoBuildScript",
+    "stable:Clippy",
+    "stable:Rustc",
+    "stable:RustcMetadata",
+    "stable:repository",
+    "stable:rustdoc",
+    "stable:rustdoc-test-compile",
+    "stable:rustdoc-test-run",
+    "stable:rustfmt",
+    "stable:setup",
+    "stable:test",
+    "stable:unpretty"
+  ],
+  "bazel_archive_sha256": "13a84586429b6084b13bd5040d78deda58d523012151e71e7d4be0c63dd831f9",
+  "bazel_source_sha256": "5b6d9e0742331cd65edf1685f0064e9144c30a2737357932a5da920d8eb54aed",
+  "capability_abi": "d2b-bazel-seccomp-abi-v1",
+  "configured_targets": [
+    "nightly:CargoBuildScript",
+    "nightly:Clippy",
+    "nightly:Rustc",
+    "nightly:RustcMetadata",
+    "nightly:repository",
+    "nightly:rustdoc",
+    "nightly:rustdoc-test-compile",
+    "nightly:rustdoc-test-run",
+    "nightly:rustfmt",
+    "nightly:setup",
+    "nightly:test",
+    "nightly:unpretty",
+    "stable:CargoBuildScript",
+    "stable:Clippy",
+    "stable:Rustc",
+    "stable:RustcMetadata",
+    "stable:repository",
+    "stable:rustdoc",
+    "stable:rustdoc-test-compile",
+    "stable:rustdoc-test-run",
+    "stable:rustfmt",
+    "stable:setup",
+    "stable:test",
+    "stable:unpretty"
+  ],
+  "coverage_targets": [
+    "//ci/rust:api_census",
+    "//ci/rust:audit_broker",
+    "//ci/rust:audit_guest",
+    "//ci/rust:audit_main",
+    "//ci/rust:broker_default",
+    "//ci/rust:broker_fakebackends",
+    "//ci/rust:broker_layer1",
+    "//ci/rust:clippy",
+    "//ci/rust:deny_broker",
+    "//ci/rust:deny_guest",
+    "//ci/rust:deny_main",
+    "//ci/rust:fmt",
+    "//ci/rust:guest_shell_runner",
+    "//ci/rust:main_doctests",
+    "//ci/rust:main_harness_free",
+    "//ci/rust:main_tests",
+    "//ci/rust:no_bash_ast",
+    "//ci/rust:pinned_test_inventory",
+    "//ci/rust:schema_reproducibility",
+    "//ci/rust:stub_no_socket"
+  ],
+  "declared_inputs": [
+    "Cargo.lock:registry-checksum",
+    "Cargo.lock:wl-proxy-rev+archive-sha256",
+    "bazel/supply_chain/yanked-snapshot.json",
+    "flake.nix:advisoryDbGit",
+    "packages/Cargo.lock"
+  ],
+  "denied_syscalls": [
+    "socket",
+    "socketpair",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "accept4",
+    "sendto",
+    "sendmsg",
+    "sendmmsg",
+    "recvfrom",
+    "recvmsg",
+    "recvmmsg",
+    "shutdown",
+    "getsockname",
+    "getpeername",
+    "setsockopt",
+    "getsockopt",
+    "pidfd_getfd",
+    "io_uring_setup",
+    "io_uring_enter",
+    "io_uring_register",
+    "socketcall"
+  ],
+  "derivation_sha256_method": "raw-drv-file-sha256",
+  "executable_sha256": "7cbf33369f34c39ceaed716ab26f4c37d32df009f290243e301e0cf8b83eafa8",
+  "fallback_strategies": [],
+  "fixed_policy": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
+  "hermeticity": {
+    "action_env_allowlist": [
+      "PATH",
+      "TMPDIR"
+    ],
+    "hubs": [
+      {
+        "build_script_crates": [
+          {
+            "name": "anyhow",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/anyhow",
+            "version": "1.0.104"
+          },
+          {
+            "name": "assert_cmd",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/assert-rs/assert_cmd.git",
+            "version": "2.2.2"
+          },
+          {
+            "name": "async-io",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/smol-rs/async-io",
+            "version": "2.6.0"
+          },
+          {
+            "name": "aws-lc-rs",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/aws/aws-lc-rs",
+            "version": "1.17.3"
+          },
+          {
+            "name": "aws-lc-sys",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/aws/aws-lc-rs",
+            "version": "0.43.0"
+          },
+          {
+            "name": "azure_core",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/azure/azure-sdk-for-rust",
+            "version": "1.1.0"
+          },
+          {
+            "name": "bindgen",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/rust-lang/rust-bindgen",
+            "version": "0.72.1"
+          },
+          {
+            "name": "clang-sys",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/KyleMayes/clang-sys",
+            "version": "1.8.1"
+          },
+          {
+            "name": "crc32fast",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/srijs/rust-crc32fast",
+            "version": "1.5.0"
+          },
+          {
+            "name": "crossbeam-deque",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/crossbeam-rs/crossbeam",
+            "version": "0.8.7"
+          },
+          {
+            "name": "crossbeam-epoch",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/crossbeam-rs/crossbeam",
+            "version": "0.9.20"
+          },
+          {
+            "name": "crossbeam-utils",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/crossbeam-rs/crossbeam",
+            "version": "0.8.22"
+          },
+          {
+            "name": "curve25519-dalek",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek",
+            "version": "4.1.3"
+          },
+          {
+            "name": "defmt",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/knurling-rs/defmt",
+            "version": "1.1.1"
+          },
+          {
+            "name": "defmt-macros",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/knurling-rs/defmt",
+            "version": "1.1.1"
+          },
+          {
+            "name": "errno-dragonfly",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/mneumann/errno-dragonfly-rs",
+            "version": "0.1.2"
+          },
+          {
+            "name": "generic-array",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/fizyk20/generic-array.git",
+            "version": "0.14.7"
+          },
+          {
+            "name": "getrandom",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/rust-random/getrandom",
+            "version": "0.3.4"
+          },
+          {
+            "name": "getrandom",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/rust-random/getrandom",
+            "version": "0.4.3"
+          },
+          {
+            "name": "httparse",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/seanmonstar/httparse",
+            "version": "1.10.1"
+          },
+          {
+            "name": "icu_normalizer_data",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/unicode-org/icu4x",
+            "version": "2.2.0"
+          },
+          {
+            "name": "icu_properties_data",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/unicode-org/icu4x",
+            "version": "2.2.0"
+          },
+          {
+            "name": "indexmap",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/bluss/indexmap",
+            "version": "1.9.3"
+          },
+          {
+            "name": "inotify-sys",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/hannobraun/inotify-sys",
+            "version": "0.1.8"
+          },
+          {
+            "name": "jni",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/jni-rs/jni-rs",
+            "version": "0.22.4"
+          },
+          {
+            "name": "jni-macros",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/jni-rs/jni-rs",
+            "version": "0.22.4"
+          },
+          {
+            "name": "libc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/rust-lang/libc",
+            "version": "0.2.189"
+          },
+          {
+            "name": "libproc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/andrewdavidmackenzie/libproc-rs",
+            "version": "0.14.11"
+          },
+          {
+            "name": "linearize",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/mahkoh/linearize",
+            "version": "0.1.7"
+          },
+          {
+            "name": "mac-notification-sys",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/h4llow3En/mac-notification-sys",
+            "version": "0.6.15"
+          },
+          {
+            "name": "memoffset",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/Gilnaa/memoffset",
+            "version": "0.7.1"
+          },
+          {
+            "name": "memoffset",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/Gilnaa/memoffset",
+            "version": "0.9.1"
+          },
+          {
+            "name": "motd",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/shell-pool/motd",
+            "version": "0.2.2"
+          },
+          {
+            "name": "nix",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/nix-rust/nix",
+            "version": "0.29.0"
+          },
+          {
+            "name": "nix",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/nix-rust/nix",
+            "version": "0.31.3"
+          },
+          {
+            "name": "num-traits",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/rust-num/num-traits",
+            "version": "0.2.19"
+          },
+          {
+            "name": "objc2",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/madsmtm/objc2",
+            "version": "0.6.4"
+          },
+          {
+            "name": "parking_lot_core",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/Amanieu/parking_lot",
+            "version": "0.9.12"
+          },
+          {
+            "name": "portable-atomic",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/taiki-e/portable-atomic",
+            "version": "1.14.0"
+          },
+          {
+            "name": "portable-atomic-util",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/taiki-e/portable-atomic-util",
+            "version": "0.2.7"
+          },
+          {
+            "name": "proc-macro2",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/proc-macro2",
+            "version": "1.0.107"
+          },
+          {
+            "name": "prost-build",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/tokio-rs/prost",
+            "version": "0.8.0"
+          },
+          {
+            "name": "protobuf",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/stepancheg/rust-protobuf/",
+            "version": "3.7.2"
+          },
+          {
+            "name": "quinn",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/quinn-rs/quinn",
+            "version": "0.11.11"
+          },
+          {
+            "name": "quinn-udp",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/quinn-rs/quinn",
+            "version": "0.5.15"
+          },
+          {
+            "name": "quote",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/quote",
+            "version": "1.0.47"
+          },
+          {
+            "name": "redb",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/cberner/redb",
+            "version": "4.1.0"
+          },
+          {
+            "name": "ring",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/briansmith/ring",
+            "version": "0.17.14"
+          },
+          {
+            "name": "rustix",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/bytecodealliance/rustix",
+            "version": "0.38.44"
+          },
+          {
+            "name": "rustix",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/bytecodealliance/rustix",
+            "version": "1.1.4"
+          },
+          {
+            "name": "rustls",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/rustls/rustls",
+            "version": "0.23.43"
+          },
+          {
+            "name": "rustversion",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/rustversion",
+            "version": "1.0.23"
+          },
+          {
+            "name": "schemars",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/GREsau/schemars",
+            "version": "0.8.22"
+          },
+          {
+            "name": "serde",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/serde-rs/serde",
+            "version": "1.0.229"
+          },
+          {
+            "name": "serde_core",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/serde-rs/serde",
+            "version": "1.0.229"
+          },
+          {
+            "name": "serde_json",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/serde-rs/json",
+            "version": "1.0.151"
+          },
+          {
+            "name": "signal-hook",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/vorner/signal-hook",
+            "version": "0.3.18"
+          },
+          {
+            "name": "snow",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/mcginty/snow",
+            "version": "0.10.0"
+          },
+          {
+            "name": "syn",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/syn",
+            "version": "1.0.109"
+          },
+          {
+            "name": "thiserror",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/thiserror",
+            "version": "1.0.69"
+          },
+          {
+            "name": "thiserror",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/thiserror",
+            "version": "2.0.19"
+          },
+          {
+            "name": "ttrpc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/containerd/ttrpc-rust",
+            "version": "0.9.0"
+          },
+          {
+            "name": "uapi",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/mahkoh/uapi",
+            "version": "0.2.13"
+          },
+          {
+            "name": "valuable",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/tokio-rs/valuable",
+            "version": "0.1.1"
+          },
+          {
+            "name": "wasm-bindgen",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/wasm-bindgen/wasm-bindgen",
+            "version": "0.2.126"
+          },
+          {
+            "name": "wasm-bindgen-shared",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared",
+            "version": "0.2.126"
+          },
+          {
+            "name": "wayland-backend",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/smithay/wayland-rs",
+            "version": "0.3.16"
+          },
+          {
+            "name": "wayland-client",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/smithay/wayland-rs",
+            "version": "0.31.15"
+          },
+          {
+            "name": "wayland-sys",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/smithay/wayland-rs",
+            "version": "0.31.11"
+          },
+          {
+            "name": "web_atoms",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/servo/html5ever",
+            "version": "0.1.3"
+          },
+          {
+            "name": "winapi",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/retep998/winapi-rs",
+            "version": "0.3.9"
+          },
+          {
+            "name": "winapi-i686-pc-windows-gnu",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/retep998/winapi-rs",
+            "version": "0.4.0"
+          },
+          {
+            "name": "winapi-x86_64-pc-windows-gnu",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/retep998/winapi-rs",
+            "version": "0.4.0"
+          },
+          {
+            "name": "windows_aarch64_gnullvm",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_aarch64_gnullvm",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_aarch64_msvc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_aarch64_msvc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_i686_gnu",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_i686_gnu",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_i686_gnullvm",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_i686_msvc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_i686_msvc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_x86_64_gnu",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_x86_64_gnu",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_x86_64_gnullvm",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_x86_64_gnullvm",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "windows_x86_64_msvc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.48.5"
+          },
+          {
+            "name": "windows_x86_64_msvc",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/microsoft/windows-rs",
+            "version": "0.52.6"
+          },
+          {
+            "name": "wit-bindgen",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/bytecodealliance/wit-bindgen",
+            "version": "0.57.1"
+          },
+          {
+            "name": "zerocopy",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/google/zerocopy",
+            "version": "0.8.55"
+          },
+          {
+            "name": "zmij",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/zmij",
+            "version": "1.0.23"
+          }
+        ],
+        "hub": "product",
+        "hub_lock_attrs": {
+          "cargo_lockfile": "packages/Cargo.lock",
+          "lockfile": "bazel/cargo/product.lock",
+          "skip_cargo_lockfile_overwrite": true
+        }
+      },
+      {
+        "build_script_crates": [
+          {
+            "name": "proc-macro2",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/proc-macro2",
+            "version": "1.0.106"
+          },
+          {
+            "name": "quote",
+            "required_annotations": {
+              "build_script_data": [
+                "**"
+              ],
+              "build_script_env": {},
+              "build_script_toolchains": [],
+              "build_script_tools": [],
+              "build_script_use_cc_toolchain": false,
+              "build_script_use_default_shell_env": false
+            },
+            "source": "https://github.com/dtolnay/quote",
+            "version": "1.0.45"
+          }
+        ],
+        "hub": "walker",
+        "hub_lock_attrs": {
+          "cargo_lockfile": "tests/tools/no-bash-ast-walker/Cargo.lock",
+          "lockfile": "bazel/cargo/walker.lock",
+          "skip_cargo_lockfile_overwrite": true
+        }
+      }
+    ],
+    "schema_version": 1
+  },
+  "inherited_descriptor_plants": [
+    "inherited-socket",
+    "inherited-io-uring",
+    "inherited-io-uring-sqpoll",
+    "inherited-io-uring-registered-fixed-socket"
+  ],
+  "load_point": "after-sandbox-construction-before-action-command-exec",
+  "native_outputs": {
+    "aarch64-linux": {
+      "executable_sha256": "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb",
+      "nar_sha256": "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91"
+    },
+    "x86_64-linux": {
+      "executable_sha256": "7cbf33369f34c39ceaed716ab26f4c37d32df009f290243e301e0cf8b83eafa8",
+      "nar_sha256": "197e2e792a7a3cf72bc9a5892b418d4abcce590dad969d23619f2bb492486be5"
+    }
+  },
+  "output_nar_sha256": "197e2e792a7a3cf72bc9a5892b418d4abcce590dad969d23619f2bb492486be5",
+  "patch_sha256": "efb0f2d806cc9f91ecdaab25be77586e744040bbf8263404302b5ecdd1a4906c",
+  "policy_sha256": "971210290491c3d359ae2540827ab1f544e86ead84db31ab7400e8dbdef2b68d",
+  "ptrace_requests": [
+    "PTRACE_TRACEME",
+    "PTRACE_SETOPTIONS",
+    "PTRACE_CONT",
+    "PTRACE_DETACH"
+  ],
+  "repository_fetches_outside_actions": true,
+  "sandbox_provider": "pkgs/bazel-8.6.0-seccomp",
+  "schema_version": 1,
+  "socket_plants": [
+    "action-network-ipv4",
+    "action-network-ipv6",
+    "action-network-netlink",
+    "action-network-packet",
+    "action-network-unix-pathname",
+    "action-network-unix-abstract",
+    "action-network-socketpair",
+    "action-network-io-uring"
+  ],
+  "strategy_inventory": {
+    "nightly:CargoBuildScript": "sandboxed",
+    "nightly:Clippy": "sandboxed",
+    "nightly:Rustc": "sandboxed",
+    "nightly:RustcMetadata": "sandboxed",
+    "nightly:repository": "sandboxed",
+    "nightly:rustdoc": "sandboxed",
+    "nightly:rustdoc-test-compile": "sandboxed",
+    "nightly:rustdoc-test-run": "sandboxed",
+    "nightly:rustfmt": "sandboxed",
+    "nightly:setup": "sandboxed",
+    "nightly:test": "sandboxed",
+    "nightly:unpretty": "sandboxed",
+    "stable:CargoBuildScript": "sandboxed",
+    "stable:Clippy": "sandboxed",
+    "stable:Rustc": "sandboxed",
+    "stable:RustcMetadata": "sandboxed",
+    "stable:repository": "sandboxed",
+    "stable:rustdoc": "sandboxed",
+    "stable:rustdoc-test-compile": "sandboxed",
+    "stable:rustdoc-test-run": "sandboxed",
+    "stable:rustfmt": "sandboxed",
+    "stable:setup": "sandboxed",
+    "stable:test": "sandboxed",
+    "stable:unpretty": "sandboxed"
+  }
+}
