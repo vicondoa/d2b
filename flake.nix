@@ -80,9 +80,9 @@
           inherit target;
           staticRustFlags =
             "-C relocation-model=pie -C link-self-contained=yes "
-            + "-C linker=${pkgs.llvmPackages.clang}/bin/clang "
+            + "-C linker=${pkgs.llvmPackages.clang-unwrapped}/bin/clang "
             + "-C link-arg=--target=${target} "
-            + "-C link-arg=-fuse-ld=lld "
+            + "-C link-arg=-fuse-ld=${pkgs.llvmPackages.lld}/bin/ld.lld "
             + "-C link-arg=-static-pie";
         };
       mkBazelSeccomp = system:
