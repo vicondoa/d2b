@@ -776,8 +776,15 @@ table before the operation exists.
   external origin-dispatch owner and T592. Activation itself may not create the privileged
   root. The existing broker must first execute typed
   `EnsureHostGenerationImmutablePublicationRootV1`, with fixed digest/enum pre/outcome audit,
+  a typed domain-separated audit operation digest instead of a raw operation id,
   create-or-reopen validation, root sync, held-parent sync, final reopen, and completed
-  response-loss replay. The accepted external source-generation producer/installer owns the
+  response-loss replay. Before pre-audit or `mkdirat`, it must open and validate the
+  disposition-sealed trusted ancestor, walk and validate the exact creation parent with
+  `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`, and hold that
+  dirfd through mutation. Fresh-process restart reacquires and revalidates a new ancestor
+  and parent descriptor; no numeric fd, joined path, post-create-only parent check, symlink,
+  magic link, or cross-mount traversal can select the root. The accepted external
+  source-generation producer/installer owns the
   source invocation and its ordering before the installed source broker advertises
   `source-handoff-v1`; this remains an external prerequisite. T595 owns the target
   `host-broker.nix` invocation and ordering before target broker adoption and target daemon
@@ -808,6 +815,16 @@ table before the operation exists.
   parent/ancestor/final-directory boundary; no record class may borrow another class's test.
   Parent replacement, symlink, magic-link, cross-device, final-identity, and exec-leak
   negatives cover publication and pruning.
+
+  Capacity-control audit uses the nonrecursive standing reserve pinned in `data-model.md`;
+  reserve/release pre/outcome records never reserve themselves. The fixture and tests pin
+  reserve creation/charge, exhaustion before mutation, export-only replenishment, restart
+  reconstruction, and the exact `Absent -> PreAudited -> LedgerApplied -> Completed`
+  prefix machine for reservation plus both `durable-prune` and
+  `immutable-zero-mutation` releases. Stable private reservation/release attempt ids and
+  typed audit digests bind the exact charge, reason, proof, and prior ledger. Independent
+  crashes after pre-audit, ledger mutation, outcome, and completed response loss prove one
+  ledger apply and one outcome at most.
 
   **Pinned independent expected sets:** T589 writes the following closed fixture and shared
   oracle set directly from this task contract. No expected-set fixture may import, call,
@@ -1704,18 +1721,23 @@ table before the operation exists.
   `host-generation-immutable-audit-restoration-edges.tsv` two-row fixture and
   `host-generation-immutable-audit-prune-edges.tsv` two-row fixture plus the
   `host-generation-immutable-audit-restoration-broker-case-ids.txt` 168-id registry in
-  `data-model.md` close restoration authorization, signed artifact validation,
-  all nineteen request-shape refusals, private non-observable evidence plus digest-only
-  audit provenance, append-only supersession, backup-before-mutation, per-intent and
-  root-level retained-intent/member/byte limits, reservation restart reconstruction and both
-  release reasons, replacement-bound age anchor/checked clock continuity,
-  sealed typed prune op with immutable pre/outcome audit, conflicts, and all seven
-  backup/evidence/pre/provenance/outcome/prune-pre/prune-outcome record classes at every hierarchy, write,
-  file-sync, link, final-reopen, parent/ancestor/final-directory-sync, and per-record
-  response-loss boundary. Each uses a separately authored literal expected set and cannot
-  derive from production or the 156-id fixture. Request, publication-class,
-  publication-boundary, retention-boundary, prune-pre-class, prune-outcome-class, and
-  reservation-lifecycle shrinkage poisons are mandatory.
+  `data-model.md` preserve their exact ids and close only their literally enumerated cases.
+  T589 additionally writes the read-independent literal
+  `host-generation-immutable-audit-record-boundary-case-ids.txt` with exactly 207 ids and
+  `host-generation-immutable-audit-lifecycle-case-ids.txt` with exactly 78 ids from
+  `data-model.md`. The first independently visits all 23 durable classes, including
+  ensure-root, reservation, both release reasons, retention anchor, settlement, and
+  repair-resume, at all nine publication boundaries. The second independently pins
+  root-aggregate storage limits, standing capacity-control reserve, every reservation and
+  release prefix, pre-audited clock candidate staging, authoritative continuity repair,
+  startup/idle day-90 catch-up without Admin traffic, every prune-permit API/compiler
+  negative, restoration resubmission settlement, completed response loss, and private
+  attempt-id leakage. Fixture, literal constant, production visitor, and poison visitors
+  must be mutually read-independent; no runtime Cartesian generation is accepted. One
+  shrinkage poison per durable class, publication boundary, lifecycle family, and permit
+  negative fails before cases run. Count reconciliation is exact: 168 existing broker ids
+  unchanged, 207 durable-record/boundary ids, 78 lifecycle ids, 20 existing ensure-root ids,
+  and 156 existing status ids.
 
   The SC-002 recovery redaction registry has seventeen rows. Raw `st_uid`, `st_gid`,
   `st_rdev`, and symlink-target bytes join the
@@ -1724,9 +1746,11 @@ table before the operation exists.
   the candidate lock, file-syncs the reopened payload before even creating a parked-status
   temporary, and retains the lock through status and ancestor durability. A dedicated latch
   proves cleanup cannot enter between payload sync and parked publication; removing or
-  reordering that hook fails.   T589 is done only when all 61 receipt, 73 census, 35 publication,
-  seventeen recovery-redaction, eight recursive-golden, preimage crash, payload-order, and
-  shared contract/status fixtures pass hermetically without source-derived expectations.
+  reordering that hook fails. T589 is done only when all 61 receipt, 73 census, 35
+  publication, seventeen recovery-redaction, eight recursive-golden, preimage crash,
+  payload-order, shared contract/status, unchanged 168-id broker, 207-id
+  durable-record/boundary, and 78-id lifecycle fixtures pass hermetically without
+  source-derived expectations.
 
 - [ ] T590 [P] [US1] **Install and recover the single-owner Zone resource policy without a bootstrap cycle.** Depends on T589. Owned files: `packages/d2b-resource-api/src/authz.rs`, `packages/d2b-core-controller/src/rbac.rs`, and new focused tests under `packages/d2b-resource-api/tests/production_policy.rs`. `ZoneResourceRuntime` owns each `PolicyBootstrapRead` and requests installation, but `d2b-resource-api` alone parses and compiles policy into the immutable `PolicySet` interpreted by `NativeAuthorizer`. For initial install and restart, consume the one-shot capability to read only this Zone's policy-input envelopes at the exact durable nonzero `policy_revision`; it has no public subject, general read/mutation operation, clone, copy, default, public construction, conversion, trait-based mint, reconstruction, or reuse path. A failed installation attempt consumes the capability. After installation, perform every normal policy read/update through an authenticated Resource API session. Authorize T589's `InspectOperation` only for the registrar-derived subject and exact Zone bound to the original mutation; a wrong subject, wrong Zone, or replay-binding mismatch returns the same non-observing result as an unknown operation and never exposes the original binding. On revision advance, compile the exact committed revision before atomic replacement, invalidate cached allows, and report ready only when installed revision and Zone UID equal live durable metadata. Refuse revision zero, stale/missing/cross-Zone/invalid policy, a caller claim, reusable bootstrap access, and any fallback to a constant or partial set. **Done when** focused tests cover first install, authenticated revision advance, restart recovery of the advanced revision, failed-attempt consumption, capability non-reuse, and same-subject/Zone operation inspection with wrong-subject/Zone indistinguishability; external compile-fail fixtures prove construction, field access, `Default`, `Clone`/`Copy`, `From`/`TryFrom`, conversion, and capability reconstruction are impossible; T589's trait-solver, roots.json, golden, and API-surface seals remain current; `make test-rust` runs the Rust and compile-fail/doctest companions and `make test-rust-api-surface` passes; and every failure leaves only the affected Zone unpublished, degraded, and denied.
 - [ ] T591 [P] [US1] **Restore the D106 store boundary and make it exhaustive.** Depends on T589. Owned files: `packages/d2b-resource-store-redb/src/transaction.rs`, `packages/d2b-resource-store/tests/d106_policy.rs`, and `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`. Preserve T589's frozen policy-neutral transactional audit hook. Remove redb deserialization or ownership of `RoleSpec`, `RoleBindingSpec`, `PolicySet`, and all other RBAC DTOs. Move policy-shape interpretation to the Resource API policy owner while retaining policy-neutral canonical-envelope, installed-schema, structural, atomicity, revision, and seal checks in the store. Expand the guard from three hand-picked source files to the full store/redb crate source and dependency graph. The scan MUST enumerate a nonempty source set independently for each store crate and a nonempty resolved dependency set; an empty, missing, or filtered-away input is a failure. Add a hermetic poison fixture that injects both a forbidden RBAC DTO use and a forbidden Resource API dependency and proves the existing test-policy/fixture-contract path rejects them. **Done when** the policy test proves neither store crate depends on the Resource API or contains/imports/deserializes an RBAC policy DTO, the poison negative fails for the intended D106 reasons through existing `make test-policy` and fixture-contract gates, the native evaluator remains the only allow issuer, and authorized Role/RoleBinding mutations still pass through the sealed generic envelope path.
@@ -1746,7 +1770,12 @@ table before the operation exists.
   generated operation and privilege catalogues, Nix-rendered privilege matrix, coordinator
   lock implementation, and broker filesystem/audit tests. Root ensure runs as a sealed
   existing-broker startup phase and writes fixed pre/outcome audit to the already available
-  broker audit sink before root mutation; it is not a public caller operation. Source
+  broker audit sink before root mutation; audit carries only the typed domain-separated
+  operation digest. Before pre-audit or `mkdirat`, it acquires and validates the sealed
+  trusted-ancestor dirfd and exact creation parent with no symlink, magic link, or
+  cross-mount traversal. Restart must reacquire fresh verified descriptors and revalidate
+  the parent before classifying or resuming; post-create-only parent validation is
+  ineligible. It is not a public caller operation. Source
   invocation and ordering belong to the accepted external source-generation installer,
   while T595 owns target activation ordering. First/second activation and every creation
   crash boundary are independently tested for both roles before any descendant use.
@@ -1778,12 +1807,20 @@ table before the operation exists.
   a maximum 256-member/16,777,216-byte per-intent census and root-wide 64-intent,
   4,096-member, 268,435,456-byte census. Before handoff it durably reserves prospective
   capacity through typed `ReserveHostGenerationImmutableAuditCapacityV1`, whose fixed
-  pre/outcome audit precedes reservation mutation; restart reconstructs reservations from
-  the immutable census before admission. Release is allowed only after durable prune or an
-  immutable zero-mutation outcome proving no backup, private evidence, audit member, or
-  covered mutation became durable. The exact two release reasons, restart reconstruction,
-  and the root-wide aggregate 32,768-record/536,870,912-byte ceiling over every private
-  publication class are mandatory; capacity refusal has zero mutation. Enforce the
+  pre/outcome audit precedes reservation mutation. Root creation atomically installs and
+  charges the eight-record/65,536-byte standing capacity-control reserve; reservation and
+  release audit consume it directly and never recursively reserve themselves. Use the exact
+  stable private reservation/release attempt ids, typed domain-separated audit digests, and
+  `Absent -> PreAudited -> LedgerApplied -> Completed` classifier from `data-model.md`.
+  Restart reconstructs reservations and standing-reserve usage from the immutable census,
+  pre/outcome chain, and export state before admission. Release is allowed only after
+  durable prune or an immutable zero-mutation outcome proving no backup, private evidence,
+  audit member, or covered mutation became durable. The exact two release reasons use
+  distinct attempts and cannot substitute. Independent tests crash reservation and each
+  release after pre-audit, ledger mutation, outcome, and completed response loss and require
+  one ledger apply/outcome at most, no leak, and no double release. The root-wide aggregate
+  32,768-record/536,870,912-byte ceiling over every private publication class is mandatory;
+  capacity refusal has zero mutation. Enforce the
   per-restoration 8-record/1,048,576-byte and per-intent 256-attempt subset, the
   8,192-record/67,108,864-byte pending-audit staging subset, body-bearing evidence removal
   with its replaced set by day 90 only after digest audit export, and reservation/anchor/
@@ -1792,23 +1829,37 @@ table before the operation exists.
   overwrite, truncation, or silent record drop is forbidden. Exact accepted/refused
   record/byte boundaries and every lifecycle transition are tests. It
   refuses any covered mutation until its backup is file-and-directory durable, never prunes
-  a current intent. Typed `BindHostGenerationImmutableAuditRetentionAnchorV1` samples one
-  private `CLOCK_REALTIME+CLOCK_BOOTTIME` anchor before replacement, binds it in the
-  replacement pre/outcome chain, and makes the replacement effective only after pointer,
-  anchor, and both outcomes are durable. Replay after any replacement/anchor crash uses the
-  same sample and never samples current time. Same-boot age follows `CLOCK_BOOTTIME` and
+  a current intent. Typed `BindHostGenerationImmutableAuditRetentionAnchorV1` first appends
+  fixed-field pre-audit without a clock sample or candidate digest, then samples one private
+  `CLOCK_REALTIME+CLOCK_BOOTTIME` anchor and durably publishes the non-authorizing private
+  candidate before its outcome. A pre-only fresh process may take the first sample only
+  after proving no candidate exists; replay after any candidate final uses the same sample
+  and never resamples. Replacement becomes effective only after pointer, anchor candidate,
+  and both outcomes are durable. Same-boot age follows `CLOCK_BOOTTIME` and
   permits at most 300 seconds of wall/boot delta skew; unsafe forward time or changed-boot
   continuity is quarantined as typed degradation. Checked 30/90-day arithmetic plus the
   durable private watermark denies rollback, forward discontinuity, ambiguous reboot,
-  overflow, invalid anchor, and early pruning. Pruning is typed op
+  overflow, invalid anchor, and early pruning. A selector-free public-socket Admin
+  continuity-repair request is only a wake. The sealed coordinator must validate
+  disposition-pinned authoritative non-caller continuity evidence and consume a private
+  continuity-repair permit; caller evidence, root, a direct broker client, or the site
+  backup administrator's claim can never publish an anchor. Repair advances the existing
+  epoch, never resets day 30 or day 90, and when authoritative evidence proves the original
+  day-90 deadline passed it must durably prune before publishing the repair outcome. Reboot,
+  discontinuity, delayed repair, startup, idle wake, and repeated Admin wake tests pin that
+  deadline without Admin-dependent catch-up. Pruning is typed op
   `PruneHostGenerationImmutableAuditBackupsV1`, admitted only by a consumed
   private-field `PruneHostGenerationImmutableAuditPermit<'coordinator>` created only after
   exact epoch/watermark/census/reservation validation and consumed by value. It has no
   public constructor, field, accessor, Clone, Copy, Default, From, TryFrom, serde,
   conversion, byte/digest/fd reconstruction, lifetime escape, cross-coordinator use, or
   second-dispatch surface; compiler/API negatives cover each route. It publishes fixed
-  redacted immutable
-  prune pre/outcome audit, uses the common stable root dirfd and fd-relative
+  redacted immutable prune pre/outcome audit whose outcome is the nested
+  `Pruned | AlreadyPruned | Degraded(failure)` enum, never a nullable sibling failure.
+  Retention degradation likewise stores one nested failure variant and derives its action
+  only during serialization; constructor/wire negatives reject every illegal
+  outcome/failure/action cross-product. Pruning uses the common stable root dirfd and
+  fd-relative
   `openat2`/single-component `unlinkat`/directory-sync protocol, and reduces the census only
   after directory durability. Pre-only, unlinked, directory-synced, census-committed, and
   response-loss restart prefixes settle exactly once; every unlink/directory-sync/census/
@@ -1818,9 +1869,10 @@ table before the operation exists.
   audited prune or publishes fail-closed clock/retention degradation; no timer unit is added.
   Hermetic clock tests cover a long same-boot process crash across both thresholds, restart
   after replacement at every anchor/outcome boundary with no timestamp resampling, forward
-  real-time steps below and above the 300-second wall/boot skew limit, changed-boot ambiguity,
-  day-90 startup and idle wake with no Admin request, and no early prune under any
-  discontinuity.
+  real-time steps below and above the 300-second wall/boot skew limit, changed-boot
+  authoritative continuity validation, day-90 startup and idle wake with no Admin request,
+  no early prune under any discontinuity, and no epoch reset or retention beyond the
+  original day-90 deadline after reboot or repair.
 
   Restoration accepts only the exact signed
   `HostGenerationImmutableAuditRestorationV1` for the displayed
@@ -1840,7 +1892,9 @@ table before the operation exists.
   or deletes the original; mismatch/unauthenticated/noncontiguous cases use the exact
   observed digest as append-only supersession provenance. The shared
   `HostGenerationImmutablePublicationV1` protocol covers dispatch, repair pre/outcome,
-  backup, private evidence, restoration pre/provenance/outcome, and prune pre/outcome. It
+  ensure-root pre/outcome, reservation and both release pre/outcome pairs, retention-anchor
+  pre/candidate/outcome, backup, private evidence, restoration pre/provenance/outcome,
+  settlement, repair-resume, and prune pre/outcome. It
   begins only after `EnsureHostGenerationImmutablePublicationRootV1` has durably created or
   reopened, validated, and parent-synced the stable root dirfd; it then creates each missing hierarchy component
   with single-component `mkdirat`; fd-relative reopens with
@@ -1856,8 +1910,13 @@ table before the operation exists.
   directory-sync failure, and restart settlement append exactly one matching fixed outcome.
   The total post-pre failure enum includes `hierarchy`, `write`, `file-sync`, `link`,
   `reopen`, `directory-sync`, and `outcome-publication`. An outcome publication failure
-  returns typed pending and is settled before another mutation. A durable degraded outcome
-  is nonterminal `repair-required`: after
+  returns typed pending and is settled before another mutation. A fresh-process pre-only
+  prefix has no durable request body and admits no caller-free replay: it blocks all later
+  coordinator mutation until the same unprivileged public-socket Admin resubmits the
+  byte-identical artifact, repeats authorization and under-lock validation, and reconstructs
+  the exact operation/private attempt. A different artifact conflicts. Once private
+  evidence is durable, caller-free restart may continue from that durable body. A durable
+  degraded outcome is nonterminal `repair-required`: after
   `host-generation-restoration-storage-repair-v1`, byte-identical artifact resubmission
   resumes the same operation id and attempt, appends repair-resume pre-audit, completes only
   missing records, and converges to restored. The degraded event remains append-only history;
@@ -1865,17 +1924,28 @@ table before the operation exists.
 
   Within T592's already assigned `packages/d2b-contracts` ownership, replace the
   success-only restoration response in `src/broker_wire.rs` with the closed nested
-  completed/refused/pending/degraded enums from `data-model.md`; each refusal owns its own
-  class domain, publication hierarchy is representable, actions and settlement are derived
-  only during serialization, and illegal sibling/null cross-products fail schema/wire tests.
+  completed/refused/pending/degraded enums from `data-model.md`; root refusal is a distinct
+  typed variant from every other unauthorized caller, Pending owns one nested total reason
+  carrying or deriving its publication failure class, and neither Pending nor Degraded
+  exposes the private attempt id. Each refusal owns its own class domain, publication
+  hierarchy is representable, actions and settlement are derived only during serialization,
+  exact derived wire values are validated but never stored as independent state, and
+  illegal sibling/null/missing/mismatched-action cross-products fail
+  constructor/schema/wire/deserialization tests.
   Authorization, all nineteen request-shape classes, artifact, conflict, retention,
   publication-degraded, and publication-pending classes have no fallback through
-  `BrokerErrorResponse.message`. Make compiler-generated broker schema/wire output
+  `BrokerErrorResponse.message`. Audit and settlement records use only their typed
+  class-specific domain-separated digests, never raw operation or restoration attempt ids;
+  leakage canaries cover the private attempt id, its preimage, and unqualified encoding.
+  Make compiler-generated broker schema/wire output
   byte-identical to T589's frozen strict response schema, snapshot, renderer inputs, and
   error/success goldens; T592 updates only its already assigned generated operation/
   privilege catalogue outputs and consumes the T589 fixtures read-only. The independent
-  two-row restoration and two-row prune audit-edge fixtures plus the 168-id broker registry are
-  mandatory and read-independent from the 156-id status registry. An unaudited extra
+  two-row restoration and two-row prune audit-edge fixtures plus the exact unchanged 168-id
+  broker registry, new 207-id durable-record/boundary registry, and new 78-id lifecycle
+  registry are mandatory and mutually read-independent from production and the 156-id
+  status registry. Every named class/boundary/lifecycle/permit visitor and shrinkage poison
+  must fire before cases count. An unaudited extra
   mutation is the separate integrity-incident result and cannot invoke restoration. No
   daemon path, generic filesystem copy, force input, partial rollback, or new unit may
   perform either mutation. Distinct artifact/member canaries must remain absent from
@@ -2275,9 +2345,11 @@ table before the operation exists.
   order T592's typed `EnsureHostGenerationImmutablePublicationRootV1` sealed broker phase
   before target broker adoption and target daemon start; Nix activation does not create the
   root itself. The target root must pass mode-`0700` root-owned create-or-reopen validation,
-  held-parent durability, first-run creation, second-run zero-write reopen, and every crash
-  boundary from pre-audit through outcome and response loss against the exact 20-id
-  source/target publication-root fixture in `data-model.md`. The source generation needs the
+  disposition-sealed trusted-ancestor and pre-mutation creation-parent validation,
+  held-parent durability, fresh verified descriptor reacquisition after restart, first-run
+  creation, second-run zero-write reopen, and every crash boundary from pre-audit through
+  outcome and response loss against the exact 20-id source/target publication-root fixture
+  in `data-model.md`. The source generation needs the
   same phase before its installed source broker may advertise `source-handoff-v1`, but that
   installer/module and its tests remain the accepted external source-generation prerequisite
   and are not T595-owned. The Type-10 handoff case starts from a source generation whose
@@ -2293,15 +2365,23 @@ table before the operation exists.
   `env!("CARGO_BIN_EXE_d2b-host-generation-deploy")`, point `D2B_PUBLIC_SOCKET` at a
   hermetic AF_UNIX server, traverse the production parser/public-socket transport/shared
   wire DTO, and assert success, every closed typed broker error projection, all nineteen
-  invalid-request class mappings, the convergent pending/degraded/repaired settlement chain,
-  exact human/JSON bytes and exits, response-loss replay, and artifact/member redaction.
+  invalid-request class mappings, the distinct typed root and non-root unauthorized
+  refusals, every closed Pending reason/publication-class mapping, the convergent
+  pending/degraded/repaired settlement chain, exact human/JSON bytes and exits,
+  response-loss replay, and artifact/member/private-attempt redaction. Pre-only
+  fresh-process tests must prove there is no caller-free body recovery, the same
+  Admin-authorized byte-identical artifact resubmission drives continuation, a different
+  artifact conflicts, and no automatic-settlement wait or separate status trigger is
+  rendered.
   `D2B_PUBLIC_SOCKET` is the only injectable process input: there is no uid/euid, caller-role,
   identity, renderer, result, or test-mode injection in release code. The real non-root
   binary proves root-specific output by receiving T592's closed typed
-  `audit-restoration-root-refused` broker response from the hermetic socket and rendering it
-  through the production response path; a direct renderer call or fabricated process
-  identity is ineligible. A source-local unit test, direct renderer call, fake CLI function,
-  or VM-only path cannot satisfy this Type-3 obligation. The pin lists
+  `audit-restoration-root-refused` nested broker variant from the hermetic socket and
+  rendering it through the production response path; the ordinary unauthorized nested
+  variant must render the different `use-local-admin-public-socket` form. A direct renderer
+  call or fabricated process identity is ineligible. A source-local unit test, direct
+  renderer call, fake CLI function, or VM-only path cannot satisfy this Type-3 obligation.
+  The pin lists
   every new test id literally; regenerate it from
   `(cd packages && cargo nextest list -p d2b --message-format oneline)`, then run
   `make test-rust` and

@@ -2827,9 +2827,10 @@ and no serialized-evidence revalidation.
 
 Every immutable single-use host-generation publication uses one
 `HostGenerationImmutablePublicationV1` protocol: the origin-consuming handoff dispatch,
-coordinator-pointer repair pre-mutation and outcome records, immutable backup members, and
-restoration private evidence, pre-mutation, provenance, and outcome records, plus backup-prune
-pre-mutation and outcome records.
+coordinator-pointer repair and ensure-root pre-mutation/outcome records, reservation and both
+release pre-mutation/outcome pairs, retention-anchor pre/candidate/outcome records,
+immutable backup members, restoration private evidence, pre-mutation, provenance, outcome,
+settlement and repair-resume records, plus backup-prune pre-mutation and outcome records.
 
 Activation owns ordering, not a direct privileged `mkdir`. The existing broker executes the
 typed sealed operation `EnsureHostGenerationImmutablePublicationRootV1` before any operation
@@ -2842,23 +2843,40 @@ create the root directly. The external source-generation invocation remains an u
 prerequisite; target-generation wiring cannot substitute for it.
 
 `EnsureHostGenerationImmutablePublicationRootV1` receives only a private root reference and
-the closed activation side `source-generation | target-generation`. It first appends a
-fixed-field pre-mutation record to the already existing broker audit sink outside the
-publication root. That record carries only the operation id, activation side, opaque
-`publicationRootRefSha256`, expected owner/mode/type/link-count posture, and prior state
-`absent | exact`. It then creates the root at mode `0700` or reopens it, validates the
-root-owned directory and its held parent's mount/device/inode binding, syncs the root, syncs
-the held parent, reopens the root, and appends the matching outcome
-`created | reopened | degraded`. No path, timestamp, uid, gid, device, inode, or errno is
-rendered in either audit record. The root is usable only after the outcome and both directory
-syncs are durable. A second activation run must return `reopened` with zero namespace
-mutation. Wrong type, owner, mode, link count, parent identity, symlink, magic-link, or mount
-refuses and preserves the observed object.
+the closed activation side `source-generation | target-generation`. Before any audit or
+namespace mutation, the broker opens a disposition-sealed trusted ancestor directory,
+validates its root ownership, mode, filesystem type, mount id, device, inode, and expected
+private reference, and walks every existing parent component from that held dirfd with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV)` and
+`O_DIRECTORY|O_CLOEXEC`. The exact creation parent is therefore opened and identity-validated
+before `mkdirat`; no unanchored path walk, current working directory, joined path, or
+post-creation-only validation may select it. After process death the broker discards every
+numeric descriptor, reacquires a fresh trusted-ancestor dirfd from the sealed reference,
+repeats the complete walk, and revalidates the creation parent before classifying or
+continuing the attempt.
+
+It first appends a fixed-field pre-mutation record to the already existing broker audit sink
+outside the publication root. That record carries only the typed
+`publicationRootOperationSha256 =
+SHA-256("d2b:audit:host-generation:publication-root-operation:v1\0" ||
+private_operation_id)`, activation side, opaque `publicationRootRefSha256`, expected
+owner/mode/type/link-count posture, and prior state `absent | exact`. It then uses `mkdirat`
+on the held validated parent to create the root at mode `0700`, or reopens it relative to
+that parent, validates the root-owned directory and the unchanged ancestor/parent
+mount/device/inode chain, syncs the root, syncs the held parent, reopens and revalidates the
+root and parent chain, and appends the matching outcome `created | reopened | degraded`.
+No raw operation id, path, timestamp, uid, gid, device, inode, or errno is rendered in
+either audit record. The root is usable only after the outcome and both directory syncs are
+durable. A second activation run must return `reopened` with zero namespace mutation. Wrong
+trusted ancestor, replaced parent, wrong type, owner, mode, link count, parent identity,
+symlink, magic-link, cross-mount traversal, or mount identity refuses and preserves the
+observed object.
 
 The source and target activation suites independently cover first run, second run, crash
 after pre-audit, after root creation, after root sync, after parent sync, after final reopen,
-after outcome, and response loss. Every restart reopens from the held parent and either
-finishes the one attempt or returns the prior completed response with zero write. A literal
+after outcome, and response loss. Every fresh-process restart reacquires the trusted
+ancestor, reopens and revalidates the exact parent chain, and either finishes the one attempt
+or returns the prior completed response with zero write. A literal
 `host-generation-immutable-publication-root-case-ids.txt` fixture and a separately authored
 constant enumerate both activation sides at every boundary; production root creation,
 fixture enumeration, and the expected constant are mutually read-independent. Missing,
@@ -2890,10 +2908,15 @@ publication-root/target/wrong-parent-refused
 publication-root/target/wrong-root-posture-refused
 ```
 
-The wrong-root posture case independently poisons type, owner, mode, link count, symlink,
-magic-link, and mount identity beneath one case-family visitor; a missing poison visit fails
-the fixture. The first-run and every crash case require durable pre/outcome audit, and the
-second-run case requires zero namespace and audit write after exact completed replay.
+The wrong-parent and wrong-root posture cases independently poison trusted-ancestor
+identity, creation-parent replacement, type, owner, mode, link count, symlink, magic-link,
+cross-mount traversal, and mount identity beneath one case-family visitor; a missing poison
+visit fails the fixture. The source and target visitors must each reach both durable
+ensure-root record classes and every acquisition/create/sync/reopen/outcome/response
+boundary. One shrinkage poison per record class and boundary fails before broker use. The
+first-run and every crash case require durable pre/outcome audit, and the second-run case
+requires fresh descriptor reacquisition plus zero namespace and audit write after exact
+completed replay.
 
 Every operation holds that stable root dirfd and revalidates its mount/device/inode identity
 before and after publication. Every descendant is resolved fd-relative with
@@ -2932,6 +2955,19 @@ subset alone. A reservation failure precedes mutation and is typed degradation. 
 operation audit rotates only through the existing append-only broker audit segment owner,
 whose record/byte segment bounds and retention are enforced before old durable segments are
 removed. No record is overwritten, truncated, or silently dropped to regain capacity.
+
+Capacity-control audit cannot recursively reserve itself. Initial root creation therefore
+atomically installs and charges a broker-private standing capacity-control reserve of eight
+fixed records and 65,536 encoded bytes inside the root-wide ceilings before the root becomes
+usable. Those bytes are unavailable to backup, restoration, retention, or prune
+publication. A reservation or release operation consumes exactly two standing slots for
+its pre/outcome pair, never invokes `ReserveHostGenerationImmutableAuditCapacityV1` for
+those records, and refuses before mutation when two slots are not free. Export completion
+replenishes slots only after the audit segment file and directory are durable; a crash
+reconstructs used/free slots from the immutable audit prefix and export state. Missing,
+overdrawn, duplicated, or unaccounted standing-reserve state degrades the root and blocks
+all mutation. Root-create, pre-only, outcome-publication, export-replenishment,
+standing-reserve exhaustion, and restart reconstruction have literal independent cases.
 
 Under the one owning lock, hierarchy replay walks from the stable root. For each missing
 component it calls `mkdirat` on the held parent, opens the result with the same `openat2`
@@ -3588,31 +3624,87 @@ intent, plus 64/65 intents, 4,096/4,097 members, and
 268,435,456/268,435,457 bytes at the root. Before a handoff can append its first backup, the
 broker invokes typed `ReserveHostGenerationImmutableAuditCapacityV1` under the coordinator
 lock and durably reserves the exact prospective set's intent/member/encoded-byte counts plus
-the aggregate record/byte charge for every private publication class. Its fixed-field
-pre/outcome audit is durable before the reservation mutation. A failed reservation is a
-typed zero-mutation refusal. A reservation is released through the same typed operation only
-after either the corresponding set is durably pruned or an immutable zero-mutation outcome
-proves that no backup, private evidence, audit member, or covered mutation became durable.
-The two release reasons are closed to `durable-prune | immutable-zero-mutation`. Restart
-reconstructs every reservation from the immutable root census and its pre/outcome chain
-before admitting another handoff; a missing, duplicated, mismatched, or unaccounted
-reservation degrades the root and blocks all later mutation.
+the aggregate record/byte charge for every private publication class. Reservation and
+release use stable private attempt identities, never a caller id:
+
+- `CapacityReservationAttemptIdV1 =
+  SHA-256("d2b:host-generation:audit-capacity-reservation-attempt:v1\0" ||
+  intent_sha256 || prospective_charge_canonical_bytes)`.
+- `CapacityReleaseAttemptIdV1 =
+  SHA-256("d2b:host-generation:audit-capacity-release-attempt:v1\0" ||
+  reservation_attempt_sha256 || release_reason_tag || governing_proof_sha256)`.
+
+`prospective_charge_canonical_bytes` is not serializer output. It is the fixed-width
+big-endian tuple `intentDelta:u16 || memberDelta:u32 || backupEncodedByteDelta:u64 ||
+rootRecordDelta:u32 || rootEncodedByteDelta:u64`. `release_reason_tag` is one byte:
+`0x01` for `durable-prune` and `0x02` for `immutable-zero-mutation`. Checked conversion or
+addition failure refuses before pre-audit.
+
+Audit contains only the corresponding typed
+`capacityReservationAttemptSha256 =
+SHA-256("d2b:audit:host-generation:capacity-reservation-attempt:v1\0" ||
+private_attempt_id)` or
+`capacityReleaseAttemptSha256 =
+SHA-256("d2b:audit:host-generation:capacity-release-attempt:v1\0" ||
+private_attempt_id)`, the exact bounded charge or release reason, governing proof digest,
+prior-ledger digest, and closed outcome. It never contains a raw operation or private
+attempt id.
+
+Each of the reservation, `durable-prune` release, and `immutable-zero-mutation` release
+machines has exactly these prefixes under the one coordinator lock:
+
+```text
+Absent
+  -> PreAudited
+  -> LedgerApplied
+  -> Completed
+```
+
+`Absent` may append one pre record by consuming two slots from the nonrecursive standing
+capacity-control reserve. `PreAudited` has no ledger mutation and replays the exact charge
+or release from its durable fixed fields. `LedgerApplied` means the ledger mutation is
+durable but its matching outcome is absent; replay verifies the new ledger digest and
+appends only that outcome. `Completed` requires a matching outcome and ledger digest and
+returns the stored completed response with zero ledger or audit write, including response
+loss. A ledger mutation without pre-audit, an outcome without the exact mutation, duplicate
+pre/outcome, a mismatched charge/reason/proof/digest, or any impossible prefix degrades the
+root and blocks all later mutation.
+
+A failed reservation records a typed zero-ledger-mutation completed outcome. Release is
+permitted only after either the corresponding set is durably pruned or an immutable
+zero-mutation outcome proves that no backup, private evidence, audit member, or covered
+mutation became durable. The two release reasons remain exactly
+`durable-prune | immutable-zero-mutation`; they use distinct attempt ids and cannot
+substitute for each other. Restart reconstructs every reservation and standing-reserve
+charge from the immutable root census, exact prefix machines, and export state before
+admitting another handoff. Literal tests independently crash each machine after pre-audit,
+after ledger mutation, after outcome publication, and after completed-response loss; each
+test asserts exact prefix classification, one ledger apply at most, one outcome at most,
+and no capacity leak or double release.
 
 No backup for the current intent is prune-eligible. Immediately after authenticated pointer
 replacement is durable, the broker completes the same effective replacement transition with
-typed `BindHostGenerationImmutableAuditRetentionAnchorV1`. One trusted clock sample is taken
-once before the replacement pre-mutation record, fixed in a private anchor candidate, and
-bound by digest in that pre record. The transition does not become effective until the
-anchor, pointer replacement, matching replacement outcome, and anchor outcome are all
-durable. A crash after replacement durability but before either outcome reuses the exact
-private anchor candidate; replay never samples a new timestamp. The private immutable
+typed `BindHostGenerationImmutableAuditRetentionAnchorV1`. It derives a stable private
+anchor-attempt id from the durable replacement audit and first appends fixed-field
+retention-anchor pre-audit containing the typed domain-separated attempt digest,
+replacement digest, intent digest, and epoch sequence, but no clock sample or candidate
+digest. Only after that pre record is durable may it take one trusted clock sample and
+publish the sample as the broker-private, non-authorizing anchor candidate. The transition
+does not become effective until the anchor candidate, pointer replacement, matching
+replacement outcome, and anchor outcome are all durable. A pre-only crash proves no sample
+became durable and permits the fresh process to take the first sample. Once an exact
+candidate final exists, every replay reuses it and never samples a new timestamp; a
+nonidentical candidate is preserved as conflict. The private immutable
 `HostGenerationImmutableAuditBackupRetentionEpochV1` fields are exactly
 `schemaVersion = 1`,
 `kind = "host-generation-immutable-audit-backup-retention-epoch"`,
 `replacementAuditSha256`, `intentSha256`, `epochSequence`, private `bootIdSha256`,
 `clock = "CLOCK_REALTIME+CLOCK_BOOTTIME"`, `epochUnixSeconds`, and
-`epochBootTimeNanoseconds`. The digest-only anchor reference, never either timestamp or boot
-identity, is permitted in pre/outcome audit.
+`epochBootTimeNanoseconds`. Only the outcome carries the digest of the now-durable anchor
+candidate. Neither timestamp nor boot identity is permitted in pre/outcome audit. Fresh
+process tests crash after pre-audit and every candidate write/file-sync/link/directory-sync
+boundary, proving zero samples before pre, exactly one durable candidate, and no resampling
+after any candidate final.
 
 A root-owned durable private clock watermark stores the greatest accepted real-time second,
 boot-time nanosecond, boot identity digest, and anchor sequence. On the same boot,
@@ -3620,8 +3712,9 @@ eligibility advances only by `CLOCK_BOOTTIME`; `CLOCK_REALTIME` must be nondecre
 delta may differ from the boot-time delta by at most 300 seconds. A larger positive
 difference is `clock-forward-discontinuity`, not elapsed retention age. A changed boot
 identity has no crash-stable monotonic continuity and is
-`clock-continuity-ambiguous` until the named trusted-clock repair procedure publishes a new
-typed continuity anchor. Neither class can make a member eligible. Every eligibility
+`clock-continuity-ambiguous` until the broker validates authoritative non-caller continuity
+evidence and consumes the sealed continuity-repair permit. The Admin request cannot publish
+an anchor. Neither class can make a member eligible. Every eligibility
 calculation uses checked unsigned addition for 2,592,000 seconds (30 days) and 7,776,000
 seconds (90 days). Backward time, forward discontinuity, changed-boot ambiguity, overflow,
 an invalid anchor, or an unpersistable watermark is typed degradation and quarantines age.
@@ -3629,6 +3722,30 @@ At 30 trusted elapsed days a member becomes prune-eligible; at 90 trusted elapse
 mandatory to prune. A long same-boot process crash or suspend uses the bound boot-time delta;
 a real-time jump with little boot-time advance and every changed-boot restart are explicit
 fail-closed tests.
+
+Continuity repair accepts no caller timestamp, boot identity, anchor, deadline, proof,
+digest, or artifact. A selector-free unprivileged public-socket `Admin` request is only a
+wake signal. Under the coordinator lock, the broker obtains continuity from its configured
+authoritative non-caller source, validates that source against the disposition-pinned
+authority and the prior private watermark, and only then attenuates and consumes one private
+`BindHostGenerationImmutableAuditContinuityRepairPermit<'coordinator>`. The permit and
+validated evidence have no public construction, field, accessor, clone/copy/default,
+conversion, serde, byte/digest reconstruction, or lifetime escape. Direct broker, root,
+backup-administrator claims, and caller-supplied evidence cannot mint it.
+
+Repair advances the existing epoch's trusted lower bound; it never creates a replacement
+epoch or resets either the day-30 threshold or original day-90 deadline. Startup performs
+this authoritative validation and mandatory catch-up before accepting handoff work, and the
+internal wake repeats it without Admin traffic. If authoritative continuity proves the
+original day-90 deadline has passed, the sealed repair operation must complete the prune
+pre/outcome chain and durable absence before it may publish a repaired-continuity outcome.
+A reboot, discontinuity, delayed repair, repeated Admin wake, or broker restart therefore
+cannot extend retention past the original deadline. Missing or invalid authoritative
+evidence keeps the root degraded and blocks mutation; it never accepts caller evidence or
+publishes a prune-governing anchor. Tests cross day 90 on same boot, reboot, forward
+discontinuity, delayed repair, startup, and idle wake and require either deadline-preserving
+mandatory prune from authoritative evidence or continued fail-closed unavailability with no
+new anchor.
 
 Pruning is the typed broker operation
 `PruneHostGenerationImmutableAuditBackupsV1`. It is not callable by the daemon, a public
@@ -3654,9 +3771,11 @@ day-90-mandatory`. It then reopens the exact leaf from the stable root by the co
 fd-relative `openat2` policy, revalidates identity, calls `unlinkat` with a
 single-component leaf, syncs the held parent dirfd, durably commits the reduced census, and
 append-only publishes the matching outcome. The outcome repeats those fields and adds only
-`outcome = pruned | already-pruned | degraded` and nullable
-`failureClass = unlink | directory-sync | census | audit-publication`; the failure class is
-null unless the outcome is `degraded`.
+one nested `PruneOutcomeV1 = Pruned | AlreadyPruned |
+Degraded(PruneFailureClassV1)`, where `PruneFailureClassV1` is exactly
+`unlink | directory-sync | census | audit-publication`. There is no nullable sibling
+failure class and no constructor can represent a success plus failure or degraded without
+one failure.
 
 Restart classifies pre-only, unlinked-but-unsynced, synced-but-old-census,
 new-census-without-outcome, and complete prefixes. It never repeats an already reflected
@@ -3672,15 +3791,22 @@ arms an internal wake for the next day-30 or day-90 boundary. This is an in-proc
 Startup and wake catch-up acquire the coordinator lock, mint the private permit, and either
 complete an audited mandatory prune or publish typed retention degradation. An Admin
 reconciliation request is an additional wake only. Tests advance beyond day 90 with no Admin
-traffic and require either the complete prune pre/outcome chain and absence or, for
-forward-discontinuous or changed-boot time, fail-closed
-`clock-forward-discontinuity | clock-continuity-ambiguous` degradation with the backup
-retained and later mutation blocked.
+traffic and require the complete prune pre/outcome chain and absence on same boot, after
+reboot, and after a forward discontinuity. The latter two paths must first validate
+authoritative non-caller continuity and consume the sealed repair permit; ambiguity may
+block service before that validation but may not reset the epoch, accept caller evidence,
+publish repair, or retain the set once the authoritative lower bound reaches the original
+day-90 deadline.
 
-`HostGenerationImmutableAuditBackupRetentionDegradedV1` contains exactly
+`HostGenerationImmutableAuditBackupRetentionDegradedV1` contains only
 `schemaVersion = 1`, `kind =
-"host-generation-immutable-audit-backup-retention-degraded"`, `failureClass`, and `action`.
-The closed failure classes and actions are:
+"host-generation-immutable-audit-backup-retention-degraded"`, and one validated nested
+`RetentionDegradationV1` variant carrying its closed failure class. It stores no sibling
+action. Custom serialization derives the exact public `failureClass` and `action` pair from
+that variant. Custom deserialization constructs the variant from the closed class, verifies
+that any wire action is byte-identical to the derived action without storing or trusting
+it, and rejects a missing/mismatched action, a class from another branch, or any illegal
+class/action cross-product. The total derived mapping is:
 
 | `failureClass` | Exact `action` |
 | --- | --- |
@@ -3691,21 +3817,29 @@ The closed failure classes and actions are:
 | `census` | `repair-retention-census-and-reconcile` |
 | `audit-publication`, `pending-settlement` | `repair-retention-audit-and-reconcile` |
 
+Private constructors, wire/schema snapshots, and table-driven negatives reject prune
+success-plus-failure, degraded-without-failure, a retention class paired with another
+action, caller-provided action, unknown variants, multiple nested branches, and missing
+branches. Human and JSON projections are generated only from validated variants.
+
 The sealed private age-anchor state is the only wall-clock carrier. No response or audit
 projection carries a path, member bytes, artifact bytes, wall-clock value, errno, uid, pid,
 or free-form value. Tests use a hermetic injected clock and pin day 29 refusal, day 30
-eligibility, day 90 mandatory absence, restart-stable
-anchors, crash after replacement at every anchor/outcome boundary with no resampling,
-same-boot long crash, safe same-boot advance, unsafe forward step, changed-boot ambiguity,
-invalid-anchor, watermark-persistence, rollback, and overflow refusal, every
-per-intent and root aggregate limit,
-reservation before handoff, restart reconstruction, release after durable prune, release
-after immutable zero-mutation, sealed prune-capability admission and all compiler/API
-negatives, immutable pre/outcome audit,
+eligibility, day 90 mandatory absence, pre-audit before the first clock sample,
+fresh-process pre-only sampling, restart-stable candidates with no resampling after any
+candidate publication boundary, same-boot long crash, safe same-boot advance, unsafe
+forward step, changed-boot ambiguity, authoritative non-caller continuity validation,
+Admin-wake-only repair, original-deadline preservation across reboot/discontinuity, and
+post-day-90 prune before repair outcome. They also pin invalid-anchor,
+watermark-persistence, rollback, overflow refusal, every per-intent and root aggregate
+limit, standing capacity-control reserve creation/exhaustion/export reconstruction,
+reservation before handoff, every reservation/release prefix, release after durable prune,
+release after immutable zero-mutation, sealed prune-capability admission and all
+compiler/API negatives, immutable nested pre/outcome audit,
 every unlink/directory-sync/census/audit failure, every crash prefix, completed
 response-loss replay, parent/symlink/magic-link/cross-device/final-identity races, descriptor
 exec-leak absence, internal idle wake and startup catch-up without Admin traffic,
-exactly-once outcomes, and redacted reports.
+exactly-once outcomes, illegal DTO cross-products, and redacted reports.
 
 Restoration requires a signed `HostGenerationImmutableAuditRestorationV1` from the
 disposition-pinned backup authority. Its canonical fields are exactly, in order,
@@ -3765,6 +3899,7 @@ nested refusal:
 ```text
 RestorationRefusalV1 =
     InvalidRequest(RestorationInvalidRequestClassV1)
+  | RootRefused
   | Unauthorized
   | ArtifactInvalid(RestorationArtifactInvalidClassV1)
   | Conflict(RestorationConflictClassV1)
@@ -3785,10 +3920,17 @@ predecessor | backup-binding | observed-member-binding`.
 `provenance | member | operation-id | duplicate-supersession`.
 The two retention enums are the applicable closed domains in the retention table.
 
-`Pending` contains `operationId`, `restorationAttemptId`, and
-`reason = outcome-publication | settlement-replay`, with settlement state
-`restart-settlement-pending`. `Degraded` contains `operationId`,
-`restorationAttemptId`, the closed
+`Pending` contains `operationId` and exactly one nested
+`RestorationPendingReasonV1`:
+
+```text
+RestorationPendingReasonV1 =
+    Publication(RestorationPublicationFailureClassV1)
+  | SettlementReplay(RestorationPublicationFailureClassV1)
+```
+
+The variant totally derives settlement state `restart-settlement-pending` and the public
+failure class from its carried publication class. `Degraded` contains `operationId`, the closed
 `RestorationPublicationFailureClassV1`, and settlement state `repair-required`.
 `RestorationPublicationFailureClassV1` is total over every post-pre publication fault:
 `hierarchy | write | file-sync | link | reopen | directory-sync | outcome-publication`.
@@ -3799,16 +3941,24 @@ The strict wire representation preserves that nesting: the envelope has only
 or `degraded`. Each nested object has its own discriminant and per-error class domain.
 Custom serialization derives every public error token, action, and settlement projection
 from the validated variant. Custom deserialization rejects more than one nested branch, a
-missing branch, a class from another branch, a caller-provided action, a settlement value
-in a refusal, or any other illegal cross-product. `operationId` is null only when
-`InvalidRequest` proves the request lacked one valid 16-byte id.
+missing branch, a class from another branch, an action or settlement value that differs from
+the variant's derived value, a settlement value in a refusal, success plus failure, pending
+without a reason or required carried class, degraded without a class, or any other illegal
+cross-product. No action or settlement input is stored as independent state. `RootRefused` and
+`Unauthorized` cannot substitute for one another. `operationId` is null only when
+`InvalidRequest` proves the request lacked one valid 16-byte id. The broker-private
+`RestorationAttemptIdV1` and every raw or encoded form of it are absent from all public
+response variants and wire fields.
 
 This operation never falls back to `BrokerErrorResponse.message`, another free-form broker
 error string, or an unrecognized enum. The renderer maps wire artifact `size` to public
 `input-size`; its local pre-wire input checks alone produce `input-type`, `input-owner`,
 `input-mode`, or `input-link-count`. The generated strict JSON schema, wire snapshot, shared
 CLI renderer, human/JSON goldens, schema-drift tests, and table-driven illegal-cross-product
-tests must all carry this same nested enum.
+tests must all carry this same nested enum. Leakage canaries inject the private attempt id,
+its raw preimage, and its unqualified hexadecimal encoding and require zero occurrences in
+response, schema examples, human/JSON output, error, `Display`, audit, log, trace/span,
+metric, panic, or `Debug`.
 
 The operation is admitted exclusively from the existing public socket's consumed `Admin`
 capability. Every other local role, including `Launcher`, workload, Zone, and
@@ -3832,8 +3982,13 @@ mandatory.
 After that under-lock validation, the broker derives one
 `RestorationAttemptIdV1` from the operation id and exact signed artifact digest. The same
 artifact always addresses the same attempt; different artifact bytes under the operation id
-are conflict. Before any body-bearing private evidence, reservation, provenance, effective
-member, or settlement mutation, the broker appends the durable fixed-field
+are conflict. This identifier remains broker-private. Every audit projection uses only
+`restorationAttemptSha256 =
+SHA-256("d2b:audit:host-generation:restoration-attempt:v1\0" ||
+private_restoration_attempt_id)`; no audit or settlement record carries the raw attempt id.
+After the separately pre-audited capacity reservation completes, and before any body-bearing
+private evidence, provenance, effective member, or settlement mutation, the broker appends
+the durable fixed-field
 `coordinator-immutable-audit-restoration/pre-mutation` audit record. It then append-only
 publishes one broker-private, non-observable
 `HostGenerationImmutableAuditRestorationEvidenceV1` preparatory record. That private record
@@ -3842,9 +3997,15 @@ contains the authenticated `canonicalMemberBytes` and complete signed
 restoration/replay owner, is never exported as audit, and has no public accessor,
 serialization response, `Debug`, `Display`, log, metric, or span projection. By itself it
 authorizes and changes nothing in the coordinator, backup census, effective audit view, or
-restored member. A crash after pre audit but before private evidence reuses the exact attempt
-and artifact after full under-lock revalidation; a nonidentical evidence final is preserved
-as conflict. No restoration body may become durable before its matching pre audit.
+restored member. A process death after pre audit but before private evidence loses the
+request frame. The durable pre-only prefix therefore blocks every later coordinator
+mutation and remains broker-private `pre-only-awaiting-identical-resubmission`; it never
+reconstructs or publishes a body on restart and synthesizes no response without a caller.
+Only a new unprivileged public-socket `Admin` submission of the
+byte-identical artifact may resume it. That submission is reauthorized, reverified, and
+fully revalidated under the lock, must reconstruct the exact operation id and private
+attempt id, and then may publish evidence. A different artifact or binding is preserved as
+conflict. No restoration body may become durable before its matching pre audit.
 
 The separate audit provenance record is
 `HostGenerationImmutableAuditRestoredMemberV1` with fields exactly, in order,
@@ -3879,9 +4040,13 @@ pre-mutation append and have zero coordinator, backup, restoration, or audit mut
 
 Once pre-mutation is durable, every private-evidence, provenance, hierarchy, or effective
 member syscall failure is a post-pre failure and must settle to exactly one matching outcome
-event when storage permits. If the outcome event itself cannot become durable, the response
-is `Pending` and restart resumes that same attempt before accepting another mutation. A
-durable `PublicationDegraded` outcome is explicitly nonterminal. It creates settlement state
+event when storage permits. A pre-only state is internally pending but has no caller and no
+response to replay. The first byte-identical authorized resubmission itself drives
+continuation and returns completed, conflict, or the actual later publication failure. If a
+later outcome event cannot become durable, the response is `Pending` with a typed
+`Publication` or `SettlementReplay` reason and the same artifact resubmission drives
+settlement before another mutation. A durable `PublicationDegraded` outcome is explicitly
+nonterminal. It creates settlement state
 `repair-required`, preserves the complete append-only attempt prefix, and permits only the
 same operation id plus byte-identical restoration artifact to resume after
 `host-generation-restoration-storage-repair-v1`.
@@ -3889,47 +4054,48 @@ same operation id plus byte-identical restoration artifact to resume after
 The append-only settlement chain is:
 
 ```text
-pre-audited
-  -> publishing
-  -> restored
-  |  degraded-repair-required
-  |    -> repair-resume-pre-audited
-  |    -> publishing
-  |    -> restored
-  `-> pending-restart-settlement -> one of the states above
+pre-audited -> publishing -> restored
+pre-audited -> pre-only-awaiting-identical-resubmission -> publishing
+publishing -> degraded-repair-required -> repair-resume-pre-audited -> publishing
+publishing -> pending-restart-settlement -> publishing | degraded-repair-required
 ```
 
-Each event contains `restorationAttemptId`, a strictly increasing settlement sequence,
-`priorSettlementSha256`, and one typed state. `repair-resume-pre-audited` is a new fixed-field
-audit event under the same operation id, not a new restoration attempt or a second
-provenance append. Under the coordinator lock, replay revalidates the same artifact,
+Each event contains only the typed
+`restorationSettlementAttemptSha256 =
+SHA-256("d2b:audit:host-generation:restoration-settlement-attempt:v1\0" ||
+private_restoration_attempt_id)`, a strictly increasing settlement sequence,
+`priorSettlementSha256`, and one typed state. `repair-resume-pre-audited` is a new
+fixed-field audit event under the same operation id, not a new restoration attempt or a
+second provenance append. Under the coordinator lock, replay revalidates the same artifact,
 predecessor, backup, observed-state, reservation, and repaired storage hierarchy; it then
 continues at the first missing record and appends a final `Restored` outcome. The durable
-degraded event remains history but no longer controls current settlement after the contiguous
-repaired event. An exact completed chain returns `already-restored` with zero write. A
-different artifact, operation id, predecessor, or observed state cannot resume the attempt.
-Signed private evidence and fixed-digest provenance remain append-only for the lifetime of
-coordinator history.
+degraded event remains history but no longer controls current settlement after the
+contiguous repaired event. An exact completed chain returns `already-restored` with zero
+write. A different artifact, operation id, predecessor, or observed state cannot resume the
+attempt. Signed private evidence and fixed-digest provenance remain append-only for the
+lifetime of coordinator history.
 
 Restart classifies every hierarchy, pre/evidence/provenance/outcome/settlement write, file-sync, link,
 final-reopen, parent-sync, ancestor-sync, final-directory-sync, and response-loss boundary
 through the shared publication protocol. A durable evidence-only prefix revalidates the
 byte-identical artifact only as an invalid pre-audit ordering and never appends a missing
-pre record after the fact. A durable pre-only prefix requires no caller-supplied body and
-revalidates the original private request frame before publishing evidence. A durable
-pre-plus-evidence prefix likewise requires no caller-supplied body to settle. Durable provenance
-without outcome appends only the matching outcome.
+pre record after the fact. A durable pre-only prefix has no recoverable request frame,
+admits no caller-free settlement, and remains blocked until the same Admin-authorized
+byte-identical artifact is resubmitted. A durable pre-plus-evidence prefix has its body and
+may settle without caller input. Durable provenance without outcome appends only the
+matching outcome.
 An existing exact complete chain returns `already-restored` with zero write, including
 response-loss replay. A nonidentical final or same operation id with different artifact
 bytes is preserved and returns conflict. Independent fault tests cover all four restoration
 failure classes, every record/boundary pair, every write/`fsync`/link/reopen/directory-sync
 failure after pre-mutation, provenance/member conflict, pending and degraded settlement,
-hierarchy failure, degraded-to-repair-resume-to-restored convergence, restart after every
-degraded and repaired threshold, exactly-one effective outcomes, and completed no-write
-replay. Distinct canary member bytes and
-artifact bytes must be absent from response, human/JSON output, error, `Display`, audit,
-log, trace/span, metric, panic, and `Debug`; the bounded request frame and private evidence
-record are the only intentional body carriers.
+hierarchy failure, fresh-process pre-only blocking, byte-identical authorized resubmission,
+different-artifact conflict, degraded-to-repair-resume-to-restored convergence, restart
+after every degraded and repaired threshold, exactly-one effective outcomes, and completed
+no-write replay. Distinct canary member bytes, artifact bytes, private attempt ids, and
+unqualified attempt encodings must be absent from response, human/JSON output, error,
+`Display`, audit, log, trace/span, metric, panic, and `Debug`; the process-local bounded
+request frame and post-pre private evidence record are the only intentional body carriers.
 
 Successful human output is exactly
 `host generation handoff immutable audit restoration complete\noutcome: <RESTORED_OR_ALREADY_RESTORED>\nsettlement: restored\nmember: <CLOSED_MEMBER>\naction: rerun-repair-authorized-handoff\n`; the outcome token is lowercase
@@ -3982,11 +4148,14 @@ or
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-publication-degraded","settlement":"repair-required","failureClass":"<CLOSED_PUBLICATION_CLASS>","action":"repair-restoration-storage-and-resubmit"}`.
 `CLOSED_PUBLICATION_CLASS` is the total
 `hierarchy | write | file-sync | link | reopen | directory-sync |
-outcome-publication` domain. `repair-required` is nonterminal: after the named storage repair,
+outcome-publication` domain for both `Pending` and `Degraded`; no pending reason can
+serialize without exactly one carried class. `repair-required` is nonterminal: after the named storage repair,
 resubmitting the byte-identical artifact resumes the same operation id and restoration
 attempt, appends the repair-resume chain, and must converge to the success form above.
-All human and JSON forms have dedicated goldens and expose no path, member or artifact
-bytes, signature, digest, uid, pid, role, wall-clock value, errno, or free-form value.
+For either pending class, byte-identical Admin-authorized resubmission drives settlement;
+there is no automatic-settlement wait or separate status trigger. All human and JSON forms
+have dedicated goldens and expose no path, member or artifact bytes, signature, private
+attempt id, unqualified digest, uid, pid, role, wall-clock value, errno, or free-form value.
 
 After restoration the operator reruns `--repair-authorized-handoff`. The separate
 audit-integrity incident preserves the coordinator and backup artifacts for security
@@ -4002,7 +4171,8 @@ The site access administrator owns
 `host-generation-unprivileged-local-admin-restoration-session-v1` for the root refusal. The
 site backup administrator owns
 `host-generation-immutable-audit-retention-reconciliation-v1`,
-`host-generation-retention-clock-discontinuity-repair-v1`,
+`host-generation-retention-clock-discontinuity-repair-v1` only for repairing the configured
+authoritative time source and issuing the selector-free Admin wake,
 `host-generation-retention-storage-repair-v1`,
 `host-generation-retention-census-repair-v1`,
 `host-generation-retention-audit-repair-v1`, and
@@ -4010,8 +4180,9 @@ site backup administrator owns
 `host-generation-restoration-client-broker-contract-repair-v1`. The latter verifies and
 reinstalls one matching release-sealed client/broker generation before the operator may
 resubmit the artifact; it never edits a request. Each accepts only its matching fixed
-error, performs no direct filesystem mutation, and reaches pruning or settlement only
-through the typed broker op and sealed coordinator capability. Clock overflow uses the
+error, performs no direct filesystem mutation, and reaches continuity publication, pruning,
+or settlement only through the broker's authoritative non-caller evidence validation,
+typed broker op, and sealed coordinator capability. Clock overflow uses the
 site-security-owned `host-generation-retention-clock-overflow-escalation-v1`.
 
 T589 owns the strict schema plus
@@ -4504,25 +4675,154 @@ restoration classes independently prove exact predecessor/member/failure binding
 append-only supersession. Backup-order cases prove no covered mutation precedes a
 file-and-directory-durable backup.
 
-The 42 retention cases prove the exact per-intent and root aggregate limits, durable
-reservation, restart reconstruction, both durable-prune and immutable-zero-mutation release
-paths, typed age-anchor/clock continuity arithmetic, sealed prune capability and its
-compiler/API negatives, fixed pre/outcome audit,
-durable prune ordering, every restart prefix, exactly-once settlement, fd-relative path
-posture, internal startup/idle catch-up, and redacted degradation. The 63 publication cases
-are the literal Cartesian
-result of seven independently named record classes (`backup`, `evidence`, `pre`,
-`provenance`, `outcome`, `prune-pre`, `prune-outcome`) and nine independently named
-boundaries, but neither the fixture
-nor its expected constant may generate that product at runtime. Each class has separate
-hierarchy creation/sync, inode write/file-sync/link/final-reopen,
-parent/ancestor/final-directory-sync, and response-loss cases. Seven family-specific
-shrinkage poisons supplement the retained fixture-member and visitor poisons, so removing a
-request refusal, any record class including either prune class, a publication boundary, a
-retention boundary, or one reservation reconstruction/release member fails before a case
-can run. Each case must reach its named check; early generic refusal, a dynamically generated
-expectation, missing visit, duplicate, reorder, skip, or production-derived list fails the
-enforcing runner.
+The existing 42 retention ids and 63 publication ids prove only the cases literally present
+in this 168-id fixture. They do not stand in for aggregate-root storage, anchor staging,
+continuity repair, internal no-Admin catch-up, the full prune-permit seal, settlement,
+repair-resume, ensure-root, reservation, or release coverage.
+
+`tests/golden/delivery/host-generation-immutable-audit-record-boundary-case-ids.txt`
+is a separate literal 207-id registry. Every id is exactly
+`record-boundary/<CLASS>/<BOUNDARY>` in the class order and then boundary order below:
+
+```text
+CLASS =
+dispatch
+pointer-repair-pre
+pointer-repair-outcome
+ensure-root-pre
+ensure-root-outcome
+backup
+reservation-pre
+reservation-outcome
+release-durable-prune-pre
+release-durable-prune-outcome
+release-zero-mutation-pre
+release-zero-mutation-outcome
+retention-anchor-pre
+retention-anchor-candidate
+retention-anchor-outcome
+evidence
+restoration-pre
+provenance
+restoration-outcome
+settlement
+repair-resume
+prune-pre
+prune-outcome
+
+BOUNDARY =
+hierarchy-after-mkdir-before-sync
+hierarchy-after-sync-before-inode-write
+after-write-before-file-sync
+after-file-sync-before-link
+after-link-before-final-reopen
+after-final-reopen-before-parent-sync
+after-parent-sync-before-ancestor-sync
+after-final-directory-sync
+completed-response-loss-no-write
+```
+
+The fixture and separately authored literal 207-id constant spell all rows; neither may
+generate this product at runtime or read production classes, hooks, registry length, or
+another expectation. Production owns a third independently authored visitor. One
+family-specific shrinkage poison for each of the 23 classes and each of the nine boundaries
+must fail before a case runs. Every case reaches its named class and fault hook, so one
+record's test cannot satisfy another, and settlement or repair-resume cannot borrow
+restoration-outcome coverage.
+
+`tests/golden/delivery/host-generation-immutable-audit-lifecycle-case-ids.txt`
+contains exactly these 78 newline-terminated ids in order:
+
+```text
+lifecycle/aggregate/root-records-32768-accepted
+lifecycle/aggregate/root-records-32769-refused
+lifecycle/aggregate/root-bytes-536870912-accepted
+lifecycle/aggregate/root-bytes-536870913-refused
+lifecycle/aggregate/restoration-records-8-accepted
+lifecycle/aggregate/restoration-records-9-refused
+lifecycle/aggregate/restoration-bytes-1048576-accepted
+lifecycle/aggregate/restoration-bytes-1048577-refused
+lifecycle/aggregate/restoration-attempts-256-accepted
+lifecycle/aggregate/restoration-attempts-257-refused
+lifecycle/aggregate/pending-staging-records-8192-accepted
+lifecycle/aggregate/pending-staging-records-8193-refused
+lifecycle/aggregate/pending-staging-bytes-67108864-accepted
+lifecycle/aggregate/pending-staging-bytes-67108865-refused
+lifecycle/standing-reserve/created-and-charged
+lifecycle/standing-reserve/nonrecursive-pre-outcome
+lifecycle/standing-reserve/exhausted-blocks-before-mutation
+lifecycle/standing-reserve/export-replenishes-after-durability
+lifecycle/capacity/reservation/absent-to-pre-audited
+lifecycle/capacity/reservation/pre-only-replay
+lifecycle/capacity/reservation/ledger-applied-no-outcome
+lifecycle/capacity/reservation/outcome-durable
+lifecycle/capacity/reservation/completed-response-loss-no-write
+lifecycle/capacity/release-durable-prune/absent-to-pre-audited
+lifecycle/capacity/release-durable-prune/pre-only-replay
+lifecycle/capacity/release-durable-prune/ledger-applied-no-outcome
+lifecycle/capacity/release-durable-prune/outcome-durable
+lifecycle/capacity/release-durable-prune/completed-response-loss-no-write
+lifecycle/capacity/release-zero-mutation/absent-to-pre-audited
+lifecycle/capacity/release-zero-mutation/pre-only-replay
+lifecycle/capacity/release-zero-mutation/ledger-applied-no-outcome
+lifecycle/capacity/release-zero-mutation/outcome-durable
+lifecycle/capacity/release-zero-mutation/completed-response-loss-no-write
+lifecycle/retention-anchor/pre-only-first-sample
+lifecycle/retention-anchor/candidate-publication-crash-no-resample
+lifecycle/retention-anchor/candidate-durable-no-resample
+lifecycle/retention-anchor/outcome-response-loss-no-resample
+lifecycle/retention-anchor/day-29-refused
+lifecycle/retention-anchor/day-30-eligible
+lifecycle/retention-anchor/day-90-mandatory
+lifecycle/retention-anchor/discontinuity-does-not-reset-epoch
+lifecycle/continuity/admin-request-is-wake-only
+lifecycle/continuity/caller-evidence-ignored
+lifecycle/continuity/invalid-broker-evidence-refused
+lifecycle/continuity/authoritative-evidence-sealed-permit
+lifecycle/continuity/reboot-preserves-original-day-90
+lifecycle/continuity/post-day-90-repair-prunes-before-outcome
+lifecycle/continuity/startup-no-admin-catch-up
+lifecycle/continuity/idle-no-admin-catch-up
+lifecycle/prune-permit/missing-denied
+lifecycle/prune-permit/public-constructor-denied
+lifecycle/prune-permit/field-access-denied
+lifecycle/prune-permit/accessor-denied
+lifecycle/prune-permit/clone-denied
+lifecycle/prune-permit/copy-denied
+lifecycle/prune-permit/default-denied
+lifecycle/prune-permit/from-tryfrom-denied
+lifecycle/prune-permit/serde-denied
+lifecycle/prune-permit/byte-digest-fd-reconstruction-denied
+lifecycle/prune-permit/cross-coordinator-denied
+lifecycle/prune-permit/lifetime-escape-denied
+lifecycle/prune-permit/second-dispatch-denied
+lifecycle/settlement/pre-only-no-caller-free-recovery
+lifecycle/settlement/pre-only-byte-identical-admin-resubmission
+lifecycle/settlement/pre-only-different-artifact-conflict
+lifecycle/settlement/publication-pending-class-total
+lifecycle/settlement/pending-resubmission-converges
+lifecycle/settlement/degraded-repair-resume-converges
+lifecycle/settlement/completed-response-loss-no-write
+lifecycle/redaction/private-attempt-id-absent-from-observable-surfaces
+lifecycle/meta/aggregate-member-removed
+lifecycle/meta/capacity-prefix-member-removed
+lifecycle/meta/retention-anchor-member-removed
+lifecycle/meta/continuity-member-removed
+lifecycle/meta/prune-permit-negative-member-removed
+lifecycle/meta/settlement-member-removed
+lifecycle/meta/boundary-visitor-removed
+lifecycle/meta/shrinkage-poison-removed
+```
+
+A separately authored literal 78-id constant, the fixture, and production visitors are
+mutually read-independent. Each case must reach its named limit, prefix, failure injection,
+permit negative, continuation source, or settlement branch. Each meta case deletes exactly
+one member or visit from one family while all other bytes remain valid. Unknown, duplicate,
+reordered, skipped, dynamically generated, early-generic-refusal, or production-derived
+expectations fail before any case counts. Count reconciliation is therefore exact: the
+original broker registry remains 168 ids unchanged, while the supplemental registries add
+207 durable-record/boundary ids and 78 lifecycle ids; the 20-id ensure-root fixture and
+156-id status fixture retain their existing independent purposes.
 
 ---
 
