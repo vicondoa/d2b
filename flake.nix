@@ -1101,6 +1101,7 @@
                 || fail D2B-BZLPOLICY-EDGES
               grep -Fq '"identities": [' "$input" \
                 || fail D2B-BZLPOLICY-CENSUS
+              mkdir -p "$out"
               printf '%s\n' ok > "$out/result"
             '';
 
@@ -1679,6 +1680,7 @@
               if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
                 fail D2B-BZLPOLICY-CLOSURE
               fi
+              mkdir -p "$out"
               printf '%s\n' ok > "$out/result"
             '';
 
