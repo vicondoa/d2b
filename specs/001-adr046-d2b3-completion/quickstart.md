@@ -305,11 +305,14 @@ revalidates those bytes, the current
 scope identity, complete preimage, and incident/parked binding. A stale or copied commitment exits `4` with
 a fresh inspect projection and no write.
 
-Only an empty ephemeral/staging census, exact identity-derived residue census, and synced
-`mismatch-retained` status form the residue-backed terminal entry. A resolution-backed
-terminal instead has the exact durable evidence object plus append-only
-`disposition-validated`. No path unlinks or restores a suspect. Every branch requires the
-same external disposition and one distinct successor snapshot. The successor is frozen
+Only a direct-final ordinary terminal requires an empty ephemeral/staging census. A
+residue-backed terminal entry instead requires the terminal legacy incident's exact frozen
+recursive census retaining every original legacy source name at its frozen locator, the
+exact identity-derived residue census, and synced `mismatch-retained` status. A
+resolution-backed terminal likewise carries its exact frozen retained-name census and has
+the exact durable evidence object plus append-only `disposition-validated`. No path unlinks
+or restores a suspect. Every branch requires the same external disposition and one distinct
+successor snapshot. The successor is frozen
 before signing, and the canonical request is the only authority input:
 
 ```bash

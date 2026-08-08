@@ -256,14 +256,18 @@ every descendant within the hard ceiling; an incomplete, unstable, unreadable, o
 over-hard-ceiling scope remains inspectable but denies request, apply, and admission until a
 fresh complete scan succeeds. The latter cases
 publish a separate append-only resolution `disposition-validated` record, and every primary or resolution branch reaches fresh
-`successor-admitted`. Ordinary terminals leave ephemeral namespaces empty; nonterminal
-variants never claim that predicate.
+`successor-admitted`. Direct-final ordinary terminals leave both ephemeral namespaces
+empty; terminal legacy incidents instead retain every original legacy source name at its
+frozen locator under the exact frozen recursive census. Nonterminal variants never claim
+either terminal predicate.
 T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope retention guard. With
 the shared lock held, it proves the candidate is terminal, every delivery transition is
 terminal, every incident is absent or has exact primary or resolution
 `successor-admitted`, every retained external
-reference remains resolvable, both ephemeral namespaces are empty, the exact durable census
-is valid and bounded, and the canonical candidate root plus all request, panel-record,
+reference remains resolvable, both ephemeral namespaces are empty for every direct-final
+ordinary path or contain only the original legacy source names bound at their frozen
+locators by each terminal legacy incident's exact frozen recursive census, the exact durable
+census is valid and bounded, and the canonical candidate root plus all request, panel-record,
 evidence-record, receipt, seal, eligibility, merge, incident preimage/anchor/metadata/
 payload/residue/status, resolution evidence/status, successor freeze, disposition request,
 disposition, and successor-admission history remain immutable. Every record repeats the same

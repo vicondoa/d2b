@@ -86,8 +86,10 @@
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
   lifetime-bound `SidecarCleanupOwner<'guard>`; named legacy state is never renamed or
-  unlinked; source absence is irreconcilable, every terminal cleanup census retains every
-  original legacy source name, and stage `3` has its own positive incident/metadata golden
+  unlinked; only direct-final ordinary terminals require both ephemeral namespaces empty;
+  source absence is irreconcilable, every terminal legacy incident cleanup census retains
+  every original legacy source name at its frozen locator, and stage `3` has its own positive
+  incident/metadata golden
 - [x] Source-floor issuer validation returns private nonserializable authenticated
   provenance from one non-clonable protected origin claimed through an anchored stable
   single-link no-follow/close-on-exec OFD lock inode, commits durable consumption only with

@@ -1716,8 +1716,10 @@ carries the object verbatim rather than copying selected fields into the task ro
   admission. Missing, unknown, duplicate, noncontiguous, cross-kind, or mismatched incident
   state blocks every close stage. Both nonterminal variants and terminal incidents block
   record publication and every close stage, survive restart, and are never automatically
-  unlinked. Ordinary success/refusal and terminal incidents require both ephemeral
-  namespaces empty; a nonterminal variant never claims that terminal predicate. T589's
+  unlinked. Direct-final ordinary success or refusal requires both ephemeral namespaces
+  empty. A terminal legacy incident instead requires every original legacy source name to
+  remain at its frozen locator under the exact frozen retained-name census; neither it nor
+  a nonterminal variant claims the ordinary empty-census predicate. T589's
   private `CandidateRetentionOwner` is a zero-mutation
   recursive whole-scope retention guard, not deletion authority. Under the same lock it requires the
   exact terminal request/reservation/panel/seal/eligibility/merge, incident, external-
