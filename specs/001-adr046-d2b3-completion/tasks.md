@@ -2163,9 +2163,18 @@ table before the operation exists.
   every decision-basis-intent, decision-basis, and decision-selection boundary, paired
   absence and exact-survival restarts at link, reopen, and parent-durable prefixes before
   each intent/basis ancestor sync,
-  both closed intent-or-basis at ancestors-durable response DTOs, and separate
-  intent/basis final-removal fresh processes that physically remove the exact durable final
-  before start at every downstream
+  both closed intent-or-basis at ancestors-durable response DTOs, and fresh-process
+  intent-final-removal cases that physically remove the exact durable intent immediately
+  after intent `AncestorsDurable` and after every decision-basis `Progress` prefix and
+  sealed `Conflict`. Each removal returns the exact
+  `audit-continuity-repair-decision-durability-integrity-incident` for record
+  `decision-basis-intent` at boundary `ancestors-durable`, proves continued physical
+  absence, and invokes zero
+  reconstruction, relink, source access, reselection, basis continuation or publication,
+  decision-selection publication, compaction, or settlement. Every case, response
+  assertion, forbidden effect, hook, and removal poison is independent. After basis
+  durability, separate intent/basis final-removal fresh processes physically remove the
+  exact durable final before start at every downstream
   decision-selection, decision-pre, outcome-intent, terminal-outcome,
   final-absence-proof, and completed prefix,
   decision-pre failure, every
@@ -2334,14 +2343,21 @@ table before the operation exists.
   `post-unlink/<ordinal>/namespace-extra` cases for every ordinal. Missing makes the
   canonical namespace observation incomplete, including omission of the required
   empty-census observation at the final ordinal; extra injects one unselected namespace
-  member. Parent mutation derives `conflict`; remaining-target, missing, and extra mutation
+  member. An additional fd-backed selected-target reappearance matrix starts a fresh
+  process after successful unlink and before census or receipt. At every ordinal, one case
+  reinserts the just-unlinked selected target through an independently held leaf descriptor
+  before restart. At every ordinal with a durable prior receipt prefix, separate cases
+  reinsert each receipted selected target through its independently held leaf descriptor
+  before restart; an unselected namespace member cannot satisfy either family. Parent
+  mutation derives `conflict`; remaining-target, missing, extra, and reappearance mutation
   derive `target-changed`. Each fresh process must stop on the same original operation with
   the prior receipt prefix intact, publish no current receipt, perform no next unlink, and
   publish no census, degraded outcome, residual selection, recovery generation,
   targets-compacted receipt, source release, or settlement. Every
-  ordinal/mutation/missing/extra/forbidden-effect assertion and poisoning check has its own
-  hook and removal poison. These are subcases of the existing compaction visitor and add no
-  registry id.
+  ordinal/mutation/missing/extra/reappearing-selected-target/forbidden-effect assertion and
+  poisoning check has its own hook and removal poison; a just-unlinked case cannot satisfy
+  a receipted-target case or vice versa. These are subcases of the existing compaction
+  visitor and add no registry id.
   The reclamation vector must encode target-zero unlink failure with zero
   completed receipts and all four residual targets, then bind recovery generation one and
   all four successful receipts; no zero-target receipt may coexist with that first failure.

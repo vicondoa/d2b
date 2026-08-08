@@ -5718,12 +5718,19 @@ digest through its held leaf descriptor and also contains two literal cases for 
 ordinal: `post-unlink/<ordinal>/namespace-missing` makes the canonical namespace
 observation incomplete, including omission of the required empty-census observation at
 the final ordinal, and `post-unlink/<ordinal>/namespace-extra` injects one unselected
-namespace member. Every missing or extra case derives `target-changed`, stops at the named
+namespace member. An additional fd-backed selected-target reappearance matrix starts a
+fresh process after successful unlink and before census or receipt. At every ordinal, one
+case reinserts the just-unlinked selected target through an independently held leaf
+descriptor before restart. At every ordinal with a durable prior receipt prefix, separate
+cases reinsert each receipted selected target through its independently held leaf descriptor
+before restart; an unselected namespace member cannot satisfy either family. Every missing,
+extra, or reappearance case derives `target-changed`, stops at the named
 ordinal with the prior receipt prefix intact, publishes no current receipt, performs no
 next unlink, and publishes no census, outcome, recovery, targets-compacted, source-release,
-or settlement record. Every ordinal, mutation member, missing/extra case, forbidden-effect
-assertion, and poisoning check has an independent hook and removal poison. These are
-subcases of the existing compaction visitor and add no registry id. A source
+or settlement record. Every ordinal, mutation member, missing/extra case, reappearing
+selected target, forbidden-effect assertion, and poisoning check has an independent hook
+and removal poison; a just-unlinked case cannot satisfy a receipted-target case or vice
+versa. These are subcases of the existing compaction visitor and add no registry id. A source
 `Released`/attempt-slice-pending case proves that no slot, reserved byte,
 repair sequence, source acquisition, or next cleanup operation changes before the exact
 slice-release outcome; the same fixture succeeds only after that final prerequisite. A
@@ -6258,12 +6265,22 @@ parent-durable absence cases repeat parent sync and ancestor sync and cannot fre
 selection early.
 
 Separate fresh-process removal-integrity cases physically delete the exact durable intent
-and, once it exists, the exact durable basis final before process start at every downstream
-durable prefix: each decision-selection publication prefix and
+before process start immediately after intent `AncestorsDurable` and after every
+decision-basis `Progress` prefix and sealed `Conflict`. Each case returns the exact
+`audit-continuity-repair-decision-durability-integrity-incident` for record
+`decision-basis-intent` at boundary `ancestors-durable`, proves the intent remains
+physically absent, and performs zero
+reconstruction, relink, source access, outcome reselection, basis continuation or
+publication, decision-selection publication, later publication, compaction, or settlement.
+Each immediate or basis-prefix case, response assertion, forbidden effect, and removal
+poison has an independent hook. Once the basis exists, separate fresh-process cases
+physically delete the exact durable intent or basis final before process start at every
+downstream durable prefix: each decision-selection publication prefix and
 conflict, decision-pre durable, each outcome-intent publication prefix and conflict,
 outcome-intent durable, each terminal publication prefix and conflict, terminal durable,
 each final-absence-proof prefix and conflict, and completed replay. The immediate
-pre-`AncestorsDurable` absence hooks do not satisfy any downstream-removal case.
+pre-`AncestorsDurable` absence hooks do not satisfy any ancestor-durable,
+basis-publication, or downstream-removal case.
 Each downstream removal must return its exact decision-durability integrity response with
 the removed final still absent afterwards and zero reconstruction, relink, source access,
 outcome reselection, decision-selection publication, decision-pre publication,
@@ -7801,8 +7818,17 @@ and poison-removal assertion. At every decision-basis intent and basis boundary,
 decision-basis subvisitor also pins the exact exit-`4` decision-basis-pending response
 schema and human/JSON golden. Its paired pre-`AncestorsDurable`
 absence/exact-survival hooks are independent for intent and basis at link, reopen, and
-parent-durable prefixes. Its durable final-removal hooks independently delete intent and
-basis at every downstream decision-selection, decision-pre, outcome-intent,
+parent-durable prefixes. Once intent is `AncestorsDurable`, independent fresh-process
+final-removal hooks physically delete the exact intent final immediately before basis
+publication and after every decision-basis `Progress` prefix and sealed `Conflict`. Each
+case returns the exact `audit-continuity-repair-decision-durability-integrity-incident` for
+record `decision-basis-intent` at boundary `ancestors-durable`, proves its continued
+physical absence, and invokes zero
+reconstruction, relink, source access, reselection, basis continuation or publication,
+decision-selection publication, compaction, or settlement. Every case, response assertion,
+forbidden effect, and removal poison is independent. After basis durability, the downstream
+final-removal hooks independently delete intent and basis at every decision-selection,
+decision-pre, outcome-intent,
 terminal-outcome, final-absence-proof, and completed prefix. Every downstream case requires
 the exact decision-durability integrity response, continued physical absence of the removed
 final, and zero reconstruction, relink, reselection, later publication, compaction, or
