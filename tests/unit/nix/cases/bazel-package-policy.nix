@@ -382,6 +382,14 @@ in
     expected = false;
   };
 
+  "bazel-package-policy/nix-policy-duplicate-root" = {
+    expr = policyValid (policyArtifact // {
+      packages = [ (builtins.head policyArtifact.packages) ]
+        ++ policyArtifact.packages;
+    }) policyLock;
+    expected = false;
+  };
+
   "bazel-package-policy/nix-policy-empty-identity-graph" = {
     expr = policyValid (policyArtifact // {
       identities = [ ];

@@ -701,6 +701,19 @@ fn selected_policy_artifact_mutations_fail_closed() {
     document = read_json(&format!("{root}/metadata.json"));
     document["root"] = Value::String("d2b-priv-broker".to_owned());
     assert!(!valid(&document, &lock));
+    document = read_json(&format!("{root}/metadata.json"));
+    let root_package = document["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .find(|package| package["name"] == context.package)
+        .expect("root package")
+        .clone();
+    document["packages"]
+        .as_array_mut()
+        .expect("packages")
+        .push(root_package);
+    assert!(!valid(&document, &lock));
 
     let root_id = document
         .get("resolve")
