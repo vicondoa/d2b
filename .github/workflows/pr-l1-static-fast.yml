@@ -1367,9 +1367,19 @@ jobs:
               ':(exclude).github/workflows/arm-artifact-measurement.yml' \
               ':(exclude).github/workflows/pr-l1-static-fast.yml'
           )
-          nix build --no-link \
+          if ! nix build --no-link \
             .#packages.aarch64-linux.d2b-priv-broker \
             .#packages.aarch64-linux.d2b-guest-shell-runner-static
+          then
+            for attribute in \
+              .#packages.aarch64-linux.d2b-priv-broker \
+              .#packages.aarch64-linux.d2b-guest-shell-runner-static
+            do
+              derivation=$(nix path-info --derivation "$attribute" 2>/dev/null || true)
+              test -z "$derivation" || nix log "$derivation" || true
+            done
+            exit 1
+          fi
           broker_out=$(nix path-info \
             .#packages.aarch64-linux.d2b-priv-broker)
           guest_out=$(nix path-info \
