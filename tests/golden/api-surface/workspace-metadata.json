@@ -35,16 +35,16 @@
     {
       "crate_name": "d2b_bazel_exec",
       "private_census": {
-        "external_crates": 42,
-        "index_items": 1603,
-        "path_items": 3932
+        "external_crates": 31,
+        "index_items": 1071,
+        "path_items": 3733
       },
-      "private_hidden_items": 41,
+      "private_hidden_items": 42,
       "private_json_file": "d2b_bazel_exec.json",
       "public_census": {
-        "external_crates": 42,
-        "index_items": 929,
-        "path_items": 3884
+        "external_crates": 31,
+        "index_items": 861,
+        "path_items": 3686
       },
       "public_json_file": "d2b_bazel_exec.json"
     },
@@ -53,14 +53,14 @@
       "private_census": {
         "external_crates": 46,
         "index_items": 114,
-        "path_items": 4109
+        "path_items": 4103
       },
       "private_hidden_items": 2,
       "private_json_file": "d2b_bazel_runner.json",
       "public_census": {
         "external_crates": 46,
         "index_items": 55,
-        "path_items": 4063
+        "path_items": 4057
       },
       "public_json_file": "d2b_bazel_runner.json"
     },
@@ -68,14 +68,14 @@
       "crate_name": "d2b_bazel_support",
       "private_census": {
         "external_crates": 35,
-        "index_items": 1760,
+        "index_items": 1738,
         "path_items": 3579
       },
       "private_hidden_items": 33,
       "private_json_file": "d2b_bazel_support.json",
       "public_census": {
         "external_crates": 35,
-        "index_items": 847,
+        "index_items": 831,
         "path_items": 3517
       },
       "public_json_file": "d2b_bazel_support.json"
@@ -788,15 +788,15 @@
       "crate_name": "d2b_test_locator",
       "private_census": {
         "external_crates": 43,
-        "index_items": 178,
-        "path_items": 3860
+        "index_items": 177,
+        "path_items": 3854
       },
       "private_hidden_items": 2,
       "private_json_file": "d2b_test_locator.json",
       "public_census": {
         "external_crates": 43,
-        "index_items": 93,
-        "path_items": 3816
+        "index_items": 90,
+        "path_items": 3810
       },
       "public_json_file": "d2b_test_locator.json"
     },
