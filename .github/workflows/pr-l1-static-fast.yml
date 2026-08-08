@@ -1331,7 +1331,7 @@ jobs:
   test-flake-aarch64:
     needs: [tier0]
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -1353,6 +1353,119 @@ jobs:
           test "$actual" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
           printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+      - name: Install ELF tooling
+        run: sudo apt-get update && sudo apt-get install -y binutils
+      - name: Measure native artifacts
+        env:
+          MEASUREMENT_COMMIT: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$MEASUREMENT_COMMIT"
+          export CANDIDATE_COMMIT
+          CANDIDATE_COMMIT=$(
+            git log -1 --format=%H -- . \
+              ':(exclude).github/workflows/arm-artifact-measurement.yml' \
+              ':(exclude).github/workflows/pr-l1-static-fast.yml'
+          )
+          broker_out=$(nix build --no-link --print-out-paths \
+            .#packages.aarch64-linux.d2b-priv-broker)
+          guest_out=$(nix build --no-link --print-out-paths \
+            .#packages.aarch64-linux.d2b-guest-shell-runner-static)
+          flake_ref="git+file://$PWD"
+          broker_closure=$(nix build --impure --no-link --print-out-paths --expr "
+            let
+              f = builtins.getFlake \"$flake_ref\";
+              pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; };
+            in
+              pkgs.closureInfo {
+                rootPaths = [ f.packages.aarch64-linux.\"d2b-priv-broker\" ];
+              }
+          ")
+          guest_closure=$(nix build --impure --no-link --print-out-paths --expr "
+            let
+              f = builtins.getFlake \"$flake_ref\";
+              pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; };
+            in
+              pkgs.closureInfo {
+                rootPaths = [
+                  f.packages.aarch64-linux.\"d2b-guest-shell-runner-static\"
+                ];
+              }
+          ")
+          export BROKER_BINARY="$broker_out/bin/d2b-priv-broker"
+          export GUEST_BINARY="$guest_out/bin/d2b-guest-shell-runner"
+          export BROKER_CLOSURE="$broker_closure/store-paths"
+          export GUEST_CLOSURE="$guest_closure/store-paths"
+          export BROKER_POLICY=packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production/policy/metadata.json
+          export GUEST_POLICY=packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          def digest(path):
+              return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+          def closure(path):
+              raw = pathlib.Path(path).read_bytes()
+              return len([line for line in raw.splitlines() if line]), hashlib.sha256(raw).hexdigest()
+
+          def elf(binary, artifact, policy, closure_path):
+              header = subprocess.check_output(["readelf", "-h", binary], text=True)
+              program = subprocess.check_output(["readelf", "-l", binary], text=True)
+              dynamic = subprocess.run(
+                  ["readelf", "-d", binary],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+              )
+              type_match = re.search(r"^\s*Type:\s+(\S+)", header, re.MULTILINE)
+              machine_match = re.search(r"^\s*Machine:\s+(.+)$", header, re.MULTILINE)
+              interpreter_match = re.search(r"Requesting program interpreter: ([^\]]+)", program)
+              needed = sorted(re.findall(r"Shared library: \[([^\]]+)\]", dynamic.stdout))
+              count, closure_digest = closure(closure_path)
+              row = {
+                  "artifact": artifact,
+                  "binaryBytes": pathlib.Path(binary).stat().st_size,
+                  "binarySha256": digest(binary),
+                  "candidateCommit": os.environ["CANDIDATE_COMMIT"],
+                  "closureCount": count,
+                  "closureSha256": closure_digest,
+                  "elfMachine": "EM_AARCH64" if machine_match and machine_match.group(1).strip() == "AArch64" else machine_match.group(1).strip(),
+                  "elfType": "ET_" + type_match.group(1),
+                  "measurementCommand": "nix build --no-link .#packages.aarch64-linux." + (
+                      "d2b-priv-broker" if artifact == "broker-host-artifact-contract"
+                      else "d2b-guest-shell-runner-static"
+                  ),
+                  "needed": needed,
+                  "selectedPolicyDigest": digest(policy),
+                  "sizeGrowthAuthorization": None,
+                  "system": "aarch64-linux",
+              }
+              if interpreter_match:
+                  row["interpreter"] = pathlib.Path(interpreter_match.group(1)).name
+              return row
+
+          rows = [
+              elf(
+                  os.environ["BROKER_BINARY"],
+                  "broker-host-artifact-contract",
+                  os.environ["BROKER_POLICY"],
+                  os.environ["BROKER_CLOSURE"],
+              ),
+              elf(
+                  os.environ["GUEST_BINARY"],
+                  "guest-static-elf",
+                  os.environ["GUEST_POLICY"],
+                  os.environ["GUEST_CLOSURE"],
+              ),
+          ]
+          print("D2B_ARM_BASELINE_JSON=" + json.dumps({"rows": rows}, sort_keys=True, separators=(",", ":")))
+          PY
       - name: Realize native aarch64 flake checks
         env:
           D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
