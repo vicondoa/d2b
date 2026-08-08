@@ -3578,8 +3578,16 @@ table before the operation exists.
   acquisition/submission/repair/escalation goldens. It also pins literal id
   `source_prefix_reconciliation_recovery_generation_overflow_real_binary` and proves the
   exact human/JSON exit-`4` integrity projection through that same production AF_UNIX path,
-  plus all four literal decision-durability rows and the durable decision-selection
-  progress/conflict matrix above, not a renderer unit. T595 consumes T592's typed broker op and
+  plus all five literal decision-durability tuples:
+  (`decision-basis-intent`, `ancestors-durable`,
+  `final-missing-after-durable-boundary`), (`decision-basis`, `ancestors-durable`,
+  `final-missing-after-durable-boundary`), (`decision-basis-intent-commit-witness`,
+  `consumed-by-durable-successor`, `witness-missing-after-consumption`),
+  (`decision-basis-intent-commit-witness`, `consumed-by-durable-successor`,
+  `witness-mismatch-after-consumption`), and (`decision-basis-intent-commit-witness`,
+  `consumed-by-durable-successor`, `predecessor-mismatch-after-consumption`), and the
+  durable decision-selection progress/conflict matrix above, not a renderer unit. T595
+  consumes T592's typed broker op and
   cannot mutate the pointer locally. The Type-1 `host-generation-rebuild-ref.nix` case remains option grammar only and
   is ineligible for runtime handoff evidence. The Type-10
   `tests/host-integration/host-generation-handoff.nix` leg alone proves the actual existing
