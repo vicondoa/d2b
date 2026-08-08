@@ -81,7 +81,7 @@
           staticRustFlags =
             "-C relocation-model=pie -C link-self-contained=yes "
             + "-C linker=${pkgs.binutils.bintools}/bin/ld "
-            + "-C link-arg=-static-pie";
+            + "-C link-arg=--static-pie";
         };
       mkBazelSeccomp = system:
         if builtins.elem system systems then
