@@ -67,17 +67,18 @@ controls, and the current record helper are sufficient.
 
 ### Discover, fix, verify
 
-One panel lifecycle has exactly one comprehensive discovery panel, followed by
-implementation and scoped verification. Its discovery-selected roster stays
-fixed through verification.
+One panel lifecycle runs exactly one comprehensive discovery panel, followed
+by implementation and scoped verification. The discovery-selected roster is
+the initial lifecycle roster. It may only widen during fixes under the
+versioned selector; no selected seat ever leaves that lifecycle.
 
 #### Discovery
 
-Every selected reviewer receives the full candidate, full relevant context,
-validation evidence available at discovery time, and its seat guidance. Every
-reviewer inspects the whole candidate and reports all reasonably discoverable
-actionable findings without stopping after the first issue or saving
-observations for a later pass.
+Every initially selected reviewer receives the full candidate, full relevant
+context, validation evidence available at discovery time, and its seat
+guidance. Every reviewer inspects the whole candidate and reports all
+reasonably discoverable actionable findings without stopping after the first
+issue or saving observations for a later pass.
 
 Each finding has one of four severities:
 
@@ -121,6 +122,16 @@ authorization protocol. A `BLOCKER` must be fixed or verified as factually
 invalid or withdrawn. A `MAJOR` must be fixed or plainly accepted by the
 repository maintainer or merge owner in the recorded response.
 
+Post-discovery implementation is ledger-scoped. An unrelated scope expansion
+is refused and must be started, or explicitly rescoped, as a new lifecycle. It
+never reopens discovery inside the current lifecycle.
+
+After every candidate fix, the orchestrator reruns the versioned selector
+against both the full current candidate and that fix delta. The lifecycle
+roster becomes the set union of its prior roster and every seat selected by
+either input. This roster monotonically widens: a newly triggered seat joins
+and no seat leaves, even if a later delta no longer carries its trigger.
+
 Before verification, implementation records the applicable tests, lint,
 formatting, static analysis, build results, uncovered areas, and a self-review.
 MINOR and NIT findings remain in the ledger, but after disposition and review
@@ -128,7 +139,7 @@ they do not block approval.
 
 #### Verification
 
-Every selected reviewer receives:
+Every reviewer in the lifecycle roster receives:
 
 - the complete ledger and source attribution;
 - every implementation response and disposition;
@@ -140,6 +151,11 @@ Every selected reviewer receives:
 Verification checks prior issues, rejected and deferred items, introduced
 regressions, and whether the evidence supports the responses. It is not a
 fresh discovery pass.
+
+A newly joined seat receives the same complete ledger and artifacts. It
+reviews only resolution obligations, regressions on the new surface that
+triggered it, and unsafe previously missed `BLOCKER` or `MAJOR` issues under
+the normal late-finding rules below. Joining is not a second discovery panel.
 
 A reviewer may add a new verification issue only for:
 
@@ -160,7 +176,7 @@ Approval means merge-ready:
 3. required validation passes;
 4. no introduced regression remains;
 5. verification has no new `BLOCKER` or `MAJOR`; and
-6. every selected reviewer signs off.
+6. every reviewer in the lifecycle roster signs off.
 
 The existing verdict invariant remains:
 `signoff == recommendations.is_empty()`. Verification recommendations contain
@@ -176,27 +192,44 @@ Operators do not hand-copy findings or responses.
 Each per-seat verification artifact carries the complete ledger and, for every
 item, its stable id, description, source attribution, disposition, previous
 status, evidence, and seat obligations from the last complete round or ledger.
-Artifacts may carry a version tag. The implementation prefers simple JSON and
-Markdown under `.scratch/panel/<lifecycle>/` and the existing delivery state.
+Generated artifacts carry a version tag. The implementation prefers simple
+JSON and Markdown under `.scratch/panel/<lifecycle>/` and the existing delivery
+state.
 
 Generation is idempotent: the same inputs produce the same bytes. Regeneration
 against conflicting existing bytes fails loudly instead of overwriting them.
 History remains readable and auditable and is never rewritten.
 
-Compatibility is a file transform, not a service:
+Compatibility is a file transform, not a service. Its entrypoint dispatches on
+the recognized artifact version before invoking a parser; legacy bytes never
+pass through the current-artifact parser.
 
-- an already dispatched legacy round may finish;
-- the adapter imports the latest complete legacy round and preserves fixes
-  already underway;
-- legacy source identity is deterministic from record, seat, and source
-  ordinal, after which the orchestrator assigns `R` identifiers;
-- a partial legacy round may retry missing seats or restart as the lifecycle's
-  one new discovery panel without dropping findings from completed seats; and
-- no protected migration or recovery service is introduced.
+- An already dispatched legacy round may finish.
+- The adapter imports completed legacy records and preserves fixes already
+  underway.
+- Legacy source identity is the tuple of immutable record digest, legacy seat,
+  and recommendation ordinal. Reimporting that tuple maps to the same source.
+- The original recommendation string and attribution are retained byte-for-byte
+  as source evidence. Normalized fields do not relabel the source seat.
+- For classification only, the adapter ASCII-case-folds the leading alphabetic
+  severity token. `critical` maps to `BLOCKER`, `high` to `MAJOR`, `medium` to
+  `MINOR`, and `low` to `NIT`.
+- An unrecognized or absent severity token imports as `MAJOR` until verification
+  confirms or fixes it, or marks it `Invalid` or `Withdrawn`. The normalized
+  record identifies this as migration-assigned severity and does not claim a
+  historical severity.
+- A legacy `rust` source stays attributed to `rust`; its verification
+  responsibility is assigned to current `software` with the Rust profile.
+- The current verification roster is recomputed from the current candidate by
+  the versioned selector. Current mandatory or triggered seats absent from the
+  old round join automatically, without hand-copying findings or inventing
+  historical findings for them.
+- No protected migration or recovery service is introduced.
 
-A completed legacy round can serve as the discovery input. A restarted
-partial round is one logical discovery panel even when individual seat
-attempts are retried.
+After conversion, a complete ten-seat legacy round can serve as the discovery
+input. A partial legacy round imports every completed source and then runs the
+lifecycle's one current discovery panel. The partial legacy work is not a
+second discovery and no completed source is dropped.
 
 ### Improvement metrics
 
@@ -278,9 +311,10 @@ The discovery prompt says plainly:
 
 The verification prompt says plainly:
 
-> Verify prior findings, responses, evidence, and regressions. Do not reopen
-> the whole review unless a new or previously missed critical issue makes
-> approval unsafe.
+> Verify prior findings, responses, evidence, and regressions, including a new
+> surface that selected this seat. Do not reopen the whole review unless an
+> introduced regression or a previously missed BLOCKER or MAJOR makes approval
+> unsafe.
 
 Seat-specific guidance may add focus. It may not weaken these instructions.
 
@@ -300,9 +334,15 @@ Behavior tests cover:
 
 - selection-table parsing, floors, every trigger, ambiguity, and fill order;
 - build triggers and citation-only negatives;
+- monotonic roster expansion when a fix triggers an optional seat, reselection
+  over the full candidate and fix delta, and unrelated scope-expansion refusal;
 - complete artifact generation and conflicting regeneration;
-- deterministic `R` identifiers and duplicate source mapping;
-- complete legacy import and partial-round retry or restart;
+- deterministic `R` identifiers;
+- legacy conversion of a complete ten-seat round, retired `rust`
+  responsibility without source relabeling, missing current mandatory seats,
+  all four recognized severity prefixes, unknown or plain strings mapping to
+  migration-assigned `MAJOR`, duplicate source mapping, and partial import
+  followed by one current discovery;
 - every disposition and required justification;
 - late-issue admission and refusal;
 - metric calculations, including zero denominators;
@@ -321,7 +361,9 @@ part of this implementation.
 | Two generations for the same inputs disagree. | Byte-stable rendering and conflict refusal stop dispatch. |
 | A late style nit restarts discovery. | Verification admission rejects the issue class. |
 | Human guidance and roster selection drift. | The authoritative table generates or byte-checks guidance and drives selection. |
-| A partial legacy round loses completed work. | Import preserves completed-seat findings before retry or restart. |
+| A fix triggers another seat but the old roster is reused. | Every fix reruns selection and verification requires the recorded set-union roster. |
+| An unrelated change enters a fix delta. | Ledger-scope validation refuses it and names a new lifecycle as the remedy. |
+| A partial legacy round loses completed work. | Conversion imports every completed source before the one current discovery. |
 
 ## Non-goals
 
