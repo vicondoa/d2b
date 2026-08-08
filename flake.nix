@@ -1092,7 +1092,7 @@
               && builtins.all (node:
                 resolveNodeEdgesClosed {
                   inherit node nodeIds packages;
-                  allowedKinds = expectedEdgeKinds;
+                  allowedKinds = lib.splitString "," expectedEdgeKinds;
                 })
                 nodes
               && builtins.isString resolveRoot
