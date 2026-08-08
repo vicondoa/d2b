@@ -202,49 +202,16 @@ merge-target registration, merge eligibility, and merge.
     make same-ID retry observe rather than reapply the mutation. Audit/export identifiers are
     fixed domain-separated digests, and retention/prune failure is typed degraded health
     (FR-070).
-11. **Amended-plan resume is receipt-bound.** T603 is the sole in-feature direct prerequisite
-    of T589; FR-070's accepted and installed source-generation compatibility floor is an
-    additional external dispatch prerequisite. That external floor atomically owns the exact
-    nonempty 13-member `SourceGenerationCompatibilityFloorV1` census in `data-model.md`.
-    Its accepted disposition names the external producer/installer and typed
-    import/validation authorities; the versioned manifest, installation, validation, and
-    exact-C/Q import receipts must form the closed append-only chain before T589. Every role
-    occurs once under one accepted disposition and source generation; `missing`, `duplicate`,
-    `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` members
-    refuse. The separately accepted external `ADR-046-validation-and-delivery` Version 2
-    amendment owns the canonical JSON/digest/domain/framing policy, strict schemas, and
-    checked-in vectors; the compatibility authorities produce and validate conforming
-    objects but do not redefine those artifacts. Bare protocol 4
-    refuses. T592 consumes those source artifacts read-only and
-    owns only target-v5 adoption and target outputs. The caller-flake target executable stays
-    unprivileged; only the separately broker-pinned installed apply object runs under `sudo`,
-    and its connection-scoped peer pidfd/executable identity must remain an exact live match
-    through each mutation with no persisted pidfd. Tests use the independent exact registry:
-    six pre-first cases and 84 literal post-first cases across the fourteen later members of
-    the closed 15-edge set; refusal occurs before the selected edge and all successors. Every
-    raw apply-peer input in the complete fifteen-row registry remains absent from human,
-    JSON, wire, error, log, span, metric, audit, panic, and `Debug` output. Only the typed
-    process-instance and executable-identity correlation digests are permitted outside
-    metrics, and metrics carry no identity. T603's pre-validator analysis and plan panel
-    at A/P0 authorize only its two validator source
-    paths plus `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit
-    V becomes B, P remains byte-identical to P0, and analysis
-    plus the plan panel rerun at B/P before T603 writes immutable authorization R using
-    repository identity plus a relative feature path. If all rows and post-validator
-    analysis/panel identities pass, only the validator-derived P-to-Q `/d2b-spec-edit` batch
-    may check T073-T218 and T603. The Wave 5 integrator owns exact child commit C; T589
-    requires finalized progress receipt E, clean HEAD C, the checked task set, and fresh
-    analysis plus unanimous plan review bound to exact C/Q. The P-to-Q content change makes
-    B/P sign-off stale for T589 dispatch. T602 later
-    validates the B-to-C ancestry/snapshots and separate final-candidate F/tree evidence
-    (FR-072, SC-034).
+11. **Amended-plan reconciliation is editor-bound.** T603 uses `/d2b-spec-edit` as the sole feature mutation surface. One current selected-roster lifecycle binds the pre-edit snapshot; the editor receipt plus dedicated checkbox-only Git commit are the only authority; and fresh analysis plus a new selected-roster lifecycle bind the post-edit snapshot before T589. T603 owns no source, fragment, sidecar, digest chain, or resume receipt. The installed source-generation compatibility floor is a separate external prerequisite owned only by accepted Version 2 and generated `VD2-SC002-SOURCE-FLOOR` plus `VD2-SC002-TRACEABILITY` rows. Feature-local census or encoding prose cannot satisfy it (FR-072, SC-034).
 12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix
     resource declaration and per-Zone bundle, activates on startup and public declaration and
     removal switches without manual restart, observes the spec-pinned Provider/config/effect
     and readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and
     `Device/acceptance-tpm`, then removes only the Device and proves its state-preserving
     cleanup without disturbing the ready, identity-stable, unrecreated acceptance
-    Volume/Network or unrelated resources. Network implementation remains owned by Wave 4.
+    Volume/Network or unrelated resources. W4 history remains unchanged, but T336-T355 are
+    pulled forward before T604 to land the real adapter, double-opt-in migration, and
+    production network-local path.
     This one denied-east-west sample is not double-opt-in evidence. The untouched external
     Network specification remains sole-opt-in canon; W4 adjudication, T070, T071, and T220
     require its accepted versioned correction/migration plus all four Network/Host cases, and
@@ -276,177 +243,18 @@ merge-target registration, merge eligibility, and merge.
     consumed its binding surface. T219 performs no binding action and may perform
     only a non-request close action expressly authorized by an accepted external disposition
     that preserves the historical bytes. F and delivery history remain immutable.
-15. **SC-002 evidence is typed and census-closed.** The schema-v2 `EvidenceRecord` remains
-    unchanged. A passing `operator-nix-activation-cleanup` record uses its existing opaque
-    locator to reference exactly one separately versioned `Sc002ActivationReceiptV1`. Its
-    version-1, 16,384-byte-bounded, fixed-redacted receipt contains one common monotonic start
-    and exactly one sample for each
-    of `Volume/acceptance-state`, `Network/acceptance-net`, and
-    `Device/acceptance-tpm`. Effect, production Ready, selected-stop, and bounded progress
-    observations repeat the sample identity, and effect plus Ready must name the same typed
-    resource identity. A failed operator record remains importable without a receipt but
-    cannot satisfy a close stage; a failed record with a positive receipt is malformed.
-    T604 emits only an external regular single-link receipt owned by the current effective uid
-    with mode `0600`. T600 supplies it through T589's explicit
-    `wave validate-import --sc002-receipt PATH` input and supplies no locator. T589 once-opens
-    the source, computes only the typed domain-separated and length-framed receipt-content
-    digest before decode, derives the typed content-address locator, validates the outer triplet, then
-    installs the exact bytes beneath held current-effective-uid `0700` candidate dirfds as a
-    current-effective-uid `0600` leaf. The importer opens an unnamed
-    `O_TMPFILE|O_RDWR|O_CLOEXEC` inode in the final parent, writes/file-syncs/revalidates it,
-    and uses a validated zero-capability procfs-fd `linkat(..., AT_SYMLINK_FOLLOW)` to link
-    that exact inode directly to the final no-replace leaf. It final-reopens the same inode,
-    syncs the final parent, then `fsync`s every ancestor directory through the candidate
-    directory before it publishes the `EvidenceRecord`. It uses no named temporary,
-    `AT_EMPTY_PATH`, or name-consuming publication rename.
-    Every importer, cleanup worker, incident transition, successor admission, and retention
-    guard holds the same verified candidate-scoped exclusive OFD lock through publication or
-    return. Successful acquisition yields one private `CandidateSidecarGuard` that solely
-    owns the locked `OwnedFd`; cleanup borrows it into
-    `SidecarCleanupOwner<'guard>`. Every namespace open or cleanup mutation is a method on
-    that borrow, so it cannot outlive, be paired with a later guard, or remain usable after
-    lock release. Neither type exposes construction, raw-fd extraction, duplication,
-    transfer, serialization, clone, conversion, or `'static` storage. A live owner cannot be
-    cleaned; a nonblocking cleanup loser returns before any namespace open or mutation.
-    Restart cleanup begins only after lock acquisition. Named temporary and quarantine
-    namespaces are legacy-observation-only: current publication never creates them, and
-    cleanup never renames, hardlinks, or unlinks an existing sidecar name because the OFD
-    lock cannot exclude a same-uid pathname replacer. A retained legacy name enters the
-    identity-ambiguity path after its direct-final write-ahead preimage is durable. Payload
-    and residue evidence are immutable direct-final copies from the retained source fd; the
-    original name remains in the frozen recursive census. The retired subtree is retained
-    read-only compatibility evidence.
-
-    An identity mismatch never unlinks or restores the suspect. It durably publishes the
-    structured `Sc002IncidentPreimageV1` containing every applicable kind-specific
-    component as a complete unnamed-inode/file-synced write-ahead record before it
-    capability-free procfs-fd links that exact opened inode directly to the final
-    no-replace preimage or publishes any other incident leaf. Only after durable preimage
-    publication may it direct-final publish the kind-bearing incident anchor and complete
-    metadata, then copy from the metadata-bound retained source fd into the direct-final
-    typed incident payload, reopen and verify it, sync the payload fd and every changed
-    ancestor, and append-only direct-final publish `parked`. A source replacement or
-    copy/final-reopen mismatch is exactly `recovery-resumable` when one continuation remains
-    and otherwise `recovery-irreconcilable`; every name is preserved, inspect returns the
-    stable id/cause/remediation, and no parked status is fabricated. Recover is offered only
-    for the resumable variant. Authenticated apply handles the irreconcilable variant by
-    retaining representable names as durable residue or by publishing a complete recursively
-    enumerated frozen primary-evidence census or identity-bearing bounded-failure commitment,
-    then appending
-    the separate resolution. The one recursive grammar contains every absent root, directory,
-    regular-file, symlink, device, fifo, socket, mount, and other member under twelve exact
-    root/root-instance pairs. Unavailable state is private denied scope only and all-zero
-    `0xff` serialized observations refuse. It binds `st_uid`, `st_gid`, `st_rdev`, and
-    symlink-target identity internally without rendering them. An admission-capable bounded
-    failure embeds every descendant in two equal stable walks within the hard ceiling;
-    unreadable, unstable, incomplete, depth-65, or over-hard-ceiling scope has null evidence,
-    projects `restore-primary-evidence-coverage`, and denies request, apply, and admission
-    until a fresh complete scan.
-    The frozen primary scope binds every descendant path/content identity plus the canonical
-    failure-path digest and excludes every resolution,
-    resolution-evidence, successor-freeze, disposition-request, disposition, receipt, and successor leaf, so no digest contains
-    itself. A raw `01ff` sentinel, copied commitment, or changed primary scope never
-    authorizes successor admission. Invalid and unstable census causes remain inspectable and
-    actionable through inspect `--json`, signed apply, and fresh-successor admission.
-    Before signing, `sc002-disposition-request` durably freezes the clean successor triplet
-    and emits the exact 19-field canonical authority request. The authority performs only
-    the closed 19-to-22 transformation in `data-model.md`.     Unnamed output preparation precedes candidate publication; candidate request durability
-    precedes capability-free procfs-fd linking of that exact opened inode directly to the
-    final no-replace output name, final-inode verification, and parent sync. Unsupported open
-    has zero internal mutation; unsupported link retains the internal pair. Exact replay is
-    crash-safe at every anonymous and direct-final boundary, and every descriptor is
-    CLOEXEC. Apply and admission rederive that same
-    snapshot triplet and require the same freeze, request, and signed disposition. Ordinary
-    direct-final paths leave both ephemeral namespaces empty. Every terminal legacy cleanup
-    census instead retains every original legacy source name at its frozen locator; source
-    absence is irreconcilable and can advance only through authenticated evidence resolution,
-    never by claiming a terminal empty census. Neither nonterminal variant claims terminal
-    cleanup.
-    T589's private `CandidateRetentionOwner` is a zero-mutation recursive whole-scope
-    retention guard: it preserves the canonical candidate root and all request, panel-record,
-    evidence-record, receipt, seal, eligibility, merge, incident preimage/anchor/metadata/
-    payload/residue/status, resolution-evidence/resolution, successor-freeze,
-    disposition-request, disposition, and admission history. Every record repeats the same
-    complete structured preimage and all kind-specific components. It never renames, tombstones, or deletes the candidate root or automatically
-    unlinks any candidate descendant. Crash retry may
-    reuse only an identical fully revalidated durable leaf; a different existing leaf or
-    concurrent wrong-byte/binding input refuses.
-    T589's one validator runs at import, durable reopen, panel-request/panel-attest, seal, and
-    merge-eligibility and retains schema-v2 decoding while rejecting every missing,
-    malformed, unknown-version/field/enum, over-bound, misordered, stale, progress-free,
-    over-budget, missing-sample, duplicate-sample, mixed-identity, effect/Ready-disagreeing,
-    unrelated-sample, wrong-owner/mode, pre-durability record publication, or crash/race case.
-    Independent literal fixtures pin the complete receipt, retired-census,
-    primary-evidence-census, source-floor 32-id receipt, 26-id issuer-authentication/
-    capability, 21-id hash-vector, mutation-edge, 15-id post-mutation,
-    15-id pre-start/root, 27-id unit-census, 35-id direct-final publication, and both forbidden-value
-    registries. The SC-002 census set has 73 ids and includes root-instance injectivity,
-    invalid-node totality, depth-64 acceptance, depth-65 denial, directory completeness, and
-    full-descendant bounded-failure refusal. The retained request-output fixture has 35 ids:
-    its original 26 preimage/request-output cases plus nine read-independent receipt-import
-    unsupported-open, invalid-procfs/mount, unsupported-link, conflict, crash-boundary, and
-    zero-write-replay cases. Its importer-specific post-link/final-reopen inode-mismatch
-    case preserves the source and observed destination and publishes zero `EvidenceRecord`
-    mutation. Every importer support refusal proves zero receipt leaf and zero
-    `EvidenceRecord` mutation. The stage-`3` identity-ambiguity incident/metadata golden is
-    mandatory; stages `1` and `2` remain historical decode-compatible inputs, and wrong or
-    unknown stages refuse. The recovery redaction set has seventeen rows including raw
-    `st_uid`, `st_gid`, `st_rdev`,
-    and symlink-target bytes.
-    Source-floor signature validation acquires one private non-clonable
-    `ProtectedSourceFloorOrigin` under a sole OFD claim, carries it through private
-    `AuthenticatedSourceFloorIssuerProvenance` into one validated-floor result, and commits
-    durable origin consumption only with the atomic durable dispatch publication. Failure
-    or pre-publication owner death releases the claim and permits exact-origin reacquisition;
-    post-publication restart resumes the durable dispatch without another mint. Later
-    boundaries borrow/attenuate it; copied authority/key digests, concurrent origin replay,
-    repeated mint, and serialized revalidation cannot produce authority. One shared
-    nineteen-digest/one-signature SC-002 domain-hash
-    golden is the oracle for every typed locator, incident, resolution, and disposition
-    digest; raw SHA-256 locator definitions are ineligible.
-16. **Recovery is never a status-only dead end.** Every closed SC-002 cause maps to one
-    inspect/action/status/successor row. Incomplete descendant coverage remains inspectable
-    with the exact bounded failure/root cause,
-    `restore-primary-evidence-coverage`, null evidence, and `next-command: none`. It maps to
-    one owner repair procedure and denies request/apply/admission until a fresh complete scan
-    succeeds. The separate
-    selector-free `HostGenerationHandoffStatusV1` projection gives each
-    active, transfer-pending, recovery, and terminal handoff variant one exact
-    state/phase/owner/action/successor tuple. Active and failed broker owners, including
-    transfer-pending and rollback, are distinct. Terminal selection uses the authenticated
-    current-intent pointer. Its 156 independent cases enumerate seven rollback members, 32
-    audit members, and 15 transition edges plus mismatch, extra-mutation, pointer-auth,
-    repair-input/restart/conflict/no-write, and shrinkage poisons. Selector-free pointer
-    repair is the Admin-only typed broker operation with immutable pre/outcome audit,
-    exact-empty clean absence, an independently projected exactly-one-valid repairable
-    absence, and invalid competing/malformed/unauthenticated censuses. The separate
-    Admin-only restoration command submits one bounded signed artifact over the public
-    socket. Its two-row restoration and two-row prune audit-edge fixtures plus the unchanged
-    168-case broker registry cover only their literal caller, nineteen request-shape,
-    artifact/binding, legacy backup/restoration publication, conflict, and no-write cases.
-    The mandatory read-independent 216-case record-boundary registry covers each listed
-    amendment class at all nine publication boundaries, including reservation, both
-    releases, settlement, repair-resume, and continuity-repair
-    pre/evidence/watermark/outcome. The mandatory read-independent 88-case lifecycle registry
-    covers aggregate and continuity-evidence limits, all standing-reserve classes/actions,
-    cycle-unique reservation success/refusal/retry, malformed release/continuity prefixes,
-    retention-anchor conflict, continuity evidence compaction and permit seals,
-    transport-loss resubmission, private-identifier/body canaries, and shrinkage. The 156,
-    168, 216, and 88 registries cannot substitute for one another. Backup retention is bounded per
-    intent by 256 members and 16,777,216 bytes and at the root by 64 intents, 4,096 members,
-    and 268,435,456 bytes; an additional aggregate record/byte ceiling covers every private
-    publication-root class. A replacement-bound fixed real-time/boot-time age anchor governs
-    30-to-90-day retention and rejects unsafe forward or changed-boot continuity; existing
-    broker startup/idle catch-up does not require Admin. Pruning is a sealed typed broker op
-    with a private non-clonable permit, immutable pre/outcome audit, and typed degradation.
-    Source/target root creation runs only through the typed pre-audited existing-broker
-    ensure-root phase; source installer ownership remains external and target ordering belongs
-    to T595.
-    Pointer/restoration/integrity escalation actions map to named procedures rather than
-    unactionable labels.
-    Recovery uses only the existing broker unit.
-    Human/JSON schemas and both redaction registries remain synchronized. The bounded
-    restoration request frame and broker-private append-only evidence are the only body
-    carriers; audit/provenance contains fixed digests/enums only. No path, fd, generation,
-    raw identity, canonical member bytes, restoration artifact bytes, or free-form
-    remediation enters responses, logs, audit, metrics, spans, errors, panic, or `Debug`.
+15. **SC-002 has one external authority.** The accepted Version 2
+    `ADR-046-validation-and-delivery` specification and its generated
+    `ADR-046-validation-and-delivery-traceability.{json,md}` artifacts solely own
+    `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`,
+    `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`,
+    `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589, T600, T604, and T220 consume
+    only their generated rows. Until Version 2 is accepted and the generated bijection passes
+    Gate 0 and drift validation, all four tasks remain blocked. This feature contains no
+    normative SC-002 encoding, census, registry count, or recovery state copy.
+16. **Recovery is never a status-only dead end.** `VD2-SC002-RECOVERY` requires every emitted
+    action to resolve to an exact invocation or an owned versioned runbook section and binds
+    the resulting state transition. T599 separately owns
+    `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping;
+    T220 blocks release on missing or broken mappings. Recovery uses only the existing broker
+    unit and preserves the daemon-only three-unit architecture.

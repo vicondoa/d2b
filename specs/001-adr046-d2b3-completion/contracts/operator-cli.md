@@ -38,11 +38,13 @@ owns migration guidance, DTO/schema and contract tests, reference and release tr
 that fragment. The implementation
 MUST NOT ship this surface under the accepted Version 1 contract.
 
-The only operator-supplied replay handle is an exact 16-byte operation ID rendered as
-lowercase 32-hex and emitted by the original mutation. Every generic and typed `create`,
-`update-spec`, and `delete` command accepts `--operation-id <OPAQUE_ID>`. Omitting it on the
-first attempt generates a new ID. Supplying it uses that value for both the operation identity
-and its idempotency binding; there is no separate public idempotency flag.
+The replay handle is an exact 16-byte operation ID rendered as lowercase 32-hex. Every
+generic and typed `create`, `update-spec`, and `delete` command accepts
+`--operation-id <OPAQUE_ID>`. If the flag is omitted, the CLI generates the ID client-side
+before opening the daemon transport and retains it through request encoding and response
+handling. Supplying the flag uses that value for both operation identity and idempotency
+binding; there is no separate public idempotency flag. The daemon never chooses the public
+ID, so loss of a response cannot lose the only inspection handle.
 
 The exact generic retry forms are:
 
@@ -123,6 +125,23 @@ For inspection, `command` is `op inspect` and the pending action is
 final result, and JSON uses
 `{"ok":true,"zoneRef":"Zone/<ZONE>","schemaVersion":2,"command":"op inspect","state":"final","operationId":"<OPAQUE_ID>","result":...}`.
 Pending output never says success, rollback, or safe to use a new ID.
+
+If the CLI has submitted a mutation but loses the transport before decoding one complete
+response, the outcome is ambiguous and it exits `1`. It MUST NOT generate or submit a second
+ID. Human output is exactly:
+
+```text
+operation response lost; outcome unknown
+zone: Zone/<ZONE>
+operation: <OPAQUE_ID>
+next: run d2b op inspect with the operation ID shown above
+```
+
+JSON is exactly
+`{"ok":false,"zoneRef":"Zone/<ZONE>","schemaVersion":2,"kind":"operation-response-lost","operationId":"<OPAQUE_ID>","remediation":{"action":"inspect-operation"}}`.
+The ID is the client-generated value used for the possibly committed request. A
+commit-then-response-loss integration test MUST inspect that same ID to its pending or final
+stored result and prove that the recovery path performs no second mutation.
 
 A mutation replay-binding mismatch exits `76` and uses this exact human form:
 
@@ -894,8 +913,16 @@ above:
 | pending `decision-basis|decision-selection|outcome-intent|terminal-outcome` at `conflict` | `preserve-and-escalate-continuity-publication-conflict` |
 | pending `decision-basis|decision-selection|outcome-intent|terminal-outcome` at `audit-publication` | `repair-retention-audit-and-reconcile` |
 
-Every public action is executable or names one external procedure. The table also documents
-the one internal continuation label in an explicitly non-emittable row:
+Every public action is executable or resolves to one concrete section in the versioned
+operator runbook planned at `docs/how-to/host-generation-recovery-v1.md`. T599 owns that
+public file, its exact section anchors, and the generated closed mapping
+`docs/reference/host-generation-recovery-actions-v1.json`; T220 requires both artifacts,
+link validation, and emitted-action coverage before release. In the table below, a
+`host-generation-*-v1` procedure identifier means the identically named runbook anchor, not
+an unowned external convention. A row that names a CLI form is the exact invocation.
+Missing owner, runbook anchor, generated mapping row, or invocation blocks T599 and T220.
+The table also documents the one internal continuation label in an explicitly non-emittable
+row:
 
 | Action | Owner and exact procedure |
 | --- | --- |

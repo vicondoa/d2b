@@ -106,18 +106,7 @@ schema. Therefore it requires no `apiVersion`, JSON `schemaVersion`, `manifestVe
 The Zone desired-spec artifact
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains unchanged and T605 must
 prove generator output is byte-identical rather than hand-editing it. C1 is resolved in these
-feature artifacts but is not implemented. The plan is eligible for read-only cross-artifact
-analysis at clean pre-validator base A and feature snapshot P0 and, if that has no HIGH or
-CRITICAL finding, a unanimous plan panel bound to A/P0. Those gates authorize exactly T603's
-two Rust files `packages/xtask/src/delivery/mod.rs` and
-`packages/xtask/src/delivery/resume.rs`, plus mandatory
-`changelog.d/delivery-resume-reconciliation.md`. T603 then
-lands validator-and-fragment commit V, freezes resume base B
-exactly at V, and MUST rerun analysis and the plan panel at B/P before it may create the
-reconciliation receipt or authorize any checkbox edit. Dedicated checkbox commit C changes
-the feature snapshot from P to Q, so B/P sign-off is stale for implementation dispatch.
-T589 remains gated on T603 progress reconciliation plus fresh analysis and unanimous plan
-review bound to exact clean C/Q.
+feature artifacts but is not implemented. T603 is an editor-only accounting gate. Cross-artifact analysis and one current selected-roster plan lifecycle bind clean base A and the complete feature snapshot. If every T073-T218 obligation is satisfied, one `/d2b-spec-edit` batch checks those rows plus T603 and the integrator creates dedicated checkbox-only commit C. The editor receipt and C are the sole authority; T603 owns no source, fragment, scratch receipt, sidecar, digest chain, or resume protocol. Fresh analysis and a new selected-roster lifecycle bound to clean C and the changed snapshot gate T589.
 
 ## Clarifications
 
@@ -219,11 +208,17 @@ candidate generic net-VM system. The exact acceptance resources are:
 | `Device/acceptance-tpm` | `metadata.ownerRef = "Guest/acceptance-vm"`; `providerRef = "Provider/device-tpm"`; `deviceClass = "emulated"`; `arbitration = "exclusive"`; `maxConcurrentClaims = 1`; `inventory.selector = {}`; `provider = { schemaId = "device-tpm.d2bus.org/Device/spec"; schemaVersion = "1.0.0"; settings.logLevel = 20; }` | The production Device controller creates or adopts its controller-managed TPM state Volume, verifies its tamper marker, completes the mandatory pre-start flush, starts the broker-supervised long-lived swtpm Process, and publishes the typed TPM Endpoint. The universal resource phase and Provider phase are `Ready`, `status.update.state` is `Current`, and Device status reports `present = true` and `health = healthy`; a manually assigned phase, refusal, or fake worker is ineligible. |
 
 This single denied-east-west acceptance case does not establish Host/Network double opt-in.
-The untouched external `ADR-046-resources-network` remains sole-opt-in canon. W4
-adjudication, T070, T071, and T220 MUST refuse until an accepted external versioned
-correction and migration either prove all four Network/Host combinations at actual F4 or
-preserve sole Network opt-in and leave double opt-in prospectively unimplemented. A
-feature-local status or test matrix cannot unblock that gate.
+The untouched external `ADR-046-resources-network` remains the historical sole-opt-in canon,
+so T070 and T071 may only report that historical result. The required contract is
+`effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
+both inputs default false. T220 MUST NOT close Wave 5 until an accepted external versioned
+correction and migration preserve that exact Host/site option as the second gate, the
+production implementation is an
+ancestor of final F, and all four Network/Host combinations pass through the actual
+emitter/controller/production-effect/net-VM path. Preserving sole Network opt-in is not a
+prospective close path. T336-T355 are therefore pull-forward implementation prerequisites of
+T604 and T220; a feature-local status, declaration-only fixture, fake effect port, or
+historical W4 record cannot unblock either task.
 
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
@@ -858,7 +853,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `Wave5RetainedRequestDispositionV1` from `data-model.md`. The record preserves the request,
   binds exact F, and selects only `remain-blocked`, `abandon-without-merge`, or
   `recover-panel-without-new-request`. Only the final action can reach successful close, and
-  it authorizes no seal or merge until the complete ten-role panel independently returns
+  it authorizes no seal or merge until the complete strict legacy fixed-ten panel independently returns
   unanimous F-bound sign-off with no recommendations. The disposition creates no second
   request and cannot waive, reduce, replace, or satisfy a constitutional panel. A
   retained-state fixture MUST run unanimous and finding-plus-rerun nonbinding phase sequences
@@ -867,47 +862,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   panel, or replacement candidate may free or replace the request. The integrator MUST stop
   with `adr046w5 binding request already consumed; obtain an accepted external
   delivery-contract/tooling disposition naming the retained request, exact F, and one closed
-  action`; findings are never waived. Before
-  T603 implementation, clean base A and feature snapshot P0 MUST pass current cross-artifact
-  analysis with no unresolved HIGH or CRITICAL finding and a unanimous plan panel that
-  authorizes only `packages/xtask/src/delivery/{mod.rs,resume.rs}` plus
-  `changelog.d/delivery-resume-reconciliation.md`. T603 MUST land one
-  validator-and-fragment commit V with sole parent A and freeze resume base B exactly at V; feature
-  snapshot P MUST be byte-identical to P0. Analysis over A..B plus the full feature artifacts
-  and a plan panel bound to B/P MUST both rerun after V. Any finding or validator-code change
-  invalidates B and both post-validator receipts. A source-only fix MUST create a new V/B and
-  rerun both post-validator gates; a required feature-artifact edit MUST return to a fresh
-  `/d2b-spec-edit` batch, establish a new A/P0, and rerun the complete two-pass sequence. Only
-  then may T603 write the closed
-  immutable external authorization receipt at
-  `.scratch/autopilot/adr046w5/reconciliation.json`, account for exactly every T073-T218
-  obligation against clean resume base B and delivery records, bind opaque project sentinel
-  `7f6d0beab0ce4c13a89f6865d5ac42e2`, the Git-discovered root, and a
-  repository-relative feature path without a hosting domain, account, remote URL, or checkout
-  path, and bind both post-validator cross-artifact analysis
-  and unanimous plan-panel receipts to B and pre-edit snapshot P. The validator MUST derive the
-  sole authorized post-edit snapshot Q for the 147 checkbox changes. T605 appears only as
-  future work after resume, never as a 147th obligation row or 148th checkbox transition. If
-  any row is open, T603 remains unchecked and no checkbox changes. Only 146 satisfied rows,
-  clean B/P identity, analysis with no unresolved HIGH or CRITICAL finding, and unanimous
-  plan signoff authorize `/d2b-spec-edit`. The Wave 5 integrator alone owns dedicated checkbox
-  commit C, whose sole parent MUST be B and whose only diff MUST be P-to-Q. The prepare,
-  apply, and finalize protocol MUST resume safely from exact B/P, B/Q, or C/Q and refuse every other
-  state. T589 MUST require the finalized progress receipt, clean HEAD C, and those checked
-  boxes. Because C changes the reviewed feature content from P to Q, the B/P plan sign-off
-  MUST NOT authorize T589. Before T589 dispatch, fresh cross-artifact analysis with no
-  unresolved HIGH or CRITICAL finding and a fresh unanimous ten-role plan review MUST both
-  bind exact clean C/Q. Any content or history change invalidates that C/Q sign-off and
-  blocks dispatch; prior sign-off never transfers. Before F freezes, T589's hermetic
-  closed-profile validator is wired into
-  panel-request/panel-attest, seal, and merge-eligibility and its exact-eight positive plus missing, extra,
-  duplicate, unknown, wrong-lane, and conflated negatives pass. T602 later invokes that same
-  validator and validates B/P, C/Q, exact `C^ = B`, C as an ancestor of final candidate F
-  frozen by T220, the exact eight-record T600/T601 closed set bound to F and F's tree, HEAD
-  exactly F, and no staged, unstaged, or non-ignored untracked state. An absent, stale,
-  ambiguous, structurally open,
-  path-raced, or identity-mismatched receipt, any unaccounted prior obligation, or any
-  unauthorized checkbox edit MUST block resume.
+  action`; findings are never waived. T603 MUST use `/d2b-spec-edit` as the sole feature mutation surface. After the accepted FR-036 predecessor and one valid T072 disposition, analysis and a current selected-roster plan lifecycle bind clean base A and the complete feature snapshot. If every T073-T218 obligation is satisfied, one editor batch checks exactly those rows plus T603 and the integrator creates dedicated checkbox-only commit C. The editor receipt and C are the only authority; T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Any open row leaves all 147 boxes unchanged. Fresh analysis and a new selected-roster lifecycle bound to clean C and the changed snapshot are required before T589.
+
 - **FR-073**: D106 remains binding in the completed production path.
   `d2b-resource-store` and `d2b-resource-store-redb` MUST NOT deserialize, import, compile,
   evaluate, or own `Role`, `RoleBinding`, `PolicySet`, or other RBAC policy DTOs. Policy
@@ -1141,7 +1097,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   provided at least five of the predecessor's ten roster reviews have returned and the
   predecessor's integration tests pass on its converged tree.
 - **FR-049**: A wave that started under FR-048 MUST NOT issue a panel request, produce a seal,
-  or merge until its predecessor is sealed at 10/10 unanimity with zero recommendations and
+  or merge until its predecessor is sealed at N/N unanimity for its selected roster with zero recommendations and
   merged to the integration lineage. It MUST then rebase onto the updated integration lineage
   **before** its own panel runs, so the panel binds to a snapshot that already contains every
   predecessor finding.
@@ -1174,7 +1130,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   lineage's history.
 - **FR-026**: A wave MUST NOT be sealed unless every work item assigned to it is recorded as
   merged, its validation evidence is imported for the exact tree being sealed, and its
-  binding ten-role panel has returned unanimous sign-off with zero outstanding
+  binding selected-roster panel has returned unanimous sign-off with zero outstanding
   recommendations against that exact snapshot.
 - **FR-027**: Any content change to a wave's candidate tree MUST invalidate that wave's
   prior validation and panel evidence, except where a canonical proof establishes the
@@ -1265,7 +1221,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   the heavy-gate semaphore is available, and the fast hermetic suite passes on its entry tree.
   Exit evidence is what a wave needs in order to be **delivered** - sealed and merged: every
   assigned work item recorded as merged, validation evidence imported for the exact snapshot,
-  and unanimous ten-role panel sign-off with zero outstanding recommendations against that
+  and unanimous selected-roster panel sign-off with zero outstanding recommendations against that
   snapshot. For ordinary prospective pipelining after FR-036 is satisfied, a missing or
   absent predecessor seal blocks the successor's **exit** and not its **entry**. This rule
   does not make W0/W1's missing seals or W2-W5's late remediation non-blocking before the
@@ -1887,45 +1843,8 @@ carries the object verbatim rather than copying selected fields into the task ro
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: Clean pre-validator A/P0 analysis and plan-panel receipts authorize exactly
-  T603's two Rust source files `packages/xtask/src/delivery/mod.rs` and
-  `packages/xtask/src/delivery/resume.rs`, plus mandatory
-  `changelog.d/delivery-resume-reconciliation.md`. Dedicated validator-and-fragment commit V
-  has sole parent A and exactly those three repository paths; resume
-  base B equals V and feature snapshot P equals P0. Analysis over
-  A..B plus the full feature artifacts and the plan panel are rerun and bound to B/P before
-  T603 creates any authorization. A finding or later validator change invalidates B and both
-  post-validator receipts. T603's immutable external authorization contains exactly the
-  closed task-ID set T073-T218 with one `satisfied|open` row each, opaque project sentinel
-  `7f6d0beab0ce4c13a89f6865d5ac42e2`, Git-root-relative feature path, B/tree, P, and
-  validator-derived post-edit snapshot Q. Any open row
-  leaves T603 unchecked and changes no checkbox. Only 146 satisfied rows, post-validator
-  analysis with no unresolved HIGH or CRITICAL finding, and the post-validator unanimous
-  plan panel at B/P authorize the sole `/d2b-spec-edit` progress batch. Dedicated checkbox
-  commit C has exact parent B and exact P-to-Q diff; prepare/apply/finalize tests converge
-  after a crash from B/P, B/Q, or C/Q. T589 refuses until the finalized editor receipt
-  exists, HEAD is clean C, T073-T218 plus T603 are checked, and fresh analysis plus a
-  unanimous ten-role plan review both bind exact C/Q. The P-to-Q content change invalidates
-  B/P sign-off for T589 dispatch, and any later content or history change invalidates the C/Q
-  gate. T605 remains future work and
-  does not alter the 146 receipt rows or 147 checkbox transitions. T219 refuses unless C is
-  an ancestor of final candidate F frozen after T220 convergence; the exact eight closed
-  FR-072 evidence identifiers occur once each at their assigned T600/T601 owner and lane; all
-  records name F and F's tree; HEAD equals F with no staged, unstaged, or non-ignored
-  untracked state; `operator-nix-activation-cleanup` alone carries T604's positive
-  public-switch activation/effect/cleanup result for `Volume/acceptance-state`,
-  `Network/acceptance-net`, and `Device/acceptance-tpm` and carries
-  no claim that Guest satisfies Wave 5; this proves only the partial US1 production-plane
-  checkpoint, never full US1 completion; `system-core-handler-contract` alone
-  carries the coordinated T605 contract, T595 emitter, and T599 consumer result; production
-  RSS is at or below 24,576 KiB with no baseline subtraction; owner fan-in is singular;
-  current removal proofs pass; and checked reference behavior matches emitted CLI and wire
-  output. Before F is final, T220 iterates scoped fixes and delta/full-context
-  `/d2b-panel-round plan` phase reviews to unanimous convergence without issuing a binding
-  delivery request. Because the retained request already consumed Wave 5's binding surface,
-  T219 performs no binding action. It may execute only a non-request close
-  action expressly authorized by an accepted external disposition that preserves the
-  historical request. F stays immutable; without such authorization the wave remains blocked.
+- **SC-034**: At clean base A, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If all T073-T218 obligations have qualifying evidence, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records the exact checkbox-only change in dedicated commit C. The editor receipt and Git history are the sole authority. Any open row leaves all 147 boxes unchanged. T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Before T589, fresh analysis and a new selected-roster lifecycle must bind clean C and the changed snapshot. T219 additionally requires C to be an ancestor of final F and the exact eight T600/T601 evidence identifiers to bind F and its tree.
+
 - **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
   for `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and
   built and no skip. W2-W4 carry the closed continuity result directly; W5 carries it only
@@ -1977,7 +1896,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   terminal wave at W7 close. The count is read from the manifest at release time and is not
   fixed at 545.
 - **SC-020**: Every wave from W2 through W8 carries a seal bound to its exact snapshot, with
-  unanimous ten-role panel sign-off and zero outstanding recommendations. W0 and W1 carry a
+  unanimous selected-roster panel sign-off and zero outstanding recommendations. W0 and W1 carry a
   written delivered-without-seal historical record, not a substitute seal or constitutional
   waiver. The release is ineligible unless the separate FR-036 constitution amendment is an
   ancestor of the release candidate and expressly permits continuation under the recorded
@@ -1999,7 +1918,7 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-026**: All seven remaining waves reach the integration lineage through a pull request
   whose gates passed first, with zero waves landing by direct push or by a gate-bypassing
   local merge, and zero intermediate versions published before 3.0.
-- **SC-027**: Every wave seals at 10/10 unanimity and merges strictly after its predecessor
+- **SC-027**: Every current wave seals at N/N unanimity for its selected roster and merges strictly after its predecessor
   did, in 100 percent of waves. Zero waves issue a panel request while their predecessor is
   unsealed, and zero waves panel against a snapshot that predates their post-merge rebase.
 - **SC-028**: Zero CRITICAL or HIGH findings are deferred in any wave. Every LOW or MEDIUM
@@ -2019,16 +1938,17 @@ carries the object verbatim rather than copying selected fields into the task ro
   creates is a requirement, not merely an assumption; see FR-056.
 - The ADR-046 delivery contract in `ADR-046-validation-and-delivery` governs the binding
   work-panel, seal, and merge-eligibility surfaces; it does not supersede the repository's
-  per-wave phase gate. Every wave retains one unanimous plan review before implementation
-  dispatch, iterative nonbinding plan-phase review for finding fixes before final-candidate
-  selection, and exactly one binding work review at close. For already-dispatched W2-W5,
+  per-wave phase gate. Every current wave uses the candidate-bound lifecycle selection
+  artifact and requires every selected seat through discovery and verification. For
+  already-dispatched W2-W5,
   the feature artifacts currently prove no contemporaneous plan-review receipt: historical
   compliance remains unproven, a current remedial plan review is evidence only until FR-036's
   external constitution amendment lands, and the later work panel cannot repair or substitute
   for the missed historical gate. After that amendment, its stated conditions and the
-  feature-local gates apply together. Wave 5's T603 plan review is then the mandatory gate
-  for resumed implementation after a valid T072 historical or current remedial entry
-  disposition. T072 may be checked only by an exact retained Wave 5 plan-panel receipt bound
+  feature-local gates apply together. Wave 5's post-editor T603 selected-roster lifecycle is
+  then the mandatory gate for resumed implementation after a valid T072 historical or
+  current remedial entry disposition. T072 may be checked only by an exact retained Wave 5
+  legacy plan-panel receipt bound
   to the actual first-dispatch base and feature snapshot; no such receipt is claimed by this
   specification. W6-W8 must pass their prospective plan gates before their first
   implementation lane.

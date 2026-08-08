@@ -25,85 +25,15 @@
   and `Device/acceptance-tpm`; each effect and production `Ready` projection is bound to that
   same identity, while Guest runtime-effect acceptance is explicitly deferred to Wave 6
   `Provider/runtime-cloud-hypervisor` T384/T479/T480
-- [x] SC-002 uses a separately versioned typed receipt referenced by an unchanged schema-v2
-  `EvidenceRecord`; failed operator records import without a receipt but cannot close
-- [x] SC-002 recovery has closed inspect/recover/request/apply/successor transitions for parked,
-  resumable, irreconcilable, and `evidence-census-conflict` states; its frozen primary scope
-  uses one total injective root-instance/node grammar and recursively binds every absent,
-  directory, file, symlink, device, fifo, socket, mount, and other descendant; unavailable
-  state is private denied scope and an all-zero `0xff` serialized observation refuses;
-  an incomplete, unstable, unreadable, depth-65, or over-hard-ceiling scan exposes null
-  evidence, an exact bounded failure/root class, and
-  `restore-primary-evidence-coverage` with no next command until its owner repair procedure
-  restores coverage; it denies admission; the scope excludes
-  resolution/request/disposition/freeze leaves, and raw `01ff` cannot authorize
-- [x] SC-002 persists one structured incident preimage with every kind-specific component
-  as a complete unnamed-inode/file-synced/procfs-fd direct-final-linked write-ahead record before every other
-  incident publication, repeats it byte-identically in preimage/anchor/metadata/status/
-  resolution/freeze/request/disposition/admission records, and classifies every crash boundary
-- [x] Successor selection is durably frozen before signing; the canonical authority request,
-  signed disposition, apply, and admit all bind the same successor triplet
-- [x] The request has an exact 19-field schema and closed 19-to-22 disposition transform;
-  `--request-out` uses anchored openat2, zero-capability/procfs validation, unnamed-inode
-  file sync before candidate publication, exact-inode direct-final no-replace linking after
-  candidate durability, final inode verification, parent sync, and exact replay; unsupported
-  open has zero internal mutation and unsupported link retains the internal pair; every
-  descriptor is CLOEXEC
-- [x] Cleanup authority is `SidecarCleanupOwner<'guard>` borrowing the exact private
-  `CandidateSidecarGuard`, and compile/API seals prevent stale-owner lifetime, fd
-  reconstruction, duplication, transfer, serialization, or cross-guard use
-- [x] Every SC-002 cause and every active or terminal host-generation variant has an exact
-  inspect/state/phase/owner/action/successor tuple; failed transfer and rollback are separate
-  restart variants, terminal selection uses the authenticated current pointer, and there is
-  no daemon recovery owner or new unit
-- [x] Literal expectations pin the 15 mutation edges, all 90 apply-peer ids, all 91
-  source-floor poison ids, 15 pre-start/root ids, 27 unit ids, 73 census ids, 35
-  direct-final publication ids, and seventeen recovery redaction rows independently from
-  production
-- [x] Recursive census goldens cover depth 64 success, depth 65 denial, every invalid node
-  kind, unstable denial, `st_uid`/`st_gid`/`st_rdev`, and symlink-target identity
-- [x] Handoff goldens and independent cases pin every valid tuple, exact human/JSON/errors,
-  exits `0|2|3|4`, forbidden inspect inputs, current/terminal pointer selection, selector-free
-  pointer repair restart/conflict/no-write behavior, exact-empty clean absence, the distinct
-  repairable-absence inspect projection, invalid competing/malformed/unauthenticated
-  censuses, bounded immutable-audit diagnostics, separate integrity escalation, and the exact 156 cases over seven rollback members, 32
-  audit members, 15 transition edges, mismatches, extra mutation, pointer authentication,
-  and shrinkage; Type-1 option eval cannot substitute for Type-10 VM proof
-- [x] Restoration has an exact bounded T595 client, a T592 shared DTO and Admin-only broker
-  op, closed typed errors, private evidence with fixed pre/provenance/outcome audit,
-  append-only supersession, bounded durable per-intent/root backup retention and sealed
-  pruning, named acquisition/repair/escalation procedures, a pinned Type-3 real-binary test,
-  and independent two-edge restoration/two-edge prune fixtures plus an unchanged 168-case
-  matrix covering its literal caller, request-shape, signature, binding, legacy publication,
-  conflict, and replay cases
-- [x] Mandatory read-independent 216-case record-boundary and 88-case lifecycle registries
-  supplement rather than replace the 168-case matrix: they pin reservation/release/
-  settlement/repair-resume and continuity-repair pre/evidence/watermark/outcome publication
-  boundaries, aggregate/continuity-evidence limits and standing-reserve taxonomy,
-  cycle-unique capacity success/refusal/retry, malformed release/continuity prefixes,
-  retention-anchor conflict, continuity evidence compaction and permit API/compiler
-  negatives, transport-loss resubmission, private-identifier/body canaries, and shrinkage
-- [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
-  retention live owner before namespace access, and namespace operations require the private
-  lifetime-bound `SidecarCleanupOwner<'guard>`; named legacy state is never renamed or
-  unlinked; only direct-final ordinary terminals require both ephemeral namespaces empty;
-  source absence is irreconcilable, every terminal legacy incident cleanup census retains
-  every original legacy source name at its frozen locator, and stage `3` has its own positive
-  incident/metadata golden
-- [x] Source-floor issuer validation returns private nonserializable authenticated
-  provenance from one non-clonable protected origin claimed through an anchored stable
-  single-link no-follow/close-on-exec OFD lock inode, commits durable consumption only with
-  dispatch publication while retaining that claim, and permits exact-origin reacquisition after
-  pre-publication owner death; copied digests, concurrent origin replay, repeated mint, and
-  serialized revalidation cannot mint authority
-- [x] Source-floor 32/26/21 and 91-case, mutation-edge 15/90 plus post-mutation,
-  pre-start/root, unit-census, SC-002 output/census, and both forbidden-value expectations
-  are independently pinned
+- [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
+- [x] The generated bijection maps every Version 2 identifier to exact schemas, fixtures, implementation owners, tasks, and enforcing gates; missing, duplicate, extra, ownerless, or stale rows block T589, T600, T604, and T220, and no feature-local encoding or historical count substitutes
 - [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
-- [x] W4/T070/T071/T220 remain blocked on the external Network normative
-  correction/version/migration and all four Network/Host opt-in cases
+- [x] T070/T071 preserve W4 history; T604/T220 remain blocked on the accepted
+  `effectiveEastWest = Network.spec.isolation.allowEastWest &&
+  d2b.site.allowUnsafeEastWest` migration, pulled-forward T336-T355 production path, and all
+  four real Network/Host cases
 - [x] T219 performs only externally authorized historical adjudication, emits an actionable
   external-disposition refusal, and offers no successor or second-request path
 

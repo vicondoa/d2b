@@ -814,7 +814,7 @@ The approved 2026-08-06 amendment now adds sixteen local completion/evidence tas
 changing the 545-item manifest census. T589-T602 plus T604-T605 own the missing production
 composition, coordinated handler-contract correction, operator activation boundary, and
 exact-candidate evidence; existing T220 is the integrator convergence/freeze boundary before
-that evidence, and T603 is the seventeenth local Wave 5 completion/resume task. The feature
+that evidence, and T603 is the seventeenth local Wave 5 editor-reconciliation task. The feature
 task total is 605.
 The completion boundary is:
 
@@ -869,13 +869,8 @@ The completion boundary is:
   `Provider/runtime-cloud-hypervisor` T384/T479/T480 obligation and no
   Guest emission, status, or refusal can satisfy this Wave 5 criterion; refusals remain
   separate negative cases;
-- pre-T603 analysis and unanimous plan panel at clean A/P0 authorizing exactly T603's two
-  Rust validator source paths plus mandatory unique changelog fragment; validator-and-fragment commit
-  V with sole parent A; B exactly V and P
-  byte-identical to P0; rerun analysis over A..B plus the feature artifacts and a rerun plan
-  panel bound to B/P; then T603's immutable B/P authorization for every T073-T218 obligation,
-  repository identity and relative feature path, validator-derived P-to-Q checkbox edit,
-  exact child commit C and progress receipt, and separate C-ancestor-of-F evidence;
+- one clean-base analysis and current selected-roster lifecycle, followed by the sole `/d2b-spec-edit` all-satisfied checkbox batch, dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589; T603 owns no source, fragment, sidecar, digest chain, or resume receipt;
+
 - T220 convergence of every content change before clean exact F, followed by T600-T602
   evidence closure. Wave 5's retained request is already consumed, so T219 performs no
   binding action and remains blocked until an accepted external disposition preserves
@@ -1012,17 +1007,8 @@ Run this against `tasks.md` before implementation starts.
       not all file-disjoint. This is permitted because
       every shared writer and strict dependency edge is explicit; no two owners write a
       contended file concurrently.
-- [x] T603 is the sole in-feature direct prerequisite of T589; the external installed
-  source-generation compatibility floor is an additional dispatch prerequisite. Pre-T603 A/P0 analysis and panel authorize
-      exactly its two Rust validator files plus mandatory unique fragment, validator-and-fragment V
-      becomes B, post-T603 analysis and panel
-      rerun at B/P, and only those post-validator receipts authorize immutable
-      repository-relative B/P reconciliation. T603 accounts for all T073-T218 obligations
-      without checking them from code presence, authorizes only the validator-derived P-to-Q
-      `/d2b-spec-edit` batch, binds exact child checkbox commit C in the finalized receipt,
-      then requires fresh exact-C/Q analysis and unanimous plan review before T589 because
-      the P-to-Q content change invalidates B/P sign-off for dispatch. Descendant final
-      candidate F/tree evidence remains separate
+- [x] T603 is the sole in-feature direct prerequisite of T589 and uses `/d2b-spec-edit` as the sole feature mutation surface. One clean-base analysis and selected-roster lifecycle precede the all-satisfied checkbox batch; the editor receipt and dedicated checkbox-only Git commit are the only authority; and fresh analysis plus a new selected-roster lifecycle bind the changed snapshot before T589. T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Final F evidence remains separate.
+
 - [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
       adds the two closed-enum values and owned pre-consumer artifacts, T595 emits them, T599
       reconciles downstream consumers, and T220 reconciles generated manifests and full drift
@@ -1082,7 +1068,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction after the external constitution prerequisite, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication through the typed accepted-socket broker pidfd operation and a safe dependency or policy-enforced approved broker FFI quarantine, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, public-socket Admin classification consumed into a sealed handoff capability with capability-authorized broker-only audited host-generation mutation, broker-owned recovery before first mutation and durable bootstrap-to-target-broker transfer, unchanged schema-v2 `EvidenceRecord` plus separately versioned typed closed-census SC-002 receipt at import/reopen/panel/seal/eligibility, restart/Zone isolation, exact Provider/config/effect/readiness and Device cleanup for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` with Network implementation retained by Wave 4, and Guest deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480 exact-F6 acceptance | **Locally added Wave 5 partial production-plane checkpoint assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `resources-volume`, `resources-network`, `resources-device`, `provider-volume-local`, `provider-network-local`, `provider-device-tpm`, `provider-system-core`, `provider-runtime-cloud-hypervisor`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `volume`, `network`, `device`, `volume-local`, `network-local`, `device-tpm`, `system-core`, `ch`, `audit` plus T589-T605 and T479-T480 |
+| FR-066 - FR-072 | Authenticated production publication through the typed accepted-socket broker pidfd operation and a safe dependency or policy-enforced approved broker FFI quarantine, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit `ResourceStatus` composite, public-socket Admin classification consumed into a sealed handoff capability with capability-authorized broker-only audited host-generation mutation, broker-owned recovery before first mutation and durable bootstrap-to-target-broker transfer, unchanged schema-v2 `EvidenceRecord` plus separately versioned typed closed-census SC-002 receipt at import/reopen/panel/seal/eligibility, restart/Zone isolation, exact Provider/config/effect/readiness and Device cleanup for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` after pulled-forward T336-T355 land the real Network adapter and double-opt-in production path, and Guest deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480 exact-F6 acceptance | **Locally added Wave 5 partial production-plane checkpoint assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `resources-volume`, `resources-network`, `resources-device`, `provider-volume-local`, `provider-network-local`, `provider-device-tpm`, `provider-system-core`, `provider-runtime-cloud-hypervisor`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `volume`, `network`, `device`, `volume-local`, `network-local`, `device-tpm`, `system-core`, `ch`, `audit` plus T589-T605 and T479-T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
 | FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity through W2-W6 | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | T028/T029, T035/T036, T070/T071, T220/T604/T600/T602/T219, T479/T480 |
@@ -1098,82 +1084,10 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | Adds sixteen completion/evidence tasks including T604 and T605 plus T603; requires FR-036's external constitution amendment before any authorization, then pre-validator A/P0 gates, validator-and-fragment V/B with exactly two Rust files plus its mandatory fragment, post-validator B/P gates, the sole editor checkbox transition and progress receipt; assigns T592 the typed accepted-socket pidfd broker op with safe-dependency-or-approved-quarantine policy and poison enforcement plus only the protocol-5 target adoption half and target schema/catalogue/fingerprint/snapshot/fixture outputs; escalates the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census as one atomic external source-generation disposition that T592 consumes read-only, with `missing`, `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` poison cases plus bare protocol 4 refusing; limits the caller-flake deployment entrypoint to unprivileged validation/build/stage/public-socket authorization/opaque request while only the separately pinned installed apply object runs under `sudo`, bound by a connection-scoped peer pidfd and live executable identity that refuses every identity transition before the first mutation and every later mutation edge without persistence or later mutation, while exposing only typed fixed correlation digests and no identity metric label; makes a public-socket-classification-derived sealed capability authorize installed-source-broker-before-transfer and target-broker-after-transfer audited mutation; assigns source-owned recovery before first mutation, exact source-to-target-broker durable ownership transfer, and broker/daemon startup plus source-actor crash boundaries with no new unit or daemon recovery ownership; retains schema-v2 `EvidenceRecord` decoding and requires a separately versioned bounded typed SC-002 receipt with the exact three-resource identity census for passed close evidence while failed records remain importable without one; serializes SC-002 temp ownership and cleanup with one shared exclusive candidate-scoped OFD lock, legacy-only named-state observation with no existing-name rename, hardlink, or unlink, live-owner exclusion, the empty ephemeral-namespace predicate only for direct-final ordinary terminals, exact frozen retained-name censuses preserving every original legacy source name at its frozen locator for terminal legacy incidents, and direct-final payload/residue evidence copies after durable preimage plus publication/close denial without unverified unlink on ambiguity; narrows T604 positive effects to the exact `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` fixture without moving Network implementation from Wave 4; adds unexpected-slice and unexpected-service unit-census negatives after excluding only canonical `d2b.slice`; defers Guest specifically to T384's `Provider/runtime-cloud-hypervisor` family and T479/T480 exact-F6 acceptance; assigns downstream contract reconciliation to T595/T599/T220; freezes F at T220; closes T600/T601 evidence to eight identifiers; leaves T219 non-authorizing until external disposition of the consumed request and requires a byte-identical retained-state phase-round fixture; and does not change the 545-item manifest or 605-task count. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | T603 uses the exclusive editor plus checkbox-only Git commit; accepted Version 2 and generated `VD2-SC002-*` traceability own all SC-002 protocol detail; T336-T355 are pulled forward before T604 for the real Network adapter and double-opt-in path; T599 owns the versioned recovery runbook/action mapping and client-side response-loss operation ID; T220 freezes only after generated traceability, all four Network/Host cases, selected-roster lifecycle approval, and the exact eight evidence identifiers. The 545-item manifest and 605-task count do not change. |
 | FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Makes the existing daemon restart VM survival check exact-candidate close evidence at W2-W6, with full namespace equality after excluding only canonical `d2b.slice` and separate unexpected-slice/unexpected-service negative injections. It adds no task and no W5 evidence identifier. |
 
-The FR-066 - FR-072 shorthand is refined, not expanded, by the current Wave 5 planning
-contracts. Accepted external delivery Version 2 owns source-floor canonical encoding,
-digest/domain/framing, strict schemas, and exact 15-digest/four-signature vectors; the
-compatibility authorities only produce and validate conforming objects. The independent
-13-row role/artifact fixture, exact 91-id class/role poison product, five copied-issuer
-cases, one non-clonable protected origin acquired under an OFD claim and consumed only with
-durable dispatch publication through private authenticated issuer provenance into one
-validated-floor result with restart-safe exact-origin reacquisition before publication and
-later borrow-only attenuation, and exact
-32-id receipt/transition, 26-id
-issuer-authentication/capability, and 21-id hash-vector negative registries require valid
-cardinality, enclosing hashes, and unaffected signatures before their semantic or pinned-key
-refusals. Copied authority/key digests cannot produce either private result. Apply-peer
-coverage has separate 15-edge, 90-case, 15-negative, and fifteen-forbidden-value fixtures,
-with six pre-first and 84 post-first cases. A separate 15-case pre-start/root registry and
-27-case unit registry close omitted lifecycle boundaries.
-SC-002 ambiguity keeps every state inspectable by stable id, cause, deterministic
-human/JSON remediation, and closed exits. The remediation enum has six values, including
-`restore-primary-evidence-coverage` with null evidence for unreadable, unstable, incomplete,
-depth-65, or hard-ceiling scans. Those states expose the bounded failure/root class, map to
-one exact owner repair procedure, and render no disposition-request command until a later
-inspect proves coverage. A verified payload reaches `parked`; an
-authenticated no-unlink residue census reaches `mismatch-retained` with every original
-legacy source name retained at its frozen locator in the frozen census; and a raced source copy/final reopen is exactly `recovery-resumable` or
-`recovery-irreconcilable` with every name preserved. One recursive grammar includes twelve
-root/root-instance pairs and total absent, directory, regular-file, symlink, device, fifo,
-socket, mount, and other observations. Unavailable state is private denied scope only and an
-all-zero `0xff` serialized observation refuses. An irreconcilable bounded failure can
-authorize only after two equal stable walks cover every descendant and embeds the complete
-ordered node sequence within the hard ceiling; unreadable, unstable, incomplete, depth-65,
-or over-hard-ceiling scope remains inspectable but denies request, apply, and admission. The
-scope binds the canonical failing-path digest and excludes
-resolution/request/disposition/freeze leaves; raw `01ff`, copied
-commitments, and post-resolution primary changes block admission. One structured incident
-preimage carries every kind-specific component and is file-synced in an unnamed inode,
-capability-free procfs-fd linked as the exact opened inode directly to its final no-replace
-name, parent-synced, and published as the complete write-ahead record before any
-other incident publication; it is repeated by all durable status/path records.
-`SidecarCleanupOwner<'guard>` exclusively borrows the private guard owning the OFD
-lock, so stale authority cannot survive release. The successor triplet is durably frozen
-before the exact 19-field request; the authority performs only the closed 19-to-22
-transformation, and apply/admit preserve it. Request output prepares and file-syncs the unnamed inode before candidate publication, then
-procfs-fd links the exact inode directly to the final no-replace name after candidate
-durability. Unsupported open has zero internal mutation and unsupported link retains the
-internal pair. The shared nineteen-digest typed hash oracle, exact 61 receipt, 73
-malformed-census, 35 direct-final publication, and seventeen-row recovery redaction registries prohibit
-a raw locator hash, self-referential resolution digest, or output leak. Every SC-002 cause
-and handoff active/terminal variant has an exact state/phase/owner/action/successor tuple.
-Handoff terminal selection uses the authenticated current pointer; failed transfer and
-rollback owners are partitioned. Its 156-case fixture independently covers seven rollback
-members, 32 audit members, 15 transition edges, unaudited extra mutation, unauthenticated
-pointer, all repair input/restart/conflict/no-write cases, and four shrinkage poisons.
-Selector-free pointer repair is an Admin-only typed broker operation with immutable
-pre/outcome audit, exact-empty clean absence, a separate repairable-absence projection, and
-invalid competing/malformed/unauthenticated censuses. The Admin-only bounded restoration
-client, two-edge restoration and two-edge prune audit fixtures, and independent 168-case
-broker registry retain only their literal private-evidence/provenance, role-denial,
-request-shape, artifact-binding, legacy publication, conflict, and no-write cases. The
-mandatory independent 216-case record-boundary registry covers the listed amendment record
-classes at every publication boundary, including reservation, both releases, settlement,
-repair-resume, and continuity-repair pre/evidence/watermark/outcome. The mandatory
-independent 88-case lifecycle registry covers aggregate storage and continuity-evidence
-limits, standing-reserve taxonomy, cycle-unique capacity success/refusal/retry, malformed
-release/continuity prefixes, retention-anchor conflict, continuity evidence compaction and
-capability seals, transport-loss resubmission, private-identifier/body canaries, and
-shrinkage. The 156, unchanged 168, 216, and 88 registries have distinct responsibilities
-and cannot substitute.
-Incomplete rollback proof is never recovery-capable.
-These refinements add no work-item or task id.
-
-A reviewer checking upstream fidelity should expect these rows to have no one-to-one
-counterpart in `docs/specs/`. That is intended, not a coverage gap. FR-073 is not in this
-table because it preserves upstream D106 rather than adding a new boundary.
+Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. The generator maps every identifier to one schema, fixture set, implementation owner, task, and gate and fails on missing, duplicate, extra, or ownerless rows. T589, T600, T604, and T220 consume only those generated rows; feature-local counts or protocol copies are non-authoritative.
 
 ### Success-criteria traceability
 
@@ -1187,5 +1101,5 @@ table because it preserves upstream D106 rather than adding a new boundary.
 | SC-024 | FR-039, FR-040 - locally added |
 | SC-025 | FR-043 - locally added; candidate-bound enforcement through T580/T555/T556 |
 | SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
-| SC-030 - SC-034 | FR-066 - FR-074; T603 receipt/editor-mediated amended-plan resume and T589-T602 plus T604-T605 exact-candidate acceptance |
+| SC-030 - SC-034 | FR-066 - FR-074; T603 exclusive-editor reconciliation, generated Version 2 SC-002 traceability, and T589-T602 plus T604-T605 exact-candidate acceptance |
 | SC-035 | FR-075; candidate-bound close evidence at T028/T029, T035/T036, T070/T071, T220/T604/T600/T602/T219, and T479/T480 |

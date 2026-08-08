@@ -13,7 +13,8 @@ This is a run guide. Implementation belongs in `tasks.md`.
 ## Prerequisites
 
 - NixOS host, `x86_64-linux`, with `/dev/kvm` for Layer-2 VM checks
-- The pinned toolchain resolves automatically from `packages/rust-toolchain.toml` (Rust 1.94.1)
+- The pinned Rust toolchain resolves automatically from
+  `packages/rust-toolchain.toml` (currently 1.97.0); the pin is authoritative.
 - Heavy-gate slots provisioned for this boot. `/run` is a tmpfs, so run once per boot when the
   gate asks:
 
@@ -47,43 +48,15 @@ rebases onto the merged predecessor.
 
 ### 1b. Reconcile `adr046w5` progress before implementation
 
-T603 never infers task completion from code presence and never edits a feature artifact
-directly. First freeze clean pre-validator base A and feature snapshot P0, run
-`/speckit-analyze`, and obtain unanimous plan signoff at A/P0. That pair authorizes exactly
-three repository paths: the two Rust files `packages/xtask/src/delivery/mod.rs` and
-`packages/xtask/src/delivery/resume.rs`, plus mandatory
-`changelog.d/delivery-resume-reconciliation.md`. Land validator-and-fragment commit V with
-sole parent A and exactly those three paths, freeze B exactly at V, require P to remain
-byte-identical to P0, rerun analysis over
-A..B plus the feature artifacts, and rerun the plan panel at B/P. Any finding or later
-validator change invalidates B and requires both post-validator gates again.
-
-Only the post-validator receipts permit the fd-anchored validator to write immutable
-authorization R at
-`.scratch/autopilot/adr046w5/reconciliation.json`, bound to repository identity, the
-repository-relative feature path, clean resume base B and tree, exact 28-file pre-edit
-snapshot P, validator-derived post-edit snapshot Q, post-validator analysis receipt,
-ten-record post-validator plan panel, and one row for each T073-T218 obligation.
-
-If any row is `open`, leave T603 and T073-T218 unchecked and stop. If all 146 rows are
-`satisfied`, the post-validator analysis has no unresolved HIGH or CRITICAL finding, and the
-post-validator unanimous plan signoff names B/P, route one explicit `/d2b-spec-edit` progress
-batch. The editor recomputes R before making its only permitted feature changes: checking
-T073-T218 and T603. The Wave 5
-integrator stages only that diff and owns dedicated commit C with exact parent B. The
-validator then finalizes `.scratch/autopilot/adr046w5/progress-editor-receipt.json`, binding
-B, C, P, and Q. A retry converges only from exact B/P, B/Q, or C/Q. T589 refuses unless HEAD
-is clean C, the finalized receipt validates, all 147 checkboxes are checked, and fresh
-analysis plus unanimous plan sign-off bind exact C/Q. The P-to-Q content change invalidates
-B/P sign-off for implementation dispatch; any later content or history change invalidates
-the C/Q gate. T602 later
-validates C as an ancestor of separate final candidate F rather than requiring R to match F.
-
-C1 is approved and fully assigned under Constitution 2.2.0. Run the pre-T603 analysis and
-plan panel first. Implementation remains pending: after validator V, the post-T603 analysis
-and plan panel must rerun before T603 may reconcile exactly T073-T218, then the fresh C/Q
-analysis and plan panel must pass before T589; T605 remains future work after resume rather
-than a 147th receipt row.
+At one clean base, validate the accepted FR-036 predecessor and exactly one T072 disposition,
+run cross-artifact analysis, and create one current selected-roster plan lifecycle for the
+complete feature snapshot. Audit T073-T218 against commits and delivery records. If any row
+is open, stop without changing a checkbox. If all rows are satisfied, submit one
+`/d2b-spec-edit` batch that checks exactly T073-T218 and T603, then create one dedicated
+checkbox-only commit. The editor batch receipt and that Git commit are the sole authority; do
+not create a validator, changelog fragment, scratch receipt, sidecar, digest chain, or custom
+resume state. Rerun analysis and a new selected-roster plan lifecycle on the changed commit
+and snapshot before T589.
 
 ### 2. Launch every ready, file-disjoint slice together
 
@@ -112,7 +85,7 @@ retained request and exact F, the actionable refusal is: `adr046w5 binding reque
 consumed; obtain an accepted external delivery-contract/tooling disposition naming the
 retained request, exact F, and one closed action`. `remain-blocked` stays blocked;
 `abandon-without-merge` cannot advance; and `recover-panel-without-new-request` still requires
-the complete unanimous ten-role exact-F panel before seal or merge. The record creates no
+the complete unanimous strict legacy fixed-ten exact-F panel before seal or merge. The record creates no
 second request and is never panel sign-off or a constitutional waiver.
 
 ### 3. Inner loop while implementing
@@ -192,22 +165,24 @@ This procedure applies only to a wave whose binding request has not been consume
 
 ```bash
 X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
+SELECTION="<candidate-bound lifecycle selection path>"
 
 $X snapshot --program ADR046 --wave W2 --repo d2b=$PWD \
     --base d2b=<base-oid> --pull-request d2b=<number>:<head-ref>
 $X validate-import   # import local/host validator results for this exact snapshot
-$X panel-request     # writes the candidate-bound 10-role request (gpt-5.6-sol/xhigh)
-$X panel-attest      # validates exactly one 14-field record per role; rejects any record
-                     # whose model does not match the pinned policy
-$X seal              # requires all 10 unanimous + every wave item Merged
+$X panel-request --selection "$SELECTION"
+                     # stores the exact lifecycle-selected roster and profiles
+$X panel-attest      # validates one current versioned record per selected role
+                     # against the selection, candidate, model, and effort
+$X seal              # requires every selected lifecycle seat unanimous + every wave item Merged
 $X merge-target --seal <state>/W2/<candidate>/seal.json --target ./merge-target.json --repo d2b=$PWD
 $X merge-eligibility
 ```
 
 `history-proof` is **not** a separate subcommand; it runs inside `merge-eligibility`.
 
-Panel lanes are 10 read-only subagents on `gpt-5.6-sol` at `xhigh`, dispatched
-together in one message. They take no heavy-gate slot, so all 10 run
+Panel lanes are exactly the read-only seats and profiles in the lifecycle selection artifact, dispatched on their recorded bindings
+together in one message. They take no heavy-gate slot, so all selected lanes run
 concurrently. They must not run tests or builds unless you explicitly ask a
 specific lane to.
 
@@ -250,253 +225,19 @@ authorized integration-lineage merge preserves F's tree.
 
 ### Recover an SC-002 sidecar incident
 
-> **Planned contract, not a command available at this committed base.** T589 owns these
-> delivery subcommands, focused tests, generated help/schema goldens, and the
-> operator-visible entry in its existing `changelog.d/resource-api-production.md` fragment.
-> Before T589, a separate external amendment must bump accepted
-> `ADR-046-validation-and-delivery` from Version 1 to Version 2, receive the required
-> approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and pass Gate
-> 0 on an ancestor of T589's base. T589 does not own that amendment. Do not claim recovery
-> until the external gate, T589, and T220's coordinated contract/changelog checks pass.
+This quickstart does not restate the protocol. Recovery is unavailable until accepted
+Version 2 `ADR-046-validation-and-delivery` and its generated
+`ADR-046-validation-and-delivery-traceability.{json,md}` artifacts provide complete rows for
+`VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, and `VD2-SC002-RECOVERY`, and T589 installs
+the commands those rows own. Before then, stop and do not infer a command from historical
+feature prose.
 
-An identity-ambiguous sidecar is never unlinked. The parked candidate remains ineligible and
-the durable incident remains retained. Cleanup can open a sidecar namespace only while its
-private `SidecarCleanupOwner<'guard>` exclusively borrows the exact
-`CandidateSidecarGuard` that owns the locked OFD; a lock loser cannot fabricate either, and
-the cleanup owner cannot outlive or be paired with another guard. A parked incident is success-shaped only after its
-immutable structured `Sc002IncidentPreimageV1` with every applicable kind-specific
-component is the complete write-ahead record. It is file-synced in an unnamed inode before
-that exact opened inode is capability-free linked through a validated procfs fd directly to
-the final no-replace name, and it is durably published before the kind-bearing anchor,
-preimage-complete metadata, exact typed content-addressed
-payload, and append-only
-`parked` status are leaf-and-every-ancestor durable. A legacy source-copy or final-reopen
-race is classified as
-exactly `recovery-resumable` or `recovery-irreconcilable`, preserves every still-named leaf,
-and exposes no parked status. Inspect returns the stable incident id, one closed cause,
-deterministic remediation, and the exact human/JSON status for both variants. Recover is
-advertised only when one preimage/anchor/metadata-bound next step is uniquely resumable.
-
-Every durable anchor, metadata, status, resolution, successor freeze, request, disposition,
-and admission record repeats the same structured preimage byte-for-byte. If the expected
-identity cannot be recovered, authenticated apply leaves each representable currently named
-leaf in place, direct-final publishes immutable incident residue copies, and binds every
-retained name in the frozen primary-evidence scope; otherwise it uses a complete census or an
-identity-bearing bounded-failure commitment. One byte grammar recursively records every
-required `(root-code, root-instance-code)` pair and every descendant. It encodes absent,
-directory, regular-file, symlink, block-device, character-device, fifo, socket, mount, and
-other observations injectively, including owner, group, `st_rdev`, and symlink-target
-payload identity. Invalid representable kinds remain evidence and never masquerade as
-absent. Unavailable observations are private denied scope only; all-zero `0xff` is rejected
-from every serialized body. The failure form embeds the full stable ordered node sequence plus the fixed
-root-instance, canonical failing-path digest, saturated counts, and equal before/after
-recursive identities. That scope excludes every resolution,
-resolution-evidence, successor-freeze, disposition-request, and disposition leaf. A raw `01ff` sentinel never authorizes apply or
-successor admission. Invalid, unstable, or over-bound primary census state remains
-actionable. A stable semantic failure with full coverage exposes only the typed evidence
-kind and digest needed by the external disposition authority. Unreadable, unstable,
-depth-65, node-hard-ceiling, or byte-hard-ceiling scope instead exposes null evidence and
-the closed `restore-primary-evidence-coverage` remediation; request exits `4` with the same
-status until read access is restored, the writer is stopped, or an injected unrecognized
-over-ceiling entry is moved outside the immutable candidate scope. Recognized evidence is
-never removed. Apply publishes and syncs only exact admission-capable canonical evidence
-bytes outside the frozen scope; successor admission recursively replays the same scan and
-revalidates those bytes, the current
-scope identity, complete preimage, and incident/parked binding. A stale or copied commitment exits `4` with
-a fresh inspect projection and no write.
-
-Only a direct-final ordinary terminal requires an empty ephemeral/staging census. A
-residue-backed terminal entry instead requires the terminal legacy incident's exact frozen
-recursive census retaining every original legacy source name at its frozen locator, the
-exact identity-derived residue census, and synced `mismatch-retained` status. A
-resolution-backed terminal likewise carries its exact frozen retained-name census and has
-the exact durable evidence object plus append-only `disposition-validated`. No path unlinks
-or restores a suspect. Every branch requires the same external disposition and one distinct
-successor snapshot. The successor is frozen
-before signing, and the canonical request is the only authority input:
-
-```bash
-set -eu
-X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
-
-$X sc002-incident-inspect \
-  --snapshot "$PARKED_SNAPSHOT" \
-  --incident-id "$SC002_INCIDENT_ID"
-
-$X sc002-incident-recover \
-  --snapshot "$PARKED_SNAPSHOT" \
-  --incident-id "$SC002_INCIDENT_ID"
-
-$X sc002-disposition-request \
-  --snapshot "$PARKED_SNAPSHOT" \
-  --incident-id "$SC002_INCIDENT_ID" \
-  --successor-snapshot "$SUCCESSOR_SNAPSHOT" \
-  --request-out "$SC002_DISPOSITION_REQUEST"
-
-# Submit exactly "$SC002_DISPOSITION_REQUEST" to the Version-2-pinned authority workflow.
-
-$X sc002-incident-apply \
-  --snapshot "$PARKED_SNAPSHOT" \
-  --incident-id "$SC002_INCIDENT_ID" \
-  --disposition "$SC002_DISPOSITION" \
-  --successor-snapshot "$SUCCESSOR_SNAPSHOT"
-
-$X sc002-successor-admit \
-  --snapshot "$PARKED_SNAPSHOT" \
-  --incident-id "$SC002_INCIDENT_ID" \
-  --disposition-id "$SC002_DISPOSITION_ID" \
-  --successor-snapshot "$SUCCESSOR_SNAPSHOT"
-```
-
-The request file is the exact 19-field `Sc002IncidentDispositionRequestV1`, not inspect JSON
-and not a caller-written disposition prefix. The authority substitutes only the envelope
-kind, copies the semantic fields and freeze digest, omits the verified embedded freeze,
-derives the request digest, inserts the pinned authority/key fields, and signs the exact
-22-field disposition. Before candidate publication, `--request-out` resolves the output parent with anchored
-openat2, verifies the privilege-dropped caller has no effective capabilities, validates a
-retained procfs `/proc/self/fd` directory fd plus the exact target mount/filesystem, and
-writes, file-syncs, and revalidates an unnamed `O_TMPFILE` inode. Unsupported open or an
-invalid procfs/mount environment refuses with zero output name and zero freeze/request
-mutation. Candidate-internal freeze/request durability then completes. The command links
-the exact opened inode directly to the final no-replace name with capability-free
-fd-relative `linkat(..., AT_SYMLINK_FOLLOW)`, verifies the final inode and bytes, and syncs
-the parent. It never uses `AT_EMPTY_PATH`, a linked temporary, a name-consuming rename, or a
-create-and-unlink preflight. Every fd is CLOEXEC. Unsupported linking after internal
-durability is an ordinary replayable output failure: no output name is created and the
-internal freeze/request remains. A crash before the direct link exposes no output name; a
-crash after it may expose only the complete final inode. Exact replay revalidates or
-recreates that final without truncating or replacing a foreign leaf.
-
-The transition is closed and operational:
-
-| Inspect state/cause | Required action | Successful next state |
-| --- | --- | --- |
-| `recovery-resumable` | run `sc002-incident-recover` | `parked`, `mismatch-retained`, `disposition-validated`, or `successor-admitted`, whichever is the maximal uniquely reconstructible contiguous branch |
-| `recovery-irreconcilable`, including `evidence-census-conflict`, without a disposition matching the current typed evidence digest | run inspect with `--json`, run `sc002-disposition-request` with the clean successor snapshot, submit that exact request, then run `sc002-incident-apply` with the same snapshot | `disposition-validated` |
-| exact `primary-evidence-coverage:<failure-class>:<root-class>` | run the mapped owner repair procedure, then rerun `sc002-incident-inspect`; do not run disposition request while this cause remains | unchanged with null evidence until two complete equal walks succeed; only a later `obtain-incident-disposition` projection permits the request |
-| `recovery-irreconcilable` with the matching signed disposition already durable | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
-| `parked` without a matching disposition | freeze the successor and create/submit the canonical request, then run `sc002-incident-apply` with that same successor snapshot | `disposition-validated` |
-| `mismatch-retained` or a crash after disposition publication | rerun `sc002-incident-apply` with the freeze-bound successor snapshot | `disposition-validated` |
-| `disposition-validated` | run `sc002-successor-admit` with the same freeze/request-bound successor snapshot | `successor-admitted` |
-| `successor-admitted` | inspect only | unchanged idempotent terminal |
-
-If the locked primary-evidence digest changes between inspect and apply, apply exits `4`,
-returns the new inspect projection, and requires a newly bound disposition. No generic retry,
-force flag, deletion selector, or alternate path is accepted.
-The test contract compares independently authored literal expectations with all 61 receipt,
-73 malformed retired/primary-census, and 35 direct-final publication ids from
-`data-model.md`, scans all
-seventeen SC-002 recovery redaction canaries, and uses the shared
-nineteen-digest/one-signature SC-002 golden. A generated expected set or a digest copied from
-production is not evidence.
-
-`SC002_INCIDENT_ID` and `SC002_DISPOSITION_ID` are stable lowercase 64-hex typed digests.
-Exit `0` means the requested read or transition completed; `2` means invalid syntax or
-malformed input; `3` means an ID was not found; and `4` means stale state, conflict, or
-blocked admission. Repeating the exact already durable apply or successor admission exits
-`0` without a write. Recovering an incident already at `parked` or later also exits `0`
-without a write. A recovery that still cannot prove the metadata-bound move exits `4`,
-preserves every name, prints the same cause/remediation status as inspect, and leaves
-publication and close blocked. Applying the authenticated disposition may complete
-no-unlink mismatch retention and then disposition validation. Changing any binding exits
-`4`.
-
-Human output is exactly these thirteen lines in this order:
-
-```text
-incident-kind: <INCIDENT_KIND>
-incident-id: <INCIDENT_ID>
-parked-candidate-id: <PARKED_CANDIDATE_ID>
-parked-content-id: <PARKED_CONTENT_ID>
-parked-snapshot-sha256: <PARKED_SNAPSHOT_SHA256>
-state: <STATE>
-cause: <CAUSE>
-disposition-id: <DISPOSITION_ID_OR_NONE>
-successor-candidate-id: <SUCCESSOR_CANDIDATE_ID_OR_NONE>
-successor-content-id: <SUCCESSOR_CONTENT_ID_OR_NONE>
-successor-snapshot-sha256: <SUCCESSOR_SNAPSHOT_SHA256_OR_NONE>
-remediation: <REMEDIATION>
-next-command: <NEXT_COMMAND>
-```
-
-The bracketed forms above denote bounded values. Null IDs render exactly `none`.
-`STATE` is exactly `recovery-resumable`, `recovery-irreconcilable`, `parked`,
-`mismatch-retained`, `disposition-validated`, or `successor-admitted`. `CAUSE` is one closed
-`Sc002IncidentCauseV1` from `data-model.md`; it is never a path, errno, or free-form
-sentence. Coverage denial uses the exact bounded
-`primary-evidence-coverage:<failure-class>:<root-class>` cause, so unreadable, unstable,
-depth, node-ceiling, and byte-ceiling failures are not collapsed. The root class is one
-closed non-path class and exposes no source-slot instance or raw identity.
-`NEXT_COMMAND` is static: `sc002-disposition-request` when a disposition must be obtained,
-`sc002-incident-apply` when a matching signed disposition is already durable,
-`sc002-incident-recover` for `resume-incident-recovery`,
-`sc002-successor-admit` for successor admission, and `none` after admission or while
-primary-evidence coverage repair is required. It never
-contains flags, IDs, paths, argv, an executable path, a shell fragment, or free-form
-guidance. The equivalent `--json` output is the distinct version-1
-`sc002-incident-cli-status` projection, not the persisted `sc002-incident-status` envelope.
-JSON contains no `nextCommand` or guidance field. Its required final `remediation` field is
-derived from the validated metadata/source/payload/residue prefix, durable status, and locked
-disposition census and is exactly one of
-`resume-incident-recovery`, `obtain-incident-disposition`,
-`restore-primary-evidence-coverage`, `apply-incident-disposition`, `admit-successor`, or
-`none`; there is no free-form guidance field. For an irreconcilable state it also carries nullable
-`resolutionEvidenceKind` and `resolutionEvidenceSha256`; these are bounded typed values, not
-a raw locator or evidence bytes. Persisted status has no remediation field but does persist
-the complete incident-id preimage; CLI output does not expose that preimage.
-
-`resume-incident-recovery` means run `sc002-incident-recover` with the stable incident id;
-the command accepts no alternate source, payload, identity, disposition, successor, or
-deletion selector.
-`obtain-incident-disposition` means run inspect with `--json`, then run
-`sc002-disposition-request` with one clean successor snapshot. That command durably freezes
-the derived successor candidate/content/snapshot triplet, writes the canonical mode-`0600`
-request, and cannot sign it. Submit exactly that request to the disposition
-authority/workflow pinned by accepted Version 2 and receive its signed mode-`0600` record;
-inspect output alone and a caller-written triplet are not signing requests. Then run
-`sc002-incident-apply` with the same successor snapshot.
-`apply-incident-disposition` means run or rerun that command with the already obtained record
-and freeze-bound snapshot. On a nonrecoverable prefix it retains every current leaf in durable
-incident residue and publishes `mismatch-retained`, or publishes the complete census or
-bounded-failure commitment and the separate resolution status; it never unlinks.
-`admit-successor` means run `sc002-successor-admit` with the disposition id and the same
-freeze/request-bound successor snapshot. These are the only operator actions.
-
-`restore-primary-evidence-coverage` is not permission to request a disposition. It exits
-`4`, emits null resolution evidence and `next-command: none`, and selects one exact
-owner-run repair procedure from the failure class:
-
-| Failure class | Required procedure | Recheck |
-| --- | --- | --- |
-| `enumeration-unavailable` | registered root owner runs `restore-primary-evidence-access` and restores the prior owner/mode/mount read and execute contract without editing recognized evidence | rerun `sc002-incident-inspect` |
-| `identity-unstable` | registered root owner runs `quiesce-primary-evidence-writer` and stops the non-d2b writer while leaving recognized evidence byte-identical | rerun `sc002-incident-inspect` |
-| `depth-limit` | registered root owner runs `relocate-unrecognized-primary-evidence-subtree` for only the injected depth-65 subtree | rerun `sc002-incident-inspect` |
-| `node-hard-ceiling` | registered root owner runs `relocate-unrecognized-primary-evidence-subtree` for only injected unrecognized entries until the complete walk fits 4,096 nodes | rerun `sc002-incident-inspect` |
-| `byte-hard-ceiling` | registered root owner runs `relocate-unrecognized-primary-evidence-subtree` for only injected unrecognized entries until the complete walk fits 67,108,864 bytes | rerun `sc002-incident-inspect` |
-
-If the named owner cannot complete the procedure, escalate to that owner with the stable
-incident id and bounded root class. Do not run `sc002-disposition-request` until a later
-inspect projection changes to `obtain-incident-disposition`.
-
-The disposition's only action is `abandon-candidate-admit-successor`. It cannot delete the
-incident, make the parked candidate eligible, reuse its receipt/evidence, release a binding
-reservation, or issue another binding request. The successor must have a distinct freshly
-derived candidate/content/snapshot triplet and no copied SC-002 bytes. The freeze, unsigned
-request, signed disposition, apply, and admission all bind that exact triplet; changing the
-snapshot after signing exits `4` without a write. For `adr046w5`, this
-admits only T220's nonbinding replacement-candidate and exact-candidate evidence flow while
-preserving the retained request byte-for-byte; T219's external retained-request disposition
-is still required. A consumed ordinary wave stops for its external wave disposition.
-`SC002_DISPOSITION` is the exact canonical, signed `Sc002IncidentDispositionV1`; the apply
-command trusts only the Version 2 contract's pinned authority and Ed25519 key, never a key
-selected by the file. The cleanup refusal and each command return the same stable incident
-id, cause, and remediation as bounded data fields. T589's existing
-`changelog.d/resource-api-production.md` fragment names
-all five command nouns, exits `0|2|3|4`, the disposition authority, and the pre-signing
-successor-freeze/request requirement
-requirement; T220 verifies and folds that existing fragment rather than creating another.
-
----
+After those gates pass, use only the exact invocation or versioned runbook anchor resolved by
+the generated traceability row for the emitted action. A missing row, broken link, unknown
+action, or action without an owned invocation is a release-blocking refusal. The runbook is
+`docs/how-to/host-generation-recovery-v1.md`; T599 owns it and
+`docs/reference/host-generation-recovery-actions-v1.json`, while T220 verifies complete
+emitted-action coverage.
 
 ## Operator loop: prove the plane works
 
@@ -1022,15 +763,15 @@ remediation and runs no privileged command.
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
 passes on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest is not expected to pass until Wave 6
-`Provider/runtime-cloud-hypervisor` and its T479/T480 exact-F6 acceptance exist. Network
-remains Wave 4 implementation; Wave 5 accepts it through the production plane without taking
-implementation ownership.
+`Provider/runtime-cloud-hypervisor` and its T479/T480 exact-F6 acceptance exist. T604 does
+not run until pulled-forward T336-T355 have landed the real Network production path.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not prove or introduce
-Host/Network double opt-in. The untouched external Network specification remains sole-opt-in
-canon. W4 adjudication, T070, T071, and T220 stop until an accepted external versioned
-correction/migration binds all four Network/Host cases or preserves sole Network opt-in and
-leaves double opt-in unimplemented. Do not change feature status to bypass that stop.
+Host/Network double opt-in. The historical external Network specification remains sole-opt-in
+canon, but Wave 5 closure requires the accepted migration to
+`effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
+both default false, plus all four cases through the real adapter and net-VM path. Historical
+sole opt-in cannot close T604 or T220. Do not change feature status to bypass that stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an
@@ -1233,7 +974,7 @@ All six release-gate conditions, evaluated against the **final** candidate:
 2. Every DELETE and REPLACE row's removal proof passing **on the shipping tree**
 3. The complete test matrix including manual hardware, live-host, and cloud tiers with
    recorded external evidence, plus the reset and cutover scenarios
-4. Unanimous ten-role panel, seal, and merge-eligibility on the W8 snapshot
+4. Unanimous selected-roster panel, seal, and merge-eligibility on the W8 snapshot
 5. A new `CHANGELOG.md` version header, summarized by version, with every wave and finding
    marker stripped
 6. Every prior wave's cleanup performed - no dangling worktrees or branches

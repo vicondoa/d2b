@@ -1673,6 +1673,16 @@ deferral remains blocked by an absent neutral contract and adapter plus
 operations assigned to a later item. Both still require out-of-destination
 writes, but they are not the same broker state.
 
+The current tree corrects one ownership assumption in that table:
+`NetworkEffectPort` already lives in
+`packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`. T336 keeps
+that trait and owns the production implementation in
+`packages/d2bd/src/network_effect_adapter.rs`, with serialized post-T595 edits to
+`d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
+broker operations and performs no direct host mutation. T336-T355 are pulled forward before
+T604. Until the accepted double-opt-in migration, that adapter, the executable network-local
+path, and all four production Network/Host cases land, T604 and T220 remain blocked.
+
 ### 16.3 Credential Provider work is in progress, not complete
 
 `ADR046-credential-003`, `ADR046-credential-004` and
@@ -2291,10 +2301,4 @@ and v3 is unreleased. The same Wave 5 PR still carries all paired Rust contract 
 tests, API snapshots, reference status docs, consumers/emitters, generator no-drift proof,
 and panel evidence.
 
-CHK054 is checked only as a specification-quality resolution. Implementation remains
-unchecked. Pre-validator analysis and plan signoff at A/P0 authorize only T603's validator
-paths plus `changelog.d/delivery-resume-reconciliation.md`. After validator-and-fragment V
-becomes B, analysis and the plan panel rerun at B/P; those
-post-validator receipts authorize only the exact T073-T218 reconciliation and editor
-transition. Dedicated commit C changes content to Q, so fresh analysis and unanimous plan
-review bound to exact C/Q still gate T589 dispatch.
+CHK054 is checked only as a specification-quality resolution. Implementation remains unchecked. T603 uses `/d2b-spec-edit` as the sole mutation surface; the editor receipt and dedicated checkbox-only Git commit are the only authority. Fresh analysis and a current selected-roster lifecycle bind the pre-edit snapshot, and fresh analysis plus a new selected-roster lifecycle bind the post-edit snapshot before T589. T603 owns no validator source, changelog fragment, scratch receipt, sidecar, or digest chain.

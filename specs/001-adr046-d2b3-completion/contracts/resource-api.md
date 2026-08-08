@@ -49,7 +49,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, expose a typed durable `InspectOperation` method, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Bind amended-plan resume to pre-validator A/P0 analysis/panel, validator-and-fragment V/B with T603's mandatory unique changelog path, rerun B/P analysis/panel, T603's opaque-sentinel B/P authorization, exact atomic-exchange B-to-C editor transition, finalized progress receipt, and fresh exact-C/Q analysis plus unanimous plan review before T589; before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require the exact eight closed evidence identifiers before T219 evaluates the accepted external disposition of Wave 5's consumed request. T219 performs no binding action | FR-072, SC-034 | W5 |
+| RA-14 | Bind amended-plan reconciliation to one clean-base analysis and current selected-roster lifecycle, one `/d2b-spec-edit` batch that changes exactly T073-T218 plus T603 when every row is satisfied, one dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589. The editor receipt and Git history are the sole authority; T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require the exact eight identifiers before T219 evaluates the accepted external disposition. | FR-072, SC-034 | W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
 | RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, complete T605 on its owned normative/test/API/reference artifacts, reconcile the T595 emitter and T599 consumers, then reconcile generated manifests/full drift at T220 so all coordinated artifacts and exact-candidate evidence land in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
 
@@ -177,18 +177,8 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   satisfy this partial US1 production-plane checkpoint. Refusals are
   separate negative cases. Direct `WatchService`, `ProductionWatchHarness`, a fake endpoint, a fixed
   subject, or an older result artifact is ineligible.
-- Before T589, pre-validator analysis and plan panel at A/P0 authorize exactly T603's two
-  validator source paths plus mandatory
-  `changelog.d/delivery-resume-reconciliation.md`. Validator-and-fragment commit V becomes B,
-  P remains byte-identical to P0,
-  and analysis plus the plan panel rerun at B/P. T603 then writes the closed external
-  receipt, accounts for all T073-T218 obligations, and binds opaque project sentinel
-  `7f6d0beab0ce4c13a89f6865d5ac42e2`, Git-root-relative
-  feature path, post-validator analysis, and the unanimous post-validator plan receipt at
-  `adr046w5-r<n>` to B/P. Only the validator-derived P-to-Q `/d2b-spec-edit` batch may check
-  T073-T218 and T603; dedicated commit C has exact parent B. T589 requires the finalized
-  editor receipt, clean HEAD C, those checkboxes, and fresh analysis plus unanimous plan
-  review bound to exact C/Q because the content change invalidates B/P sign-off for dispatch.
+- Before T589, analysis and one current selected-roster plan lifecycle bind clean base A and the complete feature snapshot. If all T073-T218 obligations are satisfied, one `/d2b-spec-edit` batch checks those rows plus T603 and the integrator creates dedicated checkbox-only commit C. The editor receipt and C are the sole authority. Fresh analysis and a new selected-roster lifecycle bind C and the changed snapshot; T603 owns no source, fragment, scratch receipt, sidecar, digest chain, or resume protocol.
+
   Before T219, no reconciled obligation
   remains open, T220 has converged and frozen clean exact F, C is an ancestor of F, and the
   F/tree-bound evidence union contains exactly the eight closed validation identifiers, as
