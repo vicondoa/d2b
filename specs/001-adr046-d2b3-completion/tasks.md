@@ -2089,8 +2089,9 @@ table before the operation exists.
   reopen/directory-sync/conflict/audit boundary of no-replace intent publication is typed
   pending-intent; after intent, every terminal boundary is typed pending-terminal. Both
   block later mutation and reconstruct the byte-identical outcome from durable
-  selection/decision-pre/intent before new source acquisition. All three pending
-  publication types use an incomplete prefix that intrinsically derives the boundary;
+  selection/decision-pre/intent before new source acquisition. All four pending
+  publication types - decision basis, decision selection, intent, and terminal
+  publication - use an incomplete prefix that intrinsically derives the boundary;
   each includes `Conflict`, while `Complete` and an independent disagreeing failure are
   unrepresentable. A
   watermark-complete repaired
