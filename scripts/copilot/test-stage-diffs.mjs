@@ -197,6 +197,14 @@ try {
       })}\n`,
     );
   }
+  const legacyAddressPath = join(firstDir, "address.json");
+  const legacyAddress = JSON.parse(readFileSync(legacyAddressPath, "utf8"));
+  delete legacyAddress.phase;
+  delete legacyAddress.selection_sha256;
+  writeFileSync(
+    legacyAddressPath,
+    `${JSON.stringify(legacyAddress, null, 2)}\n`,
+  );
 
   writeFileSync(join(repo, "Makefile"), "second build change\n");
   git(repo, "add", "Makefile");
@@ -280,6 +288,11 @@ try {
     currentSelectionPath,
   ]);
   check("later review stages successfully", second.status === 0, second.text);
+  check(
+    "later review derives compatibility fields from a legacy address",
+    second.status === 0,
+    second.text,
+  );
 
   const secondDir = join(repo, ".scratch", "panel", "spec001w1-r2");
   const delta = readFileSync(join(secondDir, "delta.diff"), "utf8");

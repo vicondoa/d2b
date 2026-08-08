@@ -124,6 +124,7 @@ out="$root/.scratch/panel/$round"
 read_address() {
   node - "$1" <<'NODE'
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = process.argv[2];
 let value;
 try {
@@ -132,19 +133,43 @@ try {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
 }
-for (const key of [
-  "round", "lifecycle_id", "base", "previous_tip", "tip",
-  "phase", "selection_path", "selection_sha256",
-]) {
+for (const key of ["round", "lifecycle_id", "base", "previous_tip", "tip"]) {
   if (typeof value[key] !== "string" || value[key].length === 0) {
     console.error(`${path}: address.json is missing ${key}`);
     process.exit(1);
   }
 }
+let phase = value.phase;
+const selectionPath = value.selection_path ?? "";
+let selectionSha256 = value.selection_sha256;
+if (
+  selectionPath &&
+  fs.existsSync(selectionPath) &&
+  (!phase || !selectionSha256)
+) {
+  const selectionBytes = fs.readFileSync(selectionPath);
+  let selection;
+  try {
+    selection = JSON.parse(selectionBytes);
+  } catch (error) {
+    console.error(`${selectionPath}: invalid lifecycle selection: ${error.message}`);
+    process.exit(1);
+  }
+  phase ||= selection.phase;
+  selectionSha256 ||=
+    crypto.createHash("sha256").update(selectionBytes).digest("hex");
+}
+if (!phase || !selectionPath || !selectionSha256) {
+  console.error(
+    `${path}: legacy address cannot derive phase and selection digest; ` +
+    "record a readable selection_path or start a new lifecycle",
+  );
+  process.exit(1);
+}
 process.stdout.write(
   [
     value.round, value.lifecycle_id, value.base, value.previous_tip, value.tip,
-    value.phase, value.selection_path, value.selection_sha256,
+    phase, selectionPath, selectionSha256,
   ].join("\t"),
 );
 NODE
