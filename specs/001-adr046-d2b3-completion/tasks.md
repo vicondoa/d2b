@@ -2022,7 +2022,7 @@ table before the operation exists.
   `BeforeDay90 | Day90Reached { mandatoryPruneTargetSha256 }` plan, then broker-private
   sealed evidence, any exact mandatory prune over the complete pre-bound 1-through-256
   member census, one immutable no-replace watermark final under the shared nine-boundary
-  publication protocol, durable decision basis, decision selection, decision-pre, a
+  publication protocol, durable decision-basis intent, decision basis, decision selection, decision-pre, a
   broker-private exact terminal-outcome intent, and one matching fixed nested outcome.
   Fresh-process pre-only
   replay reconstructs
