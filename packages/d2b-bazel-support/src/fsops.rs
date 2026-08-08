@@ -89,7 +89,7 @@ pub enum FileKind {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct FileMetadata {
     device: u64,
     inode: u64,
@@ -119,14 +119,6 @@ impl FileMetadata {
             modified,
             changed,
         }
-    }
-
-    pub const fn device(self) -> u64 {
-        self.device
-    }
-
-    pub const fn inode(self) -> u64 {
-        self.inode
     }
 
     pub const fn size(self) -> u64 {
@@ -162,10 +154,22 @@ impl FileMetadata {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for FileMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("FileMetadata(..)")
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct DirectoryEntry {
     pub name: OsString,
     pub kind: FileKind,
+}
+
+impl fmt::Debug for DirectoryEntry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DirectoryEntry(..)")
+    }
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -199,7 +203,6 @@ impl fmt::Debug for Digest {
     }
 }
 
-#[derive(Debug)]
 enum HandleInner {
     #[cfg(unix)]
     Host(Arc<OwnedFd>),
@@ -207,8 +210,13 @@ enum HandleInner {
 }
 
 /// An owned directory or file descriptor. It intentionally has no path.
-#[derive(Debug)]
 pub struct FsHandle(HandleInner);
+
+impl fmt::Debug for FsHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("FsHandle(..)")
+    }
+}
 
 impl Clone for FsHandle {
     fn clone(&self) -> Self {
@@ -221,16 +229,6 @@ impl Clone for FsHandle {
 }
 
 impl FsHandle {
-    pub fn inode(&self) -> u64 {
-        match &self.0 {
-            #[cfg(unix)]
-            HandleInner::Host(fd) => rustix_fs::fstat(fd.as_ref())
-                .map(|stat| stat.st_ino)
-                .unwrap_or_default(),
-            HandleInner::Memory(handle) => handle.inode,
-        }
-    }
-
     pub fn is_directory(&self) -> bool {
         match &self.0 {
             #[cfg(unix)]
@@ -250,113 +248,86 @@ impl FsHandle {
 }
 
 /// A descriptor returned by the provider open. Its inner descriptor and path
-/// are private; only the verified execution owner can request a CLOEXEC dup.
+/// remain private to this filesystem authority.
 pub struct ProviderHandle {
     descriptor: FsHandle,
 }
 
 impl fmt::Debug for ProviderHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ProviderHandle")
-            .field("inode", &self.inode())
-            .finish()
+        formatter.write_str("ProviderHandle(..)")
     }
 }
 
 impl ProviderHandle {
-    pub fn inode(&self) -> u64 {
-        self.descriptor.inode()
-    }
-
-    pub fn descriptor(&self) -> &FsHandle {
+    fn descriptor(&self) -> &FsHandle {
         &self.descriptor
-    }
-
-    #[cfg(unix)]
-    pub fn duplicate_for_mapping(&self) -> io::Result<OwnedFd> {
-        match &self.descriptor.0 {
-            HandleInner::Host(fd) => {
-                rustix_io::fcntl_dupfd_cloexec(fd.as_ref(), 3).map_err(io::Error::from)
-            }
-            HandleInner::Memory(_) => Err(io::Error::from_raw_os_error(
-                rustix_io::Errno::NOSYS.raw_os_error(),
-            )),
-        }
-    }
-
-    #[cfg(unix)]
-    pub fn is_close_on_exec(&self) -> io::Result<bool> {
-        match &self.descriptor.0 {
-            HandleInner::Host(fd) => rustix_io::fcntl_getfd(fd.as_ref())
-                .map(|flags| flags.contains(rustix_io::FdFlags::CLOEXEC))
-                .map_err(io::Error::from),
-            HandleInner::Memory(_) => Ok(true),
-        }
     }
 }
 
-/// A verified provider result. This is an intermediate support value; the
-/// public execution capability is defined in `d2b-bazel-exec`.
+/// A verified provider result retained for the authority-owned admission lane.
+#[allow(dead_code)]
 pub struct VerifiedProvider {
     handle: ProviderHandle,
     metadata: FileMetadata,
     digest: Digest,
 }
 
-impl VerifiedProvider {
-    pub fn into_parts(self) -> (ProviderHandle, FileMetadata, Digest) {
-        (self.handle, self.metadata, self.digest)
-    }
-}
-
-#[derive(Debug)]
 pub enum VerificationError {
-    Io(io::Error),
+    Io,
     NotRegular,
-    NotExecutable {
-        mode: u32,
-    },
-    Stale {
-        provider: Timestamp,
-        newest_input: Timestamp,
-    },
+    NotExecutable,
+    Stale,
     DigestMismatch,
     MetadataChanged,
-    ShortRead {
-        expected: u64,
-        actual: usize,
-    },
+    ShortRead,
+}
+
+impl fmt::Debug for VerificationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code())
+    }
 }
 
 impl fmt::Display for VerificationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(_) => formatter.write_str("provider descriptor operation failed"),
+            Self::Io => formatter.write_str("provider descriptor operation failed"),
             Self::NotRegular => formatter.write_str("provider is not a regular file"),
-            Self::NotExecutable { .. } => formatter.write_str("provider is not executable"),
-            Self::Stale { .. } => formatter.write_str("provider is older than its newest input"),
+            Self::NotExecutable => formatter.write_str("provider is not executable"),
+            Self::Stale => formatter.write_str("provider is older than its newest input"),
             Self::DigestMismatch => formatter.write_str("provider digest does not match"),
             Self::MetadataChanged => {
                 formatter.write_str("provider metadata changed during digest read")
             }
-            Self::ShortRead { .. } => formatter.write_str("provider digest read was short"),
+            Self::ShortRead => formatter.write_str("provider digest read was short"),
+        }
+    }
+}
+
+impl VerificationError {
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Io => "D2B-BZLEXEC-PROVIDER-IO",
+            Self::NotRegular => "D2B-BZLEXEC-PROVIDER-KIND",
+            Self::NotExecutable => "D2B-BZLEXEC-PROVIDER-MODE",
+            Self::Stale => "D2B-BZLEXEC-PROVIDER-STALE",
+            Self::DigestMismatch => "D2B-BZLEXEC-PROVIDER-DIGEST",
+            Self::MetadataChanged => "D2B-BZLEXEC-PROVIDER-METADATA",
+            Self::ShortRead => "D2B-BZLEXEC-PROVIDER-READ",
         }
     }
 }
 
 impl std::error::Error for VerificationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            _ => None,
-        }
+        None
     }
 }
 
 impl From<io::Error> for VerificationError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
+    fn from(_: io::Error) -> Self {
+        Self::Io
     }
 }
 
@@ -393,31 +364,20 @@ pub fn verify_provider<F: FileSystem>(
         return Err(VerificationError::NotRegular);
     }
     if !before.is_executable() {
-        return Err(VerificationError::NotExecutable {
-            mode: before.mode(),
-        });
+        return Err(VerificationError::NotExecutable);
     }
     if let Some(input) = newest_input {
         let input_metadata = filesystem.fstat(input.descriptor())?;
         if before.modified() < input_metadata.modified() {
-            return Err(VerificationError::Stale {
-                provider: before.modified(),
-                newest_input: input_metadata.modified(),
-            });
+            return Err(VerificationError::Stale);
         }
     }
 
-    let size = usize::try_from(before.size()).map_err(|_| VerificationError::ShortRead {
-        expected: before.size(),
-        actual: 0,
-    })?;
+    let size = usize::try_from(before.size()).map_err(|_| VerificationError::ShortRead)?;
     let mut bytes = vec![0_u8; size];
     let count = filesystem.pread(handle.descriptor(), &mut bytes, 0)?;
     if count != size {
-        return Err(VerificationError::ShortRead {
-            expected: before.size(),
-            actual: count,
-        });
+        return Err(VerificationError::ShortRead);
     }
     let actual = Digest::sha256(&bytes);
     if expected_digest.as_ref() != actual.as_ref() {
@@ -445,9 +405,16 @@ pub struct OpenRecord {
 }
 
 #[cfg(unix)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct HostFileSystem {
     route: OpenRoute,
+}
+
+#[cfg(unix)]
+impl fmt::Debug for HostFileSystem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HostFileSystem(..)")
+    }
 }
 
 #[cfg(unix)]
@@ -625,13 +592,11 @@ fn rustix_file_kind(mode: u32) -> FileKind {
     }
 }
 
-#[derive(Debug)]
 struct MemoryHandle {
     fs: Arc<Mutex<MemoryState>>,
     inode: u64,
 }
 
-#[derive(Debug)]
 struct MemoryNode {
     metadata: FileMetadata,
     bytes: Vec<u8>,
@@ -647,7 +612,6 @@ struct MemoryNodeSpec {
     target: Option<u64>,
 }
 
-#[derive(Debug)]
 struct MemoryState {
     next_inode: u64,
     nodes: BTreeMap<u64, MemoryNode>,
@@ -662,9 +626,15 @@ struct MemoryState {
 
 /// A deterministic filesystem fake. It records the exact open policy and
 /// models descriptor identity without touching a host path.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InMemoryFileSystem {
     state: Arc<Mutex<MemoryState>>,
+}
+
+impl fmt::Debug for InMemoryFileSystem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("InMemoryFileSystem(..)")
+    }
 }
 
 pub type FakeFileSystem = InMemoryFileSystem;
@@ -811,6 +781,10 @@ impl InMemoryFileSystem {
         }
     }
 
+    pub fn set_provider_mode(&self, provider: &ProviderHandle, mode: u32) {
+        self.set_mode(&provider.descriptor, mode);
+    }
+
     pub fn rebind(
         &self,
         parent: &FsHandle,
@@ -839,14 +813,6 @@ impl InMemoryFileSystem {
         self.state
             .lock()
             .map(|state| state.open_records.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn inode_named(&self, name: impl AsRef<OsStr>) -> u64 {
-        self.state
-            .lock()
-            .ok()
-            .and_then(|state| state.children.get(&(1, os_bytes(name.as_ref()))).copied())
             .unwrap_or_default()
     }
 

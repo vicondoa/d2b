@@ -13,15 +13,11 @@ use d2b_bazel_support::{
         Digest, FileMetadata, FileSystem, FsHandle, InMemoryFileSystem, OpenFlags, ProviderHandle,
         ResolvePolicy,
     },
-    runfiles::{InMemoryRunfilesView, RunfilesLookup, RunfilesMode, RunfilesView},
+    runfiles::{
+        InMemoryRunfilesView, RunfilesLocation, RunfilesLookup, RunfilesMode, RunfilesView,
+    },
 };
 use d2b_test_locator::{LocatorError, bazel_binary};
-
-macro_rules! env {
-    ($($tokens:tt)*) => {
-        "/caller/anchor/provider"
-    };
-}
 
 #[derive(Debug)]
 struct CountingRunfiles {
@@ -97,23 +93,16 @@ fn bazel_mode_miss_is_refused_without_a_cargo_fallback() {
 }
 
 #[test]
-fn cargo_binary_macro_expands_the_environment_at_the_call_site() {
+fn cargo_binary_macro_refuses_before_an_authority_owned_admission() {
     let (filesystem, digest) = fixture();
     let runfiles = InMemoryRunfilesView::cargo();
 
-    let executable =
-        d2b_test_locator::cargo_binary!(&filesystem, &runfiles, "caller_binary", digest)
-            .expect("the caller-provided Cargo path should locate the provider");
-
-    assert_eq!(
-        filesystem
-            .provider_paths
-            .lock()
-            .expect("provider paths")
-            .as_slice(),
-        [PathBuf::from("provider")]
-    );
-    drop(executable);
+    let error =
+        match d2b_test_locator::cargo_binary!(&filesystem, &runfiles, "caller_binary", digest) {
+            Ok(_) => panic!("local provider admission must fail closed"),
+            Err(error) => error,
+        };
+    assert!(matches!(error, LocatorError::ExecutionAuthorityUnavailable));
 }
 
 #[test]
@@ -141,19 +130,31 @@ fn selected_mode_dispatches_one_arm_without_chaining() {
 
 #[test]
 fn bazel_binary_reports_a_missing_declared_entry_instead_of_using_cargo() {
-    let (filesystem, digest) = fixture();
+    let (filesystem, _digest) = fixture();
     let runfiles = InMemoryRunfilesView::present("/runfiles/root", []);
 
-    let error = match bazel_binary(&filesystem, &runfiles, Path::new("provider"), digest) {
+    let error = match bazel_binary(&filesystem, &runfiles, Path::new("provider")) {
         Ok(_) => panic!("a missing Bazel entry must refuse"),
         Err(error) => error,
     };
 
-    assert!(matches!(
-        error,
-        LocatorError::RunfilesEntryMissing { ref relative } if relative == Path::new("provider")
-    ));
+    assert!(matches!(error, LocatorError::RunfilesEntryMissing));
     assert_eq!(filesystem.inner.provider_open_count(), 0);
+}
+
+#[test]
+fn locator_and_runfiles_debug_renderings_are_fixed() {
+    let location = RunfilesLocation {
+        anchor: PathBuf::from("/sensitive/anchor"),
+        relative: PathBuf::from("sensitive/provider"),
+    };
+    assert_eq!(
+        format!("{:?}", RunfilesLookup::Present(location)),
+        "RunfilesLookup::Present"
+    );
+    let error = LocatorError::RunfilesEntryMissing;
+    assert_eq!(format!("{error:?}"), "D2B-BZLEXEC-LOCATOR-RUNFILES");
+    assert_eq!(error.to_string(), "D2B-BZLEXEC-LOCATOR-RUNFILES");
 }
 
 struct AnchoredFileSystem {

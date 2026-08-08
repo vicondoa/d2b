@@ -12,18 +12,35 @@ pub enum RunfilesMode {
 }
 
 /// A runfiles anchor and the declared path below that anchor.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct RunfilesLocation {
     pub anchor: PathBuf,
     pub relative: PathBuf,
 }
 
+impl std::fmt::Debug for RunfilesLocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RunfilesLocation(..)")
+    }
+}
+
 /// The result of one runfiles lookup.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum RunfilesLookup {
     Present(RunfilesLocation),
     Missing,
     NotBazel,
+}
+
+impl std::fmt::Debug for RunfilesLookup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Present(_) => "RunfilesLookup::Present",
+            Self::Missing => "RunfilesLookup::Missing",
+            Self::NotBazel => "RunfilesLookup::NotBazel",
+        };
+        formatter.write_str(label)
+    }
 }
 
 /// The injected boundary used by tests and by the locator.
@@ -33,10 +50,16 @@ pub trait RunfilesView {
 }
 
 /// Read-only host runfiles lookup.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct HostRunfilesView {
     root: Option<PathBuf>,
     manifest_entries: Option<BTreeSet<PathBuf>>,
+}
+
+impl std::fmt::Debug for HostRunfilesView {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HostRunfilesView(..)")
+    }
 }
 
 impl HostRunfilesView {
@@ -97,12 +120,12 @@ impl RunfilesView for HostRunfilesView {
 }
 
 /// An explicit runfiles fake. It does not inspect a host path.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InMemoryRunfilesView {
     state: InMemoryRunfilesState,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum InMemoryRunfilesState {
     Present {
         anchor: PathBuf,
@@ -110,6 +133,12 @@ enum InMemoryRunfilesState {
     },
     Missing,
     Cargo,
+}
+
+impl std::fmt::Debug for InMemoryRunfilesView {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("InMemoryRunfilesView(..)")
+    }
 }
 
 impl InMemoryRunfilesView {
