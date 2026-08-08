@@ -482,8 +482,9 @@ deserializers, and human/JSON goldens accept every listed pair and reject every 
 stage/class pair or action substitution. The overflow golden uses `u32::MAX`, exits `4`,
 and carries no intended outcome, terminal failure, next generation, or mutable identifier.
 
-Replay-key candidate recycling, broker compaction/recovery, or attempt-capacity release
-failure also exits `4` and never masquerades as a settled continuity repair:
+Replay-key candidate recycling, broker compaction/recovery, or a resumable
+attempt-capacity release failure exits `4` and never masquerades as a settled continuity
+repair:
 
 ```text
 host generation handoff immutable audit continuity cleanup pending
@@ -497,36 +498,49 @@ Its JSON is exactly
 Stages are exactly `replay-key-candidate-recycling | broker-compaction |
 capacity-release`. Classes are exactly `head-changed | target-changed | hierarchy | write |
 file-sync | link | reopen | unlink | directory-sync | census | conflict |
-audit-publication | ledger-conflict |
-standing-reserve-missing | standing-reserve-overdrawn |
-standing-reserve-duplicated | standing-reserve-unaccounted`.
+audit-publication`.
 `head-changed | target-changed | conflict` map to
 `preserve-and-escalate-continuity-publication-conflict`;
 `hierarchy | write | file-sync | link | reopen | unlink | directory-sync` to
 `repair-retention-storage-and-reconcile`, `census` to
 `repair-retention-census-and-reconcile`, and `audit-publication` to
-`repair-retention-audit-and-reconcile`. `ledger-conflict` and every standing-reserve
-corruption class map to `preserve-and-escalate-audit-integrity-incident`. Valid pairs are
-exactly:
+`repair-retention-audit-and-reconcile`. Valid pending pairs are exactly:
 
 | Stage | Admitted classes |
 | --- | --- |
 | `replay-key-candidate-recycling` | `hierarchy | write | file-sync | link | reopen | unlink | directory-sync | census | conflict | audit-publication` |
 | `broker-compaction` | `head-changed | target-changed | hierarchy | write | file-sync | link | reopen | unlink | directory-sync | census | conflict | audit-publication` |
-| `capacity-release` | `ledger-conflict | census | audit-publication | standing-reserve-missing | standing-reserve-overdrawn | standing-reserve-duplicated | standing-reserve-unaccounted` |
+| `capacity-release` | `census | audit-publication` |
 
 Candidate-recycler and broker-compaction storage, census, conflict, and audit-publication
 failures after successful unlink carry the original durable mutation intent and resume
-that same operation; they are not settled degraded repair results. Capacity-release
-`ledger-conflict` and standing-reserve classes are public integrity responses, never
-collapsed to `census`, `audit-publication`, or a generic capacity error. Strict schemas,
-wire snapshots, constructors, deserializers, and one human and JSON golden for every exact
-stage/class/action triple reject every other pair and every action substitution.
-For capacity release, `census` and `audit-publication` preserve and resume the original
-ledger-safe release prefix after their named repair. `ledger-conflict` and all four
-standing-reserve classes are terminal incidents for that operation: the action preserves
-and escalates, the charged slice remains unavailable, and no successor release identity or
-retry command is rendered.
+that same operation; pre-unlink candidate-recycler failure likewise keeps the original
+fixed identity pending and retries it after repair rather than publishing a failed outcome
+or successor identity. These are not settled degraded repair results. Strict schemas, wire
+snapshots, constructors, deserializers, and one human and JSON golden for every exact
+stage/class/action triple reject every other pair and every action substitution. For
+capacity release, `census` and `audit-publication` preserve and resume the original
+ledger-safe release prefix after their named repair.
+
+`ledger-conflict` and the four standing-reserve corruption classes are terminal integrity
+incidents, not pending cleanup. They exit `4` with the distinct human form:
+
+```text
+host generation handoff immutable audit continuity capacity integrity incident
+stage: capacity-release
+failure-class: <CLOSED_CAPACITY_INTEGRITY_INCIDENT_CLASS>
+action: preserve-and-escalate-audit-integrity-incident
+```
+
+Their JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-capacity-integrity-incident","stage":"capacity-release","failureClass":"<CLOSED_CAPACITY_INTEGRITY_INCIDENT_CLASS>","action":"preserve-and-escalate-audit-integrity-incident"}`.
+`CLOSED_CAPACITY_INTEGRITY_INCIDENT_CLASS` is exactly `ledger-conflict |
+standing-reserve-missing | standing-reserve-overdrawn |
+standing-reserve-duplicated | standing-reserve-unaccounted`. This shape contains no
+`pending`, `settlement`, successor, or retry field. It preserves the ledger, keeps the
+charged slice unavailable, and renders no successor release identity or retry command.
+Strict schema and human/JSON goldens independently reject every terminal class in the
+cleanup-pending shape and every resumable class in the integrity-incident shape.
 Source-release failure always uses the source-lifecycle form above, never this cleanup
 class.
 
@@ -561,13 +575,17 @@ This form deliberately has no `intendedOutcome` or terminal `failure`: neither i
 until the exact private `ContinuityRepairDecisionBasisV1` final and directory chain are
 durable. The private `ContinuityRepairDecisionBasisIntentV1` final and directory chain are
 the write-ahead decision commit; an in-memory candidate before intent durability is not a
-selected outcome, and every later basis prefix reloads that intent. The closed intent and
-basis boundary set is exactly
+selected outcome. Before intent parent durability, restart accepts an absent or exact final:
+absence means no decision committed and replays the preceding durable repair state, while
+an exact final resumes durability. After the intent directory chain is durable, every
+later basis state reloads that frozen intent. Before basis parent durability, restart
+accepts absence or the exact basis and recreates absence byte-identically only from the
+durable intent. The closed intent and basis boundary set is exactly
 `hierarchy | write | file-sync | link | reopen | directory-sync | conflict |
 audit-publication`; every member has this one legal response shape and exact exit. The
-boundary is intrinsic to its incomplete prefix.
-`conflict` preserves either both private intent digests or the durable intent plus both
-private basis digests, publishes no intended outcome, and maps only to
+boundary is derived from either the sealed `Progress` prefix or sealed `Conflict` state.
+Progress prefixes exclude `Conflict`. A `conflict` state preserves its durable predecessor
+plus existing and candidate private digests, publishes no intended outcome, and maps only to
 `preserve-and-escalate-continuity-publication-conflict`.
 
 Decision selection publication pending exits `4` before an intended outcome is publicly
@@ -586,9 +604,9 @@ Its JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
 `intendedOutcome` comes only from the durable sealed decision basis recorded before
 decision-selection publication. The boundary is derived from the incomplete durable prefix
-and cannot be supplied independently. `conflict` is a closed prefix/boundary carrying the
-same durable intended outcome; it preserves both private selection digests and permits no
-replacement or reselection.
+or sealed conflict state and cannot be supplied independently. `conflict` is not a progress
+prefix; it carries the same durable basis predecessor plus existing and candidate private
+selection digests and permits no replacement or reselection.
 
 Settlement preparation incomplete after durable decision selection but before durable
 decision-pre exits `4`. Its human form is exactly:
@@ -662,11 +680,12 @@ decision-basis pending without an intended outcome, decision-selection pending,
 preparation-incomplete, and both later pending stages for all five intended outcomes.
 Constructor and deserializer negatives reject an intended outcome or terminal failure in
 the basis-pending form, `Complete` in any pending form, and any independently supplied
-boundary that disagrees with its prefix. Across the four publication-pending types -
+boundary that disagrees with its state. Across the four publication-pending types -
 decision basis, decision selection, outcome intent, and terminal outcome - `Conflict` is a
-sealed intrinsic prefix, never a free failure field; basis pending alone omits
-`intendedOutcome`, while the other three derive it only from their required durable
-predecessor.
+sealed state variant carrying predecessor, existing digest, and candidate digest, never a
+progress prefix or free failure field; basis pending alone omits `intendedOutcome`, while
+the other three derive it only from their required durable predecessor. Human/JSON output
+never renders any of those private digests or predecessor bytes.
 
 The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
 168-case broker registry preserve their exact ids and own only their literal caller,
