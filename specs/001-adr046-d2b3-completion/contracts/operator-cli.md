@@ -391,6 +391,58 @@ typed degradation. `PruneHostGenerationImmutableAuditBackupsV1` consumes the pri
 sealed lifetime-bound permit with no clone/copy/default/conversion/serde/accessor surface and
 emits immutable fixed-field pre/outcome audit. Prune/limit/clock/settlement failure returns
 the typed redacted report/action and blocks later mutation.
+
+The selector-free `host-generation-retention-clock-discontinuity-repair-v1` procedure
+returns only the following continuity-repair forms. It accepts no caller evidence,
+timestamp, boot identity, anchor, deadline, member, digest, path, selector, or force input.
+A repaired result exits `0`. Its human form is exactly two newline-terminated lines:
+
+```text
+host generation handoff immutable audit continuity repaired
+outcome: <REPAIRED_OUTCOME>
+```
+
+`REPAIRED_OUTCOME` is exactly `repaired-before-day-90 |
+repaired-after-mandatory-prune`. JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-continuity-repair","ok":true,"outcome":"<REPAIRED_OUTCOME>"}`.
+
+Pending exact-outcome publication exits `4`. Its human form is exactly:
+
+```text
+host generation handoff immutable audit continuity repair pending
+intended-outcome: <CLOSED_TERMINAL_OUTCOME>
+settlement: exact-outcome-publication-pending
+action: repair-retention-audit-and-reconcile
+```
+
+`CLOSED_TERMINAL_OUTCOME` is exactly `repaired-before-day-90 |
+repaired-after-mandatory-prune | degraded-before-day-90 |
+degraded-day-90-before-prune | degraded-day-90-after-prune`. JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","settlement":"exact-outcome-publication-pending","action":"repair-retention-audit-and-reconcile"}`.
+The intended outcome is reconstructed from the broker-private durable intent and is never
+changed during settlement.
+
+A settled degraded result exits `4`. Its human form is exactly:
+
+```text
+host generation handoff immutable audit continuity repair degraded
+outcome: <DEGRADED_OUTCOME>
+failure-branch: <CLOSED_CONTINUITY_FAILURE_BRANCH>
+failure-class: <CLOSED_CONTINUITY_FAILURE_CLASS>
+action: <ACTION_FROM_CONTINUITY_TABLE>
+```
+
+`DEGRADED_OUTCOME` is exactly `degraded-before-day-90 |
+degraded-day-90-before-prune | degraded-day-90-after-prune`.
+`CLOSED_CONTINUITY_FAILURE_BRANCH` is exactly `source | publication | retention`, and its
+class must belong to that branch's closed enum in `data-model.md`.
+`outcome-publication` is pending-only and is not a settled degraded failure class. JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-degraded","outcome":"<DEGRADED_OUTCOME>","failure":{"branch":"<CLOSED_CONTINUITY_FAILURE_BRANCH>","class":"<CLOSED_CONTINUITY_FAILURE_CLASS>"},"action":"<ACTION_FROM_CONTINUITY_TABLE>"}`.
+No continuity form contains a replay handle, attempt, watermark, prune proof, evidence,
+clock, boot identity, path, selector, argv, or free-form value. Real-procedure human/JSON
+goldens pin each repaired variant, every degraded branch/class/action, and pending settlement
+for all five intended outcomes.
+
 The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
 168-case broker registry preserve their exact ids and own only their literal caller,
 request, artifact, legacy backup/restoration publication, conflict, and no-write cases.
@@ -436,6 +488,17 @@ standing-reserve-unaccounted`:
 | `audit-publication`, `pending-settlement` | `repair-retention-audit-and-reconcile` |
 | `standing-reserve-missing`, `standing-reserve-overdrawn`, `standing-reserve-duplicated`, `standing-reserve-unaccounted` | `preserve-and-escalate-audit-integrity-incident` |
 
+Continuity rendering uses this exact total extension; a `retention` branch uses the table
+above:
+
+| Continuity failure branch/class | Exact action |
+| --- | --- |
+| `source/source-unavailable` | `repair-continuity-authoritative-source` |
+| `source/source-conflict` | `preserve-and-escalate-continuity-source-conflict` |
+| `publication/hierarchy`, `publication/write`, `publication/file-sync`, `publication/link`, `publication/reopen`, `publication/directory-sync` | `repair-retention-storage-and-reconcile` |
+| `publication/conflict` | `preserve-and-escalate-continuity-publication-conflict` |
+| `publication/audit-publication`, `publication/outcome-publication` | `repair-retention-audit-and-reconcile` |
+
 Every action is executable or names one external procedure:
 
 | Action | Owner and exact procedure |
@@ -452,6 +515,9 @@ Every action is executable or names one external procedure:
 | `use-unprivileged-local-admin-restoration-session` | site access administrator runs `host-generation-unprivileged-local-admin-restoration-session-v1`; the resulting unprivileged local Admin reruns the same one-artifact command |
 | `reconcile-immutable-audit-retention` | site backup administrator runs `host-generation-immutable-audit-retention-reconciliation-v1`, which can invoke only the typed prune op through the existing public-socket Admin path and sealed coordinator capability |
 | `repair-retention-clock-discontinuity` | site backup administrator repairs the configured authoritative time source, then an unprivileged public-socket `Admin` runs selector-free `host-generation-retention-clock-discontinuity-repair-v1` only as a wake signal; the sealed broker coordinator validates non-caller authoritative continuity evidence, consumes its private repair permit, preserves the original day-90 deadline across reboot or discontinuity, and prunes before completing repair when that deadline has passed |
+| `repair-continuity-authoritative-source` | site backup administrator runs `host-generation-continuity-authoritative-source-repair-v1`, which restores the disposition-pinned source version, authority, and exact replay-by-private-handle contract without accepting evidence from the operator; an unprivileged local public-socket `Admin` then reruns selector-free `host-generation-retention-clock-discontinuity-repair-v1` |
+| `preserve-and-escalate-continuity-source-conflict` | site security authority runs `host-generation-continuity-source-conflict-escalation-v1`, preserving the source, coordinator root, and immutable prefix and permitting no replacement, fallback evidence, prune, or retry until an accepted authority disposition names the source repair; after that repair, the site backup administrator and local Admin perform the authoritative-source repair and selector-free wake above |
+| `preserve-and-escalate-continuity-publication-conflict` | site security authority runs `host-generation-continuity-publication-conflict-escalation-v1`, preserving the conflicting final, parent, coordinator root, and immutable prefix and permitting no unlink, replacement, copy, compaction, or retry until an accepted authority disposition resolves the exact publication identity; the site backup administrator then runs `host-generation-retention-storage-repair-v1` and a local Admin reruns the selector-free wake |
 | `preserve-and-escalate-retention-clock-overflow` | site security authority runs `host-generation-retention-clock-overflow-escalation-v1`; no pruning or handoff retry is authorized |
 | `repair-retention-storage-and-reconcile` | site backup administrator runs `host-generation-retention-storage-repair-v1`, then typed reconciliation; it never unlinks directly |
 | `repair-retention-census-and-reconcile` | site backup administrator runs `host-generation-retention-census-repair-v1`, then typed reconciliation; it never edits an immutable census directly |
