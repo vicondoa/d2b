@@ -28,12 +28,13 @@
 //! purpose can never be reinterpreted as material for another.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     path::{Component, Path},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{DELIVERY_SCHEMA_VERSION, DeliveryError, Result};
@@ -73,7 +74,10 @@ const CONTENT_DOMAIN: &[u8] = b"d2b-delivery-content-v1\0";
 const CANDIDATE_DOMAIN: &[u8] = b"d2b-delivery-candidate-v1\0";
 const SNAPSHOT_DOMAIN: &[u8] = b"d2b-delivery-snapshot-v1\0";
 
-/// The ten-role default panel from spec section 12.3.
+/// The historical ten-role panel from spec section 12.3.
+///
+/// This is deliberately retained as a separate compatibility roster. Current
+/// panel selection uses [`PANEL_CURRENT_ROLES`] and never includes `rust`.
 pub const PANEL_ROLES: [PanelRole; 10] = [
     PanelRole::Software,
     PanelRole::Test,
@@ -86,6 +90,31 @@ pub const PANEL_ROLES: [PanelRole; 10] = [
     PanelRole::Observability,
     PanelRole::Kernel,
 ];
+
+/// Current panel role domain used by the version-1 selected-roster format.
+///
+/// A request stores a selected subset of this ordered domain. `rust` is not a
+/// current seat: Rust review is a profile on the `software` seat, while the
+/// legacy roster below remains readable unchanged.
+pub const PANEL_CURRENT_ROLES: [PanelRole; 13] = [
+    PanelRole::Software,
+    PanelRole::Test,
+    PanelRole::Product,
+    PanelRole::Docs,
+    PanelRole::Security,
+    PanelRole::Observability,
+    PanelRole::Simplicity,
+    PanelRole::Reliability,
+    PanelRole::Agentic,
+    PanelRole::Nixos,
+    PanelRole::Networking,
+    PanelRole::Kernel,
+    PanelRole::Build,
+];
+
+pub const PANEL_SELECTION_ARTIFACT_KIND: &str = "d2b-panel/lifecycle-selection";
+pub const PANEL_SELECTION_SCHEMA_VERSION: u32 = 1;
+pub const PANEL_SELECTION_TABLE_VERSION: u32 = 2;
 
 macro_rules! digest_identifier {
     ($name:ident, $label:literal) => {
@@ -336,6 +365,10 @@ pub enum PanelRole {
     Docs,
     Observability,
     Kernel,
+    Simplicity,
+    Reliability,
+    Agentic,
+    Build,
 }
 
 impl PanelRole {
@@ -351,8 +384,208 @@ impl PanelRole {
             Self::Docs => "docs",
             Self::Observability => "observability",
             Self::Kernel => "kernel",
+            Self::Simplicity => "simplicity",
+            Self::Reliability => "reliability",
+            Self::Agentic => "agentic",
+            Self::Build => "build",
         }
     }
+
+    pub(crate) fn is_current(self) -> bool {
+        PANEL_CURRENT_ROLES.contains(&self)
+    }
+}
+
+/// The candidate-bound selection artifact shared by the lifecycle helper and
+/// the delivery request writer.
+///
+/// The nested classification input is intentionally retained as JSON because
+/// the lifecycle helper adds full-candidate and fix-delta details over time.
+/// Its required top-level shape is checked by [`Self::validate_for_snapshot`], while the
+/// top-level DTO remains closed so a misspelled selection field cannot pass.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelSelectionV1 {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub lifecycle_id: String,
+    pub phase: String,
+    pub program: String,
+    pub wave: String,
+    pub candidate_id: CandidateId,
+    pub content_id: ContentId,
+    pub snapshot_sha256: SnapshotSha256,
+    pub selection_table_version: u32,
+    pub candidate_class: String,
+    pub classification_inputs: Value,
+    pub ambiguity_widened: bool,
+    pub profiles: BTreeMap<String, Vec<String>>,
+    pub roster: Vec<PanelRole>,
+}
+
+impl PanelSelectionV1 {
+    /// Validates a selection against the immutable snapshot it is intended to
+    /// request. The returned roster is already the only roster a current
+    /// request may store.
+    pub fn validate_for_snapshot(
+        &self,
+        program: &str,
+        wave: &str,
+        digests: &CandidateDigests,
+    ) -> Result<()> {
+        if self.artifact_kind != PANEL_SELECTION_ARTIFACT_KIND {
+            return Err(DeliveryError::new(
+                "panel selection artifact kind is not d2b-panel/lifecycle-selection",
+            ));
+        }
+        if self.schema_version != PANEL_SELECTION_SCHEMA_VERSION {
+            return Err(DeliveryError::new(format!(
+                "panel selection schema version must be {PANEL_SELECTION_SCHEMA_VERSION}"
+            )));
+        }
+        validate_bounded_string(&self.lifecycle_id, "panel selection lifecycle identifier")?;
+        if self.lifecycle_id == "."
+            || self.lifecycle_id == ".."
+            || self.lifecycle_id.contains('/')
+            || self.lifecycle_id.contains('\\')
+            || self.lifecycle_id.chars().any(char::is_control)
+        {
+            return Err(DeliveryError::new(
+                "panel selection lifecycle identifier must be one safe path component",
+            ));
+        }
+        if self.phase != "discovery" && self.phase != "verification" {
+            return Err(DeliveryError::new(
+                "panel selection phase must be discovery or verification",
+            ));
+        }
+        validate_program_wave(&self.program, &self.wave)?;
+        if self.program != program || self.wave != wave {
+            return Err(DeliveryError::new(
+                "panel selection program and wave must match the candidate snapshot",
+            ));
+        }
+        if self.candidate_id != digests.candidate_id
+            || self.content_id != digests.content_id
+            || self.snapshot_sha256 != digests.snapshot_sha256
+        {
+            return Err(DeliveryError::new(
+                "panel selection candidate digests must exactly match the candidate snapshot",
+            ));
+        }
+        if self.selection_table_version != PANEL_SELECTION_TABLE_VERSION {
+            return Err(DeliveryError::new(format!(
+                "panel selection table version must be {PANEL_SELECTION_TABLE_VERSION}"
+            )));
+        }
+        if !matches!(
+            self.candidate_class.as_str(),
+            "code" | "configuration" | "documentation" | "ambiguous"
+        ) {
+            return Err(DeliveryError::new(
+                "panel selection candidate class is not supported",
+            ));
+        }
+        validate_selection_classification_inputs(&self.classification_inputs)?;
+
+        if self.roster.is_empty() {
+            return Err(DeliveryError::new(
+                "panel selection roster must contain at least one current seat",
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for role in &self.roster {
+            if !role.is_current() {
+                return Err(DeliveryError::new(format!(
+                    "panel selection roster contains legacy or unknown seat {}",
+                    role.as_str()
+                )));
+            }
+            if !seen.insert(*role) {
+                return Err(DeliveryError::new(format!(
+                    "panel selection roster repeats seat {}",
+                    role.as_str()
+                )));
+            }
+        }
+        let canonical = PANEL_CURRENT_ROLES
+            .iter()
+            .copied()
+            .filter(|role| seen.contains(role))
+            .collect::<Vec<_>>();
+        if self.roster != canonical {
+            return Err(DeliveryError::new(
+                "panel selection roster is not in selection-table order",
+            ));
+        }
+        let floor = match self.candidate_class.as_str() {
+            "documentation" => 8,
+            "code" | "configuration" | "ambiguous" => 10,
+            _ => unreachable!("candidate class was checked above"),
+        };
+        if self.roster.len() < floor {
+            return Err(DeliveryError::new(format!(
+                "panel selection roster has {} seats but this candidate class requires at least {floor}",
+                self.roster.len()
+            )));
+        }
+
+        if self.profiles.len() != self.roster.len() {
+            return Err(DeliveryError::new(
+                "panel selection profiles must have exactly one entry per selected seat",
+            ));
+        }
+        for role in &self.roster {
+            let profiles = self.profiles.get(role.as_str()).ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "panel selection profiles are missing selected seat {}",
+                    role.as_str()
+                ))
+            })?;
+            let mut profile_names = BTreeSet::new();
+            for profile in profiles {
+                validate_bounded_string(profile, "panel selection profile")?;
+                if !profile_names.insert(profile) {
+                    return Err(DeliveryError::new(format!(
+                        "panel selection repeats profile for seat {}",
+                        role.as_str()
+                    )));
+                }
+            }
+        }
+        if self
+            .profiles
+            .keys()
+            .any(|role| !self.roster.iter().any(|selected| selected.as_str() == role))
+        {
+            return Err(DeliveryError::new(
+                "panel selection profiles contain an unselected seat",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_selection_classification_inputs(value: &Value) -> Result<()> {
+    let object = value.as_object().ok_or_else(|| {
+        DeliveryError::new("panel selection classification_inputs must be an object")
+    })?;
+    for key in ["changed_paths", "signals"] {
+        let values = object.get(key).and_then(Value::as_array).ok_or_else(|| {
+            DeliveryError::new(format!(
+                "panel selection classification_inputs must contain a {key} array"
+            ))
+        })?;
+        for value in values {
+            let text = value.as_str().ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "panel selection classification_inputs {key} entries must be strings"
+                ))
+            })?;
+            validate_bounded_string(text, "panel selection classification input")?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -1272,6 +1505,30 @@ mod tests {
                 "kernel",
             ]
         );
+    }
+
+    #[test]
+    fn the_current_panel_domain_is_thirteen_roles_without_rust() {
+        assert_eq!(PANEL_CURRENT_ROLES.len(), 13);
+        assert_eq!(
+            PANEL_CURRENT_ROLES.map(PanelRole::as_str),
+            [
+                "software",
+                "test",
+                "product",
+                "docs",
+                "security",
+                "observability",
+                "simplicity",
+                "reliability",
+                "agentic",
+                "nixos",
+                "networking",
+                "kernel",
+                "build",
+            ]
+        );
+        assert!(!PANEL_CURRENT_ROLES.contains(&PanelRole::Rust));
     }
 
     #[test]

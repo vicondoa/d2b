@@ -90,18 +90,23 @@ The one exception is a **history-only rebase**. Review survives when content is
 provably unchanged and matches on content identity rather than the full digest
 triple. Validator evidence uses the opposite rule.
 
-### 2. Panel request, then the round
+### 2. Panel request and selected lifecycle
 
-`panel-request` writes the candidate-bound request naming exactly the ten roles
-and required provider, model, and reasoning effort. Then run
-`/d2b-panel-round work` against the same candidate.
+`panel-request --selection PATH` requires the candidate-bound lifecycle
+selection and stores its exact ordered roster, provider, model, and reasoning
+effort. Then run `/d2b-panel-round work` against the same candidate: one
+comprehensive discovery, one shared ledger, batch implementation responses and
+self-verification, and scoped verification. The lifecycle roster may widen
+for a fix delta but never narrows.
 
 ### 3. Attest
 
-`panel-attest` validates a directory with exactly one strict record per role,
-all bound to the same candidate. It enforces ten of ten, `signoff` true iff
-`recommendations` is empty, distinct provenance per seat, and pinned provider,
-model, and reasoning effort.
+`panel-attest` validates a directory with exactly one strict current record per
+role stored in the request, all bound to the same candidate. It enforces
+unanimity for exactly that roster, `signoff` true iff `recommendations` is
+empty, distinct provenance per seat, and pinned provider, model, and reasoning
+effort. Current artifacts carry `panel_format_version: 1`; legacy fixed-ten
+artifacts omit it and retain `rust`.
 
 The panel model is deliberately not the coding model, so a lane cannot both
 author a change and attest to it.

@@ -225,20 +225,25 @@ Detail, including each role's focus and harness notes, in
   phase: once on plan before any implementation is dispatched, and once on
   integrated diff before next phase begins.
 - **`signoff` is `true` iff `recommendations` is `[]`.** phase closes only
-  on unanimous sign-off from full roster. **Green tests do not waive this
-  gate.** canonical precedent: Wave-1 panel returned 0/8 sign-offs with
-  11 HIGH findings that static gate caught none of.
-- **default roster is ten roles**: `software`, `test`, `nixos`,
-  `networking`, `security`, `rust`, `product`, `docs`, `observability`,
-  `kernel`.
+  on unanimous sign-off from the selected lifecycle roster. **Green tests do
+  not waive this gate.** canonical precedent: Wave-1 panel returned 0/8
+  sign-offs with 11 HIGH findings that static gate caught none of.
+- **the current role domain is thirteen seats**: `software`, `test`,
+  `product`, `docs`, `security`, `observability`, `simplicity`, `reliability`,
+  `agentic`, `nixos`, `networking`, `kernel`, and `build`. The versioned
+  selection artifact chooses the ordered roster, includes every mandatory and
+  triggered seat, meets the class floor, and may only widen over fix deltas.
+  Rust depth is a `software` profile; legacy delivery artifacts retain the
+  historical `rust` seat.
 - **Reviewers do not rerun validation.** Prompts carry evidence the
   integrator already ran, and instruct reviewers to reason over it rather than
   stampeding shared Nix store and cargo target while implementation agents
   are still running. Missing or insufficient validation is finding.
-- **Rounds after first are delta reviews** and carry two ranges: delta
-  since that reviewer last reviewed, and full branch for context. Any
-  content change invalidates every prior sign-off in phase.
-- **Fix rounds address only findings raised.** genuine defect found
+- **Verification iterations carry two ranges**: the fix delta since the last
+  reviewed candidate, and the full branch for context. They verify the shared
+  ledger and regressions; they do not reopen discovery. Any content change
+  invalidates prior sign-off for that candidate.
+- **Fix passes address only findings raised.** genuine defect found
   while fixing something else is still out of scope; file it separately.
   Unrequested changes are new content, new content invalidates round's
   evidence, and gate recedes while deliverable sits finished.
@@ -247,10 +252,13 @@ Escape hatches are narrow: trivial fixes with no semantic change,
 documentation-only changes that do not describe load-bearing behaviour, and
 time-critical hotfixes, which still require post-fix panel.
 
-once-per-wave binding panel is enforced in code by
-`packages/xtask/src/delivery/panel.rs`: ten records, one per role, unanimous,
-all bound to same snapshot, with provider, model, and reasoning effort
-pinned. No override and no partial pass.
+The once-per-wave binding panel is enforced in code by
+`packages/xtask/src/delivery/panel.rs`: `panel-request --selection` stores
+the selected ordered roster, and `panel-attest` requires exactly one current
+record per stored role, unanimous and bound to the same snapshot, provider,
+model, and reasoning effort. Current request, record, attestation, and seal
+panel objects carry `panel_format_version: 1`; strict legacy fixed-ten
+artifacts omit it and retain `rust`. No override and no partial pass.
 
 ## Changelog and commits
 

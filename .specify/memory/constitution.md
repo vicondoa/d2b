@@ -1,12 +1,22 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 2.0.0 -> 2.1.0 (this amendment); 1.0.0 -> 2.0.0 (prior, same day)
-Rationale: MAJOR. Principle VI is redefined, not merely clarified. Behavior that
-the 1.0.0 text forbade - dispatching the next phase's implementation before the
-current phase's panel returns unanimous sign-off - is now permitted under four
-named conditions. That is a backward-incompatible governance redefinition per
-this document's own versioning policy.
+Version change: 2.1.0 -> 3.0.0 (this amendment); 1.0.0 -> 2.0.0 (prior, same day)
+Rationale: MAJOR. Principle VI replaces repeated discovery and delayed
+LOW/MEDIUM deferral with the accepted ADR 0055 Discover-Fix-Verify lifecycle.
+
+Amendment 3.0.0 (2026-08-08): Selected-roster Discover-Fix-Verify
+- Principle VI replaces the operative fixed roster with the versioned
+  candidate-bound selection artifact and current thirteen-seat role domain.
+- One comprehensive discovery, a shared stable ledger, batched implementation
+  responses and self-verification, and scoped verification are now binding.
+- Legacy fixed-ten delivery records remain readable as compatibility data; they
+  do not define current selection.
+- The active bounded-deferral-after-eight-rounds rule is superseded. During
+  verification, pre-existing MINOR and NIT observations are non-blocking from
+  the start, while admitted BLOCKER and MAJOR findings remain blocking.
+- Rationale: selection and a complete shared ledger prevent repeated
+  rediscovery while preserving unanimous, request-bound sign-off.
 
 Amendment 2.1.0 (2026-07-29): Bounded deferral and delivery memory
 - Principle VI gains a "Bounded deferral after eight rounds" clause: from round
@@ -71,7 +81,8 @@ Added sections:
 - Core Principles I-VII (Daemon-Only Control Plane, Broker-Mediated
   Privilege, Reasonable Isolation Over Convenience, Contract-Driven
   Compatibility, Test-Layer Discipline, Panel-Gated Multi-Phase Work
-  [explicitly names the default ten-role panel roster], Traceable,
+  [now names the selected-roster lifecycle; prior reports retain history],
+  Traceable,
   Marker-Free Shipped Artifacts)
 - Additional Constraints (security posture, disk hygiene, naming/versioning)
 - Development Workflow & Quality Gates
@@ -165,19 +176,30 @@ device.
 
 ### VI. Panel-Gated Multi-Phase Work
 A multi-phase plan MUST pass a panel sign-off gate at each phase boundary:
-unanimous sign-off (`recommendations: []`) from the applicable roster,
+unanimous sign-off (`recommendations: []`) from the selected lifecycle roster,
 following plan review → implementation → integration → work review → advance.
-The default per-round roster is the **ten-role panel** (`software`, `test`,
-`nixos`, `networking`, `security`, `rust`, `product`, `docs`, `observability`,
-`kernel`); a plan may name a different roster explicitly, but the gate
-requires unanimous sign-off from whichever roster is selected. Green tests
-alone never waive this gate. Trivial fixes, time-critical hotfixes (with a
+The current role domain is the thirteen-seat selection table (`software`,
+`test`, `product`, `docs`, `security`, `observability`, `simplicity`,
+`reliability`, `agentic`, `nixos`, `networking`, `kernel`, `build`). A
+versioned candidate-bound selection artifact chooses the ordered roster,
+includes mandatory and triggered seats, meets the applicable floor, and may
+only widen over fix deltas. Rust depth is a `software` profile; legacy
+delivery artifacts retain the historical `rust` seat. Green tests alone
+never waive this gate. Trivial fixes, time-critical hotfixes (with a
 mandatory post-fix panel), and documentation-only changes that describe no
-load-bearing behavior are the only exceptions. Where a harness (e.g. a
-five-seat phase council) stands in for the per-round ten-role panel, it MUST
-preserve the same unanimity rule and no-rerun discipline; it does not
-substitute for the separate, binding ten-role panel required once at a
-wave's close for wave-scale (ADR 0046-class) work.
+load-bearing behavior are the only exceptions. Where a harness stands in for
+the per-round panel, it MUST preserve the same unanimity rule and no-rerun
+discipline; it does not substitute for the separate, binding selected-roster
+panel required once at a wave's close for wave-scale (ADR 0046-class) work.
+
+**Discover-Fix-Verify.** A lifecycle MUST run one comprehensive discovery over
+the full candidate, require an explicit complete result from every selected
+seat, merge findings into one shared ledger with stable identifiers, and give
+the complete ledger to implementation for batched dispositions, evidence, and
+self-verification. It MUST run scoped verification against that ledger,
+responses, supplied validation, the latest delta, and the full candidate.
+Pre-existing late MINOR and NIT observations do not become new blockers.
+Metrics are informational and never decide approval.
 
 **Pipelined dispatch.** Implementation of the next phase MAY begin before the
 current phase's panel returns unanimous sign-off, provided **all** of the
@@ -197,48 +219,16 @@ finding that changes a contract may invalidate in-flight next-phase work, and
 absorbing that rework is the price of the pipeline. A plan using pipelined
 dispatch MUST record that acceptance explicitly.
 
-**Bounded deferral after eight rounds.** Once a phase has completed **eight**
-panel rounds, a reviewer in round nine or later MAY classify a finding ranked
-LOW or MEDIUM as **deferred** rather than blocking. A deferred finding is
-moved out of `recommendations` and recorded in the plan's deferred-findings
-register with its severity, subject area, owning phase, and the round that
-deferred it. Findings ranked CRITICAL or HIGH are **never** deferrable and
-continue to block sign-off in every round.
+**Verification convergence.** Verification checks the shared ledger,
+implementation responses, supplied validation, regressions, and admitted late
+BLOCKER or MAJOR findings. A pre-existing MINOR or NIT observation discovered
+after the comprehensive discovery remains non-blocking history. There is no
+round-count threshold and no later transition from blocking to non-blocking.
 
-This preserves the sign-off invariant exactly: `signoff` remains `true` if and
-only if `recommendations` is empty. A deferred finding is re-filed, never
-dropped and never silently ignored - the reviewer MUST state the deferral, and
-an unrecorded deferral is a process violation. Re-ranking a finding the
-reviewer believes is CRITICAL or HIGH downward in order to defer it is
-likewise a violation.
-
-Rationale: convergence, not fatigue. This project has seen a single wave run
-twenty-one follow-up rounds, which is evidence that unbounded LOW and MEDIUM
-churn can consume more capacity than the defects it removes are worth. Eight
-rounds is enough for a genuinely blocking defect to have surfaced; past that
-point the marginal LOW finding costs more than it returns. The severity
-classes that actually protect the threat model stay non-negotiable.
-
-**Delivery memory.** A plan governed by this principle MUST maintain two
-durable registers, and they are inputs to planning rather than archives:
-
-- a **deferred-findings register** of every LOW and MEDIUM finding deferred
-  under the rule above, so deferral is bounded and visible rather than
-  cumulative and forgotten; and
-- a **friction log** recording what slowed delivery, categorized so it can be
-  triaged and fixed rather than re-encountered each phase.
-
-Neither register may contain panel transcripts, validation command output, or
-attestation payloads. They record classification metadata - severity, subject
-area, phase, round, category, and impact - not review text.
-
-Rationale: panel review commonly takes one to two times the coding time, so
-strictly serializing review after implementation idles the implementation
-capacity for more than half of every cycle. The protection that matters is
-that nothing merges without unanimous review, and that ordering is preserved
-in full. The project's own history includes a panel catching 11 HIGH findings
-that automated tests caught none of - testing and review are complementary,
-not substitutable - which is why the gate is moved rather than loosened.
+Rationale: convergence comes from comprehensive discovery and scoped
+verification, not fatigue after an arbitrary number of open-ended rounds. The
+project's own history includes a panel catching 11 HIGH findings that
+automated tests caught none of, so testing and review remain complementary.
 
 ### VII. Traceable, Marker-Free Shipped Artifacts
 Shipped source, docs, CLI text, and CHANGELOG entries MUST NOT carry
@@ -322,4 +312,4 @@ described in the amendment procedure above. The version, ratification date,
 and last-amended date are recorded in the footer and MUST be updated
 together in any amending change.
 
-**Version**: 2.1.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-07-29
+**Version**: 3.0.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-08-08

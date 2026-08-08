@@ -30,12 +30,17 @@ integrating.
    stage while a gate runs.
 2. **Run the wave's validation** and record exact commands and results. That
    record is evidence in every panel prompt, so state coverage accurately.
-3. **Run a panel round** via `d2b-panel-round`. Never use a hand-written
-   reviewer prompt: stage the round, edit evidence and seat notes, then use the
-   generated `dispatch-prompt.txt` verbatim for every seat.
-4. **If any reviewer returns findings**, dispatch fix agents only for those
-   findings, land fixes, rerun the smallest relevant validation, and run another
-   round.
+3. **Run the Discover-Fix-Verify lifecycle** via `d2b-panel-round`. Create one
+   deterministic selection artifact, dispatch one comprehensive discovery to
+   its selected roster, merge the shared ledger, and hand the complete ledger
+   plus batch responses and self-verification to implementation. Never use a
+   hand-written reviewer prompt: stage the lifecycle, edit evidence and seat
+   notes, then use the generated `dispatch-prompt.txt` verbatim for every
+   selected seat.
+4. **If verification returns findings**, dispatch fix agents only for those
+   findings, land fixes, rerun the smallest relevant validation, widen the
+   lifecycle roster when selection triggers a new seat, and run scoped
+   verification again. Do not reopen comprehensive discovery.
 5. **On unanimous sign-off**, open the wave PR, get CI green, and merge it.
 6. **Seal the wave** via `d2b-wave-delivery`, then fold registers via
    `d2b-memory`.
@@ -55,10 +60,11 @@ and enlarges the next review.
 reviewers whose area was untouched. They re-report on the delta and may confirm
 briefly that their area is unaffected.
 
-**Rounds after the first are delta reviews.** Record each reviewed tip so the
-next round can scope against it. Prompts carry the delta since that review and
-the full branch for context. The staging helper must accept the prior tip and
-verdict set; do not construct diffs or prompts yourself.
+**Verification is scoped, not rediscovery.** Record each reviewed tip so the
+next verification can scope against it. Prompts carry the latest delta, the
+full branch for context, the complete ledger, every implementation response,
+and supplied validation evidence. The lifecycle roster is the union of all
+accepted selections and never narrows.
 
 **A prose summary of what changed is intent, not evidence.** Reviewers must
 read the delta themselves; that is how silent scope changes are caught.
@@ -68,7 +74,7 @@ judge it on the merits, permitting but not requiring withdrawal. Do not sustain
 an unfounded finding, and do not pressure a reviewer to withdraw a valid one.
 
 **Reviewers do not rerun validation** unless you explicitly ask one to. They
-are read-only by construction and take no heavy-gate slot. Asking ten
+are read-only by construction and take no heavy-gate slot. Asking selected
 reviewers to rebuild would stampede the shared Nix store and cargo target
 while implementation agents are still running.
 

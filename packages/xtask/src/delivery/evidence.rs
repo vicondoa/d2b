@@ -1071,7 +1071,7 @@ mod tests {
         assert_eq!(record.evidence.len(), 2);
         assert_eq!(
             record.panel.records.len(),
-            crate::delivery::model::PANEL_ROLES.len()
+            crate::delivery::model::PANEL_CURRENT_ROLES.len()
         );
         assert!(record.panel.unanimous);
     }
