@@ -71,9 +71,9 @@ in
 
   "bazel-toolchain-single-devshell-provider" = {
     expr =
-      (builtins.match ".*bazelSeccomp.*" flakeText != null)
-      && (builtins.match ".*bazel_8.*" flakeText == null)
-      && (builtins.match ".*Bazelisk.*" flakeText == null);
+      (pkgs.lib.hasInfix "bazelSeccomp" flakeText)
+      && !(pkgs.lib.hasInfix "bazel_8" flakeText)
+      && !(pkgs.lib.hasInfix "Bazelisk" flakeText);
     expected = true;
   };
 
@@ -81,13 +81,10 @@ in
     expr = {
       inherit (toolchain) loadPoint noNetwork noFallback derivationSha256Method;
       policyName = toolchain.policyName;
-      policyFile = builtins.match ".*seccomp-policy\\.json.*" bazelText != null;
-      patchFile =
-        builtins.match ".*linux-sandbox-seccomp\\.patch.*" bazelText != null;
-      policyEnv =
-        builtins.match ".*D2B_BAZEL_SECCOMP_POLICY.*" bazelText != null;
-      sourcePatchLoad =
-        builtins.match ".*D2BPrepareActionPolicy\\(\\).*" patchText != null;
+      policyFile = pkgs.lib.hasInfix "seccomp-policy.json" bazelText;
+      patchFile = pkgs.lib.hasInfix "linux-sandbox-seccomp.patch" bazelText;
+      policyEnv = pkgs.lib.hasInfix "D2B_BAZEL_SECCOMP_POLICY" bazelText;
+      sourcePatchLoad = pkgs.lib.hasInfix "D2BPrepareActionPolicy()" patchText;
       goldenDerivationSha256Method = golden.derivationSha256Method;
       goldenNativeDigestsAreNonzero = nativeDigestsAreNonzero golden;
       supervisorNativeDigestsAreNonzero =
@@ -194,33 +191,21 @@ in
 
   "bazel-toolchain-strategy-and-plants" = {
     expr = {
-      strategy =
-        builtins.match ".*common --spawn_strategy=sandboxed.*" bazelrcText
-        != null;
-      rustcStrategy =
-        builtins.match ".*common --strategy=Rustc=sandboxed.*" bazelrcText
-        != null;
-      testStrategy =
-        builtins.match ".*common --strategy=TestRunner=sandboxed.*" bazelrcText
-        != null;
+      strategy = pkgs.lib.hasInfix "common --spawn_strategy=sandboxed" bazelrcText;
+      rustcStrategy = pkgs.lib.hasInfix "common --strategy=Rustc=sandboxed" bazelrcText;
+      testStrategy = pkgs.lib.hasInfix "common --strategy=TestRunner=sandboxed" bazelrcText;
       effectiveObservation =
-        builtins.match ".*d2b_validate_effective_strategies.*"
-          sandboxRuleText != null;
-      strategyLock =
-        builtins.match ".*D2B_BAZEL_STRATEGY_LOCK.*" bazelText != null;
+        pkgs.lib.hasInfix "d2b_validate_effective_strategies" sandboxRuleText;
+      strategyLock = pkgs.lib.hasInfix "D2B_BAZEL_STRATEGY_LOCK" bazelText;
       noStrategyOverride =
-        builtins.match ".*strategyOverrides = false.*" bazelText != null;
-      x32Guard =
-        builtins.match ".*BPF_JMP \\| BPF_JSET \\| BPF_K.*"
-          patchText != null;
-      livenessPath =
-        builtins.match ".*--liveness-path.*" plantText != null;
-      barrierPath =
-        builtins.match ".*--barrier-path.*" plantText != null;
+        pkgs.lib.hasInfix "strategyOverrides = false" bazelText;
+      x32Guard = pkgs.lib.hasInfix "BPF_JMP | BPF_JSET | BPF_K" patchText;
+      livenessPath = pkgs.lib.hasInfix "--liveness-path" plantText;
+      barrierPath = pkgs.lib.hasInfix "--barrier-path" plantText;
       beyondCeilingStage =
-        builtins.match ".*case PLANT_BEYOND_CEILING:.*" plantText != null;
+        pkgs.lib.hasInfix "case PLANT_BEYOND_CEILING:" plantText;
       plantIgnoresTerm =
-        builtins.match ".*signal\\(SIGTERM, SIG_IGN\\).*" plantText != null;
+        pkgs.lib.hasInfix "signal(SIGTERM, SIG_IGN)" plantText;
     };
     expected = {
       strategy = true;
@@ -253,8 +238,7 @@ in
       capSysPtrace = supervisor.passthru.yama.capSysPtrace;
       exactCalls = map (call: call.request)
         supervisor.passthru.protocol.ptraceCalls;
-      sourceHasCalls =
-        builtins.match ".*PTRACE_DETACH.*" supervisorText != null;
+      sourceHasCalls = pkgs.lib.hasInfix "PTRACE_DETACH" supervisorText;
     };
     expected = {
       derivationSha256Method = "raw-drv-file-sha256";
@@ -280,13 +264,13 @@ in
       (hash: builtins.isString hash
         && builtins.match "[0-9a-fA-F]{64}" hash != null)
       (builtins.attrValues currentSourceHashes)
-      && builtins.match ".*bazelSourceIdentityGate.*" flakeText != null;
+      && pkgs.lib.hasInfix "bazelSourceIdentityGate" flakeText;
     expected = true;
   };
 
   "bazel-toolchain-native-check-surface" = {
     expr = builtins.all
-      (check: builtins.match ".*${check}.*" flakeText != null)
+      (check: pkgs.lib.hasInfix check flakeText)
       [
         "broker-production-dependency-policy"
         "guest-shell-runner-static-dependency-policy"
