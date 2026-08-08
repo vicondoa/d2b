@@ -210,20 +210,27 @@ pass through the current-artifact parser.
 - Legacy source identity is the tuple of immutable record digest, legacy seat,
   and recommendation ordinal. Reimporting that tuple maps to the same source.
 - The original recommendation string and attribution are retained byte-for-byte
-  as source evidence. Normalized fields do not relabel the source seat.
-- For classification only, the adapter ASCII-case-folds the leading alphabetic
-  severity token. `critical` maps to `BLOCKER`, `high` to `MAJOR`, `medium` to
-  `MINOR`, and `low` to `NIT`.
-- An unrecognized or absent severity token imports as `MAJOR` until verification
-  confirms or fixes it, or marks it `Invalid` or `Withdrawn`. The normalized
-  record identifies this as migration-assigned severity and does not claim a
-  historical severity.
+  as raw source evidence. Normalized fields do not relabel the source seat.
+- For classification only, the adapter recognizes a severity when the legacy
+  string starts at byte zero with an exact ASCII-case-folded canonical prefix:
+  `[critical]`, `[high]`, `[medium]`, or `[low]`. They map to `BLOCKER`,
+  `MAJOR`, `MINOR`, and `NIT`, respectively.
+- Every other string, including unbracketed prose beginning with words such as
+  `critical` or `low`, imports as `MAJOR`. The normalized record identifies
+  this as migration-assigned severity and does not claim a historical
+  severity. The raw string bytes remain unchanged.
 - A legacy `rust` source stays attributed to `rust`; its verification
   responsibility is assigned to current `software` with the Rust profile.
-- The current verification roster is recomputed from the current candidate by
-  the versioned selector. Current mandatory or triggered seats absent from the
-  old round join automatically, without hand-copying findings or inventing
-  historical findings for them.
+- The converted verification roster is the monotonic union of every legacy
+  discovery seat that remains a current seat; the current accountability
+  replacement for retired legacy `rust`, namely `software` with the Rust
+  profile; and every seat selected by the current versioned selector for the
+  current candidate and fix delta. Current mandatory or triggered seats absent
+  from the legacy round join automatically. No imported seat or accountability
+  obligation ever leaves the lifecycle; removing its trigger in a fix does not
+  remove it.
+- Conversion rejects a reconstructed roster that omits any member of this
+  union; a mandatory-only approximation is not valid.
 - No protected migration or recovery service is introduced.
 
 After conversion, a complete ten-seat legacy round can serve as the discovery
@@ -338,11 +345,21 @@ Behavior tests cover:
   over the full candidate and fix delta, and unrelated scope-expansion refusal;
 - complete artifact generation and conflicting regeneration;
 - deterministic `R` identifiers;
-- legacy conversion of a complete ten-seat round, retired `rust`
-  responsibility without source relabeling, missing current mandatory seats,
-  all four recognized severity prefixes, unknown or plain strings mapping to
-  migration-assigned `MAJOR`, duplicate source mapping, and partial import
-  followed by one current discovery;
+- legacy conversion of the exact ten-seat fixture, with repeated imports
+  producing identical source identifiers, source-to-ledger mappings, and
+  output bytes;
+- byte preservation of raw recommendation text and attribution;
+- all four canonical bracketed severity prefixes and their ASCII case folding;
+- ambiguous or unbracketed severity prose falling back to migration-assigned
+  `MAJOR`;
+- preservation of a legacy optional seat in the converted union after its
+  trigger is removed by a fix;
+- addition of an absent optional `build` seat when the current candidate
+  triggers it;
+- refusal of mandatory-only reconstruction when a current optional trigger
+  exists;
+- retired `rust` responsibility without source relabeling, duplicate source
+  mapping, and partial import followed by one current discovery;
 - every disposition and required justification;
 - late-issue admission and refusal;
 - metric calculations, including zero denominators;
@@ -362,6 +379,9 @@ part of this implementation.
 | A late style nit restarts discovery. | Verification admission rejects the issue class. |
 | Human guidance and roster selection drift. | The authoritative table generates or byte-checks guidance and drives selection. |
 | A fix triggers another seat but the old roster is reused. | Every fix reruns selection and verification requires the recorded set-union roster. |
+| Conversion drops a legacy optional seat after its trigger disappears. | Converted-roster union validation refuses removal of imported obligations. |
+| Conversion omits an optional seat triggered by the current candidate. | Selector-derived union validation refuses the incomplete reconstruction. |
+| Unbracketed severity prose is mistaken for a canonical legacy prefix. | The exact bracketed-prefix parser falls back to migration-assigned `MAJOR`. |
 | An unrelated change enters a fix delta. | Ledger-scope validation refuses it and names a new lifecycle as the remedy. |
 | A partial legacy round loses completed work. | Conversion imports every completed source before the one current discovery. |
 
