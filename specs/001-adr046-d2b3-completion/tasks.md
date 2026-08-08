@@ -2266,14 +2266,45 @@ table before the operation exists.
   consumption, every case returns its closed integrity incident, poisons the attempt, and
   proves zero reconstruction, relink, witness publication, source access, reselection,
   later publication, compaction, settlement, cleanup, or slot-reuse mutation. Every
-  prefix, substitution, forbidden effect, hook, and removal poison is independent. Four
-  anchor intent-final-removal cases start independent fresh processes at
-  `WitnessReclamationPending`, source `Released` under `AttemptSliceReleasePending`,
-  attempt-slice `CompletedReleased`, and `Complete`. The pending anchor uses the surviving
-  exact decision witness. After that witness's unlink and coordinator-parent sync, an
-  independent matrix removes the intent at every reachable target-witness
-  `WitnessReclamationPending { nextWitness }` prefix before unlink, after unlink before
-  parent sync, and after parent sync; at `TargetsCompacted`; at every
+  prefix, substitution, forbidden effect, hook, and removal poison is independent. An
+  independent decision-witness removal matrix starts a fresh process for target
+  cardinality `0`, `1`, `2`, and `3` at each of three prefixes: immediately before
+  decision-witness unlink, after that unlink but before coordinator-parent sync, and after
+  that sync. The existing maximum four-target case independently applies the same three
+  prefixes at cardinality `4`. The before-unlink case requires the current exact decision
+  witness, targets-compacted receipt, and complete durable basis/downstream successor chain
+  to be present. The after-unlink-before-parent-sync case requires a recorded
+  `PresentExact` pre-unlink hook assertion, exact current-name absence, and an
+  identity-revalidated held coordinator parent; its fresh-process incident constructor
+  consumes only the absence, parent, and durable successor proof and must not perform the
+  pending parent sync after the intent final is removed. The after-parent-sync case
+  requires the exact synced absence. For each nonzero target cardinality, the same
+  three-prefix matrix applies to every target witness and requires the current exact
+  witness and matching immediate receipt before unlink. The zero-target case proves no
+  target witness or receipt can be synthesized; without the injected removal its next
+  state is directly `TargetsCompacted`, while the removal case remains terminal. At every
+  matrix prefix the case physically removes the intent final before process start. The
+  surviving witness or prefix-appropriate successor proof constructs
+  `IntentFinalMissingAfterAncestorsDurable` and returns the exact exit-`4`
+  `audit-continuity-repair-decision-durability-integrity-incident` for record
+  `decision-basis-intent`, boundary `ancestors-durable`, failure
+  `final-missing-after-durable-boundary`, and action
+  `preserve-and-escalate-audit-integrity-incident`, while preserving the absent intent and
+  performing zero reconstruction, relink, witness publication or reclamation, parent sync,
+  source access or release, reselection, continuation, cleanup, settlement, response
+  replay, attempt-slice or ledger mutation, or slot reuse. The literal hook family is
+  `decision-intent-final-removal/witness-reclamation/<decision|target-ordinal>/<0|1|2|3>/<before-unlink|after-unlink-before-parent-sync|after-parent-sync>`;
+  each hook has independent current-witness, applicable current-receipt, successor-member,
+  terminal-response, forbidden-effect, and hook-removal poisons. Four
+  post-decision-witness-reclamation anchor cases start independent fresh processes at the
+  exact checkpoints `WitnessReclamationPending`, source `Released` under
+  `AttemptSliceReleasePending`, attempt-slice `CompletedReleased`, and `Complete`. The
+  `WitnessReclamationPending` anchor is after decision-witness parent sync and before the
+  current target-witness unlink; it requires the exact current target witness and matching
+  receipt. A separate zero-target control uses the immediately following
+  `TargetsCompacted` checkpoint. The matrix also removes the intent at every reachable
+  target-witness `WitnessReclamationPending { nextWitness }` prefix before unlink, after
+  unlink before parent sync, and after parent sync; at `TargetsCompacted`; at every
   `SourceReleasePending` prefix; and at every `AttemptSliceReleasePending` prefix. Every
   valid prefix-appropriate successor chain constructs
   `IntentFinalMissingAfterAncestorsDurable` and returns the exact exit-`4`
@@ -2283,12 +2314,13 @@ table before the operation exists.
   `preserve-and-escalate-audit-integrity-incident`, while preserving the absent intent and
   performing zero reconstruction, relink, witness publication or reclamation, parent sync,
   source access or release, reselection, continuation, cleanup, settlement, response
-  replay, attempt-slice or ledger mutation, or slot reuse. At every anchor and intervening
+  replay, attempt-slice or ledger mutation, or slot reuse. At every matrix prefix, anchor, and intervening
   prefix, independent successor cases remove, substitute, reorder, or change the digest or
-  predecessor of each required chain member. They return that member's exact existing
-  closed terminal integrity result with zero mutation, never construct the intent-final
-  incident from incomplete proof, and never fall back to precommit reselection, cleanup
-  continuation, pending settlement, or completed response replay. Literal
+  predecessor of each required chain member. A corrupt or incomplete chain returns that
+  member's exact existing closed terminal integrity result before any mutation; that result
+  takes precedence over the intent-final incident, which cannot be constructed from
+  incomplete proof, and never falls back to precommit reselection, cleanup continuation,
+  pending settlement, or completed response replay. Literal
   `decision-intent-final-removal/<checkpoint>` and
   `decision-intent-final-removal/<checkpoint>/successor/<member>/<poison>` hooks and every
   lifecycle-prefix/chain-member/response/forbidden-effect/removal poison are independent
@@ -3246,9 +3278,18 @@ table before the operation exists.
   raw-wire shared decoding, and serde deserialization before the T595 renderer; each
   row/surface has its own poison, and omission, duplication, accidental acceptance, or
   replacement with an unknown-string case fails. Unknown-string negatives remain separate.
-  `parent-durable` is therefore covered as part of the complete known cross-product rather
-  than as the sole invalid tuple. This matrix adds no registry, subvisitor, or top-level
-  pinned test id.
+  The literal
+  `decision-basis-intent | parent-durable | final-missing-after-durable-boundary` tuple is
+  outside the two-boundary known domain and therefore does not change the exact nineteen
+  invalid known cross-products. Four separate independent literal negatives named
+  `decision-durability-parent-durable-negative/construction`,
+  `decision-durability-parent-durable-negative/schema`,
+  `decision-durability-parent-durable-negative/raw-wire`, and
+  `decision-durability-parent-durable-negative/serde` refuse typed construction, strict
+  schema validation, shared raw-wire decoding, and serde deserialization respectively.
+  Each surface has its own visit and acceptance poison; the generic unknown-boundary
+  negative and any one of the nineteen known cross-products cannot satisfy it. These
+  matrices add no registry, subvisitor, or top-level pinned test id.
   The same real-binary file must also contain a literal sixteen-row
   compaction-witness-integrity matrix: each of
   `witness-operation-mismatch`, `witness-selection-mismatch`,
