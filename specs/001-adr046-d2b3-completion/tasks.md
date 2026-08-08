@@ -1131,9 +1131,10 @@ table before the operation exists.
   successor triplet, publishes the canonical unsigned authority request, and cannot mint or
   self-sign a disposition. Apply consumes the authenticated disposition and the same
   successor snapshot from
-  `recovery-irreconcilable`, moves every representable current leaf through the closed
-  temporary, cleanup-quarantine, payload, retired-source, or retired-existing-destination
-  residue slot and publishes `mismatch-retained`, or binds the complete frozen
+  `recovery-irreconcilable`, preserves every existing name and direct-final publishes
+  immutable payload or residue evidence from retained fds while every original legacy source
+  name remains at its frozen locator under the exact frozen retained-name and residue
+  censuses before it publishes `mismatch-retained`, or binds the complete frozen
   primary-evidence census or identity-bearing bounded-failure commitment and publishes
   separate resolution `disposition-validated` when names, anchor/metadata, primary status, or the
   census itself are unusable or unstable. The   frozen scope recursively enumerates every descendant and excludes every resolution,
