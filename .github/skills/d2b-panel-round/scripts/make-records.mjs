@@ -11,10 +11,10 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -22,6 +22,10 @@ import { join } from "node:path";
 import {
   readSelection,
   validateSelectionCandidate,
+  validateSelectionAgainstTable,
+  validateLedger,
+  validateApprovalArtifact,
+  sha256,
   stableStringify,
 } from "./panel-lifecycle.mjs";
 
@@ -42,13 +46,23 @@ const errors = [];
 const fail = (message) => errors.push(message);
 
 function usage() {
-  return "usage: make-records.mjs <round-dir> --selection <selection.json>";
+  return "usage: make-records.mjs <round-dir> --selection <selection.json> --approval <approval.json>";
 }
 
 const dir = process.argv[2];
-const selectionFlag = process.argv[3];
-const selectionPath = process.argv[4];
-if (!dir || selectionFlag !== "--selection" || !selectionPath) {
+const selectionIndex = process.argv.indexOf("--selection");
+const approvalIndex = process.argv.indexOf("--approval");
+const selectionPath = selectionIndex >= 0 ? process.argv[selectionIndex + 1] : undefined;
+const approvalPath = approvalIndex >= 0 ? process.argv[approvalIndex + 1] : undefined;
+if (
+  !dir ||
+  selectionIndex < 0 ||
+  !selectionPath ||
+  approvalIndex < 0 ||
+  !approvalPath ||
+  selectionPath.startsWith("--") ||
+  approvalPath.startsWith("--")
+) {
   console.error(usage());
   process.exit(2);
 }
@@ -69,6 +83,17 @@ const readJson = (path, label) => {
 const address = readJson(join(dir, "address.json"), "round address");
 const candidate = readJson(join(dir, "candidate.json"), "candidate address");
 const observed = readJson(join(dir, "observed.json"), "observed binding table");
+const approval = readJson(approvalPath, "approval artifact");
+const discoveryLedgerPath = existsSync(join(dir, "discovery-ledger.json"))
+  ? join(dir, "discovery-ledger.json")
+  : join(dir, "ledger.json");
+let discoveryLedgerBytes = "";
+const discoveryLedger = readJson(discoveryLedgerPath, "immutable discovery ledger");
+try {
+  discoveryLedgerBytes = readFileSync(discoveryLedgerPath, "utf8");
+} catch (cause) {
+  fail(`missing immutable discovery ledger at ${discoveryLedgerPath}: ${cause.message}`);
+}
 let selection = null;
 try {
   selection = readSelection(selectionPath);
@@ -80,11 +105,80 @@ if (errors.length) {
   for (const message of errors) console.error(`error: ${message}`);
   process.exit(1);
 }
+try {
+  validateLedger(discoveryLedger);
+} catch (cause) {
+  fail(`invalid immutable discovery ledger: ${cause.message}`);
+}
 
-for (const key of ["candidate_id", "content_id", "snapshot_sha256"]) {
-  if (typeof candidate[key] !== "string" || !candidate[key]) {
-    fail(`candidate.json is missing ${key}`);
+let selectionBytes;
+try {
+  selectionBytes = readFileSync(selectionPath, "utf8");
+} catch (cause) {
+  fail(`cannot read lifecycle selection bytes at ${selectionPath}: ${cause.message}`);
+}
+try {
+  readFileSync(approvalPath, "utf8");
+} catch (cause) {
+  fail(`cannot read approval bytes at ${approvalPath}: ${cause.message}`);
+}
+if (errors.length) {
+  for (const message of errors) console.error(`error: ${message}`);
+  process.exit(1);
+}
+if (selection?.phase !== "verification") {
+  fail("current records require a verification-phase lifecycle selection");
+}
+try {
+  validateSelectionAgainstTable(selection);
+} catch (cause) {
+  fail(`selection does not satisfy the authoritative selection table: ${cause.message}`);
+}
+if (selection && address?.selection_sha256 !== sha256(selectionBytes)) {
+  fail("address.json selection_sha256 does not match the recorded selection bytes");
+}
+try {
+  validateApprovalArtifact(approval, {
+    selection,
+    ledgerBytes: discoveryLedgerBytes,
+  });
+} catch (cause) {
+  fail(`invalid approval artifact: ${cause.message}`);
+}
+if (approval && approval.selection_sha256 !== sha256(selectionBytes)) {
+  fail("approval artifact selection_sha256 does not match the recorded selection bytes");
+}
+if (approval && !approval.approved) {
+  fail("approval artifact is not approved; current records require merge-ready verification");
+}
+if (approval && approval.discovery_ledger_sha256 !==
+    sha256(discoveryLedgerBytes)) {
+  fail("approval artifact is not bound to the immutable discovery ledger bytes");
+}
+
+if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+  fail("candidate.json must be an object");
+} else {
+  for (const key of ["candidate_id", "content_id", "snapshot_sha256"]) {
+    if (typeof candidate[key] !== "string" || !candidate[key]) {
+      fail(`candidate.json is missing ${key}`);
+    }
   }
+}
+if (
+  address?.lifecycle_id !== selection.lifecycle_id ||
+  address?.selection_path !== selectionPath
+) {
+  fail("address.json must bind the exact lifecycle and selection path used for records");
+}
+if (
+  approval?.current_candidate &&
+  candidate &&
+  ["candidate_id", "content_id", "snapshot_sha256"].some(
+    (key) => approval.current_candidate[key] !== candidate[key],
+  )
+) {
+  fail("approval artifact current candidate disagrees with staged candidate.json");
 }
 try {
   validateSelectionCandidate(selection, candidate);
@@ -100,8 +194,14 @@ if (!address || typeof address.lifecycle_id !== "string" || !address.lifecycle_i
 }
 
 const verdictDir = join(dir, "verdicts");
-const observedKeys = observed && typeof observed === "object"
-  ? Object.keys(observed)
+const observedTable = observed && typeof observed === "object" && !Array.isArray(observed)
+  ? observed
+  : {};
+if (!observed || typeof observed !== "object" || Array.isArray(observed)) {
+  fail("observed.json must be an object keyed by selected seat");
+}
+const observedKeys = observedTable
+  ? Object.keys(observedTable)
   : [];
 const present = existsSync(verdictDir)
   ? readdirSync(verdictDir)
@@ -211,9 +311,16 @@ for (const role of roster) {
     }
   }
 
-  const observedBinding = observed[role];
+  const observedBinding = observedTable[role];
   if (!observedBinding) continue;
-  for (const key of ["model", "reasoning_effort", "run_id", "receipt_locator"]) {
+  if (
+    typeof observedBinding !== "object" ||
+    Array.isArray(observedBinding)
+  ) {
+    fail(`observed.json ${role} must be an object`);
+    continue;
+  }
+  for (const key of ["provider", "model", "reasoning_effort", "run_id", "receipt_locator"]) {
     if (
       typeof observedBinding[key] !== "string" ||
       observedBinding[key].length === 0
@@ -224,18 +331,14 @@ for (const role of roster) {
   const currentBinding =
     observedBinding.model === MODEL_POLICY &&
     observedBinding.reasoning_effort === EFFORT_POLICY;
-  const legacyBinding =
-    observedBinding.model === LEGACY_MODEL_POLICY &&
-    observedBinding.reasoning_effort === LEGACY_EFFORT_POLICY;
-  if (!currentBinding && !legacyBinding) {
+  if (!currentBinding) {
     fail(
       `observed.json ${role}: lane ran on "${observedBinding.model}" at effort ` +
       `"${observedBinding.reasoning_effort}", but policy accepts only ` +
-      `"${MODEL_POLICY}"/"${EFFORT_POLICY}" or the exact legacy ` +
-      `"${LEGACY_MODEL_POLICY}"/"${LEGACY_EFFORT_POLICY}" compatibility pair`,
+      `"${MODEL_POLICY}"/"${EFFORT_POLICY}" for current records`,
     );
   }
-  const provider = observedBinding.provider ?? PROVIDER_POLICY;
+  const provider = observedBinding.provider;
   if (provider !== PROVIDER_POLICY) {
     fail(
       `observed.json ${role}: provider "${provider}" but policy pins "${PROVIDER_POLICY}"`,
@@ -288,28 +391,51 @@ if (errors.length) {
 }
 
 const outDir = join(dir, "records");
-mkdirSync(outDir, { recursive: true });
-for (const record of records) {
-  const final = join(outDir, `${record.role}.json`);
-  const bytes = `${JSON.stringify(record, null, 2)}\n`;
-  if (existsSync(final)) {
-    const actual = readFileSync(final, "utf8");
-    if (actual !== bytes) {
-      fail(`conflicting generated record bytes at ${final}; refusing to overwrite`);
-    }
-    continue;
+const expectedFiles = new Set(records.map((record) => `${record.role}.json`));
+const existingFiles = existsSync(outDir)
+  ? readdirSync(outDir)
+  : [];
+for (const file of existingFiles) {
+  if (!expectedFiles.has(file)) {
+    fail(`unexpected pre-existing record ${join(outDir, file)}; refusing a mixed output set`);
   }
-  const temporary = `${final}.${process.pid}.tmp`;
+}
+const pendingWrites = records.map((record) => ({
+  final: join(outDir, `${record.role}.json`),
+  bytes: `${JSON.stringify(record, null, 2)}\n`,
+}));
+for (const { final, bytes } of pendingWrites) {
+  if (existsSync(final) && readFileSync(final, "utf8") !== bytes) {
+    fail(`conflicting generated record bytes at ${final}; refusing to overwrite`);
+  }
+}
+if (errors.length) {
+  for (const message of errors) console.error(`error: ${message}`);
+  process.exit(1);
+}
+
+mkdirSync(outDir, { recursive: true });
+let publicationCounter = 0;
+for (const { final, bytes } of pendingWrites) {
+  if (existsSync(final)) continue;
+  const temporary = `${final}.${process.pid}.${publicationCounter += 1}.tmp`;
   try {
     writeFileSync(temporary, bytes, { encoding: "utf8", flag: "wx" });
-    renameSync(temporary, final);
-  } catch (cause) {
+    try {
+      linkSync(temporary, final);
+    } catch (cause) {
+      if (cause.code !== "EEXIST") throw cause;
+      const actual = readFileSync(final, "utf8");
+      if (actual !== bytes) {
+        fail(`conflicting generated record bytes at ${final}; refusing to overwrite`);
+      }
+    }
+  } finally {
     try {
       unlinkSync(temporary);
     } catch {
-      // The write itself may have failed before a temporary file existed.
+      // The temporary file may not have been created.
     }
-    throw cause;
   }
 }
 

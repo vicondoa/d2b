@@ -83,6 +83,9 @@ are a hard failure. The artifact binds the lifecycle, phase, program, wave,
 candidate digest triple, selection-table version, classification inputs,
 profiles, and ordered roster.
 
+Verification selections use a phase component when a candidate address would
+otherwise collide with discovery state.
+
 Stage the candidate with the same lifecycle and selection:
 
 ```
@@ -103,6 +106,14 @@ delivery wave panel-request --selection <selection.json>
 Both consumers must refuse a candidate, selection schema, selection-table
 version, or ordered-roster mismatch. Records are current workspace
 schema-version `2` objects with `panel_format_version: 1`.
+
+The phase handoff uses a staged candidate, a discovery request, an immutable
+ledger, a response envelope, verification requests, an approval artifact, and
+a metrics artifact as its canonical inputs. The public command sequence covers
+selection, verdict adaptation, discovery merging, response generation,
+verification preparation, approval, metrics, and record generation. Staging
+derives changed paths from its git range and records the selection digest beside
+the phase and artifact names.
 
 ## Discover once
 
@@ -252,6 +263,12 @@ only after every selected seat has a verdict and observed binding:
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \
   <round-dir> --selection <selection.json>
 ```
+
+Record generation also consumes the approval artifact and immutable discovery
+ledger before publication.
+
+The metrics command reads the canonical ledger, response envelope, and
+verification results and writes deterministic lifecycle metrics.
 
 Do not hand-copy findings or responses. Green validation never substitutes for
 selected-roster verification.

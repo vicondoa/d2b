@@ -40,6 +40,17 @@ infer a runtime surface from a contributor-only selection artifact.
 Authoritative table focus: NixOS options, module merging, mkDefault and mkForce,
 assertions, evaluation, activation ordering, and unit invariants.
 
+<!-- panel nixos invariant checklist -->
+The invariant checklist covers option declarations, priority merging, default
+and forced values, evaluation assertions, generated inputs, activation
+dependencies, and unit ownership. Inspect the relevant module and its
+evaluation evidence for each item before forming a recommendation.
+The concrete checks cover net virtual machine uplink dhcp neutralization with mkForce,
+consumer defaults with mkDefault, retained evaluation assertions, daemon owned
+per vm lifecycle rather than service declarations, opt in usbip and graphics
+gating, dedicated video identity, persistent tpm state, framework owned key
+material, and presentation colors outside policy.
+
 ## What is not this seat
 
 Do not substitute a security, network, kernel, build, documentation,

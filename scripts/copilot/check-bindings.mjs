@@ -238,6 +238,21 @@ function readSelectionPolicy() {
   if (roles.includes("rust") || !roles.includes("build")) {
     fail(`${selectionTableJson} current roster must include build and exclude rust.`);
   }
+  const buildPaths = table.seats?.build?.triggers
+    ?.filter((trigger) => trigger.kind === "path")
+    .flatMap((trigger) => trigger.patterns ?? []) ?? [];
+  for (const requiredPath of [
+    "rust-toolchain.toml",
+    ".cargo/config.toml",
+    "tests/layer1-jobs.json",
+    "tests/test-rust.sh",
+  ]) {
+    if (!buildPaths.includes(requiredPath)) {
+      fail(
+        `${selectionTableJson} build triggers are missing canonical path ${requiredPath}.`,
+      );
+    }
+  }
   return {
     roles,
     mandatory,
@@ -359,6 +374,24 @@ const headingOffsets = (text, heading) => {
 };
 
 const panelAgents = [...agents.entries()].filter(([n]) => n.startsWith("panel-"));
+
+const INVARIANT_CHECKLIST_MARKERS = {
+  "panel-nixos": "<!-- panel nixos invariant checklist -->",
+  "panel-observability": "<!-- panel observability invariant checklist -->",
+};
+for (const [agentName, marker] of Object.entries(INVARIANT_CHECKLIST_MARKERS)) {
+  const agent = agents.get(agentName);
+  if (!agent) {
+    fail(`${agentName}: invariant checklist agent is missing.`);
+    continue;
+  }
+  const occurrences = agent.text.split(marker).length - 1;
+  if (occurrences !== 1) {
+    fail(
+      `${agent.file}: invariant checklist marker must occur exactly once; found ${occurrences}.`,
+    );
+  }
+}
 
 const bars = new Map();
 for (const [name, a] of panelAgents) {

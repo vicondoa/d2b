@@ -5,6 +5,7 @@
 // no-rerun rule instead of relying on a hand-written task prompt.
 
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -25,6 +26,21 @@ const script = join(
   "d2b-panel-round",
   "scripts",
   "stage-diffs.sh",
+);
+const lifecycleScript = join(
+  root,
+  ".github",
+  "skills",
+  "d2b-panel-round",
+  "scripts",
+  "panel-lifecycle.mjs",
+);
+const selectionTable = join(
+  root,
+  ".github",
+  "skills",
+  "d2b-panel-round",
+  "selection-table.json",
 );
 
 let failures = 0;
@@ -66,7 +82,20 @@ try {
 
   const agents = join(repo, ".github", "agents");
   mkdirSync(agents, { recursive: true });
-  for (const seat of ["software", "test"]) {
+  const skillScripts = join(
+    repo,
+    ".github",
+    "skills",
+    "d2b-panel-round",
+    "scripts",
+  );
+  mkdirSync(skillScripts, { recursive: true });
+  cpSync(lifecycleScript, join(skillScripts, "panel-lifecycle.mjs"));
+  cpSync(selectionTable, join(repo, ".github", "skills", "d2b-panel-round", "selection-table.json"));
+  for (const seat of [
+    "software", "test", "product", "docs", "security", "observability",
+    "simplicity", "reliability", "agentic", "nixos", "build",
+  ]) {
     writeFileSync(join(agents, `panel-${seat}.agent.md`), `name: ${seat}\n`);
   }
 
@@ -80,8 +109,32 @@ try {
   git(repo, "commit", "--quiet", "-m", "first");
   const firstTip = git(repo, "rev-parse", "HEAD");
 
+  const candidatePath = join(repo, "candidate.json");
+  writeFileSync(
+    candidatePath,
+    `${JSON.stringify({
+      program: "SPEC001",
+      wave: "spec001w1",
+      candidate_id: "candidate-1",
+      content_id: "content-1",
+      snapshot_sha256: "a".repeat(64),
+      changed_paths: ["first.txt"],
+    }, null, 2)}\n`,
+  );
+  const selectionPath = execFileSync(
+    "node",
+    [lifecycleScript, "select", candidatePath, "spec001w1"],
+    { cwd: repo, encoding: "utf8" },
+  ).trim();
+
   console.log("stage-diffs: first review");
-  const first = run(repo, [base, base, "spec001w1-r1"]);
+  const first = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+  ]);
   check("first review stages successfully", first.status === 0, first.text);
 
   const firstDir = join(repo, ".scratch", "panel", "spec001w1-r1");
@@ -90,6 +143,8 @@ try {
     "first review records its lifecycle id",
     firstAddress.lifecycle_id === "spec001w1",
   );
+  check("first review records its selection digest", typeof firstAddress.selection_sha256 === "string");
+  check("first review stages candidate.json", JSON.parse(readFileSync(join(firstDir, "candidate.json"), "utf8")).candidate_id === "candidate-1");
   const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
   const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
   check(
@@ -113,6 +168,12 @@ try {
       firstRequest.includes("every reasonably discoverable actionable finding"),
   );
   check(
+    "first request is phase-aware and names discovery artifacts",
+    firstRequest.includes("Phase: `discovery`") &&
+      firstRequest.includes("Discovery request:") &&
+      firstRequest.includes("Issue ledger:"),
+  );
+  check(
     "dispatch prompt points at the complete request",
     firstDispatch.includes(join(firstDir, "review-request.md")),
   );
@@ -124,7 +185,8 @@ try {
     ),
   );
 
-  for (const seat of ["software", "test"]) {
+  const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
+  for (const seat of firstRoster) {
     writeFileSync(
       join(firstDir, "verdicts", `${seat}.json`),
       `${JSON.stringify({
@@ -136,13 +198,50 @@ try {
     );
   }
 
-  writeFileSync(join(repo, "second.txt"), "second change\n");
-  git(repo, "add", "second.txt");
+  writeFileSync(join(repo, "Makefile"), "second build change\n");
+  git(repo, "add", "Makefile");
   git(repo, "commit", "--quiet", "-m", "second");
   const secondTip = git(repo, "rev-parse", "HEAD");
 
+  const currentCandidatePath = join(repo, "current-candidate.json");
+  writeFileSync(
+    currentCandidatePath,
+    `${JSON.stringify({
+      program: "SPEC001",
+      wave: "spec001w1",
+      candidate_id: "candidate-2",
+      content_id: "content-2",
+      snapshot_sha256: "b".repeat(64),
+      changed_paths: ["Makefile", "first.txt"],
+    }, null, 2)}\n`,
+  );
+  const deltaPath = join(repo, "fix-delta.json");
+  writeFileSync(deltaPath, `${JSON.stringify({ changed_paths: ["Makefile"] }, null, 2)}\n`);
+  const currentSelectionPath = execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "select",
+      currentCandidatePath,
+      "spec001w1",
+      "--phase",
+      "verification",
+      "--previous-selection",
+      selectionPath,
+      "--fix-delta",
+      deltaPath,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  ).trim();
+
   console.log("stage-diffs: fail-closed continuity");
-  const wrongPreviousTip = run(repo, [base, base, "spec001w1-r2"]);
+  const wrongPreviousTip = run(repo, [
+    base,
+    base,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+  ]);
   check(
     "later review rejects a non-incremental previous tip",
     wrongPreviousTip.status === 2 &&
@@ -155,19 +254,31 @@ try {
   const missingVerdict = join(firstDir, "verdicts", "test.json");
   const savedVerdict = readFileSync(missingVerdict);
   rmSync(missingVerdict);
-  const incompletePreviousReview = run(repo, [base, firstTip, "spec001w1-r2"]);
+  const incompletePreviousReview = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+  ]);
   check(
     "later review rejects a missing prior seat verdict",
     incompletePreviousReview.status === 2 &&
       incompletePreviousReview.text.includes(
-        "missing previous verdict for seat test",
+      "missing previous verdict for incumbent seat test",
       ),
     incompletePreviousReview.text,
   );
   writeFileSync(missingVerdict, savedVerdict);
 
   console.log("stage-diffs: incremental review");
-  const second = run(repo, [base, firstTip, "spec001w1-r2"]);
+  const second = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+  ]);
   check("later review stages successfully", second.status === 0, second.text);
 
   const secondDir = join(repo, ".scratch", "panel", "spec001w1-r2");
@@ -176,11 +287,11 @@ try {
   const secondRequest = readFileSync(join(secondDir, "review-request.md"), "utf8");
   check(
     "incremental diff excludes earlier changed paths",
-    delta.includes("second.txt") && !delta.includes("first.txt"),
+    delta.includes("Makefile") && !delta.includes("first.txt"),
   );
   check(
     "full diff retains all branch changes",
-    full.includes("first.txt") && full.includes("second.txt"),
+    full.includes("first.txt") && full.includes("Makefile"),
   );
   check(
     "later request names the prior verdict and invalidated sign-off",
@@ -195,12 +306,25 @@ try {
     "later request names the exact incremental range",
     secondRequest.includes(`Delta range: \`${firstTip}..${secondTip}\``),
   );
+  check(
+    "later request names verification artifacts and allows the new seat",
+    secondRequest.includes("Phase: `verification`") &&
+      secondRequest.includes("Immutable discovery ledger:") &&
+      secondRequest.includes("Approval artifact:") &&
+      !secondRequest.includes("missing previous verdict for seat build"),
+  );
 
   writeFileSync(
     join(secondDir, "verdicts", "software.json"),
     "{}\n",
   );
-  const reused = run(repo, [base, firstTip, "spec001w1-r2"]);
+  const reused = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+  ]);
   check(
     "a review id with verdicts cannot be restaged",
     reused.status === 2 &&

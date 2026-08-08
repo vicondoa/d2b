@@ -42,6 +42,16 @@ belongs in a metric label.
 Authoritative table focus: Metric cardinality, spans, logs, audit shape,
 redaction, retention, exporters, and diagnosability.
 
+<!-- panel observability invariant checklist -->
+The invariant checklist covers bounded metric labels, lifecycle counts,
+deterministic artifact evidence, redaction, retention, audit shape, exporter
+failure behavior, and useful diagnostics. Inspect each surface and its
+failure path before forming a recommendation.
+The concrete checks cover closed metric labels, fixed lifecycle counts,
+deterministic artifact evidence, no raw paths or identities, redaction of
+credentials and handles, append only audit shape, bounded retention, exporter
+failure isolation, trace completion, and degraded reporting.
+
 ## What is not this seat
 
 Do not substitute a security, NixOS, network, kernel, build, documentation,

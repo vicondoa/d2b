@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Stage byte-identical review evidence for one panel round.
 #
-#   stage-diffs.sh <base> <prev-tip> <round-id> [--lifecycle <lifecycle-id>]
-#                  [--selection <selection.json>]
+#   stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json>
+#                  [--lifecycle <lifecycle-id>] [--discovery-request PATH]
+#                  [--ledger PATH] [--responses PATH] [--self-verification PATH]
+#                  [--verification-dir PATH] [--approval PATH]
 #
 # <base>      branch base commit or ref
 # <prev-tip>  commit the previous round reviewed; pass <base> for round 1
@@ -12,7 +14,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> [--lifecycle <lifecycle-id>] [--selection <selection.json>]" >&2
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--lifecycle <lifecycle-id>]" >&2
   exit 2
 fi
 
@@ -27,6 +29,12 @@ esac
 
 lifecycle=""
 selection_path=""
+discovery_request_path=""
+ledger_path=""
+responses_path=""
+self_verification_path=""
+verification_dir=""
+approval_path=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --lifecycle)
@@ -39,12 +47,47 @@ while [ "$#" -gt 0 ]; do
       selection_path="$2"
       shift 2
       ;;
+    --discovery-request)
+      [ "$#" -ge 2 ] || { echo "--discovery-request requires a path" >&2; exit 2; }
+      discovery_request_path="$2"
+      shift 2
+      ;;
+    --ledger)
+      [ "$#" -ge 2 ] || { echo "--ledger requires a path" >&2; exit 2; }
+      ledger_path="$2"
+      shift 2
+      ;;
+    --responses)
+      [ "$#" -ge 2 ] || { echo "--responses requires a path" >&2; exit 2; }
+      responses_path="$2"
+      shift 2
+      ;;
+    --self-verification)
+      [ "$#" -ge 2 ] || { echo "--self-verification requires a path" >&2; exit 2; }
+      self_verification_path="$2"
+      shift 2
+      ;;
+    --verification-dir)
+      [ "$#" -ge 2 ] || { echo "--verification-dir requires a path" >&2; exit 2; }
+      verification_dir="$2"
+      shift 2
+      ;;
+    --approval)
+      [ "$#" -ge 2 ] || { echo "--approval requires a path" >&2; exit 2; }
+      approval_path="$2"
+      shift 2
+      ;;
     *)
       echo "unknown option: $1" >&2
       exit 2
       ;;
   esac
 done
+
+if [ -z "$selection_path" ]; then
+  echo "--selection is required; staging without the authoritative lifecycle selection is refused" >&2
+  exit 2
+fi
 
 if [[ "$round" =~ ^([[:alnum:]]+)-r([1-9][0-9]*)$ ]]; then
   wave="${BASH_REMATCH[1]}"
@@ -89,14 +132,20 @@ try {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
 }
-for (const key of ["round", "lifecycle_id", "base", "previous_tip", "tip"]) {
+for (const key of [
+  "round", "lifecycle_id", "base", "previous_tip", "tip",
+  "phase", "selection_path", "selection_sha256",
+]) {
   if (typeof value[key] !== "string" || value[key].length === 0) {
     console.error(`${path}: address.json is missing ${key}`);
     process.exit(1);
   }
 }
 process.stdout.write(
-  [value.round, value.lifecycle_id, value.base, value.previous_tip, value.tip].join("\t"),
+  [
+    value.round, value.lifecycle_id, value.base, value.previous_tip, value.tip,
+    value.phase, value.selection_path, value.selection_sha256,
+  ].join("\t"),
 );
 NODE
 }
@@ -122,7 +171,7 @@ else
   if ! previous_fields="$(read_address "$previous_address")"; then
     exit 2
   fi
-  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip <<<"$previous_fields"
+  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
   if [ "$recorded_round" != "$previous_round" ]; then
     echo "$previous_address records round $recorded_round, expected $previous_round" >&2
     exit 2
@@ -138,51 +187,68 @@ else
     echo "  supplied tip    $prev_sha" >&2
     exit 2
   fi
-fi
-
-if [ -n "$selection_path" ]; then
-  if [ ! -f "$selection_path" ]; then
-    echo "missing lifecycle selection: $selection_path" >&2
+  if [ -z "$recorded_selection" ] || [ ! -f "$recorded_selection" ]; then
+    echo "previous review does not record a readable lifecycle selection" >&2
     exit 2
   fi
-  selected_roster="$(
-    node - "$selection_path" <<'NODE'
-const fs = require("node:fs");
-const path = process.argv[2];
-let selection;
-try {
-  selection = JSON.parse(fs.readFileSync(path, "utf8"));
-} catch (error) {
-  console.error(`${path}: invalid lifecycle selection: ${error.message}`);
-  process.exit(1);
-}
-if (selection?.schema_version !== 1 ||
-    selection?.selection_table_version !== 2 ||
-    !Array.isArray(selection?.roster)) {
-  console.error(`${path}: unsupported lifecycle selection`);
-  process.exit(1);
-}
-for (const seat of selection.roster) {
-  if (typeof seat !== "string" || !seat) {
-    console.error(`${path}: lifecycle selection has an invalid roster`);
-    process.exit(1);
-  }
-  process.stdout.write(`${seat}\n`);
-}
-NODE
-  )" || {
-    echo "cannot read selected lifecycle roster from $selection_path" >&2
-    exit 2
-  }
-  mapfile -t panel_seats <<<"$selected_roster"
-else
-  mapfile -t panel_seats < <(
-    find "$root/.github/agents" -maxdepth 1 -type f -name 'panel-*.agent.md' \
-      -printf '%f\n' |
-      sed -e 's/^panel-//' -e 's/\.agent\.md$//' |
-      sort
-  )
+  previous_roster="$(
+    node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { readSelection } = await import(pathToFileURL(process.argv[2]).href);
+process.stdout.write(readSelection(process.argv[1]).roster.join(","));
+' "$recorded_selection" "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  )"
 fi
+
+if [ ! -f "$selection_path" ]; then
+  echo "missing lifecycle selection: $selection_path" >&2
+  exit 2
+fi
+
+selection_meta="$(
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [selectionPath, candidatePath, range, helperPath, lifecycle] = process.argv.slice(1);
+const {
+  changedPathsFromGitRange,
+  candidateFromSelection,
+  readSelection,
+  selectionDigest,
+  validateSelectionAgainstTable,
+  writeCreateOrCompare,
+} = await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+if (selection.lifecycle_id !== lifecycle) {
+  throw new Error(
+    `selection lifecycle ${selection.lifecycle_id} disagrees with staging lifecycle ${lifecycle}`,
+  );
+}
+validateSelectionAgainstTable(selection);
+const actual = changedPathsFromGitRange(range);
+const declared = selection.phase === "verification"
+  ? selection.classification_inputs.fix_delta?.changed_paths ??
+    selection.classification_inputs.changed_paths
+  : selection.classification_inputs.changed_paths;
+if (actual.join("\u0000") !== declared.join("\u0000")) {
+  throw new Error(
+    `selection changed paths do not match git range ${range}; ` +
+    `declared [${declared.join(", ")}], actual [${actual.join(", ")}]`,
+  );
+}
+writeCreateOrCompare(candidatePath, candidateFromSelection(selection));
+process.stdout.write([
+  selection.phase,
+  selectionDigest(selectionPath),
+  selection.roster.join(","),
+].join("\t"));
+' "$selection_path" "$out/candidate.json" "$prev_sha..$tip" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" "$lifecycle"
+)" || {
+  echo "selection validation or git-range derivation failed" >&2
+  exit 2
+}
+IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_meta"
+IFS=',' read -r -a panel_seats <<<"$selected_roster"
 if [ "${#panel_seats[@]}" -eq 0 ]; then
   echo "no panel seat agents found under $root/.github/agents" >&2
   exit 2
@@ -196,25 +262,44 @@ done
 
 if [ "$round_number" -gt 1 ]; then
   for seat in "${panel_seats[@]}"; do
-    prior_verdict="$previous_dir/verdicts/$seat.json"
-    if [ ! -s "$prior_verdict" ]; then
-      echo "missing previous verdict for seat $seat: $prior_verdict" >&2
-      echo "later reviews must give every seat its own prior verdict to verify" >&2
-      exit 2
-    fi
+    case ",$previous_roster," in
+      *,"$seat",*)
+        prior_verdict="$previous_dir/verdicts/$seat.json"
+        if [ ! -s "$prior_verdict" ]; then
+          echo "missing previous verdict for incumbent seat $seat: $prior_verdict" >&2
+          echo "later reviews must give every incumbent seat its own prior verdict to verify" >&2
+          exit 2
+        fi
+        ;;
+      *)
+        # A newly triggered seat has no prior verdict. Its first verification
+        # request carries the complete ledger and an explicit null prior.
+        ;;
+    esac
   done
 fi
+
+for path_value in "$discovery_request_path" "$ledger_path" "$responses_path" \
+  "$self_verification_path" "$verification_dir" "$approval_path"; do
+  if [[ "$path_value" == *\"* || "$path_value" == *\\* || "$path_value" == *$'\n'* ]]; then
+    echo "artifact path contains JSON control characters: $path_value" >&2
+    exit 2
+  fi
+done
 
 if [ -f "$out/address.json" ]; then
   if ! existing_fields="$(read_address "$out/address.json")"; then
     exit 2
   fi
-  IFS=$'\t' read -r existing_round existing_lifecycle existing_base existing_prev existing_tip <<<"$existing_fields"
+  IFS=$'\t' read -r existing_round existing_lifecycle existing_base existing_prev existing_tip existing_phase existing_selection existing_selection_sha <<<"$existing_fields"
   if [ "$existing_round" != "$round" ] ||
      [ "$existing_lifecycle" != "$lifecycle" ] ||
      [ "$existing_base" != "$base_sha" ] ||
      [ "$existing_prev" != "$prev_sha" ] ||
-     [ "$existing_tip" != "$tip" ]; then
+     [ "$existing_tip" != "$tip" ] ||
+     [ "$existing_phase" != "$phase" ] ||
+     [ "$existing_selection" != "$selection_path" ] ||
+     [ "$existing_selection_sha" != "$selection_sha256" ]; then
     echo "review address $round was already staged for different commits" >&2
     echo "use the next review id instead of changing evidence beneath an existing address" >&2
     exit 2
@@ -230,12 +315,29 @@ fi
 
 mkdir -p "$out/verdicts" "$out/reviewer-notes"
 
-# Write-then-rename every artifact. A diff truncated by a signal or a full
-# disk would otherwise sit at its final path, and a reviewer would read a
-# partial delta as the whole change. The temp name carries the pid so two
-# concurrent stagings cannot stomp each other, and a failed write is removed
-# rather than left as residue - including a failed rename, which is the one
-# path that would otherwise exit under `set -e` with the temp still there.
+publish_no_replace() {
+  local tmp="$1"
+  local dest="$2"
+  if [ -e "$dest" ]; then
+    if ! cmp -s "$tmp" "$dest"; then
+      echo "conflicting generated bytes at $dest; refusing to overwrite" >&2
+      rm -f -- "$tmp"
+      return 1
+    fi
+    rm -f -- "$tmp"
+    return 0
+  fi
+  if ! ln "$tmp" "$dest"; then
+    if [ -e "$dest" ] && cmp -s "$tmp" "$dest"; then
+      rm -f -- "$tmp"
+      return 0
+    fi
+    rm -f -- "$tmp"
+    return 1
+  fi
+  rm -f -- "$tmp"
+}
+
 stage() {
   local dest="$1"
   shift
@@ -244,10 +346,7 @@ stage() {
     rm -f -- "$tmp"
     return 1
   fi
-  if ! mv -f "$tmp" "$dest"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
+  publish_no_replace "$tmp" "$dest"
 }
 
 stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"
@@ -257,25 +356,32 @@ stage "$out/commits.txt" git --no-pager log --no-decorate --oneline "$base_sha..
 delta_sha="$(sha256sum "$out/delta.diff" | cut -d' ' -f1)"
 full_sha="$(sha256sum "$out/full.diff" | cut -d' ' -f1)"
 
-addr_tmp="$out/address.json.$$.tmp"
-trap 'rm -f -- "$addr_tmp"' EXIT
-cat > "$addr_tmp" <<JSON
-{
-  "round": "$round",
-  "lifecycle_id": "$lifecycle",
-  "selection_path": "$selection_path",
-  "base": "$base_sha",
-  "previous_tip": "$prev_sha",
-  "tip": "$tip",
-  "delta_sha256": "$delta_sha",
-  "full_sha256": "$full_sha"
-}
-JSON
-mv -f "$addr_tmp" "$out/address.json"
-trap - EXIT
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const args = process.argv.slice(1);
+const helperPath = args.pop();
+const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
+const [path, round, lifecycle, selectionPath, base, previousTip, tip, phase,
+  selectionSha, deltaSha, fullSha] = args;
+writeCreateOrCompare(path, {
+  round,
+  lifecycle_id: lifecycle,
+  selection_path: selectionPath,
+  selection_sha256: selectionSha,
+  phase,
+  base,
+  previous_tip: previousTip,
+  tip,
+  delta_sha256: deltaSha,
+  full_sha256: fullSha,
+});
+' "$out/address.json" "$round" "$lifecycle" "$selection_path" "$base_sha" \
+  "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
 if [ ! -f "$out/evidence.md" ]; then
-  cat > "$out/evidence.md" <<'MD'
+  evidence_tmp="$out/evidence.md.$$.tmp"
+  cat > "$evidence_tmp" <<'MD'
 # Validation evidence
 
 Replace this file before dispatching. Reviewers are told to treat missing or
@@ -298,6 +404,7 @@ contract crate, and an advisory job's pass is not evidence at all.
 One or two sentences. Reviewers confine findings to defects in the delta that
 would break this deliverable or mask a regression.
 MD
+  publish_no_replace "$evidence_tmp" "$out/evidence.md"
 fi
 
 for seat in "${panel_seats[@]}"; do
@@ -305,7 +412,8 @@ for seat in "${panel_seats[@]}"; do
   if [ -f "$note" ]; then
     continue
   fi
-  cat > "$note" <<MD
+  note_tmp="$note.$$.tmp"
+  cat > "$note_tmp" <<MD
 # Reviewer notes for $seat
 
 ## Integrator rebuttals
@@ -321,12 +429,31 @@ to withdraw a correct one.
 None. Reviewers do not rerun tests, builds, evals, exploits, or other long
 validations unless this section explicitly asks this seat to do so.
 MD
+  publish_no_replace "$note_tmp" "$note"
 done
+
+if [ -z "$discovery_request_path" ]; then
+  discovery_request_path="$out/discovery-request.json"
+fi
+if [ -z "$ledger_path" ]; then
+  ledger_path="$out/discovery-ledger.json"
+fi
+if [ -z "$responses_path" ]; then
+  responses_path="$out/responses.json"
+fi
+if [ -z "$self_verification_path" ]; then
+  self_verification_path="$out/self-verification.json"
+fi
+if [ -z "$verification_dir" ]; then
+  verification_dir="$out/verification"
+fi
+if [ -z "$approval_path" ]; then
+  approval_path="$out/approval.json"
+fi
 
 request_tmp="$out/review-request.md.$$.tmp"
 dispatch_tmp="$out/dispatch-prompt.txt.$$.tmp"
-trap 'rm -f -- "$addr_tmp" "$request_tmp" "$dispatch_tmp"' EXIT
-
+trap 'rm -f -- "$request_tmp" "$dispatch_tmp"' EXIT
 cat > "$request_tmp" <<MD
 # Panel review request
 
@@ -339,10 +466,30 @@ with \`view\`; do not substitute a prose summary for them.
 - Delta range: \`$prev_sha..$tip\`
 - Full branch context: \`$out/full.diff\`
 - Full range: \`$base_sha..$tip\`
-- Lifecycle selection: \`${selection_path:-not supplied to staging; use the recorded lifecycle selection}\`
+- Phase: \`$phase\`
+- Lifecycle selection: \`$selection_path\` (sha256 \`$selection_sha256\`)
+- Staged candidate: \`$out/candidate.json\`
 - Validation evidence and phase deliverable: \`$out/evidence.md\`
 - Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
 - Commit list: \`$out/commits.txt\`
+
+## Generated lifecycle artifacts
+
+The canonical generated artifacts for this phase are:
+
+$(if [ "$phase" = "discovery" ]; then
+  printf '%s\n' \
+    "- Discovery request: \`$discovery_request_path\`" \
+    "- Issue ledger: \`$ledger_path\`" \
+    "- Implementation responses: \`$responses_path\`"
+else
+  printf '%s\n' \
+    "- Immutable discovery ledger: \`$ledger_path\`" \
+    "- Implementation responses: \`$responses_path\`" \
+    "- Self-verification: \`$self_verification_path\`" \
+    "- Verification requests: \`$verification_dir/<your-seat>.json\`" \
+    "- Approval artifact: \`$approval_path\`"
+fi)
 
 ## Required review behaviour
 
@@ -388,12 +535,12 @@ This is the first review. There is no prior verdict to verify.
 MD
 fi
 
-mv -f "$request_tmp" "$out/review-request.md"
+publish_no_replace "$request_tmp" "$out/review-request.md"
 
 cat > "$dispatch_tmp" <<MD
-Read and follow the complete review request at $out/review-request.md. Use view to read every artifact it names, including the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
+Read and follow the complete phase-aware review request at $out/review-request.md. Use view to read every artifact it names, including the staged candidate, generated lifecycle artifacts, the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
 MD
-mv -f "$dispatch_tmp" "$out/dispatch-prompt.txt"
+publish_no_replace "$dispatch_tmp" "$out/dispatch-prompt.txt"
 trap - EXIT
 
 echo "staged $out"

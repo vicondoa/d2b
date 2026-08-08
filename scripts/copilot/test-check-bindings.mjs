@@ -728,6 +728,46 @@ const CASES = [
     expectText: "authoritative selection-table focus",
   },
   {
+    name: "nixos invariant checklist marker drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-nixos.agent.md",
+        (text) => text.replace("<!-- panel nixos invariant checklist -->", ""),
+      ),
+    expectExit: 1,
+    expectText: "invariant checklist marker",
+  },
+  {
+    name: "observability invariant checklist marker duplication is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-observability.agent.md",
+        (text) => `${text}\n<!-- panel observability invariant checklist -->\n`,
+      ),
+    expectExit: 1,
+    expectText: "invariant checklist marker",
+  },
+  ...[
+    ["rust-toolchain.toml", "rust-toolchain.toml"],
+    [".cargo/config.toml", ".cargo/config.toml"],
+    ["tests/layer1-jobs.json", "tests/layer1-jobs.json"],
+    ["tests/test-rust.sh", "tests/test-rust.sh"],
+  ].map(([name, pattern]) => ({
+    name: `build trigger ${name} is required`,
+    mutate: (dir) =>
+      mutateSelectionRoster(dir, (table) => {
+        for (const trigger of table.seats.build.triggers) {
+          if (trigger.kind === "path") {
+            trigger.patterns = trigger.patterns.filter((entry) => entry !== pattern);
+          }
+        }
+      }),
+    expectExit: 1,
+    expectText: `canonical path ${pattern}`,
+  })),
+  {
     name: "a seat missing the shared finding bar is rejected",
     mutate: (dir) => mutateBar(dir, "build", (t, s, e) => t.slice(0, s) + t.slice(e + 1)),
     expectExit: 1,

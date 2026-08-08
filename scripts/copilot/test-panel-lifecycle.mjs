@@ -3,7 +3,10 @@
 
 import {
   appendLateFindings,
+  adaptDiscoveryVerdict,
+  adaptVerificationVerdict,
   calculateMetrics,
+  createApprovalArtifact,
   createDiscoveryRequest,
   createResponseTemplate,
   createSelection,
@@ -16,6 +19,7 @@ import {
   readSelectionTable,
   selectRoster,
   selectLifecycleRoster,
+  sha256,
   stableStringify,
   validateDiscoveryResults,
   validateFixScope,
@@ -27,13 +31,28 @@ import {
   writeCreateOrCompare,
 } from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const LIFECYCLE_CLI = join(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "..",
+  "..",
+  ".github",
+  "skills",
+  "d2b-panel-round",
+  "scripts",
+  "panel-lifecycle.mjs",
+);
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -208,15 +227,20 @@ function makeLedger() {
   };
 }
 
-function allVerificationResults(roster, lateFindings = {}) {
+function allVerificationResults(roster, lateFindings = {}, ledger = makeLedger()) {
+  const statuses = Object.fromEntries(
+    ledger.issues.map((issue) => [issue.id, "resolved"]),
+  );
   return Object.fromEntries(
     roster.map((seat) => [
       seat,
       {
         seat,
         complete: true,
+        signoff: true,
         summary: "Verified.",
         recommendations: [],
+        verified_issue_statuses: statuses,
         late_findings: lateFindings[seat] ?? [],
       },
     ]),
@@ -252,6 +276,17 @@ console.log("panel lifecycle: selection table");
   for (const [seat, paths] of Object.entries(triggerPaths)) {
     const result = selectRoster(candidate({ changed_paths: paths }));
     check(`the ${seat} path trigger selects its seat`, result.triggered_optional.includes(seat));
+  }
+  for (const path of [
+    "rust-toolchain.toml",
+    ".cargo/config.toml",
+    "tests/layer1-jobs.json",
+    "tests/test-rust.sh",
+  ]) {
+    check(
+      `the build seat path trigger selects ${path}`,
+      selectRoster(candidate({ changed_paths: [path] })).triggered_optional.includes("build"),
+    );
   }
   const signals = [
     "stateful",
@@ -351,6 +386,30 @@ try {
   });
   check("discovery request is comprehensive", request.comprehensive === true && request.full_candidate === true);
   check("discovery request states the one comprehensive instruction", /comprehensive/.test(request.instruction) && /later rounds/.test(request.instruction));
+  const actualDiscoveryVerdict = {
+    engineer: "software",
+    signoff: false,
+    summary: "A source mapping issue was found.",
+    recommendations: [{
+      severity: "high",
+      where: "scripts/panel.js:1",
+      what: "A source can disappear.",
+      why: "The ledger would be incomplete.",
+      fix: "Validate source coverage.",
+    }],
+  };
+  const adaptedDiscovery = adaptDiscoveryVerdict(actualDiscoveryVerdict);
+  check(
+    "actual verdict JSON adapts to a complete discovery result",
+    adaptedDiscovery.complete === true &&
+      adaptedDiscovery.seat === "software" &&
+      adaptedDiscovery.findings[0].severity === "MAJOR",
+  );
+  rejects(
+    "an inconsistent actual discovery signoff is refused",
+    () => adaptDiscoveryVerdict({ ...actualDiscoveryVerdict, signoff: true }),
+    /signoff/,
+  );
 
   const zeroResults = completeResults(initial.selection.roster);
   const zeroSources = validateDiscoveryResults(initial.selection, zeroResults);
@@ -426,6 +485,18 @@ try {
     }),
     /more than one/,
   );
+  rejects(
+    "a ledger group cannot downgrade source severity",
+    () => mergeDiscoveryLedger({
+      selection: initial.selection,
+      results: withFinding,
+      groups: [{
+        source_finding_ids: ["software:1", "test:1"],
+        severity: "MINOR",
+      }],
+    }),
+    /maximum source severity/,
+  );
   const ledgerPath = join(root, "ledger.json");
   writeCreateOrCompare(ledgerPath, ledger);
   rejects(
@@ -474,6 +545,18 @@ try {
     responses,
     verification_results: allVerificationResults(initial.selection.roster),
   }).approved === true);
+  const approvalArtifact = createApprovalArtifact({
+    selection: initial.selection,
+    ledger: responseInput,
+    responses,
+    verification_results: allVerificationResults(initial.selection.roster),
+  });
+  check(
+    "approval is exposed as a directly consumable artifact",
+    approvalArtifact.artifact_kind === "d2b-panel/approval" &&
+      approvalArtifact.approved === true &&
+      approvalArtifact.selection_sha256.length === 64,
+  );
   for (const disposition of ["Invalid", "Withdrawn"]) {
     const factualBlocker = {
       issue_id: "R1",
@@ -548,7 +631,7 @@ try {
     selection: initial.selection,
     ledger: majorLedger,
     responses: [acceptedMajor],
-    verification_results: allVerificationResults(initial.selection.roster),
+    verification_results: allVerificationResults(initial.selection.roster, {}, majorLedger),
   }).approved === true);
   const acceptedRejectedMajor = {
     ...acceptedMajor,
@@ -560,7 +643,7 @@ try {
       selection: initial.selection,
       ledger: majorLedger,
       responses: [acceptedRejectedMajor],
-      verification_results: allVerificationResults(initial.selection.roster),
+      verification_results: allVerificationResults(initial.selection.roster, {}, majorLedger),
     }).approved === true,
   );
   for (const disposition of ["Invalid", "Withdrawn"]) {
@@ -577,7 +660,7 @@ try {
         selection: initial.selection,
         ledger: majorLedger,
         responses: [factualMajor],
-        verification_results: allVerificationResults(initial.selection.roster),
+        verification_results: allVerificationResults(initial.selection.roster, {}, majorLedger),
       }).approved === true,
     );
   }
@@ -612,7 +695,7 @@ try {
         selection: initial.selection,
         ledger: majorLedger,
         responses: [{ ...acceptedMajor, disposition: "Intentionally rejected", acceptance: undefined }],
-        verification_results: allVerificationResults(initial.selection.roster),
+        verification_results: allVerificationResults(initial.selection.roster, {}, majorLedger),
       });
       if (result.approved) throw new Error("unaccepted MAJOR approved");
     },
@@ -680,12 +763,18 @@ try {
   );
   const metrics = calculateMetrics({
     ledger: appended,
-    responses: [{ issue_id: "R1", disposition: "Fixed" }],
+    responses: appended.issues.map((issue) => ({
+      issue_id: issue.id,
+      disposition: "Fixed",
+      changed_surface: ["src/panel.js"],
+      justification: "The issue was fixed.",
+      evidence: "focused test",
+    })),
     review_iterations: 2,
     implementation_iterations: 2,
   });
   check("metrics count late blockers and majors", metrics.late_major_count === 1 && metrics.late_unique_findings === 1);
-  check("metrics calculate fixed issues per iteration", metrics.average_fixed_issues_per_implementation_iteration === 0.5);
+  check("metrics calculate fixed issues per iteration", metrics.average_fixed_issues_per_implementation_iteration === 2.5);
   check("zero implementation iterations produce 0.0", calculateMetrics({ ledger: responseInput, implementation_iterations: 0 }).average_fixed_issues_per_implementation_iteration === 0.0);
 
   console.log("panel lifecycle: scoped verification");
@@ -711,8 +800,68 @@ try {
   const verified = validateVerificationResults(
     verificationSelection.selection,
     allVerificationResults(verificationSelection.selection.roster),
+    { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
   );
   check("every selected seat supplies complete verification", verified.length === verificationSelection.selection.roster.length);
+  const verificationStatuses = Object.fromEntries(
+    responseInput.issues.map((issue) => [issue.id, "resolved"]),
+  );
+  const actualVerificationVerdict = adaptVerificationVerdict({
+    engineer: "software",
+    signoff: true,
+    summary: "All ledger issues were verified.",
+    issue_statuses: verificationStatuses,
+    recommendations: [],
+  }, { issue_ids: responseInput.issues.map((issue) => issue.id) });
+  check(
+    "actual verdict JSON adapts to explicit verification status",
+    actualVerificationVerdict.verified_issue_statuses.R1 === "resolved" &&
+      actualVerificationVerdict.signoff === true,
+  );
+  rejects(
+    "verification refuses a missing per-issue status",
+    () => validateVerificationResults(
+      verificationSelection.selection,
+      {
+        software: {
+          ...allVerificationResults(verificationSelection.selection.roster).software,
+          verified_issue_statuses: { R1: "resolved" },
+        },
+      },
+      { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
+    ),
+    /cover each issue|missing/,
+  );
+  const lateApproval = evaluateApproval({
+    selection: verificationSelection.selection,
+    ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+    responses,
+    verification_results: Object.fromEntries(
+      verificationSelection.selection.roster.map((seat) => [
+        seat,
+        {
+          ...allVerificationResults(verificationSelection.selection.roster).software,
+          seat,
+          verified_issue_statuses: verificationStatuses,
+          late_findings: seat === "software"
+            ? [{
+                severity: "MAJOR",
+                introduced_regression: true,
+                raw_text: "A late blocking regression.",
+                impact: "The current candidate is unsafe.",
+                recommendation: "Fix the regression.",
+              }]
+            : [],
+        },
+      ]),
+    ),
+  });
+  check(
+    "admitted late MAJOR is appended and blocks approval",
+    lateApproval.late_blocking_issues.length === 1 &&
+      lateApproval.approved === false &&
+      lateApproval.ledger.issues.at(-1).late === true,
+  );
   const verificationDir = join(root, "verification");
   const writtenVerification = writeVerificationArtifacts(verificationDir, {
     selection: verificationSelection.selection,
@@ -732,9 +881,129 @@ try {
       Object.fromEntries(
         Object.entries(allVerificationResults(verificationSelection.selection.roster)).slice(0, -1),
       ),
+      { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
     ),
     /missing verification result/,
   );
+
+  console.log("panel lifecycle: public CLI integration");
+  const cliRoot = mkdtempSync(join(tmpdir(), "d2b-panel-cli-"));
+  try {
+    const cliCandidate = join(cliRoot, "candidate.json");
+    const cliCurrentCandidate = join(cliRoot, "current-candidate.json");
+    const cliDiscoveryVerdicts = join(cliRoot, "discovery-verdicts.json");
+    const cliDiscoveryResults = join(cliRoot, "discovery-results.json");
+    const cliGroups = join(cliRoot, "groups.json");
+    const cliLedger = join(cliRoot, "ledger.json");
+    const cliResponses = join(cliRoot, "responses.json");
+    const cliSelf = join(cliRoot, "self.json");
+    const cliVerificationSelectionCandidate = join(cliRoot, "verification-candidate.json");
+    const cliVerificationVerdicts = join(cliRoot, "verification-verdicts.json");
+    const cliVerificationResults = join(cliRoot, "verification-results.json");
+    const cliApproval = join(cliRoot, "approval.json");
+    const cliMetrics = join(cliRoot, "metrics.json");
+    const address = (snapshot, content = "cli-content") => ({
+      program: "SPEC004",
+      wave: "spec004w1",
+      candidate_id: "cli-candidate",
+      content_id: content,
+      snapshot_sha256: snapshot,
+      changed_paths: ["src/panel.js"],
+    });
+    writeFileSync(cliCandidate, stableStringify(address("d".repeat(64))));
+    const runCli = (...args) =>
+      execFileSync("node", [LIFECYCLE_CLI, ...args], {
+        cwd: cliRoot,
+        encoding: "utf8",
+      }).trim();
+    const discoverySelection = runCli("select", cliCandidate, "spec004w1");
+    const discoveryRequest = join(cliRoot, "discovery-request.json");
+    runCli("discovery-request", discoverySelection, cliCandidate, discoveryRequest);
+    const discoveryRoster = JSON.parse(readFileSync(discoverySelection, "utf8")).roster;
+    writeFileSync(
+      cliDiscoveryVerdicts,
+      stableStringify(Object.fromEntries(discoveryRoster.map((seat) => [seat, {
+        engineer: seat,
+        signoff: true,
+        summary: "No discovery findings.",
+        recommendations: [],
+      }]))),
+    );
+    runCli("adapt-discovery", cliDiscoveryVerdicts, cliDiscoveryResults);
+    writeFileSync(cliGroups, "[]\n");
+    runCli("merge-ledger", discoverySelection, cliDiscoveryResults, cliGroups, cliLedger);
+    runCli("response-template", cliLedger, cliResponses);
+    writeFileSync(cliSelf, stableStringify({
+      tests: "passed",
+      lint: "passed",
+      formatting: "passed",
+      static_analysis: "passed",
+      build: "not applicable",
+      uncovered_areas: "none",
+      self_review: "passed",
+    }));
+    writeFileSync(
+      cliVerificationSelectionCandidate,
+      stableStringify(address("e".repeat(64), "cli-current-content")),
+    );
+    const verificationSelection = runCli(
+      "select",
+      cliVerificationSelectionCandidate,
+      "spec004w1",
+      "--phase",
+      "verification",
+      "--previous-selection",
+      discoverySelection,
+    );
+    const verificationRoster = JSON.parse(readFileSync(verificationSelection, "utf8")).roster;
+    writeFileSync(
+      cliVerificationVerdicts,
+      stableStringify(Object.fromEntries(verificationRoster.map((seat) => [seat, {
+        engineer: seat,
+        signoff: true,
+        summary: "Verification passed.",
+        issue_statuses: {},
+        recommendations: [],
+      }]))),
+    );
+    runCli("adapt-verification", cliLedger, cliVerificationVerdicts, cliVerificationResults);
+    runCli(
+      "verification",
+      verificationSelection,
+      cliLedger,
+      cliResponses,
+      cliSelf,
+      join(cliRoot, "verification"),
+    );
+    const approvalResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      verificationSelection,
+      cliLedger,
+      cliResponses,
+      cliVerificationResults,
+      cliApproval,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI exposes a passing artifact",
+      approvalResult.status === 0 &&
+        JSON.parse(readFileSync(cliApproval, "utf8")).approved === true,
+      `${approvalResult.stdout}${approvalResult.stderr}`,
+    );
+    runCli("metrics", cliLedger, cliResponses, cliVerificationResults, cliMetrics);
+    check(
+      "metrics CLI writes deterministic canonical metrics",
+      JSON.parse(readFileSync(cliMetrics, "utf8")).artifact_kind === "d2b-panel/metrics",
+    );
+    check(
+      "public CLI integration produces named lifecycle artifacts",
+      readFileSync(discoveryRequest, "utf8").includes("comprehensive") &&
+        existsSync(cliApproval) &&
+        existsSync(cliMetrics),
+    );
+  } finally {
+    rmSync(cliRoot, { recursive: true, force: true });
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
@@ -757,10 +1026,66 @@ console.log("panel lifecycle: legacy continuation");
     output_sha256: String(index + 1).repeat(64).slice(0, 64),
     recommendations: [recommendation],
   }));
+  const legacyCandidate = candidate({ changed_paths: ["Makefile"] });
+  const legacyWireRecords = legacyRecords.map((record, index) => ({
+    artifact_kind: "d2b-delivery/panel-receipt",
+    schema_version: 2,
+    role: record.role,
+    candidate_id: legacyCandidate.candidate_id,
+    content_id: legacyCandidate.content_id,
+    snapshot_sha256: legacyCandidate.snapshot_sha256,
+    model_version: "gemini-3.1-pro-preview",
+    provider: "github-copilot",
+    reasoning_effort: "high",
+    run_id: `run-${record.role}-${index}`,
+    receipt_locator: `github-copilot://runs/${record.role}/${index}`,
+    output_sha256: record.output_sha256,
+    signoff: false,
+    recommendations: record.recommendations,
+  }));
+  const legacyRequest = {
+    artifact_kind: "d2b-delivery/panel-request",
+    schema_version: 2,
+    program: legacyCandidate.program,
+    wave: legacyCandidate.wave,
+    candidate_id: legacyCandidate.candidate_id,
+    content_id: legacyCandidate.content_id,
+    snapshot_sha256: legacyCandidate.snapshot_sha256,
+    provider: "github-copilot",
+    model_version: "gemini-3.1-pro-preview",
+    reasoning_effort: "high",
+    roles: [
+      "software", "test", "nixos", "networking", "security",
+      "rust", "product", "docs", "observability", "kernel",
+    ],
+    record_artifact_kind: "d2b-delivery/panel-receipt",
+    record_schema_version: 2,
+    record_files: [
+      "software.json", "test.json", "nixos.json", "networking.json",
+      "security.json", "rust.json", "product.json", "docs.json",
+      "observability.json", "kernel.json",
+    ],
+  };
+  const legacyAttestation = {
+    roles: legacyRequest.roles,
+    records: legacyWireRecords.map((record) => ({
+      role: record.role,
+      file: `${record.role}.json`,
+      sha256: record.output_sha256,
+      run_id: record.run_id,
+    })),
+    unanimous: false,
+  };
+  const legacyBundle = {
+    request: legacyRequest,
+    records: legacyWireRecords,
+    attestation: legacyAttestation,
+    seal_panel: legacyAttestation,
+  };
   const imported = importLegacyRound(
-    { records: legacyRecords },
+    legacyBundle,
     {
-      candidate: candidate({ changed_paths: ["Makefile"] }),
+      candidate: legacyCandidate,
     },
   );
   check("complete legacy ten-seat import is recognized", imported.complete === true && imported.discovery_required === false);
@@ -776,10 +1101,10 @@ console.log("panel lifecycle: legacy continuation");
   check("legacy rust profile is bound to current software", imported.profiles.software.includes("rust"));
   check("current build selection widens the imported roster", imported.lifecycle_roster.includes("build"));
   const importedWithPriorSelection = importLegacyRound(
-    { records: legacyRecords },
+    legacyBundle,
     {
       selection: priorSelection,
-      candidate: candidate({ changed_paths: ["Makefile"] }),
+      candidate: legacyCandidate,
     },
   );
   check(
@@ -787,43 +1112,69 @@ console.log("panel lifecycle: legacy continuation");
     importedWithPriorSelection.lifecycle_roster.includes("build"),
   );
   const importedAgain = importLegacyRound(
-    { records: legacyRecords },
-    { candidate: candidate({ changed_paths: ["Makefile"] }) },
+    legacyBundle,
+    { candidate: legacyCandidate },
   );
   check("repeated legacy import has stable bytes", stableStringify(imported) === stableStringify(importedAgain));
   const legacyDir = mkdtempSync(join(tmpdir(), "d2b-legacy-round-"));
   try {
     mkdirSync(join(legacyDir, "records"));
+    writeFileSync(join(legacyDir, "panel-request.json"), stableStringify(legacyRequest));
+    for (const record of legacyWireRecords) {
+      writeFileSync(join(legacyDir, "records", `${record.role}.json`), stableStringify(record));
+    }
     writeFileSync(
-      join(legacyDir, "address.json"),
-      JSON.stringify({ panel_format_version: undefined }),
-    );
-    writeFileSync(
-      join(legacyDir, "records", "software.json"),
-      JSON.stringify(legacyRecords[0]),
+      join(legacyDir, "attestation.json"),
+      stableStringify({
+        roles: legacyRequest.roles,
+        records: legacyWireRecords.map((record) => ({
+          role: record.role,
+          file: `${record.role}.json`,
+          sha256: sha256(stableStringify(record)),
+          run_id: record.run_id,
+        })),
+        unanimous: false,
+      }),
     );
     const directoryImport = importLegacyRound(legacyDir, {
-      candidate: candidate({ changed_paths: ["src/panel.js"] }),
+      candidate: legacyCandidate,
     });
-    check("legacy directory import reads only its records directory", directoryImport.sources.length === 1);
+    check("legacy directory import reads its fixed-ten records directory", directoryImport.sources.length === 10);
+    writeFileSync(
+      join(legacyDir, "records", "software.json"),
+      stableStringify({
+        ...legacyWireRecords[0],
+        recommendations: ["tampered"],
+      }),
+    );
+    try {
+      importLegacyRound(legacyDir, { candidate: legacyCandidate });
+      check("legacy directory import binds attestation to exact record bytes", false);
+    } catch (cause) {
+      check(
+        "legacy directory import binds attestation to exact record bytes",
+        /exact bytes|digest does not match/.test(cause.message),
+        cause.message,
+      );
+    }
   } finally {
     rmSync(legacyDir, { recursive: true, force: true });
   }
 
   const partial = importLegacyRound(
-    { records: legacyRecords.slice(0, 2) },
-    { candidate: candidate({ changed_paths: ["src/panel.js"] }) },
+    { records: legacyWireRecords.slice(0, 2) },
+    { candidate: legacyCandidate },
   );
   check("partial legacy import retains completed sources", partial.sources.length === 2);
   check("partial legacy import requests one current discovery", partial.discovery_required === true && partial.discovery_mode === "run-one-current-discovery");
   rejects(
     "current panel format is not accepted as legacy",
-    () => importLegacyRound({ records: [{ ...legacyRecords[0], panel_format_version: 1 }] }),
+    () => importLegacyRound({ records: [{ ...legacyWireRecords[0], panel_format_version: 1 }] }),
     /current format|legacy fallback/,
   );
   rejects(
     "duplicate legacy role is refused",
-    () => importLegacyRound({ records: [legacyRecords[0], legacyRecords[0]] }),
+    () => importLegacyRound({ records: [legacyWireRecords[0], legacyWireRecords[0]] }),
     /duplicate record/,
   );
 }
