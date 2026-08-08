@@ -392,14 +392,16 @@ sealed lifetime-bound permit with no clone/copy/default/conversion/serde/accesso
 emits immutable fixed-field pre/outcome audit. Prune/limit/clock/settlement failure returns
 the typed redacted report/action and blocks later mutation.
 
-The three reserved continuity-subset refusals are not rendered as generic retention
-failures. They use the exact retention-capacity form above with
-`CLOSED_RETENTION_CAPACITY_CLASS` narrowed to
-`continuity-evidence-record-limit | continuity-evidence-byte-limit |
-continuity-repair-attempt-limit`, exit `4`, error
-`audit-backup-retention-capacity`, and action
-`reconcile-immutable-audit-retention`. A source live-pair refusal uses the source form below,
-not `continuity-repair-attempt-limit`.
+Reserved continuity-subset refusals are not rendered as generic retention failures.
+`continuity-evidence-record-limit | continuity-evidence-byte-limit` use the exact
+retention-capacity form above, exit `4`, error `audit-backup-retention-capacity`, and
+action `repair-continuity-authoritative-source-contract`. A
+`continuity-repair-attempt-limit` first drives the oldest broker-target compaction, source
+release, and attempt-slice release. If cleanup blocks, the CLI renders that exact broker,
+source-lifecycle, or ledger failure; it never renders a generic limit or prune-only action.
+A 257th source live-pair admission uses the same ordered cleanup and exact-blocker rule.
+`source-capacity` below is reserved for an authoritative-source record/byte contract
+violation, not live-slot exhaustion.
 
 Replay-key publication failure exits `4`. Its human form is exactly:
 
@@ -413,12 +415,13 @@ Its JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-replay-key-unavailable","failureClass":"<CLOSED_REPLAY_KEY_FAILURE_CLASS>","action":"<ACTION_FROM_REPLAY_KEY_TABLE>"}`.
 `CLOSED_REPLAY_KEY_FAILURE_CLASS` is exactly `entropy-unavailable | hierarchy | write |
 file-sync | link | reopen | directory-sync | conflict |
-replay-key-missing-after-parent-durable | posture`. Actions are
+replay-key-missing-after-parent-durable | posture | audit-publication`. Actions are
 `repair-continuity-replay-key-generation` for `entropy-unavailable`,
 `repair-retention-storage-and-reconcile` for the six storage boundaries,
 `preserve-and-escalate-continuity-publication-conflict` for `conflict`, and
 `preserve-and-escalate-audit-integrity-incident` for
-`replay-key-missing-after-parent-durable | posture`.
+`replay-key-missing-after-parent-durable | posture`, and
+`repair-retention-audit-and-reconcile` for `audit-publication`.
 Replay-key reservation failure uses the existing exact
 `root-publication-record-limit | root-publication-byte-limit` retention-capacity form, or
 the standing-reserve admission form when applicable; it never enters
@@ -438,12 +441,24 @@ Its JSON is exactly
 `CLOSED_SOURCE_LIFECYCLE_STAGE` is exactly `pin-acquisition | replay-binding |
 source-release`. `CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS` is exactly `source-capacity |
 source-unavailable | source-conflict | hierarchy | write | file-sync | link | reopen |
-directory-sync | conflict | audit-publication`. `source-capacity` maps to
-`reconcile-immutable-audit-retention`; `source-unavailable` maps to
+unlink | directory-sync | census | conflict | audit-publication`. `source-capacity` caused
+by evidence count or size maps to `repair-continuity-authoritative-source-contract`;
+`source-unavailable` maps to
 `repair-continuity-authoritative-source`; `source-conflict | conflict` map to
 `preserve-and-escalate-continuity-source-conflict`; the six storage boundaries map to
 `repair-continuity-source-storage-and-reconcile`; and `audit-publication` maps to
-`repair-retention-audit-and-reconcile`.
+`repair-retention-audit-and-reconcile`. Source-release `unlink` maps to
+`repair-continuity-source-storage-and-reconcile`, and source-release `census` maps to
+`repair-retention-census-and-reconcile`.
+
+Valid stage/class pairs are closed. `pin-acquisition` admits `source-capacity |
+source-unavailable | source-conflict | hierarchy | write | file-sync | link | reopen |
+directory-sync | conflict | audit-publication`; `replay-binding` admits the same set
+without `source-capacity`; and `source-release` admits only `source-unavailable |
+source-conflict | hierarchy | reopen | unlink | directory-sync | census | conflict |
+audit-publication`. Replay-key `audit-publication` is valid only for fixed outcome-audit
+publication after parent durability. Strict schemas, wire snapshots, constructors,
+deserializers, and human/JSON goldens reject every other stage/class pair.
 
 Broker compaction/recovery cleanup failure also exits `4` and never masquerades as a settled
 continuity repair:
@@ -463,8 +478,10 @@ Stages are exactly `broker-compaction | capacity-release`. Classes are exactly
 `preserve-and-escalate-continuity-publication-conflict`;
 `unlink | directory-sync` to `repair-retention-storage-and-reconcile`, `census` to
 `repair-retention-census-and-reconcile`, and `audit-publication` to
-`repair-retention-audit-and-reconcile`. Schemas and goldens reject every stage/class pair
-that the lifecycle cannot produce. Source-release failure always uses the source-lifecycle
+`repair-retention-audit-and-reconcile`. Valid pairs are
+`broker-compaction/(head-changed | target-changed | unlink | directory-sync | census |
+audit-publication)` and `capacity-release/(census | audit-publication)` only. Schemas and
+goldens reject every other pair. Source-release failure always uses the source-lifecycle
 form above, never this cleanup class.
 
 The selector-free `host-generation-retention-clock-discontinuity-repair-v1` procedure
@@ -486,6 +503,7 @@ committed. Its human form is exactly:
 
 ```text
 host generation handoff immutable audit continuity repair decision selection pending
+intended-outcome: <CLOSED_TERMINAL_OUTCOME>
 publication-stage: decision-selection
 failure-boundary: <CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>
 settlement: decision-selection-pending
@@ -493,9 +511,12 @@ action: <ACTION_FROM_SETTLEMENT_BOUNDARY>
 ```
 
 Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
-It contains no `intendedOutcome`. The boundary is derived from the incomplete durable prefix
-and cannot be supplied independently.
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
+`intendedOutcome` comes only from the durable sealed decision basis recorded before
+decision-selection publication. The boundary is derived from the incomplete durable prefix
+and cannot be supplied independently. `conflict` is a closed prefix/boundary carrying the
+same durable intended outcome; it preserves both private selection digests and permits no
+replacement or reselection.
 
 Settlement preparation incomplete after durable decision selection but before durable
 decision-pre exits `4`. Its human form is exactly:
@@ -605,7 +626,9 @@ standing-reserve-unaccounted`:
 
 | Closed failure class | Exact action |
 | --- | --- |
-| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `continuity-evidence-record-limit`, `continuity-evidence-byte-limit`, `continuity-repair-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
+| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
+| `continuity-evidence-record-limit`, `continuity-evidence-byte-limit` | `repair-continuity-authoritative-source-contract` |
+| `continuity-repair-attempt-limit` | `resume-oldest-continuity-cleanup` |
 | `standing-reserve-exhausted` | `repair-retention-audit-and-reconcile` |
 | `clock-rollback`, `clock-watermark`, `epoch-invalid`, `clock-forward-discontinuity`, `clock-continuity-ambiguous` | `repair-retention-clock-discontinuity` |
 | `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |
@@ -647,7 +670,9 @@ Every action is executable or names one external procedure:
 | `repair-retention-clock-discontinuity` | site backup administrator repairs the configured authoritative time source, then an unprivileged public-socket `Admin` runs selector-free `host-generation-retention-clock-discontinuity-repair-v1` only as a wake signal; the sealed broker coordinator validates non-caller authoritative continuity evidence, consumes its private repair permit, preserves the original day-90 deadline across reboot or discontinuity, and prunes before completing repair when that deadline has passed |
 | `repair-continuity-replay-key-generation` | site package administrator runs `host-generation-continuity-replay-key-generation-repair-v1`, which restores the release-sealed broker CSPRNG and root posture without supplying, rotating, or replacing a key; broker startup then resumes the exact typed publication prefix |
 | `repair-continuity-authoritative-source` | site backup administrator runs `host-generation-continuity-authoritative-source-repair-v1`, which restores the disposition-pinned source version, authority, and exact replay-by-private-handle contract without accepting evidence from the operator; an unprivileged local public-socket `Admin` then reruns selector-free `host-generation-retention-clock-discontinuity-repair-v1` |
-| `repair-continuity-source-storage-and-reconcile` | site backup administrator runs `host-generation-continuity-source-storage-repair-v1`, which repairs only the disposition-pinned source root and exact retained lifecycle prefix; broker startup resumes fd-relative pin, replay binding, or release without selecting new evidence |
+| `repair-continuity-authoritative-source-contract` | site package administrator reinstalls the release-sealed authoritative-source producer/consumer contract and its evidence record/byte limits; the disposition-pinned authority, never the operator, republishes the same authoritative fact in canonical bounded form, then a local Admin sends the selector-free wake |
+| `resume-oldest-continuity-cleanup` | broker startup or the existing idle wake resumes the oldest broker-target compaction, source release, and attempt-slice release in order; a block renders the exact owning closed failure and this generic action is not emitted as a substitute |
+| `repair-continuity-source-storage-and-reconcile` | site backup administrator restores only underlying availability of the disposition-pinned source filesystem/provider - mount, space, inode availability, and service reachability - and must not edit, copy, truncate, rename, unlink, recreate, or reconcile the source root or any lifecycle byte; a selector-free local Admin wake lets the sealed broker-only `ReconcileHostGenerationImmutableAuditContinuitySourcePrefixV1` publish immutable pre/outcome audit and resume the exact retained prefix, with no independent repair role |
 | `preserve-and-escalate-continuity-source-conflict` | site security authority runs `host-generation-continuity-source-conflict-escalation-v1`, preserving the source, coordinator root, and immutable prefix and permitting no replacement, fallback evidence, prune, or retry until an accepted authority disposition names the source repair; after that repair, the site backup administrator and local Admin perform the authoritative-source repair and selector-free wake above |
 | `preserve-and-escalate-continuity-publication-conflict` | site security authority runs `host-generation-continuity-publication-conflict-escalation-v1`, preserving the conflicting final, parent, coordinator root, and immutable prefix and permitting no unlink, replacement, copy, compaction, or retry until an accepted authority disposition resolves the exact publication identity; the site backup administrator then runs `host-generation-retention-storage-repair-v1` and a local Admin reruns the selector-free wake |
 | `preserve-and-escalate-retention-clock-overflow` | site security authority runs `host-generation-retention-clock-overflow-escalation-v1`; no pruning or handoff retry is authorized |
