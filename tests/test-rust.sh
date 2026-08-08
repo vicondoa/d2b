@@ -881,6 +881,7 @@ ok "schema generation reproducibility"
 }
 
 run_supply_chain_gate() {
+local advisory_db_path=""
 cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
@@ -928,16 +929,27 @@ cargo_deny_policy_check() {
 cargo_audit_check() {
   local label="$1" lock_path="$2"
   shift 2
-  if ! command -v cargo-audit >/dev/null 2>&1 && ! command -v nix >/dev/null 2>&1; then
-    fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
+  if ! command -v nix >/dev/null 2>&1; then
+    fail "cargo audit cannot run for $label: nix is unavailable for the pinned RustSec database"
     exit 1
+  fi
+  if [ -z "$advisory_db_path" ]; then
+    local system flake_ref
+    system=$(nix eval --raw --impure --expr builtins.currentSystem)
+    flake_ref=$(d2b_flake_ref "$ROOT")
+    advisory_db_path=$(nix build --no-link --print-out-paths \
+      "${flake_ref}#packages.${system}.rustsec-advisory-db")
+    [ -d "$advisory_db_path/crates" ] || {
+      fail "pinned RustSec database is missing its advisory crate index"
+      exit 1
+    }
   fi
   log "--> cargo audit ($label; pinned RustSec database, no fetch)"
   if command -v cargo-audit >/dev/null 2>&1; then
-    cargo audit --file "$lock_path" --no-fetch "$@"
+    cargo audit --file "$lock_path" --db "$advisory_db_path" --no-fetch "$@"
   else
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-      cargo audit --file "$lock_path" --no-fetch "$@"
+      cargo audit --file "$lock_path" --db "$advisory_db_path" --no-fetch "$@"
   fi
   ok "cargo audit ($label)"
 }

@@ -32,6 +32,26 @@
             Move evaluation and execution to a native x86_64-linux or aarch64-linux runner;
             run make test-flake; then run the exact phase-valid closed slice command.
           '';
+      mkRustsecAdvisoryDb = pkgs:
+        let
+          source = pkgs.fetchFromGitHub {
+            owner = "rustsec";
+            repo = "advisory-db";
+            rev = "831c50f4a4304068f125e603add6a8839f08b3eb";
+            hash = "sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=";
+          };
+        in
+        pkgs.runCommand "rustsec-advisory-db-git" {
+          nativeBuildInputs = [ pkgs.git ];
+        } ''
+          cp -r ${source} $out
+          chmod -R u+w $out
+          cd $out
+          git init -q
+          git add .
+          git -c user.email=nixbld@localhost -c user.name=nixbld \
+            commit -q -m 'advisory-db snapshot'
+        '';
       mkGuestRustPackagesSrc = pkgs:
         pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
@@ -163,6 +183,7 @@
         bazelSeccomp = mkBazelSeccomp system;
         bazelExecSupervisor =
           import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
+        rustsecAdvisoryDb = mkRustsecAdvisoryDb pkgs;
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
@@ -301,6 +322,7 @@
       in {
         "bazel-8.6.0-seccomp" = bazelSeccomp;
         "d2b-bazel-exec-supervisor" = bazelExecSupervisor;
+        "rustsec-advisory-db" = rustsecAdvisoryDb;
         manpages = pkgs.runCommand "d2b-manpages" { } ''
           install -Dm644 ${./docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
           ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
@@ -751,30 +773,7 @@
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
 
-        # Pinned RustSec advisory DB snapshot for offline cargo-deny /
-        # cargo-audit checks in the Nix sandbox.  Update the rev + hash
-        # periodically to pick up new advisories.
-        advisoryDbSrc = pkgs.fetchFromGitHub {
-          owner = "rustsec";
-          repo = "advisory-db";
-          rev = "831c50f4a4304068f125e603add6a8839f08b3eb";
-          hash = "sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=";
-        };
-
-        # cargo-deny and cargo-audit (via the rustsec crate) require the
-        # advisory DB to be a git repository.  Wrap the fetchFromGitHub
-        # source tree in a minimal git repo so gix::open succeeds.
-        advisoryDbGit = pkgs.runCommand "rustsec-advisory-db-git" {
-          nativeBuildInputs = [ pkgs.git ];
-        } ''
-          cp -r ${advisoryDbSrc} $out
-          chmod -R u+w $out
-          cd $out
-          git init -q
-          git add .
-          git -c user.email=nixbld@localhost -c user.name=nixbld \
-            commit -q -m 'advisory-db snapshot'
-        '';
+        advisoryDbGit = mkRustsecAdvisoryDb pkgs;
 
         nativePrefix =
           if system == "x86_64-linux" then "x86_64"
