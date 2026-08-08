@@ -59,8 +59,8 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-rust` | bounded Make DAG for the Rust leaves (API, fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
 | `make test-rust-<leaf>` | eight CI leaf targets (API, main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
-| `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
+| `make test-proofs` | independent proof crates under `proofs/` | local + CI |
+| `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; native aarch64 job realizes six checks and runs the supply-chain target) |
 | `make test-flake-list` | emit native-system flake check names as JSON; the partition tool below reads it | source helper |
 | `make test-flake-partition` | emit those names split into the eval, realized, and nix-unit dispatch classes (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
@@ -80,15 +80,43 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
+The native `test-flake-aarch64` job runs on a native `aarch64-linux` runner and
+realizes exactly these six checks before running `make test-rust-supply-chain`
+on the same stable head:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+The supply-chain target selects the broker GNU and guest musl policy contexts
+for both systems:
+
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool`
+
+Its audit step resolves the flake's `packages.<system>.rustsec-advisory-db`
+output, pinned to RustSec `advisory-db` commit
+`831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`, and uses
+`cargo audit --no-fetch`. Do not substitute an ambient advisory database.
+
 `make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
 guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
 workspace dependencies in
 `tests/fixtures/guest-rust-workspace/Cargo.toml`, any
 `tests/fixtures/guest-rust-workspace/*.Cargo.toml` overrides, and
-`packages/Cargo.guest.lock` remain one resolvable locked workspace. When a
-mirrored shared crate gains or changes a dependency, update the guest workspace
-fixture and any affected override, refresh `packages/Cargo.guest.lock`, and run
-`make test-policy`.
+`packages/Cargo.guest.lock` remain one resolvable generated static-guest
+workspace. This fixture is separate from the unified product workspace and
+does not add a product lock authority. When a mirrored shared crate gains or
+changes a dependency, update the guest fixture and any affected override,
+refresh `packages/Cargo.guest.lock`, and run `make test-policy`.
 
 All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, invoked
 from the repository root as `cargo run --manifest-path packages/Cargo.toml
@@ -328,9 +356,10 @@ instantiating them again is redundant; that lane reads the same partition, so
 the names dropped here are the names it runs. Everything else instantiates in
 the bounded matrix. The tool fails closed if the partition is not total, if the
 enumeration is empty, or if a check named as realized is not in the flake. The
-aarch64
-leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
-drift gate keeps the matrix and smoke wiring in sync with the flake (`make
+native `aarch64-linux` job is separate from this x86 partition: it realizes the
+six native package and ELF checks listed above and runs
+`make test-rust-supply-chain` on the same stable head. A fail-closed drift gate
+keeps the matrix and native wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
 sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
 `D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
@@ -368,8 +397,9 @@ Layer 1:
   or missing paths so the test never touches the operator's live daemon.
 - Rendered-artifact ↔ DTO/doc contract → a contract test in
   `packages/d2b-contract-tests/`.
-- Generated docs/schemas/CLI freshness → already a drift gate; regenerate with
-  `cargo run -p xtask -- gen-*`. Do **not** add a new shell gate.
+- Generated docs/schemas/CLI freshness → already a drift gate; from the
+repository root enter `nix develop`, then run `cd packages` and the matching
+`cargo xtask gen-*` command. Do **not** add a new shell gate.
 
 Only reach for Layer 2 (containers / VMs / live-host / hardware) when a foreign
 userland, a real systemd boot, a live host, or a physical device is genuinely

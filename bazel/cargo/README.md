@@ -21,12 +21,14 @@ against it.
 The supported regeneration command is one explicit hub at a time:
 
 ```text
+cd packages
 cargo xtask bazel-repin --hub <product|walker>
 ```
 
 The module graph has its separate refresh command:
 
 ```text
+cd packages
 cargo xtask bazel-module-refresh
 ```
 
@@ -37,6 +39,7 @@ it atomically rewrites the exact owned tracked outputs and removes stale
 sidecars before returning their repository-relative paths:
 
 ```text
+cd packages
 cargo xtask gen-bazel --install
 cargo xtask gen-package-policy-inputs --install
 ```

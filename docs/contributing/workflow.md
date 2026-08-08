@@ -116,8 +116,30 @@ or coverage output from a scope slice.
 Package policy uses exact broker GNU and guest musl selected paths on
 `x86_64-linux` and `aarch64-linux`. Selected policy inputs are projections of
 the root lock, not additional workspace locks. The native arm gate realizes
-the six system-specific checks and runs the supply-chain gate on the same
-stable head.
+exactly these six system-specific checks and runs
+`make test-rust-supply-chain` on the same stable head:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+The four selected policy contexts are:
+
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool`
+
+The supply-chain target resolves the flake's
+`packages.<system>.rustsec-advisory-db` output, pinned to RustSec
+`advisory-db` commit `831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`, and runs its audit
+checks with `--no-fetch`.
 
 ## Screenshot and visual artifact hygiene
 
@@ -402,9 +424,12 @@ fields that request panel, agent, or model metadata.
 - `nix flake check` now builds real `cargo-deny` + `cargo-audit`
   derivations (via `checks.${system}.rust-deny` / `.rust-audit`).
   Each derivation fetches the pinned RustSec advisory DB snapshot
-  from the Nix store (no network at build time) and runs cargo-deny /
-  cargo-audit against both `packages/Cargo.lock` and
-  `packages/d2b-priv-broker/Cargo.lock`. The advisory DB is a
-  `fetchFromGitHub` pinned to a specific commit; update the rev + hash
-  in `flake.nix` periodically to pick up new advisories. Wall-clock
+  from the Nix store (no network at build time). The product checks use
+  `packages/Cargo.lock`; the static-guest checks use
+  `packages/Cargo.guest.lock`; package policy checks use the four selected
+  system-and-target inputs above. The advisory DB is a `fetchFromGitHub`
+  snapshot pinned to commit
+  `831c50f4a4304068f125e603add6a8839f08b3eb` and hash
+  `sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`. Update the rev and
+  hash in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).

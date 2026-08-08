@@ -39,6 +39,15 @@ realizes exactly six checks - the four package policy checks,
 `make test-rust-supply-chain` on the same verified head. It is enforcing and
 does not use a foreign system, remote builder, or advisory skip.
 
+The supported aggregate entrypoint is `make test-rust`; use
+`make test-rust-supply-chain` for the focused supply-chain leaf. Its audit
+helper resolves the flake's `packages.<system>.rustsec-advisory-db` output,
+pinned to RustSec `advisory-db` commit
+`831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=`, and passes that
+store path to `cargo audit` with `--no-fetch`. Do not use an ambient advisory
+database.
+
 ## Build and validate, in detail
 
 Use top-level `Makefile` targets. Shell scripts under `tests/` are
@@ -59,7 +68,9 @@ ones are capability seals) and **`harness = false` binaries**
 set comes from `nextest list`, not a pin. The privileged broker package stays
 on serial `cargo test` through the root manifest with its package and feature
 selectors: its tests are not process-per-test safe. The guest shell runner
-likewise uses the root manifest and lock with the `real-libshpool` feature.
+likewise uses the root product manifest and lock with the `real-libshpool`
+feature as a package-selected stream. Both packages remain members of the
+unified product workspace; only the no-bash AST walker is separate.
 
 `make test-runtime-ledger` also stays on `cargo test`, and that is load
 bearing. It enforces an aggregate process-CPU budget, and nextest's
@@ -159,10 +170,11 @@ fixture behavior.
 ### The API census shard
 
 CI runs eight independent Rust leaf jobs behind the stable required
-`test-rust` rollup context: API, main workspace, broker, guest shell runner,
-no-bash AST, schema, inventory and supply chain. Each focused target receives
-the full runner budget and drops local-only dependency edges, so a shard does
-not repeat another shard's work. `make test-rust` remains the local aggregate.
+`test-rust` rollup context: API, main product workspace, broker
+package-selected stream, guest shell runner package-selected stream, no-bash
+AST, schema, inventory and supply chain. Each focused target receives the full
+runner budget and drops local-only dependency edges, so a shard does not repeat
+another shard's work. `make test-rust` remains the local aggregate.
 
 The API census is a separate shard because it shares nothing with the
 product workspace build: it renders through the separately pinned nightly toolchain in

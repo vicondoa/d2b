@@ -150,7 +150,7 @@
       "runsOn": "ubuntu-latest"
     },
     "test-rust-main": {
-      "displayName": "Rust main workspace gate",
+      "displayName": "Rust main product-workspace gate",
       "makeTarget": "test-rust-main",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
@@ -163,7 +163,7 @@
       "runsOn": "ubuntu-latest"
     },
     "test-rust-broker": {
-      "displayName": "Rust broker workspace gate",
+      "displayName": "Rust broker package-selected stream (product workspace)",
       "makeTarget": "test-rust-broker",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
@@ -176,7 +176,7 @@
       "runsOn": "ubuntu-latest"
     },
     "test-rust-guest-shell-runner": {
-      "displayName": "Rust guest shell runner gate",
+      "displayName": "Rust guest shell runner package-selected stream (product workspace)",
       "makeTarget": "test-rust-guest-shell-runner",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"

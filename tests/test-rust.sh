@@ -4,8 +4,9 @@
 # GNU Make owns the Rust DAG. This file owns leaf environment setup and the
 # explicit leaf modes only: fast-lint, api-surface, main-workspace, broker,
 # guest-shell-runner, no-bash-ast, schema-reproducibility, supply-chain,
-# inventory-stub, and fixture-contracts. The fixture mode emits the contract
-# and CLI surfaces separately.
+# inventory-stub, and fixture-contracts. The broker and guest modes select
+# package streams from the unified product workspace. The fixture mode emits
+# the contract and CLI surfaces separately.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
@@ -159,7 +160,7 @@ fi
 # CARGO_TARGET_DIR, so a random per-run target dir would change the cache key
 # and defeat cross-run hits. Stable, distinct dirs keep the key stable (cache
 # hits) while still avoiding lock contention. They are gitignored and reused
-# across runs like the default broker/workspace target dirs.
+# across runs like the default product-workspace and broker-stream target dirs.
 broker_target_dir=$(d2b_cargo_target_dir broker)
 broker_layer1_target_dir="${broker_target_dir%/}-layer1"
 broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
@@ -167,8 +168,8 @@ guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
 no_bash_target_dir="$ROOT/tests/tools/no-bash-ast-walker/target"
 
 # Keep broker, guest, and fixture-dependent contract crates out of generic
-# workspace tests. Their dedicated lanes below retain their exact feature- and
-# harness-specific coverage.
+# product-workspace tests. Their dedicated package-selected streams below
+# retain their exact feature- and harness-specific coverage.
 # Full D2B_FIXTURES delivery to the sandbox/CI is tracked separately.
 workspace_test_excludes=(
   --exclude d2b-contract-tests
@@ -180,9 +181,9 @@ d2b_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 # No Rust compiler warning is advisory in this gate. Clippy already receives
 # `-D warnings`; this also covers cargo check/build/test, doctests, nextest,
-# standalone workspaces, and build scripts. Compile-fail fixtures replace this
-# inherited value with their exact mutation flags so expected diagnostics stay
-# attributable to the capability seal they exercise.
+# product-workspace streams, gate-tool streams, and build scripts. Compile-fail
+# fixtures replace this inherited value with their exact mutation flags so
+# expected diagnostics stay attributable to the capability seal they exercise.
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"
 export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings"
 
@@ -318,9 +319,10 @@ cleanup_package_test_scratch() {
 }
 
 # sccache: a per-crate compilation cache (keyed on source + flags), shared
-# across the main + broker workspaces and all feature passes - so the broker's
-# rebuilds of crates the main workspace already compiled (d2b-core/host/ipc)
-# and its three separate-target-dir feature passes become cache hits. Used
+# across the main product workspace and broker package streams - so the
+# broker's rebuilds of crates the main product workspace already compiled
+# (d2b-core/host/ipc) and its three separate-target-dir feature passes become
+# cache hits. Used
 # locally by default. In CI it is OFF unless D2B_CI_SCCACHE=1 is set, because it
 # only helps when a persistent backend survives across runs. CI opts in by
 # pointing SCCACHE_DIR at a directory it restores/saves via actions/cache - we
@@ -357,7 +359,7 @@ else
   # --manifest-path to every invocation, and there is no $ROOT/.cargo/config.toml
   # - so relying on the config would silently disable the wrapper for the whole
   # gate. The four shim copies are byte-identical, so one absolute path serves
-  # every workspace.
+  # every Rust stream.
   _wrapper_shim="$ROOT/packages/.cargo/rustc-wrapper.sh"
   export RUSTC_WRAPPER="$_wrapper_shim" CARGO_BUILD_RUSTC_WRAPPER="$_wrapper_shim"
   if [ "$_ci_active" = 1 ]; then
@@ -383,9 +385,9 @@ assert_pinned_rust_toolchain
 #     filters them out (see packages/.config/nextest.toml). `cargo test` runs
 #     them, so they need an explicit invocation to stay gated.
 #
-# Both companions are wired per workspace, and the harness=false set is
-# DISCOVERED from cargo metadata rather than hard-coded, so a newly added
-# harness=false target cannot silently drop out of the gate.
+# Both companions are wired per selected workspace stream, and the
+# harness=false set is DISCOVERED from cargo metadata rather than hard-coded,
+# so a newly added harness=false target cannot silently drop out of the gate.
 require_nextest() {
   if cargo nextest --version >/dev/null 2>&1; then
     return 0
@@ -400,8 +402,8 @@ require_nextest() {
   exit 1
 }
 
-# Emit the harness=false test targets of a workspace as "<package>\t<binary>"
-# rows, for execution with a plain `cargo test --test`.
+# Emit the harness=false test targets of a selected workspace stream as
+# "<package>\t<binary>" rows, for execution with a plain `cargo test --test`.
 #
 # Such a target exposes no libtest interface, so cargo-nextest builds it but
 # reports zero test cases and never runs it. Selecting on kind == "test" is what
@@ -422,7 +424,7 @@ nextest_unrunnable_targets() {
   fi
   # Validate the shape the filter below actually reads, not just the top-level
   # key. A schema change that renamed any of these would otherwise let jq match
-  # nothing and exit 0, which reads identically to "this workspace has no
+  # nothing and exit 0, which reads identically to "this stream has no
   # harness-free targets" and would silently empty the gate surface.
   if ! printf '%s' "$listing" | jq -e '
         ."rust-suites" | length > 0
@@ -444,8 +446,8 @@ nextest_unrunnable_targets() {
 }
 
 # Run the surfaces cargo-nextest cannot: doctests, then any harness=false
-# binaries. `label` names the workspace for the log line; the remaining
-# arguments select the workspace and feature set and are shared with the
+# binaries. `label` names the selected stream for the log line; the remaining
+# arguments select its workspace and feature set and are shared with the
 # preceding nextest invocation.
 run_nextest_companions() {
   local label="$1" manifest_path="$2"
@@ -469,19 +471,20 @@ run_nextest_companions() {
     cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin"
     ran=$((ran + 1))
   done <<<"$targets"
-  if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then
+  if [ "$ran" -eq 0 ] && [ "$label" = "main product-workspace stream" ]; then
     fail "$label: harness=false discovery was empty; refusing to report a passing companion surface"
     return 1
   fi
   ok "$label companions (doctests + $ran harness=false binaries)"
 }
 
-# The privileged broker is a SEPARATE workspace with three independent feature
-# passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
-# They share nothing with the main workspace and nothing with each other. The
-# streams stay serial by default because their tests manipulate process-global
-# signal/reap state; an explicit timing-only opt-in can use their separate target
-# directories. With sccache the shared crates are cache hits across all streams.
+# The privileged broker uses three package-selected feature streams from the
+# unified product workspace (default, layer1-bootstrap, fake-backends), each on
+# its OWN target dir. The target directories are separate from the main product
+# workspace and from each other. The streams stay serial by default because
+# their tests manipulate process-global signal/reap state; an explicit
+# timing-only opt-in can use their separate target directories. With sccache the
+# shared crates are cache hits across all streams.
 # Running serially in the foreground means a failing stream aborts the gate at
 # the point of failure, with its output already on the gate's own stream.
 #
@@ -644,7 +647,7 @@ run_fast_lint_gate() {
     exit 1
   }
 
-  log "--> cargo fmt --check (gated Rust workspaces)"
+  log "--> cargo fmt --check (gated Rust streams)"
   cargo fmt --manifest-path "$manifest" --all --check
   cargo fmt --manifest-path "$broker_manifest" --all --check
   (
@@ -712,13 +715,13 @@ run_fast_lint_gate() {
   fi
 
   if [ "${#main_package_args[@]}" -gt 0 ]; then
-    log "--> cargo clippy --locked --all-targets (changed main workspace scope)"
+    log "--> cargo clippy --locked --all-targets (changed main product-workspace scope)"
     CARGO_TARGET_DIR="$workspace_target_dir" \
       cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked \
         --manifest-path "$manifest" "${main_package_args[@]}" --all-targets -- -D warnings
-    ok "changed main workspace clippy"
+    ok "changed main product-workspace clippy"
   else
-    log "  changed main workspace clippy: no Rust package changes"
+    log "  changed main product-workspace clippy: no Rust package changes"
   fi
 
   if [ "$guest_shell_runner_changed" -eq 1 ]; then
@@ -775,13 +778,13 @@ log "--> cargo nextest run --workspace ${workspace_test_excludes[*]}"
 workspace_test_started=$SECONDS
 CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 CARGO_TARGET_DIR="$workspace_target_dir" run_nextest_companions \
-  "main workspace" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
-ok "workspace tests (duration: $((SECONDS - workspace_test_started))s)"
+  "main product-workspace stream" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
+ok "main product-workspace tests (duration: $((SECONDS - workspace_test_started))s)"
 
-cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
-cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
+cleanup_cargo_special_files "main product-workspace cargo test" "$workspace_target_dir"
+cleanup_package_test_scratch "main product-workspace cargo test" "$ROOT/packages/d2bd/target"
 rust_surface_success rust-main-workspace-tests
-  log "test-rust main-workspace OK (duration: $((SECONDS - suite_started))s)"
+  log "test-rust main product-workspace OK (duration: $((SECONDS - suite_started))s)"
 }
 
 run_no_bash_ast_gate() {
@@ -789,9 +792,9 @@ rust_surface_start rust-no-bash-ast
 # no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
 # is covered by d2b-contract-tests/tests/policy_source.rs, but the
 # AST-level walk (which catches cross-line / obfuscated bash-exec sites the
-# per-line regex cannot) lives in the standalone tests/tools/no-bash-ast-walker
-# cargo tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run
-# it here so the AST coverage stays gated. Fails closed on any bash-literal
+# per-line regex cannot) lives in the separate tests/tools/no-bash-ast-walker
+# gate tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run it
+# here so the AST coverage stays gated. Fails closed on any bash-literal
 # Command::new site under packages/.
 log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
 CARGO_TARGET_DIR="$no_bash_target_dir" \
@@ -803,8 +806,9 @@ ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 }
 
 run_broker_gate() {
-# Broker workspace: run the three feature passes (default, layer1-bootstrap,
-# fake-backends) - each on its own target dir - serially. Tests inside each
+# Broker package-selected product-workspace streams: run the three feature
+# passes (default, layer1-bootstrap, fake-backends) - each on its own target
+# dir - serially. Tests inside each
 # cargo-test process manipulate process-global SIGCHLD/reap state, so do not
 # overlap the three harnesses unless a dedicated isolation review proves it safe.
 # The fail-closed
@@ -822,23 +826,23 @@ for _stream in "${broker_streams[@]}"; do
     *) fail "unknown broker stream: $_stream"; exit 1 ;;
   esac
   rust_surface_start "$_surface"
-  log "--> broker cargo ($_stream feature pass, serial)"
+  log "--> broker package stream ($_stream feature pass, serial)"
   "broker_stream_$_stream"
   rust_surface_success "$_surface"
-  ok "broker cargo ($_stream feature pass)"
+  ok "broker package stream ($_stream feature pass)"
 done
-cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
-cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
-cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
+cleanup_cargo_special_files "broker package stream" "$broker_target_dir"
+cleanup_cargo_special_files "broker package stream (layer1)" "$broker_layer1_target_dir"
+cleanup_cargo_special_files "broker package stream (fake-backends)" "$broker_fakebackends_target_dir"
 }
 
 run_guest_shell_runner_gate() {
 require_nextest "$rust_mode"
 rust_surface_start rust-guest-shell-runner
-log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
+log "--> guest shell runner package stream (product workspace, real-libshpool feature)"
 guest_shell_runner_gate
-ok "guest shell runner cargo"
-cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
+ok "guest shell runner package stream"
+cleanup_cargo_special_files "guest shell runner package stream" "$guest_shell_runner_target_dir"
 rust_surface_success rust-guest-shell-runner
 }
 
@@ -1113,7 +1117,7 @@ run_policy_audit() {
 }
 
 rust_surface_start rust-deny-main
-cargo_deny_check "main workspace" "$manifest" "$deny_config"
+cargo_deny_check "main product-workspace stream" "$manifest" "$deny_config"
 rust_surface_success rust-deny-main
 
 broker_policy_contexts=(
@@ -1128,14 +1132,14 @@ guest_policy_contexts=(
 rust_surface_start rust-deny-broker
 for policy_context in "${broker_policy_contexts[@]}"; do
   run_policy_deny "$policy_context" "$broker_deny_config" \
-    "broker policy $policy_context"
+    "broker package stream (product workspace) $policy_context"
 done
 rust_surface_success rust-deny-broker
 
 rust_surface_start rust-deny-guest
 for policy_context in "${guest_policy_contexts[@]}"; do
   run_policy_deny "$policy_context" "$guest_shell_runner_deny_config" \
-    "guest policy $policy_context"
+    "guest package stream (product workspace) $policy_context"
 done
 rust_surface_success rust-deny-guest
 
@@ -1143,14 +1147,15 @@ rust_surface_success rust-deny-guest
 # updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
 # a release on quick-xml >= 0.41.
 rust_surface_start rust-audit-main
-cargo_audit_check "main workspace" "$lock_file" \
+cargo_audit_check "main product-workspace lock" "$lock_file" \
   --ignore RUSTSEC-2026-0194 \
   --ignore RUSTSEC-2026-0195
 rust_surface_success rust-audit-main
 
 rust_surface_start rust-audit-broker
 for policy_context in "${broker_policy_contexts[@]}"; do
-  run_policy_audit "$policy_context" "" "broker policy $policy_context"
+  run_policy_audit "$policy_context" "" \
+    "broker package stream (product workspace) $policy_context"
 done
 rust_surface_success rust-audit-broker
 
@@ -1158,10 +1163,10 @@ rust_surface_success rust-audit-broker
 # The helper pins and tracks that transitive unmaintained advisory explicitly
 # while evaluating libshpool feasibility.
 rust_surface_start rust-audit-guest
-cargo_audit_check "Cargo.guest.lock aggregate" "$guest_lock_file"
+cargo_audit_check "static-guest closure lock aggregate" "$guest_lock_file"
 for policy_context in "${guest_policy_contexts[@]}"; do
   run_policy_audit "$policy_context" "RUSTSEC-2024-0384" \
-    "guest policy $policy_context"
+    "guest package stream (product workspace) $policy_context"
 done
 rust_surface_success rust-audit-guest
 }
@@ -1173,9 +1178,10 @@ bash "$ROOT/tests/tools/stub-no-socket.sh"
 rust_surface_success rust-stub-no-socket
 ok "stub-no-socket"
 
-# Fail-closed Rust test inventory: every pinned workspace + broker test must
-# still exist (catches a silently-deleted test that would otherwise vanish from
-# coverage). The pinned set is committed under tests/golden/pinned/.
+# Fail-closed Rust test inventory: every pinned product-workspace and broker
+# package-stream test must still exist (catches a silently-deleted test that
+# would otherwise vanish from coverage). The pinned set is committed under
+# tests/golden/pinned/.
 rust_surface_start rust-assert-pinned
 log "--> tests/tools/assert-pinned-tests.sh"
 bash "$ROOT/tests/tools/assert-pinned-tests.sh"

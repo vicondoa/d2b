@@ -76,15 +76,17 @@ under `tests/tools/no-bash-ast-walker/` and keeps its own Cargo lock.
 |---|------|------------|----------|----------------|
 | 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - **local host/manual pre-PR; not the PR pipeline** |
 | 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
-| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the `cargo xtask heavy-gate` semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
-| 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | through the `cargo xtask heavy-gate` semaphore - **manual on a host with the devices** |
+| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate`; `D2B_LIVE=1` / sudo - **manual, never CI** |
+| 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | through `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate` - **manual on a host with the devices** |
 
-Every Layer-2 tier (9-12) runs behind the `cargo xtask heavy-gate` sole-use
-semaphore, never as a raw script. Use the gated public lane target
+Every Layer-2 tier (9-12) runs behind the
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate`
+sole-use semaphore, never as a raw script. Use the gated public lane target
 (`make test-integration`, `make test-host-integration`, `make test-hardware`;
 `make pre-tag` / `make smoke-lite` for the live-VM smoke gate), or wrap an
-ad-hoc live script as `cargo xtask heavy-gate -- env D2B_LIVE=1 bash
-tests/integration/live/<name>.sh`.
+ad-hoc live script from the repository root as
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- env
+D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
 
 Invoking a live script directly no longer bypasses the semaphore: it re-executes
 through the gate exactly once when `D2B_HEAVY_GATE` is unset, so shared Nix
@@ -111,8 +113,9 @@ fails while walking on-disk scripts and the Makefile.
    type 4, a contract test in `packages/d2b-contract-tests/` (driven by
    `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
-   already covered by a **drift gate**; regenerate with the matching
-   `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate. The
+   already covered by a **drift gate**; from the repository root enter
+   `nix develop`, then run `cd packages` and the matching `cargo xtask gen-*`
+   command, and commit the result - do **not** add a new gate. The
    compiler-derived capability API snapshots are regenerated explicitly with
    `make api-surface-pin`.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
@@ -191,8 +194,9 @@ back into a single invocation:
 The privileged broker package stays on `cargo test` within the product
 workspace. Its tests are not process-per-test safe, so its package-selected
 stream remains serial. The guest shell runner uses the same root manifest and
-root lock with its `real-libshpool` feature selection. Neither stream is a
-standalone product workspace.
+root lock with its `real-libshpool` feature selection. Both streams select
+packages from the unified product workspace; no package-local product workspace
+is used.
 
 `make test-rust` owns the bounded local GNU Make DAG. Its stable leaves cover
 the API, main format/clippy/workspace, conditional fixture/CLI, broker,

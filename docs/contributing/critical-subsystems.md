@@ -258,11 +258,21 @@ the `product` and `walker` hubs; `main`, `broker`, and `guest` are retired hub
 identifiers, not additional authorities.
 
 Broker and guest policy are selected from the root lock for exact GNU and musl
-targets on both `x86_64-linux` and `aarch64-linux`. The native arm gate
-realizes the six system-specific checks, including `guest-static-elf`, runs
-`make test-rust-supply-chain` on the same stable head, binds every result, and
-refuses foreign systems, remote builders, and advisory classification. Release
-builds use the root manifest,
+targets on both `x86_64-linux` and `aarch64-linux`. The selected inputs are:
+
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production`
+- `packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool`
+- `packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool`
+
+The native arm gate realizes exactly six system-specific checks, including
+`guest-static-elf`, runs `make test-rust-supply-chain` on the same stable head,
+binds every result, and refuses foreign systems, remote builders, and advisory
+classification. That supply-chain target uses the flake's pinned RustSec
+`advisory-db` snapshot at commit
+`831c50f4a4304068f125e603add6a8839f08b3eb` with Nix hash
+`sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=` and runs audits with
+`--no-fetch`. Release builds use the root manifest,
 `--locked`, explicit package/bin/default-feature selectors, and
 `packages/target/release`; the cache has one `packages -> target` workspace
 mapping plus explicit broker and guest gate target directories.
