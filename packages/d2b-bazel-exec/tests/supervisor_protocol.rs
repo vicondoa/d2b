@@ -14,9 +14,13 @@ use std::{
 
 use command_fds::{CommandFdExt, FdMapping};
 use nix::{
-    fcntl::OFlag,
-    sys::signal::{self, SigSet},
-    unistd::pipe2,
+    errno::Errno,
+    fcntl::{OFlag, open},
+    sys::{
+        signal::{self, SigSet},
+        stat::Mode,
+    },
+    unistd::{mkfifo, pipe2},
 };
 
 use d2b_bazel_exec::{
@@ -811,8 +815,25 @@ fn real_c_supervisor_maps_child_exec_failure_without_false_executed_success() {
 #[test]
 fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
     let binaries = real_binaries();
-    let (mut child, reader) =
-        spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "exit-during-grace"]);
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let barrier_dir = std::env::temp_dir().join(format!("d2b-grace-barrier-{suffix}"));
+    fs::create_dir(&barrier_dir).expect("grace barrier directory");
+    let barrier = barrier_dir.join("ready.fifo");
+    mkfifo(&barrier, Mode::S_IRUSR | Mode::S_IWUSR).expect("grace barrier FIFO");
+    let barrier_path = barrier.to_str().expect("UTF-8 grace barrier path");
+    let (mut child, reader) = spawn_real_supervisor(
+        &binaries.plant,
+        &[
+            "plant",
+            "--stage",
+            "exit-during-grace",
+            "--barrier-path",
+            barrier_path,
+        ],
+    );
     let receiver = status_events(reader);
     match receiver
         .recv_timeout(Duration::from_secs(3))
@@ -821,6 +842,20 @@ fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
         StatusEvent::Executed => {}
         StatusEvent::Complete(_) => panic!("terminal status preceded EXECUTED"),
     }
+    let barrier_deadline = Instant::now() + Duration::from_secs(3);
+    let barrier_writer = loop {
+        match open(
+            &barrier,
+            OFlag::O_WRONLY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => break fd,
+            Err(Errno::ENXIO) if Instant::now() < barrier_deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("grace barrier writer: {error}"),
+        }
+    };
     let started = Instant::now();
     signal::kill(
         nix::unistd::Pid::from_raw(child.id() as i32),
@@ -830,7 +865,7 @@ fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
     let status = wait_for_complete(&receiver, &mut child);
     let elapsed = started.elapsed();
     let exit = child.wait().expect("grace supervisor wait");
-    assert_eq!(exit.code(), Some(143));
+    assert_eq!(exit.code(), Some(73));
     assert!(
         elapsed >= Duration::from_millis(900),
         "termination grace was shortened: {elapsed:?}"
@@ -840,10 +875,13 @@ fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
         [
             encode_status(StatusFrame::Ready),
             encode_status(StatusFrame::Executed),
-            encode_status(StatusFrame::Signaled(15)),
+            encode_status(StatusFrame::Exited(73)),
         ]
         .concat()
     );
+    drop(barrier_writer);
+    fs::remove_file(&barrier).expect("remove grace barrier FIFO");
+    fs::remove_dir(&barrier_dir).expect("remove grace barrier directory");
 }
 
 #[test]
