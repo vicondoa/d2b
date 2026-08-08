@@ -432,7 +432,8 @@ Replay-key reservation failure uses the existing exact
 the standing-reserve admission form when applicable; it never enters
 `CLOSED_REPLAY_KEY_FAILURE_CLASS`.
 
-Source pin/binding or audited source release failure exits `4`. Its human form is exactly:
+Source pin/binding, audited source release, or source-prefix reconciliation failure exits
+`4`. Its human form is exactly:
 
 ```text
 host generation handoff immutable audit continuity source lifecycle unavailable
@@ -444,9 +445,11 @@ action: <ACTION_FROM_SOURCE_LIFECYCLE_TABLE>
 Its JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-source-lifecycle-unavailable","stage":"<CLOSED_SOURCE_LIFECYCLE_STAGE>","failureClass":"<CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS>","action":"<ACTION_FROM_SOURCE_LIFECYCLE_TABLE>"}`.
 `CLOSED_SOURCE_LIFECYCLE_STAGE` is exactly `pin-acquisition | replay-binding |
-source-release`. `CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS` is exactly `source-capacity |
+source-release | source-prefix-reconciliation`.
+`CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS` is exactly `source-capacity |
 source-unavailable | source-conflict | hierarchy | write | file-sync | link | reopen |
-unlink | directory-sync | census | conflict | audit-publication`. `source-capacity` caused
+unlink | directory-sync | census | conflict | audit-publication |
+recovery-generation-overflow`. `source-capacity` caused
 by evidence count or size maps to `repair-continuity-authoritative-source-contract`;
 `source-unavailable` maps to
 `repair-continuity-authoritative-source`; `source-conflict | conflict` map to
@@ -455,6 +458,9 @@ by evidence count or size maps to `repair-continuity-authoritative-source-contra
 `repair-retention-audit-and-reconcile`. Source-release `unlink` maps to
 `repair-continuity-source-storage-and-reconcile`, and source-release `census` maps to
 `repair-retention-census-and-reconcile`.
+`source-prefix-reconciliation/recovery-generation-overflow` maps to
+`preserve-and-escalate-audit-integrity-incident`; it authorizes no wrap, retry, source
+mutation, pair recycle, or next pre-audit.
 `source-capacity` is emitted only for the authoritative source's exact record/byte contract,
 including refusal of a 141,313-byte combined attempt after acceptance at 141,312 bytes; it
 always maps to `repair-continuity-authoritative-source-contract`. A 257th live pair never
@@ -469,9 +475,12 @@ source-unavailable | source-conflict | hierarchy | write | file-sync | link | re
 directory-sync | conflict | audit-publication`; `replay-binding` admits the same set
 without `source-capacity`; and `source-release` admits only `source-unavailable |
 source-conflict | hierarchy | reopen | unlink | directory-sync | census | conflict |
-audit-publication`. Replay-key `audit-publication` is valid only for fixed outcome-audit
+audit-publication`; `source-prefix-reconciliation` admits only
+`recovery-generation-overflow`. Replay-key `audit-publication` is valid only for fixed outcome-audit
 publication after parent durability. Strict schemas, wire snapshots, constructors,
-deserializers, and human/JSON goldens reject every other stage/class pair.
+deserializers, and human/JSON goldens accept every listed pair and reject every other
+stage/class pair or action substitution. The overflow golden uses `u32::MAX`, exits `4`,
+and carries no intended outcome, terminal failure, next generation, or mutable identifier.
 
 Replay-key candidate recycling, broker compaction/recovery, or attempt-capacity release
 failure also exits `4` and never masquerades as a settled continuity repair:
@@ -513,6 +522,11 @@ that same operation; they are not settled degraded repair results. Capacity-rele
 collapsed to `census`, `audit-publication`, or a generic capacity error. Strict schemas,
 wire snapshots, constructors, deserializers, and one human and JSON golden for every exact
 stage/class/action triple reject every other pair and every action substitution.
+For capacity release, `census` and `audit-publication` preserve and resume the original
+ledger-safe release prefix after their named repair. `ledger-conflict` and all four
+standing-reserve classes are terminal incidents for that operation: the action preserves
+and escalates, the charged slice remains unavailable, and no successor release identity or
+retry command is rendered.
 Source-release failure always uses the source-lifecycle form above, never this cleanup
 class.
 
@@ -530,7 +544,7 @@ outcome: <REPAIRED_OUTCOME>
 repaired-after-mandatory-prune`. JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-continuity-repair","ok":true,"outcome":"<REPAIRED_OUTCOME>"}`.
 
-Decision basis publication pending exits `4` before any selected outcome is durably
+Decision basis write-ahead publication pending exits `4` before any selected outcome is
 available for public projection. Its human form is exactly:
 
 ```text
@@ -545,8 +559,15 @@ Its JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-basis-pending","publicationStage":"decision-basis","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-basis-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
 This form deliberately has no `intendedOutcome` or terminal `failure`: neither is public
 until the exact private `ContinuityRepairDecisionBasisV1` final and directory chain are
-durable. The boundary is intrinsic to its durable incomplete prefix. `conflict` preserves
-both private basis digests, publishes neither, and maps only to
+durable. The private `ContinuityRepairDecisionBasisIntentV1` final and directory chain are
+the write-ahead decision commit; an in-memory candidate before intent durability is not a
+selected outcome, and every later basis prefix reloads that intent. The closed intent and
+basis boundary set is exactly
+`hierarchy | write | file-sync | link | reopen | directory-sync | conflict |
+audit-publication`; every member has this one legal response shape and exact exit. The
+boundary is intrinsic to its incomplete prefix.
+`conflict` preserves either both private intent digests or the durable intent plus both
+private basis digests, publishes no intended outcome, and maps only to
 `preserve-and-escalate-continuity-publication-conflict`.
 
 Decision selection publication pending exits `4` before an intended outcome is publicly
@@ -641,7 +662,11 @@ decision-basis pending without an intended outcome, decision-selection pending,
 preparation-incomplete, and both later pending stages for all five intended outcomes.
 Constructor and deserializer negatives reject an intended outcome or terminal failure in
 the basis-pending form, `Complete` in any pending form, and any independently supplied
-boundary that disagrees with its prefix.
+boundary that disagrees with its prefix. Across the four publication-pending types -
+decision basis, decision selection, outcome intent, and terminal outcome - `Conflict` is a
+sealed intrinsic prefix, never a free failure field; basis pending alone omits
+`intendedOutcome`, while the other three derive it only from their required durable
+predecessor.
 
 The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
 168-case broker registry preserve their exact ids and own only their literal caller,
