@@ -2,14 +2,18 @@
 
 - Status: Accepted
 - Date: 2026-08-01
+- Partially superseded by: [ADR 0055](0055-discover-fix-verify-panel-review.md)
+  for panel selection, seat identity, model and effort policy, lifecycle, and
+  versioned record shape. The Copilot-only definition surface, measured
+  dispatch mechanism, read-only reviewer construction, helper assembly
+  principle, standalone ADR process, and qualified wave identifiers remain.
 - Related: ADR 0046 (d2b 3.0 provider control plane), and the delivery
-  tooling in `packages/xtask/src/delivery/` that ADR 0046 section 12.3
-  binds the ten-role panel to
+  tooling in `packages/xtask/src/delivery/` that ADR 0046 section 12.3 uses
 
 ## Context
 
 This repository runs a heavyweight engineering process: ADR authoring,
-spec-kit feature specs, a ten-role panel review, and an attest/seal/
+spec-kit feature specs, selected-roster panel review, and an attest/seal/
 merge-eligibility gate implemented in `packages/xtask/src/delivery/`.
 
 ### Historical state (retired)
@@ -25,14 +29,16 @@ The operator drives Copilot, frequently over ACP, where interactive commands
 such as `/model` are not reliably available. Model selection therefore has to
 be declared in committed files rather than chosen at a prompt.
 
-Two properties of the existing gate make that requirement sharp rather than
-cosmetic. `packages/xtask/src/delivery/panel.rs` attests each record's
-`provider`, `model_version`, and `reasoning_effort`, pinned to
-`github-copilot` / `gemini-3.1-pro-preview` / `high`. And the panel model is
-deliberately not the coding model, so a lane cannot both author a change and
+Two properties of the gate at adoption made that requirement sharp rather than
+cosmetic. `packages/xtask/src/delivery/panel.rs` attested each record's
+`provider`, `model_version`, and `reasoning_effort`, then pinned to
+`github-copilot` / `gemini-3.1-pro-preview` / `high`. The panel model was
+deliberately not the coding model, so a lane could not both author a change and
 attest to it. A record that claims a binding the lane did not actually run at
 is therefore not a cosmetic error; it is a false attestation on the gate that
-seals a wave.
+seals a wave. ADR 0055 supersedes the particular roster, model, effort, and
+record shape; its versioned selection and current dispatch table are
+authoritative.
 
 The cutover is immediate. Existing delivery records remain historical
 evidence, not an executable integration or an authority over the committed
@@ -40,10 +46,10 @@ Copilot surface.
 
 ## Decision
 
-Make Copilot the sole authoritative definition surface. Thirteen agents under
-`.github/agents/` and five d2b skills under `.github/skills/` define the
-process. The `.opencode/` integration surface is removed at this cutover and
-must not be recreated as a compatibility path.
+Make Copilot the sole authoritative definition surface. Agents under
+`.github/agents/` and d2b skills under `.github/skills/` define the process.
+The `.opencode/` integration surface is removed at this cutover and must not be
+recreated as a compatibility path.
 
 ### The binding mechanism
 
@@ -95,9 +101,9 @@ was measured sufficient with no `subagents` block in either scope.
 
 ### Defence against the silent downgrade
 
-An unpinned panel lane runs at `medium` while its record would attest `high`.
-That failure produces a plausible-looking artifact rather than an error, which
-is why it gets three layers rather than one:
+An unpinned panel lane runs at the model default while its record would attest
+the policy effort. That failure produces a plausible-looking artifact rather
+than an error, which is why it gets three layers rather than one:
 
 1. the committed dispatch tables, which make it rarely happen;
 2. `scripts/copilot/check-bindings.mjs`, which rejects a missing row, an
@@ -110,28 +116,29 @@ is why it gets three layers rather than one:
 
 Copilot agent frontmatter has no per-command permission allowlist, so a legacy
 shell rule such as "allow `git diff*`, deny the rest" does not translate. The
-ten panel agents instead declare `tools: [view, grep, glob]`, and the panel skill
+panel agents instead declare `tools: [view, grep, glob]`, and the panel skill
 pre-stages `delta.diff` and `full.diff` for them to read. This is stronger than
 granting a restricted shell: it is mechanical rather than prompt-enforced, it
-keeps ten lanes off the shared Nix store and the heavy-gate semaphore, and
-every reviewer in a round provably sees byte-identical evidence.
+keeps selected lanes off the shared Nix store and the heavy-gate semaphore, and
+every reviewer in a lifecycle sees staged evidence.
 
 ### Verdicts are authored by agents; records are assembled by a helper
 
-`PanelRecord` is a fourteen-field `deny_unknown_fields` struct requiring
-`candidate_id`, `content_id`, `snapshot_sha256`, `output_sha256`, `run_id`, and
-`receipt_locator`. A reviewing agent cannot know those digests. Each agent emits
-only the verdict object the repository already uses, and a bundled helper joins
-it to the candidate address. Prompts stay small, digest handling stays in one
-testable place, and `packages/xtask/src/delivery/` is not modified.
+At adoption, `PanelRecord` was a fourteen-field `deny_unknown_fields` struct
+requiring `candidate_id`, `content_id`, `snapshot_sha256`, `output_sha256`,
+`run_id`, and `receipt_locator`. ADR 0055 supersedes that fixed shape with the
+current versioned selected-roster records. The retained decision is that a
+reviewing agent emits only its verdict and a bundled helper joins it to the
+candidate-bound metadata the agent cannot know. Prompts stay small and digest
+handling stays in one testable place.
 
-### Ten agents, not one
+### Independent agents, not one
 
 Each role gets its own agent with its own domain checklist anchored to this
 repository's invariants. The cost is deliberate. An early panel here returned
 zero sign-offs with eleven high findings that the static gate caught none of,
 and the five-seat council is already documented as a synthesis risk where five
-synthesizers agree in places ten independent reviewers would have dissented.
+synthesizers agree in places independent reviewers would have dissented.
 
 ### spec-kit authors; the d2b skills execute
 
@@ -139,7 +146,7 @@ spec-kit ships a workflow runner with a rich step vocabulary and per-step
 `model`, which is tempting for the panel. It is the wrong tool here for one
 concrete reason: every step is dispatched as a subprocess and there is **no
 per-step reasoning effort**; the only knob is process-global. A panel whose
-records attest `reasoning_effort: high` cannot be driven by a runner that
+records attest a pinned `reasoning_effort` cannot be driven by a runner that
 cannot set effort per lane. So spec-kit authors the artifacts through
 in-session slash commands, and the d2b skills execute the work through
 in-session Task lanes where all three parameters bind per lane.

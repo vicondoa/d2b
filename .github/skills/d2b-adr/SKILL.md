@@ -1,6 +1,6 @@
 ---
 name: d2b-adr
-description: Author, review, and land a d2b architecture decision record. Runs standalone - draft, index row, supersession, ten-lane panel, PR. Use when a load-bearing design choice needs recording, before any feature that depends on it starts.
+description: Author, review, and land a d2b architecture decision record. Runs standalone - draft, index row, supersession, selected-roster panel, PR. Use when a load-bearing design choice needs recording, before any feature that depends on it starts.
 user-invocable: true
 ---
 
@@ -19,7 +19,7 @@ it and may land before consumers are known, so tying it to a feature branch is
 wrong for a document the whole repository reads.
 
 A spec says *what* and *why* in product terms, not implementation. An ADR
-decides *how* and is where the `nixos`, `rust`, `security` and `kernel` seats
+decides *how* and is where the selected seats and applicable language profiles
 argue. It gets its own run, panel, and PR. A feature that needs one cites its
 merged ADR number like any committed contract; one that does not never
 mentions ADRs.
@@ -90,9 +90,10 @@ the producing wave or phase.
 
 ### 4. Panel
 
-An architectural decision earns the full roster. Run
-`/d2b-panel-round adr docs/adr/NNNN-*.md`. Ten lanes, `gpt-5.6-sol` at
-`xhigh`, read-only.
+Run `/d2b-panel-round adr docs/adr/NNNN-*.md`. The panel lifecycle derives
+selection from the versioned table. Dispatch exactly the roster and profiles
+recorded in the lifecycle selection; reviewers use the current panel dispatch
+table and remain read-only.
 
 ADR review prompts carry the draft, related or superseded records, and the
 constrained code. Reviewers judge the decision and honest consequences, not

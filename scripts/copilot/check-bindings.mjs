@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const agentsDir = join(root, ".github", "agents");
 const skillsDir = join(root, ".github", "skills");
+const adrSkill = join(skillsDir, "d2b-adr", "SKILL.md");
 const selectionTableJson = join(root, ".github", "skills", "d2b-panel-round", "selection-table.json");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
 const tier0DashGate = join(root, "tests", "tools", "tier0-first-pass.sh");
@@ -40,8 +41,8 @@ const panelPromptSource = join(root, "docs", "adr", "specs", "0053-panel-prompt-
 const CAVEMAN_VENDOR_ROOT = join(root, "third_party", "caveman", "v1.10.0");
 const CAVEMAN_VENDOR_FILES = {
   "LICENSE": "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
-  "skills/caveman/SKILL.md": "daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce",
-  "skills/caveman-compress/SKILL.md": "3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688",
+  "skills/caveman/SKILL.md": "d33253598ef3a40054e2b539e6f94654bcd3b801f58046277dfbb0180068f1c8",
+  "skills/caveman-compress/SKILL.md": "6d64f8261f65a95bb7d7411b2dbd4acaa65e0989f553e89e6786f47d3f2a8f0c",
 };
 const CAVEMAN_VENDOR_METADATA = {
   repository: "https://github.com/JuliusBrussee/caveman",
@@ -361,7 +362,7 @@ if (!existsSync(agentsDir)) {
       if (/\b(bash|edit|create|write|task|sql)\b/.test(tools)) {
         fail(
           `${file}: panel agents are read-only by construction. "tools:" must not grant ` +
-          `${tools}. Reviewers read staged diffs; granting shell also puts ten lanes on ` +
+          `${tools}. Reviewers read staged diffs; granting shell also puts selected lanes on ` +
           `the shared Nix store and the heavy-gate semaphore. Remove those entries from \n          "tools:".`,
         );
       }
@@ -409,6 +410,7 @@ const panelAgents = [...agents.entries()].filter(([n]) => n.startsWith("panel-")
 const INVARIANT_CHECKLIST_MARKERS = {
   "panel-nixos": "<!-- panel nixos invariant checklist -->",
   "panel-observability": "<!-- panel observability invariant checklist -->",
+  "panel-security": "<!-- panel security invariant checklist -->",
 };
 for (const [agentName, marker] of Object.entries(INVARIANT_CHECKLIST_MARKERS)) {
   const agent = agents.get(agentName);
@@ -436,6 +438,17 @@ const SUBSTANTIVE_SEAT_CHECKLISTS = {
     "**Sensitive values in observable surfaces.**",
     "**Audit records that lose their properties.**",
     "**Degraded reporting.**",
+  ],
+  "panel-security": [
+    "**A second authorization surface.**",
+    "**A privileged effect that bypasses the broker.**",
+    "**Capability mint surfaces.**",
+    "**Caller-supplied identity.**",
+    "**Sandbox profile regressions.**",
+    "**Store exposure.**",
+    "**Secrets and identifiers in observable surfaces.**",
+    "**State that looks like tampering when lost.**",
+    "**Fail-open error handling.**",
   ],
   "panel-networking": [
     "**Environment isolation weakened.**",
@@ -514,8 +527,8 @@ if (bars.size > 1) {
     if (bar !== refBar) {
       fail(
         `${agents.get(name).file}: its "${BAR_HEADING}" section differs from ` +
-        `${agents.get(refName).file}. All ten seats must apply one identical bar; a ` +
-        `per-seat variant is how the panel starts returning findings at ten different ` +
+        `${agents.get(refName).file}. All panel seats must apply one identical bar; a ` +
+        `per-seat variant is how the panel starts returning findings at different ` +
         `severities. Make them byte-identical.`,
       );
     }
@@ -1129,6 +1142,34 @@ function requireText(path, text, label = path) {
   }
 }
 
+// ADR review uses the same current selected-roster contract as every panel
+// candidate. Fixed counts and the retired Rust seat remain valid only in
+// explicitly historical compatibility prose.
+if (!existsSync(adrSkill)) {
+  fail(`${adrSkill} is missing; the ADR panel contract cannot be checked.`);
+} else {
+  const source = readFileSync(adrSkill, "utf8");
+  for (const required of [
+    "selected-roster panel",
+    "versioned table",
+    "roster and profiles",
+    "lifecycle selection",
+  ]) {
+    if (!source.toLowerCase().includes(required.toLowerCase())) {
+      fail(`d2b-adr is missing required selected-roster guidance: ${required}`);
+    }
+  }
+  for (const [label, pattern] of [
+    ["fixed panel count", /\bten[- ](?:lane|role|seat)s?\b/i],
+    ["full-roster instruction", /\bfull roster\b/i],
+    ["retired Rust seat", /`rust`(?:\s+seat)?/i],
+  ]) {
+    if (pattern.test(source)) {
+      fail(`d2b-adr keeps an operative ${label}; dispatch the lifecycle selection instead`);
+    }
+  }
+}
+
 // ADR 0055 replaces the old fixed-seat verdict contract. Keep this small
 // source check next to the binding gate so a prompt corpus refresh cannot
 // accidentally preserve an operative legacy instruction.
@@ -1183,29 +1224,37 @@ if (!existsSync(panelPromptSource)) {
 }
 
 if (!existsSync(tier0DashGate)) {
-  fail(`${tier0DashGate} is missing; the hash-scoped vendor dash admission has no gate.`);
+  fail(`${tier0DashGate} is missing; the repository dash policy has no gate.`);
 } else {
   const source = readFileSync(tier0DashGate, "utf8");
-  requireText(tier0DashGate, "CAVEMAN_DASH_ADMISSIONS", "tier-0 dash gate");
-  requireText(tier0DashGate, "validate_caveman_dash_admissions", "tier-0 dash gate");
-  for (const [relative, hash] of Object.entries(CAVEMAN_VENDOR_FILES)) {
-    requireText(tier0DashGate, `${relative} ${hash}`, "tier-0 dash gate");
-  }
-  if (!source.includes("is_caveman_dash_admission")) {
-    fail("tier-0 dash gate does not filter only validated Caveman admissions; the general dash rule may be weakened.");
+  requireText(
+    tier0DashGate,
+    "Historical regression sentinel, not a scan admission: Caveman LICENSE",
+    "tier-0 dash gate",
+  );
+  requireText(
+    tier0DashGate,
+    "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+    "tier-0 dash gate",
+  );
+  for (const retired of [
+    "CAVEMAN_DASH_ADMISSIONS",
+    "validate_caveman_dash_admissions",
+    "is_caveman_dash_admission",
+  ]) {
+    if (source.includes(retired)) {
+      fail(`tier-0 dash gate restores retired vendor bypass ${retired}; vendor files must be scanned normally.`);
+    }
   }
 }
 if (!existsSync(dashPolicyTest)) {
-  fail(`${dashPolicyTest} is missing; the vendor dash admission lacks policy-test coverage.`);
+  fail(`${dashPolicyTest} is missing; the repository dash policy lacks policy-test coverage.`);
 } else {
-  const source = readFileSync(dashPolicyTest, "utf8");
-  for (const testName of [
-    "scan_passes_on_exact_caveman_vendor_admissions",
-    "modified_caveman_vendor_blob_loses_dash_admission",
-    "missing_caveman_vendor_blob_fails_closed",
-    "extra_caveman_vendor_file_is_not_admitted",
+  for (const required of [
+    "the_repository_carries_no_non_ascii_dash",
+    "must not restore retired vendor bypass",
   ]) {
-    requireText(dashPolicyTest, testName, "dash policy test");
+    requireText(dashPolicyTest, required, "dash policy test");
   }
 }
 

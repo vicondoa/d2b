@@ -434,14 +434,11 @@ is warning, not contract.
   cell for `ADR046-network-005` in
   `docs/specs/ADR-046-resources-network.md` for shape that survives
   normalization.
-- dash scanner has one exact admission for inert Caveman provenance:
-  `third_party/caveman/v1.10.0/LICENSE`,
-  `third_party/caveman/v1.10.0/skills/caveman/SKILL.md`, and
-  `third_party/caveman/v1.10.0/skills/caveman-compress/SKILL.md`, only while
-  each blob matches SHA-256 in
-  `third_party/caveman/v1.10.0/UPSTREAM.json`. changed blob or extra vendor
-  file loses admission; every other path remains covered by general rule.
-  No upstream runtime, script, external install, network access, or content
+- Vendored Caveman prose is normalized to ASCII hyphens and receives no dash
+  exception. The scanner covers every file under
+  `third_party/caveman/v1.10.0/`. `UPSTREAM.json` pins the normalized blobs,
+  and `check-bindings.mjs` rejects a changed blob or extra vendor file. No
+  upstream runtime, script, external install, network access, or content
   upload is permitted.
 - **Don't let host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider

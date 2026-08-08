@@ -3,16 +3,18 @@
 - Status: Accepted
 - Date: 2026-08-07
 - Amended: 2026-08-07
-- Partially supersedes: [ADR 0053](0053-gascity-contributor-infrastructure.md)
-  D7 through D9 for panel-review trust and lifecycle, and D21 for panel
-  selection. ADR 0053's classification of Gas City as contributor
-  infrastructure and its unrelated orchestration and publication decisions
-  remain.
-- Related: [ADR 0048](0048-copilot-native-agent-surface.md), whose read-only
-  Copilot reviewers, pinned model and effort, staged evidence, and record
-  helper remain the implementation base; and
-  [ADR 0052](0052-bazel-rust-build-and-test.md), whose build decision is not
-  changed here.
+- Partially supersedes: [ADR 0048](0048-copilot-native-agent-surface.md) for
+  panel selection, seat identity, model and effort policy, lifecycle, and
+  versioned record shape; and
+  [ADR 0053](0053-gascity-contributor-infrastructure.md) D7 through D9 for
+  panel-review trust and lifecycle, and D21 for panel selection. ADR 0048's
+  Copilot-only definition surface, measured dispatch mechanism, read-only
+  reviewer construction, helper assembly principle, standalone ADR process,
+  and qualified wave identifiers remain. ADR 0053's classification of Gas City
+  as contributor infrastructure and its unrelated orchestration and
+  publication decisions remain.
+- Related: [ADR 0052](0052-bazel-rust-build-and-test.md), whose build decision
+  is not changed here.
 - Scope: contributor panel selection, review lifecycle, generated review
   artifacts, compatibility, and improvement metrics.
 - Non-scope: Gas City implementation, product behavior, and runtime or

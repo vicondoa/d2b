@@ -43,6 +43,57 @@ Authoritative table focus: Concrete attack surface, authorization and
 capability boundaries, privilege separation, sandboxing, secrets, PII, and
 audit exposure.
 
+## Repository security invariants
+
+<!-- panel security invariant checklist -->
+
+**A second authorization surface.** Local lifecycle authorization is
+`SO_PEERCRED` at the public socket plus `d2b` group membership, and is the
+*only* such surface. Anything else inverts the threat model. The narrow
+exception is the guarded host-shutdown role, permitted for teardown stop and
+denied for every admin-only operation. Widening it or mapping a
+relay-authenticated or remote peer to a local role is critical.
+
+**A privileged effect that bypasses the broker.** Every host mutation flows
+through a typed broker op and becomes an audit record. A daemon or activation
+direct write, spawn, or `chown` escapes both audit and the typed dispatcher.
+
+**Capability mint surfaces.** Admission evidence and attachment credits are
+consumed into one private owner; a clone, copy, `Default`, or `From` that
+reconstructs one mints genuine admission. Sealing traits and private fields are
+the boundary. Treat a new public constructor, accessor, or capability trait
+implementation as a stated trust-boundary change, even if harmless looking.
+
+**Caller-supplied identity.** A subject, uid, or principal taken from the
+caller rather than verified peer evidence lets a component name itself as
+another identity. Failing closed without an authoritative resolver is intended,
+not a bug to fix by accepting claims.
+
+**Sandbox profile regressions.** virtiofsd profiles must declare zero host
+capabilities, must not require start-as-root, and must run with the chroot
+sandbox and inode file handles disabled, with read-only shares actually marked
+read-only. Reintroducing host capabilities or the namespace sandbox violates a
+recorded decision. Per-runner device allowlists must stay minimal, and a
+runner must use its own dedicated principal rather than borrowing a broader
+one.
+
+**Store exposure.** The guest's store must be the per-VM closure-only farm,
+never the host's full store. A "simplification" here re-leaks the entire host
+store to every guest.
+
+**Secrets and identifiers in observable surfaces.** Store paths, argv, socket
+paths, environment, PIDs, unit names, terminal bytes, shell names, and opaque
+handles must not reach Debug, error text, logs, audit records, metric labels,
+or span attributes. Audit may carry fixed digests and closed enumerations.
+
+**State that looks like tampering when lost.** Per-VM TPM state is
+identity-bound; a path that recreates it silently rather than failing closed
+turns a missing directory into a device-tampering event for the identity
+provider.
+
+**Fail-open error handling.** Any check whose error path permits the operation
+or accepts unverifiable state weakens the boundary.
+
 ## What is not this seat
 
 Do not substitute a NixOS, network, kernel, build, documentation,
