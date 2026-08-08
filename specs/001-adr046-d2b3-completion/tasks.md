@@ -2087,20 +2087,24 @@ table before the operation exists.
   `contracts/operator-cli.md`, constructors, and hard-failure tests pin every variant,
   terminal failure branch/class, settlement stage/intrinsic boundary, intended outcome, and
   derived action while rejecting every terminal/settlement conversion. T592 owns the broker DTO;
-  T595's already assigned helper ownership renders those exact forms and action tokens,
+  T595's already assigned helper ownership renders those exact public forms and action tokens,
   while `contracts/operator-cli.md` maps replay-key, reserved-subset, source
-  pin/bind/release, cleanup, settlement storage, conflict, and audit actions to their named
-  external owners and procedures. T592's closed wire variants distinguish replay-key
+  pin/bind/release, cleanup-blocker, settlement storage, conflict, and audit actions to their
+  named external owners and procedures. T592's closed wire variants distinguish replay-key
   unavailable, source-lifecycle unavailable, reserved capacity, cleanup pending,
   decision-selection pending, preparation-incomplete, later settlement pending, and
   settled degraded; constructors reject every cross-domain class, illegal stage/class,
   completed pending prefix, and mismatched derived action. Replay-key outcome-audit
   publication has its explicit `audit-publication` class; source release has explicit
   `unlink` and `census` classes. Strict stage/class matrices, schemas, snapshots, and
-  human/JSON goldens accept only lifecycle-reachable pairs. Evidence record/byte limits map
-  to authoritative-source-contract repair; a live-slot limit drives ordered broker-target,
-  source, and attempt-slice cleanup and reports the exact blocker rather than prune-only
-  reconciliation.
+  human/JSON goldens accept only lifecycle-reachable pairs. The
+  `continuity-repair-attempt-limit` class and
+  `resume-oldest-continuity-cleanup` continuation label are private trigger-only control
+  tokens: public response constructors, serializers, deserializers, schemas, snapshots, and
+  human/JSON goldens reject both. Evidence record/byte limits map to
+  authoritative-source-contract repair; a live-slot limit drives ordered broker-target,
+  source, and attempt-slice cleanup and reports the exact blocker rather than either private
+  token or prune-only reconciliation.
 
   The canonical continuity-evidence body is at most 131,072 bytes and its raw evidence,
   real-time value, boot-time value, boot identity, and authority proof each have independent

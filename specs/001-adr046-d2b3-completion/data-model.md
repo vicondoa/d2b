@@ -3056,7 +3056,10 @@ next repair with a new sequence in the reclaimed reserved slice. If cleanup is s
 failing, the request returns the exact owning stage and failure class - broker cleanup,
 source lifecycle, or attempt-slice ledger - and performs no new source acquisition. A
 generic `continuity-repair-attempt-limit` response is never substituted for that blocking
-failure. An immutable degraded compaction outcome is not retried under the same
+failure. `continuity-repair-attempt-limit` is only the private capacity-classifier trigger
+for entering this cleanup path, not a public response variant; its paired internal
+continuation label `resume-oldest-continuity-cleanup` is likewise never emitted as a public
+action. An immutable degraded compaction outcome is not retried under the same
 identity: after the named storage, audit, source, or head conflict is repaired, a
 `ContinuityCompactionRecoveryGenerationV1` cites the prior attempt and outcome, every
 completed target receipt, a freshly selected residual target set, and a fresh current-head
@@ -5742,6 +5745,10 @@ restoration-record-limit | restoration-byte-limit | restoration-attempt-limit |
 continuity-evidence-record-limit | continuity-evidence-byte-limit |
 continuity-repair-attempt-limit | pending-staging-record-limit |
 pending-staging-byte-limit`.
+The wire/CLI-emittable `CLOSED_RETENTION_CAPACITY_CLASS` subset is exactly
+`RetentionCapacityClassV1` without `continuity-repair-attempt-limit`. The excluded member is
+private trigger-only classification for ordered cleanup; it cannot construct a public
+capacity response.
 `RetentionDegradedClassV1` is exactly
 `clock-rollback | clock-watermark | epoch-invalid | clock-forward-discontinuity |
 clock-continuity-ambiguous | clock-overflow | unlink | directory-sync | census |
@@ -5753,17 +5760,19 @@ The audited capacity, no-write admission-refusal, and degraded DTOs each contain
 validated nested variant carrying one class from its own enum. Neither stores a sibling
 action. `CapacityAdmissionRefusalV1` contains only
 `StandingReserveExhausted`; it has no reservation attempt digest, prefix, outcome, or
-generation transition. Custom serialization derives the exact public `failureClass` and
-`action` pair from the variant. Custom deserialization constructs the variant from the
-closed class, verifies that any wire action is byte-identical to the derived action without
-storing or trusting it, and rejects a missing/mismatched action, a class from another
-branch, or any illegal class/action cross-product. The total derived mapping is:
+generation transition. For each wire-emittable variant, custom response serialization
+derives the exact public `failureClass` and `action` pair. Custom response deserialization
+constructs the variant from the closed public class, verifies that any wire action is
+byte-identical to the derived action without storing or trusting it, and rejects a
+missing/mismatched action, a class from another branch, or any illegal class/action
+cross-product. Public response construction, serialization, deserialization, and schema
+validation reject `continuity-repair-attempt-limit` and
+`resume-oldest-continuity-cleanup`. The total public derived mapping is:
 
 | `failureClass` | Exact `action` |
 | --- | --- |
 | `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
 | `continuity-evidence-record-limit`, `continuity-evidence-byte-limit` | `repair-continuity-authoritative-source-contract` |
-| `continuity-repair-attempt-limit` | `resume-oldest-continuity-cleanup` |
 | `standing-reserve-exhausted` | `repair-retention-audit-and-reconcile` |
 | `clock-rollback`, `clock-watermark`, `epoch-invalid`, `clock-forward-discontinuity`, `clock-continuity-ambiguous` | `repair-retention-clock-discontinuity` |
 | `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |
@@ -5772,14 +5781,19 @@ branch, or any illegal class/action cross-product. The total derived mapping is:
 | `audit-publication`, `pending-settlement` | `repair-retention-audit-and-reconcile` |
 | `standing-reserve-missing`, `standing-reserve-overdrawn`, `standing-reserve-duplicated`, `standing-reserve-unaccounted` | `preserve-and-escalate-audit-integrity-incident` |
 
+The separate private trigger mapping is
+`continuity-repair-attempt-limit -> resume-oldest-continuity-cleanup`. It selects the
+cleanup control path and is not a wire/CLI failure/action pair.
+
 Private constructors, wire/schema snapshots, and table-driven negatives reject prune
 success-plus-failure, degraded-without-failure, a retention class paired with another
 action, a capacity class in the degraded or admission branch, an admission class in the
 audited capacity branch, a degraded class in either capacity branch, caller-provided
 action, unknown variants, multiple nested branches, and missing branches. Human and JSON
-projections are generated only from validated variants. Independent schema, wire,
-human/JSON golden, and lifecycle cases cover every class and action, including all five
-standing-reserve states and both the audited and no-write capacity refusal shapes.
+projections are generated only from validated wire-emittable variants. Independent schema,
+wire, human/JSON golden, and lifecycle cases cover every public class and action, including
+all five standing-reserve states and both the audited and no-write capacity refusal shapes,
+and negatively cover the non-emittable trigger class and internal continuation label.
 
 Continuity-specific source and publication projection derives these exact actions without
 storing one:
@@ -5822,9 +5836,10 @@ Reserved-subset admission uses only the existing
 `continuity-evidence-record-limit | continuity-evidence-byte-limit |
 continuity-repair-attempt-limit` capacity classes and never relabels them as a source or
 replay-key failure. Evidence size/count failures render authoritative-source-contract
-repair. A live-attempt limit first drives the oldest ordered broker-target/source/
-attempt-slice cleanup and, if blocked, renders that exact owning failure instead of the
-generic limit. Replay-key reservation uses the existing root-publication capacity or
+repair. A live-attempt limit is the private trigger-only class: it first drives the oldest
+ordered broker-target/source/attempt-slice cleanup and, if blocked, renders that exact
+owning failure instead of the trigger or its internal continuation label. Replay-key
+reservation uses the existing root-publication capacity or
 standing-reserve admission class and likewise never enters the infrastructure enum.
 Their total actions are:
 
@@ -6299,7 +6314,10 @@ A retention-capacity refusal exits `4` with exactly
 or
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-capacity","failureClass":"<CLOSED_RETENTION_CAPACITY_CLASS>","action":"<ACTION_FROM_RETENTION_CAPACITY_TABLE>"}`.
 This is the audited `RefusedZeroMutation` shape: its capacity pre/outcome pair is durable,
-while the ledger and restoration operation are unchanged. Pre-audit standing-reserve
+while the ledger and restoration operation are unchanged.
+`CLOSED_RETENTION_CAPACITY_CLASS` excludes the trigger-only
+`continuity-repair-attempt-limit`, so neither that class nor
+`resume-oldest-continuity-cleanup` can inhabit this response. Pre-audit standing-reserve
 exhaustion instead exits `4` with exactly
 `host generation handoff immutable audit capacity admission unavailable\nfailure-class: standing-reserve-exhausted\naction: repair-retention-audit-and-reconcile\n`
 or
@@ -7026,6 +7044,15 @@ lifecycle/meta/settlement-member-removed
 lifecycle/meta/boundary-visitor-removed
 lifecycle/meta/shrinkage-poison-removed
 ```
+
+The literal
+`lifecycle/aggregate/continuity-repair-attempts-257-refused` id preserves the initial
+private capacity-classifier refusal that enters ordered cleanup; `refused` does not name a
+wire/CLI refusal. Its subvisitors require either one complete ordered release followed by
+admission with a new sequence or the exact owning broker-cleanup, source-lifecycle, or
+attempt-slice-ledger failure. They also require public response construction, schema, wire,
+and human/JSON golden rejection of `continuity-repair-attempt-limit` and
+`resume-oldest-continuity-cleanup`.
 
 A separately authored literal 88-id constant, the fixture, and production visitors are
 mutually read-independent. Each case must reach its named limit, prefix, failure injection,
