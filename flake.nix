@@ -319,9 +319,11 @@
             nativeBuildInputs = [ pkgs.binutils ];
             installPhase = ''
               runHook preInstall
-              install -Dm755 \
-                "target/${staticRustPlatform.target}/release/${binName}" \
-                "$out/bin/${binName}"
+              mapfile -t candidates < <(
+                find target -type f -path "*/release/${binName}" -perm -0100
+              )
+              test "''${#candidates[@]}" -eq 1
+              install -Dm755 "''${candidates[0]}" "$out/bin/${binName}"
               runHook postInstall
             '';
             postInstall = ''
@@ -382,8 +384,12 @@
             ];
             installPhase = ''
               runHook preInstall
-              install -Dm755 \
-                "target/${staticRustPlatform.target}/release/d2b-guest-shell-runner" \
+              mapfile -t candidates < <(
+                find target -type f \
+                  -path "*/release/d2b-guest-shell-runner" -perm -0100
+              )
+              test "''${#candidates[@]}" -eq 1
+              install -Dm755 "''${candidates[0]}" \
                 "$out/bin/d2b-guest-shell-runner"
               runHook postInstall
             '';
