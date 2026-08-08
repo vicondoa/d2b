@@ -117,7 +117,7 @@ describe and enforce one selected-roster Discover-Fix-Verify lifecycle.
 
 - [x] T024 When the fingerprint precheck reports drift, run `make api-surface-pin` before `make test-lint`; then run focused xtask test/clippy/fmt, `make check-tier0`, `make test-changelog`, and `make test-policy`, recording exact results in panel evidence
 - [x] T025 Expand the literal changed-path allowlist in `specs/004-adr0055-panel-review/plan.md`, compare it with `git diff --name-only "$(git merge-base origin/v3 HEAD)"...HEAD`, print every undeclared changed path, and fail if any path is outside the declared feature artifacts, contributor tooling, docs, xtask delivery files, tests, or changelog set
-- [ ] T026 Run the finished-diff panel lifecycle with only HIGH or CRITICAL merge blockers admitted, resolve its complete ledger in batches, and obtain unanimous selected-roster verification
+- [x] T026 Run the finished-diff panel lifecycle with only HIGH or CRITICAL merge blockers admitted, resolve its complete ledger in batches, and obtain unanimous selected-roster verification
 - [ ] T027 Push `spec004-panel-review-pragmatic`, open one Track B PR to `v3`, wait for required checks, and merge after the panel and CI are green
 
 ---
