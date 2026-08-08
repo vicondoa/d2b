@@ -139,8 +139,9 @@ Fields:
 - evidence
 - verified factual status and supporting evidence when the disposition is
   Withdrawn or Invalid
-- optional recorded acceptance naming the repository maintainer or merge
-  owner, that capacity, and the acceptance justification
+- optional recorded acceptance containing a non-empty accepter identifier,
+  capacity exactly `repository maintainer` or `merge owner`, and a non-empty
+  acceptance justification
 
 Rules:
 
@@ -153,6 +154,9 @@ Rules:
   protected principal, authorization, capability, or separate service. Its
   claimed repository username and capacity are shape-checked but not resolved
   through signatures, GitHub API lookup, or another identity authority.
+- A present acceptance object is malformed when the accepter identifier is
+  empty, capacity is outside `repository maintainer` or `merge owner`, or the
+  acceptance justification is empty.
 - A BLOCKER approves only as Fixed, Invalid, or Withdrawn. Invalid and
   Withdrawn must satisfy the verified-factual-status rule; Intentionally
   rejected and Deferred cannot approve a BLOCKER.
@@ -160,8 +164,8 @@ Rules:
   verified-factual-status rule. Those resolved factual dispositions require no
   acceptance.
 - An unresolved Intentionally rejected or Deferred MAJOR requires recorded
-  acceptance by the repository maintainer or merge owner. Without it the MAJOR
-  cannot approve.
+  acceptance by the repository maintainer or merge owner. Without it, or with a
+  malformed acceptance object, the MAJOR cannot approve.
 - MINOR and NIT responses remain in the ledger but do not block after their
   required response data is complete.
 

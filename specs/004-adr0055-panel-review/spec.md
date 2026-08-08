@@ -69,6 +69,10 @@ and previous status.
    resolved by Fixed or factually verified Invalid or Withdrawn, while an
    unresolved Intentionally rejected or Deferred response approves only with
    recorded acceptance by the repository maintainer or merge owner.
+7. **Given** an unresolved Intentionally rejected or Deferred MAJOR response,
+   **When** its acceptance has an empty accepter identifier, a capacity other
+   than `repository maintainer` or `merge owner`, or an empty justification,
+   **Then** approval is refused.
 
 ---
 
@@ -122,6 +126,9 @@ conversion into current artifacts.
 - A ledger issue has no implementation response, or a response omits required
   justification, evidence, factual verification, or acceptance when required;
   verification preparation refuses the incomplete artifact.
+- An unresolved Intentionally rejected or Deferred MAJOR has an acceptance
+  object with an empty accepter identifier, an out-of-domain capacity, or an
+  empty justification; approval refuses the malformed object.
 - A selected seat returns an explicit complete discovery result with an empty
   findings list; it is accepted as a positive zero-finding result.
 - A panel artifact carries an unknown, malformed, misplaced, or mixed-family
@@ -201,9 +208,12 @@ conversion into current artifacts.
 - **FR-029**: Approval MUST require every MAJOR to be Fixed or to carry
   verified factual Invalid or Withdrawn status, or - only for unresolved
   Intentionally rejected or Deferred responses - recorded acceptance by the
-  repository maintainer or merge owner. The acceptance MUST remain plain
-  recorded process data and MUST NOT require identity verification, signatures,
-  GitHub API lookup, a service, or authority.
+  repository maintainer or merge owner. A present acceptance object MUST
+  contain a non-empty accepter identifier, capacity exactly `repository
+  maintainer` or `merge owner`, and a non-empty justification; any malformed
+  field MUST be refused. The acceptance MUST remain plain recorded process data
+  and MUST NOT require identity verification, signatures, GitHub API lookup, a
+  service, or authority.
 - **FR-030**: Each reviewed candidate state MUST have exactly one versioned
   selection artifact bound to its lifecycle identifier, candidate digest
   triple, selection-table version, profiles, and ordered lifecycle roster.
@@ -295,7 +305,10 @@ conversion into current artifacts.
 - **SC-012**: Approval tests accept verified BLOCKER; Fixed, verified Invalid,
   and verified Withdrawn MAJOR; and accepted Intentionally rejected and
   Deferred MAJOR cases. They refuse Deferred BLOCKER, unverified Invalid or
-  Withdrawn, and unaccepted Intentionally rejected or Deferred MAJOR cases.
+  Withdrawn, and unaccepted Intentionally rejected or Deferred MAJOR cases. For
+  each of the two unresolved MAJOR dispositions, planted malformed-acceptance
+  cases refuse an empty accepter identifier, a capacity other than `repository
+  maintainer` or `merge owner`, and an empty justification.
 - **SC-013**: A focused prompt-source contract test proves the current
   thirteen-seat Discover-Fix-Verify guidance is present and the superseded
   fixed-roster, four-field verdict, held-reviewer, repeated-round, and old

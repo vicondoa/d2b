@@ -113,12 +113,19 @@ declared change and non-empty evidence. Intentionally rejected and Deferred
 require a concrete justification. Withdrawn and Invalid require a concrete
 factual-status statement and non-empty evidence that verifies it.
 
-A recorded acceptance is an optional plain object containing the accepting
-repository username, capacity `repository maintainer` or `merge owner`, and a
-concrete justification. It is ordinary review data under existing repository
-controls, not authentication or protected authorization. Validation checks
-only this shape and content. It does not verify the claimed identity or
-capacity, call GitHub, require a signature, or consult another authority.
+A recorded acceptance is an optional plain object. When present, validation
+requires all three of these fields:
+
+- a non-empty accepter identifier naming the claimed repository username;
+- capacity exactly `repository maintainer` or `merge owner`; and
+- a non-empty acceptance justification.
+
+An empty accepter identifier, any other capacity, or an empty justification is
+malformed and cannot approve an unresolved Intentionally rejected or Deferred
+MAJOR. The object is ordinary review data under existing repository controls,
+not authentication or protected authorization. Validation checks only this
+shape and content. It does not verify the claimed identity or capacity, call
+GitHub, require a signature, or consult another authority.
 
 Approval applies this matrix before reviewer sign-off:
 

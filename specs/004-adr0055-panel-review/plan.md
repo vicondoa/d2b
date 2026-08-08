@@ -292,9 +292,11 @@ delivery validation work together at merge.
    A MAJOR approves as Fixed or as factually verified Invalid or Withdrawn
    without acceptance. Only unresolved Intentionally rejected or Deferred
    MAJOR responses require recorded acceptance by the repository maintainer or
-   merge owner. That acceptance is plain shape-checked process data, not
-   verified identity or authorization. Deferred cannot approve a BLOCKER or an
-   unaccepted MAJOR.
+   merge owner. A valid acceptance object requires a non-empty accepter
+   identifier, capacity exactly `repository maintainer` or `merge owner`, and a
+   non-empty acceptance justification. That acceptance is plain shape-checked
+   process data, not verified identity or authorization. Deferred cannot
+   approve a BLOCKER or an unaccepted MAJOR.
 5. Reselect over the full candidate and every fix delta, union the result with
    the prior lifecycle roster, and reject narrowing or unrelated scope
    expansion with an actionable new-lifecycle remedy.
@@ -472,7 +474,10 @@ It does not merely prove that selected runtime paths stayed clean.
    Intentionally rejected and Deferred MAJOR responses. They refuse
    Intentionally rejected and Deferred BLOCKER responses, unverified Invalid
    or Withdrawn responses, and unaccepted Intentionally rejected or Deferred
-   MAJOR responses.
+   MAJOR responses. For each of the two unresolved MAJOR dispositions, separate
+   planted malformed-acceptance cases refuse an empty accepter identifier, a
+   capacity other than `repository maintainer` or `merge owner`, and an empty
+   acceptance justification.
 5. xtask tests prove two different current selected-roster sizes attest only
    their request's exact roles and record files; missing, extra, out-of-order,
    malformed-version, unknown-version, and mixed-family records fail; and the
@@ -507,6 +512,7 @@ It does not merely prove that selected runtime paths stayed clean.
 | A selected discovery seat is absent but is treated as finding-free. | Complete-result coverage refuses the missing seat; a separate zero-finding positive proves the valid empty shape. |
 | A ledger item disappears from implementation responses or carries incomplete justification or evidence. | Exact response coverage and disposition-specific completeness validation refuse verification preparation. |
 | A factually verified Invalid or Withdrawn MAJOR is wrongly held for acceptance, or an unresolved Intentionally rejected or Deferred MAJOR passes without it. | Severity-by-disposition tests positively cover resolved factual responses without acceptance and require recorded acceptance only for the two unresolved dispositions. |
+| A malformed acceptance object approves an unresolved Intentionally rejected or Deferred MAJOR. | Planted negatives for each disposition refuse an empty accepter identifier, an out-of-domain capacity, and an empty acceptance justification. |
 | A fix silently removes a reviewer. | Recorded set-union validation requires monotonic roster widening. |
 | A late style issue restarts discovery. | Verification admission rejects non-blocking late issues. |
 | Partial legacy import loses completed work or relabels Rust attribution. | Lifecycle import fixtures assert raw-byte preservation, source identity stability, and Rust-profile responsibility. |
