@@ -1331,7 +1331,7 @@ jobs:
   test-flake-aarch64:
     needs: [tier0]
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -1367,9 +1367,12 @@ jobs:
               ':(exclude).github/workflows/arm-artifact-measurement.yml' \
               ':(exclude).github/workflows/pr-l1-static-fast.yml'
           )
-          broker_out=$(nix build --no-link --print-out-paths \
+          nix build --no-link \
+            .#packages.aarch64-linux.d2b-priv-broker \
+            .#packages.aarch64-linux.d2b-guest-shell-runner-static
+          broker_out=$(nix path-info \
             .#packages.aarch64-linux.d2b-priv-broker)
-          guest_out=$(nix build --no-link --print-out-paths \
+          guest_out=$(nix path-info \
             .#packages.aarch64-linux.d2b-guest-shell-runner-static)
           flake_ref="git+file://$PWD"
           broker_closure=$(nix build --impure --no-link --print-out-paths --expr "
