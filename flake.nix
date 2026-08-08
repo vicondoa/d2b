@@ -317,6 +317,13 @@
             SCCACHE_DIR = "";
             RUSTFLAGS = staticRustPlatform.staticRustFlags;
             nativeBuildInputs = [ pkgs.binutils ];
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 \
+                "target/${staticRustPlatform.target}/release/${binName}" \
+                "$out/bin/${binName}"
+              runHook postInstall
+            '';
             postInstall = ''
               readelf=${pkgs.binutils.bintools}/bin/readelf
               bin="$out/bin/${binName}"
@@ -373,6 +380,13 @@
               pkgs.binutils
               staticRustPlatform.bindgenHook
             ];
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 \
+                "target/${staticRustPlatform.target}/release/d2b-guest-shell-runner" \
+                "$out/bin/d2b-guest-shell-runner"
+              runHook postInstall
+            '';
             postInstall = ''
               readelf=${pkgs.binutils.bintools}/bin/readelf
               bin="$out/bin/d2b-guest-shell-runner"
