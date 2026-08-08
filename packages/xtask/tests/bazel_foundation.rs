@@ -52,9 +52,9 @@ fn module_declares_exactly_the_two_accepted_hubs() {
             .expect_err("retired hub must refuse");
         assert_eq!(
             error.to_string(),
-            format!(
-                "Hub '{retired}' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product"
-            )
+            "D2B-BZL-RETIRED-HUB: the requested Bazel dependency hub is retired.\n\
+From the repository root, run: nix develop\n\
+Then run from packages/: cargo xtask bazel-repin --hub product."
         );
         let (_, argv, cwd) = bazel::retired_hub_remediation(retired).expect("remediation");
         bazel::validate_retired_hub_remediation(&argv, cwd).expect("closed remediation");
@@ -93,6 +93,7 @@ fn adr0054_drift_table_is_closed_and_redacted() {
         "D2B-BZLDRIFT-MODULE",
         "D2B-BZLDRIFT-GENERATOR",
         "D2B-BZLDRIFT-PACKAGE-POLICY",
+        "D2B-BZL-METADATA",
         "D2B-BZLDRIFT-YANKED",
         "D2B-BZL-AMBIENT-REPIN",
         "D2B-BZL-UNEXPECTED-MUTATION",
@@ -267,8 +268,13 @@ fn generator_preview_is_the_only_generation_side_effect() {
             .map(|path| fs::read(root.join(path)).expect("second preview output"))
             .collect::<Vec<_>>()
     );
-    let checked = bazel::gen_bazel(&["--check".to_owned()]).expect("generator check");
-    assert_eq!(outputs, checked);
+    let stale_preview = root
+        .join(&preview_root)
+        .join("bazel/generated/obsolete-sidecar.json");
+    fs::write(&stale_preview, b"obsolete\n").expect("plant stale preview sidecar");
+    let third = bazel::gen_bazel(&[]).expect("replace stale generator preview");
+    assert_eq!(outputs, third);
+    assert!(!stale_preview.exists());
 
     let stale = root.join("bazel/generated/obsolete-inventory.json");
     fs::create_dir_all(stale.parent().expect("generated parent")).expect("generated directory");

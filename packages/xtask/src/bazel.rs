@@ -5,6 +5,7 @@ use std::{
     env,
     error::Error,
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -16,6 +17,7 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GenBazelMode {
     Write,
+    Install,
     Check,
 }
 
@@ -33,6 +35,11 @@ const NIGHTLY_TOOLCHAIN: &str = "nightly-2026-02-16";
 const GENERATOR_METADATA_TARGET: &str = "x86_64-unknown-linux-gnu";
 const PREVIEW_ROOT: &str = ".scratch/bazel/generated-preview";
 const OUTPUT_MANIFEST_PATH: &str = "bazel/generated/output-manifest.json";
+const BAZEL_EXECUTABLE_DIAGNOSTIC: &str = "\
+D2B-BZL-EXECUTABLE: the repository-pinned Bazel executable is unavailable.
+From the repository root, run: nix develop
+Then run from packages/: cargo xtask gen-bazel --check
+If the command still fails, verify the pinned Bazel tool in the development shell.";
 
 const APPROVED_OUTPUT_PATHS: &[&str] = &[
     ".bazelignore",
@@ -59,19 +66,15 @@ const APPROVED_GENERATED_EXPORTS: &[&str] = &[
 ];
 
 const RETIRED_HUB_MESSAGES: &[(&str, &str)] = &[
-    (
-        "main",
-        "Hub 'main' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product",
-    ),
-    (
-        "broker",
-        "Hub 'broker' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product",
-    ),
-    (
-        "guest",
-        "Hub 'guest' is retired; after entering nix develop, run from packages/: cargo xtask bazel-repin --hub product",
-    ),
+    ("main", RETIRED_HUB_MESSAGE),
+    ("broker", RETIRED_HUB_MESSAGE),
+    ("guest", RETIRED_HUB_MESSAGE),
 ];
+
+const RETIRED_HUB_MESSAGE: &str = "\
+D2B-BZL-RETIRED-HUB: the requested Bazel dependency hub is retired.
+From the repository root, run: nix develop
+Then run from packages/: cargo xtask bazel-repin --hub product.";
 
 pub fn retired_hub_remediation(hub: &str) -> Option<(&'static str, Vec<String>, &'static str)> {
     RETIRED_HUB_MESSAGES
@@ -164,16 +167,22 @@ Rerun cargo xtask bazel-module-refresh, then rerun the failed command.",
 D2B-BZLDRIFT-GENERATOR: generated Bazel output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
-cargo xtask gen-bazel
-Review and commit the listed repository-relative generated paths.
+Review the scratch preview, then run cargo xtask gen-bazel --install.
+Review and commit the exact repository-relative generated paths returned by the install command.
 Rerun cargo xtask gen-bazel --check, then rerun the failed command.",
         "D2B-BZLDRIFT-PACKAGE-POLICY" => "\
 D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
-cargo xtask gen-package-policy-inputs
-Review and commit the generated changes under packages/policy-inputs/.
+Review the scratch preview, then run cargo xtask gen-package-policy-inputs --install.
+Review and commit the exact repository-relative generated paths returned by the install command.
 Rerun cargo xtask gen-package-policy-inputs --check, then rerun the failed command.",
+        "D2B-BZL-METADATA" => "\
+D2B-BZL-METADATA: pinned offline Cargo metadata could not be generated.
+From the repository root, run: nix develop
+Then run: cd packages
+cargo xtask gen-bazel
+Review the scratch preview and rerun the failed command.",
         "D2B-BZLDRIFT-YANKED" => "\
 D2B-BZLDRIFT-YANKED: yanked snapshot is stale.
 From the repository root, run: nix develop
@@ -233,15 +242,16 @@ impl BazelExecutor for ProcessExecutor {
         }
         command
             .status()
-            .map_err(|error| format!("could not start the Bazel child: {error}").into())
+            .map_err(|_| BAZEL_EXECUTABLE_DIAGNOSTIC.into())
     }
 }
 
 pub(crate) fn parse_gen_bazel(args: &[String]) -> Result<GenBazelMode, Box<dyn Error>> {
     match args {
         [] => Ok(GenBazelMode::Write),
+        [flag] if flag == "--install" => Ok(GenBazelMode::Install),
         [flag] if flag == "--check" => Ok(GenBazelMode::Check),
-        _ => Err("usage: gen-bazel [--check]".into()),
+        _ => Err("usage: gen-bazel [--check|--install]".into()),
     }
 }
 
@@ -255,58 +265,166 @@ pub(crate) fn gen_bazel(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>>
     let paths = rendered.keys().map(PathBuf::from).collect::<Vec<_>>();
 
     match mode {
-        GenBazelMode::Write => {
-            // This wave is allowed to leave a reviewable preview only.  The
-            // integrator owns generated BUILD files, inventories, pins, and
-            // goldens, so a contributor command must not silently create one.
-            let preview_root = root.join(PREVIEW_ROOT);
-            if preview_root.exists() {
-                fs::remove_dir_all(&preview_root)?;
-            }
-            fs::create_dir_all(&preview_root)?;
-            for (relative, contents) in rendered {
-                let path = preview_root.join(&relative);
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(path, contents)?;
-            }
-            Ok(paths
-                .into_iter()
-                .map(|relative| PathBuf::from(PREVIEW_ROOT).join(relative))
-                .collect())
+        GenBazelMode::Write => write_bazel_preview(&root, &rendered),
+        GenBazelMode::Install => {
+            install_bazel_outputs(&root, &rendered)?;
+            Ok(paths)
         }
         GenBazelMode::Check => {
             validate_committed_output_census(&root, &rendered)?;
             for (relative, expected) in rendered {
                 let path = root.join(&relative);
-                if path.is_file() {
-                    let actual = fs::read_to_string(&path).map_err(|_error| {
-                        format!(
-                            "{}\nStale path: {relative}",
-                            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
-                                .expect("generator diagnostic is closed")
-                        )
-                    })?;
-                    if actual != expected {
-                        return Err(format!(
-                            "{}\nStale path: {relative}",
-                            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
-                                .expect("generator diagnostic is closed")
-                        )
-                        .into());
-                    }
+                let actual = fs::read_to_string(&path).map_err(|_| {
+                    format!(
+                        "{}\nStale path: {relative}",
+                        adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+                            .expect("generator diagnostic is closed")
+                    )
+                })?;
+                if actual != expected {
+                    return Err(format!(
+                        "{}\nStale path: {relative}",
+                        adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+                            .expect("generator diagnostic is closed")
+                    )
+                    .into());
                 }
             }
-            // A check is intentionally read-only.  It does not compare or
-            // delete a stale output outside this scope and never creates a
-            // generated repository artifact.
-            Ok(paths
-                .into_iter()
-                .map(|relative| PathBuf::from(PREVIEW_ROOT).join(relative))
-                .collect())
+            Ok(paths)
         }
     }
+}
+
+fn write_bazel_preview(
+    root: &Path,
+    rendered: &BTreeMap<String, String>,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let preview_root = root.join(PREVIEW_ROOT);
+    if let Ok(metadata) = fs::symlink_metadata(&preview_root) {
+        if !metadata.file_type().is_dir() {
+            return Err("D2B-BZLDRIFT-GENERATOR: Bazel preview root is not a directory.".into());
+        }
+        fs::remove_dir_all(&preview_root)
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not clear the Bazel preview root.")?;
+    }
+    fs::create_dir_all(&preview_root)
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create the Bazel preview root.")?;
+    for (relative, contents) in rendered {
+        let path = preview_root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(
+                |_| "D2B-BZLDRIFT-GENERATOR: could not create a Bazel preview directory.",
+            )?;
+        }
+        fs::write(path, contents)
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not write the Bazel preview.")?;
+    }
+    validate_committed_output_census(&preview_root, rendered)?;
+    Ok(rendered
+        .keys()
+        .map(|relative| PathBuf::from(PREVIEW_ROOT).join(relative))
+        .collect())
+}
+
+fn install_bazel_outputs(
+    root: &Path,
+    rendered: &BTreeMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
+    let generated_root = root.join("bazel/generated");
+    if let Ok(metadata) = fs::symlink_metadata(&generated_root) {
+        if !metadata.file_type().is_dir() {
+            return Err(
+                "D2B-BZLDRIFT-GENERATOR: bazel/generated is not a regular directory.".into(),
+            );
+        }
+        for entry in fs::read_dir(&generated_root)
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect the Bazel output directory.")?
+        {
+            let entry = entry.map_err(
+                |_| "D2B-BZLDRIFT-GENERATOR: could not inspect the Bazel output directory.",
+            )?;
+            if !entry
+                .file_type()
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect a Bazel output entry.")?
+                .is_file()
+            {
+                return Err("D2B-BZLDRIFT-GENERATOR: a Bazel output is not a regular file.".into());
+            }
+        }
+    } else {
+        fs::create_dir_all(&generated_root)
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create bazel/generated.")?;
+    }
+
+    let bazelignore = root.join(".bazelignore");
+    if let Ok(metadata) = fs::symlink_metadata(&bazelignore)
+        && !metadata.file_type().is_file()
+    {
+        return Err("D2B-BZLDRIFT-GENERATOR: .bazelignore is not a regular file.".into());
+    }
+
+    for (relative, contents) in rendered {
+        atomic_write_file(&root.join(relative), contents)?;
+    }
+
+    let expected = rendered.keys().cloned().collect::<BTreeSet<_>>();
+    for entry in fs::read_dir(&generated_root)
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect the Bazel output directory.")?
+    {
+        let entry = entry
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect the Bazel output directory.")?;
+        let relative = format!(
+            "bazel/generated/{}",
+            entry
+                .file_name()
+                .to_str()
+                .ok_or("D2B-BZLDRIFT-GENERATOR: Bazel output path is not UTF-8.")?
+        );
+        if !expected.contains(&relative) {
+            fs::remove_file(entry.path())
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not remove a stale Bazel output.")?;
+        }
+    }
+    validate_committed_output_census(root, rendered)
+}
+
+fn atomic_write_file(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
+    let parent = path
+        .parent()
+        .ok_or("D2B-BZLDRIFT-GENERATOR: generated output has no parent directory.")?;
+    fs::create_dir_all(parent)
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create an output directory.")?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("D2B-BZLDRIFT-GENERATOR: generated output path is not UTF-8.")?;
+    for attempt in 0..100_u32 {
+        let temporary = parent.join(format!(
+            ".{file_name}.d2b-install-{}-{attempt}",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                return Err("D2B-BZLDRIFT-GENERATOR: could not create an atomic output.".into());
+            }
+        };
+        if file.write_all(contents.as_bytes()).is_err() || file.sync_all().is_err() {
+            let _ = fs::remove_file(&temporary);
+            return Err("D2B-BZLDRIFT-GENERATOR: could not write an atomic output.".into());
+        }
+        if fs::rename(&temporary, path).is_err() {
+            let _ = fs::remove_file(&temporary);
+            return Err("D2B-BZLDRIFT-GENERATOR: could not install an output.".into());
+        }
+        return Ok(());
+    }
+    Err("D2B-BZLDRIFT-GENERATOR: could not reserve an atomic output.".into())
 }
 
 pub(crate) fn parse_repin(args: &[String]) -> Result<&str, Box<dyn Error>> {
@@ -324,9 +442,9 @@ pub(crate) fn parse_repin(args: &[String]) -> Result<&str, Box<dyn Error>> {
                 .unwrap_or("retired Bazel hub")
                 .into())
         }
-        [flag, hub] if flag == "--hub" && !hub.is_empty() => {
-            Err(format!("unknown Bazel dependency hub `{hub}`; expected product or walker").into())
-        }
+        [flag, _hub] if flag == "--hub" => Err(
+            "D2B-BZL-INVALID-HUB: select one of the repository's product or walker hubs.".into(),
+        ),
         _ => Err("usage: bazel-repin --hub <name>".into()),
     }
 }
@@ -349,7 +467,7 @@ pub fn bazel_repin_with_executor(
             return Err((*message).into());
         }
         return Err(
-            format!("unknown Bazel dependency hub `{hub}`; expected product or walker").into(),
+            "D2B-BZL-INVALID-HUB: select one of the repository's product or walker hubs.".into(),
         );
     }
     reject_ambient_repin("bazel-repin", Some(hub))?;
@@ -488,11 +606,11 @@ fn bazel_executable() -> Result<PathBuf, Box<dyn Error>> {
     if executable.is_absolute() {
         return Ok(executable);
     }
-    let path = env::var_os("PATH").ok_or("BAZEL is unset and PATH is unavailable")?;
+    let path = env::var_os("PATH").ok_or(BAZEL_EXECUTABLE_DIAGNOSTIC)?;
     env::split_paths(&path)
         .map(|directory| directory.join(&executable))
         .find(|candidate| candidate.is_file())
-        .ok_or_else(|| format!("{} is not on PATH", executable.display()).into())
+        .ok_or_else(|| BAZEL_EXECUTABLE_DIAGNOSTIC.into())
 }
 
 fn absolute_root(root: &Path) -> PathBuf {
@@ -514,8 +632,9 @@ fn status_text(status: &std::process::ExitStatus) -> String {
 
 fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(root) = env::var_os("D2B_BAZEL_WORKTREE") {
-        return fs::canonicalize(root)
-            .map_err(|error| format!("cannot canonicalize D2B_BAZEL_WORKTREE: {error}").into());
+        return fs::canonicalize(root).map_err(|_| {
+            "D2B-BZL-WORKTREE: D2B_BAZEL_WORKTREE is not a repository directory.".into()
+        });
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1048,49 +1167,77 @@ fn validate_committed_output_census(
     root: &Path,
     expected: &BTreeMap<String, String>,
 ) -> Result<(), Box<dyn Error>> {
+    if expected.is_empty() {
+        return Err("D2B-BZLDRIFT-GENERATOR: expected generated output census is empty.".into());
+    }
     let mut actual = BTreeSet::new();
-    for path in [".bazelignore"] {
-        if root.join(path).is_file() {
-            actual.insert(path.to_owned());
+    let bazelignore = root.join(".bazelignore");
+    match fs::symlink_metadata(&bazelignore) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            actual.insert(".bazelignore".to_owned());
+        }
+        Ok(_) => {
+            return Err("D2B-BZLDRIFT-GENERATOR: .bazelignore is not a regular file.".into());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return Err("D2B-BZLDRIFT-GENERATOR: could not inspect .bazelignore.".into());
         }
     }
     let generated = root.join("bazel/generated");
-    if generated.exists() {
-        if !generated.is_dir() {
-            return Err("bazel/generated is not a directory".into());
+    let generated_metadata = match fs::symlink_metadata(&generated) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("D2B-BZLDRIFT-GENERATOR: bazel/generated output root is absent.".into());
         }
-        for entry in fs::read_dir(&generated)? {
-            let entry = entry?;
-            let relative = format!("bazel/generated/{}", entry.file_name().to_string_lossy());
-            if !entry.file_type()?.is_file() {
-                return Err(format!("stale generated path: {relative}").into());
-            }
-            actual.insert(relative);
+        Err(_) => {
+            return Err("D2B-BZLDRIFT-GENERATOR: could not inspect bazel/generated.".into());
         }
+    };
+    if !generated_metadata.file_type().is_dir() {
+        return Err(
+            "D2B-BZLDRIFT-GENERATOR: bazel/generated output root is not a directory.".into(),
+        );
     }
-    let mut package_builds = Vec::new();
-    collect_named_files(&root.join("packages"), "BUILD.bazel", &mut package_builds)?;
-    for path in package_builds {
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| "package BUILD path escaped repository root")?
-            .to_string_lossy()
-            .replace('\\', "/");
-        actual.insert(relative);
+    for entry in fs::read_dir(&generated)
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect bazel/generated.")?
+    {
+        let entry =
+            entry.map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect a generated output.")?;
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect a generated output.")?;
+        if !file_type.is_file() {
+            return Err("D2B-BZLDRIFT-GENERATOR: generated output is not a regular file.".into());
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: generated output path is not UTF-8.")?;
+        actual.insert(format!("bazel/generated/{name}"));
     }
     let expected_paths = expected.keys().cloned().collect::<BTreeSet<_>>();
+    let missing = expected_paths
+        .difference(&actual)
+        .cloned()
+        .collect::<Vec<_>>();
     let extras = actual
         .difference(&expected_paths)
         .cloned()
         .collect::<Vec<_>>();
-    if !extras.is_empty() {
-        return Err(format!(
-            "{}\nStale paths: {}",
-            adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
-                .expect("generator diagnostic is closed"),
-            extras.join(", ")
-        )
-        .into());
+    if !missing.is_empty() || !extras.is_empty() {
+        let mut message = adr0054_drift_message("D2B-BZLDRIFT-GENERATOR")
+            .expect("generator diagnostic is closed")
+            .to_owned();
+        if !missing.is_empty() {
+            message.push_str("\nMissing paths: ");
+            message.push_str(&missing.join(", "));
+        }
+        if !extras.is_empty() {
+            message.push_str("\nExtra paths: ");
+            message.push_str(&extras.join(", "));
+        }
+        return Err(message.into());
     }
     Ok(())
 }
@@ -1831,7 +1978,7 @@ fn evidence_sink_policy_json() -> String {
         .collect::<Vec<_>>();
     pretty_json(&ordered_object([
         ("schemaVersion".to_owned(), json!(1)),
-        ("status".to_owned(), json!("w0-seed")),
+        ("status".to_owned(), json!("unmeasured")),
         ("measured".to_owned(), json!(false)),
         ("rows".to_owned(), Value::Array(rows)),
     ]))
@@ -1912,20 +2059,29 @@ fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box
         let output = command
             .args(["--manifest-path", manifest])
             .output()
-            .map_err(|error| format!("could not run cargo metadata for {hub}: {error}"))?;
+            .map_err(|_| {
+                adr0054_drift_message("D2B-BZL-METADATA")
+                    .expect("metadata diagnostic is closed")
+                    .to_owned()
+            })?;
         if !output.status.success() {
-            return Err(format!(
-                "cargo metadata for {hub} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )
-            .into());
+            return Err(adr0054_drift_message("D2B-BZL-METADATA")
+                .expect("metadata diagnostic is closed")
+                .into());
         }
-        let document: Value = serde_json::from_slice(&output.stdout)
-            .map_err(|error| format!("cannot parse cargo metadata for {hub}: {error}"))?;
+        let document: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
+            adr0054_drift_message("D2B-BZL-METADATA")
+                .expect("metadata diagnostic is closed")
+                .to_owned()
+        })?;
         let packages = document
             .get("packages")
             .and_then(Value::as_array)
-            .ok_or_else(|| format!("cargo metadata for {hub} has no packages"))?;
+            .ok_or_else(|| {
+                adr0054_drift_message("D2B-BZL-METADATA")
+                    .expect("metadata diagnostic is closed")
+                    .to_owned()
+            })?;
         let proc_macro_packages = packages
             .iter()
             .filter(|package| {
@@ -2104,7 +2260,7 @@ fn hermeticity_hub(name: &str) -> Result<hermeticity::Hub, Box<dyn Error>> {
     match name {
         "product" => Ok(hermeticity::Hub::Product),
         "walker" => Ok(hermeticity::Hub::Walker),
-        _ => Err(format!("unknown hermeticity hub {name:?}").into()),
+        _ => Err("D2B-BZL-HUB: generator hub selection is not closed.".into()),
     }
 }
 
@@ -3475,5 +3631,44 @@ harness = false
         assert!(model.validate().is_err());
         model.bazelignore.push(".scratch/".into());
         assert!(model.validate().is_ok());
+    }
+
+    #[test]
+    fn committed_generator_census_rejects_missing_extra_nonregular_and_absent_roots() {
+        let root = std::env::temp_dir().join(format!("d2b-bazel-census-{}", std::process::id()));
+        let generated = root.join("bazel/generated");
+        fs::create_dir_all(&generated).expect("generated root");
+        fs::write(root.join(".bazelignore"), ".scratch/\n").expect("bazelignore");
+        fs::write(generated.join("one.json"), "{}\n").expect("generated output");
+        let expected = BTreeMap::from([
+            (".bazelignore".to_owned(), ".scratch/\n".to_owned()),
+            ("bazel/generated/one.json".to_owned(), "{}\n".to_owned()),
+        ]);
+        validate_committed_output_census(&root, &expected).expect("exact census");
+
+        fs::remove_file(generated.join("one.json")).expect("remove expected output");
+        assert!(
+            validate_committed_output_census(&root, &expected).is_err(),
+            "missing output must fail closed"
+        );
+        fs::write(generated.join("one.json"), "{}\n").expect("restore output");
+
+        fs::write(generated.join("stale.json"), "{}\n").expect("extra output");
+        let extra = validate_committed_output_census(&root, &expected)
+            .expect_err("extra output must fail closed");
+        assert!(extra.to_string().contains("stale.json"));
+        fs::remove_file(generated.join("stale.json")).expect("remove extra output");
+
+        fs::remove_file(generated.join("one.json")).expect("remove output for nonregular test");
+        fs::create_dir(generated.join("one.json")).expect("replace output with directory");
+        assert!(
+            validate_committed_output_census(&root, &expected).is_err(),
+            "nonregular output must fail closed"
+        );
+        fs::remove_dir_all(&root).expect("remove census root");
+        assert!(
+            validate_committed_output_census(&root, &expected).is_err(),
+            "absent output root must fail closed"
+        );
     }
 }

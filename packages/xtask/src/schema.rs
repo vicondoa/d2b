@@ -12,8 +12,32 @@ use std::{
 use schemars::schema::RootSchema;
 
 const OUT_DIR_FLAG: &str = "--out-dir";
-const SCHEMA_VERSION: &str = "v2";
-const SCHEMA_PREVIEW_ROOT: &str = ".scratch/bazel/schema-preview";
+const AUTHORITATIVE_SCHEMA_ROOT: &str = "docs/reference/schemas/v2";
+const AUTHORITATIVE_SCHEMA_DOCS: &[&str] = &[
+    "allocator.md",
+    "bundle.md",
+    "closures.md",
+    "d2b-realm-core.md",
+    "guest-control.md",
+    "host.md",
+    "manifest_v04.md",
+    "minijail-profile.md",
+    "privileges.md",
+    "processes.md",
+    "realm-controllers.md",
+    "realm-identity.md",
+    "realm-workloads-launcher-v2.md",
+    "storage.md",
+    "sync.md",
+    "unsafe-local-helper-wire.md",
+    "unsafe-local-workloads.md",
+    "wire-protocol.md",
+];
+const SCHEMA_DRIFT_REMEDIATION: &str = "\
+D2B-SCHEMA-DRIFT: committed schema output is not an exact, nonempty census.
+From the repository root, run: nix develop
+Then run from packages/: cargo xtask gen-schemas
+Review and commit the repository-relative schema changes, then rerun the failed command.";
 
 pub(crate) fn gen_schemas_with_args(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let explicit_output = parse_gen_schemas_args(args)?;
@@ -22,12 +46,14 @@ pub(crate) fn gen_schemas_with_args(args: &[String]) -> Result<Vec<PathBuf>, Box
         Some(path) => {
             let path = resolve_output_dir(path.to_owned())?;
             let scratch = repo_root.join(".scratch");
-            if !path.starts_with(&scratch) {
-                return Err("schema previews must be emitted under .scratch/".into());
+            if path.strip_prefix(&scratch).is_err() {
+                return Err(
+                    "D2B-SCHEMA-OUTPUT: explicit schema output must be under .scratch/.".into(),
+                );
             }
             path
         }
-        None => repo_root.join(SCHEMA_PREVIEW_ROOT).join(SCHEMA_VERSION),
+        None => repo_root.join(AUTHORITATIVE_SCHEMA_ROOT),
     };
 
     ensure_output_directory(&output_dir)?;
@@ -35,6 +61,9 @@ pub(crate) fn gen_schemas_with_args(args: &[String]) -> Result<Vec<PathBuf>, Box
     let emitted = write_schema_files(&output_dir, &definitions)?;
     if explicit_output.is_some() {
         validate_exact_schema_census(&output_dir, &emitted)?;
+    } else {
+        reconcile_authoritative_schema_json(&output_dir, &emitted)?;
+        validate_authoritative_schema_census(&output_dir, &emitted)?;
     }
     Ok(emitted)
 }
@@ -57,13 +86,10 @@ fn resolve_output_dir(path: PathBuf) -> Result<PathBuf, Box<dyn Error>> {
 
 fn ensure_output_directory(output_dir: &Path) -> Result<(), Box<dyn Error>> {
     if output_dir.exists() && !output_dir.is_dir() {
-        return Err(format!(
-            "schema output directory is not a directory: {}",
-            output_dir.display()
-        )
-        .into());
+        return Err("D2B-SCHEMA-OUTPUT: schema output directory is not a directory.".into());
     }
-    fs::create_dir_all(output_dir)?;
+    fs::create_dir_all(output_dir)
+        .map_err(|_| "D2B-SCHEMA-OUTPUT: could not create the schema output directory.")?;
     Ok(())
 }
 
@@ -159,72 +185,145 @@ fn validate_exact_schema_census(
     census: &[PathBuf],
 ) -> Result<(), Box<dyn Error>> {
     if census.is_empty() {
-        return Err("schema census must be nonempty".into());
+        return Err("D2B-SCHEMA-DRIFT: schema census must be nonempty.".into());
     }
     if !output_dir.is_dir() {
-        return Err(format!(
-            "schema output directory is not a directory: {}",
-            output_dir.display()
-        )
-        .into());
+        return Err("D2B-SCHEMA-DRIFT: schema output directory is not a directory.".into());
     }
 
     let mut expected = BTreeSet::<OsString>::new();
     for path in census {
         if path.parent() != Some(output_dir) {
-            return Err(format!(
-                "schema census path is outside its output directory: {}",
-                path.display()
-            )
-            .into());
+            return Err(
+                "D2B-SCHEMA-DRIFT: schema census path is outside its output directory.".into(),
+            );
         }
         let name = path
             .file_name()
-            .ok_or_else(|| format!("schema census path has no file name: {}", path.display()))?
+            .ok_or("D2B-SCHEMA-DRIFT: schema census path has no file name.")?
             .to_os_string();
         if !expected.insert(name) {
-            return Err(format!(
-                "schema census contains a duplicate path: {}",
-                path.display()
-            )
-            .into());
+            return Err("D2B-SCHEMA-DRIFT: schema census contains a duplicate path.".into());
         }
 
-        let metadata = fs::symlink_metadata(path)?;
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is missing.")?;
         if !metadata.file_type().is_file() {
-            return Err(format!("schema output is not a regular file: {}", path.display()).into());
+            return Err("D2B-SCHEMA-DRIFT: schema output is not a regular file.".into());
         }
-        let contents = fs::read(path)?;
+        let contents =
+            fs::read(path).map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?;
         if contents.is_empty() {
-            return Err(format!("schema output is empty: {}", path.display()).into());
+            return Err("D2B-SCHEMA-DRIFT: schema output is empty.".into());
         }
-        serde_json::from_slice::<serde_json::Value>(&contents).map_err(|error| {
-            format!(
-                "schema output is not valid JSON ({}): {error}",
-                path.display()
-            )
-        })?;
+        serde_json::from_slice::<serde_json::Value>(&contents)
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is not valid JSON.")?;
     }
 
     let mut actual = BTreeSet::<OsString>::new();
-    for entry in fs::read_dir(output_dir)? {
-        let entry = entry?;
+    for entry in
+        fs::read_dir(output_dir).map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?
+    {
+        let entry = entry.map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?;
         let name = entry.file_name();
-        if !entry.file_type()?.is_file() {
-            return Err(format!(
-                "schema output directory contains a non-file entry: {}",
-                entry.path().display()
-            )
-            .into());
+        if !entry
+            .file_type()
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?
+            .is_file()
+        {
+            return Err(
+                "D2B-SCHEMA-DRIFT: schema output directory contains a non-file entry.".into(),
+            );
         }
         actual.insert(name);
     }
     if actual != expected {
-        return Err(format!(
-            "schema output census differs: expected {:?}, found {:?}",
-            expected, actual
-        )
-        .into());
+        return Err(SCHEMA_DRIFT_REMEDIATION.into());
+    }
+    Ok(())
+}
+
+fn reconcile_authoritative_schema_json(
+    output_dir: &Path,
+    census: &[PathBuf],
+) -> Result<(), Box<dyn Error>> {
+    let mut expected = census
+        .iter()
+        .filter_map(|path| path.file_name().map(OsString::from))
+        .collect::<BTreeSet<_>>();
+    expected.extend(AUTHORITATIVE_SCHEMA_DOCS.iter().map(OsString::from));
+    if expected.is_empty() {
+        return Err(SCHEMA_DRIFT_REMEDIATION.into());
+    }
+    for entry in fs::read_dir(output_dir).map_err(|_| SCHEMA_DRIFT_REMEDIATION)? {
+        let entry = entry.map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        let name = entry.file_name();
+        let file_type = entry.file_type().map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        if !file_type.is_file() {
+            return Err(SCHEMA_DRIFT_REMEDIATION.into());
+        }
+        if !expected.contains(&name) {
+            fs::remove_file(entry.path()).map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_authoritative_schema_census(
+    output_dir: &Path,
+    census: &[PathBuf],
+) -> Result<(), Box<dyn Error>> {
+    if census.is_empty() {
+        return Err(SCHEMA_DRIFT_REMEDIATION.into());
+    }
+    let metadata = fs::symlink_metadata(output_dir).map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+    if !metadata.file_type().is_dir() {
+        return Err(SCHEMA_DRIFT_REMEDIATION.into());
+    }
+
+    let mut expected = census
+        .iter()
+        .filter_map(|path| path.file_name().map(OsString::from))
+        .collect::<BTreeSet<_>>();
+    expected.extend(AUTHORITATIVE_SCHEMA_DOCS.iter().map(OsString::from));
+    let mut actual = BTreeSet::new();
+    for path in census {
+        let name = path.file_name().ok_or(SCHEMA_DRIFT_REMEDIATION)?;
+        let metadata = fs::symlink_metadata(path).map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        if !metadata.file_type().is_file() {
+            return Err(SCHEMA_DRIFT_REMEDIATION.into());
+        }
+        let contents = fs::read(path).map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        if contents.is_empty() || serde_json::from_slice::<serde_json::Value>(&contents).is_err() {
+            return Err(SCHEMA_DRIFT_REMEDIATION.into());
+        }
+        actual.insert(name.to_os_string());
+    }
+    for doc in AUTHORITATIVE_SCHEMA_DOCS {
+        let path = output_dir.join(doc);
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        if !metadata.file_type().is_file() {
+            return Err(SCHEMA_DRIFT_REMEDIATION.into());
+        }
+        if fs::read(&path)
+            .map_err(|_| SCHEMA_DRIFT_REMEDIATION)?
+            .is_empty()
+        {
+            return Err(SCHEMA_DRIFT_REMEDIATION.into());
+        }
+        actual.insert(OsString::from(doc));
+    }
+    for entry in fs::read_dir(output_dir).map_err(|_| SCHEMA_DRIFT_REMEDIATION)? {
+        let entry = entry.map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        let name = entry.file_name();
+        let file_type = entry.file_type().map_err(|_| SCHEMA_DRIFT_REMEDIATION)?;
+        if !file_type.is_file() {
+            return Err(SCHEMA_DRIFT_REMEDIATION.into());
+        }
+        actual.insert(name);
+    }
+    if actual != expected {
+        return Err(SCHEMA_DRIFT_REMEDIATION.into());
     }
     Ok(())
 }
@@ -236,22 +335,22 @@ pub(crate) fn compare_independent_schema_trees(
     let first_files = schema_files(first)?;
     let second_files = schema_files(second)?;
     if first_files.is_empty() || second_files.is_empty() {
-        return Err("independent schema census must be nonempty".into());
+        return Err("D2B-SCHEMA-DRIFT: independent schema census must be nonempty.".into());
     }
     if first_files.keys().collect::<BTreeSet<_>>() != second_files.keys().collect::<BTreeSet<_>>() {
-        return Err("independent schema censuses differ".into());
+        return Err("D2B-SCHEMA-DRIFT: independent schema censuses differ.".into());
     }
     for name in first_files.keys() {
-        let first_contents = fs::read(first.join(name))?;
-        let second_contents = fs::read(second.join(name))?;
-        serde_json::from_slice::<serde_json::Value>(&first_contents)?;
-        serde_json::from_slice::<serde_json::Value>(&second_contents)?;
+        let first_contents = fs::read(first.join(name))
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?;
+        let second_contents = fs::read(second.join(name))
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?;
+        serde_json::from_slice::<serde_json::Value>(&first_contents)
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is not valid JSON.")?;
+        serde_json::from_slice::<serde_json::Value>(&second_contents)
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is not valid JSON.")?;
         if first_contents != second_contents {
-            return Err(format!(
-                "independent schema output differs: {}",
-                name.to_string_lossy()
-            )
-            .into());
+            return Err("D2B-SCHEMA-DRIFT: independent schema output differs.".into());
         }
     }
     Ok(())
@@ -259,21 +358,19 @@ pub(crate) fn compare_independent_schema_trees(
 
 fn schema_files(directory: &Path) -> Result<BTreeMap<OsString, PathBuf>, Box<dyn Error>> {
     if !directory.is_dir() {
-        return Err(format!(
-            "schema output directory is not a directory: {}",
-            directory.display()
-        )
-        .into());
+        return Err("D2B-SCHEMA-DRIFT: schema output directory is not a directory.".into());
     }
     let mut files = BTreeMap::new();
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            return Err(format!(
-                "schema output contains a non-file entry: {}",
-                entry.path().display()
-            )
-            .into());
+    for entry in
+        fs::read_dir(directory).map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?
+    {
+        let entry = entry.map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?;
+        if !entry
+            .file_type()
+            .map_err(|_| "D2B-SCHEMA-DRIFT: schema output is unreadable.")?
+            .is_file()
+        {
+            return Err("D2B-SCHEMA-DRIFT: schema output contains a non-file entry.".into());
         }
         files.insert(entry.file_name(), entry.path());
     }
@@ -289,8 +386,8 @@ mod tests {
     };
 
     use super::{
-        gen_schemas_with_args, parse_gen_schemas_args, validate_exact_schema_census,
-        write_schema_files,
+        AUTHORITATIVE_SCHEMA_DOCS, gen_schemas_with_args, parse_gen_schemas_args,
+        validate_authoritative_schema_census, validate_exact_schema_census, write_schema_files,
     };
 
     struct TempDir {
@@ -427,5 +524,42 @@ mod tests {
         let error = validate_exact_schema_census(temp.path(), &[])
             .expect_err("empty output must fail closed");
         assert!(error.to_string().contains("nonempty"));
+    }
+
+    #[test]
+    fn authoritative_schema_census_rejects_missing_extra_and_absent_roots() {
+        let temp = TempDir::new("authoritative-census");
+        let output = temp.path().join("schemas");
+        fs::create_dir_all(&output).expect("create authoritative output directory");
+        let definitions = vec![(
+            "first.json",
+            schemars::schema_for!(d2b_core::allocator_config::AllocatorJson),
+        )];
+        let emitted =
+            write_schema_files(&output, &definitions).expect("write authoritative schema");
+        for name in AUTHORITATIVE_SCHEMA_DOCS {
+            fs::write(output.join(name), b"documented schema\n").expect("write schema sidecar");
+        }
+        validate_authoritative_schema_census(&output, &emitted)
+            .expect("authoritative census is exact");
+
+        fs::remove_file(&emitted[0]).expect("remove expected schema");
+        assert!(
+            validate_authoritative_schema_census(&output, &emitted).is_err(),
+            "missing schema must fail closed"
+        );
+
+        write_schema_files(&output, &definitions).expect("restore expected schema");
+        fs::write(output.join("stale.json"), b"{}\n").expect("write stale schema");
+        assert!(
+            validate_authoritative_schema_census(&output, &emitted).is_err(),
+            "extra schema must fail closed"
+        );
+
+        let absent = output.join("absent");
+        assert!(
+            validate_authoritative_schema_census(&absent, &emitted).is_err(),
+            "absent schema root must fail closed"
+        );
     }
 }

@@ -844,37 +844,50 @@ rust_surface_success rust-guest-shell-runner
 
 run_schema_reproducibility_gate() {
 rust_surface_start rust-schema-reproducibility
-schema_out="$ROOT/packages/xtask/out"
-schema_out_preexisting=0
-if [ -e "$schema_out" ]; then
-  schema_out_preexisting=1
-fi
-snapshot_schema_out() {
-  if [ ! -d "$schema_out" ]; then
-    return 0
+schema_root="$ROOT/docs/reference/schemas/v2"
+snapshot_schema_root() {
+  if [ ! -d "$schema_root" ]; then
+    fail "schema reproducibility: authoritative schema root is absent"
+    return 1
   fi
+  if [ -L "$schema_root" ]; then
+    fail "schema reproducibility: authoritative schema root is not a directory"
+    return 1
+  fi
+  local entries path
+  entries=$(find "$schema_root" -mindepth 1 -maxdepth 1 -type f -name '*.json' -print)
+  if [ -z "$entries" ]; then
+    fail "schema reproducibility: authoritative schema census is empty"
+    return 1
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -L "$path" ]; then
+      fail "schema reproducibility: schema output is not a regular file"
+      return 1
+    fi
+  done <<< "$entries"
   (
-    cd "$schema_out"
-    find . -type f -print0 \
+    cd "$schema_root"
+    find . -mindepth 1 -maxdepth 1 -type f -print0 \
       | LC_ALL=C sort -z \
       | xargs -0 -r sha256sum
   )
 }
 
 log "--> schema generation reproducibility"
+schema_snapshot_before=$(snapshot_schema_root)
 (cd "$ROOT/packages" && cargo xtask gen-schemas)
-schema_snapshot_1=$(snapshot_schema_out)
+schema_snapshot_1=$(snapshot_schema_root)
 (cd "$ROOT/packages" && cargo xtask gen-schemas)
-schema_snapshot_2=$(snapshot_schema_out)
-if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
-  fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
+schema_snapshot_2=$(snapshot_schema_root)
+if [ "$schema_snapshot_before" != "$schema_snapshot_1" ] ||
+  [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
+  fail "schema generation reproducibility: committed schema output is not reproducible"
   diff -u \
-    <(printf '%s\n' "$schema_snapshot_1") \
-    <(printf '%s\n' "$schema_snapshot_2") >&2 || true
+    <(printf '%s\n' "$schema_snapshot_before") \
+    <(printf '%s\n' "$schema_snapshot_1") >&2 || true
   exit 1
-fi
-if [ "$schema_out_preexisting" = "0" ]; then
-  rm -rf -- "$schema_out"
 fi
 rust_surface_success rust-schema-reproducibility
 ok "schema generation reproducibility"

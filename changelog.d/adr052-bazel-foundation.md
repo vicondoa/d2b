@@ -15,6 +15,10 @@
   lock while retaining package-selected broker and guest build, test, policy,
   target-directory, and Nix derivation boundaries. The no-bash walker remains
   an independent tool workspace and lock.
+- Made Bazel and package-policy generator recovery explicit: preview output is
+  complete and replaceable, while `--install` atomically promotes the exact
+  owned tracked paths and removes stale sidecars. Schema generation now writes
+  and reproducibly checks the committed `docs/reference/schemas/v2/` root.
 - Updated the release and Layer-1 workflow generators for root-workspace
   package selectors, explicit gate target directories, and an enforcing native
   arm lane that realizes six checks and runs the supply-chain gate on one

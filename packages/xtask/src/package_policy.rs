@@ -15,6 +15,7 @@ use std::{
     error::Error,
     ffi::OsStr,
     fmt, fs,
+    io::Write,
     ops::Range,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -30,9 +31,25 @@ pub const POLICY_DRIFT_REMEDIATION: &str = "\
 D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
-cargo xtask gen-package-policy-inputs
-Review and commit the generated changes under packages/policy-inputs/.
+Review the scratch preview, then run cargo xtask gen-package-policy-inputs --install.
+Review and commit the exact repository-relative generated paths returned by the install command.
 Rerun cargo xtask gen-package-policy-inputs --check, then rerun the failed command.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackagePolicyMode {
+    Preview,
+    Install,
+    Check,
+}
+
+fn parse_package_policy_mode(args: &[String]) -> Result<PackagePolicyMode, Box<dyn Error>> {
+    match args {
+        [] => Ok(PackagePolicyMode::Preview),
+        [flag] if flag == "--install" => Ok(PackagePolicyMode::Install),
+        [flag] if flag == "--check" => Ok(PackagePolicyMode::Check),
+        _ => Err("usage: gen-package-policy-inputs [--check|--install]".into()),
+    }
+}
 
 const GIT_ARCHIVE_SHA256: &str = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
 const GIT_ARCHIVE_REV: &str = "072945b59fef21a2a8166460454280d543f48772";
@@ -1875,57 +1892,348 @@ fn escape_toml_string(value: &str) -> String {
 }
 
 pub fn gen_package_policy_inputs(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-    let check = match args {
-        [] => false,
-        [flag] if flag == "--check" => true,
-        _ => return Err("usage: gen-package-policy-inputs [--check]".into()),
-    };
+    let mode = parse_package_policy_mode(args)?;
     let root = repo_root()?;
     let outputs = package_policy_preview(&root)?;
-    if check {
-        check_policy_outputs(&root, &outputs)?;
-    }
-    let preview_root = root.join(POLICY_PREVIEW_ROOT);
-    if !check {
-        for (relative, contents) in &outputs {
-            let relative_preview = Path::new(&relative)
-                .strip_prefix("packages/policy-inputs")
-                .unwrap_or_else(|_| Path::new(&relative));
-            let path = preview_root.join(relative_preview);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&path, contents)?;
+    match mode {
+        PackagePolicyMode::Preview => write_policy_preview(&root, &outputs),
+        PackagePolicyMode::Install => {
+            install_policy_outputs(&root, &outputs)?;
+            Ok(outputs.keys().map(PathBuf::from).collect())
+        }
+        PackagePolicyMode::Check => {
+            check_policy_outputs(&root, &outputs)?;
+            Ok(outputs.keys().map(PathBuf::from).collect())
         }
     }
-    Ok(outputs
-        .keys()
-        .map(|relative| PathBuf::from(POLICY_PREVIEW_ROOT).join(relative))
-        .collect())
 }
 
 pub fn check_policy_outputs(
     root: &Path,
     expected: &BTreeMap<String, String>,
 ) -> Result<(), Box<dyn Error>> {
-    let final_root = root.join("packages/policy-inputs");
-    if !final_root.exists() {
-        return Ok(());
+    if expected.is_empty() {
+        return Err(POLICY_DRIFT_REMEDIATION.into());
     }
+    let final_root = root.join("packages/policy-inputs");
+    let metadata = fs::symlink_metadata(&final_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    if !metadata.file_type().is_dir() {
+        return Err(POLICY_DRIFT_REMEDIATION.into());
+    }
+
+    let actual = policy_file_census(&final_root)?;
+    let expected_paths = expected
+        .keys()
+        .map(|relative| {
+            Path::new(relative)
+                .strip_prefix("packages/policy-inputs")
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .map_err(|_| POLICY_DRIFT_REMEDIATION.into())
+        })
+        .collect::<Result<BTreeSet<_>, Box<dyn Error>>>()?;
+    let expected_directories = policy_directory_set(&expected_paths);
+    let actual_directories = policy_directory_census(&final_root)?;
+    if actual_directories != expected_directories {
+        return Err(policy_directory_drift(
+            &expected_directories,
+            &actual_directories,
+        ));
+    }
+    if actual != expected_paths {
+        return Err(policy_census_drift(&expected_paths, &actual));
+    }
+
     for (relative, contents) in expected {
         let relative = Path::new(relative)
             .strip_prefix("packages/policy-inputs")
-            .map_err(|_| "policy output escaped its owned directory")?;
+            .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
         let path = final_root.join(relative);
-        let actual = match fs::read_to_string(&path) {
-            Ok(actual) => actual,
-            Err(_) => return Err(POLICY_DRIFT_REMEDIATION.into()),
-        };
+        let actual = fs::read_to_string(&path).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
         if actual != *contents {
             return Err(POLICY_DRIFT_REMEDIATION.into());
         }
     }
     Ok(())
+}
+
+fn write_policy_preview(
+    root: &Path,
+    outputs: &BTreeMap<String, String>,
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let preview_root = root.join(POLICY_PREVIEW_ROOT);
+    if let Ok(metadata) = fs::symlink_metadata(&preview_root) {
+        if !metadata.file_type().is_dir() {
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+        fs::remove_dir_all(&preview_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    }
+    fs::create_dir_all(&preview_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+
+    for (relative, contents) in outputs {
+        let relative = policy_preview_relative(relative)?;
+        let path = preview_root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        }
+        fs::write(&path, contents).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    }
+
+    let actual = policy_file_census(&preview_root)?;
+    let expected = outputs
+        .keys()
+        .map(|relative| {
+            policy_preview_relative(relative).map(|path| path.to_string_lossy().replace('\\', "/"))
+        })
+        .collect::<Result<BTreeSet<_>, Box<dyn Error>>>()?;
+    if actual != expected {
+        return Err(policy_census_drift(&expected, &actual));
+    }
+    outputs
+        .keys()
+        .map(|relative| {
+            policy_preview_relative(relative)
+                .map(|path| PathBuf::from(POLICY_PREVIEW_ROOT).join(path))
+        })
+        .collect()
+}
+
+fn install_policy_outputs(
+    root: &Path,
+    outputs: &BTreeMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
+    let final_root = root.join("packages/policy-inputs");
+    if let Ok(metadata) = fs::symlink_metadata(&final_root) {
+        if !metadata.file_type().is_dir() {
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+        policy_file_census(&final_root)?;
+    } else {
+        fs::create_dir_all(&final_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    }
+
+    for (relative, contents) in outputs {
+        let relative = policy_preview_relative(relative)?;
+        let path = final_root.join(relative);
+        atomic_policy_write(&path, contents)?;
+    }
+
+    let expected = outputs
+        .keys()
+        .map(|relative| {
+            Path::new(relative)
+                .strip_prefix("packages/policy-inputs")
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .map_err(|_| POLICY_DRIFT_REMEDIATION.into())
+        })
+        .collect::<Result<BTreeSet<_>, Box<dyn Error>>>()?;
+    remove_policy_extras(&final_root, &expected)?;
+    check_policy_outputs(root, outputs)
+}
+
+fn policy_preview_relative(relative: &str) -> Result<PathBuf, Box<dyn Error>> {
+    Path::new(relative)
+        .strip_prefix("packages/policy-inputs")
+        .map(Path::to_path_buf)
+        .map_err(|_| POLICY_DRIFT_REMEDIATION.into())
+}
+
+fn policy_file_census(root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
+    let metadata = fs::symlink_metadata(root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    if !metadata.file_type().is_dir() {
+        return Err(POLICY_DRIFT_REMEDIATION.into());
+    }
+    let mut files = BTreeSet::new();
+    collect_policy_entries(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn policy_directory_census(root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
+    let metadata = fs::symlink_metadata(root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    if !metadata.file_type().is_dir() {
+        return Err(POLICY_DRIFT_REMEDIATION.into());
+    }
+    let mut directories = BTreeSet::new();
+    collect_policy_directories(root, root, &mut directories)?;
+    Ok(directories)
+}
+
+fn collect_policy_directories(
+    root: &Path,
+    current: &Path,
+    directories: &mut BTreeSet<String>,
+) -> Result<(), Box<dyn Error>> {
+    for entry in fs::read_dir(current).map_err(|_| POLICY_DRIFT_REMEDIATION)? {
+        let entry = entry.map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        let file_type = entry.file_type().map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        if file_type.is_dir() {
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .map_err(|_| POLICY_DRIFT_REMEDIATION)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            directories.insert(relative);
+            collect_policy_directories(root, &entry.path(), directories)?;
+        } else if !file_type.is_file() {
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+    }
+    Ok(())
+}
+
+fn policy_directory_set(files: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut directories = BTreeSet::new();
+    for file in files {
+        let mut current = Path::new(file);
+        while let Some(parent) = current.parent() {
+            if parent.as_os_str().is_empty() || parent == Path::new(".") {
+                break;
+            }
+            directories.insert(parent.to_string_lossy().replace('\\', "/"));
+            current = parent;
+        }
+    }
+    directories
+}
+
+fn collect_policy_entries(
+    root: &Path,
+    current: &Path,
+    files: &mut BTreeSet<String>,
+) -> Result<(), Box<dyn Error>> {
+    for entry in fs::read_dir(current).map_err(|_| POLICY_DRIFT_REMEDIATION)? {
+        let entry = entry.map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        let file_type = entry.file_type().map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_policy_entries(root, &path, files)?;
+        } else if file_type.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| POLICY_DRIFT_REMEDIATION)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.insert(relative);
+        } else {
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+    }
+    Ok(())
+}
+
+fn policy_census_drift(expected: &BTreeSet<String>, actual: &BTreeSet<String>) -> Box<dyn Error> {
+    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    let extra = actual.difference(expected).cloned().collect::<Vec<_>>();
+    let mut message = POLICY_DRIFT_REMEDIATION.to_owned();
+    if !missing.is_empty() {
+        message.push_str("\nMissing paths: ");
+        message.push_str(&missing.join(", "));
+    }
+    if !extra.is_empty() {
+        message.push_str("\nExtra paths: ");
+        message.push_str(&extra.join(", "));
+    }
+    message.into()
+}
+
+fn policy_directory_drift(
+    expected: &BTreeSet<String>,
+    actual: &BTreeSet<String>,
+) -> Box<dyn Error> {
+    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    let extra = actual.difference(expected).cloned().collect::<Vec<_>>();
+    let mut message = POLICY_DRIFT_REMEDIATION.to_owned();
+    if !missing.is_empty() {
+        message.push_str("\nMissing directories: ");
+        message.push_str(&missing.join(", "));
+    }
+    if !extra.is_empty() {
+        message.push_str("\nExtra directories: ");
+        message.push_str(&extra.join(", "));
+    }
+    message.into()
+}
+
+fn remove_policy_extras(root: &Path, expected: &BTreeSet<String>) -> Result<(), Box<dyn Error>> {
+    let actual = policy_file_census(root)?;
+    for relative in actual.difference(expected) {
+        fs::remove_file(root.join(relative)).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    }
+    let expected_directories = policy_directory_set(expected);
+    remove_policy_extra_directories(root, root, &expected_directories)?;
+    Ok(())
+}
+
+fn remove_policy_extra_directories(
+    root: &Path,
+    current: &Path,
+    expected: &BTreeSet<String>,
+) -> Result<(), Box<dyn Error>> {
+    let entries = fs::read_dir(current)
+        .map_err(|_| POLICY_DRIFT_REMEDIATION)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    for entry in entries {
+        let file_type = entry.file_type().map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        remove_policy_extra_directories(root, &entry.path(), expected)?;
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|_| POLICY_DRIFT_REMEDIATION)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !expected.contains(&relative)
+            && fs::read_dir(entry.path())
+                .map_err(|_| POLICY_DRIFT_REMEDIATION)?
+                .next()
+                .is_none()
+        {
+            fs::remove_dir(entry.path()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        }
+    }
+    Ok(())
+}
+
+fn atomic_policy_write(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
+    let parent = path.parent().ok_or(POLICY_DRIFT_REMEDIATION)?;
+    fs::create_dir_all(parent).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && !metadata.file_type().is_file()
+    {
+        return Err(POLICY_DRIFT_REMEDIATION.into());
+    }
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or(POLICY_DRIFT_REMEDIATION)?;
+    for attempt in 0..100_u32 {
+        let temporary = parent.join(format!(
+            ".{file_name}.d2b-install-{}-{attempt}",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(POLICY_DRIFT_REMEDIATION.into()),
+        };
+        if file.write_all(contents.as_bytes()).is_err() || file.sync_all().is_err() {
+            let _ = fs::remove_file(&temporary);
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+        if fs::rename(&temporary, path).is_err() {
+            let _ = fs::remove_file(&temporary);
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+        return Ok(());
+    }
+    Err(POLICY_DRIFT_REMEDIATION.into())
 }
 
 pub fn package_policy_drift_message() -> &'static str {
@@ -1934,8 +2242,9 @@ pub fn package_policy_drift_message() -> &'static str {
 
 fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(root) = env::var_os("D2B_BAZEL_WORKTREE") {
-        return fs::canonicalize(root)
-            .map_err(|error| format!("cannot canonicalize D2B_BAZEL_WORKTREE: {error}").into());
+        return fs::canonicalize(root).map_err(|_| {
+            "D2B-BZL-WORKTREE: D2B_BAZEL_WORKTREE is not a repository directory.".into()
+        });
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

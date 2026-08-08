@@ -463,7 +463,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas [--out-dir <path>]|gen-bazel [--check]|bazel-repin --hub <name>|bazel-module-refresh|bazel-yanked-refresh|bazel-yanked-check|gen-package-policy-inputs [--check]|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-attest|panel-request|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas [--out-dir <path>]|gen-bazel [--check|--install]|bazel-repin --hub <name>|bazel-module-refresh|bazel-yanked-refresh|bazel-yanked-check|gen-package-policy-inputs [--check|--install]|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-attest|panel-request|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -1358,7 +1358,14 @@ where
 {
     match task() {
         Ok(files) => {
-            println!("{} generated {} file(s)", label, files.len());
+            println!("{} processed {} file(s)", label, files.len());
+            for path in files {
+                let display = repo_root()
+                    .ok()
+                    .and_then(|root| path.strip_prefix(root).ok())
+                    .unwrap_or(&path);
+                println!("{} path: {}", label, display.display());
+            }
             std::process::ExitCode::SUCCESS
         }
         Err(err) => {

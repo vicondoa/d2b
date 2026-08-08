@@ -30,6 +30,22 @@ The module graph has its separate refresh command:
 cargo xtask bazel-module-refresh
 ```
 
+The generator commands run from `packages/`. Bazel and package-policy write
+commands create complete scratch previews under `.scratch/` and return the
+paths that were written. To promote a preview, use the explicit install mode;
+it atomically rewrites the exact owned tracked outputs and removes stale
+sidecars before returning their repository-relative paths:
+
+```text
+cargo xtask gen-bazel --install
+cargo xtask gen-package-policy-inputs --install
+```
+
+The default schema command writes the authoritative JSON schemas under
+`docs/reference/schemas/v2/`. The schema reproducibility gate hashes that
+committed directory before and after generation, so missing, extra, stale, or
+absent schema roots cannot pass by being recreated during the check.
+
 The `cargo-bazel` executable is fetched from the pinned rules_rust release
 asset by `cargo_bazel.bzl` using its URL and SHA-256. The source-bootstrap
 repository in rules_rust is overridden and is not a permitted fallback.

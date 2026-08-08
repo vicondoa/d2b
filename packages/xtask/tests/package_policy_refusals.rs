@@ -103,8 +103,8 @@ fn policy_remediation_is_the_exact_repository_sequence() {
 D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
-cargo xtask gen-package-policy-inputs
-Review and commit the generated changes under packages/policy-inputs/.
+Review the scratch preview, then run cargo xtask gen-package-policy-inputs --install.
+Review and commit the exact repository-relative generated paths returned by the install command.
 Rerun cargo xtask gen-package-policy-inputs --check, then rerun the failed command."
     );
 }
@@ -157,6 +157,82 @@ fn policy_preview_uses_locked_offline_commands_and_stays_in_scratch() {
     });
     assert_eq!(before, after);
     let _ = fs::remove_dir_all(root.join(".scratch/bazel/policy-inputs"));
+}
+
+#[test]
+fn policy_generator_preview_replaces_stale_sidecars_and_returns_written_paths() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    let preview_root = root.join(".scratch/bazel/policy-inputs");
+    let outputs = package_policy::gen_package_policy_inputs(&[]).expect("policy preview");
+    assert_eq!(outputs.len(), 16);
+    assert!(
+        outputs
+            .iter()
+            .all(|path| root.join(path).starts_with(&preview_root))
+    );
+    assert!(outputs.iter().all(|path| root.join(path).is_file()));
+
+    let stale = preview_root.join("obsolete-sidecar.json");
+    fs::write(&stale, b"obsolete\n").expect("plant stale preview sidecar");
+    let second = package_policy::gen_package_policy_inputs(&[]).expect("replaced preview");
+    assert_eq!(outputs, second);
+    assert!(!stale.exists());
+    assert!(second.iter().all(|path| root.join(path).is_file()));
+
+    let checked =
+        package_policy::gen_package_policy_inputs(&["--check".to_owned()]).expect("policy check");
+    assert_eq!(
+        checked,
+        package_policy::package_policy_preview(root)
+            .expect("policy outputs")
+            .keys()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+    );
+    let _ = fs::remove_dir_all(preview_root);
+}
+
+#[test]
+fn policy_check_requires_an_exact_nonempty_regular_census() {
+    let root = std::env::temp_dir().join(format!("d2b-policy-census-{}", std::process::id()));
+    let output_root = root.join("packages/policy-inputs");
+    fs::create_dir_all(output_root.join("context")).expect("policy root");
+    let expected = std::collections::BTreeMap::from([(
+        "packages/policy-inputs/context/Cargo.lock".to_owned(),
+        "lock\n".to_owned(),
+    )]);
+    let output = output_root.join("context/Cargo.lock");
+    fs::write(&output, b"lock\n").expect("policy output");
+    package_policy::check_policy_outputs(&root, &expected).expect("exact policy census");
+
+    fs::remove_file(&output).expect("remove expected output");
+    let missing = package_policy::check_policy_outputs(&root, &expected)
+        .expect_err("missing output must fail closed");
+    assert!(missing.to_string().contains("Missing paths"));
+
+    fs::write(&output, b"lock\n").expect("restore policy output");
+    fs::write(output_root.join("stale.json"), b"stale\n").expect("extra output");
+    let extra = package_policy::check_policy_outputs(&root, &expected)
+        .expect_err("extra output must fail closed");
+    assert!(extra.to_string().contains("Extra paths"));
+
+    fs::remove_file(output_root.join("stale.json")).expect("remove extra output");
+    fs::remove_file(&output).expect("remove output for nonregular mutation");
+    fs::create_dir(&output).expect("replace output with directory");
+    assert!(
+        package_policy::check_policy_outputs(&root, &expected).is_err(),
+        "nonregular output must fail closed"
+    );
+
+    fs::remove_dir_all(&root).expect("remove policy census root");
+    assert!(
+        package_policy::check_policy_outputs(&root, &expected).is_err(),
+        "absent policy root must fail closed"
+    );
 }
 
 #[test]
