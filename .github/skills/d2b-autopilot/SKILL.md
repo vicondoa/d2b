@@ -28,7 +28,7 @@ inherit the session's effort.
 | implementer | `d2b-implementer` | `gpt-5.6-luna` | `max` | `long_context` | `caveman-full-optional` |
 | integrator | `d2b-integrator` | `gpt-5.6-luna` | `max` | `long_context` | `caveman-full-optional` |
 
-The ten panel seats have their own table in
+The thirteen current panel seats have their own selection table in
 `.github/skills/d2b-panel-round/SKILL.md`. `scripts/copilot/check-bindings.mjs`
 validates both tables against agent files and xtask policy constants.
 
@@ -106,13 +106,18 @@ Two traps to avoid asserting past:
 
 Heavy lanes use public gated targets so the two-slot semaphore is respected.
 
-**4. Panel.** `/d2b-panel-round work`: ten read-only lanes on a staged diff.
-Record the reviewed tip for the next delta round.
+**4. Discover-Fix-Verify.** `/d2b-panel-round work`: create one lifecycle
+selection, dispatch one comprehensive discovery to its selected read-only
+roster, merge the shared ledger, and hand every issue to implementation with
+batch response and self-verification templates. Reselect over the full
+candidate and every fix delta, unioning the roster without narrowing it.
+Record the reviewed tip and supplied evidence for scoped verification.
 
-**5. Fix.** If a seat returns findings, dispatch fix lanes **scoped strictly
-to those findings**. A genuine defect found while fixing something else goes to
-`/d2b-memory record`, not this round. Revalidate and run another round. Any
-content change invalidates every prior phase sign-off.
+**5. Fix and verify.** If verification returns findings, dispatch fix lanes
+**scoped strictly to those findings**. A genuine defect found while fixing
+something else goes to `/d2b-memory record`, not this lifecycle. Revalidate
+and run scoped verification again. Any content change invalidates every prior
+phase sign-off; do not reopen comprehensive discovery.
 
 **6. Advance only on a unanimous panel and green enforcing validation.**
 Otherwise park.
