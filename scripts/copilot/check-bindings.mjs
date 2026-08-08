@@ -246,10 +246,41 @@ function readSelectionPolicy() {
     ".cargo/config.toml",
     "tests/layer1-jobs.json",
     "tests/test-rust.sh",
+    "Makefile",
+    "flake.nix",
+    "packages/xtask/src/main.rs",
+    "packages/xtask/src/delivery/**",
+    "tests/static.sh",
+    "tests/test-lint.sh",
   ]) {
     if (!buildPaths.includes(requiredPath)) {
       fail(
         `${selectionTableJson} build triggers are missing canonical path ${requiredPath}.`,
+      );
+    }
+  }
+  const networkingSignals = table.seats?.networking?.triggers
+    ?.filter((trigger) => trigger.kind === "signal")
+    .flatMap((trigger) => trigger.values ?? []) ?? [];
+  for (const requiredSignal of ["routing", "mtu", "mss"]) {
+    if (!networkingSignals.includes(requiredSignal)) {
+      fail(
+        `${selectionTableJson} networking triggers are missing canonical signal ${requiredSignal}.`,
+      );
+    }
+  }
+  const networkingPaths = table.seats?.networking?.triggers
+    ?.filter((trigger) => trigger.kind === "path")
+    .flatMap((trigger) => trigger.patterns ?? []) ?? [];
+  for (const requiredPath of [
+    "**/*route*",
+    "**/*routing*",
+    "**/*mtu*",
+    "**/*mss*",
+  ]) {
+    if (!networkingPaths.includes(requiredPath)) {
+      fail(
+        `${selectionTableJson} networking triggers are missing canonical path ${requiredPath}.`,
       );
     }
   }
@@ -390,6 +421,45 @@ for (const [agentName, marker] of Object.entries(INVARIANT_CHECKLIST_MARKERS)) {
     fail(
       `${agent.file}: invariant checklist marker must occur exactly once; found ${occurrences}.`,
     );
+  }
+}
+
+const SUBSTANTIVE_SEAT_CHECKLISTS = {
+  "panel-nixos": [
+    "The net VM's `10-eth-dhcp` neutralizer",
+    "A new `systemd.services.*` for",
+    "`videoSidecar` must",
+    "**TPM** state is per-VM and persistent",
+  ],
+  "panel-observability": [
+    "**Unbounded label cardinality.**",
+    "**Sensitive values in observable surfaces.**",
+    "**Audit records that lose their properties.**",
+    "**Degraded reporting.**",
+  ],
+  "panel-networking": [
+    "**Environment isolation weakened.**",
+    "**The net VM's uplink.**",
+    "**MTU and MSS.**",
+    "**Address and prefix handling.**",
+  ],
+  "panel-kernel": [
+    "**Process identity races.**",
+    "**cgroup v2 phase confusion.**",
+    "**Filesystem edge cases that only appear in production.**",
+    "**Signal handling.**",
+  ],
+};
+for (const [agentName, phrases] of Object.entries(SUBSTANTIVE_SEAT_CHECKLISTS)) {
+  const agent = agents.get(agentName);
+  if (!agent) continue;
+  for (const phrase of phrases) {
+    if (!agent.text.includes(phrase)) {
+      fail(
+        `${agent.file}: substantive repository checklist phrase is missing: ${phrase}. ` +
+        "Restore the concrete seat guidance; a marker comment alone is not protection.",
+      );
+    }
   }
 }
 

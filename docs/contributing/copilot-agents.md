@@ -284,8 +284,6 @@ byte-identical bytes:
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
   --lifecycle <lifecycle-id> --selection <selection.json>
-node .github/skills/d2b-panel-round/scripts/make-records.mjs \
-  .scratch/panel/<round> --selection <selection.json>
 ```
 
 Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
@@ -295,6 +293,37 @@ prompt. Later reviews fail closed unless `<prev-tip>` matches the previous
 recorded tip and every seat's prior verdict is available, so the incremental
 range and prior-finding instructions cannot be replaced by a free-form
 summary.
+
+After verification verdicts are collected, copy this sequence without changing
+the canonical ledger path or any of the artifact paths:
+
+```bash
+ROUND=.scratch/panel/<round>
+SELECTION="$ROUND/selection.json"
+LEDGER="$ROUND/discovery-ledger.json"
+RESPONSES="$ROUND/responses.json"
+VERIFICATION="$ROUND/verification-results.json"
+APPROVAL="$ROUND/approval.json"
+METRICS="$ROUND/metrics.json"
+CANDIDATE="$ROUND/current-candidate.json"
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  adapt-verification "$LEDGER" "$ROUND/verification-verdicts.json" "$VERIFICATION" \
+  --selection "$SELECTION" --candidate "$CANDIDATE"
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  approval "$SELECTION" "$LEDGER" "$RESPONSES" "$VERIFICATION" "$APPROVAL" \
+  --candidate "$CANDIDATE"
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  metrics --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
+  --verification-results "$VERIFICATION" --output "$METRICS"
+node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
+  --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
+  --verification-results "$VERIFICATION" --approval "$APPROVAL"
+```
+
+The verification command that precedes this sequence requires
+`--candidate`, `--prior-selection`, `--delta`, and `--full-context`; none of
+those inputs has an empty default.
 
 Independent selected reviewers are a deliberate cost. This repository's own
 history is the argument: an early panel returned zero sign-offs with eleven

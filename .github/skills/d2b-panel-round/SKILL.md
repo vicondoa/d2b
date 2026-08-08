@@ -99,7 +99,12 @@ to both consumers:
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \
-  <round-dir> --selection <selection.json>
+  <round-dir> \
+  --selection <selection.json> \
+  --ledger <round-dir>/discovery-ledger.json \
+  --responses <round-dir>/responses.json \
+  --verification-results <round-dir>/verification-results.json \
+  --approval <round-dir>/approval.json
 delivery wave panel-request --selection <selection.json>
 ```
 
@@ -114,6 +119,35 @@ selection, verdict adaptation, discovery merging, response generation,
 verification preparation, approval, metrics, and record generation. Staging
 derives changed paths from its git range and records the selection digest beside
 the phase and artifact names.
+
+The following is the complete copyable handoff after the verification verdicts
+are collected. Keep the ledger at the canonical round path; every later command
+must consume that exact path and the exact bytes produced by the preceding
+command:
+
+```bash
+ROUND=.scratch/panel/<round-id>
+SELECTION="$ROUND/selection.json"
+LEDGER="$ROUND/discovery-ledger.json"
+RESPONSES="$ROUND/responses.json"
+VERIFICATION="$ROUND/verification-results.json"
+APPROVAL="$ROUND/approval.json"
+METRICS="$ROUND/metrics.json"
+CANDIDATE="$ROUND/current-candidate.json"
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  adapt-verification "$LEDGER" "$ROUND/verification-verdicts.json" "$VERIFICATION" \
+  --selection "$SELECTION" --candidate "$CANDIDATE"
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  approval "$SELECTION" "$LEDGER" "$RESPONSES" "$VERIFICATION" "$APPROVAL" \
+  --candidate "$CANDIDATE"
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  metrics --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
+  --verification-results "$VERIFICATION" --output "$METRICS"
+node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
+  --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
+  --verification-results "$VERIFICATION" --approval "$APPROVAL"
+```
 
 ## Discover once
 
@@ -163,7 +197,11 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   response-template <ledger.json> <responses.json>
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   verification <selection.json> <ledger.json> <responses.json> \
-  <self-verification.json> <verification-dir>
+  <self-verification.json> <verification-dir> \
+  --candidate <current-candidate.json> \
+  --prior-selection <prior-selection.json> \
+  --delta <actual-delta.json> \
+  --full-context <full-context.json>
 ```
 
 ## Fix and verify the ledger
@@ -213,6 +251,10 @@ previously missed BLOCKER or MAJOR, or an unsafe correctness, security,
 data-loss, or reliability condition. Pre-existing MINOR, NIT, style, optional,
 and theoretical out-of-scope observations remain non-blocking ledger history.
 
+Every verification result must status every ledger issue exactly once. Only
+`resolved` or `verified` is a passing status; `open`, `blocked`, `unresolved`,
+`regression`, `accepted`, and every other status keep approval blocked.
+
 The lifecycle records initial and late findings, late BLOCKER and MAJOR
 counts, review and implementation iterations, and average fixed issues per
 implementation iteration. A zero implementation-iteration denominator is
@@ -261,14 +303,24 @@ only after every selected seat has a verdict and observed binding:
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \
-  <round-dir> --selection <selection.json>
+  <round-dir> --selection <selection.json> \
+  --ledger <round-dir>/discovery-ledger.json \
+  --responses <round-dir>/responses.json \
+  --verification-results <round-dir>/verification-results.json \
+  --approval <round-dir>/approval.json
 ```
 
-Record generation also consumes the approval artifact and immutable discovery
-ledger before publication.
+Record generation also consumes the approval artifact, exact response bytes,
+exact adapted verification-result bytes, and immutable discovery ledger before
+publication. It requires `--approval` and an explicit canonical `--ledger`
+path; no ledger or verification artifact is inferred from an alternate
+filename.
 
-The metrics command reads the canonical ledger, response envelope, and
-verification results and writes deterministic lifecycle metrics.
+The metrics command reads and validates the canonical ledger, response
+envelope, current selection, and adapted verification results. Final metrics
+require complete verification and mark the output `status: "complete"` with
+`degraded: false`; incomplete inputs are refused rather than presented as
+complete.
 
 Do not hand-copy findings or responses. Green validation never substitutes for
 selected-roster verification.

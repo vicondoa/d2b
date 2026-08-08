@@ -41,6 +41,61 @@ kernel or process-management runtime surface.
 Authoritative table focus: Syscalls, pidfd, cgroup v2, namespaces, mounts,
 signals, ioctl, filesystems, and kernel-version assumptions.
 
+## Your seat
+
+Linux API semantics: pidfd, cgroup v2, namespaces, mounts, signals, ioctls,
+filesystem behavior, and their version assumptions.
+
+## What to hunt, specifically
+
+**Process identity races.** Reading a PID then signalling races reuse; a pidfd
+is the identity. After restart, re-discover the runner, open a fresh pidfd, and
+verify identity before acting. Persisting or trusting a stale pidfd is a
+finding. Ambiguity must quarantine or degrade rather than proceed.
+
+**Restart treated as a fresh start.** A normal daemon restart continues the
+run. Sweeping the runtime directory before adoption kills live work. Recover,
+adopt, and quarantine before cleanup.
+
+**cgroup v2 phase confusion.** Privileged setup legitimately runs as root:
+enable controllers, create slice and leaves, and transfer delegated ownership.
+Steady-state mutation after privilege drop must not run as root. Check for a
+write across that boundary. The intermediate layer stays process-free; owned
+cgroups must not receive cpuset partition writes, threaded cgroups, or kills of
+an ancestor of a supervised leaf, and the host cgroup root is never chowned.
+
+**Filesystem edge cases that only appear in production.** A hardlink across a
+mount boundary returns `EXDEV` even on the same device, so distinguish a
+recoverable cross-vfsmount case from a fatal different-filesystem case. A
+saturated link count returns `EMLINK`, requiring a copy fallback. Also check
+`EINTR`, `EAGAIN`, `ENOSPC`, `EEXIST`, short reads and writes, and bounded
+retries.
+
+**Path resolution that can be redirected.** String concatenation, `stat` then
+`open`, or resolution following a replaceable unprivileged symlink is unsafe.
+Use anchored, fd-relative resolution with no-symlink and no-magiclink
+restrictions; a new mutation without it is a finding.
+
+**File descriptor discipline.** Check missing `O_CLOEXEC`, fds leaked across a
+spawn, unbounded socket fd counts, and ambiguous ownership of received fds.
+
+**Lock semantics.** Advisory locks must be open-file-description locks, not
+process-associated ones, because the latter are released by an unrelated close
+in the same process. Acquisition must follow a total order, and a lock must
+not be held across a blocking operation that can wait on the holder.
+
+**Namespace and mount setup.** A user namespace whose mapping is written after
+the target process has begun executing is not a boundary. Mount propagation
+left shared where private was intended leaks mounts to the host. A sandbox
+that unshares but does not pivot or chroot still sees the host tree.
+
+**Signal handling.** A handler doing work that is not async-signal-safe, a
+`SIGTERM` path with no bounded escalation to `SIGKILL`, and a graceful wait
+with no ceiling.
+
+**Version assumptions.** A syscall, flag, or cgroup file that requires a newer
+kernel than the stated floor, used without a fallback or a documented bump.
+
 ## What is not this seat
 
 Do not substitute a security, NixOS, network, build, documentation,

@@ -184,6 +184,23 @@ try {
         .includes(`Reviewer notes for ${seat}`),
     ),
   );
+  const originalDeltaBytes = readFileSync(join(firstDir, "delta.diff"), "utf8");
+  writeFileSync(join(firstDir, "delta.diff"), "conflicting scratch bytes\n");
+  const firstConflict = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+  ]);
+  check(
+    "stage-diffs stops at the first conflict with a clear retry",
+    firstConflict.status === 1 &&
+    firstConflict.text.includes("staging stopped at the first conflict") &&
+    firstConflict.text.includes("new review id"),
+    firstConflict.text,
+  );
+  writeFileSync(join(firstDir, "delta.diff"), originalDeltaBytes);
 
   const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
   for (const seat of firstRoster) {
@@ -325,6 +342,20 @@ try {
       secondRequest.includes("Immutable discovery ledger:") &&
       secondRequest.includes("Approval output after verdict collection:") &&
       !secondRequest.includes("missing previous verdict for seat build"),
+  );
+  check(
+    "new-seat request makes the absent prior verdict explicit",
+    secondRequest.includes("newly selected seat") &&
+      secondRequest.includes("no prior verdict exists"),
+  );
+  check(
+    "new-seat note carries its first-verification obligation",
+    readFileSync(join(secondDir, "reviewer-notes", "build.md"), "utf8").includes(
+      "No prior verdict exists for this seat",
+    ) &&
+      readFileSync(join(secondDir, "reviewer-notes", "build.md"), "utf8").includes(
+        "complete ledger",
+      ),
   );
 
   writeFileSync(

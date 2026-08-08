@@ -763,11 +763,73 @@ const CASES = [
     expectExit: 1,
     expectText: "invariant checklist marker",
   },
+  {
+    name: "nixos substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-nixos.agent.md",
+        (text) => text.replace(
+          "The net VM's `10-eth-dhcp` neutralizer",
+          "The net VM uplink neutralizer",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  {
+    name: "observability substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-observability.agent.md",
+        (text) => text.replace(
+          "**Unbounded label cardinality.**",
+          "Unbounded labels.",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  {
+    name: "networking substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-networking.agent.md",
+        (text) => text.replace(
+          "**MTU and MSS.**",
+          "Packet sizing.",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
+  {
+    name: "kernel substantive checklist drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-kernel.agent.md",
+        (text) => text.replace(
+          "**Process identity races.**",
+          "Process identity.",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "substantive repository checklist phrase",
+  },
   ...[
     ["rust-toolchain.toml", "rust-toolchain.toml"],
     [".cargo/config.toml", ".cargo/config.toml"],
     ["tests/layer1-jobs.json", "tests/layer1-jobs.json"],
     ["tests/test-rust.sh", "tests/test-rust.sh"],
+    ["Makefile", "Makefile"],
+    ["flake.nix", "flake.nix"],
+    ["packages/xtask/src/main.rs", "packages/xtask/src/main.rs"],
+    ["packages/xtask/src/delivery/**", "packages/xtask/src/delivery/**"],
+    ["tests/static.sh", "tests/static.sh"],
+    ["tests/test-lint.sh", "tests/test-lint.sh"],
   ].map(([name, pattern]) => ({
     name: `build trigger ${name} is required`,
     mutate: (dir) =>
@@ -780,6 +842,24 @@ const CASES = [
       }),
     expectExit: 1,
     expectText: `canonical path ${pattern}`,
+  })),
+  ...[
+    ["network route", "**/*route*"],
+    ["network routing", "**/*routing*"],
+    ["network mtu", "**/*mtu*"],
+    ["network mss", "**/*mss*"],
+  ].map(([name, pattern]) => ({
+    name: `${name} trigger is required`,
+    mutate: (dir) =>
+      mutateSelectionRoster(dir, (table) => {
+        for (const trigger of table.seats.networking.triggers) {
+          if (trigger.kind === "path") {
+            trigger.patterns = trigger.patterns.filter((entry) => entry !== pattern);
+          }
+        }
+      }),
+    expectExit: 1,
+    expectText: `networking triggers are missing canonical path ${pattern}`,
   })),
   {
     name: "a seat missing the shared finding bar is rejected",

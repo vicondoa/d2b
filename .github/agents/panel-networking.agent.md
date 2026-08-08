@@ -40,6 +40,54 @@ selection artifact must not be mistaken for a network or runtime protocol.
 Authoritative table focus: Bridges, firewalls, DHCP, DNS, routes, MTU and MSS,
 sockets, isolation, and host-network coexistence.
 
+## Your seat
+
+The network surface across environments: bridge isolation, firewall posture,
+DHCP and DNS, routing, MTU and MSS, and coexistence with host interface
+managers.
+
+## What to hunt, specifically
+
+**Environment isolation weakened.** Environments are isolated by default and
+east-west reachability is a deliberate double opt-in. Making one env reachable
+from another without both declarations is your highest severity finding; a
+shared bridge, broad accept rule, or oversized route can introduce it.
+
+**The net VM's uplink.** The net VM must not dual-stack DHCP on its uplink.
+The default DHCP neutralizer is load-bearing; verify reshapes against its
+nix-unit case, not the diff alone.
+
+**Firewall rules that lose their ownership marker.** Every managed nftables
+rule and chain carries a `d2b managed: <ownership-id>` comment, and foreign
+tables are never flushed. Without its marker, a rule cannot be distinguished
+later from foreign state, turning reconcile into a leak or destructive flush.
+Foreign markers where d2b expects its own must stay fail-closed.
+
+**Coexistence surfaces.** The `/etc/hosts` block and NetworkManager unmanaged
+file use begin/end markers, with foreign content outside them byte-preserved.
+Rewriting a whole file or failing to re-find its delimiters destroys operator
+configuration. systemd-networkd is detection-only; a write there is a finding.
+
+**Accept rules that are broader than the intent.** A rule matching an
+interface prefix rather than an exact name, a rule without a state match where
+one is needed, and a rule ordered after a general accept so it never
+evaluates.
+
+**MTU and MSS.** A path that changes MTU on one side of a bridge without the
+matching MSS clamp produces a black hole that only shows up for large frames,
+which no fast test will catch.
+
+**Address and prefix handling.** Overlapping CIDRs, an address derived by
+arithmetic that can leave its subnet, and a prefix that silently widens when
+a config value is absent.
+
+**A real address or hostname committed to the tree.** Docs, examples, tests,
+and comments use RFC1918 or RFC5737 ranges and generic names (`alice`,
+`corp-vm`, `work`). A real routable address, a real internal hostname, a real
+domain, or a real user identifier is a finding regardless of how harmless it
+looks, because it is an operator-identifying leak that survives in history
+even after it is removed.
+
 ## What is not this seat
 
 Do not substitute a security, NixOS, kernel, build, documentation,

@@ -2,7 +2,9 @@
 // Join selected-roster verdicts to a candidate address and emit current
 // schema-version-2 panel records.
 //
-//   node make-records.mjs <round-dir> --selection <selection.json>
+//   node make-records.mjs <round-dir> --selection <selection.json> \
+//     --ledger <discovery-ledger.json> --responses <responses.json> \
+//     --verification-results <verification-results.json> --approval <approval.json>
 //
 // The selection artifact is the one roster authority shared by the lifecycle
 // helper and delivery tooling. This helper does not retain a fixed current
@@ -11,20 +13,21 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
-  linkSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
+  adaptVerificationVerdict,
+  createApprovalArtifact,
   readSelection,
   validateSelectionCandidate,
   validateSelectionAgainstTable,
   validateLedger,
   validateApprovalArtifact,
+  validateResponses,
+  validateVerificationResultArtifact,
+  writeDirectoryCreateOrCompare,
   sha256,
   stableStringify,
 } from "./panel-lifecycle.mjs";
@@ -46,21 +49,43 @@ const errors = [];
 const fail = (message) => errors.push(message);
 
 function usage() {
-  return "usage: make-records.mjs <round-dir> --selection <selection.json> --approval <approval.json>";
+  return (
+    "usage: make-records.mjs <round-dir> --selection <selection.json> " +
+    "--ledger <discovery-ledger.json> --responses <responses.json> " +
+    "--verification-results <verification-results.json> --approval <approval.json>"
+  );
 }
 
 const dir = process.argv[2];
 const selectionIndex = process.argv.indexOf("--selection");
+const ledgerIndex = process.argv.indexOf("--ledger");
+const responsesIndex = process.argv.indexOf("--responses");
+const verificationResultsIndex = process.argv.indexOf("--verification-results");
 const approvalIndex = process.argv.indexOf("--approval");
 const selectionPath = selectionIndex >= 0 ? process.argv[selectionIndex + 1] : undefined;
+const ledgerPath = ledgerIndex >= 0 ? process.argv[ledgerIndex + 1] : undefined;
+const responsesPath = responsesIndex >= 0 ? process.argv[responsesIndex + 1] : undefined;
+const verificationResultsPath =
+  verificationResultsIndex >= 0
+    ? process.argv[verificationResultsIndex + 1]
+    : undefined;
 const approvalPath = approvalIndex >= 0 ? process.argv[approvalIndex + 1] : undefined;
 if (
   !dir ||
   selectionIndex < 0 ||
   !selectionPath ||
+  ledgerIndex < 0 ||
+  !ledgerPath ||
+  responsesIndex < 0 ||
+  !responsesPath ||
+  verificationResultsIndex < 0 ||
+  !verificationResultsPath ||
   approvalIndex < 0 ||
   !approvalPath ||
   selectionPath.startsWith("--") ||
+  ledgerPath.startsWith("--") ||
+  responsesPath.startsWith("--") ||
+  verificationResultsPath.startsWith("--") ||
   approvalPath.startsWith("--")
 ) {
   console.error(usage());
@@ -84,15 +109,40 @@ const address = readJson(join(dir, "address.json"), "round address");
 const candidate = readJson(join(dir, "candidate.json"), "candidate address");
 const observed = readJson(join(dir, "observed.json"), "observed binding table");
 const approval = readJson(approvalPath, "approval artifact");
-const discoveryLedgerPath = existsSync(join(dir, "discovery-ledger.json"))
-  ? join(dir, "discovery-ledger.json")
-  : join(dir, "ledger.json");
-let discoveryLedgerBytes = "";
-const discoveryLedger = readJson(discoveryLedgerPath, "immutable discovery ledger");
+let approvalBytes = "";
 try {
-  discoveryLedgerBytes = readFileSync(discoveryLedgerPath, "utf8");
+  approvalBytes = readFileSync(approvalPath, "utf8");
 } catch (cause) {
-  fail(`missing immutable discovery ledger at ${discoveryLedgerPath}: ${cause.message}`);
+  fail(`cannot read approval bytes at ${approvalPath}: ${cause.message}`);
+}
+let discoveryLedgerBytes = "";
+const discoveryLedger = readJson(ledgerPath, "immutable discovery ledger");
+const readBytes = (path, label) => {
+  if (!existsSync(path)) {
+    fail(`missing ${label} at ${path}`);
+    return "";
+  }
+  try {
+    return readFileSync(path, "utf8");
+  } catch (cause) {
+    fail(`cannot read ${label} bytes at ${path}: ${cause.message}`);
+    return "";
+  }
+};
+const responsesBytes = readBytes(responsesPath, "implementation responses");
+const verificationResultsBytes = readBytes(
+  verificationResultsPath,
+  "adapted verification results",
+);
+const responses = readJson(responsesPath, "implementation responses");
+const verificationResults = readJson(
+  verificationResultsPath,
+  "adapted verification results",
+);
+try {
+  discoveryLedgerBytes = readFileSync(ledgerPath, "utf8");
+} catch (cause) {
+  fail(`missing immutable discovery ledger at ${ledgerPath}: ${cause.message}`);
 }
 let selection = null;
 try {
@@ -110,17 +160,17 @@ try {
 } catch (cause) {
   fail(`invalid immutable discovery ledger: ${cause.message}`);
 }
+try {
+  validateResponses(discoveryLedger, responses);
+} catch (cause) {
+  fail(`invalid implementation responses: ${cause.message}`);
+}
 
 let selectionBytes;
 try {
   selectionBytes = readFileSync(selectionPath, "utf8");
 } catch (cause) {
   fail(`cannot read lifecycle selection bytes at ${selectionPath}: ${cause.message}`);
-}
-try {
-  readFileSync(approvalPath, "utf8");
-} catch (cause) {
-  fail(`cannot read approval bytes at ${approvalPath}: ${cause.message}`);
 }
 if (errors.length) {
   for (const message of errors) console.error(`error: ${message}`);
@@ -141,6 +191,9 @@ try {
   validateApprovalArtifact(approval, {
     selection,
     ledgerBytes: discoveryLedgerBytes,
+    selectionBytes,
+    responseBytes: responsesBytes,
+    verificationResultsBytes,
   });
 } catch (cause) {
   fail(`invalid approval artifact: ${cause.message}`);
@@ -151,9 +204,45 @@ if (approval && approval.selection_sha256 !== sha256(selectionBytes)) {
 if (approval && !approval.approved) {
   fail("approval artifact is not approved; current records require merge-ready verification");
 }
-if (approval && approval.discovery_ledger_sha256 !==
-    sha256(discoveryLedgerBytes)) {
+try {
+  validateVerificationResultArtifact(verificationResults, {
+    selection,
+    ledger: discoveryLedger,
+    ledger_bytes: discoveryLedgerBytes,
+    selection_bytes: selectionBytes,
+  });
+} catch (cause) {
+  fail(`invalid adapted verification results: ${cause.message}`);
+}
+if (approval && approval.discovery_ledger_sha256 !== sha256(discoveryLedgerBytes)) {
   fail("approval artifact is not bound to the immutable discovery ledger bytes");
+}
+if (approval && approval.response_sha256 !== sha256(responsesBytes)) {
+  fail("approval artifact is not bound to the exact implementation response bytes");
+}
+if (approval && approval.verification_results_sha256 !== sha256(verificationResultsBytes)) {
+  fail("approval artifact is not bound to the exact adapted verification-result bytes");
+}
+try {
+  const expectedApproval = createApprovalArtifact({
+    current_selection: selection,
+    selection_bytes: selectionBytes,
+    discovery_ledger: discoveryLedger,
+    discovery_ledger_bytes: discoveryLedgerBytes,
+    current_candidate: candidate,
+    responses,
+    responses_bytes: responsesBytes,
+    verification_results: verificationResults,
+    verification_results_bytes: verificationResultsBytes,
+  });
+  if (approvalBytes !== stableStringify(expectedApproval)) {
+    fail(
+      "approval artifact bytes do not match the exact selection, ledger, response, " +
+      "and adapted verification-result inputs",
+    );
+  }
+} catch (cause) {
+  fail(`approval artifact does not recompute from canonical inputs: ${cause.message}`);
 }
 
 if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
@@ -194,6 +283,10 @@ if (!address || typeof address.lifecycle_id !== "string" || !address.lifecycle_i
 }
 
 const verdictDir = join(dir, "verdicts");
+const adaptedVerificationResults =
+  verificationResults && Array.isArray(verificationResults.results)
+    ? Object.fromEntries(verificationResults.results.map((result) => [result.seat, result]))
+    : verificationResults?.results ?? {};
 const observedTable = observed && typeof observed === "object" && !Array.isArray(observed)
   ? observed
   : {};
@@ -291,6 +384,21 @@ for (const role of roster) {
   }
   if (typeof verdict.summary !== "string" || !verdict.summary.trim()) {
     fail(`verdict ${role}: summary is required`);
+  }
+  try {
+    const adapted = adaptVerificationVerdict(verdict, {
+      seat: role,
+      issue_ids: discoveryLedger.issues.map((issue) => issue.id),
+    });
+    const recorded = adaptedVerificationResults[role];
+    if (!recorded || stableStringify(adapted) !== stableStringify(recorded)) {
+      fail(
+        `verdict ${role} does not match the exact adapted verification-result bytes; ` +
+        "adapt verification again before generating records",
+      );
+    }
+  } catch (cause) {
+    fail(`verdict ${role} cannot be adapted to the exact verification result: ${cause.message}`);
   }
   if (
     typeof verdict.summary === "string" &&
@@ -391,54 +499,20 @@ if (errors.length) {
 }
 
 const outDir = join(dir, "records");
-const expectedFiles = new Set(records.map((record) => `${record.role}.json`));
-const existingFiles = existsSync(outDir)
-  ? readdirSync(outDir)
-  : [];
-for (const file of existingFiles) {
-  if (!expectedFiles.has(file)) {
-    fail(`unexpected pre-existing record ${join(outDir, file)}; refusing a mixed output set`);
-  }
-}
 const pendingWrites = records.map((record) => ({
-  final: join(outDir, `${record.role}.json`),
+  name: `${record.role}.json`,
   bytes: `${JSON.stringify(record, null, 2)}\n`,
 }));
-for (const { final, bytes } of pendingWrites) {
-  if (existsSync(final) && readFileSync(final, "utf8") !== bytes) {
-    fail(`conflicting generated record bytes at ${final}; refusing to overwrite`);
-  }
+try {
+  writeDirectoryCreateOrCompare(outDir, pendingWrites);
+} catch (cause) {
+  fail(
+    `record set publication stopped before replacement: ` +
+    `${cause.message.replace("conflicting generated bytes", "conflicting generated record bytes")}. ` +
+    "Retry with the same inputs only after restoring a complete matching set, " +
+    "or use a new round directory.",
+  );
 }
-if (errors.length) {
-  for (const message of errors) console.error(`error: ${message}`);
-  process.exit(1);
-}
-
-mkdirSync(outDir, { recursive: true });
-let publicationCounter = 0;
-for (const { final, bytes } of pendingWrites) {
-  if (existsSync(final)) continue;
-  const temporary = `${final}.${process.pid}.${publicationCounter += 1}.tmp`;
-  try {
-    writeFileSync(temporary, bytes, { encoding: "utf8", flag: "wx" });
-    try {
-      linkSync(temporary, final);
-    } catch (cause) {
-      if (cause.code !== "EEXIST") throw cause;
-      const actual = readFileSync(final, "utf8");
-      if (actual !== bytes) {
-        fail(`conflicting generated record bytes at ${final}; refusing to overwrite`);
-      }
-    }
-  } finally {
-    try {
-      unlinkSync(temporary);
-    } catch {
-      // The temporary file may not have been created.
-    }
-  }
-}
-
 if (errors.length) {
   for (const message of errors) console.error(`error: ${message}`);
   process.exit(1);

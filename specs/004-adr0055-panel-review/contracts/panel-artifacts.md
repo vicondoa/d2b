@@ -61,15 +61,22 @@ The two consumers are explicit:
 ```text
 delivery wave panel-request --snapshot <path> --selection <path>
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \
-  <round-dir> --selection <path>
+  <round-dir> \
+  --selection <path> \
+  --ledger <round-dir>/discovery-ledger.json \
+  --responses <round-dir>/responses.json \
+  --verification-results <round-dir>/verification-results.json \
+  --approval <round-dir>/approval.json
 ```
 
 `panel-request` requires the selection candidate triple, program, and wave to
 equal the snapshot. `make-records.mjs` requires the same candidate triple as
 `candidate.json` and verdict and observed-binding keys exactly equal to the
-ordered roster. Both consumers accept only selection schema version `1` and
-selection-table version `2`. Candidate, version, or roster disagreement fails
-before output is written.
+ordered roster. It also requires the explicit canonical ledger path, response
+path, adapted verification-result path, and approval path. Both consumers
+accept only selection schema version `1` and selection-table version `2`.
+Candidate, version, roster, or canonical-artifact disagreement fails before
+output is written.
 
 ## Discovery request and result
 
@@ -143,8 +150,39 @@ Approval applies this matrix before reviewer sign-off:
 
 Verification artifacts carry every response, the applicable validation and
 self-review evidence, the latest delta, full candidate context, prior status,
-and seat obligations. `signoff` remains true exactly when blocking
+and seat obligations. After discovery, verification preparation requires an
+explicit current candidate, prior selection, non-empty actual delta, and
+non-empty full candidate context. `signoff` remains true exactly when blocking
 recommendations are empty.
+
+The approval artifact is bound to the exact UTF-8 bytes of the immutable
+discovery ledger, implementation response envelope, and adapted
+verification-result artifact. It records `discovery_ledger_sha256`,
+`response_sha256`, and `verification_results_sha256`; approval and record
+generation refuse any digest mismatch. Record generation recomputes approval
+from those exact bytes rather than trusting a changed approval field.
+
+An adapted verification-result artifact contains the current selection digest,
+current candidate address, immutable ledger digest, and one complete result per
+selected seat. A final issue status is passing only when it is exactly
+`resolved` or `verified`; every other status is blocking even when the verdict
+claims sign-off. The status map must cover every ledger issue exactly once.
+
+Generated verification requests are preflighted as a complete family and
+published by staging every seat file in a temporary sibling directory followed
+by one directory rename. Existing output must already be a complete,
+byte-identical family. Record generation uses the same directory publication
+rule. No lock, fsync protocol, service, daemon, or broad transaction framework
+is part of this contract. Editable stage-diffs scratch files remain
+per-file; staging stops at the first conflict and tells the operator to restore
+the expected bytes or use a new review id.
+
+Final metrics validate the canonical selection, ledger, response envelope, and
+adapted verification-result bytes. They require complete verification and emit
+`status: "complete"`, `degraded: false`, and `verification_complete: true`.
+Incomplete or absent verification is refused for final metrics rather than
+reported as a complete round. Metrics remain descriptive and never become an
+approval threshold.
 
 ## Panel delivery formats under workspace schema version 2
 
@@ -246,4 +284,10 @@ current severities; all other legacy text receives migration-assigned MAJOR.
 Complete legacy rounds serve as discovery input. Partial legacy rounds retain
 every completed source before the lifecycle's one current discovery. Legacy
 `rust` remains the source attribution and maps only its current verification
-responsibility to `software` with the Rust profile.
+responsibility to `software` with the Rust profile. A JSON or object import is
+partial by default, even when it contains all ten roles: it may suppress the
+one current discovery only when exact record bytes and attestation digests
+were supplied and validated. A directory import may be complete after strict
+validation of the request, fixed-ten record filenames and bindings, exact
+record bytes, and attestation digests. Without those proofs the import retains
+all completed sources and requests exactly one current discovery.

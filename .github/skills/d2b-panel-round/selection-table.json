@@ -283,12 +283,15 @@
             "**/*network*",
             "**/*firewall*",
             "**/*route*",
+            "**/*routing*",
             "**/*resolver*",
             "**/*socket*",
             "**/*interface*",
             "**/*bridge*",
             "**/*dhcp*",
-            "**/*dns*"
+            "**/*dns*",
+            "**/*mtu*",
+            "**/*mss*"
           ]
         },
         {
@@ -296,6 +299,9 @@
           "values": [
             "network",
             "firewall",
+            "routing",
+            "mtu",
+            "mss",
             "routing",
             "resolver",
             "socket",
@@ -388,7 +394,11 @@
             "**/package.json",
             "**/*-lock.json",
             "**/*-lock.yaml",
-            "**/*-lock.yml"
+            "**/*-lock.yml",
+            "packages/xtask/src/main.rs",
+            "packages/xtask/src/delivery/**",
+            "tests/static.sh",
+            "tests/test-lint.sh"
           ]
         },
         {

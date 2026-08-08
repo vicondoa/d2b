@@ -31,6 +31,7 @@ import {
   writeCreateOrCompare,
 } from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -247,6 +248,26 @@ function allVerificationResults(roster, lateFindings = {}, ledger = makeLedger()
   );
 }
 
+function adaptedVerificationArtifact(selection, ledger, results) {
+  const selectionBytes = stableStringify(selection);
+  const ledgerBytes = stableStringify(ledger);
+  return {
+    artifact_kind: "d2b-panel/verification",
+    schema_version: 1,
+    phase: "verification",
+    lifecycle_id: selection.lifecycle_id,
+    selection_sha256: sha256(selectionBytes),
+    current_candidate: candidate({
+      candidate_id: selection.candidate_id,
+      content_id: selection.content_id,
+      snapshot_sha256: selection.snapshot_sha256,
+      changed_paths: selection.classification_inputs.changed_paths,
+    }),
+    discovery_ledger_sha256: sha256(ledgerBytes),
+    results,
+  };
+}
+
 console.log("panel lifecycle: selection table");
 {
   const code = selectRoster(candidate());
@@ -278,10 +299,26 @@ console.log("panel lifecycle: selection table");
     check(`the ${seat} path trigger selects its seat`, result.triggered_optional.includes(seat));
   }
   for (const path of [
+    "src/routing-table.js",
+    "src/mtu-policy.js",
+    "src/mss-clamp.js",
+  ]) {
+    check(
+      `the networking path trigger selects ${path}`,
+      selectRoster(candidate({ changed_paths: [path] })).triggered_optional.includes("networking"),
+    );
+  }
+  for (const path of [
     "rust-toolchain.toml",
     ".cargo/config.toml",
     "tests/layer1-jobs.json",
     "tests/test-rust.sh",
+    "Makefile",
+    "flake.nix",
+    "packages/xtask/src/main.rs",
+    "packages/xtask/src/delivery/panel.rs",
+    "tests/static.sh",
+    "tests/test-lint.sh",
   ]) {
     check(
       `the build seat path trigger selects ${path}`,
@@ -293,6 +330,9 @@ console.log("panel lifecycle: selection table");
     "agent",
     "nixos",
     "network",
+    "routing",
+    "mtu",
+    "mss",
     "kernel",
     "build-contract",
   ];
@@ -308,6 +348,11 @@ console.log("panel lifecycle: selection table");
   for (const seat of signalSeats) {
     check(`the ${seat} signal trigger selects its seat`, signalResult.triggered_optional.includes(seat));
   }
+  check(
+    "routing, mtu, and mss signals select networking",
+    selectRoster(candidate({ signals: ["routing", "mtu", "mss"] }))
+      .triggered_optional.includes("networking"),
+  );
   const citation = selectRoster(
     candidate({
       changed_paths: ["docs/build-notes.md"],
@@ -549,7 +594,20 @@ try {
     selection: initial.selection,
     ledger: responseInput,
     responses,
-    verification_results: allVerificationResults(initial.selection.roster),
+    ledger_bytes: stableStringify(responseInput),
+    responses_bytes: stableStringify(responses),
+    verification_results: adaptedVerificationArtifact(
+      initial.selection,
+      responseInput,
+      allVerificationResults(initial.selection.roster, {}, responseInput),
+    ),
+    verification_results_bytes: stableStringify(
+      adaptedVerificationArtifact(
+        initial.selection,
+        responseInput,
+        allVerificationResults(initial.selection.roster, {}, responseInput),
+      ),
+    ),
   });
   check(
     "approval is exposed as a directly consumable artifact",
@@ -792,7 +850,14 @@ try {
     ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
     responses,
     self_verification: selfVerification,
+    current_candidate: candidate({
+      snapshot_sha256: "c".repeat(64),
+      content_id: "content-1",
+    }),
+    prior_selection: initial.selection,
     latest_delta_paths: ["src/panel.js"],
+    actual_delta: { changed_paths: ["src/panel.js"], context: "fix" },
+    full_context: { candidate: "full" },
     previous_status: {},
   });
   check("verification receives the complete ledger", verificationInput.requests[0].ledger.issues.length === 4);
@@ -817,6 +882,23 @@ try {
     "actual verdict JSON adapts to explicit verification status",
     actualVerificationVerdict.verified_issue_statuses.R1 === "resolved" &&
       actualVerificationVerdict.signoff === true,
+  );
+  const inconsistentStatusResults = allVerificationResults(
+    verificationSelection.selection.roster,
+    {},
+    { ...responseInput, snapshot_sha256: "c".repeat(64) },
+  );
+  inconsistentStatusResults.software.verified_issue_statuses.R1 = "accepted";
+  const inconsistentStatusApproval = evaluateApproval({
+    selection: verificationSelection.selection,
+    ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+    responses,
+    verification_results: inconsistentStatusResults,
+  });
+  check(
+    "only resolved or verified issue statuses can pass approval",
+    inconsistentStatusApproval.approved === false &&
+      inconsistentStatusApproval.status_blocks.some((item) => item.issue_id === "R1"),
   );
   rejects(
     "verification refuses a missing per-issue status",
@@ -868,11 +950,37 @@ try {
     ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
     responses,
     self_verification: selfVerification,
+    current_candidate: candidate({
+      snapshot_sha256: "c".repeat(64),
+      content_id: "content-1",
+    }),
+    prior_selection: initial.selection,
     latest_delta_paths: ["src/panel.js"],
+    actual_delta: { changed_paths: ["src/panel.js"], context: "fix" },
+    full_context: { candidate: "full" },
   });
   check(
     "verification generation writes one request per selected seat",
     writtenVerification.written.length === verificationSelection.selection.roster.length,
+  );
+  rmSync(join(verificationDir, "software.json"));
+  rejects(
+    "verification artifact family refuses a partial existing directory",
+    () => writeVerificationArtifacts(verificationDir, {
+      selection: verificationSelection.selection,
+      ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+      responses,
+      self_verification: selfVerification,
+      current_candidate: candidate({
+        snapshot_sha256: "c".repeat(64),
+        content_id: "content-1",
+      }),
+      prior_selection: initial.selection,
+      latest_delta_paths: ["src/panel.js"],
+      actual_delta: { changed_paths: ["src/panel.js"], context: "fix" },
+      full_context: { candidate: "full" },
+    }),
+    /incomplete or has extra entries/,
   );
   rejects(
     "a missing verification seat is refused",
@@ -885,10 +993,102 @@ try {
     ),
     /missing verification result/,
   );
+  rejects(
+    "verification requires an explicit current candidate",
+    () => prepareVerification({
+      selection: verificationSelection.selection,
+      ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+      responses,
+      self_verification: selfVerification,
+      prior_selection: initial.selection,
+      latest_delta_paths: ["src/panel.js"],
+      full_context: { candidate: "full" },
+    }),
+    /explicit current candidate/,
+  );
+  rejects(
+    "verification requires an explicit prior selection",
+    () => prepareVerification({
+      selection: verificationSelection.selection,
+      ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+      responses,
+      self_verification: selfVerification,
+      current_candidate: candidate({ snapshot_sha256: "c".repeat(64) }),
+      latest_delta_paths: ["src/panel.js"],
+      full_context: { candidate: "full" },
+    }),
+    /explicit prior selection/,
+  );
+  rejects(
+    "verification requires a non-empty actual delta",
+    () => prepareVerification({
+      selection: verificationSelection.selection,
+      ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+      responses,
+      self_verification: selfVerification,
+      current_candidate: candidate({ snapshot_sha256: "c".repeat(64) }),
+      prior_selection: initial.selection,
+      latest_delta_paths: [],
+      full_context: { candidate: "full" },
+    }),
+    /non-empty actual delta/,
+  );
+  rejects(
+    "verification requires non-empty full context",
+    () => prepareVerification({
+      selection: verificationSelection.selection,
+      ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+      responses,
+      self_verification: selfVerification,
+      current_candidate: candidate({ snapshot_sha256: "c".repeat(64) }),
+      prior_selection: initial.selection,
+      latest_delta_paths: ["src/panel.js"],
+      full_context: {},
+    }),
+    /non-empty full candidate context/,
+  );
 
   console.log("panel lifecycle: public CLI integration");
   const cliRoot = mkdtempSync(join(tmpdir(), "d2b-panel-cli-"));
   try {
+    const cliStageScript = join(
+      fileURLToPath(new URL(".", import.meta.url)),
+      "..",
+      "..",
+      ".github",
+      "skills",
+      "d2b-panel-round",
+      "scripts",
+      "stage-diffs.sh",
+    );
+    const cliLifecycleDir = join(cliRoot, ".github", "skills", "d2b-panel-round", "scripts");
+    mkdirSync(cliLifecycleDir, { recursive: true });
+    cpSync(LIFECYCLE_CLI, join(cliLifecycleDir, "panel-lifecycle.mjs"));
+    cpSync(
+      join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", ".github", "skills", "d2b-panel-round", "selection-table.json"),
+      join(cliRoot, ".github", "skills", "d2b-panel-round", "selection-table.json"),
+    );
+    mkdirSync(join(cliRoot, ".github", "agents"), { recursive: true });
+    for (const seat of [
+      "software", "test", "product", "docs", "security", "observability",
+      "simplicity", "reliability", "agentic", "nixos",
+    ]) {
+      writeFileSync(join(cliRoot, ".github", "agents", `panel-${seat}.agent.md`), `name: ${seat}\n`);
+    }
+    execFileSync("git", ["init", "--quiet"], { cwd: cliRoot });
+    execFileSync("git", ["config", "user.name", "d2b test"], { cwd: cliRoot });
+    execFileSync("git", ["config", "user.email", "d2b-test@example.invalid"], { cwd: cliRoot });
+    writeFileSync(join(cliRoot, "base.txt"), "base\n");
+    execFileSync("git", ["add", "."], { cwd: cliRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "base"], { cwd: cliRoot });
+    const cliBase = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: cliRoot,
+      encoding: "utf8",
+    }).trim();
+    mkdirSync(join(cliRoot, "src"), { recursive: true });
+    writeFileSync(join(cliRoot, "src", "panel.js"), "candidate\n");
+    execFileSync("git", ["add", "src/panel.js"], { cwd: cliRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "candidate"], { cwd: cliRoot });
     const cliCandidate = join(cliRoot, "candidate.json");
     const cliCurrentCandidate = join(cliRoot, "current-candidate.json");
     const cliDiscoveryVerdicts = join(cliRoot, "discovery-verdicts.json");
@@ -897,11 +1097,24 @@ try {
     const cliLedger = join(cliRoot, "ledger.json");
     const cliResponses = join(cliRoot, "responses.json");
     const cliSelf = join(cliRoot, "self.json");
+    const cliDelta = join(cliRoot, "actual-delta.json");
+    const cliFullContext = join(cliRoot, "full-context.json");
     const cliVerificationSelectionCandidate = join(cliRoot, "verification-candidate.json");
     const cliVerificationVerdicts = join(cliRoot, "verification-verdicts.json");
     const cliVerificationResults = join(cliRoot, "verification-results.json");
     const cliApproval = join(cliRoot, "approval.json");
     const cliMetrics = join(cliRoot, "metrics.json");
+    const cliRound = join(cliRoot, "round");
+    const cliMakeRecords = join(
+      fileURLToPath(new URL(".", import.meta.url)),
+      "..",
+      "..",
+      ".github",
+      "skills",
+      "d2b-panel-round",
+      "scripts",
+      "make-records.mjs",
+    );
     const address = (snapshot, content = "cli-content") => ({
       program: "SPEC004",
       wave: "spec004w1",
@@ -917,6 +1130,20 @@ try {
         encoding: "utf8",
       }).trim();
     const discoverySelection = runCli("select", cliCandidate, "spec004w1");
+    const staged = spawnSync("bash", [
+      cliStageScript,
+      cliBase,
+      cliBase,
+      "spec004w1-r1",
+      "--selection",
+      discoverySelection,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "CLI integration reaches staged review evidence",
+      staged.status === 0 &&
+        existsSync(join(cliRoot, ".scratch", "panel", "spec004w1-r1", "review-request.md")),
+      `${staged.stdout}${staged.stderr}`,
+    );
     const discoveryRequest = join(cliRoot, "discovery-request.json");
     runCli("discovery-request", discoverySelection, cliCandidate, discoveryRequest);
     const discoveryRoster = JSON.parse(readFileSync(discoverySelection, "utf8")).roster;
@@ -924,15 +1151,43 @@ try {
       cliDiscoveryVerdicts,
       stableStringify(Object.fromEntries(discoveryRoster.map((seat) => [seat, {
         engineer: seat,
-        signoff: true,
-        summary: "No discovery findings.",
-        recommendations: [],
+        signoff: seat !== "software",
+        summary: seat === "software"
+          ? "A source mapping issue was found."
+          : "No discovery findings.",
+        recommendations: seat === "software"
+          ? [{
+              severity: "high",
+              where: "scripts/panel.js:1",
+              what: "A source can disappear.",
+              why: "The ledger would be incomplete.",
+              fix: "Validate source coverage.",
+            }]
+          : [],
       }]))),
     );
     runCli("adapt-discovery", cliDiscoveryVerdicts, cliDiscoveryResults);
-    writeFileSync(cliGroups, "[]\n");
+    writeFileSync(
+      cliGroups,
+      stableStringify([{
+        source_finding_ids: ["software:1"],
+        description: "A source can disappear.",
+        severity: "MAJOR",
+        impact: "The ledger would be incomplete.",
+        recommendation: "Validate source coverage.",
+      }]),
+    );
     runCli("merge-ledger", discoverySelection, cliDiscoveryResults, cliGroups, cliLedger);
     runCli("response-template", cliLedger, cliResponses);
+    const cliResponseObject = JSON.parse(readFileSync(cliResponses, "utf8"));
+    cliResponseObject.responses[0] = {
+      issue_id: "R1",
+      disposition: "Fixed",
+      changed_surface: ["scripts/panel.js"],
+      justification: "The source mapping is now validated.",
+      evidence: "focused Node test",
+    };
+    writeFileSync(cliResponses, stableStringify(cliResponseObject));
     writeFileSync(cliSelf, stableStringify({
       tests: "passed",
       lint: "passed",
@@ -941,6 +1196,14 @@ try {
       build: "not applicable",
       uncovered_areas: "none",
       self_review: "passed",
+    }));
+    writeFileSync(cliDelta, stableStringify({
+      changed_paths: ["scripts/panel.js"],
+      diff: "the focused fix",
+    }));
+    writeFileSync(cliFullContext, stableStringify({
+      candidate: "full candidate context",
+      validation: "staged evidence",
     }));
     writeFileSync(
       cliVerificationSelectionCandidate,
@@ -954,19 +1217,47 @@ try {
       "verification",
       "--previous-selection",
       discoverySelection,
+      "--fix-delta",
+      cliDelta,
+    );
+    const missingVerificationFlags = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "verification",
+      verificationSelection,
+      cliLedger,
+      cliResponses,
+      cliSelf,
+      join(cliRoot, "verification-missing-flags"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "verification CLI refuses empty candidate, prior, delta, and context defaults",
+      missingVerificationFlags.status !== 0 &&
+        /requires --candidate, --prior-selection, --delta, and --full-context/.test(
+          `${missingVerificationFlags.stdout}${missingVerificationFlags.stderr}`,
+        ),
     );
     const verificationRoster = JSON.parse(readFileSync(verificationSelection, "utf8")).roster;
+    const ledgerIssues = JSON.parse(readFileSync(cliLedger, "utf8")).issues;
     writeFileSync(
       cliVerificationVerdicts,
       stableStringify(Object.fromEntries(verificationRoster.map((seat) => [seat, {
         engineer: seat,
         signoff: true,
         summary: "Verification passed.",
-        issue_statuses: {},
+        issue_statuses: Object.fromEntries(ledgerIssues.map((issue) => [issue.id, "resolved"])),
         recommendations: [],
       }]))),
     );
-    runCli("adapt-verification", cliLedger, cliVerificationVerdicts, cliVerificationResults);
+    runCli(
+      "adapt-verification",
+      cliLedger,
+      cliVerificationVerdicts,
+      cliVerificationResults,
+      "--selection",
+      verificationSelection,
+      "--candidate",
+      cliVerificationSelectionCandidate,
+    );
     runCli(
       "verification",
       verificationSelection,
@@ -974,6 +1265,14 @@ try {
       cliResponses,
       cliSelf,
       join(cliRoot, "verification"),
+      "--candidate",
+      cliVerificationSelectionCandidate,
+      "--prior-selection",
+      discoverySelection,
+      "--delta",
+      cliDelta,
+      "--full-context",
+      cliFullContext,
     );
     const approvalResult = spawnSync("node", [
       LIFECYCLE_CLI,
@@ -983,6 +1282,8 @@ try {
       cliResponses,
       cliVerificationResults,
       cliApproval,
+      "--candidate",
+      cliVerificationSelectionCandidate,
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
       "approval CLI exposes a passing artifact",
@@ -990,11 +1291,114 @@ try {
         JSON.parse(readFileSync(cliApproval, "utf8")).approved === true,
       `${approvalResult.stdout}${approvalResult.stderr}`,
     );
-    runCli("metrics", cliLedger, cliResponses, cliVerificationResults, cliMetrics);
+    runCli(
+      "metrics",
+      "--selection",
+      verificationSelection,
+      "--ledger",
+      cliLedger,
+      "--responses",
+      cliResponses,
+      "--verification-results",
+      cliVerificationResults,
+      "--output",
+      cliMetrics,
+    );
+    mkdirSync(join(cliRound, "verdicts"), { recursive: true });
+    writeFileSync(
+      join(cliRound, "address.json"),
+      stableStringify({
+        round: "spec004w1-r1",
+        lifecycle_id: "spec004w1",
+        selection_path: verificationSelection,
+        selection_sha256: sha256(readFileSync(verificationSelection, "utf8")),
+      }),
+    );
+    writeFileSync(
+      join(cliRound, "candidate.json"),
+      stableStringify(JSON.parse(readFileSync(cliVerificationSelectionCandidate, "utf8"))),
+    );
+    writeFileSync(join(cliRound, "observed.json"), stableStringify(
+      Object.fromEntries(verificationRoster.map((seat, index) => [seat, {
+        provider: "github-copilot",
+        model: "gpt-5.6-sol",
+        reasoning_effort: "xhigh",
+        run_id: `cli-run-${index}`,
+        receipt_locator: `github-copilot://cli/${index}`,
+      }])),
+    ));
+    writeFileSync(
+      join(cliRound, "discovery-ledger.json"),
+      readFileSync(cliLedger),
+    );
+    writeFileSync(join(cliRound, "responses.json"), readFileSync(cliResponses));
+    writeFileSync(
+      join(cliRound, "verification-results.json"),
+      readFileSync(cliVerificationResults),
+    );
+    for (const seat of verificationRoster) {
+      writeFileSync(
+        join(cliRound, "verdicts", `${seat}.json`),
+        stableStringify(JSON.parse(readFileSync(cliVerificationVerdicts, "utf8"))[seat]),
+      );
+    }
+    const recordsResult = spawnSync("node", [
+      cliMakeRecords,
+      cliRound,
+      "--selection",
+      verificationSelection,
+      "--ledger",
+      join(cliRound, "discovery-ledger.json"),
+      "--responses",
+      join(cliRound, "responses.json"),
+      "--verification-results",
+      join(cliRound, "verification-results.json"),
+      "--approval",
+      cliApproval,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "make-records CLI publishes the complete record set",
+      recordsResult.status === 0 &&
+        verificationRoster.every((seat) =>
+          existsSync(join(cliRound, "records", `${seat}.json`))),
+      `${recordsResult.stdout}${recordsResult.stderr}`,
+    );
     check(
       "metrics CLI writes deterministic canonical metrics",
-      JSON.parse(readFileSync(cliMetrics, "utf8")).artifact_kind === "d2b-panel/metrics",
+      JSON.parse(readFileSync(cliMetrics, "utf8")).artifact_kind === "d2b-panel/metrics" &&
+        JSON.parse(readFileSync(cliMetrics, "utf8")).status === "complete" &&
+        JSON.parse(readFileSync(cliMetrics, "utf8")).degraded === false &&
+        JSON.parse(readFileSync(cliMetrics, "utf8")).metrics.initial_unique_findings > 0 &&
+        JSON.parse(readFileSync(cliMetrics, "utf8")).metrics.average_fixed_issues_per_implementation_iteration > 0,
     );
+    const canonicalVerificationResultsBytes = readFileSync(cliVerificationResults);
+    const tamperedMetricsVerification = JSON.parse(
+      readFileSync(cliVerificationResults, "utf8"),
+    );
+    tamperedMetricsVerification.results[0].verified_issue_statuses.R1 = "accepted";
+    writeFileSync(cliVerificationResults, stableStringify(tamperedMetricsVerification));
+    const degradedMetrics = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "metrics",
+      "--selection",
+      verificationSelection,
+      "--ledger",
+      cliLedger,
+      "--responses",
+      cliResponses,
+      "--verification-results",
+      cliVerificationResults,
+      "--output",
+      join(cliRoot, "tampered-metrics.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "metrics refuses a non-passing verification status",
+      degradedMetrics.status !== 0 &&
+        /passing verification|status/.test(
+          `${degradedMetrics.stdout}${degradedMetrics.stderr}`,
+        ),
+    );
+    writeFileSync(cliVerificationResults, canonicalVerificationResultsBytes);
     check(
       "public CLI integration produces named lifecycle artifacts",
       readFileSync(discoveryRequest, "utf8").includes("comprehensive") &&
@@ -1088,7 +1492,12 @@ console.log("panel lifecycle: legacy continuation");
       candidate: legacyCandidate,
     },
   );
-  check("complete legacy ten-seat import is recognized", imported.complete === true && imported.discovery_required === false);
+  check(
+    "object legacy ten-seat import stays partial without exact bytes",
+    imported.complete === false &&
+      imported.discovery_required === true &&
+      imported.discovery_mode === "run-one-current-discovery",
+  );
   check("legacy source identity includes digest, seat, and ordinal", imported.sources[0].source_id.includes("software:1"));
   check("legacy raw recommendation text is preserved", imported.sources[0].raw_text === "[critical] unsafe source");
   check("legacy attribution is preserved", imported.sources[0].raw_attribution === "software");
@@ -1100,6 +1509,33 @@ console.log("panel lifecycle: legacy continuation");
   check("legacy rust maps responsibility to software Rust profile", imported.responsibilities.some((item) => item.legacy_seat === "rust" && item.current_seat === "software" && item.profile === "rust"));
   check("legacy rust profile is bound to current software", imported.profiles.software.includes("rust"));
   check("current build selection widens the imported roster", imported.lifecycle_roster.includes("build"));
+  const exactLegacyRecordBytes = Object.fromEntries(
+    legacyWireRecords.map((record) => [record.role, stableStringify(record)]),
+  );
+  const exactLegacyAttestation = {
+    roles: legacyRequest.roles,
+    records: legacyWireRecords.map((record) => ({
+      role: record.role,
+      file: `${record.role}.json`,
+      sha256: sha256(stableStringify(record)),
+      run_id: record.run_id,
+    })),
+    unanimous: false,
+  };
+  const exactObjectImport = importLegacyRound(
+    {
+      request: legacyRequest,
+      records: legacyWireRecords,
+      record_bytes: exactLegacyRecordBytes,
+      attestation: exactLegacyAttestation,
+    },
+    { candidate: legacyCandidate },
+  );
+  check(
+    "object legacy import is complete only with exact record bytes and attestation digests",
+    exactObjectImport.complete === true &&
+      exactObjectImport.discovery_required === false,
+  );
   const importedWithPriorSelection = importLegacyRound(
     legacyBundle,
     {

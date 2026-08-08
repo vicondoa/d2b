@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  adaptVerificationVerdict,
   createApprovalArtifact,
   sha256,
   stableStringify,
@@ -118,28 +119,60 @@ function buildRound(mutate) {
     verdicts: Object.fromEntries(ROLES.map((r) => [r, {
       engineer: r,
       signoff: true,
-      summary: `${r} seat reviewed the delta.`,
-      recommendations: [],
-    }])),
-  };
-
-  const selectionBytes = stableStringify(state.selection);
-  const ledgerBytes = stableStringify(state.ledger);
-  state.address.selection_sha256 = sha256(selectionBytes);
-  state.approval = createApprovalArtifact({
-    current_selection: state.selection,
-    discovery_ledger: state.ledger,
-    current_candidate: state.candidate,
-    responses: [],
-    verification_results: Object.fromEntries(ROLES.map((role) => [role, {
-      seat: role,
-      complete: true,
-      signoff: true,
       summary: "Verified.",
       recommendations: [],
       verified_issue_statuses: {},
       late_findings: [],
     }])),
+  };
+
+  const selectionBytes = stableStringify(state.selection);
+  const ledgerBytes = stableStringify(state.ledger);
+  state.responses = {
+    artifact_kind: "d2b-panel/implementation-responses",
+    schema_version: 1,
+    selection_schema_version: 1,
+    selection_table_version: 2,
+    lifecycle_id: "spec001w1",
+    program: "SPEC001",
+    wave: "spec001w1",
+    candidate_id: "cand-0001",
+    content_id: "content-0001",
+    snapshot_sha256: "f".repeat(64),
+    roster: ROLES,
+    responses: [],
+  };
+  state.verificationResults = {
+    artifact_kind: "d2b-panel/verification",
+    schema_version: 1,
+    phase: "verification",
+    lifecycle_id: "spec001w1",
+    selection_sha256: sha256(selectionBytes),
+    current_candidate: state.candidate,
+    discovery_ledger_sha256: sha256(ledgerBytes),
+    results: Object.fromEntries(ROLES.map((role) => [role, {
+      seat: role,
+      complete: true,
+      signoff: true,
+      summary: "Verified.",
+      blocking_recommendations: [],
+      recommendations: [],
+      verified_issue_statuses: {},
+      late_findings: [],
+    }])),
+  };
+  const responseBytes = stableStringify(state.responses);
+  const verificationResultsBytes = stableStringify(state.verificationResults);
+  state.address.selection_sha256 = sha256(selectionBytes);
+  state.approval = createApprovalArtifact({
+    current_selection: state.selection,
+    discovery_ledger: state.ledger,
+    current_candidate: state.candidate,
+    ledger_bytes: ledgerBytes,
+    responses: state.responses,
+    responses_bytes: responseBytes,
+    verification_results: state.verificationResults,
+    verification_results_bytes: verificationResultsBytes,
   });
   if (mutate) mutate(state);
   const finalSelectionBytes = stableStringify(state.selection);
@@ -149,6 +182,8 @@ function buildRound(mutate) {
   writeFileSync(join(dir, "selection.json"), finalSelectionBytes);
   writeFileSync(join(dir, "ledger.json"), finalLedgerBytes);
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
+  writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
+  writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
   writeFileSync(join(dir, "observed.json"), stableStringify(state.observed));
   for (const [role, v] of Object.entries(state.verdicts)) {
     writeFileSync(join(dir, "verdicts", `${role}.json`), stableStringify(v));
@@ -165,6 +200,12 @@ function run(dir) {
         dir,
         "--selection",
         join(dir, "selection.json"),
+        "--ledger",
+        join(dir, "ledger.json"),
+        "--responses",
+        join(dir, "responses.json"),
+        "--verification-results",
+        join(dir, "verification-results.json"),
         "--approval",
         join(dir, "approval.json"),
       ],
@@ -213,12 +254,8 @@ console.log("make-records: the happy path");
   }
 }
 
-console.log("make-records: a structured finding reaches the seal as a string");
+console.log("make-records: verdict tampering cannot bypass approval");
 {
-  // The shared finding bar asks each seat for an object. `PanelRecord` in
-  // packages/xtask/src/delivery/panel.rs is `Vec<String>`, so an object
-  // written through verbatim passes every check here and then fails
-  // deserialization at the seal. This case is the guard against that.
   const dir = buildRound((s) => {
     s.verdicts.agentic.signoff = false;
     s.verdicts.agentic.recommendations = [{
@@ -231,31 +268,12 @@ console.log("make-records: a structured finding reaches the seal as a string");
   });
   try {
     const r = run(dir);
-    // Exit 3 is the designed non-unanimous verdict: the records are written,
-    // the round does not pass. The point of this case is the record contents.
-    check("a round carrying an object finding still writes records", r.code === 3, `exit ${r.code}: ${r.err}`);
-    const p = join(dir, "records", "agentic.json");
-    if (existsSync(p)) {
-      const rec = JSON.parse(readFileSync(p, "utf8"));
-      const got = rec.recommendations[0];
-      check(
-        "an object finding is rendered to a string, not written through as an object",
-        typeof got === "string",
-        `recommendations[0] is ${typeof got}: ${JSON.stringify(got)}`,
-      );
-      check(
-        "the rendered finding keeps its severity",
-        typeof got === "string" && got.includes("critical"),
-        JSON.stringify(got),
-      );
-      check(
-        "the rendered finding keeps its location and fix",
-        typeof got === "string" && got.includes("lib.rs:1") && got.includes("stop doing that"),
-        JSON.stringify(got),
-      );
-    } else {
-      check("a record was written for the seat carrying the object finding", false, "records/agentic.json missing");
-    }
+    check(
+      "a verdict changed after approval is refused",
+      r.code !== 0 &&
+        /exact adapted verification-result bytes|approval artifact bytes|canonical inputs|recompute/.test(`${r.out}${r.err}`),
+      `${r.out}${r.err}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -279,24 +297,82 @@ console.log("make-records: approval and publication preflight");
 {
   const dir = buildRound();
   try {
+    const missingLedger = execFileSync(
+      "node",
+      [
+        script,
+        dir,
+        "--selection",
+        join(dir, "selection.json"),
+        "--responses",
+        join(dir, "responses.json"),
+        "--verification-results",
+        join(dir, "verification-results.json"),
+        "--approval",
+        join(dir, "approval.json"),
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    check("canonical ledger flag is required", false, missingLedger);
+  } catch (cause) {
+    check(
+      "canonical ledger flag is required",
+      cause.status === 2 && /--ledger <discovery-ledger\.json>/.test(
+        `${cause.stdout ?? ""}${cause.stderr ?? ""}`,
+      ),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
     const first = run(dir);
-    const before = readFileSync(join(dir, "records", "software.json"), "utf8");
-    const verdictPath = join(dir, "verdicts", "software.json");
-    const verdict = JSON.parse(readFileSync(verdictPath, "utf8"));
-    verdict.summary = "A different verdict.";
-    writeFileSync(verdictPath, stableStringify(verdict));
+    const recordPath = join(dir, "records", "software.json");
+    const before = readFileSync(recordPath, "utf8");
+    writeFileSync(recordPath, `${before}tampered\n`);
     const conflict = run(dir);
     check(
       "conflicting record bytes are refused after complete preflight",
       first.code === 0 &&
         conflict.code !== 0 &&
         /conflicting generated record bytes/.test(`${conflict.out}${conflict.err}`) &&
-        readFileSync(join(dir, "records", "software.json"), "utf8") === before,
+        readFileSync(recordPath, "utf8") !== before,
+      `first=${first.code} conflict=${conflict.code} output=${conflict.out}${conflict.err}`,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+rejects(
+  "tampered implementation response bytes are refused",
+  (s) => {
+    s.responses.responses = [{
+      issue_id: "unexpected",
+      disposition: "Fixed",
+      changed_surface: ["x"],
+      justification: "tampered",
+      evidence: "tampered",
+    }];
+  },
+  /implementation responses|exact implementation response bytes|approval artifact bytes|canonical inputs/,
+);
+rejects(
+  "tampered adapted verification bytes are refused",
+  (s) => {
+    s.verificationResults.results.software.summary = "tampered";
+  },
+  /adapted verification-result bytes|approval artifact bytes|canonical inputs/,
+);
+rejects(
+  "tampered approval bytes are refused",
+  (s) => {
+    s.approval.approved = false;
+  },
+  /approval artifact|canonical inputs/,
+);
 
 console.log("make-records: legacy Gemini is rejected by current records");
 {

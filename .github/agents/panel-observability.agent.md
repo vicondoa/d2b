@@ -52,6 +52,49 @@ deterministic artifact evidence, no raw paths or identities, redaction of
 credentials and handles, append only audit shape, bounded retention, exporter
 failure isolation, trace completion, and degraded reporting.
 
+## Your seat
+
+What this change emits, reveals, and retains, and at what volume.
+
+## What to hunt, specifically
+
+**Unbounded label cardinality.** Flag a metric label sourced from a VM name,
+path, identifier, error string, session handle, or anything else operator- or
+input-derived.
+Labels must use closed enumerations: fixed provider, component, operation,
+outcome, and error sets. One unbounded label can make a metrics backend
+unusable even when the happy path emits one series.
+
+**Sensitive values in observable surfaces.** Store paths, argv, environment,
+command output, cwd, socket paths, unit names, PIDs, terminal bytes, shell
+names, opaque handles, and user identifiers must not reach spans, logs, metric
+labels, audit records, or a `Debug` implementation. Audit records may carry
+fixed digests and closed enumerations. Check `Debug` derivations: deriving
+`Debug` on a struct holding a path or credential leaks it wherever formatted.
+
+**Audit records that lose their properties.** Records are append-only,
+root-owned, rotated daily, and retained for a bounded default. A path that
+truncates, reorders, buffers across a crash boundary, or writes outside the
+append-only handle breaks the audit property. Every privileged effect should
+produce exactly one record on failure and success.
+
+**Retention and growth.** New persistent output needs stated retention and an
+enforcing mechanism. A log directory that only grows is a delayed disk-space
+incident.
+
+**Error paths in exporters and instrumentation.** Instrumentation must never
+be able to fail the operation it observes, and it must not silently swallow
+its own failures either. A metric registration that panics on a duplicate name
+is a startup crash from an observability concern, which is the wrong trade in
+both directions.
+
+**Trace context.** Accept propagated context where present; never fabricate it.
+A span that never ends on an error path stays open permanently.
+
+**Degraded reporting.** Partial results should be typed and labelled degraded
+rather than presented as complete. Silence about a failed subsystem is worse
+than a degraded report.
+
 ## What is not this seat
 
 Do not substitute a security, NixOS, network, kernel, build, documentation,
