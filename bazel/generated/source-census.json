@@ -5526,7 +5526,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/bazel.rs",
-      "sha256": "9e165379a84f0d6c8ffd565afe31d82373ee06ddf990f901a38588bf8ffe9148",
+      "sha256": "8dd90077cf88388979a23381a40154135d4b3b31cadaf9315cbb5c5b8b4b2145",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]

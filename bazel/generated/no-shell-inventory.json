@@ -7555,9 +7555,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "spawnSiteCount": 3,
       "spawnSiteKeys": [
-        "packages/xtask/src/bazel.rs:1899:22:\"cargo\"",
+        "packages/xtask/src/bazel.rs:1899:27:\"cargo\"",
         "packages/xtask/src/bazel.rs:217:27:executable",
-        "packages/xtask/src/bazel.rs:3167:18:\"git\""
+        "packages/xtask/src/bazel.rs:3169:18:\"git\""
       ],
       "status": "scanned"
     },
@@ -8822,9 +8822,9 @@
       "shellInvocation": false,
       "source": "packages/xtask/src/bazel.rs",
       "span": {
-        "endColumn": 43,
+        "endColumn": 48,
         "endLine": 1899,
-        "startColumn": 22,
+        "startColumn": 27,
         "startLine": 1899
       }
     },
@@ -8845,9 +8845,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 37,
-        "endLine": 3167,
+        "endLine": 3169,
         "startColumn": 18,
-        "startLine": 3167
+        "startLine": 3169
       }
     },
     {
