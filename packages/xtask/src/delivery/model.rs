@@ -116,6 +116,13 @@ pub const PANEL_SELECTION_ARTIFACT_KIND: &str = "d2b-panel/lifecycle-selection";
 pub const PANEL_SELECTION_SCHEMA_VERSION: u32 = 1;
 pub const PANEL_SELECTION_TABLE_VERSION: u32 = 2;
 
+/// The panel selector's table is a repository contract, not a second Rust
+/// configuration surface. Including the checked-in table makes every delivery
+/// consumer validate the same mandatory seats, triggers, floors, order, and
+/// profiles as the lifecycle helper.
+const AUTHORITATIVE_SELECTION_TABLE: &str =
+    include_str!("../../../../.github/skills/d2b-panel-round/selection-table.json");
+
 macro_rules! digest_identifier {
     ($name:ident, $label:literal) => {
         #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -396,6 +403,417 @@ impl PanelRole {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionTable {
+    artifact_kind: String,
+    selection_table_version: u32,
+    mandatory_seats: Vec<String>,
+    optional_seats: Vec<String>,
+    floors: BTreeMap<String, u32>,
+    fill_order: Vec<String>,
+    seats: BTreeMap<String, SelectionSeat>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionSeat {
+    class: String,
+    focus: String,
+    triggers: Vec<SelectionTrigger>,
+    profiles: BTreeMap<String, SelectionProfile>,
+    #[serde(default)]
+    citation_only_prose_does_not_trigger: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionProfile {
+    paths: Vec<String>,
+    signals: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionTrigger {
+    kind: String,
+    #[serde(default)]
+    patterns: Option<Vec<String>>,
+    #[serde(default)]
+    values: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+struct SelectionInputs {
+    changed_paths: Vec<String>,
+    signals: Vec<String>,
+}
+
+fn authoritative_selection_table() -> Result<SelectionTable> {
+    let table: SelectionTable =
+        serde_json::from_str(AUTHORITATIVE_SELECTION_TABLE).map_err(|error| {
+            DeliveryError::new(format!(
+                "authoritative panel selection table is invalid: {error}"
+            ))
+        })?;
+    validate_selection_table(&table)?;
+    Ok(table)
+}
+
+fn validate_selection_table(table: &SelectionTable) -> Result<()> {
+    if table.artifact_kind != "d2b-panel/selection-table" {
+        return Err(DeliveryError::new(
+            "authoritative panel selection table has an unexpected artifact kind",
+        ));
+    }
+    if table.selection_table_version != PANEL_SELECTION_TABLE_VERSION {
+        return Err(DeliveryError::new(format!(
+            "authoritative panel selection table version must be {PANEL_SELECTION_TABLE_VERSION}"
+        )));
+    }
+    if table.mandatory_seats.is_empty() || table.optional_seats.is_empty() {
+        return Err(DeliveryError::new(
+            "authoritative panel selection table must define mandatory and optional seats",
+        ));
+    }
+    if table.fill_order != table.optional_seats {
+        return Err(DeliveryError::new(
+            "authoritative panel selection table fill_order must exactly match optional_seats",
+        ));
+    }
+
+    let mut all_seats = BTreeSet::new();
+    for seat in table
+        .mandatory_seats
+        .iter()
+        .chain(table.optional_seats.iter())
+    {
+        if !all_seats.insert(seat.as_str()) {
+            return Err(DeliveryError::new(format!(
+                "authoritative panel selection table repeats seat {seat}"
+            )));
+        }
+        if current_role_named(seat).is_none() {
+            return Err(DeliveryError::new(format!(
+                "authoritative panel selection table names unsupported seat {seat}"
+            )));
+        }
+    }
+    if table.seats.len() != all_seats.len()
+        || table
+            .seats
+            .keys()
+            .any(|seat| !all_seats.contains(seat.as_str()))
+    {
+        return Err(DeliveryError::new(
+            "authoritative panel selection table seat definitions do not match its seat domain",
+        ));
+    }
+
+    for seat in &table.mandatory_seats {
+        validate_selection_seat(table, seat, "mandatory")?;
+    }
+    for seat in &table.optional_seats {
+        validate_selection_seat(table, seat, "optional")?;
+    }
+
+    const FLOOR_CLASSES: [&str; 4] = ["code", "configuration", "documentation", "ambiguous"];
+    if table.floors.len() != FLOOR_CLASSES.len()
+        || FLOOR_CLASSES
+            .iter()
+            .any(|candidate_class| !table.floors.contains_key(*candidate_class))
+    {
+        return Err(DeliveryError::new(
+            "authoritative panel selection table floors must define exactly the four candidate classes",
+        ));
+    }
+    for candidate_class in FLOOR_CLASSES {
+        let floor = table
+            .floors
+            .get(candidate_class)
+            .copied()
+            .expect("checked above");
+        if floor < table.mandatory_seats.len() as u32 {
+            return Err(DeliveryError::new(format!(
+                "authoritative panel selection table floor for {candidate_class} is below its \
+                 mandatory seat count"
+            )));
+        }
+    }
+
+    let table_order = table
+        .mandatory_seats
+        .iter()
+        .chain(table.fill_order.iter())
+        .map(|seat| current_role_named(seat).expect("seat domain was checked above"))
+        .collect::<Vec<_>>();
+    if table_order != PANEL_CURRENT_ROLES {
+        return Err(DeliveryError::new(
+            "authoritative panel selection table order does not match the current role domain",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_selection_seat(table: &SelectionTable, seat: &str, expected_class: &str) -> Result<()> {
+    let definition = table.seats.get(seat).ok_or_else(|| {
+        DeliveryError::new(format!(
+            "authoritative panel selection table has no definition for seat {seat}"
+        ))
+    })?;
+    if definition.class != expected_class {
+        return Err(DeliveryError::new(format!(
+            "authoritative panel selection table class for {seat} is not {expected_class}"
+        )));
+    }
+    validate_bounded_string(&definition.focus, "selection-table seat focus")?;
+    for trigger in &definition.triggers {
+        match trigger.kind.as_str() {
+            "always" => {
+                if trigger.patterns.is_some() || trigger.values.is_some() {
+                    return Err(DeliveryError::new(format!(
+                        "authoritative panel selection table always trigger for {seat} has \
+                         unexpected fields"
+                    )));
+                }
+            }
+            "path" => {
+                let patterns = trigger.patterns.as_ref().ok_or_else(|| {
+                    DeliveryError::new(format!(
+                        "authoritative panel selection table path trigger for {seat} has no patterns"
+                    ))
+                })?;
+                if patterns.is_empty() || trigger.values.is_some() {
+                    return Err(DeliveryError::new(format!(
+                        "authoritative panel selection table path trigger for {seat} is malformed"
+                    )));
+                }
+                for pattern in patterns {
+                    validate_bounded_string(pattern, "selection-table path pattern")?;
+                }
+            }
+            "signal" => {
+                let values = trigger.values.as_ref().ok_or_else(|| {
+                    DeliveryError::new(format!(
+                        "authoritative panel selection table signal trigger for {seat} has no values"
+                    ))
+                })?;
+                if values.is_empty() || trigger.patterns.is_some() {
+                    return Err(DeliveryError::new(format!(
+                        "authoritative panel selection table signal trigger for {seat} is malformed"
+                    )));
+                }
+                for value in values {
+                    validate_bounded_string(value, "selection-table signal trigger")?;
+                }
+            }
+            other => {
+                return Err(DeliveryError::new(format!(
+                    "authoritative panel selection table has unknown trigger kind {other:?}"
+                )));
+            }
+        }
+    }
+    for (profile, definition) in &definition.profiles {
+        validate_bounded_string(profile, "selection-table profile name")?;
+        for path in &definition.paths {
+            validate_bounded_string(path, "selection-table profile path")?;
+        }
+        for signal in &definition.signals {
+            validate_bounded_string(signal, "selection-table profile signal")?;
+        }
+    }
+    Ok(())
+}
+
+fn current_role_named(name: &str) -> Option<PanelRole> {
+    PANEL_CURRENT_ROLES
+        .iter()
+        .copied()
+        .find(|role| role.as_str() == name)
+}
+
+fn table_roles(names: &[String], label: &str) -> Result<Vec<PanelRole>> {
+    names
+        .iter()
+        .map(|name| {
+            current_role_named(name).ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "authoritative panel selection table {label} names unsupported seat {name}"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn selection_inputs(value: &Value) -> Result<SelectionInputs> {
+    let object = value.as_object().ok_or_else(|| {
+        DeliveryError::new("panel selection classification_inputs must be an object")
+    })?;
+    let raw_changed_paths = object
+        .get("changed_paths")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            DeliveryError::new(
+                "panel selection classification_inputs must contain a changed_paths array",
+            )
+        })?
+        .iter()
+        .map(|value| {
+            let path = value.as_str().ok_or_else(|| {
+                DeliveryError::new(
+                    "panel selection classification_inputs changed_paths entries must be strings",
+                )
+            })?;
+            validate_bounded_string(path, "panel selection changed path")?;
+            if path.chars().any(char::is_control) {
+                return Err(DeliveryError::new(
+                    "panel selection changed paths must not contain control characters",
+                ));
+            }
+            Ok(path.to_owned())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let canonical_changed_paths = raw_changed_paths
+        .iter()
+        .map(|path| path.replace('\\', "/"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if raw_changed_paths != canonical_changed_paths {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs changed_paths must be unique and sorted",
+        ));
+    }
+
+    let raw_signals = object
+        .get("signals")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            DeliveryError::new("panel selection classification_inputs must contain a signals array")
+        })?
+        .iter()
+        .map(|value| {
+            let signal = value.as_str().ok_or_else(|| {
+                DeliveryError::new(
+                    "panel selection classification_inputs signals entries must be strings",
+                )
+            })?;
+            validate_bounded_string(signal, "panel selection signal")?;
+            if signal.chars().any(char::is_control) {
+                return Err(DeliveryError::new(
+                    "panel selection signals must not contain control characters",
+                ));
+            }
+            Ok(signal.to_owned())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let canonical_signals = raw_signals
+        .iter()
+        .map(|signal| signal.trim().to_ascii_lowercase())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if raw_signals != canonical_signals {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs signals must be unique, lowercase, and sorted",
+        ));
+    }
+
+    if let Some(candidate_class) = object.get("candidate_class") {
+        let candidate_class = candidate_class.as_str().ok_or_else(|| {
+            DeliveryError::new(
+                "panel selection classification_inputs candidate_class must be a string",
+            )
+        })?;
+        validate_bounded_string(candidate_class, "panel selection candidate class")?;
+    }
+    if let Some(ambiguous) = object.get("ambiguous")
+        && !ambiguous.is_boolean()
+    {
+        return Err(DeliveryError::new(
+            "panel selection classification_inputs ambiguous must be boolean",
+        ));
+    }
+
+    Ok(SelectionInputs {
+        changed_paths: canonical_changed_paths,
+        signals: canonical_signals,
+    })
+}
+
+fn trigger_matches(trigger: &SelectionTrigger, inputs: &SelectionInputs) -> bool {
+    match trigger.kind.as_str() {
+        "always" => true,
+        "path" => trigger.patterns.as_ref().is_some_and(|patterns| {
+            inputs
+                .changed_paths
+                .iter()
+                .any(|path| patterns.iter().any(|pattern| glob_matches(path, pattern)))
+        }),
+        "signal" => trigger.values.as_ref().is_some_and(|values| {
+            values.iter().any(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                inputs.signals.iter().any(|signal| signal == &value)
+            })
+        }),
+        _ => false,
+    }
+}
+
+fn glob_matches(path: &str, pattern: &str) -> bool {
+    fn visit(
+        path: &[u8],
+        pattern: &[u8],
+        path_index: usize,
+        pattern_index: usize,
+        memo: &mut BTreeMap<(usize, usize), bool>,
+    ) -> bool {
+        if let Some(result) = memo.get(&(path_index, pattern_index)) {
+            return *result;
+        }
+        let result = if pattern_index == pattern.len() {
+            path_index == path.len()
+        } else if pattern[pattern_index] == b'*' {
+            if pattern.get(pattern_index + 1) == Some(&b'*') {
+                let next = pattern_index + 2;
+                if pattern.get(next) == Some(&b'/') {
+                    visit(path, pattern, path_index, next + 1, memo)
+                        || (path_index < path.len()
+                            && visit(path, pattern, path_index + 1, pattern_index, memo))
+                } else {
+                    visit(path, pattern, path_index, next, memo)
+                        || (path_index < path.len()
+                            && visit(path, pattern, path_index + 1, pattern_index, memo))
+                }
+            } else {
+                visit(path, pattern, path_index, pattern_index + 1, memo)
+                    || (path_index < path.len()
+                        && path[path_index] != b'/'
+                        && visit(path, pattern, path_index + 1, pattern_index, memo))
+            }
+        } else if pattern[pattern_index] == b'?' {
+            path_index < path.len()
+                && path[path_index] != b'/'
+                && visit(path, pattern, path_index + 1, pattern_index + 1, memo)
+        } else {
+            path_index < path.len()
+                && path[path_index].eq_ignore_ascii_case(&pattern[pattern_index])
+                && visit(path, pattern, path_index + 1, pattern_index + 1, memo)
+        };
+        memo.insert((path_index, pattern_index), result);
+        result
+    }
+
+    visit(
+        path.as_bytes(),
+        pattern.as_bytes(),
+        0,
+        0,
+        &mut BTreeMap::new(),
+    )
+}
+
 /// The candidate-bound selection artifact shared by the lifecycle helper and
 /// the delivery request writer.
 ///
@@ -473,20 +891,38 @@ impl PanelSelectionV1 {
                 "panel selection candidate digests must exactly match the candidate snapshot",
             ));
         }
-        if self.selection_table_version != PANEL_SELECTION_TABLE_VERSION {
+        let table = authoritative_selection_table()?;
+        if self.selection_table_version != table.selection_table_version {
             return Err(DeliveryError::new(format!(
-                "panel selection table version must be {PANEL_SELECTION_TABLE_VERSION}"
+                "panel selection table version must be {}",
+                table.selection_table_version
             )));
         }
-        if !matches!(
-            self.candidate_class.as_str(),
-            "code" | "configuration" | "documentation" | "ambiguous"
-        ) {
+        if !table.floors.contains_key(&self.candidate_class) {
             return Err(DeliveryError::new(
                 "panel selection candidate class is not supported",
             ));
         }
-        validate_selection_classification_inputs(&self.classification_inputs)?;
+        let inputs = selection_inputs(&self.classification_inputs)?;
+        let table_order = table
+            .mandatory_seats
+            .iter()
+            .chain(table.fill_order.iter())
+            .map(|seat| current_role_named(seat).expect("validated selection table seat"))
+            .collect::<Vec<_>>();
+        let mandatory = table_roles(&table.mandatory_seats, "mandatory_seats")?;
+        let triggered_optional = table
+            .optional_seats
+            .iter()
+            .filter_map(|seat| {
+                let definition = table
+                    .seats
+                    .get(seat)
+                    .expect("validated selection table seat definition");
+                trigger_matches_for_seat(definition, &inputs)
+                    .then(|| current_role_named(seat).expect("validated selection table seat"))
+            })
+            .collect::<Vec<_>>();
 
         if self.roster.is_empty() {
             return Err(DeliveryError::new(
@@ -508,7 +944,23 @@ impl PanelSelectionV1 {
                 )));
             }
         }
-        let canonical = PANEL_CURRENT_ROLES
+        for role in mandatory {
+            if !seen.contains(&role) {
+                return Err(DeliveryError::new(format!(
+                    "panel selection roster omits mandatory seat {}",
+                    role.as_str()
+                )));
+            }
+        }
+        for role in triggered_optional {
+            if !seen.contains(&role) {
+                return Err(DeliveryError::new(format!(
+                    "panel selection roster omits triggered optional seat {}",
+                    role.as_str()
+                )));
+            }
+        }
+        let canonical = table_order
             .iter()
             .copied()
             .filter(|role| seen.contains(role))
@@ -518,11 +970,12 @@ impl PanelSelectionV1 {
                 "panel selection roster is not in selection-table order",
             ));
         }
-        let floor = match self.candidate_class.as_str() {
-            "documentation" => 8,
-            "code" | "configuration" | "ambiguous" => 10,
-            _ => unreachable!("candidate class was checked above"),
-        };
+        let floor = table
+            .floors
+            .get(&self.candidate_class)
+            .copied()
+            .expect("candidate class was checked against the authoritative table")
+            as usize;
         if self.roster.len() < floor {
             return Err(DeliveryError::new(format!(
                 "panel selection roster has {} seats but this candidate class requires at least {floor}",
@@ -542,6 +995,10 @@ impl PanelSelectionV1 {
                     role.as_str()
                 ))
             })?;
+            let definition = table
+                .seats
+                .get(role.as_str())
+                .expect("validated selection table seat definition");
             let mut profile_names = BTreeSet::new();
             for profile in profiles {
                 validate_bounded_string(profile, "panel selection profile")?;
@@ -549,6 +1006,31 @@ impl PanelSelectionV1 {
                     return Err(DeliveryError::new(format!(
                         "panel selection repeats profile for seat {}",
                         role.as_str()
+                    )));
+                }
+                if !definition.profiles.contains_key(profile) {
+                    return Err(DeliveryError::new(format!(
+                        "panel selection profile {}/{} is not defined by the selection table",
+                        role.as_str(),
+                        profile
+                    )));
+                }
+            }
+            for (profile, profile_definition) in &definition.profiles {
+                let required = profile_definition.paths.iter().any(|pattern| {
+                    inputs
+                        .changed_paths
+                        .iter()
+                        .any(|path| glob_matches(path, pattern))
+                }) || profile_definition.signals.iter().any(|signal| {
+                    let signal = signal.trim().to_ascii_lowercase();
+                    inputs.signals.iter().any(|input| input == &signal)
+                });
+                if required && !profile_names.contains(profile) {
+                    return Err(DeliveryError::new(format!(
+                        "panel selection profile {}/{} is missing for its classification inputs",
+                        role.as_str(),
+                        profile
                     )));
                 }
             }
@@ -566,26 +1048,11 @@ impl PanelSelectionV1 {
     }
 }
 
-fn validate_selection_classification_inputs(value: &Value) -> Result<()> {
-    let object = value.as_object().ok_or_else(|| {
-        DeliveryError::new("panel selection classification_inputs must be an object")
-    })?;
-    for key in ["changed_paths", "signals"] {
-        let values = object.get(key).and_then(Value::as_array).ok_or_else(|| {
-            DeliveryError::new(format!(
-                "panel selection classification_inputs must contain a {key} array"
-            ))
-        })?;
-        for value in values {
-            let text = value.as_str().ok_or_else(|| {
-                DeliveryError::new(format!(
-                    "panel selection classification_inputs {key} entries must be strings"
-                ))
-            })?;
-            validate_bounded_string(text, "panel selection classification input")?;
-        }
-    }
-    Ok(())
+fn trigger_matches_for_seat(definition: &SelectionSeat, inputs: &SelectionInputs) -> bool {
+    definition
+        .triggers
+        .iter()
+        .any(|trigger| trigger_matches(trigger, inputs))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -1538,5 +2005,264 @@ mod tests {
         assert_eq!(PANEL_REASONING_EFFORT_POLICY, "xhigh");
         assert_eq!(PANEL_LEGACY_MODEL_POLICY, "gemini-3.1-pro-preview");
         assert_eq!(PANEL_LEGACY_REASONING_EFFORT_POLICY, "high");
+    }
+
+    fn selection(
+        roster: &[PanelRole],
+        candidate_class: &str,
+        changed_paths: &[&str],
+        signals: &[&str],
+        software_profiles: &[&str],
+    ) -> PanelSelectionV1 {
+        let material = material();
+        let digests = material.digests().expect("digests");
+        PanelSelectionV1 {
+            artifact_kind: PANEL_SELECTION_ARTIFACT_KIND.to_owned(),
+            schema_version: PANEL_SELECTION_SCHEMA_VERSION,
+            lifecycle_id: "selection-tests".to_owned(),
+            phase: "discovery".to_owned(),
+            program: material.program,
+            wave: material.wave,
+            candidate_id: digests.candidate_id,
+            content_id: digests.content_id,
+            snapshot_sha256: digests.snapshot_sha256,
+            selection_table_version: PANEL_SELECTION_TABLE_VERSION,
+            candidate_class: candidate_class.to_owned(),
+            classification_inputs: serde_json::json!({
+                "changed_paths": changed_paths,
+                "signals": signals,
+            }),
+            ambiguity_widened: candidate_class == "ambiguous",
+            profiles: roster
+                .iter()
+                .map(|role| {
+                    let profiles = if *role == PanelRole::Software {
+                        software_profiles
+                            .iter()
+                            .map(|profile| (*profile).to_owned())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    (role.as_str().to_owned(), profiles)
+                })
+                .collect(),
+            roster: roster.to_vec(),
+        }
+    }
+
+    #[test]
+    fn selection_validation_uses_table_mandatory_seats_and_floors() {
+        let mandatory_only = selection(&PANEL_CURRENT_ROLES[..7], "code", &[], &[], &[]);
+        let error = mandatory_only
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("code selection below the table floor must fail");
+        assert!(error.message().contains("requires at least 10"), "{error}");
+
+        let missing_software = selection(
+            &[
+                PanelRole::Test,
+                PanelRole::Product,
+                PanelRole::Docs,
+                PanelRole::Security,
+                PanelRole::Observability,
+                PanelRole::Simplicity,
+                PanelRole::Reliability,
+                PanelRole::Agentic,
+                PanelRole::Nixos,
+                PanelRole::Networking,
+            ],
+            "code",
+            &[],
+            &[],
+            &[],
+        );
+        let error = missing_software
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("a selection omitting a mandatory seat must fail");
+        assert!(
+            error.message().contains("mandatory seat software"),
+            "{error}"
+        );
+
+        let documentation = selection(&PANEL_CURRENT_ROLES[..8], "documentation", &[], &[], &[]);
+        documentation
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("documentation floor and mandatory seats come from the table");
+    }
+
+    #[test]
+    fn selection_validation_requires_every_triggered_optional_seat() {
+        let cases = [
+            (
+                "src/state-machine.rs",
+                &[
+                    PanelRole::Software,
+                    PanelRole::Test,
+                    PanelRole::Product,
+                    PanelRole::Docs,
+                    PanelRole::Security,
+                    PanelRole::Observability,
+                    PanelRole::Simplicity,
+                    PanelRole::Agentic,
+                    PanelRole::Nixos,
+                    PanelRole::Networking,
+                ][..],
+                "reliability",
+            ),
+            (
+                ".github/agents/panel-test.agent.md",
+                &[
+                    PanelRole::Software,
+                    PanelRole::Test,
+                    PanelRole::Product,
+                    PanelRole::Docs,
+                    PanelRole::Security,
+                    PanelRole::Observability,
+                    PanelRole::Simplicity,
+                    PanelRole::Reliability,
+                    PanelRole::Nixos,
+                    PanelRole::Networking,
+                ][..],
+                "agentic",
+            ),
+            (
+                "configuration.nix",
+                &[
+                    PanelRole::Software,
+                    PanelRole::Test,
+                    PanelRole::Product,
+                    PanelRole::Docs,
+                    PanelRole::Security,
+                    PanelRole::Observability,
+                    PanelRole::Simplicity,
+                    PanelRole::Reliability,
+                    PanelRole::Agentic,
+                    PanelRole::Networking,
+                ][..],
+                "nixos",
+            ),
+            (
+                "src/network-firewall.rs",
+                &[
+                    PanelRole::Software,
+                    PanelRole::Test,
+                    PanelRole::Product,
+                    PanelRole::Docs,
+                    PanelRole::Security,
+                    PanelRole::Observability,
+                    PanelRole::Simplicity,
+                    PanelRole::Reliability,
+                    PanelRole::Agentic,
+                    PanelRole::Nixos,
+                ][..],
+                "networking",
+            ),
+            (
+                "src/syscall.rs",
+                &[
+                    PanelRole::Software,
+                    PanelRole::Test,
+                    PanelRole::Product,
+                    PanelRole::Docs,
+                    PanelRole::Security,
+                    PanelRole::Observability,
+                    PanelRole::Simplicity,
+                    PanelRole::Reliability,
+                    PanelRole::Agentic,
+                    PanelRole::Nixos,
+                ][..],
+                "kernel",
+            ),
+        ];
+        for (path, roster, seat) in cases {
+            let selection = selection(roster, "code", &[path], &[], &[]);
+            let error = selection
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .expect_err("a triggered optional seat cannot be omitted");
+            assert!(
+                error.message().contains(&format!("optional seat {seat}")),
+                "{seat}: {error}"
+            );
+        }
+
+        let build = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &["Cargo.toml"],
+            &[],
+            &["rust"],
+        );
+        let error = build
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("Cargo.toml must trigger the optional build seat");
+        assert!(error.message().contains("optional seat build"), "{error}");
+
+        let build_signal = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &[],
+            &["build-contract"],
+            &[],
+        );
+        let error = build_signal
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("a build classification signal must trigger build");
+        assert!(error.message().contains("optional seat build"), "{error}");
+
+        let mut complete = build;
+        complete.roster.push(PanelRole::Build);
+        complete.profiles.insert("build".to_owned(), Vec::new());
+        complete
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("the triggered build seat is accepted when present");
+    }
+
+    #[test]
+    fn selection_validation_requires_table_profiles_and_rejects_unknown_profiles() {
+        let missing_rust = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &["packages/xtask/src/main.rs"],
+            &[],
+            &[],
+        );
+        let error = missing_rust
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("Rust is a required software profile for a Rust path");
+        assert!(error.message().contains("software/rust"), "{error}");
+
+        let unknown = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &[],
+            &[],
+            &["not-a-table-profile"],
+        );
+        let error = unknown
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("profiles outside the table must fail");
+        assert!(
+            error
+                .message()
+                .contains("not defined by the selection table"),
+            "{error}"
+        );
+
+        let duplicate = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &[],
+            &[],
+            &["rust", "rust"],
+        );
+        let error = duplicate
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("duplicate profiles must fail closed");
+        assert!(error.message().contains("repeats profile"), "{error}");
+    }
+
+    fn mandatory_only_snapshot_digests() -> CandidateDigests {
+        material().digests().expect("digests")
     }
 }

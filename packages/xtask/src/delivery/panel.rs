@@ -282,6 +282,16 @@ impl PanelRequest {
         roles: &[PanelRole],
         format: PanelFormat,
     ) -> Self {
+        let (model_version, reasoning_effort) = match format {
+            PanelFormat::Legacy => (
+                PANEL_LEGACY_MODEL_POLICY.to_owned(),
+                PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned(),
+            ),
+            PanelFormat::Current => (
+                PANEL_MODEL_POLICY.to_owned(),
+                PANEL_REASONING_EFFORT_POLICY.to_owned(),
+            ),
+        };
         Self {
             panel_format_version: format.panel_format_version(),
             artifact_kind: PANEL_REQUEST_ARTIFACT_KIND.to_owned(),
@@ -292,8 +302,8 @@ impl PanelRequest {
             content_id: snapshot.content_id.clone(),
             snapshot_sha256: snapshot.snapshot_sha256.clone(),
             provider: PANEL_PROVIDER_POLICY.to_owned(),
-            model_version: PANEL_MODEL_POLICY.to_owned(),
-            reasoning_effort: PANEL_REASONING_EFFORT_POLICY.to_owned(),
+            model_version,
+            reasoning_effort,
             roles: roles.to_vec(),
             record_artifact_kind: PANEL_ATTESTATION_ARTIFACT_KIND.to_owned(),
             record_schema_version: DELIVERY_SCHEMA_VERSION,
@@ -342,20 +352,12 @@ impl PanelRequest {
         )?;
         ensure_schema(self.record_schema_version, "panel record")?;
         validate_program_wave(&self.program, &self.wave)?;
-        ensure_supported_panel_binding(
+        ensure_panel_binding(
+            format,
             &self.provider,
             &self.model_version,
             &self.reasoning_effort,
         )?;
-        if format == PanelFormat::Current
-            && (self.provider != PANEL_PROVIDER_POLICY
-                || self.model_version != PANEL_MODEL_POLICY
-                || self.reasoning_effort != PANEL_REASONING_EFFORT_POLICY)
-        {
-            return Err(DeliveryError::new(
-                "current panel requests must use the current provider/model/effort policy",
-            ));
-        }
         validate_roster_for_format(&self.roles, format, "panel request")?;
         let expected = self
             .roles
@@ -506,8 +508,13 @@ impl PanelRecord {
             "panel record",
         )?;
         ensure_schema(self.schema_version, "panel record")?;
-        ensure_supported_panel_binding(&self.provider, &self.model_version, &self.reasoning_effort)
-            .map_err(|error| DeliveryError::new(format!("panel record {role}: {error}")))?;
+        ensure_panel_binding(
+            self.format()?,
+            &self.provider,
+            &self.model_version,
+            &self.reasoning_effort,
+        )
+        .map_err(|error| DeliveryError::new(format!("panel record {role}: {error}")))?;
         if self.provider != request.provider
             || self.model_version != request.model_version
             || self.reasoning_effort != request.reasoning_effort
@@ -1188,19 +1195,29 @@ pub(crate) fn ensure_artifact_kind(found: &str, expected: &str, label: &str) -> 
     Ok(())
 }
 
-fn ensure_supported_panel_binding(
+fn ensure_panel_binding(
+    format: PanelFormat,
     provider: &str,
     model: &str,
     reasoning_effort: &str,
 ) -> Result<()> {
-    let current = model == PANEL_MODEL_POLICY && reasoning_effort == PANEL_REASONING_EFFORT_POLICY;
-    let legacy = model == PANEL_LEGACY_MODEL_POLICY
-        && reasoning_effort == PANEL_LEGACY_REASONING_EFFORT_POLICY;
-    if provider != PANEL_PROVIDER_POLICY || (!current && !legacy) {
-        return Err(DeliveryError::new(
-            "panel binding must match the current provider/model/effort policy or the exact \
-             legacy Gemini compatibility pair",
-        ));
+    let expected = match format {
+        PanelFormat::Current => (PANEL_MODEL_POLICY, PANEL_REASONING_EFFORT_POLICY),
+        PanelFormat::Legacy => (
+            PANEL_LEGACY_MODEL_POLICY,
+            PANEL_LEGACY_REASONING_EFFORT_POLICY,
+        ),
+    };
+    if provider != PANEL_PROVIDER_POLICY || model != expected.0 || reasoning_effort != expected.1 {
+        let family = match format {
+            PanelFormat::Current => "current",
+            PanelFormat::Legacy => "legacy",
+        };
+        return Err(DeliveryError::new(format!(
+            "{family} panel binding must exactly match provider {PANEL_PROVIDER_POLICY:?}, \
+             model {:?}, and reasoning effort {:?} from its fixed policy",
+            expected.0, expected.1
+        )));
     }
     Ok(())
 }
@@ -1706,6 +1723,39 @@ pub(crate) mod tests {
         let attestation = validate_record_set(&candidate, &request, &files)
             .expect("legacy Gemini records remain compatible");
         assert!(attestation.unanimous);
+    }
+
+    #[test]
+    fn current_records_reject_the_legacy_binding() {
+        let error = reject(|files, _| {
+            rewrite(files, PanelRole::Security, |record| {
+                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
+                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
+            });
+        });
+        assert!(
+            error
+                .message()
+                .contains("current panel binding must exactly match"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_legacy_fixed_ten_family_rejects_the_current_binding() {
+        let scratch = Scratch::new("panel-legacy-current-binding");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let mut request = PanelRequest::legacy_for_snapshot(&snapshot);
+        request.model_version = PANEL_MODEL_POLICY.to_owned();
+        request.reasoning_effort = PANEL_REASONING_EFFORT_POLICY.to_owned();
+        let error = validate_record_set(&candidate, &request, &legacy_record_files(&snapshot))
+            .expect_err("legacy requests must retain the legacy binding");
+        assert!(
+            error
+                .message()
+                .contains("legacy panel binding must exactly match"),
+            "{error}"
+        );
     }
 
     #[test]
