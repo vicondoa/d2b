@@ -1,8 +1,30 @@
+use std::{
+    fs::{self, File},
+    io::Read,
+    os::fd::OwnedFd,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        OnceLock,
+        mpsc::{self, Receiver},
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use command_fds::{CommandFdExt, FdMapping};
+use nix::{
+    fcntl::OFlag,
+    sys::signal::{self, SigSet},
+    unistd::pipe2,
+};
+
 use d2b_bazel_exec::{
     CHILD_STAGE_CODES, ChildIdentity, ContainmentBackend, ExecErrorRecord, ExecStop, GroupIdentity,
     InitialStop, PTRACE_EVENT_EXEC, ProtocolError, RUST_PARENT_STAGE_CODES, SUPERVISOR_STAGE_CODES,
     StatusDecoder, StatusFrame, StatusWriteError, SupervisorProtocol, TerminalStatus,
     classify_status_write, decode_exec_error, encode_status, helper_exit_before_executed,
+    managed_signals,
 };
 
 #[derive(Default)]
@@ -402,4 +424,440 @@ fn parent_supervisor_and_child_stage_tables_are_closed_and_nonempty() {
     }
     assert!(SUPERVISOR_STAGE_CODES.contains(&"D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION"));
     assert!(CHILD_STAGE_CODES.contains(&"D2B-BZLEXEC-CHILD-EXECVEAT"));
+}
+
+struct RealBinaries {
+    supervisor: PathBuf,
+    plant: PathBuf,
+    decoder: PathBuf,
+}
+
+static REAL_BINARIES: OnceLock<RealBinaries> = OnceLock::new();
+
+fn real_binaries() -> &'static RealBinaries {
+    REAL_BINARIES.get_or_init(|| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        let source_dir = root.join("tests/tools/d2b-bazel-exec-supervisor");
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let output_dir =
+            std::env::temp_dir().join(format!("d2b-bazel-exec-supervisor-tests-{suffix}"));
+        fs::create_dir(&output_dir).expect("test output directory");
+        let supervisor = output_dir.join("supervisor");
+        let plant = output_dir.join("plant");
+        let decoder = output_dir.join("decoder");
+        let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+        for (source, output) in [
+            (source_dir.join("supervisor.c"), supervisor.clone()),
+            (source_dir.join("sandbox-crash-plant.c"), plant.clone()),
+        ] {
+            let result = Command::new(&cc)
+                .args([
+                    "-std=c11",
+                    "-O2",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wno-unused-parameter",
+                    "-fno-pie",
+                    "-no-pie",
+                ])
+                .arg(source)
+                .arg("-o")
+                .arg(&output)
+                .status()
+                .expect("C compiler for real supervisor test");
+            assert!(result.success(), "real C test binary compilation failed");
+        }
+
+        let source = source_dir
+            .join("supervisor.c")
+            .to_str()
+            .expect("UTF-8 supervisor source")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let harness = real_decoder_harness(&source);
+        let harness_path = output_dir.join("decoder.c");
+        fs::write(&harness_path, harness).expect("decoder harness");
+        let result = Command::new(&cc)
+            .args([
+                "-std=c11",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-Wno-unused-parameter",
+                "-fno-pie",
+                "-no-pie",
+            ])
+            .arg(&harness_path)
+            .arg("-o")
+            .arg(&decoder)
+            .status()
+            .expect("C compiler for exec transport test");
+        assert!(
+            result.success(),
+            "exec transport harness compilation failed"
+        );
+
+        RealBinaries {
+            supervisor,
+            plant,
+            decoder,
+        }
+    })
+}
+
+fn real_decoder_harness(supervisor_source: &str) -> String {
+    r#"
+#define main d2b_embedded_supervisor_main
+#include "__SUPERVISOR_SOURCE__"
+#undef main
+
+#include <signal.h>
+#include <sys/time.h>
+
+static void write_all(int fd, const unsigned char *bytes, size_t length) {
+  size_t offset = 0;
+  while (offset < length) {
+    ssize_t result = write(fd, bytes + offset, length - offset);
+    if (result > 0) {
+      offset += (size_t)result;
+    } else if (result < 0 && errno == EINTR) {
+      continue;
+    } else {
+      _exit(91);
+    }
+  }
+}
+
+static void interrupt_without_restart(int signal_number) {
+  (void)signal_number;
+}
+
+static int decode_mode(const char *mode, unsigned char child_code) {
+  int pipe_flags = strcmp(mode, "eintr") == 0 ? 0 : O_NONBLOCK;
+  int descriptors[2];
+  if (pipe2(descriptors, pipe_flags | O_CLOEXEC) != 0) return 90;
+
+  pid_t writer = fork();
+  if (writer < 0) return 89;
+  if (writer == 0) {
+    close(descriptors[0]);
+    unsigned char record[D2B_EXEC_ERROR_SIZE] =
+        {'D', '2', 'B', 'E', D2B_PROTOCOL_VERSION, 1, 0, child_code};
+    if (strcmp(mode, "partial") == 0) {
+      write_all(descriptors[1], record, 3);
+    } else if (strcmp(mode, "fragmented") == 0) {
+      write_all(descriptors[1], record, 3);
+      usleep(20000);
+      write_all(descriptors[1], record + 3, 5);
+    } else if (strcmp(mode, "overlong") == 0) {
+      write_all(descriptors[1], record, sizeof(record));
+      write_all(descriptors[1], (const unsigned char *)"x", 1);
+    } else {
+      if (strcmp(mode, "eagain") == 0) usleep(20000);
+      write_all(descriptors[1], record, sizeof(record));
+    }
+    if (strcmp(mode, "held-open") == 0) {
+      usleep(1000000);
+    } else {
+      close(descriptors[1]);
+    }
+    _exit(0);
+  }
+  close(descriptors[1]);
+
+  if (strcmp(mode, "eintr") == 0) {
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = interrupt_without_restart;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGALRM, &action, NULL) != 0) return 88;
+    ualarm(10000, 0);
+  }
+
+  unsigned char record[D2B_EXEC_ERROR_SIZE] = {0};
+  size_t length = 0;
+  int eof = 0;
+  int probe_complete = 0;
+  int pending = 0;
+  int64_t deadline = d2b_monotonic_ms() + 300;
+  int result = D2B_EXEC_RECORD_PENDING;
+  while (d2b_remaining_ms(deadline) > 0) {
+    result = d2b_read_exec_record(descriptors[0], record, &length, &eof,
+                                  &probe_complete, deadline);
+    if (result != D2B_EXEC_RECORD_PENDING) break;
+    pending = 1;
+    struct pollfd descriptor = {.fd = descriptors[0], .events = POLLIN | POLLHUP};
+    int poll_result = poll(&descriptor, 1, d2b_remaining_ms(deadline));
+    if (poll_result < 0 && errno == EINTR) continue;
+    if (poll_result <= 0) {
+      result = D2B_EXEC_RECORD_TIMEOUT;
+      break;
+    }
+  }
+  if (strcmp(mode, "eintr") == 0) ualarm(0, 0);
+  if (result == D2B_EXEC_RECORD_PENDING) result = D2B_EXEC_RECORD_TIMEOUT;
+  close(descriptors[0]);
+  if (result == D2B_EXEC_RECORD_TIMEOUT && strcmp(mode, "held-open") == 0) {
+    kill(writer, SIGKILL);
+  }
+  waitpid(writer, NULL, 0);
+  const char *stage = "none";
+  if (result == D2B_EXEC_RECORD_COMPLETE) stage = d2b_child_error_code(record[7]);
+  printf("%d %d %s\n", result, pending, stage == NULL ? "none" : stage);
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  if (argc < 2) return 87;
+  unsigned char child_code = argc > 2 ? (unsigned char)strtoul(argv[2], NULL, 10)
+                                      : D2B_CHILD_EXECVEAT;
+  return decode_mode(argv[1], child_code);
+}
+"#
+    .replace("__SUPERVISOR_SOURCE__", supervisor_source)
+}
+
+fn decoder_observation(mode: &str, child_code: u8) -> (i32, bool, String) {
+    let output = Command::new(&real_binaries().decoder)
+        .arg(mode)
+        .arg(child_code.to_string())
+        .output()
+        .expect("exec transport harness");
+    assert!(
+        output.status.success(),
+        "exec transport harness failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let fields = String::from_utf8(output.stdout)
+        .expect("decoder output")
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 3, "decoder output fields: {fields:?}");
+    (
+        fields[0].parse().expect("decoder result"),
+        fields[1].parse::<u8>().expect("pending flag") != 0,
+        fields[2].clone(),
+    )
+}
+
+enum StatusEvent {
+    Executed,
+    Complete(Vec<u8>),
+}
+
+fn status_events(mut reader: File) -> Receiver<StatusEvent> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut announced = false;
+        let mut buffer = [0_u8; 64];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => {
+                    bytes.extend_from_slice(&buffer[..length]);
+                    if !announced && bytes.len() >= 16 {
+                        announced = true;
+                        if sender.send(StatusEvent::Executed).is_err() {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+        let _ = sender.send(StatusEvent::Complete(bytes));
+    });
+    receiver
+}
+
+fn spawn_real_supervisor(target: &Path, arguments: &[&str]) -> (Child, File) {
+    let (status_reader, status_writer) = pipe2(OFlag::O_CLOEXEC).expect("status transport pipe");
+    let target_fd: OwnedFd = File::open(target).expect("target executable").into();
+    let mut command = Command::new(&real_binaries().supervisor);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    command
+        .fd_mappings(vec![
+            FdMapping {
+                parent_fd: status_writer,
+                child_fd: 8,
+            },
+            FdMapping {
+                parent_fd: target_fd,
+                child_fd: 9,
+            },
+        ])
+        .expect("status and executable fd mappings");
+
+    let previous_mask = SigSet::thread_get_mask().expect("test signal mask");
+    managed_signals()
+        .thread_block()
+        .expect("block managed signals for helper handoff");
+    let child = command.spawn();
+    previous_mask
+        .thread_set_mask()
+        .expect("restore test signal mask");
+    (
+        child.expect("spawn real C supervisor"),
+        File::from(status_reader),
+    )
+}
+
+fn wait_for_complete(receiver: &Receiver<StatusEvent>, child: &mut Child) -> Vec<u8> {
+    loop {
+        let event = match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(event) => event,
+            Err(error) => {
+                let _ = signal::kill(
+                    nix::unistd::Pid::from_raw(child.id() as i32),
+                    signal::Signal::SIGKILL,
+                );
+                let _ = child.wait();
+                panic!("real supervisor status deadline: {error}");
+            }
+        };
+        match event {
+            StatusEvent::Executed => {}
+            StatusEvent::Complete(bytes) => return bytes,
+        }
+        if child.try_wait().expect("supervisor wait probe").is_some() {
+            continue;
+        }
+    }
+}
+
+#[test]
+fn real_c_exec_error_transport_covers_deadline_and_closed_mapping() {
+    for code in 1_u8..=8 {
+        let (result, _, stage) = decoder_observation("exact", code);
+        assert_eq!(result, 2, "complete code {code}");
+        assert_eq!(stage, CHILD_STAGE_CODES[usize::from(code - 1)]);
+    }
+
+    let (result, _, _) = decoder_observation("overlong", 8);
+    assert_eq!(result, -2);
+    let (result, _, _) = decoder_observation("partial", 8);
+    assert_eq!(result, -1);
+    let (result, _, _) = decoder_observation("unknown", 99);
+    assert_eq!(result, -3);
+    let (result, pending, _) = decoder_observation("held-open", 8);
+    assert_eq!(result, -5);
+    assert!(pending);
+
+    let (result, pending, stage) = decoder_observation("eintr", 8);
+    assert_eq!(result, 2);
+    assert!(!pending);
+    assert_eq!(stage, CHILD_STAGE_CODES[7]);
+    let (result, pending, stage) = decoder_observation("eagain", 8);
+    assert_eq!(result, 2);
+    assert!(pending);
+    assert_eq!(stage, CHILD_STAGE_CODES[7]);
+    let (result, pending, stage) = decoder_observation("fragmented", 8);
+    assert_eq!(result, 2);
+    assert!(pending);
+    assert_eq!(stage, CHILD_STAGE_CODES[7]);
+}
+
+#[test]
+fn real_c_supervisor_closes_signalfd_and_preserves_order_on_fast_exit() {
+    let binaries = real_binaries();
+    let (mut child, reader) =
+        spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "fd-audit"]);
+    let receiver = status_events(reader);
+    let status = wait_for_complete(&receiver, &mut child);
+    let exit = child.wait().expect("fd-audit supervisor wait");
+    assert_eq!(exit.code(), Some(0));
+    assert_eq!(
+        status,
+        [
+            encode_status(StatusFrame::Ready),
+            encode_status(StatusFrame::Executed),
+            encode_status(StatusFrame::Exited(0)),
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn real_c_supervisor_maps_child_exec_failure_without_false_executed_success() {
+    let (mut child, reader) = spawn_real_supervisor(Path::new("/dev/null"), &["target"]);
+    let receiver = status_events(reader);
+    let status = wait_for_complete(&receiver, &mut child);
+    let mut stderr = child.stderr.take().expect("supervisor stderr");
+    let exit = child.wait().expect("exec-error supervisor wait");
+    let mut diagnostics = String::new();
+    stderr
+        .read_to_string(&mut diagnostics)
+        .expect("exec-error diagnostics");
+    assert_eq!(exit.code(), Some(1));
+    assert_eq!(status, encode_status(StatusFrame::Ready));
+    assert!(diagnostics.contains("D2B-BZLEXEC-CHILD-EXECVEAT"));
+    assert!(!diagnostics.contains("D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH"));
+}
+
+#[test]
+fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
+    let binaries = real_binaries();
+    let (mut child, reader) =
+        spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "exit-during-grace"]);
+    let receiver = status_events(reader);
+    match receiver
+        .recv_timeout(Duration::from_secs(3))
+        .expect("EXECUTED status deadline")
+    {
+        StatusEvent::Executed => {}
+        StatusEvent::Complete(_) => panic!("terminal status preceded EXECUTED"),
+    }
+    let started = Instant::now();
+    signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        signal::Signal::SIGTERM,
+    )
+    .expect("forward termination");
+    let status = wait_for_complete(&receiver, &mut child);
+    let elapsed = started.elapsed();
+    let exit = child.wait().expect("grace supervisor wait");
+    assert_eq!(exit.code(), Some(143));
+    assert!(
+        elapsed >= Duration::from_millis(900),
+        "termination grace was shortened: {elapsed:?}"
+    );
+    assert_eq!(
+        status,
+        [
+            encode_status(StatusFrame::Ready),
+            encode_status(StatusFrame::Executed),
+            encode_status(StatusFrame::Signaled(15)),
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn real_c_supervisor_classifies_closed_status_reader_as_epipe_without_success() {
+    let binaries = real_binaries();
+    let (mut child, reader) =
+        spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "after-executed"]);
+    drop(reader);
+    let mut stderr = child.stderr.take().expect("supervisor stderr");
+    let exit = child.wait().expect("EPIPE supervisor wait");
+    let mut diagnostics = String::new();
+    stderr
+        .read_to_string(&mut diagnostics)
+        .expect("EPIPE diagnostics");
+    assert_eq!(exit.code(), Some(1));
+    assert!(diagnostics.contains("D2B-BZLEXEC-HELPER-EXEC-EPIPE"));
 }

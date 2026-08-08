@@ -51,6 +51,12 @@
 
 extern char **environ;
 
+enum d2b_write_result {
+  D2B_WRITE_OK = 0,
+  D2B_WRITE_ERROR = -1,
+  D2B_WRITE_EPIPE = -2,
+};
+
 enum d2b_status_type {
   D2B_READY = 1,
   D2B_EXECUTED = 2,
@@ -149,21 +155,34 @@ static int d2b_write_full(int fd, const void *data, size_t length,
     }
     if (result < 0 && errno == EINTR) {
       if (d2b_remaining_ms(deadline) == 0) {
-        return -1;
+        return D2B_WRITE_ERROR;
       }
       continue;
+    }
+    if (result < 0 && errno == EPIPE) {
+      return D2B_WRITE_EPIPE;
     }
     if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       struct pollfd wait_fd = {.fd = fd, .events = POLLOUT};
-      int wait_result = poll(&wait_fd, 1, d2b_remaining_ms(deadline));
-      if (wait_result <= 0) {
-        return -1;
+      int wait_result;
+      do {
+        wait_result = poll(&wait_fd, 1, d2b_remaining_ms(deadline));
+      } while (wait_result < 0 && errno == EINTR &&
+               d2b_remaining_ms(deadline) > 0);
+      if (wait_result < 0 || wait_result == 0) {
+        return D2B_WRITE_ERROR;
+      }
+      if ((wait_fd.revents & POLLHUP) != 0) {
+        return D2B_WRITE_EPIPE;
+      }
+      if ((wait_fd.revents & (POLLERR | POLLNVAL)) != 0) {
+        return D2B_WRITE_ERROR;
       }
       continue;
     }
-    return -1;
+    return D2B_WRITE_ERROR;
   }
-  return 0;
+  return D2B_WRITE_OK;
 }
 
 static int d2b_write_exec_error(int fd, enum d2b_child_error error,
@@ -178,7 +197,19 @@ static int d2b_write_frame(int fd, enum d2b_status_type type,
   unsigned char frame[9] = {
       'D', '2', 'B', 'S', D2B_STATUS_VERSION, (unsigned char)type, 0, 0, value};
   size_t length = (type == D2B_EXITED || type == D2B_SIGNALED) ? 9 : 8;
+  if (length == 9) {
+    frame[7] = 1;
+  }
   return d2b_write_full(fd, frame, length, deadline);
+}
+
+static void d2b_emit_status_write_failure(int write_result,
+                                          const char *ordinary_code) {
+  if (write_result == D2B_WRITE_EPIPE) {
+    d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-EPIPE");
+  } else {
+    d2b_emit_code(ordinary_code);
+  }
 }
 
 static int d2b_check_fd(int fd, int require_cloexec) {
@@ -190,6 +221,29 @@ static int d2b_check_fd(int fd, int require_cloexec) {
     return -1;
   }
   return 0;
+}
+
+static const char *d2b_child_error_code(unsigned char error) {
+  switch (error) {
+    case D2B_CHILD_GROUP:
+      return "D2B-BZLEXEC-CHILD-GROUP";
+    case D2B_CHILD_SIGNAL:
+      return "D2B-BZLEXEC-CHILD-SIGNAL";
+    case D2B_CHILD_STDIO:
+      return "D2B-BZLEXEC-CHILD-STDIO";
+    case D2B_CHILD_CLOEXEC:
+      return "D2B-BZLEXEC-CHILD-CLOEXEC";
+    case D2B_CHILD_CLOSE:
+      return "D2B-BZLEXEC-CHILD-CLOSE";
+    case D2B_CHILD_PTRACE:
+      return "D2B-BZLEXEC-CHILD-PTRACE";
+    case D2B_CHILD_STOP:
+      return "D2B-BZLEXEC-CHILD-STOP";
+    case D2B_CHILD_EXECVEAT:
+      return "D2B-BZLEXEC-CHILD-EXECVEAT";
+    default:
+      return NULL;
+  }
 }
 
 static int d2b_inspect_inherited_signals(sigset_t *managed) {
@@ -268,7 +322,8 @@ static void d2b_child_fail(int error_fd, enum d2b_child_error error,
   _exit(127);
 }
 
-static void d2b_child_exec(int error_writer, char *const target_argv[]) {
+static void d2b_child_exec(int error_writer, int signal_fd,
+                           char *const target_argv[]) {
   int64_t deadline = d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS;
 
   if (setpgid(0, 0) != 0) {
@@ -283,6 +338,9 @@ static void d2b_child_exec(int error_writer, char *const target_argv[]) {
     d2b_child_fail(error_writer, D2B_CHILD_CLOEXEC, deadline);
   }
   if (close(D2B_STATUS_FD) != 0) {
+    d2b_child_fail(error_writer, D2B_CHILD_CLOSE, deadline);
+  }
+  if (close(signal_fd) != 0) {
     d2b_child_fail(error_writer, D2B_CHILD_CLOSE, deadline);
   }
 
@@ -323,53 +381,160 @@ static void d2b_child_exec(int error_writer, char *const target_argv[]) {
   d2b_child_fail(error_writer, D2B_CHILD_EXECVEAT, deadline);
 }
 
-static int d2b_read_exec_record(int fd, unsigned char record[8], size_t *length,
-                                int *eof) {
-  unsigned char byte;
-  ssize_t result = read(fd, &byte, 1);
-  if (result == 0) {
-    *eof = 1;
-    return 0;
-  }
-  if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-    return 0;
-  }
-  if (result < 0 && errno == EINTR) {
-    return 0;
-  }
-  if (result < 0) {
+enum d2b_exec_record_result {
+  D2B_EXEC_RECORD_PENDING = 0,
+  D2B_EXEC_RECORD_EMPTY_EOF = 1,
+  D2B_EXEC_RECORD_COMPLETE = 2,
+  D2B_EXEC_RECORD_PARTIAL = -1,
+  D2B_EXEC_RECORD_OVERLONG = -2,
+  D2B_EXEC_RECORD_UNKNOWN = -3,
+  D2B_EXEC_RECORD_IO = -4,
+  D2B_EXEC_RECORD_TIMEOUT = -5,
+};
+
+static int d2b_validate_exec_record(const unsigned char record[8]) {
+  if (memcmp(record, D2B_EXEC_ERROR_MAGIC, 4) != 0 ||
+      record[4] != D2B_PROTOCOL_VERSION || record[5] != 1 ||
+      record[6] != 0 || d2b_child_error_code(record[7]) == NULL) {
     return -1;
-  }
-  if (*length >= sizeof(unsigned char[8])) {
-    return -2;
-  }
-  record[(*length)++] = byte;
-  if (*length == sizeof(unsigned char[8])) {
-    if (memcmp(record, D2B_EXEC_ERROR_MAGIC, 4) != 0 ||
-        record[4] != D2B_PROTOCOL_VERSION || record[5] != 1 ||
-        record[6] != 0) {
-      return -3;
-    }
   }
   return 0;
 }
 
-static int d2b_group_kill_and_reap(pid_t child) {
+static int d2b_read_exec_record(int fd, unsigned char record[8], size_t *length,
+                                int *eof, int *probe_complete,
+                                int64_t deadline) {
+  for (;;) {
+    if (*length < D2B_EXEC_ERROR_SIZE) {
+      unsigned char byte;
+      ssize_t result = read(fd, &byte, 1);
+      if (result > 0) {
+        record[(*length)++] = byte;
+        if (*length == D2B_EXEC_ERROR_SIZE &&
+            d2b_validate_exec_record(record) != 0) {
+          return D2B_EXEC_RECORD_UNKNOWN;
+        }
+        continue;
+      }
+      if (result == 0) {
+        *eof = 1;
+        return *length == 0 ? D2B_EXEC_RECORD_EMPTY_EOF
+                            : D2B_EXEC_RECORD_PARTIAL;
+      }
+      if (errno == EINTR) {
+        if (d2b_remaining_ms(deadline) == 0) {
+          return D2B_EXEC_RECORD_TIMEOUT;
+        }
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return D2B_EXEC_RECORD_PENDING;
+      }
+      return D2B_EXEC_RECORD_IO;
+    }
+
+    if (*probe_complete) {
+      return D2B_EXEC_RECORD_COMPLETE;
+    }
+
+    /*
+     * An exact record is not complete until the close-on-exec writer has
+     * closed and the one-byte probe has observed EOF.  A ninth byte is a
+     * protocol overrun, even if it arrives in a later read.
+     */
+    unsigned char extra;
+    ssize_t result = read(fd, &extra, 1);
+    if (result > 0) {
+      return D2B_EXEC_RECORD_OVERLONG;
+    }
+    if (result == 0) {
+      *eof = 1;
+      *probe_complete = 1;
+      return D2B_EXEC_RECORD_COMPLETE;
+    }
+    if (errno == EINTR) {
+      if (d2b_remaining_ms(deadline) == 0) {
+        return D2B_EXEC_RECORD_TIMEOUT;
+      }
+      continue;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return D2B_EXEC_RECORD_PENDING;
+    }
+    return D2B_EXEC_RECORD_IO;
+  }
+}
+
+static int d2b_read_signal(int signal_fd);
+static int d2b_reap_after_kill(pid_t child, int signal_fd, int *status);
+
+static int d2b_group_kill_and_reap(pid_t child, int child_already_reaped,
+                                   int signal_fd, int *status) {
   int result = kill(-child, SIGKILL);
   if (result != 0 && errno != ESRCH) {
     return -1;
   }
-  int status;
-  while (waitpid(child, &status, __WALL) < 0) {
-    if (errno == EINTR) {
-      continue;
-    }
-    if (errno == ECHILD) {
-      return 0;
-    }
+  if (child_already_reaped) {
+    return 0;
+  }
+  return d2b_reap_after_kill(child, signal_fd, status);
+}
+
+static int d2b_observe_child_exit(pid_t child) {
+  siginfo_t info;
+  memset(&info, 0, sizeof(info));
+  if (waitid(P_PID, (id_t)child, &info, WEXITED | WNOWAIT | WNOHANG) != 0) {
     return -1;
   }
-  return 0;
+  return info.si_pid == child ? 1 : 0;
+}
+
+static int d2b_reap_after_kill(pid_t child, int signal_fd, int *status) {
+  int64_t start = d2b_monotonic_ms();
+  if (start < 0) {
+    d2b_emit_code("D2B-BZLEXEC-HELPER-REAP");
+    return -1;
+  }
+  int64_t deadline = start + D2B_EXEC_DEADLINE_MS;
+  while (d2b_remaining_ms(deadline) > 0) {
+    pid_t waited = waitpid(child, status, WNOHANG);
+    if (waited == child) {
+      return 0;
+    }
+    if (waited < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      d2b_emit_code("D2B-BZLEXEC-HELPER-REAP");
+      return -1;
+    }
+
+    struct pollfd descriptor = {.fd = signal_fd, .events = POLLIN};
+    int timeout = d2b_remaining_ms(deadline);
+    if (timeout > 10) {
+      timeout = 10;
+    }
+    int poll_result = poll(&descriptor, 1, timeout);
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
+    if (poll_result > 0 &&
+        (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
+    if (poll_result > 0 && (descriptor.revents & POLLIN) != 0 &&
+        d2b_read_signal(signal_fd) < 0) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
+  }
+  d2b_emit_code("D2B-BZLEXEC-HELPER-REAP");
+  return -1;
 }
 
 static int d2b_confirm_group(pid_t child) {
@@ -428,58 +593,83 @@ static int d2b_pre_exec_loop(pid_t child, int error_fd, int signal_fd,
   unsigned char error_record[D2B_EXEC_ERROR_SIZE] = {0};
   size_t error_length = 0;
   int error_eof = 0;
+  int probe_complete = 0;
+  int child_reaped = 0;
   while (d2b_remaining_ms(deadline) > 0) {
     int signal_number = d2b_read_signal(signal_fd);
     if (signal_number < 0) {
       d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
     if (signal_number != 0) {
       d2b_emit_code("D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION");
-      (void)d2b_group_kill_and_reap(child);
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
 
-    pid_t waited = waitpid(child, status, WNOHANG | __WALL);
-    if (waited == child) {
-      if (WIFSTOPPED(*status) && WSTOPSIG(*status) == SIGTRAP &&
-          ((*status >> 16) & 0xffff) == PTRACE_EVENT_EXEC) {
-        return 0;
-      }
-      if (WIFEXITED(*status) || WIFSIGNALED(*status)) {
-        d2b_emit_code("D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH");
-      } else {
-        d2b_emit_code("D2B-BZLEXEC-HELPER-PTRACE-EVENT");
-      }
-      (void)d2b_group_kill_and_reap(child);
+    int read_result = d2b_read_exec_record(
+        error_fd, error_record, &error_length, &error_eof, &probe_complete,
+        deadline);
+    if (read_result == D2B_EXEC_RECORD_COMPLETE) {
+      d2b_emit_code(d2b_child_error_code(error_record[7]));
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
-    if (waited < 0 && errno != EINTR) {
-      d2b_emit_code("D2B-BZLEXEC-HELPER-WAIT");
+    if (read_result == D2B_EXEC_RECORD_OVERLONG) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-OVERLONG");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
-
-    int read_result = d2b_read_exec_record(error_fd, error_record,
-                                           &error_length, &error_eof);
-    if (read_result < 0) {
-      if (read_result == -2 || error_length > D2B_EXEC_ERROR_SIZE) {
-        d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-OVERLONG");
-      } else if (read_result == -3) {
-        d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-UNKNOWN");
-      } else {
-        d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
-      }
-      (void)d2b_group_kill_and_reap(child);
+    if (read_result == D2B_EXEC_RECORD_UNKNOWN) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-UNKNOWN");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
-    if (error_length == D2B_EXEC_ERROR_SIZE) {
-      d2b_emit_code("D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH");
-      (void)d2b_group_kill_and_reap(child);
-      return -1;
-    }
-    if (error_eof && error_length != 0) {
+    if (read_result == D2B_EXEC_RECORD_PARTIAL) {
       d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-PARTIAL");
-      (void)d2b_group_kill_and_reap(child);
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
+      return -1;
+    }
+    if (read_result == D2B_EXEC_RECORD_IO) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
+      return -1;
+    }
+    if (read_result == D2B_EXEC_RECORD_TIMEOUT) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-TIMEOUT");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
+      return -1;
+    }
+
+    if (!child_reaped) {
+      pid_t waited = waitpid(child, status, WNOHANG | __WALL);
+      if (waited == child) {
+        if (WIFSTOPPED(*status) && WSTOPSIG(*status) == SIGTRAP &&
+            ((*status >> 16) & 0xffff) == PTRACE_EVENT_EXEC) {
+          return 0;
+        }
+        if (WIFEXITED(*status) || WIFSIGNALED(*status)) {
+          child_reaped = 1;
+        } else {
+          d2b_emit_code("D2B-BZLEXEC-HELPER-PTRACE-EVENT");
+          (void)d2b_group_kill_and_reap(child, 0, signal_fd, status);
+          return -1;
+        }
+      }
+      if (waited < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        d2b_emit_code("D2B-BZLEXEC-HELPER-WAIT");
+        (void)d2b_group_kill_and_reap(child, 1, signal_fd, status);
+        return -1;
+      }
+    }
+
+    if (child_reaped && read_result == D2B_EXEC_RECORD_EMPTY_EOF) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
 
@@ -488,14 +678,29 @@ static int d2b_pre_exec_loop(pid_t child, int error_fd, int signal_fd,
         {.fd = error_fd, .events = POLLIN | POLLHUP},
     };
     int poll_result = poll(descriptors, 2, d2b_remaining_ms(deadline));
-    if (poll_result < 0 && errno != EINTR) {
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
       d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
-      (void)d2b_group_kill_and_reap(child);
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
+      return -1;
+    }
+    if (poll_result > 0 &&
+        (descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
+      return -1;
+    }
+    if (poll_result > 0 &&
+        (descriptors[1].revents & (POLLERR | POLLNVAL)) != 0) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
       return -1;
     }
   }
   d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-TIMEOUT");
-  (void)d2b_group_kill_and_reap(child);
+  (void)d2b_group_kill_and_reap(child, child_reaped, signal_fd, status);
   return -1;
 }
 
@@ -510,38 +715,57 @@ static int d2b_forward_and_escalate(pid_t child, int signal_number,
     d2b_emit_code("D2B-BZLEXEC-HELPER-SIGNAL-FORWARD");
     return -1;
   }
-  int64_t grace_deadline = d2b_monotonic_ms() + D2B_TERM_GRACE_MS;
+  int64_t grace_start = d2b_monotonic_ms();
+  if (grace_start < 0) {
+    d2b_emit_code("D2B-BZLEXEC-HELPER-DEADLINE");
+    return -1;
+  }
+  int64_t grace_deadline = grace_start + D2B_TERM_GRACE_MS;
   while (d2b_remaining_ms(grace_deadline) > 0) {
-    pid_t waited = waitpid(child, status, WNOHANG);
-    if (waited == child) {
-      /*
-       * The full grace remains independent.  The unconditional KILL below
-       * is still sent when the leader has already exited.
-       */
-      struct timespec pause_time = {.tv_sec = 0, .tv_nsec = 1000000};
-      nanosleep(&pause_time, NULL);
-      continue;
-    }
-    if (waited < 0 && errno != EINTR && errno != ECHILD) {
+    int observed = d2b_observe_child_exit(child);
+    if (observed < 0 && errno != EINTR) {
       d2b_emit_code("D2B-BZLEXEC-HELPER-WAIT");
       return -1;
     }
+    /*
+     * waitid(WNOWAIT) is informational only.  Even a repeatedly observed
+     * zombie does not shorten the independently timed grace or consume the
+     * direct-child status.
+     */
     struct pollfd descriptor = {.fd = signal_fd, .events = POLLIN};
-    (void)poll(&descriptor, 1, d2b_remaining_ms(grace_deadline));
-    (void)d2b_read_signal(signal_fd);
+    int timeout = d2b_remaining_ms(grace_deadline);
+    if (timeout > 10) {
+      timeout = 10;
+    }
+    int poll_result = poll(&descriptor, 1, timeout);
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
+    if (poll_result > 0 &&
+        (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
+    if (poll_result > 0 && (descriptor.revents & POLLIN) != 0 &&
+        d2b_read_signal(signal_fd) < 0) {
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
   }
+  /*
+   * This kill is deliberately unconditional.  The group may already contain
+   * only a zombie leader, in which case kill reports ESRCH, but the attempt
+   * still occurs after the complete grace.
+   */
   if (kill(-child, SIGKILL) != 0 && errno != ESRCH) {
     d2b_emit_code("D2B-BZLEXEC-HELPER-DEADLINE");
     return -1;
   }
-  while (waitpid(child, status, 0) < 0) {
-    if (errno == EINTR) {
-      continue;
-    }
-    d2b_emit_code("D2B-BZLEXEC-HELPER-REAP");
-    return -1;
-  }
-  return 0;
+  return d2b_reap_after_kill(child, signal_fd, status);
 }
 
 static int d2b_supervise(pid_t child, int signal_fd, int *status) {
@@ -564,7 +788,15 @@ static int d2b_supervise(pid_t child, int signal_fd, int *status) {
     }
     struct pollfd descriptor = {.fd = signal_fd, .events = POLLIN};
     int poll_result = poll(&descriptor, 1, 100);
-    if (poll_result < 0 && errno != EINTR) {
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
+      return -1;
+    }
+    if (poll_result > 0 &&
+        (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
       d2b_emit_code("D2B-BZLEXEC-HELPER-EXEC-IO");
       return -1;
     }
@@ -611,39 +843,43 @@ int main(int argc, char **argv, char **envp) {
   }
   if (child == 0) {
     close(exec_pipe[0]);
-    d2b_child_exec(exec_pipe[1], argc > 1 ? &argv[1] : (char *const[]){"target", NULL});
+    d2b_child_exec(
+        exec_pipe[1], signal_fd,
+        argc > 1 ? &argv[1] : (char *const[]){"target", NULL});
   }
   close(exec_pipe[1]);
 
+  int status = 0;
   if (d2b_confirm_group(child) != 0) {
-    (void)d2b_group_kill_and_reap(child);
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     close(exec_pipe[0]);
     return 1;
   }
 
-  int status = 0;
   if (d2b_wait_initial_stop(child, &status) != 0) {
-    (void)d2b_group_kill_and_reap(child);
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     close(exec_pipe[0]);
     return 1;
   }
 
   if (ptrace(PTRACE_SETOPTIONS, child, (void *)0, (void *)(uintptr_t)PTRACE_O_TRACEEXEC) != 0) {
     d2b_emit_code("D2B-BZLEXEC-HELPER-PTRACE-OPTIONS");
-    (void)d2b_group_kill_and_reap(child);
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     close(exec_pipe[0]);
     return 1;
   }
   int64_t deadline = d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS;
-  if (d2b_write_frame(D2B_STATUS_FD, D2B_READY, 0, deadline) != 0) {
-    d2b_emit_code("D2B-BZLEXEC-HELPER-TERMINAL-WRITE");
-    (void)d2b_group_kill_and_reap(child);
+  int write_result = d2b_write_frame(D2B_STATUS_FD, D2B_READY, 0, deadline);
+  if (write_result != D2B_WRITE_OK) {
+    d2b_emit_status_write_failure(write_result,
+                                  "D2B-BZLEXEC-HELPER-TERMINAL-WRITE");
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     close(exec_pipe[0]);
     return 1;
   }
   if (ptrace(PTRACE_CONT, child, (void *)0, (void *)0) != 0) {
     d2b_emit_code("D2B-BZLEXEC-HELPER-PTRACE-CONT");
-    (void)d2b_group_kill_and_reap(child);
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     close(exec_pipe[0]);
     return 1;
   }
@@ -656,13 +892,15 @@ int main(int argc, char **argv, char **envp) {
 
   if (ptrace(PTRACE_DETACH, child, (void *)0, (void *)0) != 0) {
     d2b_emit_code("D2B-BZLEXEC-HELPER-PTRACE-DETACH");
-    (void)d2b_group_kill_and_reap(child);
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     return 1;
   }
-  if (d2b_write_frame(D2B_STATUS_FD, D2B_EXECUTED, 0,
-                      d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS) != 0) {
-    d2b_emit_code("D2B-BZLEXEC-HELPER-TERMINAL-WRITE");
-    (void)d2b_group_kill_and_reap(child);
+  write_result = d2b_write_frame(D2B_STATUS_FD, D2B_EXECUTED, 0,
+                                 d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS);
+  if (write_result != D2B_WRITE_OK) {
+    d2b_emit_status_write_failure(write_result,
+                                  "D2B-BZLEXEC-HELPER-TERMINAL-WRITE");
+    (void)d2b_group_kill_and_reap(child, 0, signal_fd, &status);
     return 1;
   }
 
@@ -681,9 +919,12 @@ int main(int argc, char **argv, char **envp) {
     d2b_emit_code("D2B-BZLEXEC-HELPER-STATUS-MIRROR");
     return 1;
   }
-  if (d2b_write_frame(D2B_STATUS_FD, terminal_type, terminal_value,
-                      d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS) != 0) {
-    d2b_emit_code("D2B-BZLEXEC-HELPER-TERMINAL-WRITE");
+  write_result = d2b_write_frame(
+      D2B_STATUS_FD, terminal_type, terminal_value,
+      d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS);
+  if (write_result != D2B_WRITE_OK) {
+    d2b_emit_status_write_failure(write_result,
+                                  "D2B-BZLEXEC-HELPER-TERMINAL-WRITE");
     return 1;
   }
   close(signal_fd);

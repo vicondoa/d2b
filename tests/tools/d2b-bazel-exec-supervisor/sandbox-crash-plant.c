@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -26,6 +27,8 @@ enum plant_stage {
   PLANT_AFTER_READY,
   PLANT_AFTER_EXECUTED,
   PLANT_DURING_GRACE,
+  PLANT_EXIT_DURING_GRACE,
+  PLANT_FD_AUDIT,
   PLANT_DESCENDANT,
   PLANT_DOUBLE_FORK_DESCENDANT,
   PLANT_BEYOND_CEILING,
@@ -40,7 +43,8 @@ static void usage(const char *name) {
   fprintf(stderr,
           "usage: %s --stage "
           "{before-ready|after-ready|after-executed|during-grace|"
-          "direct-descendant|double-fork-descendant|beyond-ceiling} "
+          "exit-during-grace|fd-audit|direct-descendant|"
+          "double-fork-descendant|beyond-ceiling} "
           "[--hold-liveness-fd] [--sigsegv]\n",
           name);
   _exit(64);
@@ -51,6 +55,9 @@ static enum plant_stage parse_stage(const char *value) {
   if (strcmp(value, "after-ready") == 0) return PLANT_AFTER_READY;
   if (strcmp(value, "after-executed") == 0) return PLANT_AFTER_EXECUTED;
   if (strcmp(value, "during-grace") == 0) return PLANT_DURING_GRACE;
+  if (strcmp(value, "exit-during-grace") == 0)
+    return PLANT_EXIT_DURING_GRACE;
+  if (strcmp(value, "fd-audit") == 0) return PLANT_FD_AUDIT;
   if (strcmp(value, "direct-descendant") == 0) return PLANT_DESCENDANT;
   if (strcmp(value, "double-fork-descendant") == 0)
     return PLANT_DOUBLE_FORK_DESCENDANT;
@@ -108,6 +115,39 @@ static void barrier_until_release(void) {
   }
 }
 
+static void exit_on_term(int signal_number) {
+  (void)signal_number;
+  _exit(73);
+}
+
+static int has_inherited_signalfd(void) {
+  DIR *directory = opendir("/proc/self/fd");
+  if (directory == NULL) return -1;
+  int found = 0;
+  struct dirent *entry;
+  while ((entry = readdir(directory)) != NULL) {
+    if (entry->d_name[0] == '.') continue;
+    char link_path[64];
+    char target[128];
+    int path_length = snprintf(link_path, sizeof(link_path), "/proc/self/fd/%s",
+                               entry->d_name);
+    if (path_length < 0 || (size_t)path_length >= sizeof(link_path)) {
+      found = -1;
+      break;
+    }
+    ssize_t target_length =
+        readlink(link_path, target, sizeof(target) - 1);
+    if (target_length < 0) continue;
+    target[target_length] = '\0';
+    if (strcmp(target, "anon_inode:[signalfd]") == 0) {
+      found = 1;
+      break;
+    }
+  }
+  closedir(directory);
+  return found;
+}
+
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--stage") == 0 && i + 1 < argc) {
@@ -136,6 +176,12 @@ int main(int argc, char **argv) {
       signal(SIGTERM, SIG_IGN);
       barrier_until_release();
       _exit(73);
+    case PLANT_EXIT_DURING_GRACE:
+      if (signal(SIGTERM, exit_on_term) == SIG_ERR) _exit(68);
+      barrier_until_release();
+      _exit(73);
+    case PLANT_FD_AUDIT:
+      _exit(has_inherited_signalfd() == 0 ? 0 : 69);
     case PLANT_DESCENDANT:
       start_descendants(false);
       _exit(74);
