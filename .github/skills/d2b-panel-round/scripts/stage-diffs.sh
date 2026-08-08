@@ -152,6 +152,7 @@ done
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+lifecycle_helper="$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
 tip="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse "$base")"
@@ -182,14 +183,18 @@ fi
 
 validate_bound_completion() {
   local marker="$1"
-  node - "$marker" <<'NODE'
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const path = require("node:path");
+  node --input-type=module - "$marker" "$lifecycle_helper" <<'NODE'
+import crypto from "node:crypto";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 const markerPath = process.argv[2];
+const helperPath = process.argv[3];
+const { readBoundArtifactSetNoFollow } =
+  await import(pathToFileURL(helperPath).href);
 let marker;
+let artifacts;
 try {
-  marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+  ({ marker, artifacts } = readBoundArtifactSetNoFollow(markerPath));
 } catch (error) {
   console.error(`${markerPath}: invalid completion marker: ${error.message}`);
   process.exit(1);
@@ -246,21 +251,9 @@ for (const relative of Object.keys(digests).sort()) {
     console.error(`${markerPath}: invalid bound artifact entry ${relative}`);
     process.exit(1);
   }
-  const artifactPath = path.join(root, relative);
-  let stat;
-  let bytes;
-  try {
-    stat = fs.lstatSync(artifactPath);
-    if (!stat.isFile()) throw new Error("not a regular file");
-    bytes = fs.readFileSync(artifactPath);
-  } catch (error) {
-    console.error(
-      `${markerPath}: bound artifact ${relative} is unavailable: ${error.message}`,
-    );
-    process.exit(1);
-  }
+  const bytes = artifacts[relative];
   const digest = crypto.createHash("sha256").update(bytes).digest("hex");
-  if (digest !== digests[relative] || stat.size !== sizes[relative]) {
+  if (digest !== digests[relative] || bytes.length !== sizes[relative]) {
     console.error(
       `${markerPath}: post-completion mutation of ${relative} is refused; ` +
       "its bytes disagree with the completion marker",
@@ -268,6 +261,19 @@ for (const relative of Object.keys(digests).sort()) {
     process.exit(1);
   }
 }
+NODE
+}
+
+secure_digest_size() {
+  node --input-type=module - "$1" "$lifecycle_helper" <<'NODE'
+import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
+const { readFileNoFollow } =
+  await import(pathToFileURL(process.argv[3]).href);
+const bytes = readFileNoFollow(process.argv[2], { label: "staged artifact" });
+process.stdout.write(
+  `${crypto.createHash("sha256").update(bytes).digest("hex")}\t${bytes.length}`,
+);
 NODE
 }
 
@@ -297,13 +303,18 @@ stage_exit() {
 trap stage_exit EXIT
 
 read_address() {
-  node - "$1" <<'NODE'
-const fs = require("node:fs");
-const crypto = require("node:crypto");
+  node --input-type=module - "$1" "$lifecycle_helper" <<'NODE'
+import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
 const path = process.argv[2];
+const { readFileNoFollow } =
+  await import(pathToFileURL(process.argv[3]).href);
 let value;
 try {
-  value = JSON.parse(fs.readFileSync(path, "utf8"));
+  value = JSON.parse(readFileNoFollow(path, {
+    encoding: "utf8",
+    label: "review address",
+  }));
 } catch (error) {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
@@ -319,10 +330,17 @@ const selectionPath = value.selection_path ?? "";
 let selectionSha256 = value.selection_sha256;
 if (
   selectionPath &&
-  fs.existsSync(selectionPath) &&
   (!phase || !selectionSha256)
 ) {
-  const selectionBytes = fs.readFileSync(selectionPath);
+  let selectionBytes;
+  try {
+    selectionBytes = readFileNoFollow(selectionPath, {
+      label: "recorded lifecycle selection",
+    });
+  } catch (error) {
+    console.error(`${selectionPath}: unreadable lifecycle selection: ${error.message}`);
+    process.exit(1);
+  }
   let selection;
   try {
     selection = JSON.parse(selectionBytes);
@@ -371,11 +389,16 @@ else
   fi
   if [ -f "$previous_dir/.complete" ]; then
     previous_completion_schema="$(
-      node -e '
-const fs = require("node:fs");
-const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { readFileNoFollow } =
+  await import(pathToFileURL(process.argv[2]).href);
+const value = JSON.parse(readFileNoFollow(process.argv[1], {
+  encoding: "utf8",
+  label: "previous completion marker",
+}));
 process.stdout.write(String(value.schema_version ?? ""));
-' "$previous_dir/.complete"
+' "$previous_dir/.complete" "$lifecycle_helper"
     )" || {
       echo "previous review has an unreadable completion marker" >&2
       exit 2
@@ -410,7 +433,8 @@ process.stdout.write(String(value.schema_version ?? ""));
     exit 2
   fi
   previous_selection_path="$recorded_selection"
-  actual_recorded_selection_sha="$(sha256sum "$recorded_selection" | cut -d' ' -f1)"
+  IFS=$'\t' read -r actual_recorded_selection_sha _recorded_selection_bytes \
+    <<<"$(secure_digest_size "$recorded_selection")"
   if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
     echo "previous review selection bytes disagree with address.json" >&2
     exit 2
@@ -534,24 +558,27 @@ if [ ! -f "$evidence_path" ] || [ ! -r "$evidence_path" ] ||
 fi
 
 if [ -n "$reviewer_notes_dir" ]; then
-  if ! node - "$reviewer_notes_dir" "$selected_roster" <<'NODE'
-const fs = require("node:fs");
+  if ! node --input-type=module - \
+    "$reviewer_notes_dir" "$selected_roster" "$lifecycle_helper" <<'NODE'
+import { pathToFileURL } from "node:url";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
-let entries;
+const { readDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[4]).href);
+let files;
 try {
-  if (!fs.statSync(source).isDirectory()) throw new Error("not a directory");
-  entries = fs.readdirSync(source, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name));
+  files = readDirectoryNoFollow(source, {
+    label: "finalized reviewer-notes directory",
+    nonEmpty: true,
+  });
 } catch (error) {
   console.error(`missing or unreadable finalized reviewer-notes directory: ${source}: ${error.message}`);
   process.exit(1);
 }
 const expected = selected.map((seat) => `${seat}.md`).sort();
-const actual = entries.map((entry) => entry.name);
+const actual = files.map((entry) => entry.name);
 if (
-  entries.length !== expected.length ||
-  entries.some((entry) => !entry.isFile()) ||
+  files.length !== expected.length ||
   actual.some((name, index) => name !== expected[index])
 ) {
   console.error(
@@ -559,12 +586,6 @@ if (
     `expected [${expected.join(", ")}], found [${actual.join(", ")}]`,
   );
   process.exit(1);
-}
-for (const entry of entries) {
-  if (fs.statSync(`${source}/${entry.name}`).size === 0) {
-    console.error(`finalized reviewer note is empty: ${source}/${entry.name}`);
-    process.exit(1);
-  }
 }
 NODE
   then
@@ -579,11 +600,16 @@ readable_json_file() {
     echo "missing or unreadable supplied $label: $path" >&2
     exit 2
   fi
-  if ! node - "$path" <<'NODE'
-const fs = require("node:fs");
+  if ! node --input-type=module - "$path" "$lifecycle_helper" <<'NODE'
+import { pathToFileURL } from "node:url";
 const path = process.argv[2];
+const { readFileNoFollow } =
+  await import(pathToFileURL(process.argv[3]).href);
 try {
-  JSON.parse(fs.readFileSync(path, "utf8"));
+  JSON.parse(readFileNoFollow(path, {
+    encoding: "utf8",
+    label: "supplied JSON artifact",
+  }));
 } catch (error) {
   console.error(`${path}: supplied JSON artifact is not readable: ${error.message}`);
   process.exit(1);
@@ -600,15 +626,18 @@ else
   readable_json_file "$ledger_path" "discovery ledger"
   readable_json_file "$responses_path" "implementation responses"
   readable_json_file "$self_verification_path" "self-verification"
-  if ! node - "$verification_dir" "$selected_roster" <<'NODE'
-const fs = require("node:fs");
+  if ! node --input-type=module - \
+    "$verification_dir" "$selected_roster" "$lifecycle_helper" <<'NODE'
+import { pathToFileURL } from "node:url";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
+const { readDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[4]).href);
 let entries;
 try {
-  if (!fs.statSync(source).isDirectory()) throw new Error("not a directory");
-  entries = fs.readdirSync(source, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name));
+  entries = readDirectoryNoFollow(source, {
+    label: "verification request directory",
+  });
 } catch (error) {
   console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
   process.exit(1);
@@ -617,7 +646,6 @@ const expected = selected.map((seat) => `${seat}.json`).sort();
 const actual = entries.map((entry) => entry.name);
 if (
   entries.length !== expected.length ||
-  entries.some((entry) => !entry.isFile()) ||
   actual.some((name, index) => name !== expected[index])
 ) {
   console.error(
@@ -627,11 +655,10 @@ if (
   process.exit(1);
 }
 for (const entry of entries) {
-  const path = `${source}/${entry.name}`;
   try {
-    JSON.parse(fs.readFileSync(path, "utf8"));
+    JSON.parse(entry.bytes.toString("utf8"));
   } catch (error) {
-    console.error(`${path}: verification request is not readable JSON: ${error.message}`);
+    console.error(`${source}/${entry.name}: verification request is not readable JSON: ${error.message}`);
     process.exit(1);
   }
 }
@@ -697,7 +724,12 @@ fi
 
 reuse_existing=false
 claim_round_directory() {
-  mkdir -p "$root/.scratch/panel"
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[2]).href);
+ensureDirectoryNoFollow(process.argv[1]);
+' "$root/.scratch/panel" "$lifecycle_helper"
   if [ -e "$out" ]; then
     if [ ! -f "$completion_marker" ]; then
       partial_cleanup_hint
@@ -706,7 +738,13 @@ claim_round_directory() {
     reuse_existing=true
     return
   fi
-  if ! mkdir "$out"; then
+  if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[2]).href);
+ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
+' "$out" "$lifecycle_helper"
+  then
     if [ -f "$completion_marker" ]; then
       reuse_existing=true
       return
@@ -755,37 +793,23 @@ if [ "$reuse_existing" = true ]; then
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
   done
 else
-  mkdir -p "$out/verdicts" "$out/reviewer-notes"
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[3]).href);
+ensureDirectoryNoFollow(process.argv[1]);
+ensureDirectoryNoFollow(process.argv[2]);
+' "$out/verdicts" "$out/reviewer-notes" "$lifecycle_helper"
 fi
 
-publish_no_replace() {
-  local tmp="$1"
-  local dest="$2"
-  if [ "$reuse_existing" = true ] && [ ! -e "$dest" ]; then
-    echo "complete review $round is missing canonical artifact $dest; refusing to add it after .complete" >&2
-    rm -f -- "$tmp"
-    return 1
-  fi
-  if [ -e "$dest" ]; then
-    if ! cmp -s "$tmp" "$dest"; then
-      echo "conflicting generated bytes at $dest; refusing to overwrite" >&2
-      echo "staging stopped at the first conflict; restore the expected bytes or use a new review id before retrying" >&2
-      rm -f -- "$tmp"
-      return 1
-    fi
-    rm -f -- "$tmp"
-    return 0
-  fi
-  if ! ln "$tmp" "$dest"; then
-    if [ -e "$dest" ] && cmp -s "$tmp" "$dest"; then
-      rm -f -- "$tmp"
-      return 0
-    fi
-    echo "staging stopped at the first publication conflict; use a new review id before retrying" >&2
-    rm -f -- "$tmp"
-    return 1
-  fi
-  rm -f -- "$tmp"
+publish_stdin_no_replace() {
+  local dest="$1"
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { writeStandardInputCreateOrCompare } =
+  await import(pathToFileURL(process.argv[2]).href);
+writeStandardInputCreateOrCompare(process.argv[1]);
+' "$dest" "$lifecycle_helper"
 }
 
 materialize_exact() {
@@ -796,21 +820,13 @@ materialize_exact() {
     echo "missing or unreadable supplied $label: $source" >&2
     return 1
   fi
-  if [ "$reuse_existing" = true ]; then
-    if ! cmp -s -- "$source" "$destination"; then
-      echo "conflicting generated bytes at $destination; refusing to overwrite" >&2
-      echo "complete review $round can only compare/reuse existing canonical artifacts" >&2
-      return 1
-    fi
-    return 0
-  fi
-  local tmp="$destination.$$.copy.tmp"
-  if ! cp -- "$source" "$tmp"; then
-    rm -f -- "$tmp"
-    echo "cannot copy supplied $label: $source" >&2
-    return 1
-  fi
-  if ! publish_no_replace "$tmp" "$destination"; then
+  if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { copyFileCreateOrCompare } =
+  await import(pathToFileURL(process.argv[3]).href);
+copyFileCreateOrCompare(process.argv[1], process.argv[2]);
+' "$source" "$destination" "$lifecycle_helper"
+  then
     echo "could not materialize supplied $label at $destination" >&2
     return 1
   fi
@@ -819,22 +835,31 @@ materialize_exact() {
 stage() {
   local dest="$1"
   shift
-  local tmp="$dest.$$.tmp"
-  if ! "$@" > "$tmp"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  publish_no_replace "$tmp" "$dest"
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [destination, helperPath, command, ...args] = process.argv.slice(1);
+const { writeCommandOutputCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+writeCommandOutputCreateOrCompare(destination, command, args);
+' "$dest" "$lifecycle_helper" "$@"
 }
 
 stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"
 stage "$out/full.diff" git --no-pager diff "$base_sha..$tip"
 stage "$out/commits.txt" git --no-pager log --no-decorate --oneline "$base_sha..$tip"
 
-delta_sha="$(sha256sum "$out/delta.diff" | cut -d' ' -f1)"
-full_sha="$(sha256sum "$out/full.diff" | cut -d' ' -f1)"
+IFS=$'\t' read -r delta_sha _delta_bytes \
+  <<<"$(secure_digest_size "$out/delta.diff")"
+IFS=$'\t' read -r full_sha _full_bytes \
+  <<<"$(secure_digest_size "$out/full.diff")"
 
 materialize_exact "$selection_path" "$staged_selection_path" "lifecycle selection"
+IFS=$'\t' read -r staged_selection_sha256 _staged_selection_bytes \
+  <<<"$(secure_digest_size "$staged_selection_path")"
+if [ "$staged_selection_sha256" != "$selection_sha256" ]; then
+  echo "lifecycle selection changed between validation and exact materialization" >&2
+  exit 2
+fi
 if [ -n "$candidate_path" ]; then
   materialize_exact "$candidate_path" "$staged_candidate_path" "current candidate"
 else
@@ -849,35 +874,40 @@ writeCreateOrCompare(candidatePath, candidateFromSelection(selection));
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 fi
 node --input-type=module -e '
-import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
-const { readSelection, validateSelectionCandidate } =
+const { readFileNoFollow, readSelection, validateSelectionCandidate } =
   await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
 validateSelectionCandidate(
   selection,
-  JSON.parse(fs.readFileSync(candidatePath, "utf8")),
+  JSON.parse(readFileNoFollow(candidatePath, {
+    encoding: "utf8",
+    label: "staged current candidate",
+  })),
 );
 ' "$staged_selection_path" "$staged_candidate_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
 materialize_exact "$evidence_path" "$out/evidence.md" \
   "finalized validation evidence"
-evidence_sha="$(sha256sum "$out/evidence.md" | cut -d' ' -f1)"
-evidence_bytes="$(stat -c '%s' "$out/evidence.md")"
+IFS=$'\t' read -r evidence_sha evidence_bytes \
+  <<<"$(secure_digest_size "$out/evidence.md")"
 
 if [ -n "$discovery_request_path" ]; then
-  discovery_request_tmp="$staged_discovery_request_path.$$.bound.tmp"
   if ! node --input-type=module - \
-    "$discovery_request_path" "$discovery_request_tmp" "$evidence_sha" \
+    "$discovery_request_path" "$staged_discovery_request_path" "$evidence_sha" \
     "$evidence_bytes" \
     "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
-import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 const [source, destination, evidenceSha256, evidenceBytesText, helperPath] =
   process.argv.slice(2);
-const request = JSON.parse(fs.readFileSync(source, "utf8"));
+const { readFileNoFollow, writeCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+const request = JSON.parse(readFileNoFollow(source, {
+  encoding: "utf8",
+  label: "generated discovery request",
+}));
 if (!Array.isArray(request.validation_evidence)) {
   throw new Error("generated discovery request validation_evidence must be an array");
 }
@@ -909,16 +939,12 @@ if (
 if (priorDescriptors.length === 0) {
   request.validation_evidence.push(descriptor);
 }
-const { writeCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
 writeCreateOrCompare(destination, request);
 NODE
   then
-    rm -f -- "$discovery_request_tmp"
     echo "cannot generate evidence-bound discovery request from $discovery_request_path" >&2
     exit 2
   fi
-  publish_no_replace "$discovery_request_tmp" "$staged_discovery_request_path"
 fi
 if [ -n "$ledger_path" ]; then
   materialize_exact "$ledger_path" "$staged_ledger_path" "discovery ledger"
@@ -941,21 +967,21 @@ if [ -n "$verification_dir" ]; then
   fi
 
   node --input-type=module -e '
-import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 const [source, destination, helperPath] = process.argv.slice(1);
-const entries = fs.readdirSync(source, { withFileTypes: true })
-  .sort((left, right) => left.name.localeCompare(right.name));
+const { readDirectoryNoFollow, writeDirectoryCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+const entries = readDirectoryNoFollow(source, {
+  label: "verification request directory",
+});
 if (entries.length === 0 || entries.some((entry) =>
-  !entry.isFile() || !entry.name.endsWith(".json")
+  !entry.name.endsWith(".json")
 )) {
   throw new Error("verification directory must contain only regular JSON files");
 }
-const { writeDirectoryCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
 writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
   name: entry.name,
-  bytes: fs.readFileSync(`${source}/${entry.name}`),
+  bytes: entry.bytes,
 })));
 ' "$verification_dir" "$staged_verification_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
@@ -963,10 +989,16 @@ fi
 
 if [ "$phase" = "discovery" ]; then
   if ! node - "$staged_discovery_request_path" "$evidence_sha" \
-    "$evidence_bytes" <<'NODE'
-const fs = require("node:fs");
+    "$evidence_bytes" "$lifecycle_helper" <<'NODE'
+const { pathToFileURL } = require("node:url");
 const [requestPath, evidenceSha256, evidenceBytesText] = process.argv.slice(2);
-const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+(async () => {
+const helperPath = process.argv[5];
+const { readFileNoFollow } = await import(pathToFileURL(helperPath).href);
+const request = JSON.parse(readFileNoFollow(requestPath, {
+  encoding: "utf8",
+  label: "staged discovery request",
+}));
 const evidenceBytes = Number(evidenceBytesText);
 const expected = {
   artifact_kind: "d2b-panel/validation-evidence",
@@ -989,6 +1021,10 @@ if (matches.length !== 1) {
   );
   process.exit(1);
 }
+})().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
 NODE
   then
     echo "generated discovery request does not bind finalized validation evidence" >&2
@@ -1003,7 +1039,6 @@ if ! node --input-type=module - \
   "$staged_verification_dir" \
   "$previous_selection_path" "$previous_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
-import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const [
@@ -1020,7 +1055,10 @@ const [
   previousDir,
   helperPath,
 ] = process.argv.slice(2);
-const readJson = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
+const { readDirectoryNoFollow, readFileNoFollow, validateStagedRoundArtifacts } =
+  await import(pathToFileURL(helperPath).href);
+const readJson = (path, label = "staged panel artifact") =>
+  JSON.parse(readFileNoFollow(path, { encoding: "utf8", label }));
 const selection = readJson(selectionPath);
 const artifacts = {
   phase,
@@ -1034,18 +1072,16 @@ if (phase === "discovery") {
   artifacts.ledger = readJson(ledgerPath);
   artifacts.responses = readJson(responsesPath);
   artifacts.self_verification = readJson(selfVerificationPath);
-  const entries = fs.readdirSync(verificationDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .sort((left, right) => left.name.localeCompare(right.name));
+  const entries = readDirectoryNoFollow(verificationDir, {
+    label: "staged verification request directory",
+  });
   artifacts.verification_requests = Object.fromEntries(
     entries.map((entry) => [
       entry.name.slice(0, -5),
-      readJson(`${verificationDir}/${entry.name}`),
+      JSON.parse(entry.bytes.toString("utf8")),
     ]),
   );
 }
-const { validateStagedRoundArtifacts } =
-  await import(pathToFileURL(helperPath).href);
 const validationOptions = {};
 if (phase === "verification" && previousSelectionPath) {
   const priorSelection = readJson(previousSelectionPath);
@@ -1099,7 +1135,6 @@ for seat in "${panel_seats[@]}"; do
     # default note's exact bytes. Reuse never recreates or edits it.
     continue
   fi
-  note_tmp="$note.$$.tmp"
   if [ "$round_number" -gt 1 ]; then
     case ",$previous_roster," in
       *,"$seat",*)
@@ -1112,7 +1147,7 @@ for seat in "${panel_seats[@]}"; do
   else
     prior_note="This is the first review. There is no prior verdict; perform the complete discovery obligation for this phase."
   fi
-  cat > "$note_tmp" <<MD
+  publish_stdin_no_replace "$note" <<MD
 # Reviewer notes for $seat
 
 ## Integrator rebuttals
@@ -1132,7 +1167,6 @@ validations unless this section explicitly asks this seat to do so.
 
 $prior_note
 MD
-  publish_no_replace "$note_tmp" "$note"
 done
 
 discovery_request_path="$staged_discovery_request_path"
@@ -1142,18 +1176,8 @@ self_verification_path="$staged_self_verification_path"
 verification_dir="$staged_verification_dir"
 approval_path="$staged_approval_path"
 
-request_tmp="$out/review-request.md.$$.tmp"
-dispatch_tmp="$out/dispatch-prompt.txt.$$.tmp"
-request_exit() {
-  local status="$?"
-  rm -f -- "$request_tmp" "$dispatch_tmp"
-  if [ "$status" -ne 0 ] && [ -d "$out" ] && [ ! -f "$completion_marker" ]; then
-    partial_cleanup_hint
-  fi
-  exit "$status"
-}
-trap request_exit EXIT
-cat > "$request_tmp" <<MD
+{
+cat <<MD
 # Panel review request
 
 This is the complete shared request for \`$round\` in lifecycle \`$lifecycle\`. Read the artifacts below
@@ -1214,7 +1238,7 @@ fi)
 MD
 
 if [ "$round_number" -gt 1 ]; then
-  cat >> "$request_tmp" <<MD
+  cat <<MD
 
 ## Prior verdict obligation
 
@@ -1229,20 +1253,18 @@ if [ "$round_number" -gt 1 ]; then
 Do not mark a finding resolved because the integrator says it was fixed. Any content change invalidated every prior sign-off, including a sign-off from a seat whose area appears unaffected.
 MD
 else
-  cat >> "$request_tmp" <<'MD'
+  cat <<'MD'
 
 ## Prior verdict obligation
 
 This is the first review. There is no prior verdict to verify.
 MD
 fi
+} | publish_stdin_no_replace "$out/review-request.md"
 
-publish_no_replace "$request_tmp" "$out/review-request.md"
-
-cat > "$dispatch_tmp" <<MD
+publish_stdin_no_replace "$out/dispatch-prompt.txt" <<MD
 Use this dispatch prompt only when the stage completion marker exists at $completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying. Read and follow the complete phase-aware review request at $out/review-request.md. Use view to read every artifact it names, including the staged current candidate, generated lifecycle artifacts, the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
 MD
-publish_no_replace "$dispatch_tmp" "$out/dispatch-prompt.txt"
 
 canonical_artifacts=(
   "address.json"
@@ -1271,31 +1293,37 @@ for seat in "${panel_seats[@]}"; do
   fi
 done
 
-if ! node - "$root/.scratch/panel" "$out" "$lifecycle" \
-  "$lifecycle_packet_max_bytes" "${canonical_artifacts[@]}" <<'NODE'
-const fs = require("node:fs");
+if ! prior_packet_bytes="$(
+node - "$root/.scratch/panel" "$out" "$lifecycle" \
+  "$lifecycle_packet_max_bytes" "$lifecycle_helper" <<'NODE'
 const path = require("node:path");
-const [panelRoot, currentRound, lifecycle, maxText, ...currentArtifacts] =
+const { pathToFileURL } = require("node:url");
+const [panelRoot, currentRound, lifecycle, maxText, helperPath] =
   process.argv.slice(2);
 const maxBytes = Number(maxText);
 let total = 0;
+(async () => {
+const {
+  listDirectoryNamesNoFollow,
+  pathKindNoFollow,
+  readBoundArtifactSetNoFollow,
+  readFileNoFollow,
+} = await import(pathToFileURL(helperPath).href);
 const addFile = (file) => {
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
-  total += stat.size;
+  total += readFileNoFollow(file, { label: "lifecycle packet artifact" }).length;
 };
-for (const relative of currentArtifacts) {
-  addFile(path.join(currentRound, relative));
-}
-for (const entry of fs.readdirSync(panelRoot, { withFileTypes: true })) {
-  if (!entry.isDirectory()) continue;
-  const directory = path.join(panelRoot, entry.name);
+for (const name of listDirectoryNamesNoFollow(panelRoot, "panel packet root")) {
+  const directory = path.join(panelRoot, name);
+  if (pathKindNoFollow(directory, "panel packet entry") !== "directory") continue;
   if (path.resolve(directory) === path.resolve(currentRound)) continue;
   const markerPath = path.join(directory, ".complete");
-  if (!fs.existsSync(markerPath)) continue;
+  if (pathKindNoFollow(markerPath, "panel completion marker") === "missing") continue;
   let marker;
   try {
-    marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+    marker = JSON.parse(readFileNoFollow(markerPath, {
+      encoding: "utf8",
+      label: "panel completion marker",
+    }));
   } catch (error) {
     throw new Error(`${markerPath} is unreadable: ${error.message}`);
   }
@@ -1306,28 +1334,28 @@ for (const entry of fs.readdirSync(panelRoot, { withFileTypes: true })) {
     typeof marker.artifact_sha256 === "object" &&
     !Array.isArray(marker.artifact_sha256)
   ) {
-    for (const relative of Object.keys(marker.artifact_sha256)) {
-      if (
-        relative === "" ||
-        path.isAbsolute(relative) ||
-        relative.split("/").includes("..")
-      ) {
-        throw new Error(`${markerPath} has an invalid artifact path`);
-      }
-      addFile(path.join(directory, relative));
+    const bound = readBoundArtifactSetNoFollow(markerPath);
+    if (bound.marker.lifecycle_id !== lifecycle) {
+      throw new Error(`${markerPath} changed lifecycle during bound read`);
+    }
+    for (const bytes of Object.values(bound.artifacts)) {
+      total += bytes.length;
     }
     continue;
   }
   const walkLegacy = (parent) => {
-    for (const child of fs.readdirSync(parent, { withFileTypes: true })) {
-      if (child.name === ".complete" || child.name.endsWith(".tmp")) continue;
-      const childPath = path.join(parent, child.name);
-      if (child.isDirectory()) {
-        if (child.name !== "verdicts" && child.name !== "records") {
+    for (const child of listDirectoryNamesNoFollow(parent, "legacy panel packet")) {
+      if (child === ".complete" || child.endsWith(".tmp")) continue;
+      const childPath = path.join(parent, child);
+      const kind = pathKindNoFollow(childPath, "legacy panel packet entry");
+      if (kind === "directory") {
+        if (child !== "verdicts" && child !== "records") {
           walkLegacy(childPath);
         }
-      } else if (child.isFile()) {
+      } else if (kind === "file") {
         addFile(childPath);
+      } else {
+        throw new Error(`${childPath} is not a regular file or directory`);
       }
     }
   };
@@ -1340,36 +1368,37 @@ if (total > maxBytes) {
   );
   process.exit(1);
 }
+process.stdout.write(String(total));
+})().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
 NODE
+)"
 then
   echo "lifecycle packet quota refused completion; .complete will not be written" >&2
   exit 2
 fi
 
-for relative in "${canonical_artifacts[@]}"; do
-  chmod 0444 -- "$out/$relative"
-done
+node --input-type=module - "$lifecycle_helper" "$out" \
+  "${canonical_artifacts[@]}" <<'NODE'
+import { pathToFileURL } from "node:url";
+const [helperPath, root, ...relativePaths] = process.argv.slice(2);
+const { chmodFileNoFollow } = await import(pathToFileURL(helperPath).href);
+for (const relative of relativePaths) {
+  chmodFileNoFollow(`${root}/${relative}`, 0o444);
+}
+NODE
 
-node --input-type=module -e '
-import crypto from "node:crypto";
-import fs from "node:fs";
+if ! node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const [path, round, lifecycle, base, previousTip, tip, phase, selectionSha,
   deltaSha, fullSha, helperPath, ...artifactPaths] = process.argv.slice(1);
-const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
-const root = path.slice(0, -"/.complete".length);
-const artifact_sha256 = {};
-const artifact_bytes = {};
-for (const relative of artifactPaths.sort()) {
-  const artifactPath = `${root}/${relative}`;
-  const stat = fs.lstatSync(artifactPath);
-  if (!stat.isFile()) throw new Error(`${artifactPath} is not a regular file`);
-  const bytes = fs.readFileSync(artifactPath);
-  artifact_sha256[relative] =
-    crypto.createHash("sha256").update(bytes).digest("hex");
-  artifact_bytes[relative] = stat.size;
-}
-writeCreateOrCompare(path, {
+const maxBytes = Number(artifactPaths.pop());
+const priorBytes = Number(artifactPaths.pop());
+const { writeBoundCompletionCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+writeBoundCompletionCreateOrCompare(path, {
   artifact_kind: "d2b-panel/stage-completion",
   schema_version: 2,
   complete: true,
@@ -1382,14 +1411,24 @@ writeCreateOrCompare(path, {
   selection_sha256: selectionSha,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
-  artifact_sha256,
-  artifact_bytes,
+}, artifactPaths, {
+  priorBytes,
+  maxBytes,
 });
 ' "$completion_marker" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
   "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-  "${canonical_artifacts[@]}"
-chmod 0444 -- "$completion_marker"
+  "${canonical_artifacts[@]}" "$prior_packet_bytes" "$lifecycle_packet_max_bytes"
+then
+  echo "lifecycle packet quota or atomic completion publication refused .complete" >&2
+  exit 2
+fi
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { chmodFileNoFollow } =
+  await import(pathToFileURL(process.argv[2]).href);
+chmodFileNoFollow(process.argv[1], 0o444);
+' "$completion_marker" "$lifecycle_helper"
 
 echo "staged $out"
 echo "  tip          $tip"

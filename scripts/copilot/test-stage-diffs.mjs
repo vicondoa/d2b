@@ -8,10 +8,12 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -235,6 +237,47 @@ try {
     force: true,
   });
   writeFileSync(discoveryRequestPath, originalDiscoveryRequest);
+  const selectionSymlink = join(repo, "selection-symlink.json");
+  symlinkSync(selectionPath, selectionSymlink);
+  const symlinkSelection = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionSymlink,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "staging rejects a symlinked lifecycle selection",
+    symlinkSelection.status === 2 &&
+      /symbolic link|ELOOP/.test(symlinkSelection.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    symlinkSelection.text,
+  );
+  const selectionHardlink = join(repo, "selection-hardlink.json");
+  linkSync(selectionPath, selectionHardlink);
+  const hardlinkedSelection = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionHardlink,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "staging rejects a hardlinked lifecycle selection",
+    hardlinkedSelection.status === 2 &&
+      /link count|hardlink/.test(hardlinkedSelection.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    hardlinkedSelection.text,
+  );
+  rmSync(selectionHardlink);
   const boundedPacket = run(repo, [
     base,
     base,
@@ -491,6 +534,33 @@ try {
   );
   writeFileSync(join(firstDir, "delta.diff"), originalDeltaBytes);
   chmodSync(join(firstDir, "delta.diff"), 0o444);
+
+  const dispatchPath = join(firstDir, "dispatch-prompt.txt");
+  const originalDispatchBytes = readFileSync(dispatchPath);
+  const dispatchAlias = join(repo, "dispatch-alias.txt");
+  writeFileSync(dispatchAlias, originalDispatchBytes);
+  rmSync(dispatchPath);
+  linkSync(dispatchAlias, dispatchPath);
+  const hardlinkedDispatch = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "dispatch consumption rejects an identical-byte hardlink substitution",
+    hardlinkedDispatch.status === 2 &&
+      /link count|hardlink/.test(hardlinkedDispatch.text),
+    hardlinkedDispatch.text,
+  );
+  rmSync(dispatchPath);
+  writeFileSync(dispatchPath, originalDispatchBytes);
+  chmodSync(dispatchPath, 0o444);
 
   const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
   for (const seat of firstRoster) {

@@ -9,22 +9,25 @@
  */
 
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { TextDecoder } from "node:util";
 import {
-  existsSync,
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
   linkSync,
   lstatSync,
-  mkdtempSync,
   mkdirSync,
-  readFileSync,
+  openSync,
+  readSync,
   readdirSync,
-  rmSync,
-  statSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, posix, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -167,14 +170,425 @@ export const sha256 = (value) =>
     .update(typeof value === "string" ? value : stableStringify(value))
     .digest("hex");
 
-const readJson = (path, label = path) => {
-  if (!existsSync(path)) error(`missing ${label} at ${path}`);
+const MAX_ANCHORED_READ_BYTES = 1024 * 1024 * 1024;
+const DIRECTORY_OPEN_FLAGS =
+  fsConstants.O_RDONLY |
+  fsConstants.O_DIRECTORY |
+  fsConstants.O_NOFOLLOW |
+  fsConstants.O_CLOEXEC;
+const FILE_READ_FLAGS =
+  fsConstants.O_RDONLY |
+  fsConstants.O_NONBLOCK |
+  fsConstants.O_NOFOLLOW |
+  fsConstants.O_CLOEXEC;
+
+function procFdPath(fd, name = undefined) {
+  return name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`;
+}
+
+function closeAll(fds) {
+  for (const fd of [...fds].reverse()) {
+    try {
+      closeSync(fd);
+    } catch {
+      // Preserve the primary filesystem error.
+    }
+  }
+}
+
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function verifyDirectoryDescriptor(fd, label) {
+  const stat = fstatSync(fd, { bigint: true });
+  if (!stat.isDirectory()) error(`${label} is not a directory`);
+  return stat;
+}
+
+function verifyNamedIdentity(parentFd, name, openedStat, label) {
+  const named = lstatSync(procFdPath(parentFd, name), { bigint: true });
+  if (named.isSymbolicLink() || !sameIdentity(named, openedStat)) {
+    error(`${label} changed identity during anchored access`);
+  }
+  return named;
+}
+
+function absoluteComponents(path, label) {
+  if (typeof path !== "string" || path.length === 0 || path.includes("\0")) {
+    error(`${label} path must be a non-empty string without NUL`);
+  }
+  const absolute = resolve(path);
+  const components = absolute.split("/").filter(Boolean);
+  if (components.length === 0) error(`${label} path must name an entry below /`);
+  return components;
+}
+
+/*
+ * Node does not expose openat2. Walk one component at a time from a pinned
+ * root descriptor and address each child through the trusted procfs handle.
+ * O_NOFOLLOW rejects both ordinary symlinks and procfs magic links supplied
+ * as path components. Retaining the descriptor chain makes a renamed parent
+ * harmless: later access remains on the inode that was opened and verified.
+ */
+function openAnchoredParent(path, label, { create = false } = {}) {
+  const components = absoluteComponents(path, label);
+  const leaf = components.pop();
+  const openedNames = [];
+  const fds = [];
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    let current = openSync("/", DIRECTORY_OPEN_FLAGS);
+    fds.push(current);
+    for (const component of components) {
+      let child;
+      try {
+        child = openSync(procFdPath(current, component), DIRECTORY_OPEN_FLAGS);
+      } catch (cause) {
+        if (!create || cause.code !== "ENOENT") throw cause;
+        try {
+          mkdirSync(procFdPath(current, component), { mode: 0o700 });
+          fsyncSync(current);
+        } catch (mkdirCause) {
+          if (mkdirCause.code !== "EEXIST") throw mkdirCause;
+        }
+        child = openSync(procFdPath(current, component), DIRECTORY_OPEN_FLAGS);
+      }
+      const childStat = verifyDirectoryDescriptor(child, `${label} parent`);
+      verifyNamedIdentity(current, component, childStat, `${label} parent`);
+      fds.push(child);
+      openedNames.push(component);
+      current = child;
+    }
+    return {
+      parentFd: fds.at(-1),
+      leaf,
+      verify: () => {
+        for (let index = 1; index < fds.length; index += 1) {
+          const stat = verifyDirectoryDescriptor(fds[index], `${label} parent`);
+          verifyNamedIdentity(
+            fds[index - 1],
+            openedNames[index - 1],
+            stat,
+            `${label} parent`,
+          );
+        }
+      },
+      close: () => closeAll(fds),
+    };
+  } catch (cause) {
+    closeAll(fds);
+    throw cause;
+  }
+}
+
+function verifyRegularDescriptor(fd, parentFd, name, label, expectedLinks = 1n) {
+  const stat = fstatSync(fd, { bigint: true });
+  if (!stat.isFile()) error(`${label} is not a regular file`);
+  if (stat.nlink !== expectedLinks) {
+    error(
+      `${label} has link count ${stat.nlink}; expected ${expectedLinks} and refusing a hardlink`,
+    );
+  }
+  const named = verifyNamedIdentity(parentFd, name, stat, label);
+  if (!named.isFile() || named.nlink !== expectedLinks) {
+    error(`${label} is not a singly linked regular file`);
+  }
+  return stat;
+}
+
+function readOpenedFile(fd, maxBytes, label, start = null) {
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    const position = start === null ? null : start + total;
+    const count = readSync(fd, chunk, 0, chunk.length, position);
+    if (count === 0) break;
+    total += count;
+    if (total > maxBytes) error(`${label} exceeds ${maxBytes} bytes`);
+    chunks.push(chunk.subarray(0, count));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function readFileAt(parentFd, name, label, options = {}) {
+  const maxBytes = options.maxBytes ?? MAX_ANCHORED_READ_BYTES;
+  let fd;
+  try {
+    fd = openSync(procFdPath(parentFd, name), FILE_READ_FLAGS);
+    const before = verifyRegularDescriptor(fd, parentFd, name, label);
+    if (before.size > BigInt(maxBytes)) error(`${label} exceeds ${maxBytes} bytes`);
+    const bytes = readOpenedFile(fd, maxBytes, label);
+    const after = verifyRegularDescriptor(fd, parentFd, name, label);
+    if (
+      !sameIdentity(before, after) ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs ||
+      after.size !== BigInt(bytes.length)
+    ) {
+      error(`${label} changed while its opened descriptor was being read`);
+    }
+    if (options.nonEmpty && bytes.length === 0) error(`${label} is empty`);
+    return bytes;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function readFileNoFollow(path, options = {}) {
+  const label = options.label ?? path;
+  const parent = openAnchoredParent(path, label);
+  try {
+    parent.verify();
+    const bytes = readFileAt(parent.parentFd, parent.leaf, label, options);
+    parent.verify();
+    return options.encoding ? bytes.toString(options.encoding) : bytes;
+  } finally {
+    parent.close();
+  }
+}
+
+function openDirectoryAt(parentFd, name, label) {
+  const fd = openSync(procFdPath(parentFd, name), DIRECTORY_OPEN_FLAGS);
+  const stat = verifyDirectoryDescriptor(fd, label);
+  verifyNamedIdentity(parentFd, name, stat, label);
+  return { fd, stat };
+}
+
+function directoryNames(fd) {
+  return readdirSync(procFdPath(fd), { withFileTypes: true })
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function readDirectoryAt(parentFd, name, label, options = {}) {
+  const directory = openDirectoryAt(parentFd, name, label);
+  try {
+    const names = directoryNames(directory.fd);
+    const entries = names.map((entryName) => ({
+      name: entryName,
+      bytes: readFileAt(
+        directory.fd,
+        entryName,
+        `${label}/${entryName}`,
+        options,
+      ),
+    }));
+    const afterNames = directoryNames(directory.fd);
+    const afterStat = verifyDirectoryDescriptor(directory.fd, label);
+    verifyNamedIdentity(parentFd, name, afterStat, label);
+    if (
+      names.length !== afterNames.length ||
+      names.some((entryName, index) => entryName !== afterNames[index])
+    ) {
+      error(`${label} changed while its entries were being read`);
+    }
+    return entries;
+  } finally {
+    closeSync(directory.fd);
+  }
+}
+
+export function readDirectoryNoFollow(path, options = {}) {
+  const label = options.label ?? path;
+  const parent = openAnchoredParent(path, label);
+  try {
+    parent.verify();
+    const entries = readDirectoryAt(parent.parentFd, parent.leaf, label, options);
+    parent.verify();
+    return entries;
+  } finally {
+    parent.close();
+  }
+}
+
+function relativeComponents(path, label) {
+  if (
+    typeof path !== "string" ||
+    path.length === 0 ||
+    posix.isAbsolute(path) ||
+    path.split("/").some((component) =>
+      component === "" || component === "." || component === "..")
+  ) {
+    error(`${label} must be a normalized relative path`);
+  }
+  return path.split("/");
+}
+
+function readRelativeFileAt(anchorFd, relative, label) {
+  const components = relativeComponents(relative, label);
+  const leaf = components.pop();
+  const directories = [];
+  let parentFd = anchorFd;
+  try {
+    for (const component of components) {
+      const directory = openDirectoryAt(parentFd, component, label);
+      directories.push(directory.fd);
+      parentFd = directory.fd;
+    }
+    return readFileAt(parentFd, leaf, label);
+  } finally {
+    closeAll(directories);
+  }
+}
+
+export function readBoundArtifactSetNoFollow(markerPath) {
+  const parent = openAnchoredParent(markerPath, "stage completion marker");
+  try {
+    parent.verify();
+    const markerBytes = readFileAt(
+      parent.parentFd,
+      parent.leaf,
+      "stage completion marker",
+    );
+    let marker;
+    try {
+      marker = JSON.parse(markerBytes.toString("utf8"));
+    } catch (cause) {
+      error(`invalid stage completion marker: ${cause.message}`);
+    }
+    if (
+      !isPlainObject(marker.artifact_sha256) ||
+      !isPlainObject(marker.artifact_bytes)
+    ) {
+      error("stage completion marker has invalid artifact maps");
+    }
+    const artifacts = {};
+    for (const relative of Object.keys(marker.artifact_sha256).sort()) {
+      try {
+        artifacts[relative] = readRelativeFileAt(
+          parent.parentFd,
+          relative,
+          `bound artifact ${relative}`,
+        );
+      } catch (cause) {
+        error(`bound artifact ${relative} is unavailable: ${cause.message}`);
+      }
+    }
+    parent.verify();
+    return { marker, markerBytes, artifacts };
+  } finally {
+    parent.close();
+  }
+}
+
+export function writeBoundCompletionCreateOrCompare(
+  markerPath,
+  metadata,
+  relativePaths,
+  options = {},
+) {
+  if (!isPlainObject(metadata) || !Array.isArray(relativePaths)) {
+    error("bound completion publication requires metadata and artifact paths");
+  }
+  const parent = openAnchoredParent(markerPath, "stage completion marker", {
+    create: true,
+  });
+  try {
+    parent.verify();
+    const artifact_sha256 = {};
+    const artifact_bytes = {};
+    let currentBytes = 0;
+    for (const relative of [...relativePaths].sort()) {
+      const bytes = readRelativeFileAt(
+        parent.parentFd,
+        relative,
+        `completion artifact ${relative}`,
+      );
+      artifact_sha256[relative] =
+        createHash("sha256").update(bytes).digest("hex");
+      artifact_bytes[relative] = bytes.length;
+      currentBytes += bytes.length;
+    }
+    if (options.maxBytes !== undefined) {
+      const priorBytes = options.priorBytes ?? 0;
+      if (
+        !Number.isSafeInteger(options.maxBytes) ||
+        !Number.isSafeInteger(priorBytes) ||
+        options.maxBytes < 0 ||
+        priorBytes < 0
+      ) {
+        error("bound completion byte quota is malformed");
+      }
+      const total = priorBytes + currentBytes;
+      if (total > options.maxBytes) {
+        error(
+          `lifecycle ${metadata.lifecycle_id} staged packet bytes ${total} exceed ` +
+          `the exact-packet quota ${options.maxBytes}; retain the immutable ` +
+          "packets and start a newly scoped lifecycle",
+        );
+      }
+    }
+    const value = {
+      ...metadata,
+      artifact_sha256,
+      artifact_bytes,
+    };
+    const bytes = Buffer.from(stableStringify(value));
+    const result = writeRawAtCreateOrCompare(
+      parent.parentFd,
+      parent.leaf,
+      markerPath,
+      bytes,
+    );
+    parent.verify();
+    return { ...result, value };
+  } finally {
+    parent.close();
+  }
+}
+
+export function pathKindNoFollow(path, label = path) {
+  let parent;
+  let fd;
+  try {
+    parent = openAnchoredParent(path, label);
+    parent.verify();
+    fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
+    const stat = fstatSync(fd, { bigint: true });
+    verifyNamedIdentity(parent.parentFd, parent.leaf, stat, label);
+    parent.verify();
+    return stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other";
+  } catch (cause) {
+    if (cause.code === "ENOENT") return "missing";
+    throw cause;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    parent?.close();
+  }
+}
+
+export function listDirectoryNamesNoFollow(path, label = path) {
+  const parent = openAnchoredParent(path, label);
+  let directory;
+  try {
+    parent.verify();
+    directory = openDirectoryAt(parent.parentFd, parent.leaf, label);
+    const names = directoryNames(directory.fd);
+    const after = verifyDirectoryDescriptor(directory.fd, label);
+    verifyNamedIdentity(parent.parentFd, parent.leaf, after, label);
+    parent.verify();
+    return names;
+  } finally {
+    if (directory !== undefined) closeSync(directory.fd);
+    parent.close();
+  }
+}
+
+function readJsonWithBytes(path, label = path) {
+  try {
+    const bytes = readFileNoFollow(path, {
+      encoding: "utf8",
+      label,
+    });
+    return { value: JSON.parse(bytes), bytes };
   } catch (cause) {
     error(`invalid ${label} at ${path}: ${cause.message}`);
   }
-};
+}
+
+const readJson = (path, label = path) => readJsonWithBytes(path, label).value;
 
 export function changedPathsFromGitRange(range, cwd = process.cwd()) {
   nonBlank(range, "git range");
@@ -239,101 +653,250 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
  */
 export function writeCreateOrCompare(path, value) {
   const expected = stableStringify(value);
-  mkdirSync(dirname(path), { recursive: true });
-  if (existsSync(path)) {
-    const actual = readFileSync(path, "utf8");
-    if (actual !== expected) {
-      error(
-        `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
-      );
-    }
-
-    return { path, created: false, bytes: expected };
-  }
-  const temporary = `${path}.${process.pid}.${temporaryCounter += 1}.tmp`;
+  const parent = openAnchoredParent(path, "generated artifact", { create: true });
+  const temporary = `.${parent.leaf}.${process.pid}.${temporaryCounter += 1}.tmp`;
+  let temporaryFd;
+  let temporaryPresent = false;
   try {
-    writeFileSync(temporary, expected, { encoding: "utf8", flag: "wx" });
-    /*
-     * A hard link is the no-replace commit primitive. Unlike rename, it
-     * cannot replace a file created by a concurrent retry. The temporary name
-     * is never the published artifact, so a failed write cannot look complete
-     * to a reader.
-     */
-    linkSync(temporary, path);
-    unlinkSync(temporary);
-    return { path, created: true, bytes: expected };
-  } catch (cause) {
+    parent.verify();
+    let actual;
     try {
-      unlinkSync(temporary);
-    } catch {
-      // The temporary file may not have been created.
+      actual = readFileAt(
+        parent.parentFd,
+        parent.leaf,
+        "existing generated artifact",
+      ).toString("utf8");
+    } catch (cause) {
+      if (cause.code !== "ENOENT") throw cause;
     }
-    if (cause.code === "EEXIST" && existsSync(path)) {
-      const actual = readFileSync(path, "utf8");
+    if (actual !== undefined) {
       if (actual !== expected) {
         error(
           `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
         );
       }
+      parent.verify();
       return { path, created: false, bytes: expected };
     }
+
+    temporaryFd = openSync(
+      procFdPath(parent.parentFd, temporary),
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_CLOEXEC,
+      0o600,
+    );
+    temporaryPresent = true;
+    writeFileSync(temporaryFd, expected);
+    fsyncSync(temporaryFd);
+    verifyRegularDescriptor(
+      temporaryFd,
+      parent.parentFd,
+      temporary,
+      "generated artifact temporary",
+    );
+    try {
+      /*
+       * link(2) is an atomic no-replace commit for a file. Both names are
+       * resolved below the same pinned parent; EXDEV and EMLINK are hard
+       * failures, never copy or rename fallbacks.
+       */
+      linkSync(
+        procFdPath(parent.parentFd, temporary),
+        procFdPath(parent.parentFd, parent.leaf),
+      );
+      verifyRegularDescriptor(
+        temporaryFd,
+        parent.parentFd,
+        parent.leaf,
+        "published generated artifact",
+        2n,
+      );
+      unlinkSync(procFdPath(parent.parentFd, temporary));
+      temporaryPresent = false;
+      verifyRegularDescriptor(
+        temporaryFd,
+        parent.parentFd,
+        parent.leaf,
+        "published generated artifact",
+      );
+      fsyncSync(parent.parentFd);
+      parent.verify();
+      return { path, created: true, bytes: expected };
+    } catch (cause) {
+      if (cause.code !== "EEXIST") {
+        if (cause.code === "EXDEV" || cause.code === "EMLINK") {
+          error(
+            `atomic no-replace publication is unavailable for ${path}: ${cause.code}`,
+          );
+        }
+        throw cause;
+      }
+      const raced = readFileAt(
+        parent.parentFd,
+        parent.leaf,
+        "concurrently published generated artifact",
+      ).toString("utf8");
+      if (raced !== expected) {
+        error(
+          `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
+        );
+      }
+      parent.verify();
+      return { path, created: false, bytes: expected };
+    }
+  } finally {
+    if (temporaryFd !== undefined) closeSync(temporaryFd);
+    if (temporaryPresent) {
+      try {
+        unlinkSync(procFdPath(parent.parentFd, temporary));
+      } catch {
+        // Preserve the primary publication error.
+      }
+    }
+    parent.close();
+  }
+}
+
+function createFileAt(parentFd, name, bytes, label) {
+  let fd;
+  try {
+    fd = openSync(
+      procFdPath(parentFd, name),
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_CLOEXEC,
+      0o600,
+    );
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+    verifyRegularDescriptor(fd, parentFd, name, label);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function removeOwnedDirectoryAt(parentFd, name) {
+  let directory;
+  try {
+    directory = openDirectoryAt(parentFd, name, "temporary artifact family");
+  } catch (cause) {
+    if (cause.code === "ENOENT") return;
     throw cause;
   }
+  try {
+    for (const entry of directoryNames(directory.fd)) {
+      const fd = openSync(procFdPath(directory.fd, entry), FILE_READ_FLAGS);
+      try {
+        verifyRegularDescriptor(
+          fd,
+          directory.fd,
+          entry,
+          "temporary artifact family entry",
+        );
+      } finally {
+        closeSync(fd);
+      }
+      unlinkSync(procFdPath(directory.fd, entry));
+    }
+  } finally {
+    closeSync(directory.fd);
+  }
+  rmdirSync(procFdPath(parentFd, name));
 }
 
-let atomicDirectoryMoveAvailable;
-
-function requireAtomicDirectoryMove() {
-  if (atomicDirectoryMoveAvailable !== undefined) {
-    if (!atomicDirectoryMoveAvailable) {
-      error(
-        "directory publication requires GNU mv with --no-clobber and " +
-        "--no-target-directory; the atomic no-clobber primitive is unavailable",
-      );
-    }
-    return;
-  }
-  try {
-    const help = execFileSync("mv", ["--help"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    atomicDirectoryMoveAvailable =
-      help.includes("--no-clobber") && help.includes("--no-target-directory");
-  } catch {
-    atomicDirectoryMoveAvailable = false;
-  }
-  if (!atomicDirectoryMoveAvailable) {
+function compareExistingDirectoryAt(parentFd, name, path, expected, expectedNames) {
+  const actualEntries = readDirectoryAt(
+    parentFd,
+    name,
+    `existing artifact family at ${path}`,
+  );
+  const actualNames = actualEntries.map((entry) => entry.name);
+  if (
+    actualNames.length !== expectedNames.length ||
+    actualNames.some((entryName, index) => entryName !== expectedNames[index])
+  ) {
     error(
-      "directory publication requires GNU mv with --no-clobber and " +
-      "--no-target-directory; the atomic no-clobber primitive is unavailable",
+      `existing artifact family at ${path} is incomplete or has extra entries; ` +
+      `expected [${expectedNames.join(", ")}], found [${actualNames.join(", ")}]`,
     );
   }
+  for (const entry of actualEntries) {
+    const expectedBytes = expected.get(entry.name);
+    const expectedBuffer = Buffer.isBuffer(expectedBytes)
+      ? expectedBytes
+      : Buffer.from(expectedBytes);
+    if (!entry.bytes.equals(expectedBuffer)) {
+      error(`conflicting generated bytes at ${join(path, entry.name)}; refusing to overwrite`);
+    }
+  }
+  return { path, created: false };
 }
 
-function atomicNoClobberDirectoryMove(source, destination) {
-  requireAtomicDirectoryMove();
+const RENAMEAT2_NOREPLACE_SYSCALL = Object.freeze({
+  arm64: 276,
+  x64: 316,
+});
+
+function atomicNoReplaceDirectoryMove(parentFd, source, destination, displayPath) {
+  const syscall = RENAMEAT2_NOREPLACE_SYSCALL[process.arch];
+  if (syscall === undefined) {
+    error(
+      `atomic no-replace directory publication is unsupported on architecture ${process.arch}`,
+    );
+  }
+  const program = String.raw`
+use strict;
+use warnings;
+my ($number, $source, $destination) = @ARGV;
+my $result = syscall(0 + $number, 3, $source, 3, $destination, 1);
+if ($result == -1) {
+  my $number = 0 + $!;
+  print STDERR "renameat2 errno=$number: $!\n";
+  exit 1;
+}
+`;
   try {
     execFileSync(
-      "mv",
-      ["--no-clobber", "--no-target-directory", "--", source, destination],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      "perl",
+      ["-e", program, String(syscall), source, destination],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", parentFd],
+      },
     );
+    return true;
   } catch (cause) {
+    const detail = String(cause.stderr ?? cause.message);
+    const errno = Number(detail.match(/renameat2 errno=(\d+)/)?.[1]);
+    if (errno === 17) return false; // EEXIST
+    if ([18, 22, 31, 38, 95].includes(errno) || cause.code === "ENOENT") {
+      const reason = Number.isFinite(errno) ? `errno ${errno}` : cause.code;
+      error(
+        `atomic no-replace directory publication is unavailable for ${displayPath}: ${reason}`,
+      );
+    }
     error(
-      `atomic no-clobber directory publication failed for ${destination}: ` +
-      `${cause.message}`,
+      `atomic no-replace directory publication failed for ${displayPath}: ${detail.trim()}`,
     );
   }
+}
+
+function createDirectoryAt(parentFd, name, label) {
+  mkdirSync(procFdPath(parentFd, name), { mode: 0o700 });
+  fsyncSync(parentFd);
+  return openDirectoryAt(parentFd, name, label);
 }
 
 /*
- * A directory is the publication unit for an artifact family. Build every
- * member in a complete sibling temporary directory, claim a separate sibling
- * claim directory, and publish with Linux's atomic no-clobber move. The
- * destination therefore changes from absent to complete, never from absent to
- * partially populated. A claim left by a crashed publisher is not reclaimed
- * implicitly: its error names the cleanup needed before retrying.
+ * A directory is the publication unit for an artifact family. Build it below
+ * a pinned parent, then call renameat2(RENAME_NOREPLACE) directly. There is no
+ * check-then-rename fallback when the syscall, filesystem, or mount rejects
+ * the primitive.
  */
 export function writeDirectoryCreateOrCompare(directory, entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -350,111 +913,362 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
     expected.set(name, entry.bytes);
   }
   const expectedNames = [...expected.keys()].sort();
-
-  const pathExists = (path) => {
-    try {
-      lstatSync(path);
-      return true;
-    } catch (cause) {
-      if (cause.code === "ENOENT") return false;
-      throw cause;
+  const parent = openAnchoredParent(directory, "artifact family", { create: true });
+  const temporary = `.${parent.leaf}.stage-${process.pid}-${temporaryCounter += 1}`;
+  const claim = `${parent.leaf}.claim`;
+  let temporaryPresent = false;
+  let claimOwned = false;
+  let staged;
+  try {
+    parent.verify();
+    if (pathKindAt(parent.parentFd, parent.leaf, "artifact family") !== "missing") {
+      const result = compareExistingDirectoryAt(
+        parent.parentFd,
+        parent.leaf,
+        directory,
+        expected,
+        expectedNames,
+      );
+      parent.verify();
+      return result;
     }
-  };
-
-  const compareExisting = (path) => {
-    if (!pathExists(path) || !lstatSync(path).isDirectory()) {
-      error(`existing artifact family at ${path} is not a directory`);
-    }
-    const actualEntries = readdirSync(path, { withFileTypes: true })
-      .sort((left, right) => left.name.localeCompare(right.name));
-    const actualNames = actualEntries.map((entry) => entry.name);
-    if (
-      actualNames.length !== expectedNames.length ||
-      actualNames.some((name, index) => name !== expectedNames[index])
-    ) {
-      error(
-        `existing artifact family at ${path} is incomplete or has extra entries; ` +
-        `expected [${expectedNames.join(", ")}], found [${actualNames.join(", ")}]`,
+    staged = createDirectoryAt(
+      parent.parentFd,
+      temporary,
+      "staged artifact family",
+    );
+    temporaryPresent = true;
+    for (const name of expectedNames) {
+      createFileAt(
+        staged.fd,
+        name,
+        expected.get(name),
+        `staged artifact family entry ${name}`,
       );
     }
-    for (const entry of actualEntries) {
-      if (!entry.isFile()) {
-        error(`existing artifact family entry ${join(path, entry.name)} is not a regular file`);
-      }
-      const actual = readFileSync(join(path, entry.name));
-      const expectedBytes = expected.get(entry.name);
-      const expectedBuffer = Buffer.isBuffer(expectedBytes)
-        ? expectedBytes
-        : Buffer.from(expectedBytes);
-      if (!actual.equals(expectedBuffer)) {
-        error(`conflicting generated bytes at ${join(path, entry.name)}; refusing to overwrite`);
-      }
-    }
-    return { path, created: false };
-  };
-
-  mkdirSync(dirname(directory), { recursive: true });
-  const temporary = mkdtempSync(
-    join(dirname(directory), `.${basename(directory)}.stage-${process.pid}-`),
-  );
-  const claim = `${directory}.claim`;
-  let claimOwned = false;
-  try {
-    for (const name of expectedNames) {
-      writeFileSync(join(temporary, name), expected.get(name), { flag: "wx" });
-    }
-    const stagedNames = readdirSync(temporary).sort();
+    fsyncSync(staged.fd);
+    const stagedNames = directoryNames(staged.fd);
     if (
       stagedNames.length !== expectedNames.length ||
       stagedNames.some((name, index) => name !== expectedNames[index])
     ) {
-      error(`staged artifact family at ${temporary} is incomplete before publication`);
+      error(`staged artifact family at ${directory} is incomplete before publication`);
     }
 
     try {
-      mkdirSync(claim);
+      const claimDirectory = createDirectoryAt(
+        parent.parentFd,
+        claim,
+        "artifact family publication claim",
+      );
+      closeSync(claimDirectory.fd);
       claimOwned = true;
     } catch (cause) {
-      if (cause.code === "EEXIST") {
-        if (pathExists(directory)) return compareExisting(directory);
-        error(
-          `sibling publication claim ${claim} already exists while ` +
-          `destination ${directory} is absent; it may be stale. ` +
-          `Clean up the stale claim before retrying: rm -rf -- '${claim}'`,
+      if (cause.code !== "EEXIST") throw cause;
+      if (pathKindAt(parent.parentFd, parent.leaf, "artifact family") !== "missing") {
+        const result = compareExistingDirectoryAt(
+          parent.parentFd,
+          parent.leaf,
+          directory,
+          expected,
+          expectedNames,
         );
+        parent.verify();
+        return result;
+      }
+      error(
+        `sibling publication claim ${directory}.claim already exists while ` +
+        `destination ${directory} is absent; it may be stale. ` +
+        `Clean up the stale claim before retrying: rm -rf -- '${directory}.claim'`,
+      );
+    }
+
+    const moved = atomicNoReplaceDirectoryMove(
+      parent.parentFd,
+      temporary,
+      parent.leaf,
+      directory,
+    );
+    if (!moved) {
+      const result = compareExistingDirectoryAt(
+        parent.parentFd,
+        parent.leaf,
+        directory,
+        expected,
+        expectedNames,
+      );
+      parent.verify();
+      return result;
+    }
+    temporaryPresent = false;
+    const published = lstatSync(procFdPath(parent.parentFd, parent.leaf), {
+      bigint: true,
+    });
+    if (!published.isDirectory() || !sameIdentity(published, staged.stat)) {
+      error(`published artifact family at ${directory} changed identity`);
+    }
+    fsyncSync(parent.parentFd);
+    parent.verify();
+    return { path: directory, created: true };
+  } finally {
+    if (staged !== undefined) closeSync(staged.fd);
+    if (temporaryPresent) {
+      try {
+        removeOwnedDirectoryAt(parent.parentFd, temporary);
+      } catch {
+        // Preserve the primary publication error.
+      }
+    }
+    if (claimOwned) {
+      try {
+        rmdirSync(procFdPath(parent.parentFd, claim));
+        fsyncSync(parent.parentFd);
+      } catch {
+        // Preserve the primary publication error.
+      }
+    }
+    parent.close();
+  }
+}
+
+function pathKindAt(parentFd, name, label) {
+  let fd;
+  try {
+    fd = openSync(procFdPath(parentFd, name), FILE_READ_FLAGS);
+    const stat = fstatSync(fd, { bigint: true });
+    verifyNamedIdentity(parentFd, name, stat, label);
+    return stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other";
+  } catch (cause) {
+    if (cause.code === "ENOENT") return "missing";
+    throw cause;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function copyFileCreateOrCompare(source, destination, options = {}) {
+  const bytes = readFileNoFollow(source, options);
+  return writeBytesCreateOrCompare(destination, bytes);
+}
+
+export function writeBytesCreateOrCompare(path, bytes) {
+  if (typeof bytes !== "string" && !Buffer.isBuffer(bytes)) {
+    error("published bytes must be a string or Buffer");
+  }
+  return writeRawCreateOrCompare(path, Buffer.from(bytes));
+}
+
+export function writeStandardInputCreateOrCompare(path) {
+  const bytes = readOpenedFile(0, MAX_ANCHORED_READ_BYTES, "standard input");
+  return writeRawCreateOrCompare(path, bytes);
+}
+
+export function writeCommandOutputCreateOrCompare(path, command, args) {
+  if (typeof command !== "string" || command.length === 0 || !Array.isArray(args)) {
+    error("command output publication requires a command and argument array");
+  }
+  const parent = openAnchoredParent(path, "command output", { create: true });
+  const temporary = `.${parent.leaf}.${process.pid}.${temporaryCounter += 1}.command.tmp`;
+  let fd;
+  let temporaryPresent = false;
+  try {
+    parent.verify();
+    fd = openSync(
+      procFdPath(parent.parentFd, temporary),
+      fsConstants.O_RDWR |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_CLOEXEC,
+      0o600,
+    );
+    temporaryPresent = true;
+    const result = spawnSync(command, args, {
+      stdio: ["ignore", fd, "inherit"],
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      error(`${command} exited with status ${result.status}`);
+    }
+    fsyncSync(fd);
+    verifyRegularDescriptor(
+      fd,
+      parent.parentFd,
+      temporary,
+      "command output temporary",
+    );
+    const bytes = readOpenedFile(fd, MAX_ANCHORED_READ_BYTES, "command output", 0);
+    const published = writeRawAtCreateOrCompare(
+      parent.parentFd,
+      parent.leaf,
+      path,
+      bytes,
+    );
+    parent.verify();
+    return published;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    if (temporaryPresent) {
+      try {
+        unlinkSync(procFdPath(parent.parentFd, temporary));
+        fsyncSync(parent.parentFd);
+      } catch {
+        // Preserve the primary command or publication error.
+      }
+    }
+    parent.close();
+  }
+}
+
+function writeRawCreateOrCompare(path, expected) {
+  const parent = openAnchoredParent(path, "raw artifact", { create: true });
+  try {
+    parent.verify();
+    const result = writeRawAtCreateOrCompare(
+      parent.parentFd,
+      parent.leaf,
+      path,
+      expected,
+    );
+    parent.verify();
+    return result;
+  } finally {
+    parent.close();
+  }
+}
+
+function writeRawAtCreateOrCompare(parentFd, leaf, path, expected) {
+  const temporary = `.${leaf}.${process.pid}.${temporaryCounter += 1}.raw.tmp`;
+  let fd;
+  let temporaryPresent = false;
+  try {
+    try {
+      const actual = readFileAt(parentFd, leaf, "existing raw artifact");
+      if (!actual.equals(expected)) {
+        error(`conflicting generated bytes at ${path}; refusing to overwrite`);
+      }
+      return { path, created: false, bytes: expected };
+    } catch (cause) {
+      if (cause.code !== "ENOENT") throw cause;
+    }
+    fd = openSync(
+      procFdPath(parentFd, temporary),
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_CLOEXEC,
+      0o600,
+    );
+    temporaryPresent = true;
+    writeFileSync(fd, expected);
+    fsyncSync(fd);
+    verifyRegularDescriptor(fd, parentFd, temporary, "raw artifact temporary");
+    try {
+      linkSync(
+        procFdPath(parentFd, temporary),
+        procFdPath(parentFd, leaf),
+      );
+    } catch (cause) {
+      if (cause.code === "EEXIST") {
+        const actual = readFileAt(
+          parentFd,
+          leaf,
+          "concurrently published raw artifact",
+        );
+        if (!actual.equals(expected)) {
+          error(`conflicting generated bytes at ${path}; refusing to overwrite`);
+        }
+        return { path, created: false, bytes: expected };
+      }
+      if (cause.code === "EXDEV" || cause.code === "EMLINK") {
+        error(`atomic no-replace publication is unavailable for ${path}: ${cause.code}`);
       }
       throw cause;
     }
-
-    if (pathExists(directory)) {
-      return compareExisting(directory);
-    }
-
-    /*
-     * The staged directory is complete and the claim serializes compliant
-     * publishers. The no-clobber move is still required: a publisher that
-     * does not take the claim must not win a check-then-rename race.
-     */
-    atomicNoClobberDirectoryMove(temporary, directory);
-    if (pathExists(temporary)) {
-      /*
-       * GNU mv leaves the source in place when --no-clobber declines an
-       * existing destination. Compare only after that atomic decision.
-       */
-      return compareExisting(directory);
-    }
-    if (!pathExists(directory)) {
-      error(
-        `atomic directory publication moved ${temporary} but destination ` +
-        `${directory} is absent`,
-      );
-    }
-    return { path: directory, created: true };
+    verifyRegularDescriptor(fd, parentFd, leaf, "published raw artifact", 2n);
+    unlinkSync(procFdPath(parentFd, temporary));
+    temporaryPresent = false;
+    verifyRegularDescriptor(fd, parentFd, leaf, "published raw artifact");
+    fsyncSync(parentFd);
+    return { path, created: true, bytes: expected };
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
-    if (claimOwned) {
-      rmSync(claim, { recursive: true, force: true });
+    if (fd !== undefined) closeSync(fd);
+    if (temporaryPresent) {
+      try {
+        unlinkSync(procFdPath(parentFd, temporary));
+      } catch {
+        // Preserve the primary publication error.
+      }
     }
+  }
+}
+
+export function chmodFileNoFollow(path, mode) {
+  const parent = openAnchoredParent(path, "artifact mode update");
+  let fd;
+  try {
+    parent.verify();
+    fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
+    verifyRegularDescriptor(fd, parent.parentFd, parent.leaf, "artifact mode update");
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+    parent.verify();
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    parent.close();
+  }
+}
+
+export function removeFileNoFollow(path) {
+  const parent = openAnchoredParent(path, "temporary artifact cleanup");
+  let fd;
+  try {
+    parent.verify();
+    fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
+    verifyRegularDescriptor(
+      fd,
+      parent.parentFd,
+      parent.leaf,
+      "temporary artifact cleanup",
+    );
+    unlinkSync(procFdPath(parent.parentFd, parent.leaf));
+    const after = fstatSync(fd, { bigint: true });
+    if (!after.isFile() || after.nlink !== 0n) {
+      error("temporary artifact cleanup did not unlink the opened file");
+    }
+    fsyncSync(parent.parentFd);
+    parent.verify();
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    parent.close();
+  }
+}
+
+export function ensureDirectoryNoFollow(path, { exclusive = false } = {}) {
+  const parent = openAnchoredParent(path, "staging directory", { create: true });
+  try {
+    parent.verify();
+    if (exclusive) {
+      const directory = createDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
+      closeSync(directory.fd);
+      parent.verify();
+      return { created: true };
+    }
+    const kind = pathKindAt(parent.parentFd, parent.leaf, "staging directory");
+    if (kind === "missing") {
+      const directory = createDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
+      closeSync(directory.fd);
+      parent.verify();
+      return { created: true };
+    }
+    if (kind !== "directory") error("staging path is not a directory");
+    const directory = openDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
+    closeSync(directory.fd);
+    parent.verify();
+    return { created: false };
+  } finally {
+    parent.close();
   }
 }
 
@@ -995,8 +1809,10 @@ function selectionPath(root, lifecycleId, candidateId, snapshotSha256, phase = "
 }
 
 export function selectionDigest(path) {
-  if (!existsSync(path)) error(`missing lifecycle selection at ${path}`);
-  return sha256(readFileSync(path, "utf8"));
+  return sha256(readFileNoFollow(path, {
+    encoding: "utf8",
+    label: "lifecycle selection",
+  }));
 }
 
 export function candidateFromSelection(selection, options = {}) {
@@ -1533,6 +2349,17 @@ export function createSelection(input, options = {}) {
 export function readSelection(path, options = {}) {
   const selection = readJson(path, "lifecycle selection");
   return validateSelection(selection, options.table ?? readSelectionTable(options.table_path));
+}
+
+function readSelectionWithBytes(path, options = {}) {
+  const { value, bytes } = readJsonWithBytes(path, "lifecycle selection");
+  return {
+    selection: validateSelection(
+      value,
+      options.table ?? readSelectionTable(options.table_path),
+    ),
+    bytes,
+  };
 }
 
 function selectionSummary(selection, table) {
@@ -4186,44 +5013,50 @@ const LEGACY_ATTESTATION_KEYS = ["roles", "records", "unanimous"];
 function legacyBundle(input) {
   if (typeof input === "string") {
     const path = resolve(input);
-    if (!existsSync(path)) error(`missing legacy round at ${path}`);
-    if (statSync(path).isFile()) {
+    const kind = pathKindNoFollow(path, "legacy round");
+    if (kind === "missing") error(`missing legacy round at ${path}`);
+    if (kind === "file") {
       const parsed = readJson(path, "legacy JSON");
       if (!isPlainObject(parsed) || !Array.isArray(parsed.records) && !isPlainObject(parsed.records)) {
         error("legacy JSON must contain a coherent request and records");
       }
       return legacyBundle(parsed);
     }
+    if (kind !== "directory") error("legacy round is not a regular file or directory");
     const requestPath = ["panel-request.json", "request.json"]
       .map((name) => join(path, name))
-      .find((candidate) => existsSync(candidate));
+      .find((candidate) => pathKindNoFollow(candidate, "legacy panel request") !== "missing");
     const recordDir = join(path, "records");
-    if (!existsSync(recordDir) || !statSync(recordDir).isDirectory()) {
+    if (pathKindNoFollow(recordDir, "legacy records") !== "directory") {
       error("legacy round is missing its records directory");
     }
-    const entries = readdirSync(recordDir, { withFileTypes: true });
-    const jsonEntries = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json"));
-    if (jsonEntries.length !== entries.length) {
+    const entries = readDirectoryNoFollow(recordDir, {
+      label: "legacy records",
+    });
+    if (entries.some((entry) => !entry.name.endsWith(".json"))) {
       error("legacy records directory contains a non-JSON or non-regular entry");
     }
-    const records = jsonEntries
-      .sort((left, right) => left.name.localeCompare(right.name))
+    const records = entries
       .map((entry) => ({
         name: entry.name,
-        record: readJson(join(recordDir, entry.name), `legacy record ${entry.name}`),
-        bytes: readFileSync(join(recordDir, entry.name)),
+        record: JSON.parse(entry.bytes.toString("utf8")),
+        bytes: entry.bytes,
       }));
     const attestationPath = join(path, "attestation.json");
     const sealPath = join(path, "seal.json");
+    const optionalJson = (artifactPath, label) => {
+      const artifactKind = pathKindNoFollow(artifactPath, label);
+      if (artifactKind === "missing") return undefined;
+      if (artifactKind !== "file") error(`${label} is not a regular file`);
+      return readJson(artifactPath, label);
+    };
     return {
       request: requestPath
         ? readJson(requestPath, "legacy panel request")
         : undefined,
       records,
-      attestation: existsSync(attestationPath)
-        ? readJson(attestationPath, "legacy panel attestation")
-        : undefined,
-      seal: existsSync(sealPath) ? readJson(sealPath, "legacy seal") : undefined,
+      attestation: optionalJson(attestationPath, "legacy panel attestation"),
+      seal: optionalJson(sealPath, "legacy seal"),
       exactBytes: true,
     };
   }
@@ -4679,19 +5512,18 @@ function flagValue(argv, name) {
 }
 
 function readJsonDirectory(path, label) {
-  if (!existsSync(path) || !statSync(path).isDirectory()) {
+  if (pathKindNoFollow(path, label) !== "directory") {
     return readJson(path, label);
   }
-  const entries = readdirSync(path, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name));
-  if (entries.some((entry) => !entry.isFile() || !entry.name.endsWith(".json"))) {
+  const entries = readDirectoryNoFollow(path, { label });
+  if (entries.some((entry) => !entry.name.endsWith(".json"))) {
     error(`${label} directory must contain only regular JSON files`);
   }
   if (entries.length === 0) error(`${label} directory contains no JSON artifacts`);
   return Object.fromEntries(
     entries.map((entry) => [
       entry.name.slice(0, -5),
-      readJson(join(path, entry.name), `${label}/${entry.name}`),
+      JSON.parse(entry.bytes.toString("utf8")),
     ]),
   );
 }
@@ -4729,7 +5561,7 @@ function validateSelectedVerdictDirectory(verdicts, selection, label) {
 }
 
 function readDiscoveryVerdicts(path, selection) {
-  if (!existsSync(path) || !statSync(path).isDirectory()) {
+  if (pathKindNoFollow(path, "actual discovery verdicts") !== "directory") {
     error("actual discovery verdicts must be a canonical per-seat verdict directory");
   }
   return validateSelectedVerdictDirectory(
@@ -4740,7 +5572,8 @@ function readDiscoveryVerdicts(path, selection) {
 }
 
 function readVerificationVerdicts(path, selection) {
-  const isDirectory = existsSync(path) && statSync(path).isDirectory();
+  const isDirectory =
+    pathKindNoFollow(path, "actual verification verdicts") === "directory";
   const verdicts = readJsonDirectory(path, "actual verification verdicts");
   if (!isDirectory) return verdicts;
   return validateSelectedVerdictDirectory(
@@ -4909,8 +5742,8 @@ async function main(argv) {
     }
     if (command === "adapt-verification") {
       const ledgerPath = argv[1];
-      const ledgerBytes = readFileSync(ledgerPath, "utf8");
-      const ledger = JSON.parse(ledgerBytes);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
       validateLedger(ledger);
       const optionsArgv = argv.slice(4);
       const selectionPath = flagValue(optionsArgv, "--selection");
@@ -4918,8 +5751,8 @@ async function main(argv) {
       if (!selectionPath || !candidatePath) {
         error("adapt-verification requires --selection and --candidate");
       }
-      const selectionBytes = readFileSync(selectionPath, "utf8");
-      const selection = readSelection(selectionPath);
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
       const verdicts = readVerificationVerdicts(argv[2], selection);
       const artifact = createVerificationResultArtifact({
         selection,
@@ -4934,15 +5767,17 @@ async function main(argv) {
       return;
     }
     if (command === "approval" || command === "approve") {
-      const selection = readSelection(argv[1]);
-      const selectionBytes = readFileSync(argv[1], "utf8");
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(argv[1]);
       const ledgerPath = argv[2];
-      const ledgerBytes = readFileSync(ledgerPath, "utf8");
-      const ledger = JSON.parse(ledgerBytes);
-      const responseBytes = readFileSync(argv[3], "utf8");
-      const verificationResultsBytes = readFileSync(argv[4], "utf8");
-      const responses = JSON.parse(responseBytes);
-      const verificationResults = JSON.parse(verificationResultsBytes);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(argv[3], "implementation responses");
+      const {
+        value: verificationResults,
+        bytes: verificationResultsBytes,
+      } = readJsonWithBytes(argv[4], "verification results");
       const candidatePath = flagValue(argv.slice(6), "--candidate");
       if (!candidatePath) error("approval requires --candidate");
       const currentCandidate = readJson(candidatePath, "current candidate");
@@ -4971,14 +5806,16 @@ async function main(argv) {
       if (!selectionPath || !ledgerPath || !responsesPath || !verificationPath || !outputPath) {
         error(usage());
       }
-      const selectionBytes = readFileSync(selectionPath, "utf8");
-      const selection = readSelection(selectionPath);
-      const ledgerBytes = readFileSync(ledgerPath, "utf8");
-      const ledger = JSON.parse(ledgerBytes);
-      const responseBytes = readFileSync(responsesPath, "utf8");
-      const verificationResultsBytes = readFileSync(verificationPath, "utf8");
-      const responses = JSON.parse(responseBytes);
-      const verificationResults = JSON.parse(verificationResultsBytes);
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(responsesPath, "implementation responses");
+      const {
+        value: verificationResults,
+        bytes: verificationResultsBytes,
+      } = readJsonWithBytes(verificationPath, "verification results");
       const optionsArgv = argv;
       const implementationHistoryPath = flagValue(optionsArgv, "--implementation-history");
       const verificationHistoryPath = flagValue(optionsArgv, "--verification-history");
