@@ -290,7 +290,7 @@ jobs:
       - name: Prune warm-local-only Rust cache trees
         run: |
           rm -rf             .scratch/rust-test-cache/api-surface-*/public-census             .scratch/rust-test-cache/api-surface-*/private-census
-      - name: Rust main workspace gate
+      - name: Rust main product-workspace gate
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust-main
@@ -394,7 +394,7 @@ jobs:
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
-      - name: Rust broker workspace gate
+      - name: Rust broker package-selected stream (product workspace)
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust-broker
@@ -498,7 +498,7 @@ jobs:
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
-      - name: Rust guest shell runner gate
+      - name: Rust guest shell runner package-selected stream (product workspace)
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust-guest-shell-runner

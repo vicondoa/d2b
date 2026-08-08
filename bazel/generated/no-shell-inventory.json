@@ -3818,7 +3818,7 @@
       "source": "packages/d2b-bazel-exec/src/execute.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/d2b-bazel-exec/src/execute.rs:366:27:IMMUTABLE_SUPERVISOR_PATH"
+        "packages/d2b-bazel-exec/src/execute.rs:430:31:helper"
       ],
       "status": "scanned"
     },
@@ -7555,9 +7555,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "spawnSiteCount": 3,
       "spawnSiteKeys": [
-        "packages/xtask/src/bazel.rs:1899:27:\"cargo\"",
-        "packages/xtask/src/bazel.rs:217:27:executable",
-        "packages/xtask/src/bazel.rs:3169:18:\"git\""
+        "packages/xtask/src/bazel.rs:2046:27:\"cargo\"",
+        "packages/xtask/src/bazel.rs:226:27:executable",
+        "packages/xtask/src/bazel.rs:3325:18:\"git\""
       ],
       "status": "scanned"
     },
@@ -7702,8 +7702,8 @@
       "spawnSiteCount": 4,
       "spawnSiteKeys": [
         "packages/xtask/src/main.rs:1076:27:executable",
-        "packages/xtask/src/main.rs:2398:27:\"false\"",
-        "packages/xtask/src/main.rs:2407:16:\"true\"",
+        "packages/xtask/src/main.rs:2405:27:\"false\"",
+        "packages/xtask/src/main.rs:2414:16:\"true\"",
         "packages/xtask/src/main.rs:711:27:&self.executable"
       ],
       "status": "scanned"
@@ -7712,7 +7712,7 @@
       "source": "packages/xtask/src/package_policy.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/xtask/src/package_policy.rs:50:27:args.first() .ok_or_else(|| PolicyError::Io(\"cargo\".to_owned(), \"empty command\".to_owned()))?,"
+        "packages/xtask/src/package_policy.rs:67:27:args.first() .ok_or_else(|| PolicyError::Io(\"cargo\".to_owned(), \"empty command\".to_owned()))?,"
       ],
       "status": "scanned"
     },
@@ -7762,14 +7762,14 @@
   "schemaVersion": 1,
   "spawnSites": [
     {
-      "programExpression": "IMMUTABLE_SUPERVISOR_PATH",
+      "programExpression": "helper",
       "shellInvocation": false,
       "source": "packages/d2b-bazel-exec/src/execute.rs",
       "span": {
-        "endColumn": 66,
-        "endLine": 366,
-        "startColumn": 27,
-        "startLine": 366
+        "endColumn": 51,
+        "endLine": 430,
+        "startColumn": 31,
+        "startLine": 430
       }
     },
     {
@@ -8823,9 +8823,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 1899,
+        "endLine": 2046,
         "startColumn": 27,
-        "startLine": 1899
+        "startLine": 2046
       }
     },
     {
@@ -8834,9 +8834,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 217,
+        "endLine": 226,
         "startColumn": 27,
-        "startLine": 217
+        "startLine": 226
       }
     },
     {
@@ -8845,9 +8845,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 37,
-        "endLine": 3169,
+        "endLine": 3325,
         "startColumn": 18,
-        "startLine": 3169
+        "startLine": 3325
       }
     },
     {
@@ -8988,9 +8988,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2398,
+        "endLine": 2405,
         "startColumn": 27,
-        "startLine": 2398
+        "startLine": 2405
       }
     },
     {
@@ -8999,9 +8999,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 36,
-        "endLine": 2407,
+        "endLine": 2414,
         "startColumn": 16,
-        "startLine": 2407
+        "startLine": 2414
       }
     },
     {
@@ -9021,9 +9021,9 @@
       "source": "packages/xtask/src/package_policy.rs",
       "span": {
         "endColumn": 10,
-        "endLine": 53,
+        "endLine": 70,
         "startColumn": 27,
-        "startLine": 50
+        "startLine": 67
       }
     }
   ]
