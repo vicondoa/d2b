@@ -113,19 +113,25 @@ declared change and non-empty evidence. Intentionally rejected and Deferred
 require a concrete justification. Withdrawn and Invalid require a concrete
 factual-status statement and non-empty evidence that verifies it.
 
-A recorded acceptance is an optional plain object. When present, validation
-requires all three of these fields:
+A recorded `acceptance` is optional except where the approval matrix requires
+it. When present, it is a strict closed JSON object with exactly these fields
+and no others:
 
-- a non-empty accepter identifier naming the claimed repository username;
-- capacity exactly `repository maintainer` or `merge owner`; and
-- a non-empty acceptance justification.
+- `accepter`: a string naming the claimed repository username, non-blank after
+  whitespace trimming;
+- `capacity`: a string enum exactly `repository maintainer` or `merge owner`;
+  and
+- `justification`: a string, non-blank after whitespace trimming.
 
-An empty accepter identifier, any other capacity, or an empty justification is
-malformed and cannot approve an unresolved Intentionally rejected or Deferred
-MAJOR. The object is ordinary review data under existing repository controls,
-not authentication or protected authorization. Validation checks only this
-shape and content. It does not verify the claimed identity or capacity, call
-GitHub, require a signature, or consult another authority.
+For an unresolved Intentionally rejected or Deferred MAJOR, a missing
+`acceptance`; null, array, or scalar value; missing required field; extra
+field; non-string field; empty or whitespace-only `accepter` or
+`justification`; or empty, whitespace-only, or otherwise out-of-enum
+`capacity` is malformed and cannot approve. The object is ordinary review data
+under existing repository controls, not authentication or protected
+authorization. Validation checks only this shape and content. It does not
+verify the claimed identity or capacity, call GitHub, require a signature, or
+consult another authority.
 
 Approval applies this matrix before reviewer sign-off:
 

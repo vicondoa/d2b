@@ -70,9 +70,9 @@ and previous status.
    unresolved Intentionally rejected or Deferred response approves only with
    recorded acceptance by the repository maintainer or merge owner.
 7. **Given** an unresolved Intentionally rejected or Deferred MAJOR response,
-   **When** its acceptance has an empty accepter identifier, a capacity other
-   than `repository maintainer` or `merge owner`, or an empty justification,
-   **Then** approval is refused.
+   **When** its `acceptance` is missing, is not a strict closed object with
+   exactly `accepter`, `capacity`, and `justification`, or any field violates
+   its required string content, **Then** approval is refused.
 
 ---
 
@@ -126,9 +126,11 @@ conversion into current artifacts.
 - A ledger issue has no implementation response, or a response omits required
   justification, evidence, factual verification, or acceptance when required;
   verification preparation refuses the incomplete artifact.
-- An unresolved Intentionally rejected or Deferred MAJOR has an acceptance
-  object with an empty accepter identifier, an out-of-domain capacity, or an
-  empty justification; approval refuses the malformed object.
+- An unresolved Intentionally rejected or Deferred MAJOR has a missing
+  `acceptance`; a null, array, or scalar value; a missing or extra field; a
+  non-string field; an empty or whitespace-only `accepter` or `justification`;
+  or a `capacity` outside `repository maintainer` or `merge owner`; approval
+  refuses the response.
 - A selected seat returns an explicit complete discovery result with an empty
   findings list; it is accepted as a positive zero-finding result.
 - A panel artifact carries an unknown, malformed, misplaced, or mixed-family
@@ -208,11 +210,15 @@ conversion into current artifacts.
 - **FR-029**: Approval MUST require every MAJOR to be Fixed or to carry
   verified factual Invalid or Withdrawn status, or - only for unresolved
   Intentionally rejected or Deferred responses - recorded acceptance by the
-  repository maintainer or merge owner. A present acceptance object MUST
-  contain a non-empty accepter identifier, capacity exactly `repository
-  maintainer` or `merge owner`, and a non-empty justification; any malformed
-  field MUST be refused. The acceptance MUST remain plain recorded process data
-  and MUST NOT require identity verification, signatures, GitHub API lookup, a
+  repository maintainer or merge owner. Required `acceptance` MUST be a strict
+  closed JSON object containing exactly `accepter`, `capacity`, and
+  `justification`, with no other fields. `accepter` and `justification` MUST be
+  strings that remain non-empty after trimming whitespace. `capacity` MUST be a
+  string enum whose value is exactly `repository maintainer` or `merge owner`.
+  A missing `acceptance`; null, array, or scalar value; missing or extra field;
+  non-string field; empty or whitespace-only string; or out-of-enum `capacity`
+  MUST be refused. The acceptance MUST remain plain recorded process data and
+  MUST NOT require identity verification, signatures, GitHub API lookup, a
   service, or authority.
 - **FR-030**: Each reviewed candidate state MUST have exactly one versioned
   selection artifact bound to its lifecycle identifier, candidate digest
@@ -306,9 +312,12 @@ conversion into current artifacts.
   and verified Withdrawn MAJOR; and accepted Intentionally rejected and
   Deferred MAJOR cases. They refuse Deferred BLOCKER, unverified Invalid or
   Withdrawn, and unaccepted Intentionally rejected or Deferred MAJOR cases. For
-  each of the two unresolved MAJOR dispositions, planted malformed-acceptance
-  cases refuse an empty accepter identifier, a capacity other than `repository
-  maintainer` or `merge owner`, and an empty justification.
+  each of the two unresolved MAJOR dispositions, planted structural negatives
+  refuse a missing `acceptance`; null, array, and scalar values; each missing
+  required field; and an extra field. Planted type negatives refuse a
+  non-string value in each field. Planted content and whitespace negatives
+  refuse empty and whitespace-only `accepter` and `justification` values, plus
+  empty, whitespace-only, and otherwise out-of-enum `capacity` values.
 - **SC-013**: A focused prompt-source contract test proves the current
   thirteen-seat Discover-Fix-Verify guidance is present and the superseded
   fixed-roster, four-field verdict, held-reviewer, repeated-round, and old

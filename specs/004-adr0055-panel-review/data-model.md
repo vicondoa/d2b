@@ -139,9 +139,11 @@ Fields:
 - evidence
 - verified factual status and supporting evidence when the disposition is
   Withdrawn or Invalid
-- optional recorded acceptance containing a non-empty accepter identifier,
-  capacity exactly `repository maintainer` or `merge owner`, and a non-empty
-  acceptance justification
+- optional recorded `acceptance`, required for the unresolved MAJOR cases
+  below, as a strict closed object containing exactly:
+  - `accepter`: string, non-blank after whitespace trimming
+  - `capacity`: string enum exactly `repository maintainer` or `merge owner`
+  - `justification`: string, non-blank after whitespace trimming
 
 Rules:
 
@@ -154,9 +156,10 @@ Rules:
   protected principal, authorization, capability, or separate service. Its
   claimed repository username and capacity are shape-checked but not resolved
   through signatures, GitHub API lookup, or another identity authority.
-- A present acceptance object is malformed when the accepter identifier is
-  empty, capacity is outside `repository maintainer` or `merge owner`, or the
-  acceptance justification is empty.
+- A present `acceptance` is malformed unless it is a JSON object, not null or
+  an array, with all three required fields and no extra fields. Every field
+  must be a string. `accepter` and `justification` must remain non-empty after
+  whitespace trimming, and `capacity` must equal one of its two enum values.
 - A BLOCKER approves only as Fixed, Invalid, or Withdrawn. Invalid and
   Withdrawn must satisfy the verified-factual-status rule; Intentionally
   rejected and Deferred cannot approve a BLOCKER.
@@ -164,8 +167,10 @@ Rules:
   verified-factual-status rule. Those resolved factual dispositions require no
   acceptance.
 - An unresolved Intentionally rejected or Deferred MAJOR requires recorded
-  acceptance by the repository maintainer or merge owner. Without it, or with a
-  malformed acceptance object, the MAJOR cannot approve.
+  acceptance by the repository maintainer or merge owner. For either
+  disposition, a missing acceptance; null, array, or scalar value; missing or
+  extra field; non-string field; empty or whitespace-only string; or
+  out-of-enum capacity cannot approve.
 - MINOR and NIT responses remain in the ledger but do not block after their
   required response data is complete.
 
