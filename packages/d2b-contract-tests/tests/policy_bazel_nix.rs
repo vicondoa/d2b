@@ -511,11 +511,13 @@ fn size_authorization_valid(
     let rationale_path = value["rationalePath"].as_str();
     let rationale_is_repository_relative = rationale_path.is_some_and(|path| {
         let relative = Path::new(path);
+        let repository = repo_root();
         relative.is_relative()
             && relative
                 .components()
                 .all(|component| matches!(component, std::path::Component::Normal(_)))
-            && repo_root().join(relative).is_file()
+            && fs::canonicalize(repository.join(relative))
+                .is_ok_and(|resolved| resolved.starts_with(&repository))
     });
     value["system"] == row.system
         && value["artifact"] == row.artifact
