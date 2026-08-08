@@ -54,7 +54,10 @@
       mkStaticRustPlatform = system: pkgs:
         let
           toolchain = mkRustToolchainComponents system;
-          target = pkgs.pkgsStatic.stdenv.targetPlatform.rust.rustcTarget;
+          target =
+            pkgs.lib.systems.parse.tripleFromSystem
+              (pkgs.lib.systems.parse.mkMuslSystem pkgs.stdenv.hostPlatform.parsed);
+          hostTarget = pkgs.stdenv.hostPlatform.rust.rustcTarget;
           targetToolchain =
             fenix.packages.${system}.targets.${target}.fromToolchainName {
               name = rustToolchainChannel;
@@ -64,10 +67,21 @@
             (toolchain.withComponents rustToolchainComponentNames)
             targetToolchain.rust-std
           ];
+          targetPlatform = pkgs.lib.systems.elaborate {
+            config = target;
+            isStatic = true;
+          };
+          staticStdenv = pkgs.stdenv.override { inherit targetPlatform; };
         in
-        pkgs.pkgsStatic.makeRustPlatform {
+        pkgs.makeRustPlatform {
           rustc = staticToolchain;
           cargo = staticToolchain;
+          stdenv = staticStdenv;
+        } // {
+          inherit target;
+          staticRustFlags =
+            "-C relocation-model=pie -C link-self-contained=yes "
+            + "-C linker=${staticToolchain}/lib/rustlib/${hostTarget}/bin/rust-lld";
         };
       mkBazelSeccomp = system:
         if builtins.elem system systems then
@@ -227,6 +241,9 @@
         pkgs = nixpkgsFor.${system};
         rustPlatform = mkRustPlatform system pkgs;
         staticRustPlatform = mkStaticRustPlatform system pkgs;
+        staticElfMachine =
+          if system == "x86_64-linux" then "Advanced Micro Devices X86-64"
+          else "AArch64";
         bazelSeccomp = mkBazelSeccomp system;
         bazelExecSupervisor =
           import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
@@ -295,14 +312,20 @@
             inherit cargoLock;
             cargoBuildFlags = [ "--package" packageName "--bin" binName ];
             doCheck = false;
+            auditable = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
-            nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
+            RUSTFLAGS = staticRustPlatform.staticRustFlags;
+            nativeBuildInputs = [ pkgs.binutils ];
             postInstall = ''
-              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
+              readelf=${pkgs.binutils.bintools}/bin/readelf
               bin="$out/bin/${binName}"
               test -x "$bin"
-              "$readelf" -h "$bin" >/dev/null
+              "$readelf" -h "$bin" > "$TMPDIR/${binName}.header"
+              grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' \
+                "$TMPDIR/${binName}.header"
+              grep -Eq "^[[:space:]]*Machine:[[:space:]]+${staticElfMachine}$" \
+                "$TMPDIR/${binName}.header"
               "$readelf" -l "$bin" > "$TMPDIR/${binName}.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
                 echo "${binName}: unexpected ELF interpreter" >&2
@@ -342,19 +365,22 @@
               "real-libshpool"
             ];
             doCheck = false;
+            auditable = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
-            RUSTFLAGS = "-C relocation-model=pie -C link-arg=-static-pie";
+            RUSTFLAGS = staticRustPlatform.staticRustFlags;
             nativeBuildInputs = [
-              pkgs.pkgsStatic.binutils
+              pkgs.binutils
               staticRustPlatform.bindgenHook
             ];
             postInstall = ''
-              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
+              readelf=${pkgs.binutils.bintools}/bin/readelf
               bin="$out/bin/d2b-guest-shell-runner"
               test -x "$bin"
               "$readelf" -h "$bin" > "$TMPDIR/d2b-guest-shell-runner.header"
               grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' \
+                "$TMPDIR/d2b-guest-shell-runner.header"
+              grep -Eq "^[[:space:]]*Machine:[[:space:]]+${staticElfMachine}$" \
                 "$TMPDIR/d2b-guest-shell-runner.header"
               "$readelf" -l "$bin" > "$TMPDIR/d2b-guest-shell-runner.program-headers"
               if grep -q 'Requesting program interpreter' "$TMPDIR/d2b-guest-shell-runner.program-headers"; then
@@ -532,6 +558,9 @@
         pkgs = nixpkgsFor.${system};
         rustToolchain = mkRustToolchainComponents system;
         rustPlatform = mkRustPlatform system pkgs;
+        staticElfMachine =
+          if system == "x86_64-linux" then "Advanced Micro Devices X86-64"
+          else "AArch64";
         lib = pkgs.lib;
         bazelSeccomp = mkBazelSeccomp system;
         bazelExecSupervisor =
@@ -2046,14 +2075,14 @@
               };
             in
             pkgs.runCommand "d2b-guest-static-elf" {
-              nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
+              nativeBuildInputs = [ pkgs.binutils ];
             } ''
               set -euo pipefail
               fail() {
                 printf '%s\n' "$1" >&2
                 exit 1
               }
-              readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
+              readelf=${pkgs.binutils.bintools}/bin/readelf
               for bin in \
                 ${self.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
                 ${self.packages.${system}.d2b-userd-static}/bin/d2b-userd \
@@ -2064,6 +2093,12 @@
                 test -x "$bin" || fail D2B-BZLARTIFACT-IDENTITY
                 name="$(basename "$bin")"
                 "$readelf" -h "$bin" > "$TMPDIR/$name.header" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                grep -Eq "^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)" \
+                  "$TMPDIR/$name.header" \
+                  || fail D2B-BZLARTIFACT-LINKAGE
+                grep -Eq "^[[:space:]]*Machine:[[:space:]]+${staticElfMachine}$" \
+                  "$TMPDIR/$name.header" \
                   || fail D2B-BZLARTIFACT-LINKAGE
                 "$readelf" -l "$bin" > "$TMPDIR/$name.program-headers" \
                   || fail D2B-BZLARTIFACT-LINKAGE
