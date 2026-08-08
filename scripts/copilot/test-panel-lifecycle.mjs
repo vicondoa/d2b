@@ -684,6 +684,11 @@ console.log("panel lifecycle: selection table");
       () => changedPathsFromGitRange("HEAD\u0000..HEAD", gitPathRoot),
       /control character/,
     );
+    rejects(
+      "git path derivation rejects option-like ranges before invoking git",
+      () => changedPathsFromGitRange("--stat", join(gitPathRoot, "missing-cwd")),
+      /option-like/,
+    );
   } finally {
     rmSync(gitPathRoot, { recursive: true, force: true });
   }
@@ -979,6 +984,60 @@ try {
     "an inconsistent actual discovery signoff is refused",
     () => adaptDiscoveryVerdict({ ...actualDiscoveryVerdict, signoff: true }),
     /signoff/,
+  );
+  rejects(
+    "a current discovery recommendation must be an object",
+    () => adaptDiscoveryVerdict({
+      ...actualDiscoveryVerdict,
+      recommendations: ["Validate source coverage."],
+    }),
+    /recommendations\[0\].*object/,
+  );
+  for (const field of ["severity", "where", "what", "why", "fix"]) {
+    const recommendation = { ...actualDiscoveryVerdict.recommendations[0] };
+    delete recommendation[field];
+    rejects(
+      `a current discovery recommendation requires explicit ${field}`,
+      () => adaptDiscoveryVerdict({
+        ...actualDiscoveryVerdict,
+        recommendations: [recommendation],
+      }),
+      new RegExp(field),
+    );
+  }
+  rejects(
+    "a current recommendation severity must use the exact reviewer vocabulary",
+    () => adaptDiscoveryVerdict({
+      ...actualDiscoveryVerdict,
+      recommendations: [{
+        ...actualDiscoveryVerdict.recommendations[0],
+        severity: "MAJOR",
+      }],
+    }),
+    /severity.*exactly/,
+  );
+  rejects(
+    "a current recommendation refuses undeclared fields",
+    () => adaptDiscoveryVerdict({
+      ...actualDiscoveryVerdict,
+      recommendations: [{
+        ...actualDiscoveryVerdict.recommendations[0],
+        impact: "Legacy alias must not be inferred.",
+      }],
+    }),
+    /fields.*impact.*expected exactly/,
+  );
+  const duplicateDiscoveryVerdicts = initial.selection.roster.map((seat) => ({
+    engineer: seat,
+    signoff: true,
+    summary: "No findings.",
+    recommendations: [],
+  }));
+  duplicateDiscoveryVerdicts.push({ ...duplicateDiscoveryVerdicts[0] });
+  rejects(
+    "duplicate current discovery seats are refused before keyed conversion",
+    () => validateDiscoveryResults(initial.selection, duplicateDiscoveryVerdicts),
+    /duplicate discovery verdict.*seat/,
   );
 
   const zeroResults = completeResults(initial.selection.roster);
@@ -1367,6 +1426,7 @@ try {
       lifecycle_id: "spec004w1",
       phase: "verification",
       previous_roster: initial.selection.roster,
+      fix_delta: { changed_paths: ["src/panel.js"] },
     },
     { root },
   );
@@ -1439,6 +1499,130 @@ try {
     "actual verdict JSON adapts to explicit verification status",
     actualVerificationVerdict.verified_issue_statuses.R1 === "resolved" &&
       actualVerificationVerdict.signoff === true,
+  );
+  rejects(
+    "a current verification recommendation must use the strict object shape",
+    () => adaptVerificationVerdict({
+      ...actualVerificationVerdict,
+      signoff: false,
+      recommendations: ["Fix the unresolved issue."],
+    }, { issue_ids: responseInput.issues.map((issue) => issue.id) }),
+    /recommendations\[0\].*object/,
+  );
+  const malformedVerificationResults = allVerificationResults(
+    verificationSelection.selection.roster,
+  );
+  malformedVerificationResults.software = {
+    ...malformedVerificationResults.software,
+    signoff: false,
+    recommendations: [{
+      severity: "high",
+      what: "A direct verification result omitted its location.",
+      why: "The recommendation cannot be actioned precisely.",
+      fix: "Declare the exact location.",
+    }],
+  };
+  rejects(
+    "direct current verification results cannot bypass recommendation shape",
+    () => validateVerificationResults(
+      verificationSelection.selection,
+      malformedVerificationResults,
+      { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
+    ),
+    /recommendations\[0\].*where/,
+  );
+  const duplicateVerificationVerdicts =
+    verificationSelection.selection.roster.map((seat) => ({
+      engineer: seat,
+      signoff: true,
+      summary: "All ledger issues were verified.",
+      issue_statuses: verificationStatuses,
+      recommendations: [],
+    }));
+  duplicateVerificationVerdicts.push({ ...duplicateVerificationVerdicts[0] });
+  rejects(
+    "duplicate current verification seats are refused before keyed conversion",
+    () => validateVerificationResults(
+      verificationSelection.selection,
+      duplicateVerificationVerdicts,
+      { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
+    ),
+    /duplicate verification verdict.*seat/,
+  );
+  const noOpCandidate = candidate({
+    snapshot_sha256: "d".repeat(64),
+    content_id: "content-1",
+  });
+  const noOpVerificationSelection = createSelection(
+    {
+      ...noOpCandidate,
+      lifecycle_id: "spec004w1",
+      phase: "verification",
+      previous_roster: initial.selection.roster,
+    },
+    { root },
+  );
+  const noOpLedger = {
+    ...responseInput,
+    snapshot_sha256: noOpCandidate.snapshot_sha256,
+  };
+  const noOpPreparationInput = {
+    selection: noOpVerificationSelection.selection,
+    ledger: noOpLedger,
+    responses,
+    self_verification: selfVerification,
+    current_candidate: noOpCandidate,
+    prior_selection: initial.selection,
+    prior_verdicts: priorVerdicts,
+    latest_delta_paths: [],
+  };
+  const noOpVerification = prepareVerification(noOpPreparationInput);
+  check(
+    "an exact empty no-op verification delta is preserved",
+    noOpVerification.scope.latest_delta_paths.length === 0 &&
+      noOpVerification.requests.every((request) =>
+        request.latest_delta_paths.length === 0 &&
+        request.actual_delta.paths.length === 0 &&
+        request.fix_delta.changed_paths.length === 0
+      ),
+  );
+  check(
+    "strict request validation accepts the declared empty no-op delta",
+    validateVerificationRequest(noOpVerification.requests[0], {
+      selection: noOpVerificationSelection.selection,
+      ledger: noOpLedger,
+      responses,
+      self_verification: selfVerification,
+      current_candidate: noOpCandidate,
+      prior_selection: initial.selection,
+      previous_status: priorVerdicts[noOpVerification.requests[0].seat],
+    }).seat === noOpVerification.requests[0].seat,
+  );
+  rejects(
+    "verification preparation rejects an undeclared delta for a no-op selection",
+    () => prepareVerification({
+      ...noOpPreparationInput,
+      latest_delta_paths: ["src/panel.js"],
+    }),
+    /must equal.*declared.*fix delta/,
+  );
+  rejects(
+    "verification request validation rejects an undeclared no-op delta",
+    () => validateVerificationRequest({
+      ...noOpVerification.requests[0],
+      latest_delta_paths: ["src/panel.js"],
+      actual_delta: { paths: ["src/panel.js"] },
+      fix_delta: { changed_paths: ["src/panel.js"] },
+    }, {
+      selection: noOpVerificationSelection.selection,
+      ledger: noOpLedger,
+      responses,
+      self_verification: selfVerification,
+      current_candidate: noOpCandidate,
+      prior_selection: initial.selection,
+      previous_status: priorVerdicts[noOpVerification.requests[0].seat],
+    }),
+    /latest_delta_paths disagree with selection/,
   );
   const inconsistentStatusResults = allVerificationResults(
     verificationSelection.selection.roster,
@@ -1639,7 +1823,7 @@ try {
     /explicit prior selection/,
   );
   rejects(
-    "verification requires a non-empty actual delta",
+    "verification actual delta must equal the declared non-empty delta",
     () => prepareVerification({
       selection: verificationSelection.selection,
       ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
@@ -1650,7 +1834,7 @@ try {
       prior_verdicts: priorVerdicts,
       latest_delta_paths: [],
     }),
-    /non-empty actual delta/,
+    /must equal.*declared.*fix delta/,
   );
   rejects(
     "verification requires prior verdicts when a prior selection is supplied",

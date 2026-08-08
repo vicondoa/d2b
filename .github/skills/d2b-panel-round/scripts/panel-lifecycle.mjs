@@ -181,6 +181,9 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
   if (CONTROL_CHARACTER_PATTERN.test(range)) {
     error("git range contains a control character");
   }
+  if (range.startsWith("-")) {
+    error("git range must not be option-like");
+  }
   let output;
   try {
     output = execFileSync(
@@ -1663,57 +1666,65 @@ function validateActualVerdict(verdict, label = "verdict") {
   if (!Array.isArray(verdict.recommendations)) {
     error(`${label}.recommendations must be an array`);
   }
+  verdict.recommendations.forEach((recommendation, index) =>
+    validateCurrentRecommendation(
+      recommendation,
+      `${label}.recommendations[${index}]`,
+    ),
+  );
   if (verdict.signoff !== (verdict.recommendations.length === 0)) {
     error(`${label}.signoff must be true if and only if recommendations is empty`);
   }
   return seat;
 }
 
+const CURRENT_RECOMMENDATION_KEYS = [
+  "severity",
+  "where",
+  "what",
+  "why",
+  "fix",
+];
+
+function validateCurrentRecommendation(recommendation, label) {
+  if (!isPlainObject(recommendation)) {
+    error(`${label} must be an object`);
+  }
+  assertExactKeys(recommendation, CURRENT_RECOMMENDATION_KEYS, label);
+  if (!["critical", "high", "medium", "low"].includes(recommendation.severity)) {
+    error(`${label}.severity must be exactly critical, high, medium, or low`);
+  }
+  for (const key of ["where", "what", "why", "fix"]) {
+    nonBlank(recommendation[key], `${label}.${key}`);
+  }
+  return recommendation;
+}
+
 function recommendationFinding(seat, recommendation, index) {
   const label = `verdict ${seat} recommendation ${index + 1}`;
-  let value = recommendation;
-  if (typeof recommendation === "string") {
-    nonBlank(recommendation, label);
-    value = {
-      severity: "MAJOR",
-      raw_text: recommendation,
-      impact: "Impact supplied by the reviewer.",
-      recommendation,
-    };
-  } else if (!isPlainObject(recommendation)) {
-    error(`${label} must be a string or object`);
-  }
-  const sourceOrdinal = value.source_ordinal ?? value.ordinal ?? index + 1;
-  if (!Number.isInteger(sourceOrdinal) || sourceOrdinal < 1) {
-    error(`${label}.source_ordinal must be a positive integer`);
-  }
-  const severity = verdictSeverity(value.severity ?? "MAJOR", `${label}.severity`);
-  const where = value.where;
-  const what = value.what ?? value.description;
-  const why = value.why ?? value.impact;
-  const fix = value.fix ?? value.recommendation;
-  const rawText = value.raw_text ??
-    (typeof recommendation === "string"
-      ? recommendation
-      : [where, what, why, fix].filter((part) => typeof part === "string" && part !== "").join(": "));
-  nonBlank(rawText, `${label}.raw_text`);
-  const impact = why ?? "Impact supplied by the reviewer.";
-  const recommendationText = fix ?? what ?? rawText;
-  nonBlank(impact, `${label}.impact`);
-  nonBlank(recommendationText, `${label}.recommendation`);
-  const rendered = {
-    source_id: value.source_id ?? `${seat}:${sourceOrdinal}`,
+  const value = validateCurrentRecommendation(recommendation, label);
+  const sourceOrdinal = index + 1;
+  return {
+    source_id: `${seat}:${sourceOrdinal}`,
     seat,
     source_ordinal: sourceOrdinal,
-    raw_text: rawText,
-    attribution: value.attribution ?? seat,
-    severity,
-    impact,
-    recommendation: recommendationText,
+    raw_text: [value.where, value.what, value.why, value.fix].join(": "),
+    attribution: seat,
+    severity: verdictSeverity(value.severity, `${label}.severity`),
+    impact: value.why,
+    recommendation: value.fix,
   };
-  nonBlank(rendered.source_id, `${label}.source_id`);
-  nonBlank(rendered.attribution, `${label}.attribution`);
-  return rendered;
+}
+
+function rejectDuplicateVerdictSeats(adapted, label) {
+  const seen = new Set();
+  for (const result of adapted) {
+    if (seen.has(result.seat)) {
+      error(`duplicate ${label} for seat "${result.seat}"`);
+    }
+    seen.add(result.seat);
+  }
+  return adapted;
 }
 
 export function adaptDiscoveryVerdict(verdict, options = {}) {
@@ -1732,8 +1743,11 @@ export function adaptDiscoveryVerdict(verdict, options = {}) {
 }
 
 export function adaptDiscoveryResults(input, options = {}) {
-  const adapted = verdictEntries(input).map(([seat, verdict]) =>
-    adaptDiscoveryVerdict(verdict, { ...options, seat }),
+  const adapted = rejectDuplicateVerdictSeats(
+    verdictEntries(input).map(([seat, verdict]) =>
+      adaptDiscoveryVerdict(verdict, { ...options, seat }),
+    ),
+    "discovery verdict",
   );
   return adapted.sort((left, right) =>
     (options.selection?.roster?.indexOf(left.seat) ?? Number.MAX_SAFE_INTEGER) -
@@ -1767,8 +1781,11 @@ export function adaptVerificationVerdict(verdict, options = {}) {
 }
 
 export function adaptVerificationResults(input, options = {}) {
-  const adapted = verdictEntries(input).map(([seat, verdict]) =>
-    adaptVerificationVerdict(verdict, { ...options, seat }),
+  const adapted = rejectDuplicateVerdictSeats(
+    verdictEntries(input).map(([seat, verdict]) =>
+      adaptVerificationVerdict(verdict, { ...options, seat }),
+    ),
+    "verification verdict",
   );
   return adapted.sort((left, right) =>
     (options.selection?.roster?.indexOf(left.seat) ?? Number.MAX_SAFE_INTEGER) -
@@ -2849,9 +2866,7 @@ export function validateVerificationRequest(request, options = {}) {
     selection.classification_inputs.fix_delta.changed_paths;
   if (
     !Array.isArray(request.latest_delta_paths) ||
-    request.latest_delta_paths.length === 0 ||
-    (declaredDeltaPaths.length > 0 &&
-      request.latest_delta_paths.join("\u0000") !== declaredDeltaPaths.join("\u0000"))
+    request.latest_delta_paths.join("\u0000") !== declaredDeltaPaths.join("\u0000")
   ) {
     error("verification request latest_delta_paths disagree with selection");
   }
@@ -3375,6 +3390,12 @@ export function validateVerificationResults(selection, results, options = {}) {
     if (!Array.isArray(recommendations)) {
       error(`verification result for ${seat} recommendations must be an array`);
     }
+    recommendations.forEach((recommendation, index) =>
+      validateCurrentRecommendation(
+        recommendation,
+        `verification result for ${seat} recommendations[${index}]`,
+      ),
+    );
     if (result.signoff !== (recommendations.length === 0)) {
       error(`verification result for ${seat} signoff must equal recommendations.isEmpty`);
     }
@@ -3503,27 +3524,36 @@ export function prepareVerification(input, options = {}) {
   const selfVerification = validateSelfVerification(
     input.self_verification ?? input.selfVerification,
   );
-  const actualDeltaPaths =
+  const actualDeltaInput =
     input.actual_delta_paths ??
     input.latest_delta_paths ??
     input.fix_delta_paths ??
     undefined;
-  if (!Array.isArray(actualDeltaPaths) || actualDeltaPaths.length === 0) {
-    error("verification preparation requires a non-empty actual delta");
+  if (!Array.isArray(actualDeltaInput)) {
+    error("verification preparation requires an explicit actual delta array");
   }
-  if (actualDeltaPaths.some(
-    (path) =>
-      typeof path !== "string" ||
-      path.trim() === "" ||
-      CONTROL_CHARACTER_PATTERN.test(path),
-  )) {
-    error("verification preparation actual delta paths must be non-blank strings");
+  const actualDeltaPaths = canonicalClassificationArray(
+    actualDeltaInput,
+    "verification preparation actual delta paths",
+    "changed_paths",
+  );
+  const declaredDeltaPaths =
+    selection.classification_inputs.fix_delta.changed_paths;
+  if (actualDeltaPaths.join("\u0000") !== declaredDeltaPaths.join("\u0000")) {
+    error(
+      "verification preparation actual delta paths must equal the declared " +
+      "selection fix delta paths",
+    );
   }
   const scope = validateFixScope({
     ...input,
     latest_delta_paths: actualDeltaPaths,
     responses,
   });
+  const fixDelta = input.fix_delta ?? input.fixDelta ?? {
+    changed_paths: scope.latest_delta_paths,
+  };
+  validateVerificationFixDelta(fixDelta, declaredDeltaPaths, selection);
   const requests = selection.roster.map((seat) => ({
     artifact_kind: VERIFICATION_ARTIFACT,
     schema_version: SELECTION_SCHEMA_VERSION,
@@ -3545,9 +3575,7 @@ export function prepareVerification(input, options = {}) {
     current_candidate: candidateAddress(currentCandidate),
     full_candidate: candidateAddress(currentCandidate),
     current_selection: selectionSummary(selection, table),
-    fix_delta: input.fix_delta ?? input.fixDelta ?? {
-      changed_paths: scope.latest_delta_paths,
-    },
+    fix_delta: fixDelta,
     prior_selection: priorSelection
       ? selectionSummary(priorSelection, table)
       : null,
@@ -3573,9 +3601,7 @@ export function prepareVerification(input, options = {}) {
     current_candidate: candidateAddress(currentCandidate),
     full_candidate: candidateAddress(currentCandidate),
     current_selection: selectionSummary(selection, table),
-    fix_delta: input.fix_delta ?? input.fixDelta ?? {
-      changed_paths: scope.latest_delta_paths,
-    },
+    fix_delta: fixDelta,
     prior_selection: priorSelection
       ? selectionSummary(priorSelection, table)
       : null,
