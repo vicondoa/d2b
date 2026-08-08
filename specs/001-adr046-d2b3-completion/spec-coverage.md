@@ -1157,11 +1157,15 @@ Selector-free pointer repair is an Admin-only typed broker operation with immuta
 pre/outcome audit, exact-empty clean absence, a separate repairable-absence projection, and
 invalid competing/malformed/unauthenticated censuses. The Admin-only bounded restoration
 client, two-edge restoration and two-edge prune audit fixtures, and independent 168-case
-broker registry cover
-private evidence and digest-only provenance, role denial, every request-shape refusal,
-artifact binding, backup-before-mutation, bounded per-intent/root retained capacity, checked
-30-to-90-day epochs, sealed typed pruning with immutable audit, conflicts, every per-record
-publication boundary, and no-write replay.
+broker registry retain only their literal private-evidence/provenance, role-denial,
+request-shape, artifact-binding, legacy publication, conflict, and no-write cases. The
+mandatory independent 207-case record-boundary registry covers the listed amendment record
+classes at every publication boundary, including reservation, both releases, settlement,
+repair-resume, and continuity-repair pre/evidence/outcome. The mandatory independent
+78-case lifecycle registry covers aggregate storage, standing-reserve taxonomy, cycle-unique
+capacity success/refusal/retry, retention-anchor conflict, continuity and capability seals,
+transport-loss resubmission, private-identifier canaries, and shrinkage. The 156, unchanged
+168, 207, and 78 registries have distinct responsibilities and cannot substitute.
 Incomplete rollback proof is never recovery-capable.
 These refinements add no work-item or task id.
 

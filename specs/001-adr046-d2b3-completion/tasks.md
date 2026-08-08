@@ -809,22 +809,24 @@ table before the operation exists.
   clock samples, and raw identities remain private. The root-wide 32,768-record and
   536,870,912-byte aggregate ceiling includes every publication-root class in addition to
   the existing backup subset, and capacity is reserved before every append.
-  Dispatch, repair pre/outcome, backup,
-  restoration pre/private-evidence/provenance/outcome/settlement, prune pre/outcome, and response-loss
-  tests are independent at every hierarchy-creation/write/file-sync/link/final-reopen/
-  parent/ancestor/final-directory boundary; no record class may borrow another class's test.
+  Dispatch, repair pre/outcome, backup, continuity-repair pre/private-evidence/outcome,
+  restoration pre/private-evidence/provenance/outcome/settlement, prune pre/outcome, and
+  response-loss tests are independent at every hierarchy-creation/write/file-sync/link/
+  final-reopen/parent/ancestor/final-directory boundary; no record class may borrow another
+  class's test.
   Parent replacement, symlink, magic-link, cross-device, final-identity, and exec-leak
   negatives cover publication and pruning.
 
   Capacity-control audit uses the nonrecursive standing reserve pinned in `data-model.md`;
   reserve/release pre/outcome records never reserve themselves. The fixture and tests pin
   reserve creation/charge, exhaustion before mutation, export-only replenishment, restart
-  reconstruction, and the exact `Absent -> PreAudited -> LedgerApplied -> Completed`
-  prefix machine for reservation plus both `durable-prune` and
-  `immutable-zero-mutation` releases. Stable private reservation/release attempt ids and
-  typed audit digests bind the exact charge, reason, proof, and prior ledger. Independent
-  crashes after pre-audit, ledger mutation, outcome, and completed response loss prove one
-  ledger apply and one outcome at most.
+  reconstruction, all four reserve-corruption degradation classes, and the exact distinct
+  successful/refused reservation plus both release prefix machines from `data-model.md`.
+  Stable private reservation/release attempt ids and typed audit digests bind the unique
+  governing operation, generation, predecessor outcome, charge, reason, proof, and prior
+  ledger. Independent equal-charge, malformed-prefix, refusal-crash, capacity-change retry,
+  release/retry, and completed-response-loss cases prove cycle uniqueness, one ledger apply
+  and one outcome at most, and zero ledger mutation for refusal.
 
   **Pinned independent expected sets:** T589 writes the following closed fixture and shared
   oracle set directly from this task contract. No expected-set fixture may import, call,
@@ -1725,19 +1727,23 @@ table before the operation exists.
   T589 additionally writes the read-independent literal
   `host-generation-immutable-audit-record-boundary-case-ids.txt` with exactly 207 ids and
   `host-generation-immutable-audit-lifecycle-case-ids.txt` with exactly 78 ids from
-  `data-model.md`. The first independently visits all 23 durable classes, including
-  ensure-root, reservation, both release reasons, retention anchor, settlement, and
-  repair-resume, at all nine publication boundaries. The second independently pins
-  root-aggregate storage limits, standing capacity-control reserve, every reservation and
-  release prefix, pre-audited clock candidate staging, authoritative continuity repair,
-  startup/idle day-90 catch-up without Admin traffic, every prune-permit API/compiler
-  negative, restoration resubmission settlement, completed response loss, and private
-  attempt-id leakage. Fixture, literal constant, production visitor, and poison visitors
-  must be mutually read-independent; no runtime Cartesian generation is accepted. One
-  shrinkage poison per durable class, publication boundary, lifecycle family, and permit
-  negative fails before cases run. Count reconciliation is exact: 168 existing broker ids
-  unchanged, 207 durable-record/boundary ids, 78 lifecycle ids, 20 existing ensure-root ids,
-  and 156 existing status ids.
+  `data-model.md`. The first independently visits all 23 listed supplemental classes,
+  including ensure-root, reservation, both release reasons, retention anchor, settlement,
+  repair-resume, and continuity-repair pre/evidence/outcome, at all nine publication
+  boundaries. The unchanged 168-id registry remains the independent owner of the three
+  legacy backup/restoration-evidence/restoration-pre class families omitted from that
+  supplemental list. The 78-id registry independently pins root-aggregate storage limits,
+  all five standing capacity-control reserve classes/actions, cycle-unique reservation
+  success/refusal/retry and malformed prefixes, both releases, retention-anchor conflict,
+  typed continuity repair and its full permit compiler/API negatives, startup/idle day-90
+  catch-up without Admin traffic, prune-permit negatives, transport-loss restoration
+  resubmission, every private publication identifier canary, and shrinkage. Fixture, literal
+  constant, production visitor, and poison visitors must be mutually read-independent; no
+  runtime Cartesian generation is accepted. Grouped prefix and permit ids still require
+  independent named hooks or compile-fail/API assertions plus one removal poison for every
+  member. Count reconciliation is exact: 168 existing broker ids unchanged, 207
+  durable-record/boundary ids, 78 lifecycle ids, 20 existing ensure-root ids, and 156
+  existing status ids.
 
   The SC-002 recovery redaction registry has seventeen rows. Raw `st_uid`, `st_gid`,
   `st_rdev`, and symlink-target bytes join the
@@ -1809,16 +1815,24 @@ table before the operation exists.
   capacity through typed `ReserveHostGenerationImmutableAuditCapacityV1`, whose fixed
   pre/outcome audit precedes reservation mutation. Root creation atomically installs and
   charges the eight-record/65,536-byte standing capacity-control reserve; reservation and
-  release audit consume it directly and never recursively reserve themselves. Use the exact
-  stable private reservation/release attempt ids, typed domain-separated audit digests, and
-  `Absent -> PreAudited -> LedgerApplied -> Completed` classifier from `data-model.md`.
-  Restart reconstructs reservations and standing-reserve usage from the immutable census,
+  release audit consume it directly and never recursively reserve themselves. Bind each
+  reservation to the exact broker-private unique governing durable operation,
+  `reservationGeneration`, prior-cycle outcome, prior-ledger digest, intent, and fixed
+  charge from `data-model.md`; independent equal-charge operations and later cycles must
+  never alias. Reservation uses the total
+  `Absent | PreAudited | LedgerApplied | CompletedReserved |
+  CompletedRefusedZeroMutation` prefix classifier. The successful branch alone requires
+  `LedgerApplied`; the refused branch carries one closed capacity class, proves the ledger
+  unchanged, and completes without that state. Restart reconstructs governing operations,
+  generations, reservations, and standing-reserve usage from the immutable census,
   pre/outcome chain, and export state before admission. Release is allowed only after
   durable prune or an immutable zero-mutation outcome proving no backup, private evidence,
   audit member, or covered mutation became durable. The exact two release reasons use
-  distinct attempts and cannot substitute. Independent tests crash reservation and each
-  release after pre-audit, ledger mutation, outcome, and completed response loss and require
-  one ledger apply/outcome at most, no leak, and no double release. The root-wide aggregate
+  distinct attempts and cannot substitute. Independent tests cover equal-charge
+  operations, every successful/refused/malformed prefix, crashes before and after refusal,
+  completed response loss, retry after a durable capacity change, and release followed by
+  same-intent/same-charge retry or refusal; they require cycle-unique identities, one ledger
+  apply/outcome at most, no leak, and no double release. The root-wide aggregate
   32,768-record/536,870,912-byte ceiling over every private publication class is mandatory;
   capacity refusal has zero mutation. Enforce the
   per-restoration 8-record/1,048,576-byte and per-intent 256-attempt subset, the
@@ -1841,11 +1855,24 @@ table before the operation exists.
   durable private watermark denies rollback, forward discontinuity, ambiguous reboot,
   overflow, invalid anchor, and early pruning. A selector-free public-socket Admin
   continuity-repair request is only a wake. The sealed coordinator must validate
-  disposition-pinned authoritative non-caller continuity evidence and consume a private
-  continuity-repair permit; caller evidence, root, a direct broker client, or the site
-  backup administrator's claim can never publish an anchor. Repair advances the existing
-  epoch, never resets day 30 or day 90, and when authoritative evidence proves the original
-  day-90 deadline passed it must durably prune before publishing the repair outcome. Reboot,
+  disposition-pinned authoritative non-caller continuity evidence and consume a private by-value
+  `BindHostGenerationImmutableAuditContinuityRepairPermit<'coordinator>` that owns an
+  invariant exclusive borrow and private unnameable brand of the exact coordinator.
+  Dispatch consumes that permit and accepts no second coordinator. The typed sealed
+  `RepairHostGenerationImmutableAuditContinuityV1` derives
+  `ContinuityRepairAttemptIdV1` and `continuityRepairAttemptSha256` from the coordinator,
+  epoch, prior watermark, repair sequence, and authoritative-evidence digest. It durably
+  publishes fixed-field pre audit,
+  then broker-private sealed evidence, then any mandatory prune and watermark, then one
+  fixed nested outcome. Caller evidence, root, a direct broker client, or the site backup
+  administrator's claim can never publish an anchor. Compiler/API negatives separately
+  reject construction, field/accessor use, Clone/Copy/Default, conversion/serde,
+  byte/digest/fd reconstruction, cross-coordinator use, lifetime escape, and second
+  dispatch, with one shrinkage poison per route. Repair advances the existing epoch, never
+  resets day 30 or day 90, and when authoritative evidence proves the original day-90
+  deadline passed it must durably prune before watermark advance or repair outcome.
+  Pre-only, evidence-only, prune-complete, watermark-without-outcome, outcome-publication,
+  malformed-prefix, and completed-response-loss tests pin exact replay. Reboot,
   discontinuity, delayed repair, startup, idle wake, and repeated Admin wake tests pin that
   deadline without Admin-dependent catch-up. Pruning is typed op
   `PruneHostGenerationImmutableAuditBackupsV1`, admitted only by a consumed
@@ -1864,7 +1891,14 @@ table before the operation exists.
   after directory durability. Pre-only, unlinked, directory-synced, census-committed, and
   response-loss restart prefixes settle exactly once; every unlink/directory-sync/census/
   audit/clock/capacity failure emits the closed typed report/action in `data-model.md` and
-  blocks later mutation. On existing broker startup and an internal wake at the next
+  blocks later mutation. `standing-reserve-exhausted` is the distinct capacity class with
+  its audit-reconciliation action; `standing-reserve-missing`,
+  `standing-reserve-overdrawn`, `standing-reserve-duplicated`, and
+  `standing-reserve-unaccounted` are four degradation classes with the
+  integrity-escalation action. DTO constructors,
+  schemas, wire snapshots, human/JSON goldens, deserializers, and lifecycle cases reject
+  every missing, unknown, cross-branch, or mismatched class/action pair. On existing broker
+  startup and an internal wake at the next
   day-30/day-90 boundary, catch-up runs without Admin traffic and either completes the full
   audited prune or publishes fail-closed clock/retention degradation; no timer unit is added.
   Hermetic clock tests cover a long same-boot process crash across both thresholds, restart
@@ -1935,8 +1969,15 @@ table before the operation exists.
   Authorization, all nineteen request-shape classes, artifact, conflict, retention,
   publication-degraded, and publication-pending classes have no fallback through
   `BrokerErrorResponse.message`. Audit and settlement records use only their typed
-  class-specific domain-separated digests, never raw operation or restoration attempt ids;
-  leakage canaries cover the private attempt id, its preimage, and unqualified encoding.
+  class-specific domain-separated digests, never raw private ids. Use the one canonical
+  two-step `RestorationAttemptIdV1`/`restorationAttemptSha256` formula and independent
+  vectors from `data-model.md`; member/failure tags and record digests are not a second
+  formula. Leakage canaries independently cover the publication-root private operation and
+  root reference, governing capacity operation, reservation/release attempts,
+  retention-anchor attempt, continuity-repair attempt, restoration attempt, every preimage,
+  and every unqualified encoding across DTO/schema/example, response, human/JSON, error,
+  `Display`, audit, log, trace/span, metric, panic, and `Debug`. Audit may expose only each
+  identifier's specifically named domain-separated digest field.
   Make compiler-generated broker schema/wire output
   byte-identical to T589's frozen strict response schema, snapshot, renderer inputs, and
   error/success goldens; T592 updates only its already assigned generated operation/
@@ -1944,8 +1985,12 @@ table before the operation exists.
   two-row restoration and two-row prune audit-edge fixtures plus the exact unchanged 168-id
   broker registry, new 207-id durable-record/boundary registry, and new 78-id lifecycle
   registry are mandatory and mutually read-independent from production and the 156-id
-  status registry. Every named class/boundary/lifecycle/permit visitor and shrinkage poison
-  must fire before cases count. An unaudited extra
+  status registry. The 168 ids retain only their literal legacy responsibilities; the 207
+  ids own the listed amendment classes including continuity-repair pre/evidence/outcome at
+  all nine boundaries; the 78 ids own capacity/lifecycle taxonomy, continuity and permit
+  seals, transport loss, all private-id canaries, and shrinkage. Every named
+  class/boundary/lifecycle/permit visitor and shrinkage poison must fire before cases count.
+  An unaudited extra
   mutation is the separate integrity-incident result and cannot invoke restoration. No
   daemon path, generic filesystem copy, force input, partial rollback, or new unit may
   perform either mutation. Distinct artifact/member canaries must remain absent from
@@ -2372,7 +2417,14 @@ table before the operation exists.
   fresh-process tests must prove there is no caller-free body recovery, the same
   Admin-authorized byte-identical artifact resubmission drives continuation, a different
   artifact conflicts, and no automatic-settlement wait or separate status trigger is
-  rendered.
+  rendered. A hermetic server disconnect after the request but before any typed response,
+  including the pre-only crash, must make the real CLI exit `4` with exact human bytes
+  `host generation handoff immutable audit restoration response lost\naction: resubmit-same-restoration-artifact\n`
+  or exact JSON
+  `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-response-lost","action":"resubmit-same-restoration-artifact"}`.
+  That local transport form has no failure class or settlement, cannot invent a publication
+  class, and directs immediate byte-identical Admin resubmission rather than restart
+  settlement. Human and JSON are separate real-binary goldens.
   `D2B_PUBLIC_SOCKET` is the only injectable process input: there is no uid/euid, caller-role,
   identity, renderer, result, or test-mode injection in release code. The real non-root
   binary proves root-specific output by receiving T592's closed typed

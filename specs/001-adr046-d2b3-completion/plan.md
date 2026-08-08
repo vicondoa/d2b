@@ -1062,8 +1062,9 @@ root-wide 64-intent/4,096-member/268,435,456-byte reservation, durable checked r
 epoch, fixed prune pre/outcome audit, private non-observable restoration evidence,
 digest/enum-only audit provenance, under-lock coordinator/backup revalidation, closed
 restoration wire errors, generated-schema/wire parity, and pending/degraded settlement.
-T589 owns the frozen strict schemas/snapshots/goldens and literal 168-id restoration broker expected
-set. T595's sole file map additionally includes new
+T589 owns the frozen strict schemas/snapshots/goldens, literal unchanged 168-id restoration
+broker expected set, supplemental 207-id durable-record/boundary expected set, and
+supplemental 78-id lifecycle expected set. T595's sole file map additionally includes new
 `packages/d2b/tests/host_generation_restoration_cli.rs` and
 `tests/golden/pinned/host-generation-restoration-cli.txt`; that Type-3 test invokes
 `CARGO_BIN_EXE_d2b-host-generation-deploy` through a hermetic public socket and is enforced
@@ -1085,6 +1086,23 @@ forward and changed-boot continuity, seals the non-clonable prune permit, runs e
 startup/idle catch-up without Admin, bounds aggregate storage for every publication-root
 class, and routes reservations, anchors/watermarks, restoration bodies, and prune state only
 through typed pre-audited broker operations.
+
+**R29 capacity, continuity, observability, and recovery correction:** the unchanged 168-id
+registry retains only its literal legacy responsibilities. The mandatory 207-id
+record-boundary registry replaces its duplicate backup/restoration-evidence/restoration-pre
+supplemental rows with continuity-repair pre/evidence/outcome, retaining exactly 23 classes
+by nine boundaries. The mandatory 78-id lifecycle registry owns aggregate and standing
+reserve taxonomy, cycle-unique reservation success/refusal/retry and malformed prefixes,
+release/retry, nonidentical retention-anchor conflict, continuity crash prefixes and permit
+compiler/API seals, transport-response-loss same-artifact recovery, all private publication
+identifier canaries, and shrinkage. Capacity identities bind the unique governing durable
+operation, generation, predecessor outcome, and ledger digest; zero-mutation refusal is a
+distinct terminal enum that never requires `LedgerApplied`. Continuity repair is a typed
+sealed operation with fixed pre/private-evidence/watermark/outcome success ordering, a
+fixed degraded outcome with zero watermark mutation, deadline-preserving prune, restart
+prefixes, and a by-value instance-bound permit. The CLI
+renders one exact exit-4 response-loss human/JSON form with no invented publication class
+and directs immediate byte-identical Admin resubmission. No task id or dependency changes.
 
 The external source-floor row now requires issuer-authenticated canonical receipts, strict
 schemas/golden vectors at the external-owner paths in `data-model.md`, and a
@@ -1894,6 +1912,14 @@ to 168 literal ids: 18 independent prune-pre/prune-outcome publication-boundary 
 reservation reconstruction, immutable-zero-mutation reservation release, and three
 prune/reservation shrinkage poisons. Active plan, task, contract, and checklist references use
 168; the dated R26 row remains historical.
+
+R29 leaves those 168 literal ids unchanged and narrows their active claim to the cases they
+actually enumerate. Active plan, task, contract, quickstart, coverage, and completion
+checklist references additionally require the read-independent 207-id durable-record/
+boundary and 78-id lifecycle registries with the responsibilities pinned in
+`data-model.md`; neither supplemental registry may be replaced by the 168-id broker or
+156-id status registry. Task ids remain exactly 605, and every external blocker and
+disposition above remains unchanged.
 
 ### Recorded drift
 

@@ -305,6 +305,23 @@ opening a new attempt. Completed replay, including response loss, returns
 restart-after-degraded, pre-only identical-resubmission, pre-only conflicting-resubmission,
 and response-loss paths each have exact human/JSON goldens and success or refusal tests.
 
+If the real CLI writes the restoration request but the public-socket transport closes
+before one complete typed broker response, including a pre-only broker crash, it exits `4`
+and prints exactly:
+
+```text
+host generation handoff immutable audit restoration response lost
+action: resubmit-same-restoration-artifact
+```
+
+With `--json`, it prints exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-response-lost","action":"resubmit-same-restoration-artifact"}`.
+There is no `failureClass` or `settlement` field because transport loss does not reveal a
+publication class or durable broker prefix. The operator immediately resubmits the
+byte-identical artifact through the same unprivileged local Admin path; no restart wait,
+automatic settlement, or status command is a prerequisite. Dedicated real-binary
+human/JSON goldens pin these bytes and exit.
+
 The command accepts one path and optional `--json`; selector, authority/key/token,
 member/failure override, `--force`, or extra input exits `2`. Root instead exits `4` with
 the distinct `use-unprivileged-local-admin-restoration-session` action. Unauthorized,
@@ -327,7 +344,7 @@ Retention capacity is exactly:
 ```text
 host generation handoff immutable audit retention capacity unavailable
 failure-class: <CLOSED_RETENTION_CAPACITY_CLASS>
-action: reconcile-immutable-audit-retention
+action: <ACTION_FROM_RETENTION_CAPACITY_TABLE>
 ```
 
 Retention degradation is exactly:
@@ -339,7 +356,7 @@ action: <ACTION_FROM_RETENTION_TABLE>
 ```
 
 Capacity JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-capacity","failureClass":"<CLOSED_RETENTION_CAPACITY_CLASS>","action":"reconcile-immutable-audit-retention"}`.
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-capacity","failureClass":"<CLOSED_RETENTION_CAPACITY_CLASS>","action":"<ACTION_FROM_RETENTION_CAPACITY_TABLE>"}`.
 Degradation JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-degraded","failureClass":"<CLOSED_RETENTION_DEGRADED_CLASS>","action":"<ACTION_FROM_RETENTION_TABLE>"}`.
 Restoration publication pending/degraded uses the exact
@@ -361,31 +378,46 @@ typed degradation. `PruneHostGenerationImmutableAuditBackupsV1` consumes the pri
 sealed lifetime-bound permit with no clone/copy/default/conversion/serde/accessor surface and
 emits immutable fixed-field pre/outcome audit. Prune/limit/clock/settlement failure returns
 the typed redacted report/action and blocks later mutation.
-The independent two-edge restoration and two-edge prune audit fixtures plus the 168-case
-broker registry preserve their exact ids and own only their literally enumerated cases.
-They are supplemented by the read-independent 207-case durable-record/boundary registry and
-78-case lifecycle registry in `data-model.md`. Those registries independently cover
-aggregate storage, anchored root acquisition, the standing nonrecursive capacity-control
-reserve, reservation and both release prefix machines, retention anchor staging, internal
-no-Admin catch-up, sealed prune-permit negatives, settlement and repair-resume, every
-durable record/boundary pair, and shrinkage poisons. The 156-case status registry and the
-168-case registry are not substitutes for either supplemental registry.
+The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
+168-case broker registry preserve their exact ids and own only their literal caller,
+request, artifact, legacy backup/restoration publication, conflict, and no-write cases.
+They are supplemented, not replaced, by the mandatory read-independent 207-case
+durable-record/boundary registry and 78-case lifecycle registry in `data-model.md`. The 207
+cases own all nine boundaries for each listed amendment record class, including reservation,
+both release reasons, settlement, repair-resume, and continuity-repair pre/evidence/outcome.
+The 78 cases own aggregate storage, standing-reserve exhaustion and corruption taxonomy,
+cycle-unique capacity success/refusal/retry, retention-anchor conflict, continuity and both
+permit seals, transport-loss resubmission, private-identifier canaries, and family
+shrinkage. The 156-case status registry and unchanged 168-case registry cannot substitute
+for either supplemental registry.
 
 An
 unaudited extra mutation instead returns the separate
 `preserve-and-escalate-audit-integrity-incident` action and is not restoration-eligible.
 No generic copy, force flag, daemon repair path, or new unit exists.
 
-Retention rendering is a total mapping:
+Retention rendering is a total mapping. `CLOSED_RETENTION_CAPACITY_CLASS` is exactly
+`intent-member-limit | intent-byte-limit | root-intent-limit | root-member-limit |
+root-byte-limit | root-publication-record-limit | root-publication-byte-limit |
+restoration-record-limit | restoration-byte-limit | restoration-attempt-limit |
+pending-staging-record-limit | pending-staging-byte-limit |
+standing-reserve-exhausted`. `CLOSED_RETENTION_DEGRADED_CLASS` is exactly
+`clock-rollback | clock-watermark | epoch-invalid | clock-forward-discontinuity |
+clock-continuity-ambiguous | clock-overflow | unlink | directory-sync | census |
+audit-publication | pending-settlement | standing-reserve-missing |
+standing-reserve-overdrawn | standing-reserve-duplicated |
+standing-reserve-unaccounted`:
 
 | Closed failure class | Exact action |
 | --- | --- |
-| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit` | `reconcile-immutable-audit-retention` |
+| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
+| `standing-reserve-exhausted` | `repair-retention-audit-and-reconcile` |
 | `clock-rollback`, `clock-watermark`, `epoch-invalid`, `clock-forward-discontinuity`, `clock-continuity-ambiguous` | `repair-retention-clock-discontinuity` |
 | `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |
 | `unlink`, `directory-sync` | `repair-retention-storage-and-reconcile` |
 | `census` | `repair-retention-census-and-reconcile` |
 | `audit-publication`, `pending-settlement` | `repair-retention-audit-and-reconcile` |
+| `standing-reserve-missing`, `standing-reserve-overdrawn`, `standing-reserve-duplicated`, `standing-reserve-unaccounted` | `preserve-and-escalate-audit-integrity-incident` |
 
 Every action is executable or names one external procedure:
 

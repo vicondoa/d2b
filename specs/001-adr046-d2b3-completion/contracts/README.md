@@ -421,14 +421,17 @@ merge-target registration, merge eligibility, and merge.
     exact-empty clean absence, an independently projected exactly-one-valid repairable
     absence, and invalid competing/malformed/unauthenticated censuses. The separate
     Admin-only restoration command submits one bounded signed artifact over the public
-    socket. Its two-row restoration and two-row prune audit-edge fixtures plus the 168-case
-    broker registry cover caller denial,
-    all nineteen request-shape refusals, signature/domain/key/member/failure/predecessor
-    binding, pre-audit-before-private-evidence, digest-only audit provenance, append-only
-    supersession, resumable degraded-to-repaired settlement, backup-before-mutation,
-    reservation reconstruction and both release paths, retention/pruning limits, conflicts,
-    every per-record publication boundary including independent prune-pre/prune-outcome
-    boundaries, and completed no-write replay. Backup retention is bounded per
+    socket. Its two-row restoration and two-row prune audit-edge fixtures plus the unchanged
+    168-case broker registry cover only their literal caller, nineteen request-shape,
+    artifact/binding, legacy backup/restoration publication, conflict, and no-write cases.
+    The mandatory read-independent 207-case record-boundary registry covers each listed
+    amendment class at all nine publication boundaries, including reservation, both
+    releases, settlement, repair-resume, and continuity-repair pre/evidence/outcome. The
+    mandatory read-independent 78-case lifecycle registry covers aggregate limits, all
+    standing-reserve classes/actions, cycle-unique reservation success/refusal/retry,
+    retention-anchor conflict, continuity and permit seals, transport-loss resubmission,
+    private-identifier canaries, and shrinkage. The 156, 168, 207, and 78 registries cannot
+    substitute for one another. Backup retention is bounded per
     intent by 256 members and 16,777,216 bytes and at the root by 64 intents, 4,096 members,
     and 268,435,456 bytes; an additional aggregate record/byte ceiling covers every private
     publication-root class. A replacement-bound fixed real-time/boot-time age anchor governs

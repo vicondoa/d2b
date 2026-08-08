@@ -763,7 +763,13 @@ mismatched, exit `4` identifies its bounded closed member and failure class with
    are denied. Signature validity does not authorize them.
 3. Exit `0` prints the fixed restored/already-restored result and
    `action: rerun-repair-authorized-handoff`. Rerun the repair command above. Response-loss
-   replay of the same artifact is `already-restored` with zero write.
+   replay of the same artifact is `already-restored` with zero write. If the CLI loses the
+   socket response entirely, it exits `4` and prints exactly
+   `host generation handoff immutable audit restoration response lost` followed by
+   `action: resubmit-same-restoration-artifact`; JSON is exactly
+   `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-response-lost","action":"resubmit-same-restoration-artifact"}`.
+   This form has no failure class or settlement field. Immediately rerun the same command
+   with the byte-identical artifact as the same unprivileged local Admin.
 
 Zero/multiple paths or forbidden options use `restore-with-one-artifact` and the command
 shape above. Root instead uses `use-unprivileged-local-admin-restoration-session`; the site
@@ -782,13 +788,22 @@ replacing an existing mismatched, unauthenticated, or noncontiguous member. Ever
 the repair/backup/dispatch/prune-audit records share one exact-final restart protocol.
 Conflicting bytes are preserved. Invalid request, artifact, authorization, state-race, or
 capacity refusals have zero coordinator/audit/provenance mutation; an accepted attempt that
-later fails or conflicts records exactly one fixed outcome or remains typed pending until
-restart settlement. A durable degraded settlement is nonterminal: after the named storage
-repair, resubmitting the byte-identical artifact resumes the same operation and attempt and
-converges to restored without duplicate provenance. The independent 168-case broker registry covers all callers, nineteen
-request shapes, signature/domain/key/member/failure/predecessor binding, conflict,
-backup-order, root/per-intent retention, clock and prune audit, each per-record hierarchy
-and publication boundary, and no-write replay.
+later fails or conflicts records exactly one fixed outcome. A pre-only crash has no broker
+response and remains blocked until the immediate byte-identical Admin resubmission above;
+daemon restart does not settle it automatically and the operator does not wait for restart
+settlement. A durable degraded settlement is nonterminal: after the named storage repair,
+resubmitting the byte-identical artifact resumes the same operation and attempt and
+converges to restored without duplicate provenance.
+
+The unchanged 168-case broker registry owns only its literal caller, nineteen request-shape,
+artifact/binding, conflict, legacy backup/restoration publication, and no-write cases. The
+mandatory independent 207-case durable-record/boundary registry adds every listed
+amendment record class at every publication boundary, including reservation, both releases,
+settlement, repair-resume, and continuity-repair pre/evidence/outcome. The mandatory
+independent 78-case lifecycle registry adds aggregate limits, all five standing-reserve
+states, cycle-unique capacity success/refusal/retry, retention-anchor conflict, continuity
+and permit seals, transport-response-loss recovery, private-identifier canaries, and
+shrinkage poisons. None of these three registries substitutes for another.
 
 The broker-private linear `HostGenerationImmutableAuditBackupOwner` retains at most 256
 members and 16,777,216 encoded bytes per intent and at most 64 intents, 4,096 members, and
@@ -815,9 +830,11 @@ rollback matrices. Their 156-case registry covers every missing and mismatched m
 changed transition edge, unaudited extra mutation, unauthenticated pointer, every repair
 restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exact successful
 pointer-repair, repairable-absence, bounded audit-restoration, and integrity-incident
-goldens. The separate two-row restoration and two-row prune audit-edge fixtures plus the
-168-case broker registry
-prove the privileged restoration boundary; the 156-case registry cannot substitute. The Type-1 Nix
+goldens. The separate two-row restoration and two-row prune audit-edge fixtures plus the unchanged
+168-case broker registry prove their literal privileged restoration cases. The mandatory
+207-case record-boundary and 78-case lifecycle registries prove the supplemental
+publication, capacity, continuity, capability, taxonomy, and redaction obligations; neither
+the 156-case status registry nor the 168-case registry can substitute. The Type-1 Nix
 case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
 `host-generation-handoff.nix` VM test alone proves real broker service failure/restart,

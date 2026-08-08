@@ -671,14 +671,19 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   registry MUST cover repair projections, inputs, absence classes, conflicts, crash
   boundaries, second-run no-write replay, restoration diagnostics, and integrity escalation.
   Separate two-row restoration and two-row prune audit-edge fixtures plus an independent
-  168-case broker registry
-  MUST cover role denial, every request-shape refusal, artifact binding, private evidence
-  with digest-only audit provenance, append-only supersession, conflicts,
-  backup-before-mutation, per-intent and root retention capacity, reservation reconstruction
-  plus both durable-prune and immutable-zero-mutation releases, crash-stable age anchors and
-  unsafe-forward quarantine, sealed prune pre/outcome audit and permit API negatives,
-  zero-mutation refusals, every per-record hierarchy and publication boundary including
-  independently pinned prune pre/outcome classes, and completed no-write replay.
+  unchanged 168-case broker registry MUST cover only their literal role denial,
+  request-shape, artifact binding, legacy backup/restoration publication, append-only
+  supersession, conflict, and completed no-write cases. A separate read-independent
+  207-case durable-record/boundary registry MUST cover every listed amendment record class
+  at all nine publication boundaries, including reservation, both release reasons,
+  settlement, repair-resume, and continuity-repair pre/evidence/outcome. A separate
+  read-independent 78-case lifecycle registry MUST cover aggregate capacity, all five
+  standing-reserve states and derived actions, cycle-unique reservation success/refusal/
+  retry, release/retry, retention-anchor conflict, continuity crash prefixes and permit
+  compiler/API negatives, prune-permit negatives, transport-loss artifact resubmission,
+  private-identifier leakage canaries, and shrinkage poisons. The 156-case status registry,
+  unchanged 168-case registry, 207-case registry, and 78-case registry MUST NOT substitute
+  for one another.
 
   **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
   has no host-generation handoff operation, and the installed

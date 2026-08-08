@@ -73,9 +73,15 @@
   op, closed typed errors, private evidence with fixed pre/provenance/outcome audit,
   append-only supersession, bounded durable per-intent/root backup retention and sealed
   pruning, named acquisition/repair/escalation procedures, a pinned Type-3 real-binary test,
-  and independent two-edge restoration/two-edge prune fixtures plus a 168-case negative
-  matrix covering caller, request shape,
-  signature, binding, conflict, crash, replay, and zero-mutation refusal boundaries
+  and independent two-edge restoration/two-edge prune fixtures plus an unchanged 168-case
+  matrix covering its literal caller, request-shape, signature, binding, legacy publication,
+  conflict, and replay cases
+- [x] Mandatory read-independent 207-case record-boundary and 78-case lifecycle registries
+  supplement rather than replace the 168-case matrix: they pin reservation/release/
+  settlement/repair-resume and continuity-repair publication boundaries, aggregate and
+  standing-reserve taxonomy, cycle-unique capacity success/refusal/retry, retention-anchor
+  conflict, continuity and permit API/compiler negatives, transport-loss resubmission,
+  private-identifier canaries, and shrinkage
 - [x] Cleanup is serialized against every importer, cleanup, incident, successor, and
   retention live owner before namespace access, and namespace operations require the private
   lifetime-bound `SidecarCleanupOwner<'guard>`; named legacy state is never renamed or
