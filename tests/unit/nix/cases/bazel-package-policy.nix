@@ -17,7 +17,7 @@ let
     (policyPath + "/policy/metadata.json"));
   policyLock = builtins.fromTOML (builtins.readFile
     (policyPath + "/policy/Cargo.lock"));
-  has = text: needle: lib.hasInfix needle text;
+  has = text: needle: builtins.replaceStrings [ needle ] [ "" ] text != text;
   all = text: needles: builtins.all (needle: has text needle) needles;
   replace = text: old: new: builtins.replaceStrings [ old ] [ new ] text;
   hash = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
