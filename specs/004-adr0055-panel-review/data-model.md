@@ -41,7 +41,7 @@ Rules:
 - xtask `delivery wave panel-request` and `make-records.mjs` consume the same
   artifact.
 - The selection candidate digest triple must equal the xtask snapshot and the
-  staged `candidate.json` digest triple.
+  staged `current-candidate.json` digest triple.
 - Only selection schema version `1` and selection-table version `2` are
   accepted.
 - Request roles, verdict files, observed bindings, and emitted records must

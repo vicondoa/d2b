@@ -14,7 +14,7 @@
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -88,6 +88,18 @@ function buildRound(mutate) {
         signals: ["rust"],
         candidate_class: "code",
         ambiguous: false,
+        full_candidate: {
+          changed_paths: ["src/lib.rs"],
+          signals: ["rust"],
+          candidate_class: "code",
+          ambiguous: false,
+        },
+        fix_delta: {
+          changed_paths: [],
+          signals: [],
+          candidate_class: "code",
+          ambiguous: false,
+        },
       },
       ambiguity_widened: false,
       profiles: Object.fromEntries(ROLES.map((role) => [role, role === "software" ? ["rust"] : []])),
@@ -191,7 +203,7 @@ function buildRound(mutate) {
   return dir;
 }
 
-function run(dir) {
+function run(dir, selectionPath = join(dir, "selection.json")) {
   try {
     const stdout = execFileSync(
       "node",
@@ -199,7 +211,7 @@ function run(dir) {
         script,
         dir,
         "--selection",
-        join(dir, "selection.json"),
+        selectionPath,
         "--ledger",
         join(dir, "ledger.json"),
         "--responses",
@@ -237,7 +249,8 @@ console.log("make-records: the happy path");
 {
   const dir = buildRound();
   try {
-    const r = run(dir);
+    const relativeSelectionPath = `./${relative(process.cwd(), join(dir, "selection.json"))}`;
+    const r = run(dir, relativeSelectionPath);
     check("a complete unanimous round is accepted", r.code === 0, `${r.err}`);
     const recordsDir = join(dir, "records");
     check("one record per seat is written", ROLES.every((x) => existsSync(join(recordsDir, `${x}.json`))));

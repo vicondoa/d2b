@@ -71,12 +71,12 @@ node .github/skills/d2b-panel-round/scripts/make-records.mjs \
 
 `panel-request` requires the selection candidate triple, program, and wave to
 equal the snapshot. `make-records.mjs` requires the same candidate triple as
-`candidate.json` and verdict and observed-binding keys exactly equal to the
-ordered roster. It also requires the explicit canonical ledger path, response
-path, adapted verification-result path, and approval path. Both consumers
-accept only selection schema version `1` and selection-table version `2`.
-Candidate, version, roster, or canonical-artifact disagreement fails before
-output is written.
+the round-local staged `current-candidate.json` and verdict and
+observed-binding keys exactly equal to the ordered roster. It also requires the
+explicit canonical ledger path, response path, adapted verification-result
+path, and approval path. Both consumers accept only selection schema version
+`1` and selection-table version `2`. Candidate, version, roster, or
+canonical-artifact disagreement fails before output is written.
 
 ## Discovery request and result
 
@@ -168,14 +168,15 @@ selected seat. A final issue status is passing only when it is exactly
 `resolved` or `verified`; every other status is blocking even when the verdict
 claims sign-off. The status map must cover every ledger issue exactly once.
 
-Generated verification requests are preflighted as a complete family and
-published by staging every seat file in a temporary sibling directory followed
-by one directory rename. Existing output must already be a complete,
-byte-identical family. Record generation uses the same directory publication
-rule. No lock, fsync protocol, service, daemon, or broad transaction framework
-is part of this contract. Editable stage-diffs scratch files remain
-per-file; staging stops at the first conflict and tells the operator to restore
-the expected bytes or use a new review id.
+Generated verification requests are built as a complete family in a sibling
+staging directory, preflighted there, and protected for publication by a
+separate exclusive sibling claim. While the destination is absent, one atomic
+directory rename exposes the complete family. Existing output is accepted only
+when it is a complete, byte-identical family. Record generation uses the same
+directory publication rule. No lock, fsync protocol, service, daemon, or broad
+transaction framework is part of this contract. Editable stage-diffs scratch
+files remain per-file; staging stops at the first conflict and tells the
+operator to restore the expected bytes or use a new review id.
 
 Final metrics validate the canonical selection, ledger, response envelope, and
 adapted verification-result bytes. They require complete verification and emit

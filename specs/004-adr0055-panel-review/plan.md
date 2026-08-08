@@ -320,10 +320,11 @@ delivery validation work together at merge.
    metric when deciding approval.
 9. Make `make-records.mjs` require the lifecycle-selection path. Validate its
    schema version, selection-table version, candidate identity, and ordered
-   roster against `candidate.json`, verdicts, observed bindings, and emitted
-   records. Emit current schema-version-2 `PanelRecord` objects with
-   `panel_format_version: 1` for exactly those roles. Preserve model and effort
-   checks, candidate binding, distinct run provenance, and
+   roster against the round-local staged `current-candidate.json`, verdicts,
+   observed bindings, and emitted records. Emit current schema-version-2
+   `PanelRecord` objects with `panel_format_version: 1` for exactly those
+   roles. Preserve model and effort checks, candidate binding, distinct run
+   provenance, and
    `signoff == recommendations.is_empty()`.
 
 ### Slice 2 - Delivery and Documentation Integration

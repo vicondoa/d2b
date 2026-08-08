@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -23,7 +24,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -215,13 +216,11 @@ export function writeCreateOrCompare(path, value) {
 
 /*
  * A directory is the publication unit for an artifact family. Build every
- * member in a sibling temporary directory, then claim the destination with
- * mkdir(2) before moving any member into it. mkdir is the exclusive
- * create-new operation here: a concurrent publisher can observe an existing
- * empty directory, but it can never replace that directory with its own
- * family. Existing output is accepted only when it is a complete,
- * byte-identical set; a partial directory is never completed by a second
- * publisher.
+ * member in a complete sibling temporary directory, claim a separate sibling
+ * claim directory, and rename the complete directory into place exactly once.
+ * The destination therefore changes from absent to complete, never from
+ * absent to partially populated. A claim left by a crashed publisher is not
+ * reclaimed implicitly: its error names the cleanup needed before retrying.
  */
 export function writeDirectoryCreateOrCompare(directory, entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -239,8 +238,18 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
   }
   const expectedNames = [...expected.keys()].sort();
 
+  const pathExists = (path) => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch (cause) {
+      if (cause.code === "ENOENT") return false;
+      throw cause;
+    }
+  };
+
   const compareExisting = (path) => {
-    if (!existsSync(path) || !statSync(path).isDirectory()) {
+    if (!pathExists(path) || !lstatSync(path).isDirectory()) {
       error(`existing artifact family at ${path} is not a directory`);
     }
     const actualEntries = readdirSync(path, { withFileTypes: true })
@@ -275,7 +284,8 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
   const temporary = mkdtempSync(
     join(dirname(directory), `.${basename(directory)}.stage-${process.pid}-`),
   );
-  let claimed = false;
+  const claim = `${directory}.claim`;
+  let claimOwned = false;
   try {
     for (const name of expectedNames) {
       writeFileSync(join(temporary, name), expected.get(name), { flag: "wx" });
@@ -287,41 +297,37 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
     ) {
       error(`staged artifact family at ${temporary} is incomplete before publication`);
     }
+
     try {
-      mkdirSync(directory);
-      claimed = true;
+      mkdirSync(claim);
+      claimOwned = true;
     } catch (cause) {
       if (cause.code === "EEXIST") {
-        return compareExisting(directory);
+        if (pathExists(directory)) return compareExisting(directory);
+        error(
+          `sibling publication claim ${claim} already exists while ` +
+          `destination ${directory} is absent; it may be stale. ` +
+          `Clean up the stale claim before retrying: rm -rf -- '${claim}'`,
+        );
       }
       throw cause;
     }
+
+    if (pathExists(directory)) {
+      return compareExisting(directory);
+    }
+
     /*
-     * The destination directory is now exclusively ours. Moving each fully
-     * written member is safe against another compliant publisher because no
-     * publisher can replace the claimed directory.
+     * The staged directory is complete and the claim is exclusive. This is
+     * the sole publication operation: readers see either no destination or
+     * the complete sibling directory.
      */
-    for (const name of expectedNames) {
-      renameSync(join(temporary, name), join(directory, name));
-    }
-    const publishedNames = readdirSync(directory).sort();
-    if (
-      publishedNames.length !== expectedNames.length ||
-      publishedNames.some((name, index) => name !== expectedNames[index])
-    ) {
-      error(`published artifact family at ${directory} is incomplete`);
-    }
+    renameSync(temporary, directory);
     return { path: directory, created: true };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
-    if (claimed) {
-      const names = existsSync(directory) && statSync(directory).isDirectory()
-        ? readdirSync(directory)
-        : [];
-      if (names.length !== expectedNames.length ||
-          names.some((name) => !expected.has(name))) {
-        rmSync(directory, { recursive: true, force: true });
-      }
+    if (claimOwned) {
+      rmSync(claim, { recursive: true, force: true });
     }
   }
 }
@@ -562,6 +568,11 @@ export function readSelectionTable(path = DEFAULT_SELECTION_TABLE) {
 function inferCandidateClass(inputs) {
   if (inputs.ambiguous) return "ambiguous";
   if (inputs.candidate_class === "documentation" || inputs.candidate_class === "docs") {
+    if (inputs.changed_paths.some((path) => !isDocumentationPath(path))) {
+      error(
+        "candidate_class documentation cannot narrow actual non-documentation paths",
+      );
+    }
     return "documentation";
   }
   if (
@@ -583,6 +594,19 @@ function inferCandidateClass(inputs) {
     return "documentation";
   }
   return "code";
+}
+
+function isDocumentationPath(path) {
+  return /^(?:docs\/|changelog\.d\/|README(?:\.[^/]*)?$|CHANGELOG(?:\.[^/]*)?$|[^/]+\.md$|[^/]+\.mdx$|[^/]+\.rst$|[^/]+\.txt$)/i.test(
+    path,
+  );
+}
+
+function candidateClassPrecedence(classes) {
+  for (const candidateClass of ["ambiguous", "code", "configuration", "documentation"]) {
+    if (classes.includes(candidateClass)) return candidateClass;
+  }
+  error("candidate classification requires at least one nested classification");
 }
 
 function seatHasTrigger(table, seat, inputs) {
@@ -874,9 +898,22 @@ function canonicalClassificationArray(value, label, kind) {
     if (/[\u0000-\u001f\u007f]/.test(entry)) {
       error(`${label} must not contain control characters`);
     }
-    return kind === "changed_paths"
-      ? entry.replaceAll("\\", "/")
+    const canonicalEntry = kind === "changed_paths"
+      ? normalize(entry.replaceAll("\\", "/"))
       : entry.trim().toLowerCase();
+    if (
+      canonicalEntry !== entry ||
+      (kind === "changed_paths" &&
+        (canonicalEntry === "." ||
+          canonicalEntry.startsWith("/") ||
+          canonicalEntry.endsWith("/")))
+    ) {
+      error(
+        `${label} must contain canonical normalized ` +
+        `${kind === "changed_paths" ? "paths" : "signals"}`,
+      );
+    }
+    return canonicalEntry;
   });
   const canonical = [...new Set(normalized)].sort();
   if (normalized.join("\u0000") !== canonical.join("\u0000")) {
@@ -1002,11 +1039,7 @@ function validateNestedClassificationConsistency(inputs) {
     );
   }
   const nestedClasses = nested.map((classification) => classification.candidate_class);
-  const expectedClass = nestedClasses.includes("ambiguous")
-    ? "ambiguous"
-    : nestedClasses.includes("code")
-      ? "code"
-      : nestedClasses[0];
+  const expectedClass = candidateClassPrecedence(nestedClasses);
   if (inputs.candidate_class !== expectedClass) {
     error(
       "panel selection classification_inputs candidate_class must agree with nested " +
@@ -1046,6 +1079,15 @@ export function validateSelection(selection, table = readSelectionTable()) {
     "selection.classification_inputs",
     { allowNested: selection.phase === "verification" },
   );
+  if (
+    selection.phase === "verification" &&
+    (!classificationInputs.full_candidate || !classificationInputs.fix_delta)
+  ) {
+    error(
+      "verification selection classification_inputs must contain both " +
+      "full_candidate and fix_delta",
+    );
+  }
   if (classificationInputs.candidate_class !== selection.candidate_class) {
     error("selection classification candidate_class disagrees with selection");
   }
@@ -1134,21 +1176,18 @@ export function createSelection(input, options = {}) {
   ) {
     error("prior selection and fix delta are verification-only selection inputs");
   }
-  const plan = input.fix_delta || input.fixDelta || input.delta ||
+  const plan = phase === "verification" ||
+      input.fix_delta || input.fixDelta || input.delta ||
       input.full_candidate || input.fullCandidate
     ? selectLifecycleRoster(input, { table })
     : selectRoster(input, { table });
   const selectionPlan = plan.full
     ? {
         ...plan.full,
-        candidate_class:
-          plan.full.candidate_class === "ambiguous" ||
-          plan.delta.candidate_class === "ambiguous"
-            ? "ambiguous"
-            : plan.full.candidate_class === "code" ||
-                plan.delta.candidate_class === "code"
-              ? "code"
-              : plan.full.candidate_class,
+        candidate_class: candidateClassPrecedence([
+          plan.full.candidate_class,
+          plan.delta.candidate_class,
+        ]),
         classification_inputs: {
           ...plan.full.classification_inputs,
           changed_paths: [...new Set([
@@ -1159,14 +1198,10 @@ export function createSelection(input, options = {}) {
             ...plan.full.classification_inputs.signals,
             ...plan.delta.classification_inputs.signals,
           ])].sort(),
-          candidate_class:
-            plan.full.candidate_class === "ambiguous" ||
-            plan.delta.candidate_class === "ambiguous"
-              ? "ambiguous"
-              : plan.full.candidate_class === "code" ||
-                  plan.delta.candidate_class === "code"
-                ? "code"
-                : plan.full.candidate_class,
+          candidate_class: candidateClassPrecedence([
+            plan.full.candidate_class,
+            plan.delta.candidate_class,
+          ]),
           ambiguous:
             plan.full.ambiguity_widened || plan.delta.ambiguity_widened,
           full_candidate: plan.full.classification_inputs,

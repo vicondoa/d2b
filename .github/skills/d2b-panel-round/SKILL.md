@@ -90,11 +90,21 @@ Stage the candidate with the same lifecycle and selection:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <round-id> --discovery-request <request.json> \
+  --lifecycle <lifecycle-id> --selection <selection.json> \
+  --candidate <current-candidate.json>
+```
+
+For verification staging, supply the complete canonical handoff instead:
+
+```
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <round-id> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
   --candidate <current-candidate.json> \
   --ledger <discovery-ledger.json> --responses <responses.json> \
-  --self-verification <self-verification.json>
+  --self-verification <self-verification.json> \
+  --verification-dir <verification-requests>
 ```
 
 `address.json` records `lifecycle_id`. The selection path is passed unchanged
@@ -116,10 +126,18 @@ version, or ordered-roster mismatch. Records are current workspace
 schema-version `2` objects with `panel_format_version: 1`.
 
 Staging materializes the supplied exact bytes into the round directory:
-`selection.json`, `current-candidate.json`, `discovery-ledger.json`,
+`selection.json`, `current-candidate.json`, `discovery-request.json`,
+`discovery-ledger.json`,
 `responses.json`, and `self-verification.json` when those artifacts are
-supplied. The generated `dispatch-prompt.txt` is usable only when the round's
-`.complete` marker exists; an unmarked scratch directory is non-authoritative.
+supplied. Discovery staging additionally requires a readable
+`--discovery-request` artifact. Verification staging requires a readable
+complete per-seat `--verification-dir`; it also requires the ledger, response,
+and self-verification artifacts above. All canonical artifacts and verification
+requests are materialized before the round's `.complete` marker is published.
+Once `.complete` exists, staging may only compare or reuse existing canonical
+artifacts and never add a missing one. The generated `dispatch-prompt.txt` is
+usable only when the round's `.complete` marker exists; an unmarked scratch
+directory is non-authoritative.
 
 The phase handoff uses a staged candidate, a discovery request, an immutable
 ledger, a response envelope, verification requests, an approval artifact, and
@@ -136,27 +154,25 @@ command:
 
 ```bash
 ROUND=.scratch/panel/<round-id>
-SELECTION="$ROUND/selection.json"
-CANDIDATE="$ROUND/current-candidate.json"
-LEDGER="$ROUND/discovery-ledger.json"
-RESPONSES="$ROUND/responses.json"
-SELF_VERIFICATION="$ROUND/self-verification.json"
-VERIFICATION="$ROUND/verification-results.json"
-APPROVAL="$ROUND/approval.json"
-METRICS="$ROUND/metrics.json"
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  adapt-verification "$LEDGER" "$ROUND/verdicts" "$VERIFICATION" \
-  --selection "$SELECTION" --candidate "$CANDIDATE"
+  adapt-verification "$ROUND/discovery-ledger.json" "$ROUND/verdicts" \
+  "$ROUND/verification-results.json" \
+  --selection "$ROUND/selection.json" --candidate "$ROUND/current-candidate.json"
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  approval "$SELECTION" "$LEDGER" "$RESPONSES" "$VERIFICATION" "$APPROVAL" \
-  --candidate "$CANDIDATE"
+  approval "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" \
+  "$ROUND/approval.json" --candidate "$ROUND/current-candidate.json"
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  metrics --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
-  --verification-results "$VERIFICATION" --output "$METRICS"
+  metrics --selection "$ROUND/selection.json" \
+  --ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json" \
+  --verification-results "$ROUND/verification-results.json" \
+  --output "$ROUND/metrics.json"
 node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
-  --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
-  --verification-results "$VERIFICATION" --approval "$APPROVAL"
+  --selection "$ROUND/selection.json" --ledger "$ROUND/discovery-ledger.json" \
+  --responses "$ROUND/responses.json" \
+  --verification-results "$ROUND/verification-results.json" \
+  --approval "$ROUND/approval.json"
 ```
 
 ## Discover once

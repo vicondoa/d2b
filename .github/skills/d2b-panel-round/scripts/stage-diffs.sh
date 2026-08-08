@@ -15,7 +15,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>]" >&2
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
   exit 2
 fi
 
@@ -281,7 +281,7 @@ fi
 selection_meta="$(
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, range, helperPath, lifecycle] = process.argv.slice(1);
+const [selectionPath, fullRange, deltaRange, helperPath, lifecycle] = process.argv.slice(1);
 const {
   changedPathsFromGitRange,
   readSelection,
@@ -295,15 +295,31 @@ if (selection.lifecycle_id !== lifecycle) {
   );
 }
 validateSelectionAgainstTable(selection);
-const actual = changedPathsFromGitRange(range);
-const declared = selection.phase === "verification"
-  ? selection.classification_inputs.fix_delta?.changed_paths ??
-    selection.classification_inputs.changed_paths
-  : selection.classification_inputs.changed_paths;
-if (actual.join("\u0000") !== declared.join("\u0000")) {
+const actualFull = changedPathsFromGitRange(fullRange);
+if (selection.phase === "verification") {
+  const actualDelta = changedPathsFromGitRange(deltaRange);
+  const declaredFull = selection.classification_inputs.full_candidate.changed_paths;
+  const declaredDelta = selection.classification_inputs.fix_delta.changed_paths;
+  if (actualFull.join("\u0000") !== declaredFull.join("\u0000")) {
+    throw new Error(
+      `selection full-candidate paths do not match git range ${fullRange}; ` +
+      `declared [${declaredFull.join(", ")}], actual [${actualFull.join(", ")}]`,
+    );
+  }
+  if (actualDelta.join("\u0000") !== declaredDelta.join("\u0000")) {
+    throw new Error(
+      `selection fix-delta paths do not match git range ${deltaRange}; ` +
+      `declared [${declaredDelta.join(", ")}], actual [${actualDelta.join(", ")}]`,
+    );
+  }
+} else if (
+  actualFull.join("\u0000") !==
+  selection.classification_inputs.changed_paths.join("\u0000")
+) {
   throw new Error(
-    `selection changed paths do not match git range ${range}; ` +
-    `declared [${declared.join(", ")}], actual [${actual.join(", ")}]`,
+    `selection changed paths do not match git range ${fullRange}; ` +
+    `declared [${selection.classification_inputs.changed_paths.join(", ")}], ` +
+    `actual [${actualFull.join(", ")}]`,
   );
 }
 process.stdout.write([
@@ -311,7 +327,7 @@ process.stdout.write([
   selectionDigest(selectionPath),
   selection.roster.join(","),
 ].join("\t"));
-' "$selection_path" "$prev_sha..$tip" \
+' "$selection_path" "$base_sha..$tip" "$prev_sha..$tip" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" "$lifecycle"
 )" || {
   echo "selection validation or git-range derivation failed" >&2
@@ -320,6 +336,10 @@ process.stdout.write([
 IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_meta"
 if [ -z "$candidate_path" ]; then
   echo "--candidate is required so current-candidate.json can be materialized from exact bytes" >&2
+  exit 2
+fi
+if [ "$phase" = "discovery" ] && [ -z "$discovery_request_path" ]; then
+  echo "--discovery-request is required before a discovery round can be marked complete" >&2
   exit 2
 fi
 if [ "$phase" = "verification" ]; then
@@ -335,6 +355,10 @@ if [ "$phase" = "verification" ]; then
     echo "--self-verification is required for verification staging so self-verification.json is exact" >&2
     exit 2
   fi
+  if [ -z "$verification_dir" ]; then
+    echo "--verification-dir is required for verification staging so every selected seat has a request before .complete" >&2
+    exit 2
+  fi
 fi
 IFS=',' read -r -a panel_seats <<<"$selected_roster"
 if [ "${#panel_seats[@]}" -eq 0 ]; then
@@ -347,6 +371,84 @@ for seat in "${panel_seats[@]}"; do
     exit 2
   fi
 done
+
+readable_json_file() {
+  local path="$1"
+  local label="$2"
+  if [ ! -f "$path" ] || [ ! -r "$path" ]; then
+    echo "missing or unreadable supplied $label: $path" >&2
+    exit 2
+  fi
+  if ! node - "$path" <<'NODE'
+const fs = require("node:fs");
+const path = process.argv[2];
+try {
+  JSON.parse(fs.readFileSync(path, "utf8"));
+} catch (error) {
+  console.error(`${path}: supplied JSON artifact is not readable: ${error.message}`);
+  process.exit(1);
+}
+NODE
+  then
+    exit 2
+  fi
+}
+
+if [ "$phase" = "discovery" ]; then
+  readable_json_file "$discovery_request_path" "discovery request"
+else
+  readable_json_file "$ledger_path" "discovery ledger"
+  readable_json_file "$responses_path" "implementation responses"
+  readable_json_file "$self_verification_path" "self-verification"
+  if ! node - "$verification_dir" "$selected_roster" <<'NODE'
+const fs = require("node:fs");
+const source = process.argv[2];
+const selected = process.argv[3].split(",").filter(Boolean);
+let entries;
+try {
+  if (!fs.statSync(source).isDirectory()) throw new Error("not a directory");
+  entries = fs.readdirSync(source, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name));
+} catch (error) {
+  console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
+  process.exit(1);
+}
+const expected = selected.map((seat) => `${seat}.json`).sort();
+const actual = entries.map((entry) => entry.name);
+if (
+  entries.length !== expected.length ||
+  entries.some((entry) => !entry.isFile()) ||
+  actual.some((name, index) => name !== expected[index])
+) {
+  console.error(
+    `verification request directory must contain exactly one readable JSON request per selected seat; ` +
+    `expected [${expected.join(", ")}], found [${actual.join(", ")}]`,
+  );
+  process.exit(1);
+}
+for (const entry of entries) {
+  const path = `${source}/${entry.name}`;
+  try {
+    const request = JSON.parse(fs.readFileSync(path, "utf8"));
+    const seat = entry.name.slice(0, -5);
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      Array.isArray(request) ||
+      request.seat !== seat
+    ) {
+      throw new Error(`request must declare seat "${seat}"`);
+    }
+  } catch (error) {
+    console.error(`${path}: verification request is not readable JSON: ${error.message}`);
+    process.exit(1);
+  }
+}
+NODE
+  then
+    exit 2
+  fi
+fi
 
 if [ "$round_number" -gt 1 ]; then
   for seat in "${panel_seats[@]}"; do
@@ -401,6 +503,7 @@ if [ -d "$out/verdicts" ] &&
   exit 2
 fi
 
+reuse_existing=false
 claim_round_directory() {
   mkdir -p "$root/.scratch/panel"
   if [ -e "$out" ]; then
@@ -408,10 +511,12 @@ claim_round_directory() {
       partial_cleanup_hint
       exit 2
     fi
+    reuse_existing=true
     return
   fi
   if ! mkdir "$out"; then
     if [ -f "$completion_marker" ]; then
+      reuse_existing=true
       return
     fi
     partial_cleanup_hint
@@ -421,11 +526,54 @@ claim_round_directory() {
 
 claim_round_directory
 
-mkdir -p "$out/verdicts" "$out/reviewer-notes"
+require_reused_path() {
+  local path="$1"
+  if [ ! -e "$path" ]; then
+    echo "complete review $round is missing canonical artifact $path; refusing to add it after .complete" >&2
+    return 1
+  fi
+}
+
+if [ "$reuse_existing" = true ]; then
+  for required_path in \
+    "$staged_selection_path" \
+    "$staged_candidate_path" \
+    "$out/delta.diff" \
+    "$out/full.diff" \
+    "$out/commits.txt" \
+    "$out/address.json" \
+    "$out/evidence.md" \
+    "$out/review-request.md" \
+    "$out/dispatch-prompt.txt" \
+    "$out/verdicts"; do
+    require_reused_path "$required_path" || exit 2
+  done
+  if [ "$phase" = "discovery" ]; then
+    require_reused_path "$staged_discovery_request_path" || exit 2
+  else
+    for required_path in \
+      "$staged_ledger_path" \
+      "$staged_responses_path" \
+      "$staged_self_verification_path" \
+      "$staged_verification_dir"; do
+      require_reused_path "$required_path" || exit 2
+    done
+  fi
+  for seat in "${panel_seats[@]}"; do
+    require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
+  done
+else
+  mkdir -p "$out/verdicts" "$out/reviewer-notes"
+fi
 
 publish_no_replace() {
   local tmp="$1"
   local dest="$2"
+  if [ "$reuse_existing" = true ] && [ ! -e "$dest" ]; then
+    echo "complete review $round is missing canonical artifact $dest; refusing to add it after .complete" >&2
+    rm -f -- "$tmp"
+    return 1
+  fi
   if [ -e "$dest" ]; then
     if ! cmp -s "$tmp" "$dest"; then
       echo "conflicting generated bytes at $dest; refusing to overwrite" >&2
@@ -452,9 +600,17 @@ materialize_exact() {
   local source="$1"
   local destination="$2"
   local label="$3"
-  if [ ! -f "$source" ]; then
-    echo "missing supplied $label: $source" >&2
+  if [ ! -f "$source" ] || [ ! -r "$source" ]; then
+    echo "missing or unreadable supplied $label: $source" >&2
     return 1
+  fi
+  if [ "$reuse_existing" = true ]; then
+    if ! cmp -s -- "$source" "$destination"; then
+      echo "conflicting generated bytes at $destination; refusing to overwrite" >&2
+      echo "complete review $round can only compare/reuse existing canonical artifacts" >&2
+      return 1
+    fi
+    return 0
   fi
   local tmp="$destination.$$.copy.tmp"
   if ! cp -- "$source" "$tmp"; then
@@ -533,6 +689,10 @@ if [ -n "$approval_path" ]; then
   materialize_exact "$approval_path" "$staged_approval_path" "approval"
 fi
 if [ -n "$verification_dir" ]; then
+  if [ "$reuse_existing" = true ] && [ ! -d "$staged_verification_dir" ]; then
+    echo "complete review $round is missing canonical verification requests at $staged_verification_dir; refusing to add them after .complete" >&2
+    exit 1
+  fi
   node --input-type=module -e '
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -655,7 +815,15 @@ approval_path="$staged_approval_path"
 
 request_tmp="$out/review-request.md.$$.tmp"
 dispatch_tmp="$out/dispatch-prompt.txt.$$.tmp"
-trap 'rm -f -- "$request_tmp" "$dispatch_tmp"' EXIT
+request_exit() {
+  local status="$?"
+  rm -f -- "$request_tmp" "$dispatch_tmp"
+  if [ "$status" -ne 0 ] && [ -d "$out" ] && [ ! -f "$completion_marker" ]; then
+    partial_cleanup_hint
+  fi
+  exit "$status"
+}
+trap request_exit EXIT
 cat > "$request_tmp" <<MD
 # Panel review request
 
@@ -683,9 +851,7 @@ The canonical generated artifacts for this phase are:
 
 $(if [ "$phase" = "discovery" ]; then
   printf '%s\n' \
-    "- Discovery request: \`$discovery_request_path\`" \
-    "- Issue ledger: \`$ledger_path\`" \
-    "- Implementation responses: \`$responses_path\`"
+    "- Discovery request: \`$discovery_request_path\`"
 else
   printf '%s\n' \
     "- Immutable discovery ledger: \`$ledger_path\`" \

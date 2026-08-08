@@ -16,7 +16,7 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   adaptVerificationVerdict,
   createApprovalArtifact,
@@ -257,9 +257,15 @@ if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     }
   }
 }
+const canonicalSelectionPath =
+  typeof selectionPath === "string" ? resolve(selectionPath) : undefined;
+const recordedSelectionPath =
+  typeof address?.selection_path === "string"
+    ? resolve(address.selection_path)
+    : undefined;
 if (
   address?.lifecycle_id !== selection.lifecycle_id ||
-  address?.selection_path !== selectionPath
+  recordedSelectionPath !== canonicalSelectionPath
 ) {
   fail("address.json must bind the exact lifecycle and selection path used for records");
 }

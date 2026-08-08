@@ -283,50 +283,64 @@ byte-identical bytes:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
+  --discovery-request <request.json> \
+  --lifecycle <lifecycle-id> --selection <selection.json> \
+  --candidate <current-candidate.json>
+```
+
+Verification staging supplies the complete canonical handoff:
+
+```
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
   --candidate <current-candidate.json> \
   --ledger <discovery-ledger.json> --responses <responses.json> \
-  --self-verification <self-verification.json>
+  --self-verification <self-verification.json> \
+  --verification-dir <verification-requests>
 ```
 
 Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
 `reviewer-notes/<seat>.md`. The integrator edits the evidence and any
 seat-specific rebuttal, then dispatches every reviewer with the exact generated
 prompt. It materializes supplied exact artifacts as round-local
-`selection.json`, `current-candidate.json`, `discovery-ledger.json`,
-`responses.json`, and `self-verification.json`. The dispatch prompt is usable
-only when the round's `.complete` marker exists; an unmarked scratch directory
-is non-authoritative and must be cleaned up before retrying. Later reviews fail
-closed unless `<prev-tip>` matches the previous recorded tip and every seat's
-prior verdict is available, so the incremental range and prior-finding
-instructions cannot be replaced by a free-form summary.
+`selection.json`, `current-candidate.json`, `discovery-request.json`,
+`discovery-ledger.json`,
+`responses.json`, and `self-verification.json` before `.complete`. Discovery
+staging requires a readable `--discovery-request`; verification staging
+requires a readable complete per-seat `--verification-dir`, which is staged
+under `verification/`. Once `.complete` exists, staging may compare or reuse
+canonical artifacts but never add a missing one. The dispatch prompt is usable
+only when the round's `.complete`
+marker exists; an unmarked scratch directory is non-authoritative and must be
+cleaned up before retrying. Later reviews fail closed unless `<prev-tip>` matches
+the previous recorded tip and every seat's prior verdict is available, so the
+incremental range and prior-finding instructions cannot be replaced by a
+free-form summary.
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:
 
 ```bash
 ROUND=.scratch/panel/<round>
-SELECTION="$ROUND/selection.json"
-CANDIDATE="$ROUND/current-candidate.json"
-LEDGER="$ROUND/discovery-ledger.json"
-RESPONSES="$ROUND/responses.json"
-SELF_VERIFICATION="$ROUND/self-verification.json"
-VERIFICATION="$ROUND/verification-results.json"
-APPROVAL="$ROUND/approval.json"
-METRICS="$ROUND/metrics.json"
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  adapt-verification "$LEDGER" "$ROUND/verdicts" "$VERIFICATION" \
-  --selection "$SELECTION" --candidate "$CANDIDATE"
+  adapt-verification "$ROUND/discovery-ledger.json" "$ROUND/verdicts" \
+  "$ROUND/verification-results.json" \
+  --selection "$ROUND/selection.json" --candidate "$ROUND/current-candidate.json"
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  approval "$SELECTION" "$LEDGER" "$RESPONSES" "$VERIFICATION" "$APPROVAL" \
-  --candidate "$CANDIDATE"
+  approval "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" \
+  "$ROUND/approval.json" --candidate "$ROUND/current-candidate.json"
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  metrics --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
-  --verification-results "$VERIFICATION" --output "$METRICS"
+  metrics --selection "$ROUND/selection.json" \
+  --ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json" \
+  --verification-results "$ROUND/verification-results.json" \
+  --output "$ROUND/metrics.json"
 node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
-  --selection "$SELECTION" --ledger "$LEDGER" --responses "$RESPONSES" \
-  --verification-results "$VERIFICATION" --approval "$APPROVAL"
+  --selection "$ROUND/selection.json" --ledger "$ROUND/discovery-ledger.json" \
+  --responses "$ROUND/responses.json" \
+  --verification-results "$ROUND/verification-results.json" \
+  --approval "$ROUND/approval.json"
 ```
 
 The verification command that precedes this sequence requires

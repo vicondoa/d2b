@@ -37,13 +37,14 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const LIFECYCLE_CLI = join(
@@ -55,6 +56,11 @@ const LIFECYCLE_CLI = join(
   "d2b-panel-round",
   "scripts",
   "panel-lifecycle.mjs",
+);
+const REPOSITORY_ROOT = join(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "..",
+  "..",
 );
 
 let failures = 0;
@@ -117,6 +123,129 @@ try {
       });
     }
   });
+}
+
+function observeDirectoryPublish(directory, helperPath) {
+  const source = `
+import { pathToFileURL } from "node:url";
+const [helperPath, directory] = process.argv.slice(1);
+try {
+  const entry = process.argv[1];
+  process.argv[1] = "";
+  const { writeDirectoryCreateOrCompare } =
+    await import(pathToFileURL(helperPath).href);
+  process.argv[1] = entry;
+  const bytes = "x".repeat(8 * 1024 * 1024);
+  writeDirectoryCreateOrCompare(directory, [
+    { name: "first.json", bytes },
+    { name: "second.json", bytes },
+  ]);
+} catch (cause) {
+  console.error(cause.message);
+  process.exitCode = 1;
+}
+`;
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", source, helperPath, directory],
+      { encoding: "utf8" },
+    );
+    const expectedSize = 8 * 1024 * 1024;
+    let violation = "";
+    let stderr = "";
+    const observe = () => {
+      if (!existsSync(directory)) return;
+      try {
+        const entries = readdirSync(directory, { withFileTypes: true })
+          .sort((left, right) => left.name.localeCompare(right.name));
+        if (
+          entries.length !== 2 ||
+          entries.some((entry, index) =>
+            !entry.isFile() ||
+            entry.name !== ["first.json", "second.json"][index] ||
+            readFileSync(join(directory, entry.name)).length !== expectedSize
+          )
+        ) {
+          violation = "observer saw a partial published directory";
+        }
+      } catch (cause) {
+        violation = `observer could not inspect published directory: ${cause.message}`;
+      }
+    };
+    const timer = setInterval(observe, 1);
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status) => {
+      clearInterval(timer);
+      observe();
+      resolve({ status, stderr, violation });
+    });
+  });
+}
+
+function faultedDirectoryPublish(directory, helperPath) {
+  const source = `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { pathToFileURL } from "node:url";
+const [helperPath, directory] = process.argv.slice(1);
+const originalRename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to === directory) {
+    const error = new Error("injected directory publication fault");
+    error.code = "EIO";
+    throw error;
+  }
+  return originalRename(from, to);
+};
+syncBuiltinESMExports();
+try {
+  const entry = process.argv[1];
+  process.argv[1] = "";
+  const { writeDirectoryCreateOrCompare } =
+    await import(pathToFileURL(helperPath).href);
+  process.argv[1] = entry;
+  writeDirectoryCreateOrCompare(directory, [{ name: "seat.json", bytes: "fault\\n" }]);
+} catch (cause) {
+  console.error(cause.message);
+  process.exitCode = 1;
+}
+`;
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", source, helperPath, directory],
+      { encoding: "utf8" },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status) => resolve({ status, stderr }));
+  });
+}
+
+console.log("panel lifecycle: documented handoff");
+const documentedHandoffLiterals = [
+  'adapt-verification "$ROUND/discovery-ledger.json" "$ROUND/verdicts"',
+  '--selection "$ROUND/selection.json" --candidate "$ROUND/current-candidate.json"',
+  '--ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json"',
+  '--verification-results "$ROUND/verification-results.json"',
+  '--approval "$ROUND/approval.json"',
+];
+for (const documentedPath of [
+  join(REPOSITORY_ROOT, ".github", "skills", "d2b-panel-round", "SKILL.md"),
+  join(REPOSITORY_ROOT, "docs", "contributing", "copilot-agents.md"),
+]) {
+  const documented = readFileSync(documentedPath, "utf8");
+  for (const literal of documentedHandoffLiterals) {
+    check(
+      `${documentedPath.split("/").at(-1)} carries literal handoff path ${literal}`,
+      documented.includes(literal),
+    );
+  }
 }
 
 function candidate(overrides = {}) {
@@ -485,6 +614,89 @@ try {
     "verification selection retains strict nested classification inputs",
     nestedSelection.selection.classification_inputs.full_candidate.candidate_class === "code" &&
       nestedSelection.selection.classification_inputs.fix_delta.candidate_class === "documentation",
+  );
+  const documentationFullConfigurationDelta = createSelection(
+    {
+      ...candidate({
+        snapshot_sha256: "f".repeat(64),
+        changed_paths: ["docs/full-review.md", "nixos/panel.nix"],
+      }),
+      lifecycle_id: "spec004w1",
+      phase: "verification",
+      full_candidate: {
+        ...candidate({
+          snapshot_sha256: "f".repeat(64),
+          changed_paths: ["docs/full-review.md"],
+        }),
+        changed_paths: ["docs/full-review.md"],
+        signals: [],
+        candidate_class: "documentation",
+        ambiguous: false,
+      },
+      fix_delta: {
+        changed_paths: ["nixos/panel.nix"],
+        signals: [],
+        candidate_class: "configuration",
+        ambiguous: false,
+      },
+      previous_roster: initial.selection.roster,
+    },
+    { root },
+  );
+  check(
+    "verification class precedence keeps configuration over documentation",
+    documentationFullConfigurationDelta.selection.candidate_class === "configuration" &&
+      documentationFullConfigurationDelta.selection.classification_inputs.changed_paths.join(",") ===
+        "docs/full-review.md,nixos/panel.nix",
+  );
+  rejects(
+    "verification selections require both nested classifications",
+    () => {
+      const incomplete = { ...nestedSelection.selection };
+      const classification = {
+        ...incomplete.classification_inputs,
+      };
+      delete classification.full_candidate;
+      incomplete.classification_inputs = classification;
+      validateSelection(incomplete);
+    },
+    /both.*full_candidate.*fix_delta/,
+  );
+  rejects(
+    "classification signals must already be lowercase and trimmed",
+    () => validateSelection({
+      ...nestedSelection.selection,
+      classification_inputs: {
+        ...nestedSelection.selection.classification_inputs,
+        full_candidate: {
+          ...nestedSelection.selection.classification_inputs.full_candidate,
+          signals: ["Rust"],
+        },
+      },
+    }),
+    /canonical normalized signals/,
+  );
+  rejects(
+    "classification paths must already use normalized separators",
+    () => validateSelection({
+      ...nestedSelection.selection,
+      classification_inputs: {
+        ...nestedSelection.selection.classification_inputs,
+        full_candidate: {
+          ...nestedSelection.selection.classification_inputs.full_candidate,
+          changed_paths: ["src\\panel.js"],
+        },
+      },
+    }),
+    /canonical normalized paths/,
+  );
+  rejects(
+    "actual non-documentation paths cannot be narrowed to documentation",
+    () => selectRoster(candidate({
+      changed_paths: ["src/panel.js"],
+      candidate_class: "documentation",
+    })),
+    /cannot narrow actual non-documentation paths/,
   );
   rejects(
     "nested classification unknown fields are refused",
@@ -1122,11 +1334,48 @@ try {
   const raceBytes = readFileSync(join(raceDirectory, "seat.json"), "utf8");
   check(
     "concurrent directory publishers use an exclusive claim",
-    raceResults.some((result) => result.status === 0) &&
+    raceResults.filter((result) => result.status === 0).length === 1 &&
       ["first\n", "second\n"].includes(raceBytes) &&
+      !existsSync(`${raceDirectory}.claim`) &&
       raceResults.every((result) => result.status === 0 || result.status === 1),
     raceResults.map((result) => result.stderr).join(" "),
   );
+  const observedDirectory = join(root, "observed-family");
+  const observation = await observeDirectoryPublish(observedDirectory, LIFECYCLE_CLI);
+  const observedEntries = readdirSync(observedDirectory).sort();
+  check(
+    "directory observers see either no destination or a complete family",
+    observation.status === 0 &&
+      observation.violation === "" &&
+      observedEntries.join(",") === "first.json,second.json" &&
+      readdirSync(observedDirectory).every((name) =>
+        readFileSync(join(observedDirectory, name)).length === 8 * 1024 * 1024),
+    observation.violation || observation.stderr,
+  );
+  const faultDirectory = join(root, "fault-family");
+  const fault = await faultedDirectoryPublish(faultDirectory, LIFECYCLE_CLI);
+  const faultSiblings = readdirSync(dirname(faultDirectory))
+    .filter((name) => name.startsWith(`.${basename(faultDirectory)}.stage-`));
+  check(
+    "a publication fault leaves the destination absent and cleans only its claim",
+    fault.status === 1 &&
+      !existsSync(faultDirectory) &&
+      !existsSync(`${faultDirectory}.claim`) &&
+      faultSiblings.length === 0 &&
+      /injected directory publication fault/.test(fault.stderr),
+    fault.stderr,
+  );
+  const staleDirectory = join(root, "stale-family");
+  mkdirSync(`${staleDirectory}.claim`);
+  rejects(
+    "a stale sibling claim names the required cleanup",
+    () => writeDirectoryCreateOrCompare(
+      staleDirectory,
+      [{ name: "seat.json", bytes: "stale\n" }],
+    ),
+    /stale.*rm -rf --/,
+  );
+  rmSync(`${staleDirectory}.claim`, { recursive: true, force: true });
   rejects(
     "verification requires an explicit current candidate",
     () => prepareVerification({
@@ -1267,6 +1516,8 @@ try {
         encoding: "utf8",
       }).trim();
     const discoverySelection = runCli("select", cliCandidate, "spec004w1");
+    const discoveryRequest = join(cliRoot, "discovery-request.json");
+    runCli("discovery-request", discoverySelection, cliCandidate, discoveryRequest);
     const staged = spawnSync("bash", [
       cliStageScript,
       cliBase,
@@ -1276,6 +1527,8 @@ try {
       discoverySelection,
       "--candidate",
       cliCandidate,
+      "--discovery-request",
+      discoveryRequest,
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
       "CLI integration reaches staged review evidence",
@@ -1283,8 +1536,6 @@ try {
         existsSync(join(cliRoot, ".scratch", "panel", "spec004w1-r1", "review-request.md")),
       `${staged.stdout}${staged.stderr}`,
     );
-    const discoveryRequest = join(cliRoot, "discovery-request.json");
-    runCli("discovery-request", discoverySelection, cliCandidate, discoveryRequest);
     const stagedDiscoveryRequest = spawnSync("bash", [
       cliStageScript,
       cliBase,
@@ -1388,6 +1639,23 @@ try {
       "--fix-delta",
       cliDelta,
     );
+    const cliVerificationRequests = join(cliRoot, "verification-requests");
+    runCli(
+      "verification",
+      verificationSelection,
+      cliLedger,
+      cliResponses,
+      cliSelf,
+      cliVerificationRequests,
+      "--candidate",
+      cliVerificationSelectionCandidate,
+      "--prior-selection",
+      discoverySelection,
+      "--delta",
+      cliDelta,
+      "--full-context",
+      cliFullContext,
+    );
     const stagedVerification = spawnSync("bash", [
       cliStageScript,
       cliBase,
@@ -1403,6 +1671,8 @@ try {
       cliResponses,
       "--self-verification",
       cliSelf,
+      "--verification-dir",
+      cliVerificationRequests,
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
       "CLI verification stage materializes exact canonical artifacts",
