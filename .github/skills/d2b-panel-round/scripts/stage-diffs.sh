@@ -4,6 +4,7 @@
 #   stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json>
 #                  [--candidate <current-candidate.json>]
 #                  [--lifecycle <lifecycle-id>] [--discovery-request PATH]
+#                  --evidence PATH [--reviewer-notes-dir PATH]
 #                  [--ledger PATH] [--responses PATH] [--self-verification PATH]
 #                  [--verification-dir PATH] [--approval PATH]
 #
@@ -15,7 +16,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> --evidence PATH [--reviewer-notes-dir PATH] [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
   exit 2
 fi
 
@@ -32,6 +33,8 @@ lifecycle=""
 selection_path=""
 candidate_path=""
 discovery_request_path=""
+evidence_path=""
+reviewer_notes_dir=""
 ledger_path=""
 responses_path=""
 self_verification_path=""
@@ -61,6 +64,16 @@ while [ "$#" -gt 0 ]; do
     --discovery-request)
       [ "$#" -ge 2 ] || { echo "--discovery-request requires a path" >&2; exit 2; }
       discovery_request_path="$2"
+      shift 2
+      ;;
+    --evidence)
+      [ "$#" -ge 2 ] || { echo "--evidence requires a path" >&2; exit 2; }
+      evidence_path="$2"
+      shift 2
+      ;;
+    --reviewer-notes-dir)
+      [ "$#" -ge 2 ] || { echo "--reviewer-notes-dir requires a path" >&2; exit 2; }
+      reviewer_notes_dir="$2"
       shift 2
       ;;
     --ledger)
@@ -99,6 +112,10 @@ if [ -z "$selection_path" ]; then
   echo "--selection is required; staging without the authoritative lifecycle selection is refused" >&2
   exit 2
 fi
+if [ -z "$evidence_path" ]; then
+  echo "--evidence is required; finalized validation evidence must be supplied before .complete" >&2
+  exit 2
+fi
 
 if [[ "$round" =~ ^([[:alnum:]]+)-r([1-9][0-9]*)$ ]]; then
   wave="${BASH_REMATCH[1]}"
@@ -126,6 +143,12 @@ if [[ "$candidate_path" == *\"* || "$candidate_path" == *\\* || "$candidate_path
   echo "refusing candidate path with JSON control characters: $candidate_path" >&2
   exit 2
 fi
+for finalized_path in "$evidence_path" "$reviewer_notes_dir"; do
+  if [[ "$finalized_path" == *\"* || "$finalized_path" == *\\* || "$finalized_path" == *$'\n'* ]]; then
+    echo "refusing finalized review input path with JSON control characters: $finalized_path" >&2
+    exit 2
+  fi
+done
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
@@ -145,14 +168,123 @@ staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
 
+# Staged packets remain exact and untruncated. Bound their aggregate logical
+# bytes instead of pruning historical evidence. Operators may lower this
+# ceiling for constrained environments, but may not raise the repository
+# policy limit.
+default_lifecycle_packet_max_bytes=$((1024 * 1024 * 1024))
+lifecycle_packet_max_bytes="${D2B_PANEL_LIFECYCLE_MAX_BYTES:-$default_lifecycle_packet_max_bytes}"
+if ! [[ "$lifecycle_packet_max_bytes" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$lifecycle_packet_max_bytes" -gt "$default_lifecycle_packet_max_bytes" ]; then
+  echo "D2B_PANEL_LIFECYCLE_MAX_BYTES must be a positive integer no greater than $default_lifecycle_packet_max_bytes" >&2
+  exit 2
+fi
+
+validate_bound_completion() {
+  local marker="$1"
+  node - "$marker" <<'NODE'
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const markerPath = process.argv[2];
+let marker;
+try {
+  marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+} catch (error) {
+  console.error(`${markerPath}: invalid completion marker: ${error.message}`);
+  process.exit(1);
+}
+const exactKeys = [
+  "artifact_bytes",
+  "artifact_kind",
+  "artifact_sha256",
+  "base",
+  "complete",
+  "delta_sha256",
+  "full_sha256",
+  "lifecycle_id",
+  "phase",
+  "previous_tip",
+  "round",
+  "schema_version",
+  "selection_sha256",
+  "tip",
+].sort();
+if (
+  marker.artifact_kind !== "d2b-panel/stage-completion" ||
+  marker.schema_version !== 2 ||
+  marker.complete !== true ||
+  !marker.artifact_sha256 ||
+  !marker.artifact_bytes ||
+  Object.keys(marker).sort().join("\0") !== exactKeys.join("\0")
+) {
+  console.error(
+    `${markerPath}: completion marker is not a canonical byte-bound schema-version 2 marker`,
+  );
+  process.exit(1);
+}
+const digests = marker.artifact_sha256;
+const sizes = marker.artifact_bytes;
+if (
+  !digests || Array.isArray(digests) || typeof digests !== "object" ||
+  !sizes || Array.isArray(sizes) || typeof sizes !== "object" ||
+  Object.keys(digests).sort().join("\0") !== Object.keys(sizes).sort().join("\0")
+) {
+  console.error(`${markerPath}: completion artifact maps disagree`);
+  process.exit(1);
+}
+const root = path.dirname(markerPath);
+for (const relative of Object.keys(digests).sort()) {
+  if (
+    relative === "" ||
+    path.isAbsolute(relative) ||
+    relative.split("/").includes("..") ||
+    !/^[0-9a-f]{64}$/.test(digests[relative]) ||
+    !Number.isSafeInteger(sizes[relative]) ||
+    sizes[relative] < 0
+  ) {
+    console.error(`${markerPath}: invalid bound artifact entry ${relative}`);
+    process.exit(1);
+  }
+  const artifactPath = path.join(root, relative);
+  let stat;
+  let bytes;
+  try {
+    stat = fs.lstatSync(artifactPath);
+    if (!stat.isFile()) throw new Error("not a regular file");
+    bytes = fs.readFileSync(artifactPath);
+  } catch (error) {
+    console.error(
+      `${markerPath}: bound artifact ${relative} is unavailable: ${error.message}`,
+    );
+    process.exit(1);
+  }
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (digest !== digests[relative] || stat.size !== sizes[relative]) {
+    console.error(
+      `${markerPath}: post-completion mutation of ${relative} is refused; ` +
+      "its bytes disagree with the completion marker",
+    );
+    process.exit(1);
+  }
+}
+NODE
+}
+
 partial_cleanup_hint() {
   echo "partial pre-dispatch scratch directory is non-authoritative: $out" >&2
   echo "clean it up before retrying: rm -rf -- '$out'" >&2
 }
 
-if [ -e "$out" ] && [ ! -f "$completion_marker" ]; then
-  partial_cleanup_hint
-  exit 2
+if [ -e "$out" ]; then
+  if [ ! -f "$completion_marker" ]; then
+    partial_cleanup_hint
+    exit 2
+  fi
+  if ! validate_bound_completion "$completion_marker"; then
+    echo "complete review $round failed canonical completion validation" >&2
+    exit 2
+  fi
 fi
 
 stage_exit() {
@@ -236,6 +368,23 @@ else
     echo "missing previous review address: $previous_address" >&2
     echo "stage reviews sequentially so the incremental range is derived from recorded evidence" >&2
     exit 2
+  fi
+  if [ -f "$previous_dir/.complete" ]; then
+    previous_completion_schema="$(
+      node -e '
+const fs = require("node:fs");
+const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+process.stdout.write(String(value.schema_version ?? ""));
+' "$previous_dir/.complete"
+    )" || {
+      echo "previous review has an unreadable completion marker" >&2
+      exit 2
+    }
+    if [ "$previous_completion_schema" = "2" ] &&
+       ! validate_bound_completion "$previous_dir/.complete"; then
+      echo "previous review failed canonical completion validation" >&2
+      exit 2
+    fi
   fi
   if ! previous_fields="$(read_address "$previous_address")"; then
     exit 2
@@ -378,6 +527,51 @@ for seat in "${panel_seats[@]}"; do
   fi
 done
 
+if [ ! -f "$evidence_path" ] || [ ! -r "$evidence_path" ] ||
+   [ ! -s "$evidence_path" ]; then
+  echo "missing, unreadable, or empty finalized validation evidence: $evidence_path" >&2
+  exit 2
+fi
+
+if [ -n "$reviewer_notes_dir" ]; then
+  if ! node - "$reviewer_notes_dir" "$selected_roster" <<'NODE'
+const fs = require("node:fs");
+const source = process.argv[2];
+const selected = process.argv[3].split(",").filter(Boolean);
+let entries;
+try {
+  if (!fs.statSync(source).isDirectory()) throw new Error("not a directory");
+  entries = fs.readdirSync(source, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name));
+} catch (error) {
+  console.error(`missing or unreadable finalized reviewer-notes directory: ${source}: ${error.message}`);
+  process.exit(1);
+}
+const expected = selected.map((seat) => `${seat}.md`).sort();
+const actual = entries.map((entry) => entry.name);
+if (
+  entries.length !== expected.length ||
+  entries.some((entry) => !entry.isFile()) ||
+  actual.some((name, index) => name !== expected[index])
+) {
+  console.error(
+    `finalized reviewer-notes directory must contain exactly one regular Markdown file per selected seat; ` +
+    `expected [${expected.join(", ")}], found [${actual.join(", ")}]`,
+  );
+  process.exit(1);
+}
+for (const entry of entries) {
+  if (fs.statSync(`${source}/${entry.name}`).size === 0) {
+    console.error(`finalized reviewer note is empty: ${source}/${entry.name}`);
+    process.exit(1);
+  }
+}
+NODE
+  then
+    exit 2
+  fi
+fi
+
 readable_json_file() {
   local path="$1"
   local label="$2"
@@ -466,7 +660,8 @@ if [ "$round_number" -gt 1 ]; then
   done
 fi
 
-for path_value in "$candidate_path" "$discovery_request_path" "$ledger_path" "$responses_path" \
+for path_value in "$candidate_path" "$discovery_request_path" "$evidence_path" \
+  "$reviewer_notes_dir" "$ledger_path" "$responses_path" \
   "$self_verification_path" "$verification_dir" "$approval_path"; do
   if [[ "$path_value" == *\"* || "$path_value" == *\\* || "$path_value" == *$'\n'* ]]; then
     echo "artifact path contains JSON control characters: $path_value" >&2
@@ -667,9 +862,63 @@ validateSelectionCandidate(
 ' "$staged_selection_path" "$staged_candidate_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
+materialize_exact "$evidence_path" "$out/evidence.md" \
+  "finalized validation evidence"
+evidence_sha="$(sha256sum "$out/evidence.md" | cut -d' ' -f1)"
+evidence_bytes="$(stat -c '%s' "$out/evidence.md")"
+
 if [ -n "$discovery_request_path" ]; then
-  materialize_exact "$discovery_request_path" "$staged_discovery_request_path" \
-    "discovery request"
+  discovery_request_tmp="$staged_discovery_request_path.$$.bound.tmp"
+  if ! node --input-type=module - \
+    "$discovery_request_path" "$discovery_request_tmp" "$evidence_sha" \
+    "$evidence_bytes" \
+    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const [source, destination, evidenceSha256, evidenceBytesText, helperPath] =
+  process.argv.slice(2);
+const request = JSON.parse(fs.readFileSync(source, "utf8"));
+if (!Array.isArray(request.validation_evidence)) {
+  throw new Error("generated discovery request validation_evidence must be an array");
+}
+const descriptor = {
+  artifact_kind: "d2b-panel/validation-evidence",
+  path: "evidence.md",
+  sha256: evidenceSha256,
+  size_bytes: Number(evidenceBytesText),
+};
+const priorDescriptors = request.validation_evidence.filter((entry) =>
+  entry?.artifact_kind === descriptor.artifact_kind &&
+  entry?.path === descriptor.path
+);
+const descriptorMatches = (entry) =>
+  entry &&
+  typeof entry === "object" &&
+  !Array.isArray(entry) &&
+  Object.keys(entry).sort().join("\0") ===
+    Object.keys(descriptor).sort().join("\0") &&
+  Object.entries(descriptor).every(([key, value]) => entry[key] === value);
+if (
+  priorDescriptors.length > 1 ||
+  (priorDescriptors.length === 1 && !descriptorMatches(priorDescriptors[0]))
+) {
+  throw new Error(
+    "generated discovery request carries conflicting validation-evidence bytes",
+  );
+}
+if (priorDescriptors.length === 0) {
+  request.validation_evidence.push(descriptor);
+}
+const { writeCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+writeCreateOrCompare(destination, request);
+NODE
+  then
+    rm -f -- "$discovery_request_tmp"
+    echo "cannot generate evidence-bound discovery request from $discovery_request_path" >&2
+    exit 2
+  fi
+  publish_no_replace "$discovery_request_tmp" "$staged_discovery_request_path"
 fi
 if [ -n "$ledger_path" ]; then
   materialize_exact "$ledger_path" "$staged_ledger_path" "discovery ledger"
@@ -690,6 +939,7 @@ if [ -n "$verification_dir" ]; then
     echo "complete review $round is missing canonical verification requests at $staged_verification_dir; refusing to add them after .complete" >&2
     exit 1
   fi
+
   node --input-type=module -e '
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -709,6 +959,41 @@ writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
 })));
 ' "$verification_dir" "$staged_verification_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+fi
+
+if [ "$phase" = "discovery" ]; then
+  if ! node - "$staged_discovery_request_path" "$evidence_sha" \
+    "$evidence_bytes" <<'NODE'
+const fs = require("node:fs");
+const [requestPath, evidenceSha256, evidenceBytesText] = process.argv.slice(2);
+const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+const evidenceBytes = Number(evidenceBytesText);
+const expected = {
+  artifact_kind: "d2b-panel/validation-evidence",
+  path: "evidence.md",
+  sha256: evidenceSha256,
+  size_bytes: evidenceBytes,
+};
+const matches = request.validation_evidence?.filter((entry) =>
+  entry &&
+  typeof entry === "object" &&
+  !Array.isArray(entry) &&
+  Object.keys(entry).sort().join("\0") ===
+    Object.keys(expected).sort().join("\0") &&
+  Object.entries(expected).every(([key, value]) => entry[key] === value)
+) ?? [];
+if (matches.length !== 1) {
+  console.error(
+    `${requestPath}: discovery request must contain exactly one canonical ` +
+    "validation-evidence descriptor for the finalized evidence.md bytes",
+  );
+  process.exit(1);
+}
+NODE
+  then
+    echo "generated discovery request does not bind finalized validation evidence" >&2
+    exit 2
+  fi
 fi
 
 if ! node --input-type=module - \
@@ -802,37 +1087,16 @@ writeCreateOrCompare(path, {
   "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
-if [ ! -f "$out/evidence.md" ]; then
-  evidence_tmp="$out/evidence.md.$$.tmp"
-  cat > "$evidence_tmp" <<'MD'
-# Validation evidence
-
-Replace this file before dispatching. Reviewers are told to treat missing or
-insufficient evidence as a finding, so an unedited template will fail the
-round on purpose.
-
-## Commands run
-
-| Command | Result |
-|---|---|
-|  |  |
-
-## What this evidence does not cover
-
-State it plainly. A green `test-rust` does not cover the fixture-dependent
-contract crate, and an advisory job's pass is not evidence at all.
-
-## Deliverable for this phase
-
-One or two sentences. Reviewers confine findings to defects in the delta that
-would break this deliverable or mask a regression.
-MD
-  publish_no_replace "$evidence_tmp" "$out/evidence.md"
-fi
-
 for seat in "${panel_seats[@]}"; do
   note="$out/reviewer-notes/$seat.md"
-  if [ -f "$note" ]; then
+  if [ -n "$reviewer_notes_dir" ]; then
+    materialize_exact "$reviewer_notes_dir/$seat.md" "$note" \
+      "finalized reviewer note for $seat"
+    continue
+  fi
+  if [ "$reuse_existing" = true ]; then
+    # Canonical completion validation above already proved the generated
+    # default note's exact bytes. Reuse never recreates or edits it.
     continue
   fi
   note_tmp="$note.$$.tmp"
@@ -907,6 +1171,7 @@ with \`view\`; do not substitute a prose summary for them.
 - Lifecycle selection: \`$staged_selection_path\` (sha256 \`$selection_sha256\`)
 - Staged current candidate: \`$staged_candidate_path\`
 - Validation evidence and phase deliverable: \`$out/evidence.md\`
+  (sha256 \`$evidence_sha\`, bound by the completion marker)
 - Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
 - Commit list: \`$out/commits.txt\`
 
@@ -979,14 +1244,134 @@ Use this dispatch prompt only when the stage completion marker exists at $comple
 MD
 publish_no_replace "$dispatch_tmp" "$out/dispatch-prompt.txt"
 
+canonical_artifacts=(
+  "address.json"
+  "commits.txt"
+  "current-candidate.json"
+  "delta.diff"
+  "dispatch-prompt.txt"
+  "evidence.md"
+  "full.diff"
+  "review-request.md"
+  "selection.json"
+)
+if [ "$phase" = "discovery" ]; then
+  canonical_artifacts+=("discovery-request.json")
+else
+  canonical_artifacts+=(
+    "discovery-ledger.json"
+    "responses.json"
+    "self-verification.json"
+  )
+fi
+for seat in "${panel_seats[@]}"; do
+  canonical_artifacts+=("reviewer-notes/$seat.md")
+  if [ "$phase" = "verification" ]; then
+    canonical_artifacts+=("verification/$seat.json")
+  fi
+done
+
+if ! node - "$root/.scratch/panel" "$out" "$lifecycle" \
+  "$lifecycle_packet_max_bytes" "${canonical_artifacts[@]}" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [panelRoot, currentRound, lifecycle, maxText, ...currentArtifacts] =
+  process.argv.slice(2);
+const maxBytes = Number(maxText);
+let total = 0;
+const addFile = (file) => {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
+  total += stat.size;
+};
+for (const relative of currentArtifacts) {
+  addFile(path.join(currentRound, relative));
+}
+for (const entry of fs.readdirSync(panelRoot, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue;
+  const directory = path.join(panelRoot, entry.name);
+  if (path.resolve(directory) === path.resolve(currentRound)) continue;
+  const markerPath = path.join(directory, ".complete");
+  if (!fs.existsSync(markerPath)) continue;
+  let marker;
+  try {
+    marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+  } catch (error) {
+    throw new Error(`${markerPath} is unreadable: ${error.message}`);
+  }
+  if (marker.lifecycle_id !== lifecycle) continue;
+  if (
+    marker.schema_version === 2 &&
+    marker.artifact_sha256 &&
+    typeof marker.artifact_sha256 === "object" &&
+    !Array.isArray(marker.artifact_sha256)
+  ) {
+    for (const relative of Object.keys(marker.artifact_sha256)) {
+      if (
+        relative === "" ||
+        path.isAbsolute(relative) ||
+        relative.split("/").includes("..")
+      ) {
+        throw new Error(`${markerPath} has an invalid artifact path`);
+      }
+      addFile(path.join(directory, relative));
+    }
+    continue;
+  }
+  const walkLegacy = (parent) => {
+    for (const child of fs.readdirSync(parent, { withFileTypes: true })) {
+      if (child.name === ".complete" || child.name.endsWith(".tmp")) continue;
+      const childPath = path.join(parent, child.name);
+      if (child.isDirectory()) {
+        if (child.name !== "verdicts" && child.name !== "records") {
+          walkLegacy(childPath);
+        }
+      } else if (child.isFile()) {
+        addFile(childPath);
+      }
+    }
+  };
+  walkLegacy(directory);
+}
+if (total > maxBytes) {
+  console.error(
+    `lifecycle ${lifecycle} staged packet bytes ${total} exceed the exact-packet ` +
+    `quota ${maxBytes}; retain the immutable packets and start a newly scoped lifecycle`,
+  );
+  process.exit(1);
+}
+NODE
+then
+  echo "lifecycle packet quota refused completion; .complete will not be written" >&2
+  exit 2
+fi
+
+for relative in "${canonical_artifacts[@]}"; do
+  chmod 0444 -- "$out/$relative"
+done
+
 node --input-type=module -e '
+import crypto from "node:crypto";
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 const [path, round, lifecycle, base, previousTip, tip, phase, selectionSha,
-  deltaSha, fullSha, helperPath] = process.argv.slice(1);
+  deltaSha, fullSha, helperPath, ...artifactPaths] = process.argv.slice(1);
 const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
+const root = path.slice(0, -"/.complete".length);
+const artifact_sha256 = {};
+const artifact_bytes = {};
+for (const relative of artifactPaths.sort()) {
+  const artifactPath = `${root}/${relative}`;
+  const stat = fs.lstatSync(artifactPath);
+  if (!stat.isFile()) throw new Error(`${artifactPath} is not a regular file`);
+  const bytes = fs.readFileSync(artifactPath);
+  artifact_sha256[relative] =
+    crypto.createHash("sha256").update(bytes).digest("hex");
+  artifact_bytes[relative] = stat.size;
+}
 writeCreateOrCompare(path, {
   artifact_kind: "d2b-panel/stage-completion",
-  schema_version: 1,
+  schema_version: 2,
   complete: true,
   round,
   lifecycle_id: lifecycle,
@@ -997,15 +1382,19 @@ writeCreateOrCompare(path, {
   selection_sha256: selectionSha,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
+  artifact_sha256,
+  artifact_bytes,
 });
 ' "$completion_marker" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
   "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
+  "${canonical_artifacts[@]}"
+chmod 0444 -- "$completion_marker"
 
 echo "staged $out"
 echo "  tip          $tip"
 echo "  delta        $prev_sha..$tip  ($delta_sha)"
 echo "  full         $base_sha..$tip  ($full_sha)"
 echo
-echo "Edit $out/evidence.md and any seat-specific notes before dispatching."
+echo "Finalized evidence and reviewer notes are byte-bound by $completion_marker."
 echo "Dispatch every seat with the exact contents of $out/dispatch-prompt.txt."

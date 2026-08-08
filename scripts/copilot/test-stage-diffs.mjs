@@ -5,6 +5,7 @@
 // no-rerun rule instead of relying on a hand-written task prompt.
 
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -54,10 +56,22 @@ const check = (name, ok, detail = "") => {
   console.error(`  FAIL ${name}${detail ? `: ${detail}` : ""}`);
 };
 
-function run(cwd, args) {
-  const result = spawnSync("bash", [script, ...args], {
+let finalizedEvidencePath = "";
+
+function run(cwd, args, options = {}) {
+  const withEvidence =
+    options.includeEvidence === false ||
+    !finalizedEvidencePath ||
+    args.includes("--evidence")
+      ? args
+      : [...args, "--evidence", finalizedEvidencePath];
+  const result = spawnSync("bash", [script, ...withEvidence], {
     cwd,
     encoding: "utf8",
+    env: {
+      ...process.env,
+      ...(options.env ?? {}),
+    },
   });
   return {
     status: result.status,
@@ -112,6 +126,19 @@ try {
   git(repo, "commit", "--quiet", "-m", "first");
   const firstTip = git(repo, "rev-parse", "HEAD");
 
+  finalizedEvidencePath = join(repo, "finalized-evidence.md");
+  writeFileSync(
+    finalizedEvidencePath,
+    "# Validation evidence\n\n| Command | Result |\n|---|---|\n| focused | PASS |\n",
+  );
+  const finalizedEvidenceBytes = readFileSync(finalizedEvidencePath);
+  const evidenceDescriptor = {
+    artifact_kind: "d2b-panel/validation-evidence",
+    path: "evidence.md",
+    sha256: createHash("sha256").update(finalizedEvidenceBytes).digest("hex"),
+    size_bytes: finalizedEvidenceBytes.length,
+  };
+
   const candidatePath = join(repo, "candidate.json");
   writeFileSync(
     candidatePath,
@@ -144,6 +171,24 @@ try {
   );
 
   console.log("stage-diffs: first review");
+  const missingFinalizedEvidence = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], { includeEvidence: false });
+  check(
+    "staging requires finalized validation evidence before completion",
+    missingFinalizedEvidence.status === 2 &&
+      /--evidence is required/.test(missingFinalizedEvidence.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    missingFinalizedEvidence.text,
+  );
   const missingDiscoveryRequest = run(repo, [
     base,
     base,
@@ -190,6 +235,30 @@ try {
     force: true,
   });
   writeFileSync(discoveryRequestPath, originalDiscoveryRequest);
+  const boundedPacket = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], {
+    env: { D2B_PANEL_LIFECYCLE_MAX_BYTES: "1" },
+  });
+  check(
+    "staging preserves exact packets and refuses an exceeded lifecycle quota",
+    boundedPacket.status === 2 &&
+      /exact-packet quota/.test(boundedPacket.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    boundedPacket.text,
+  );
+  rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
+    recursive: true,
+    force: true,
+  });
   const first = run(repo, [
     base,
     base,
@@ -205,11 +274,36 @@ try {
 
   const firstDir = join(repo, ".scratch", "panel", "spec001w1-r1");
   const firstAddress = JSON.parse(readFileSync(join(firstDir, "address.json"), "utf8"));
+  const firstCompletion = JSON.parse(
+    readFileSync(join(firstDir, ".complete"), "utf8"),
+  );
   check(
     "first review records its lifecycle id",
     firstAddress.lifecycle_id === "spec001w1",
   );
   check("first review records its selection digest", typeof firstAddress.selection_sha256 === "string");
+  check(
+    "completion binds every reviewer-visible evidence packet",
+    firstCompletion.schema_version === 2 &&
+      firstCompletion.artifact_sha256["evidence.md"] ===
+        evidenceDescriptor.sha256 &&
+      firstCompletion.artifact_sha256["discovery-request.json"] ===
+        createHash("sha256")
+          .update(readFileSync(join(firstDir, "discovery-request.json")))
+          .digest("hex") &&
+      ["software", "test"].every((seat) =>
+        typeof firstCompletion.artifact_sha256[
+          `reviewer-notes/${seat}.md`
+        ] === "string") &&
+      typeof firstCompletion.artifact_sha256["review-request.md"] === "string" &&
+      typeof firstCompletion.artifact_sha256["dispatch-prompt.txt"] === "string",
+  );
+  check(
+    "generated discovery request canonically binds finalized evidence",
+    JSON.parse(readFileSync(join(firstDir, "discovery-request.json"), "utf8"))
+      .validation_evidence.some((entry) =>
+        JSON.stringify(entry) === JSON.stringify(evidenceDescriptor)),
+  );
   check("first review stages selection.json exactly", readFileSync(join(firstDir, "selection.json"), "utf8") === readFileSync(selectionPath, "utf8"));
   check("first review stages current-candidate.json exactly", readFileSync(join(firstDir, "current-candidate.json"), "utf8") === readFileSync(candidatePath, "utf8"));
   check(
@@ -219,7 +313,21 @@ try {
       JSON.parse(readFileSync(join(firstDir, "current-candidate.json"), "utf8"))
         .changed_paths.includes(literalBackslashPath),
   );
-  check("first review stages discovery-request.json exactly", readFileSync(join(firstDir, "discovery-request.json"), "utf8") === readFileSync(discoveryRequestPath, "utf8"));
+  const sourceDiscoveryRequest = JSON.parse(
+    readFileSync(discoveryRequestPath, "utf8"),
+  );
+  const stagedDiscoveryRequest = JSON.parse(
+    readFileSync(join(firstDir, "discovery-request.json"), "utf8"),
+  );
+  check(
+    "first review preserves the generated request and adds only bound evidence",
+    JSON.stringify({
+      ...stagedDiscoveryRequest,
+      validation_evidence: sourceDiscoveryRequest.validation_evidence,
+    }) === JSON.stringify(sourceDiscoveryRequest) &&
+      stagedDiscoveryRequest.validation_evidence.length ===
+        sourceDiscoveryRequest.validation_evidence.length + 1,
+  );
   check("first review writes its completion marker last", existsSync(join(firstDir, ".complete")));
   const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
   const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
@@ -298,12 +406,69 @@ try {
   check(
     "a complete round never adds a missing canonical artifact",
     completeMissingCanonical.status === 2 &&
-      /refusing to add it after \.complete/.test(completeMissingCanonical.text) &&
+      /bound artifact discovery-request\.json is unavailable/.test(
+        completeMissingCanonical.text,
+      ) &&
       !existsSync(join(firstDir, "discovery-request.json")),
     completeMissingCanonical.text,
   );
   writeFileSync(join(firstDir, "discovery-request.json"), savedDiscoveryRequest);
+  chmodSync(join(firstDir, "discovery-request.json"), 0o444);
+
+  const stagedEvidencePath = join(firstDir, "evidence.md");
+  const originalEvidenceBytes = readFileSync(stagedEvidencePath);
+  chmodSync(stagedEvidencePath, 0o644);
+  writeFileSync(stagedEvidencePath, "mutated evidence\n");
+  const mutatedEvidence = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "post-completion evidence mutation is refused",
+    mutatedEvidence.status === 2 &&
+      /post-completion mutation of evidence\.md is refused/.test(
+        mutatedEvidence.text,
+      ),
+    mutatedEvidence.text,
+  );
+  writeFileSync(stagedEvidencePath, originalEvidenceBytes);
+  chmodSync(stagedEvidencePath, 0o444);
+
+  const softwareNote = join(firstDir, "reviewer-notes", "software.md");
+  const originalSoftwareNote = readFileSync(softwareNote);
+  chmodSync(softwareNote, 0o644);
+  writeFileSync(softwareNote, "mutated reviewer note\n");
+  const mutatedNote = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "post-completion reviewer-note mutation is refused",
+    mutatedNote.status === 2 &&
+      /post-completion mutation of reviewer-notes\/software\.md is refused/.test(
+        mutatedNote.text,
+      ),
+    mutatedNote.text,
+  );
+  writeFileSync(softwareNote, originalSoftwareNote);
+  chmodSync(softwareNote, 0o444);
+
   const originalDeltaBytes = readFileSync(join(firstDir, "delta.diff"), "utf8");
+  chmodSync(join(firstDir, "delta.diff"), 0o644);
   writeFileSync(join(firstDir, "delta.diff"), "conflicting scratch bytes\n");
   const firstConflict = run(repo, [
     base,
@@ -317,13 +482,15 @@ try {
     discoveryRequestPath,
   ]);
   check(
-    "stage-diffs stops at the first conflict with a clear retry",
-    firstConflict.status === 1 &&
-    firstConflict.text.includes("staging stopped at the first conflict") &&
-    firstConflict.text.includes("new review id"),
+    "completion validation refuses mutation before generated-byte comparison",
+    firstConflict.status === 2 &&
+      /post-completion mutation of delta\.diff is refused/.test(
+        firstConflict.text,
+      ),
     firstConflict.text,
   );
   writeFileSync(join(firstDir, "delta.diff"), originalDeltaBytes);
+  chmodSync(join(firstDir, "delta.diff"), 0o444);
 
   const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
   for (const seat of firstRoster) {
@@ -337,14 +504,37 @@ try {
       })}\n`,
     );
   }
-  const legacyAddressPath = join(firstDir, "address.json");
-  const legacyAddress = JSON.parse(readFileSync(legacyAddressPath, "utf8"));
-  delete legacyAddress.phase;
-  delete legacyAddress.selection_sha256;
+  const addressPath = join(firstDir, "address.json");
+  const originalAddressBytes = readFileSync(addressPath);
+  const mutatedAddress = JSON.parse(originalAddressBytes);
+  delete mutatedAddress.phase;
+  delete mutatedAddress.selection_sha256;
+  chmodSync(addressPath, 0o644);
   writeFileSync(
-    legacyAddressPath,
-    `${JSON.stringify(legacyAddress, null, 2)}\n`,
+    addressPath,
+    `${JSON.stringify(mutatedAddress, null, 2)}\n`,
   );
+  const postCompletionAddressMutation = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "post-completion address compatibility edits are refused",
+    postCompletionAddressMutation.status === 2 &&
+      /post-completion mutation of address\.json is refused/.test(
+        postCompletionAddressMutation.text,
+      ),
+    postCompletionAddressMutation.text,
+  );
+  writeFileSync(addressPath, originalAddressBytes);
+  chmodSync(addressPath, 0o444);
 
   writeFileSync(join(repo, "Makefile"), "second build change\n");
   git(repo, "add", "Makefile");
@@ -780,11 +970,6 @@ try {
     verificationSourceDir,
   ]);
   check("later review stages successfully", second.status === 0, second.text);
-  check(
-    "later review derives compatibility fields from a legacy address",
-    second.status === 0,
-    second.text,
-  );
 
   const secondDir = join(repo, ".scratch", "panel", "spec001w1-r2");
   check("later review stages selection.json exactly", readFileSync(join(secondDir, "selection.json"), "utf8") === readFileSync(currentSelectionPath, "utf8"));
@@ -850,10 +1035,100 @@ try {
       ),
   );
 
+  for (const seat of verificationRoster) {
+    writeFileSync(
+      join(secondDir, "verdicts", `${seat}.json`),
+      `${JSON.stringify({
+        engineer: seat,
+        signoff: true,
+        summary: "Verified.",
+        recommendations: [],
+      })}\n`,
+    );
+  }
+  const noOpDeltaPath = join(repo, "no-op-delta.json");
   writeFileSync(
-    join(secondDir, "verdicts", "software.json"),
-    "{}\n",
+    noOpDeltaPath,
+    `${JSON.stringify({ changed_paths: [] }, null, 2)}\n`,
   );
+  const noOpSelectionPath = join(repo, "no-op-selection.json");
+  execFileSync(
+    "node",
+    [
+      "--input-type=module",
+      "-e",
+      `
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const [helperPath, candidatePath, priorPath, outputPath] = process.argv.slice(2);
+const { createSelection, readSelection } =
+  await import(pathToFileURL(helperPath).href);
+const candidate = JSON.parse(fs.readFileSync(candidatePath, "utf8"));
+createSelection({
+  ...candidate,
+  lifecycle_id: "spec001w1",
+  phase: "verification",
+  previous_selection: readSelection(priorPath),
+}, { path: outputPath });
+`,
+      "d2b-test",
+      lifecycleScript,
+      currentCandidatePath,
+      currentSelectionPath,
+      noOpSelectionPath,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
+  const noOpVerificationDir = join(repo, "no-op-verification-requests");
+  execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "verification",
+      noOpSelectionPath,
+      stagedLedger,
+      stagedResponses,
+      stagedSelfVerification,
+      noOpVerificationDir,
+      "--candidate",
+      currentCandidatePath,
+      "--prior-selection",
+      currentSelectionPath,
+      "--prior-verdicts",
+      join(secondDir, "verdicts"),
+      "--delta",
+      noOpDeltaPath,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
+  const noOp = run(repo, [
+    base,
+    secondTip,
+    "spec001w1-r3",
+    "--selection",
+    noOpSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    noOpVerificationDir,
+  ]);
+  const noOpDir = join(repo, ".scratch", "panel", "spec001w1-r3");
+  check(
+    "verification permits an unchanged-tip no-op with an exact empty delta",
+    noOp.status === 0 &&
+      readFileSync(join(noOpDir, "delta.diff")).length === 0 &&
+      verificationRoster.every((seat) =>
+        readFileSync(join(noOpDir, "verification", `${seat}.json`), "utf8") ===
+          readFileSync(join(noOpVerificationDir, `${seat}.json`), "utf8")),
+    noOp.text,
+  );
+
   const reused = run(repo, [
     base,
     firstTip,
@@ -928,7 +1203,7 @@ try {
   const c1Staging = run(repo, [
     base,
     secondTip,
-    "spec001w1-r3",
+    "spec001w1-r4",
     "--selection",
     currentSelectionPath,
     "--candidate",
@@ -946,7 +1221,7 @@ try {
     "staging refuses a git range containing a C1 path",
     c1Staging.status === 2 &&
       /control character/.test(c1Staging.text) &&
-      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r3", ".complete")),
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r4", ".complete")),
     c1Staging.text,
   );
 } finally {
