@@ -5,6 +5,8 @@
 // no-rerun rule instead of relying on a hand-written task prompt.
 
 import {
+  cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,7 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -25,6 +27,21 @@ const script = join(
   "d2b-panel-round",
   "scripts",
   "stage-diffs.sh",
+);
+const lifecycleScript = join(
+  root,
+  ".github",
+  "skills",
+  "d2b-panel-round",
+  "scripts",
+  "panel-lifecycle.mjs",
+);
+const selectionTable = join(
+  root,
+  ".github",
+  "skills",
+  "d2b-panel-round",
+  "selection-table.json",
 );
 
 let failures = 0;
@@ -66,7 +83,20 @@ try {
 
   const agents = join(repo, ".github", "agents");
   mkdirSync(agents, { recursive: true });
-  for (const seat of ["software", "test"]) {
+  const skillScripts = join(
+    repo,
+    ".github",
+    "skills",
+    "d2b-panel-round",
+    "scripts",
+  );
+  mkdirSync(skillScripts, { recursive: true });
+  cpSync(lifecycleScript, join(skillScripts, "panel-lifecycle.mjs"));
+  cpSync(selectionTable, join(repo, ".github", "skills", "d2b-panel-round", "selection-table.json"));
+  for (const seat of [
+    "software", "test", "product", "docs", "security", "observability",
+    "simplicity", "reliability", "agentic", "nixos", "build",
+  ]) {
     writeFileSync(join(agents, `panel-${seat}.agent.md`), `name: ${seat}\n`);
   }
 
@@ -75,16 +105,122 @@ try {
   git(repo, "commit", "--quiet", "-m", "base");
   const base = git(repo, "rev-parse", "HEAD");
 
+  const literalBackslashPath = "literal\\backslash.txt";
   writeFileSync(join(repo, "first.txt"), "first change\n");
-  git(repo, "add", "first.txt");
+  writeFileSync(join(repo, literalBackslashPath), "literal backslash change\n");
+  git(repo, "add", "first.txt", literalBackslashPath);
   git(repo, "commit", "--quiet", "-m", "first");
   const firstTip = git(repo, "rev-parse", "HEAD");
 
+  const candidatePath = join(repo, "candidate.json");
+  writeFileSync(
+    candidatePath,
+    `${JSON.stringify({
+      program: "SPEC001",
+      wave: "spec001w1",
+      candidate_id: "candidate-1",
+      content_id: "content-1",
+      snapshot_sha256: "a".repeat(64),
+      changed_paths: ["first.txt", literalBackslashPath],
+    }, null, 2)}\n`,
+  );
+  const selectionPath = execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "select",
+      candidatePath,
+      "spec001w1",
+      "--git-range",
+      `${base}..${firstTip}`,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  ).trim();
+  const discoveryRequestPath = join(repo, "discovery-request.json");
+  execFileSync(
+    "node",
+    [lifecycleScript, "discovery-request", selectionPath, candidatePath, discoveryRequestPath],
+    { cwd: repo, encoding: "utf8" },
+  );
+
   console.log("stage-diffs: first review");
-  const first = run(repo, [base, base, "spec001w1-r1"]);
+  const missingDiscoveryRequest = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+  ]);
+  check(
+    "discovery staging refuses to complete without its supplied request",
+    missingDiscoveryRequest.status === 2 &&
+      /--discovery-request is required/.test(missingDiscoveryRequest.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    missingDiscoveryRequest.text,
+  );
+  const originalDiscoveryRequest = readFileSync(discoveryRequestPath, "utf8");
+  const crossCandidateDiscovery = JSON.parse(originalDiscoveryRequest);
+  crossCandidateDiscovery.candidate.content_id = "stale-content";
+  writeFileSync(
+    discoveryRequestPath,
+    `${JSON.stringify(crossCandidateDiscovery, null, 2)}\n`,
+  );
+  const staleDiscoveryRequest = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "discovery staging rejects a well-formed cross-candidate request",
+    staleDiscoveryRequest.status === 2 &&
+      /strict lifecycle validation/.test(staleDiscoveryRequest.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    staleDiscoveryRequest.text,
+  );
+  rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
+    recursive: true,
+    force: true,
+  });
+  writeFileSync(discoveryRequestPath, originalDiscoveryRequest);
+  const first = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
   check("first review stages successfully", first.status === 0, first.text);
 
   const firstDir = join(repo, ".scratch", "panel", "spec001w1-r1");
+  const firstAddress = JSON.parse(readFileSync(join(firstDir, "address.json"), "utf8"));
+  check(
+    "first review records its lifecycle id",
+    firstAddress.lifecycle_id === "spec001w1",
+  );
+  check("first review records its selection digest", typeof firstAddress.selection_sha256 === "string");
+  check("first review stages selection.json exactly", readFileSync(join(firstDir, "selection.json"), "utf8") === readFileSync(selectionPath, "utf8"));
+  check("first review stages current-candidate.json exactly", readFileSync(join(firstDir, "current-candidate.json"), "utf8") === readFileSync(candidatePath, "utf8"));
+  check(
+    "git-range selection and staging preserve a literal backslash path",
+    JSON.parse(readFileSync(join(firstDir, "selection.json"), "utf8"))
+      .classification_inputs.changed_paths.includes(literalBackslashPath) &&
+      JSON.parse(readFileSync(join(firstDir, "current-candidate.json"), "utf8"))
+        .changed_paths.includes(literalBackslashPath),
+  );
+  check("first review stages discovery-request.json exactly", readFileSync(join(firstDir, "discovery-request.json"), "utf8") === readFileSync(discoveryRequestPath, "utf8"));
+  check("first review writes its completion marker last", existsSync(join(firstDir, ".complete")));
   const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
   const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
   check(
@@ -103,6 +239,39 @@ try {
       ),
   );
   check(
+    "first request asks for full-candidate comprehensive discovery",
+    firstRequest.includes("full candidate") &&
+      firstRequest.includes("every reasonably discoverable actionable finding"),
+  );
+  const malformedSelection = JSON.parse(readFileSync(selectionPath, "utf8"));
+  malformedSelection.classification_inputs.unexpected = true;
+  const validSelectionBytes = readFileSync(selectionPath, "utf8");
+  writeFileSync(join(repo, "malformed-selection.json"), `${JSON.stringify(malformedSelection, null, 2)}\n`);
+  const malformedStage = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    join(repo, "malformed-selection.json"),
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "staging rejects a malformed nested classification",
+    malformedStage.status === 2 &&
+      /unknown field/.test(malformedStage.text),
+    malformedStage.text,
+  );
+  writeFileSync(selectionPath, validSelectionBytes);
+  check(
+    "first request is phase-aware and names discovery artifacts",
+    firstRequest.includes("Phase: `discovery`") &&
+      firstRequest.includes("Discovery request:") &&
+      !firstRequest.includes("Immutable discovery ledger:"),
+  );
+  check(
     "dispatch prompt points at the complete request",
     firstDispatch.includes(join(firstDir, "review-request.md")),
   );
@@ -113,8 +282,51 @@ try {
         .includes(`Reviewer notes for ${seat}`),
     ),
   );
+  const savedDiscoveryRequest = readFileSync(join(firstDir, "discovery-request.json"));
+  rmSync(join(firstDir, "discovery-request.json"));
+  const completeMissingCanonical = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "a complete round never adds a missing canonical artifact",
+    completeMissingCanonical.status === 2 &&
+      /refusing to add it after \.complete/.test(completeMissingCanonical.text) &&
+      !existsSync(join(firstDir, "discovery-request.json")),
+    completeMissingCanonical.text,
+  );
+  writeFileSync(join(firstDir, "discovery-request.json"), savedDiscoveryRequest);
+  const originalDeltaBytes = readFileSync(join(firstDir, "delta.diff"), "utf8");
+  writeFileSync(join(firstDir, "delta.diff"), "conflicting scratch bytes\n");
+  const firstConflict = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "stage-diffs stops at the first conflict with a clear retry",
+    firstConflict.status === 1 &&
+    firstConflict.text.includes("staging stopped at the first conflict") &&
+    firstConflict.text.includes("new review id"),
+    firstConflict.text,
+  );
+  writeFileSync(join(firstDir, "delta.diff"), originalDeltaBytes);
 
-  for (const seat of ["software", "test"]) {
+  const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
+  for (const seat of firstRoster) {
     writeFileSync(
       join(firstDir, "verdicts", `${seat}.json`),
       `${JSON.stringify({
@@ -125,14 +337,163 @@ try {
       })}\n`,
     );
   }
+  const legacyAddressPath = join(firstDir, "address.json");
+  const legacyAddress = JSON.parse(readFileSync(legacyAddressPath, "utf8"));
+  delete legacyAddress.phase;
+  delete legacyAddress.selection_sha256;
+  writeFileSync(
+    legacyAddressPath,
+    `${JSON.stringify(legacyAddress, null, 2)}\n`,
+  );
 
-  writeFileSync(join(repo, "second.txt"), "second change\n");
-  git(repo, "add", "second.txt");
+  writeFileSync(join(repo, "Makefile"), "second build change\n");
+  git(repo, "add", "Makefile");
   git(repo, "commit", "--quiet", "-m", "second");
   const secondTip = git(repo, "rev-parse", "HEAD");
 
+  const currentCandidatePath = join(repo, "current-candidate.json");
+  writeFileSync(
+    currentCandidatePath,
+    `${JSON.stringify({
+      program: "SPEC001",
+      wave: "spec001w1",
+      candidate_id: "candidate-2",
+      content_id: "content-2",
+      snapshot_sha256: "b".repeat(64),
+      changed_paths: ["Makefile", "first.txt", literalBackslashPath],
+    }, null, 2)}\n`,
+  );
+  const deltaPath = join(repo, "fix-delta.json");
+  writeFileSync(deltaPath, `${JSON.stringify({ changed_paths: ["Makefile"] }, null, 2)}\n`);
+  const currentSelectionPath = execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "select",
+      currentCandidatePath,
+      "spec001w1",
+      "--phase",
+      "verification",
+      "--previous-selection",
+      selectionPath,
+      "--fix-delta",
+      deltaPath,
+      "--git-range",
+      `${base}..${secondTip}`,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  ).trim();
+  const stagedLedger = join(repo, "source-ledger.json");
+  const stagedResponses = join(repo, "source-responses.json");
+  const stagedSelfVerification = join(repo, "source-self-verification.json");
+  const discoveryResultsPath = join(repo, "discovery-results.json");
+  const groupsPath = join(repo, "discovery-groups.json");
+  writeFileSync(
+    discoveryResultsPath,
+    `${JSON.stringify(Object.fromEntries(firstRoster.map((seat) => [
+      seat,
+      {
+        seat,
+        complete: true,
+        findings: seat === "software"
+          ? [{
+              source_id: "software:1",
+              source_ordinal: 1,
+              raw_text: "The fix needs verification.",
+              attribution: "software",
+              severity: "MAJOR",
+              impact: "The change could regress the handoff.",
+              recommendation: "Verify the fix.",
+            }]
+          : [],
+      },
+    ])), null, 2)}\n`,
+  );
+  writeFileSync(
+    groupsPath,
+    `${JSON.stringify([{
+      source_finding_ids: ["software:1"],
+      description: "The fix needs verification.",
+      severity: "MAJOR",
+      impact: "The change could regress the handoff.",
+      recommendation: "Verify the fix.",
+    }], null, 2)}\n`,
+  );
+  execFileSync(
+    "node",
+    [lifecycleScript, "merge-ledger", selectionPath, discoveryResultsPath, groupsPath, stagedLedger],
+    { cwd: repo, encoding: "utf8" },
+  );
+  execFileSync(
+    "node",
+    [lifecycleScript, "response-template", stagedLedger, stagedResponses],
+    { cwd: repo, encoding: "utf8" },
+  );
+  const responseEnvelope = JSON.parse(readFileSync(stagedResponses, "utf8"));
+  responseEnvelope.responses[0] = {
+    issue_id: "R1",
+    disposition: "Fixed",
+    changed_surface: ["Makefile"],
+    justification: "The fix is staged for verification.",
+    evidence: "focused test",
+  };
+  writeFileSync(stagedResponses, `${JSON.stringify(responseEnvelope, null, 2)}\n`);
+  writeFileSync(
+    stagedSelfVerification,
+    `${JSON.stringify({
+      tests: ["focused stage test"],
+      lint: "passed",
+      formatting: "passed",
+      static_analysis: "passed",
+      build: "not applicable",
+      uncovered_areas: ["none"],
+      self_review: "passed",
+    }, null, 2)}\n`,
+  );
+  const verificationSourceDir = join(repo, "verification-requests");
+  execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "verification",
+      currentSelectionPath,
+      stagedLedger,
+      stagedResponses,
+      stagedSelfVerification,
+      verificationSourceDir,
+      "--candidate",
+      currentCandidatePath,
+      "--prior-selection",
+      selectionPath,
+      "--prior-verdicts",
+      join(firstDir, "verdicts"),
+      "--delta",
+      deltaPath,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
+  const verificationRoster = JSON.parse(
+    readFileSync(currentSelectionPath, "utf8"),
+  ).roster;
+
   console.log("stage-diffs: fail-closed continuity");
-  const wrongPreviousTip = run(repo, [base, base, "spec001w1-r2"]);
+  const wrongPreviousTip = run(repo, [
+    base,
+    base,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
   check(
     "later review rejects a non-incremental previous tip",
     wrongPreviousTip.status === 2 &&
@@ -145,32 +506,314 @@ try {
   const missingVerdict = join(firstDir, "verdicts", "test.json");
   const savedVerdict = readFileSync(missingVerdict);
   rmSync(missingVerdict);
-  const incompletePreviousReview = run(repo, [base, firstTip, "spec001w1-r2"]);
+  const incompletePreviousReview = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
   check(
     "later review rejects a missing prior seat verdict",
     incompletePreviousReview.status === 2 &&
       incompletePreviousReview.text.includes(
-        "missing previous verdict for seat test",
+      "missing previous verdict for incumbent seat test",
       ),
     incompletePreviousReview.text,
   );
   writeFileSync(missingVerdict, savedVerdict);
 
   console.log("stage-diffs: incremental review");
-  const second = run(repo, [base, firstTip, "spec001w1-r2"]);
+  const missingVerificationDirectory = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+  ]);
+  check(
+    "verification staging refuses to complete without every seat request",
+    missingVerificationDirectory.status === 2 &&
+      /--verification-dir is required/.test(missingVerificationDirectory.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    missingVerificationDirectory.text,
+  );
+  const incompleteVerificationDir = join(repo, "incomplete-verification-requests");
+  mkdirSync(incompleteVerificationDir);
+  for (const seat of verificationRoster.slice(0, -1)) {
+    writeFileSync(
+      join(incompleteVerificationDir, `${seat}.json`),
+      `${JSON.stringify({ seat, request: "incomplete" })}\n`,
+    );
+  }
+  const incompleteVerification = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    incompleteVerificationDir,
+  ]);
+  check(
+    "verification staging refuses an incomplete per-seat request directory",
+    incompleteVerification.status === 2 &&
+      /exactly one readable JSON request per selected seat/.test(incompleteVerification.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    incompleteVerification.text,
+  );
+  const currentSelection = JSON.parse(
+    readFileSync(currentSelectionPath, "utf8"),
+  );
+  const badFullSelection = JSON.parse(JSON.stringify(currentSelection));
+  badFullSelection.classification_inputs.changed_paths = ["Makefile"];
+  badFullSelection.classification_inputs.full_candidate.changed_paths = ["Makefile"];
+  badFullSelection.classification_inputs.fix_delta.changed_paths = ["Makefile"];
+  const badFullSelectionPath = join(repo, "bad-full-selection.json");
+  writeFileSync(badFullSelectionPath, `${JSON.stringify(badFullSelection, null, 2)}\n`);
+  const fullRangeMismatch = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    badFullSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
+  check(
+    "verification staging compares base-to-tip full paths",
+    fullRangeMismatch.status === 2 &&
+      /full-candidate paths do not match git range/.test(fullRangeMismatch.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    fullRangeMismatch.text,
+  );
+  const badDeltaSelection = JSON.parse(JSON.stringify(currentSelection));
+  badDeltaSelection.classification_inputs.fix_delta.changed_paths = ["first.txt"];
+  const badDeltaSelectionPath = join(repo, "bad-delta-selection.json");
+  writeFileSync(badDeltaSelectionPath, `${JSON.stringify(badDeltaSelection, null, 2)}\n`);
+  const deltaRangeMismatch = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    badDeltaSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
+  check(
+    "verification staging compares previous-tip-to-tip delta paths",
+    deltaRangeMismatch.status === 2 &&
+      /fix-delta paths do not match git range/.test(deltaRangeMismatch.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    deltaRangeMismatch.text,
+  );
+  const invalidVerificationDirectory = (name, mutate) => {
+    const directory = join(repo, name);
+    mkdirSync(directory);
+    for (const seat of verificationRoster) {
+      const request = JSON.parse(
+        readFileSync(join(verificationSourceDir, `${seat}.json`), "utf8"),
+      );
+      if (seat === "software") mutate(request);
+      writeFileSync(directory + `/${seat}.json`, `${JSON.stringify(request, null, 2)}\n`);
+    }
+    return directory;
+  };
+  const rejectsStagedVerification = (name, mutate) => {
+    const directory = invalidVerificationDirectory(name, mutate);
+    const result = run(repo, [
+      base,
+      firstTip,
+      "spec001w1-r2",
+      "--selection",
+      currentSelectionPath,
+      "--candidate",
+      currentCandidatePath,
+      "--ledger",
+      stagedLedger,
+      "--responses",
+      stagedResponses,
+      "--self-verification",
+      stagedSelfVerification,
+      "--verification-dir",
+      directory,
+    ]);
+    check(
+      name,
+      result.status === 2 &&
+        /strict lifecycle validation/.test(result.text) &&
+        !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+      result.text,
+    );
+    rmSync(join(repo, ".scratch", "panel", "spec001w1-r2"), {
+      recursive: true,
+      force: true,
+    });
+  };
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed cross-candidate request",
+    (request) => {
+      request.current_candidate.candidate_id = "stale-candidate";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed cross-ledger request",
+    (request) => {
+      request.ledger.candidate_id = "foreign-candidate";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed cross-selection profile",
+    (request) => {
+      request.selection.profiles.software = ["javascript"];
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed stale response",
+    (request) => {
+      request.responses[0].justification = "stale response from an earlier ledger";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects removed full context",
+    (request) => {
+      request.full_context = {
+        candidate: "context from an earlier candidate",
+        validation: "stale evidence",
+      };
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects removed actual delta context",
+    (request) => {
+      request.actual_delta.context = {
+        changed_paths: ["Makefile"],
+      };
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a swapped request seat",
+    (request) => {
+      request.seat = "test";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects stale prior selection",
+    (request) => {
+      request.prior_selection.content_id = "stale-prior-content";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a null incumbent prior status",
+    (request) => {
+      request.previous_status = null;
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects stale incumbent prior status",
+    (request) => {
+      request.previous_status = {
+        engineer: "software",
+        signoff: false,
+        summary: "status from a different prior review",
+        recommendations: ["stale"],
+      };
+    },
+  );
+  const second = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
   check("later review stages successfully", second.status === 0, second.text);
+  check(
+    "later review derives compatibility fields from a legacy address",
+    second.status === 0,
+    second.text,
+  );
 
   const secondDir = join(repo, ".scratch", "panel", "spec001w1-r2");
+  check("later review stages selection.json exactly", readFileSync(join(secondDir, "selection.json"), "utf8") === readFileSync(currentSelectionPath, "utf8"));
+  check("later review stages current-candidate.json exactly", readFileSync(join(secondDir, "current-candidate.json"), "utf8") === readFileSync(currentCandidatePath, "utf8"));
+  check("later review stages the immutable ledger exactly", readFileSync(join(secondDir, "discovery-ledger.json"), "utf8") === readFileSync(stagedLedger, "utf8"));
+  check("later review stages responses exactly", readFileSync(join(secondDir, "responses.json"), "utf8") === readFileSync(stagedResponses, "utf8"));
+  check("later review stages self-verification exactly", readFileSync(join(secondDir, "self-verification.json"), "utf8") === readFileSync(stagedSelfVerification, "utf8"));
+  check(
+    "later review stages every verification request exactly",
+    verificationRoster.every((seat) =>
+      readFileSync(join(secondDir, "verification", `${seat}.json`), "utf8") ===
+        readFileSync(join(verificationSourceDir, `${seat}.json`), "utf8")),
+  );
+  check(
+    "newly selected seats carry a null prior status",
+    JSON.parse(readFileSync(join(secondDir, "verification", "build.json"), "utf8"))
+      .previous_status === null,
+  );
+  check("later review writes a completion marker", existsSync(join(secondDir, ".complete")));
   const delta = readFileSync(join(secondDir, "delta.diff"), "utf8");
   const full = readFileSync(join(secondDir, "full.diff"), "utf8");
   const secondRequest = readFileSync(join(secondDir, "review-request.md"), "utf8");
   check(
     "incremental diff excludes earlier changed paths",
-    delta.includes("second.txt") && !delta.includes("first.txt"),
+    delta.includes("Makefile") && !delta.includes("first.txt"),
   );
   check(
     "full diff retains all branch changes",
-    full.includes("first.txt") && full.includes("second.txt"),
+    full.includes("first.txt") && full.includes("Makefile"),
   );
   check(
     "later request names the prior verdict and invalidated sign-off",
@@ -185,17 +828,126 @@ try {
     "later request names the exact incremental range",
     secondRequest.includes(`Delta range: \`${firstTip}..${secondTip}\``),
   );
+  check(
+    "later request names verification artifacts and allows the new seat",
+    secondRequest.includes("Phase: `verification`") &&
+      secondRequest.includes("Immutable discovery ledger:") &&
+      secondRequest.includes("Approval output after verdict collection:") &&
+      !secondRequest.includes("missing previous verdict for seat build"),
+  );
+  check(
+    "new-seat request makes the absent prior verdict explicit",
+    secondRequest.includes("newly selected seat") &&
+      secondRequest.includes("no prior verdict exists"),
+  );
+  check(
+    "new-seat note carries its first-verification obligation",
+    readFileSync(join(secondDir, "reviewer-notes", "build.md"), "utf8").includes(
+      "No prior verdict exists for this seat",
+    ) &&
+      readFileSync(join(secondDir, "reviewer-notes", "build.md"), "utf8").includes(
+        "complete ledger",
+      ),
+  );
 
   writeFileSync(
     join(secondDir, "verdicts", "software.json"),
     "{}\n",
   );
-  const reused = run(repo, [base, firstTip, "spec001w1-r2"]);
+  const reused = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
   check(
     "a review id with verdicts cannot be restaged",
     reused.status === 2 &&
       reused.text.includes("already has verdicts"),
     reused.text,
+  );
+  rmSync(join(firstDir, ".complete"));
+  const incompleteRetry = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "an unmarked scratch directory is non-authoritative and names cleanup",
+    incompleteRetry.status === 2 &&
+      /non-authoritative/.test(incompleteRetry.text) &&
+      /rm -rf/.test(incompleteRetry.text),
+    incompleteRetry.text,
+  );
+
+  const c1Path = `c1-${"\u0080"}.txt`;
+  writeFileSync(join(repo, c1Path), "c1 control character\n");
+  git(repo, "add", c1Path);
+  git(repo, "commit", "--quiet", "-m", "c1 path");
+  const c1Selection = spawnSync(
+    "node",
+    [
+      lifecycleScript,
+      "select",
+      currentCandidatePath,
+      "spec001w1",
+      "--phase",
+      "verification",
+      "--previous-selection",
+      selectionPath,
+      "--fix-delta",
+      deltaPath,
+      "--git-range",
+      `${secondTip}..HEAD`,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
+  check(
+    "git-range selection refuses a C1 path",
+    c1Selection.status !== 0 &&
+      /control character/.test(`${c1Selection.stdout}${c1Selection.stderr}`),
+    `${c1Selection.stdout}${c1Selection.stderr}`,
+  );
+  const c1Staging = run(repo, [
+    base,
+    secondTip,
+    "spec001w1-r3",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
+  check(
+    "staging refuses a git range containing a C1 path",
+    c1Staging.status === 2 &&
+      /control character/.test(c1Staging.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r3", ".complete")),
+    c1Staging.text,
   );
 } finally {
   rmSync(repo, { recursive: true, force: true });

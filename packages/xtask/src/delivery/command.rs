@@ -145,7 +145,7 @@ impl WaveCommand {
                  candidate ID."
             }
             Self::PanelRequest => {
-                "Write the candidate-bound ten-role panel request into external delivery state."
+                "Write the candidate-bound selected-roster panel request into external delivery state."
             }
             Self::PanelAttest => {
                 "Validate one panel record per role against the candidate's digests."
@@ -188,7 +188,7 @@ impl WaveCommand {
             }
             Self::PanelRequest => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request --snapshot PATH \
-                 --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
+                 --selection PATH --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
             }
             Self::PanelAttest => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest --snapshot PATH --records DIR \
@@ -214,7 +214,7 @@ impl WaveCommand {
             Self::Help => &[],
             Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
-            Self::PanelRequest => &["--snapshot", "--repo"],
+            Self::PanelRequest => &["--snapshot", "--selection", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
             Self::Seal => &["--snapshot", "--repo"],
             Self::MergeTarget => &["--seal", "--target", "--repo"],
@@ -808,6 +808,21 @@ mod tests {
             "the wave usage string must list merge-target: {}",
             usage()
         );
+    }
+
+    #[test]
+    fn panel_request_requires_a_selection_path() {
+        let error = dispatch(&args(&[
+            "wave",
+            "panel-request",
+            "--snapshot",
+            "W0/candidate/snapshot.json",
+            "--repo",
+            "github.com/example/d2b=/checkout",
+        ]))
+        .expect_err("panel-request without --selection");
+        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
+        assert!(error.message().contains("--selection"), "{error}");
     }
 
     #[test]

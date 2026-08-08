@@ -221,36 +221,28 @@ Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
 Detail, including each role's focus and harness notes, in
 [panel-review.md](./docs/contributing/panel-review.md). binding rules:
 
-- **Multi-phase plans pass panel gate at each phase boundary**, twice per
-  phase: once on plan before any implementation is dispatched, and once on
-  integrated diff before next phase begins.
-- **`signoff` is `true` iff `recommendations` is `[]`.** phase closes only
-  on unanimous sign-off from full roster. **Green tests do not waive this
-  gate.** canonical precedent: Wave-1 panel returned 0/8 sign-offs with
-  11 HIGH findings that static gate caught none of.
-- **default roster is ten roles**: `software`, `test`, `nixos`,
-  `networking`, `security`, `rust`, `product`, `docs`, `observability`,
-  `kernel`.
-- **Reviewers do not rerun validation.** Prompts carry evidence the
-  integrator already ran, and instruct reviewers to reason over it rather than
-  stampeding shared Nix store and cargo target while implementation agents
-  are still running. Missing or insufficient validation is finding.
-- **Rounds after first are delta reviews** and carry two ranges: delta
-  since that reviewer last reviewed, and full branch for context. Any
-  content change invalidates every prior sign-off in phase.
-- **Fix rounds address only findings raised.** genuine defect found
-  while fixing something else is still out of scope; file it separately.
-  Unrequested changes are new content, new content invalidates round's
-  evidence, and gate recedes while deliverable sits finished.
+- Multi-phase work passes a plan gate before implementation and a work gate
+  before advance. `signoff` is `true` iff `recommendations` is `[]`; every
+  selected lifecycle seat must sign off, and green tests never waive the gate.
+- Selection uses the versioned thirteen-seat table. It includes every
+  mandatory and triggered seat, meets the applicable floor, and only widens.
+  Rust depth is a `software` profile; legacy records retain `rust`.
+- One comprehensive discovery produces the stable shared ledger. Fixes are
+  ledger-scoped and batched. Verification receives the full ledger, responses,
+  evidence, fix delta, and full candidate; it checks resolutions and
+  regressions without reopening discovery.
+- Reviewers are read-only and do not rerun validation unless explicitly asked.
+  Missing evidence is a finding. Unrelated defects found during a fix are
+  recorded separately rather than expanding that lifecycle.
 
 Escape hatches are narrow: trivial fixes with no semantic change,
 documentation-only changes that do not describe load-bearing behaviour, and
 time-critical hotfixes, which still require post-fix panel.
 
-once-per-wave binding panel is enforced in code by
-`packages/xtask/src/delivery/panel.rs`: ten records, one per role, unanimous,
-all bound to same snapshot, with provider, model, and reasoning effort
-pinned. No override and no partial pass.
+The once-per-wave binding panel is enforced in code by
+`packages/xtask/src/delivery/panel.rs`: the request stores the selected roster,
+attestation requires one unanimous candidate-bound record per stored role, and
+strict fixed-ten legacy artifacts remain readable. No override or partial pass.
 
 ## Changelog and commits
 
