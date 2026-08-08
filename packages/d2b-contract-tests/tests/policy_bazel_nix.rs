@@ -778,7 +778,7 @@ test ! -e /proc/self/fd/9
         fs::read(&status).expect("status capture"),
         [
             b'D', b'2', b'B', b'S', 1, 1, 0, 0, b'D', b'2', b'B', b'S', 1, 2, 0, 0, b'D', b'2',
-            b'B', b'S', 1, 3, 0, 0, 0,
+            b'B', b'S', 1, 3, 0, 1, 0,
         ]
     );
 }
