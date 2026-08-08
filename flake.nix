@@ -1442,7 +1442,6 @@
                 "libgcc_s.so.1"
                 "libm.so.6"
               ] else if system == "aarch64-linux" then [
-                "ld-linux-aarch64.so.1"
                 "libc.so.6"
                 "libgcc_s.so.1"
                 "libm.so.6"

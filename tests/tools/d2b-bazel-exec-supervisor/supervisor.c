@@ -139,8 +139,10 @@ static int d2b_remaining_ms(int64_t deadline) {
 }
 
 static void d2b_emit_code(const char *code) {
-  (void)write(STDERR_FILENO, code, strlen(code));
-  (void)write(STDERR_FILENO, "\n", 1);
+  ssize_t code_result = write(STDERR_FILENO, code, strlen(code));
+  ssize_t newline_result = write(STDERR_FILENO, "\n", 1);
+  (void)code_result;
+  (void)newline_result;
 }
 
 static int d2b_write_full(int fd, const void *data, size_t length,
