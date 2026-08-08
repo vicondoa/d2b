@@ -34,6 +34,7 @@ let
     expression = builtins.hashFile "sha256"
       (flakeRoot + "/pkgs/d2b-bazel-exec-supervisor/default.nix");
   };
+  has = text: needle: builtins.replaceStrings [ needle ] [ "" ] text != text;
   zeroSha256 = builtins.concatStringsSep "" (builtins.genList (_: "0") 64);
   supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
   nativeDigestsAreNonzero = record:
@@ -71,9 +72,9 @@ in
 
   "bazel-toolchain-single-devshell-provider" = {
     expr =
-      (pkgs.lib.hasInfix "bazelSeccomp" flakeText)
-      && !(pkgs.lib.hasInfix "bazel_8" flakeText)
-      && !(pkgs.lib.hasInfix "Bazelisk" flakeText);
+      (has flakeText "bazelSeccomp")
+      && !(has flakeText "bazel_8")
+      && !(has flakeText "Bazelisk");
     expected = true;
   };
 
@@ -81,10 +82,10 @@ in
     expr = {
       inherit (toolchain) loadPoint noNetwork noFallback derivationSha256Method;
       policyName = toolchain.policyName;
-      policyFile = pkgs.lib.hasInfix "seccomp-policy.json" bazelText;
-      patchFile = pkgs.lib.hasInfix "linux-sandbox-seccomp.patch" bazelText;
-      policyEnv = pkgs.lib.hasInfix "D2B_BAZEL_SECCOMP_POLICY" bazelText;
-      sourcePatchLoad = pkgs.lib.hasInfix "D2BPrepareActionPolicy()" patchText;
+      policyFile = has bazelText "seccomp-policy.json";
+      patchFile = has bazelText "linux-sandbox-seccomp.patch";
+      policyEnv = has bazelText "D2B_BAZEL_SECCOMP_POLICY";
+      sourcePatchLoad = has patchText "D2BPrepareActionPolicy()";
       goldenDerivationSha256Method = golden.derivationSha256Method;
       goldenNativeDigestsAreNonzero = nativeDigestsAreNonzero golden;
       supervisorNativeDigestsAreNonzero =
@@ -191,21 +192,19 @@ in
 
   "bazel-toolchain-strategy-and-plants" = {
     expr = {
-      strategy = pkgs.lib.hasInfix "common --spawn_strategy=sandboxed" bazelrcText;
-      rustcStrategy = pkgs.lib.hasInfix "common --strategy=Rustc=sandboxed" bazelrcText;
-      testStrategy = pkgs.lib.hasInfix "common --strategy=TestRunner=sandboxed" bazelrcText;
+      strategy = has bazelrcText "common --spawn_strategy=sandboxed";
+      rustcStrategy = has bazelrcText "common --strategy=Rustc=sandboxed";
+      testStrategy = has bazelrcText "common --strategy=TestRunner=sandboxed";
       effectiveObservation =
-        pkgs.lib.hasInfix "d2b_validate_effective_strategies" sandboxRuleText;
-      strategyLock = pkgs.lib.hasInfix "D2B_BAZEL_STRATEGY_LOCK" bazelText;
-      noStrategyOverride =
-        pkgs.lib.hasInfix "strategyOverrides = false" bazelText;
-      x32Guard = pkgs.lib.hasInfix "BPF_JMP | BPF_JSET | BPF_K" patchText;
-      livenessPath = pkgs.lib.hasInfix "--liveness-path" plantText;
-      barrierPath = pkgs.lib.hasInfix "--barrier-path" plantText;
+        has sandboxRuleText "d2b_validate_effective_strategies";
+      strategyLock = has bazelText "D2B_BAZEL_STRATEGY_LOCK";
+      noStrategyOverride = has bazelText "strategyOverrides = false";
+      x32Guard = has patchText "BPF_JMP | BPF_JSET | BPF_K";
+      livenessPath = has plantText "--liveness-path";
+      barrierPath = has plantText "--barrier-path";
       beyondCeilingStage =
-        pkgs.lib.hasInfix "case PLANT_BEYOND_CEILING:" plantText;
-      plantIgnoresTerm =
-        pkgs.lib.hasInfix "signal(SIGTERM, SIG_IGN)" plantText;
+        has plantText "case PLANT_BEYOND_CEILING:";
+      plantIgnoresTerm = has plantText "signal(SIGTERM, SIG_IGN)";
     };
     expected = {
       strategy = true;
@@ -238,7 +237,7 @@ in
       capSysPtrace = supervisor.passthru.yama.capSysPtrace;
       exactCalls = map (call: call.request)
         supervisor.passthru.protocol.ptraceCalls;
-      sourceHasCalls = pkgs.lib.hasInfix "PTRACE_DETACH" supervisorText;
+      sourceHasCalls = has supervisorText "PTRACE_DETACH";
     };
     expected = {
       derivationSha256Method = "raw-drv-file-sha256";
@@ -264,13 +263,13 @@ in
       (hash: builtins.isString hash
         && builtins.match "[0-9a-fA-F]{64}" hash != null)
       (builtins.attrValues currentSourceHashes)
-      && pkgs.lib.hasInfix "bazelSourceIdentityGate" flakeText;
+      && has flakeText "bazelSourceIdentityGate";
     expected = true;
   };
 
   "bazel-toolchain-native-check-surface" = {
     expr = builtins.all
-      (check: pkgs.lib.hasInfix check flakeText)
+      (check: has flakeText check)
       [
         "broker-production-dependency-policy"
         "guest-shell-runner-static-dependency-policy"
