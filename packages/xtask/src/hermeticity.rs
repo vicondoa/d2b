@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
+    path::Path,
 };
 
 use serde::{Deserialize, Serialize};
@@ -513,13 +514,13 @@ pub const BAZEL_SOURCE_SHA256: &str =
 pub const BAZEL_ARCHIVE_SHA256: &str =
     "13a84586429b6084b13bd5040d78deda58d523012151e71e7d4be0c63dd831f9";
 pub const BAZEL_PATCH_SHA256: &str =
-    "3293478bf69c07dd16963f7ab7efeb6e4afcbb274c6461a8a8d94a4b211f2786";
+    "efb0f2d806cc9f91ecdaab25be77586e744040bbf8263404302b5ecdd1a4906c";
 pub const BAZEL_POLICY_SHA256: &str =
-    "b1ce0e3607e6888af24475cac8ca4ab59555a42fed791dcc6420fbb4434831a9";
+    "971210290491c3d359ae2540827ab1f544e86ead84db31ab7400e8dbdef2b68d";
 pub const BAZEL_X86_NAR_SHA256: &str =
-    "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba";
+    "197e2e792a7a3cf72bc9a5892b418d4abcce590dad969d23619f2bb492486be5";
 pub const BAZEL_X86_EXECUTABLE_SHA256: &str =
-    "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a";
+    "7cbf33369f34c39ceaed716ab26f4c37d32df009f290243e301e0cf8b83eafa8";
 pub const BAZEL_ARM_NAR_SHA256: &str =
     "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91";
 pub const BAZEL_ARM_EXECUTABLE_SHA256: &str =
@@ -732,15 +733,170 @@ impl fmt::Display for ActionNetworkError {
 
 impl Error for ActionNetworkError {}
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ActionNetworkObservation {
+    pub configured_targets: BTreeSet<String>,
+    pub coverage_targets: BTreeSet<String>,
+    pub aquery_actions: BTreeSet<String>,
+    pub effective_strategies: BTreeMap<String, String>,
+    pub fallback_strategies: BTreeSet<String>,
+}
+
+impl ActionNetworkObservation {
+    pub(crate) fn from_files(
+        configured_targets: &Path,
+        aquery_actions: &Path,
+        effective_strategies: &Path,
+    ) -> Result<Self, ActionNetworkError> {
+        let configured_targets = std::fs::read_to_string(configured_targets)
+            .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
+        let aquery_actions = std::fs::read_to_string(aquery_actions)
+            .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
+        let effective_strategies = std::fs::read_to_string(effective_strategies)
+            .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
+        Self::from_json(&configured_targets, &aquery_actions, &effective_strategies)
+    }
+
+    pub(crate) fn from_json(
+        configured_targets: &str,
+        aquery_actions: &str,
+        effective_strategies: &str,
+    ) -> Result<Self, ActionNetworkError> {
+        let configured: serde_json::Value = serde_json::from_str(configured_targets)
+            .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
+        let aquery: serde_json::Value = serde_json::from_str(aquery_actions)
+            .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
+        let effective: serde_json::Value = serde_json::from_str(effective_strategies)
+            .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
+
+        let configured_targets = string_set(&configured, &["configuredTargets", "actionKinds"])?;
+        let coverage_targets = string_set(&configured, &["coverageTargets"])?;
+        let aquery_actions = string_set(&aquery, &["actions", "aqueryActions", "actionKinds"])?;
+        let mut effective_map = BTreeMap::new();
+        collect_strategy_observations(&effective, &mut effective_map);
+        if effective_map.is_empty() {
+            return Err(ActionNetworkError::MalformedToolchainRecord);
+        }
+        let fallback_strategies =
+            string_set_optional(&effective, &["fallbackStrategies", "fallback_strategies"]);
+        Ok(Self {
+            configured_targets,
+            coverage_targets,
+            aquery_actions,
+            effective_strategies: effective_map,
+            fallback_strategies,
+        })
+    }
+}
+
+fn string_set(
+    value: &serde_json::Value,
+    keys: &[&str],
+) -> Result<BTreeSet<String>, ActionNetworkError> {
+    for key in keys {
+        if let Some(values) = value.get(*key).and_then(serde_json::Value::as_array) {
+            let result = values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            value.as_object().and_then(|fields| {
+                                ["action", "actionKind", "kind", "mnemonic"]
+                                    .iter()
+                                    .find_map(|field| {
+                                        fields.get(*field).and_then(serde_json::Value::as_str)
+                                    })
+                                    .map(str::to_owned)
+                            })
+                        })
+                        .ok_or(ActionNetworkError::MalformedToolchainRecord)
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            if result.is_empty() {
+                return Err(ActionNetworkError::MalformedToolchainRecord);
+            }
+            return Ok(result);
+        }
+    }
+    Err(ActionNetworkError::MalformedToolchainRecord)
+}
+
+fn string_set_optional(value: &serde_json::Value, keys: &[&str]) -> BTreeSet<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_array))
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn collect_strategy_observations(
+    value: &serde_json::Value,
+    observations: &mut BTreeMap<String, String>,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_strategy_observations(value, observations);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for key in ["strategies", "effectiveStrategies", "effective_strategies"] {
+                if let Some(strategy_map) = fields.get(key).and_then(serde_json::Value::as_object) {
+                    for (action, strategy) in strategy_map {
+                        if let Some(strategy) = strategy.as_str() {
+                            observations.insert(action.clone(), strategy.to_owned());
+                        }
+                    }
+                }
+            }
+            let action = ["action", "actionKind", "kind", "mnemonic"]
+                .iter()
+                .find_map(|key| fields.get(*key).and_then(serde_json::Value::as_str));
+            let strategy = ["effectiveStrategy", "strategy"]
+                .iter()
+                .find_map(|key| fields.get(*key).and_then(serde_json::Value::as_str));
+            if let (Some(action), Some(strategy)) = (action, strategy) {
+                observations.insert(action.to_owned(), strategy.to_owned());
+            }
+            for value in fields.values() {
+                collect_strategy_observations(value, observations);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn complete_action_network_inventory() -> ActionNetworkInventory {
     let action_kinds = GOVERNED_ACTION_KINDS
         .iter()
         .map(|kind| (*kind).to_owned())
-        .collect::<Vec<_>>();
-    let strategy_inventory = action_kinds
-        .iter()
-        .map(|kind| (kind.clone(), SANDBOX_STRATEGY.to_owned()))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<BTreeSet<_>>();
+    complete_action_network_inventory_from_observation(&ActionNetworkObservation {
+        configured_targets: action_kinds.clone(),
+        coverage_targets: CONFIGURED_COVERAGE_TARGETS
+            .iter()
+            .map(|target| (*target).to_owned())
+            .collect(),
+        aquery_actions: action_kinds.clone(),
+        effective_strategies: action_kinds
+            .iter()
+            .map(|kind| (kind.clone(), SANDBOX_STRATEGY.to_owned()))
+            .collect(),
+        fallback_strategies: BTreeSet::new(),
+    })
+}
+
+pub(crate) fn complete_action_network_inventory_from_observation(
+    observation: &ActionNetworkObservation,
+) -> ActionNetworkInventory {
+    let strategy_inventory = observation.effective_strategies.clone();
     ActionNetworkInventory {
         action_network: ACTION_NETWORK.to_owned(),
         sandbox_provider: PATCHED_BAZEL_OUTPUT.to_owned(),
@@ -770,12 +926,9 @@ pub fn complete_action_network_inventory() -> ActionNetworkInventory {
             ),
         ]),
         load_point: "after-sandbox-construction-before-action-command-exec".to_owned(),
-        configured_targets: action_kinds.clone(),
-        coverage_targets: CONFIGURED_COVERAGE_TARGETS
-            .iter()
-            .map(|target| (*target).to_owned())
-            .collect(),
-        aquery_actions: action_kinds,
+        configured_targets: observation.configured_targets.iter().cloned().collect(),
+        coverage_targets: observation.coverage_targets.iter().cloned().collect(),
+        aquery_actions: observation.aquery_actions.iter().cloned().collect(),
         strategy_inventory,
         declared_inputs: BTreeSet::from([
             "packages/Cargo.lock".to_owned(),
@@ -801,8 +954,44 @@ pub fn complete_action_network_inventory() -> ActionNetworkInventory {
             .map(|plant| (*plant).to_owned())
             .collect(),
         repository_fetches_outside_actions: true,
-        fallback_strategies: Vec::new(),
+        fallback_strategies: observation.fallback_strategies.iter().cloned().collect(),
     }
+}
+
+pub(crate) fn validate_observed_action_network(
+    inventory: &ActionNetworkInventory,
+    observation: &ActionNetworkObservation,
+) -> Result<(), ActionNetworkError> {
+    validate_action_network_inventory(inventory)?;
+    if inventory
+        .configured_targets
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        != observation.configured_targets
+        || inventory
+            .coverage_targets
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != observation.coverage_targets
+        || inventory
+            .aquery_actions
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != observation.aquery_actions
+        || inventory.strategy_inventory != observation.effective_strategies
+        || inventory
+            .fallback_strategies
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != observation.fallback_strategies
+    {
+        return Err(ActionNetworkError::MalformedToolchainRecord);
+    }
+    Ok(())
 }
 
 pub fn validate_action_network_inventory(

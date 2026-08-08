@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -38,6 +39,8 @@ static enum plant_stage stage = PLANT_BEFORE_READY;
 static bool hold_liveness_fd;
 static bool crash_with_signal;
 static int liveness_fd = -1;
+static const char *liveness_path;
+static const char *barrier_path;
 
 static void usage(const char *name) {
   fprintf(stderr,
@@ -45,7 +48,8 @@ static void usage(const char *name) {
           "{before-ready|after-ready|after-executed|during-grace|"
           "exit-during-grace|fd-audit|direct-descendant|"
           "double-fork-descendant|beyond-ceiling} "
-          "[--hold-liveness-fd] [--sigsegv]\n",
+          "[--hold-liveness-fd --liveness-path PATH] "
+          "[--barrier-path PATH] [--sigsegv]\n",
           name);
   _exit(64);
 }
@@ -67,10 +71,25 @@ static enum plant_stage parse_stage(const char *value) {
 }
 
 static void keep_descriptor_open(void) {
-  if (liveness_fd < 0) {
-    liveness_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (liveness_fd >= 0) {
+    return;
   }
+  if (liveness_path == NULL || *liveness_path == '\0') {
+    _exit(65);
+  }
+  /*
+   * The harness creates this FIFO and opens its read end before launching the
+   * plant. Every descendant inherits the same write end. The harness therefore
+   * observes a byte for liveness and EOF only after the namespace has closed
+   * every copy during cleanup; no private descriptor or host identifier is
+   * rendered.
+   */
+  liveness_fd = open(liveness_path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
   if (liveness_fd < 0) {
+    _exit(65);
+  }
+  const char marker = '1';
+  if (write(liveness_fd, &marker, 1) != 1) {
     _exit(65);
   }
 }
@@ -99,20 +118,24 @@ static void start_descendants(bool double_fork) {
 
 static void barrier_until_release(void) {
   /*
-   * A pipe supplied by the test harness is optional.  Without one the plant
-   * remains live, which is useful for the ordinary crash/quarantine cases.
-   * The monitor owns the eventual namespace cleanup; this process never
-   * signals a host pid or process group.
+   * The harness creates a FIFO and keeps its writer open without writing.
+   * Reading it is a deterministic, externally observable barrier: the harness
+   * can release it after checking quarantine, while SIGKILL closes the plant's
+   * descriptor and lets the reader observe EOF. Without a barrier path the
+   * plant remains live for ordinary crash cases.
    */
-  const char *barrier_fd = getenv("D2B_SANDBOX_PLANT_BARRIER_FD");
-  if (barrier_fd == NULL || *barrier_fd == '\0') {
+  if (barrier_path == NULL || *barrier_path == '\0') {
     pause();
     return;
   }
   char byte;
-  int fd = atoi(barrier_fd);
+  int fd = open(barrier_path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    _exit(68);
+  }
   while (read(fd, &byte, 1) < 0 && errno == EINTR) {
   }
+  close(fd);
 }
 
 static void exit_on_term(int signal_number) {
@@ -154,6 +177,11 @@ int main(int argc, char **argv) {
       stage = parse_stage(argv[++i]);
     } else if (strcmp(argv[i], "--hold-liveness-fd") == 0) {
       hold_liveness_fd = true;
+    } else if (strcmp(argv[i], "--liveness-path") == 0 && i + 1 < argc) {
+      liveness_path = argv[++i];
+      hold_liveness_fd = true;
+    } else if (strcmp(argv[i], "--barrier-path") == 0 && i + 1 < argc) {
+      barrier_path = argv[++i];
     } else if (strcmp(argv[i], "--sigsegv") == 0) {
       crash_with_signal = true;
     } else {
@@ -189,6 +217,7 @@ int main(int argc, char **argv) {
       start_descendants(true);
       _exit(75);
     case PLANT_BEYOND_CEILING:
+      signal(SIGTERM, SIG_IGN);
       start_descendants(true);
       barrier_until_release();
       _exit(76);

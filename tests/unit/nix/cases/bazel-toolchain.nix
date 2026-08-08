@@ -7,12 +7,17 @@ let
   policy = builtins.fromJSON (builtins.readFile
     (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/seccomp-policy.json"));
   flakeText = builtins.readFile (flakeRoot + "/flake.nix");
+  bazelrcText = builtins.readFile (flakeRoot + "/.bazelrc");
+  sandboxRuleText = builtins.readFile
+    (flakeRoot + "/bazel/rules/sandboxed_action.bzl");
   bazelText = builtins.readFile
     (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/default.nix");
   patchText = builtins.readFile
     (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch");
   supervisorText = builtins.readFile
     (flakeRoot + "/tests/tools/d2b-bazel-exec-supervisor/supervisor.c");
+  plantText = builtins.readFile
+    (flakeRoot + "/tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c");
   golden = builtins.fromJSON (builtins.readFile
     (flakeRoot + "/tests/golden/bazel-toolchain.json"));
   supervisorGolden = builtins.fromJSON (builtins.readFile
@@ -144,6 +149,9 @@ in
       deniedSocket = builtins.elem "socket" policy.deniedSyscalls;
       deniedRing = builtins.elem "io_uring_setup" policy.deniedSyscalls;
       deniedPidfd = builtins.elem "pidfd_getfd" policy.deniedSyscalls;
+      x32RejectedBeforeDispatch =
+        policy.x86X32SyscallBit.rejectedBeforeDispatch;
+      x32Denial = policy.x86X32SyscallBit.denial;
     };
     expected = {
       requests = [
@@ -163,6 +171,57 @@ in
       deniedSocket = true;
       deniedRing = true;
       deniedPidfd = true;
+      x32RejectedBeforeDispatch = true;
+      x32Denial = {
+        action = "errno";
+        errno = "EACCES";
+        value = 13;
+      };
+    };
+  };
+
+  "bazel-toolchain-strategy-and-plants" = {
+    expr = {
+      strategy =
+        builtins.match ".*common --spawn_strategy=sandboxed.*" bazelrcText
+        != null;
+      rustcStrategy =
+        builtins.match ".*common --strategy=Rustc=sandboxed.*" bazelrcText
+        != null;
+      testStrategy =
+        builtins.match ".*common --strategy=TestRunner=sandboxed.*" bazelrcText
+        != null;
+      effectiveObservation =
+        builtins.match ".*d2b_validate_effective_strategies.*"
+          sandboxRuleText != null;
+      strategyLock =
+        builtins.match ".*D2B_BAZEL_STRATEGY_LOCK.*" bazelText != null;
+      noStrategyOverride =
+        builtins.match ".*strategyOverrides = false.*" bazelText != null;
+      x32Guard =
+        builtins.match ".*BPF_JMP \\| BPF_JSET \\| BPF_K.*"
+          patchText != null;
+      livenessPath =
+        builtins.match ".*--liveness-path.*" plantText != null;
+      barrierPath =
+        builtins.match ".*--barrier-path.*" plantText != null;
+      beyondCeilingStage =
+        builtins.match ".*case PLANT_BEYOND_CEILING:.*" plantText != null;
+      plantIgnoresTerm =
+        builtins.match ".*signal\\(SIGTERM, SIG_IGN\\).*" plantText != null;
+    };
+    expected = {
+      strategy = true;
+      rustcStrategy = true;
+      testStrategy = true;
+      effectiveObservation = true;
+      strategyLock = true;
+      noStrategyOverride = true;
+      x32Guard = true;
+      livenessPath = true;
+      barrierPath = true;
+      beyondCeilingStage = true;
+      plantIgnoresTerm = true;
     };
   };
 

@@ -24,7 +24,20 @@ pkgs.bazel_8.overrideAttrs (old: {
       "$out/share/d2b/bazel/seccomp-policy.json"
     wrapProgram "$out/bin/bazel" \
       --set D2B_BAZEL_SECCOMP_POLICY \
-      "$out/share/d2b/bazel/seccomp-policy.json"
+      "$out/share/d2b/bazel/seccomp-policy.json" \
+      --set D2B_BAZEL_STRATEGY_LOCK d2b-bazel-sandbox-v1 \
+      --run '
+        for d2b_arg in "$@"; do
+          case "$d2b_arg" in
+            --spawn_strategy=*|--spawn_strategy|--strategy=*|--strategy|--strategy_regexp=*|--strategy_regexp|--test_strategy=*|--test_strategy|--genrule_strategy=*|--genrule_strategy|--worker_strategy=*|--worker_strategy|--remote_executor=*|--remote_executor|--bazelrc=*|--bazelrc|--ignore_all_rc_files|--nohome_rc|--nosystem_rc|--noworkspace_rc)
+              printf "%s\n" D2B-BZLNET-STRATEGY
+              printf "%s\n" "correction=Use the repository .bazelrc and the pinned sandboxed strategy without overrides."
+              printf "%s\n" "retry=make test-flake"
+              exit 64
+              ;;
+          esac
+        done
+      '
   '';
   passthru = (old.passthru or { }) // {
     d2bSeccomp = {
@@ -39,6 +52,15 @@ pkgs.bazel_8.overrideAttrs (old: {
       loadPoint = "after-sandbox-construction-before-action-command-exec";
       noNetwork = true;
       noFallback = true;
+      strategy = "sandboxed";
+      strategyLock = "d2b-bazel-sandbox-v1";
+      strategyOverrides = false;
+      retryCommand = "make test-flake";
+      x86X32SyscallBit = {
+        rejectedBeforeDispatch = true;
+        denialErrno = "EACCES";
+        denialValue = 13;
+      };
       ptraceRequests = [
         "PTRACE_TRACEME"
         "PTRACE_SETOPTIONS"

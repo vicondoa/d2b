@@ -21,6 +21,14 @@
     "noNewPrivs": true,
     "noFallback": true
   },
+  "x86X32SyscallBit": {
+    "rejectedBeforeDispatch": true,
+    "denial": {
+      "action": "errno",
+      "errno": "EACCES",
+      "value": 13
+    }
+  },
   "inheritedDescriptorPreflight": {
     "beforeFilterLoad": true,
     "socketDescriptors": "deny",

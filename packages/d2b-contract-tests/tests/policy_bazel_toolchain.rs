@@ -94,6 +94,10 @@ fn policy_is_closed_no_network_and_constant_ptrace() {
     assert_eq!(policy["load"]["before"], "action-command-exec");
     assert_eq!(policy["load"]["noNewPrivs"], true);
     assert_eq!(policy["load"]["noFallback"], true);
+    assert_eq!(policy["x86X32SyscallBit"]["rejectedBeforeDispatch"], true);
+    assert_eq!(policy["x86X32SyscallBit"]["denial"]["action"], "errno");
+    assert_eq!(policy["x86X32SyscallBit"]["denial"]["errno"], "EACCES");
+    assert_eq!(policy["x86X32SyscallBit"]["denial"]["value"], 13);
     assert_eq!(
         array_strings(&policy, "/load/covers"),
         strings(&[
@@ -320,6 +324,14 @@ fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
     assert!(patch.contains("CLONE_NEWPID"));
     assert!(patch.contains("kD2BUserspaceCeilingMs = 10000"));
     assert!(patch.contains("WNOHANG"));
+    assert!(patch.contains("__X32_SYSCALL_BIT"));
+    assert!(patch.contains("BPF_JMP | BPF_JSET | BPF_K"));
+    assert!(
+        patch.find("BPF_JMP | BPF_JSET | BPF_K").expect("x32 guard")
+            < patch
+                .find("std::vector<struct sock_filter> ptrace_rules")
+                .expect("syscall dispatch")
+    );
     for code in [
         "D2B-BZLEXEC-SANDBOX-NAMESPACE",
         "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
@@ -353,6 +365,122 @@ fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
             "missing quarantine prohibition {forbidden}"
         );
     }
+}
+
+#[test]
+fn x32_filter_mutation_is_rejected_before_dispatch() {
+    let patch = read_repo_file(PATCH);
+    let guard = "BPF_JMP | BPF_JSET | BPF_K";
+    assert!(patch.contains(guard));
+    let mutated = patch.replace(guard, "BPF_JMP | BPF_JEQ | BPF_K");
+    assert!(
+        !mutated.contains(guard),
+        "the mutation must remove the pre-dispatch x32 guard"
+    );
+    assert!(
+        mutated
+            .find("__X32_SYSCALL_BIT")
+            .expect("mutated x32 source")
+            < mutated
+                .find("std::vector<struct sock_filter> ptrace_rules")
+                .expect("syscall dispatch")
+    );
+}
+
+#[test]
+fn strategy_lock_and_observation_inputs_are_closed() {
+    let bazelrc = read_repo_file(".bazelrc");
+    for setting in [
+        "common --spawn_strategy=sandboxed",
+        "common --strategy=Rustc=sandboxed",
+        "common --strategy=RustcMetadata=sandboxed",
+        "common --strategy=Clippy=sandboxed",
+        "common --strategy=rustdoc=sandboxed",
+        "common --strategy=rustfmt=sandboxed",
+        "common --strategy=CargoBuildScript=sandboxed",
+        "common --strategy=TestRunner=sandboxed",
+    ] {
+        assert!(
+            bazelrc.contains(setting),
+            "missing closed strategy {setting}"
+        );
+    }
+    for forbidden in [
+        "sandboxed,local",
+        "sandboxed,standalone",
+        "sandboxed,worker",
+        "sandboxed,process",
+    ] {
+        assert!(
+            !bazelrc.contains(forbidden),
+            "strategy fallback {forbidden}"
+        );
+    }
+
+    let rule = read_repo_file("bazel/rules/sandboxed_action.bzl");
+    assert!(rule.contains("d2b_validate_effective_strategies"));
+    assert!(rule.contains("D2B_STRATEGY_OVERRIDE_KEYS"));
+    assert!(rule.contains("d2b.execution_strategy"));
+    assert!(rule.contains("D2B_ACTION_NETWORK"));
+
+    let package = read_repo_file(BAZEL_NIX);
+    assert!(package.contains("D2B_BAZEL_STRATEGY_LOCK"));
+    assert!(package.contains("D2B-BZLNET-STRATEGY"));
+    assert!(package.contains("retry=make test-flake"));
+    assert!(package.contains("strategyOverrides = false"));
+}
+
+#[test]
+fn crash_plant_is_observable_and_has_beyond_ceiling_barrier() {
+    let plant = read_repo_file(PLANT);
+    for stage in [
+        "before-ready",
+        "after-ready",
+        "after-executed",
+        "during-grace",
+        "direct-descendant",
+        "double-fork-descendant",
+        "beyond-ceiling",
+    ] {
+        assert!(plant.contains(stage), "plant stage is missing {stage}");
+    }
+    assert!(plant.contains("--liveness-path"));
+    assert!(plant.contains("--barrier-path"));
+    assert!(plant.contains("O_WRONLY | O_NONBLOCK | O_CLOEXEC"));
+    assert!(plant.contains("O_RDONLY | O_CLOEXEC"));
+    assert!(plant.contains("signal(SIGTERM, SIG_IGN)"));
+    assert!(!plant.contains("open(\"/dev/null\""));
+    assert!(!plant.contains("D2B_SANDBOX_PLANT_BARRIER_FD"));
+
+    let mutated = plant.replace("O_WRONLY | O_NONBLOCK | O_CLOEXEC", "O_WRONLY");
+    assert!(
+        !mutated.contains("O_WRONLY | O_NONBLOCK | O_CLOEXEC"),
+        "liveness descriptor mutation must be observable"
+    );
+}
+
+#[test]
+fn sandbox_diagnostics_are_closed_and_retryable() {
+    let patch = read_repo_file(PATCH);
+    for code in [
+        "D2B-BZLEXEC-SANDBOX-NAMESPACE",
+        "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
+        "D2B-BZLEXEC-SANDBOX-MONITOR",
+        "D2B-BZLEXEC-SANDBOX-KILL",
+        "D2B-BZLEXEC-SANDBOX-REAP",
+        "D2B-BZLEXEC-SANDBOX-CEILING",
+        "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP",
+        "D2B-BZLEXEC-SANDBOX-CLEANUP",
+    ] {
+        assert!(patch.contains(code), "missing sandbox code {code}");
+    }
+    assert!(patch.contains("correction=Restore the pinned sandbox patch and policy"));
+    assert!(patch.contains("retry=make test-flake"));
+    assert!(patch.contains("result=failed;reuse=denied"));
+    assert!(!patch.contains("pid="));
+    assert!(!patch.contains("pgid="));
+    assert!(!patch.contains("run_id"));
+    assert!(!patch.contains("attempt_id"));
 }
 
 #[test]
