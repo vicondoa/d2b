@@ -6267,9 +6267,13 @@ whose complete witness directory chain is not yet durable, every consumer remain
 zero: basis construction and publication, decision selection, decision-pre, outcome
 intent, terminal outcome, final-absence proof, compaction, settlement, and selected-outcome
 projection. Only the final ancestor-sync case may classify the witness directory chain
-complete and admit the basis consumer. For each literal `<hook>` above, the expected
-fixture separately pins `<hook>/hook-removed`, `<hook>/consumer-ran`, and
-`<hook>/wrong-resume` poisons. The wrong-resume assertion requires write after either
+complete and admit the basis consumer. The expected fixture separately pins
+`<hook>/hook-removed` and `<hook>/wrong-resume` poisons. For every literal `<hook>` named
+above, the closed ten-member per-consumer poison-path family is
+`<hook>/consumer-ran/<basis-construction|basis-publication|decision-selection|decision-pre|outcome-intent|terminal-outcome|final-absence-proof|compaction|settlement|selected-outcome-projection>`.
+Each member is pinned independently; an aggregate `<hook>/consumer-ran` assertion is
+forbidden as a substitute, and no one per-consumer poison may satisfy another. The
+wrong-resume assertion requires write after either
 pre-link crash, reopen after link, parent sync after reopen, the first missing ancestor
 sync after parent sync or an intermediate ancestor sync, and basis consumption only after
 the final ancestor sync. Every fault hook, exact observable-prefix resume assertion,
@@ -6643,7 +6647,11 @@ construction or consumption and zero selected-outcome projection, then resumes e
 the first missing publication operation. The final ancestor-sync case alone may consume
 the witness and continue to basis publication. Every prefix, forbidden-effect assertion,
 resume point, hook, hook-removal poison, and early-consumer poison is independently
-enumerated.
+enumerated. For every literal `<hook>` named above, the closed ten-member per-consumer
+poison-path family is
+`<hook>/consumer-ran/<basis-construction|basis-publication|decision-selection|decision-pre|outcome-intent|terminal-outcome|final-absence-proof|compaction|settlement|selected-outcome-projection>`.
+Each member is pinned independently; an aggregate `<hook>/consumer-ran` assertion is
+forbidden as a substitute, and no one per-consumer poison may satisfy another.
 
 Separate fresh-process removal-integrity cases physically delete the exact durable intent
 before process start immediately after its matching independent commit witness is durable
