@@ -57,7 +57,6 @@
           target =
             pkgs.lib.systems.parse.tripleFromSystem
               (pkgs.lib.systems.parse.mkMuslSystem pkgs.stdenv.hostPlatform.parsed);
-          hostTarget = pkgs.stdenv.hostPlatform.rust.rustcTarget;
           targetToolchain =
             fenix.packages.${system}.targets.${target}.fromToolchainName {
               name = rustToolchainChannel;
@@ -81,7 +80,8 @@
           inherit target;
           staticRustFlags =
             "-C relocation-model=pie -C link-self-contained=yes "
-            + "-C linker=${staticToolchain}/lib/rustlib/${hostTarget}/bin/rust-lld";
+            + "-C linker=${pkgs.binutils.bintools}/bin/ld "
+            + "-C link-arg=-static-pie";
         };
       mkBazelSeccomp = system:
         if builtins.elem system systems then
