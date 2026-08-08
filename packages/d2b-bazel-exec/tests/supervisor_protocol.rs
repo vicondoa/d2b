@@ -20,7 +20,7 @@ use nix::{
         signal::{self, SigSet},
         stat::Mode,
     },
-    unistd::{mkfifo, pipe2},
+    unistd::{close, mkfifo, pipe2},
 };
 
 use d2b_bazel_exec::{
@@ -879,7 +879,7 @@ fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
         ]
         .concat()
     );
-    drop(barrier_writer);
+    close(barrier_writer).expect("close grace barrier writer");
     fs::remove_file(&barrier).expect("remove grace barrier FIFO");
     fs::remove_dir(&barrier_dir).expect("remove grace barrier directory");
 }
