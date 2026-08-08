@@ -4,6 +4,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # `microvm` flake input DROPPED per ADR 0018.
     # The d2b NixOS substrate owns its per-VM evaluator via
     # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
@@ -16,11 +21,54 @@
     };
   };
 
-  outputs = { self, nixpkgs, home-manager, ... }@inputs:
+  outputs = { self, nixpkgs, fenix, home-manager, ... }@inputs:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      rustToolchainFile = ./packages/rust-toolchain.toml;
+      rustToolchainManifestHash =
+        "sha256-OATSZm98Es5kIFuqaba+UvkQtFsVgJEBMmS+t6od5/U=";
+      rustToolchainChannel =
+        (builtins.fromTOML (builtins.readFile rustToolchainFile)).toolchain.channel;
+      rustToolchainComponents =
+        (builtins.fromTOML (builtins.readFile rustToolchainFile)).toolchain.components;
+      rustToolchainComponentNames = [ "cargo" "rustc" ] ++ rustToolchainComponents;
+      mkRustToolchainComponents = system:
+        fenix.packages.${system}.fromToolchainName {
+          name = rustToolchainChannel;
+          sha256 = rustToolchainManifestHash;
+        };
+      mkRustToolchain = system:
+        let
+          toolchain = mkRustToolchainComponents system;
+        in
+        toolchain.withComponents rustToolchainComponentNames;
+      mkRustPlatform = system: pkgs:
+        let
+          toolchain = mkRustToolchainComponents system;
+        in
+        pkgs.makeRustPlatform {
+          inherit (toolchain) cargo rustc;
+        };
+      mkStaticRustPlatform = system: pkgs:
+        let
+          toolchain = mkRustToolchainComponents system;
+          target = pkgs.pkgsStatic.stdenv.targetPlatform.rust.rustcTarget;
+          targetToolchain =
+            fenix.packages.${system}.targets.${target}.fromToolchainName {
+              name = rustToolchainChannel;
+              sha256 = rustToolchainManifestHash;
+            };
+          staticToolchain = fenix.packages.${system}.combine [
+            (toolchain.withComponents rustToolchainComponentNames)
+            targetToolchain.rust-std
+          ];
+        in
+        pkgs.pkgsStatic.makeRustPlatform {
+          rustc = staticToolchain;
+          cargo = staticToolchain;
+        };
       mkBazelSeccomp = system:
         if builtins.elem system systems then
           import ./pkgs/bazel-8.6.0-seccomp {
@@ -125,23 +173,20 @@
       # Without this each gate script provisions its own toolchain, which is
       # why tests/test-rust.sh, tests/test-policy.sh and
       # tests/tools/assert-pinned-tests.sh each carry their own nix-shell
-      # re-entry and rustup bootstrap. Enter this shell and those paths are
+      # re-entry and toolchain bootstrap. Enter this shell and those paths are
       # skipped entirely, because the tools they look for are already present.
       #
-      # rustup rather than pkgs.rustc: packages/rust-toolchain.toml pins a
-      # version nixpkgs does not carry (the pin is 1.97.0; this nixpkgs has
-      # 1.95.0), and rustup reads that file itself. Once the nixpkgs input
-      # advances far enough to supply the pinned release, rustup can be dropped
-      # for pkgs.rustc/pkgs.cargo and the pin will be served natively.
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         bazelSeccomp = mkBazelSeccomp system;
+        rustToolchain = mkRustToolchain system;
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
           packages = with pkgs; [
-            # Toolchain. rustup resolves packages/rust-toolchain.toml.
-            rustup
+            # Toolchain. Fenix resolves the repository-pinned manifest and
+            # supplies the exact compiler and cargo used by the gates.
+            rustToolchain
             stdenv.cc
             # Bazel is the repository-pinned 8.6.0 output with the Linux
             # sandbox seccomp and PID-namespace monitor patch. Do not add an
@@ -163,7 +208,7 @@
           ];
           shellHook = ''
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
-            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
+            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via Nix-pinned Fenix, sccache at $SCCACHE_DIR"
           '';
         };
         # Focused shell for the evaluation-only Nix-unit runner. Keeping this
@@ -180,6 +225,8 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        rustPlatform = mkRustPlatform system pkgs;
+        staticRustPlatform = mkStaticRustPlatform system pkgs;
         bazelSeccomp = mkBazelSeccomp system;
         bazelExecSupervisor =
           import ./pkgs/d2b-bazel-exec-supervisor { inherit pkgs; };
@@ -188,7 +235,7 @@
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
         '';
-        rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
+        rustWorkspace = args: rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
@@ -205,7 +252,7 @@
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
         } // args);
-        brokerHostPackage = pkgs.rustPlatform.buildRustPackage {
+        brokerHostPackage = rustPlatform.buildRustPackage {
           pname = "d2b-priv-broker";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
@@ -238,7 +285,7 @@
           lockFile = ./packages/Cargo.guest.lock;
         };
         guestStaticPackage = packageName: binName:
-          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+          staticRustPlatform.buildRustPackage {
             pname = "${binName}-static";
             version = "0.0.0-bootstrap";
             src = guestRustPackagesSrc;
@@ -274,7 +321,7 @@
             '';
           };
         guestShellRunnerStatic =
-          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+          staticRustPlatform.buildRustPackage {
             pname = "d2b-guest-shell-runner-static";
             version = "0.0.0-bootstrap";
             src = rustPackagesSrc;
@@ -298,7 +345,7 @@
             RUSTFLAGS = "-C relocation-model=pie -C link-arg=-static-pie";
             nativeBuildInputs = [
               pkgs.pkgsStatic.binutils
-              pkgs.pkgsStatic.rustPlatform.bindgenHook
+              staticRustPlatform.bindgenHook
             ];
             postInstall = ''
               readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
@@ -481,6 +528,8 @@
       # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        rustToolchain = mkRustToolchainComponents system;
+        rustPlatform = mkRustPlatform system pkgs;
         lib = pkgs.lib;
         bazelSeccomp = mkBazelSeccomp system;
         bazelExecSupervisor =
@@ -758,7 +807,7 @@
           cp -r ${./tests/fixtures} $out/tests/fixtures
         '';
         guestRustPackagesSrc = mkGuestRustPackagesSrc pkgs;
-        rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
+        rustWorkspace = args: rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
@@ -779,8 +828,6 @@
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
         } // args);
-        rustToolchainChannel =
-          (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
@@ -1936,7 +1983,7 @@
 
         rust-clippy = rustWorkspace {
           pname = "d2b-rust-clippy";
-          nativeBuildInputs = [ pkgs.clippy ];
+          nativeBuildInputs = [ rustToolchain.clippy ];
           cargoBuildFlags = [
             "--workspace"
             "--exclude"
@@ -2088,7 +2135,7 @@
         # the crate registry and override the sccache wrapper that
         # the repo-local .cargo/config.toml enables.
         rust-deny = let
-          mainVendor = pkgs.rustPlatform.importCargoLock {
+          mainVendor = rustPlatform.importCargoLock {
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
@@ -2103,7 +2150,11 @@
             directory = "${vendorDir}"
           '';
         in pkgs.runCommand "d2b-rust-deny" {
-          nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
+          nativeBuildInputs = [
+            pkgs.cargo-deny
+            rustToolchain.cargo
+            rustToolchain.rustc
+          ];
         } ''
           export HOME="$TMPDIR"
 
@@ -2134,7 +2185,7 @@
         '';
 
         guest-rust-deny = let
-          guestVendor = pkgs.rustPlatform.importCargoLock {
+          guestVendor = rustPlatform.importCargoLock {
             lockFile = ./packages/Cargo.guest.lock;
           };
           cargoConfig = ''
@@ -2144,7 +2195,11 @@
             directory = "${guestVendor}"
           '';
         in pkgs.runCommand "d2b-guest-rust-deny" {
-          nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
+          nativeBuildInputs = [
+            pkgs.cargo-deny
+            rustToolchain.cargo
+            rustToolchain.rustc
+          ];
         } ''
           export HOME="$TMPDIR"
           ws="$TMPDIR/guest"
