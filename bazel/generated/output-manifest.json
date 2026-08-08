@@ -36,7 +36,7 @@
     },
     {
       "path": "bazel/generated/no-shell-inventory.json",
-      "sha256": "dcedd3e38a58ba8a75aab4a98454f750469f22a94a88ecfb80e6bbe4b5008db3"
+      "sha256": "6e9ce040fd4e8df6d6ee1d660ebda5829ac6ffab5eedbb3c459d1bbd62facbfb"
     },
     {
       "path": "bazel/generated/package-policy-targets.bzl",
@@ -48,7 +48,7 @@
     },
     {
       "path": "bazel/generated/source-census.json",
-      "sha256": "8255ddf4d68e9e77b6c4da8ecf4d99cf02b5155c86d40df319ec467f5d8e1d38"
+      "sha256": "8bd36bb0c1095363e5783ff63667f73cfc5979e48358c29f1e14e9bc2d770f3d"
     }
   ],
   "schemaVersion": 1,
