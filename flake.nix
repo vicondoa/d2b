@@ -83,7 +83,8 @@
             + "-C linker=${pkgs.llvmPackages.clang-unwrapped}/bin/clang "
             + "-C link-arg=--target=${target} "
             + "-C link-arg=-fuse-ld=${pkgs.llvmPackages.lld}/bin/ld.lld "
-            + "-C link-arg=-static-pie";
+            + "-C link-arg=-pie "
+            + "-C link-arg=-Wl,--no-dynamic-linker";
         };
       mkBazelSeccomp = system:
         if builtins.elem system systems then
