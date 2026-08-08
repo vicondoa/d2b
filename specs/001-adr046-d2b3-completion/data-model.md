@@ -2932,8 +2932,10 @@ single-component leaf, and every opened descriptor carries `O_CLOEXEC`.
 Every durable private-state change beneath or governing this root is a typed broker operation
 or a private sealed suboperation reached from one. The closed set is
 `EnsureHostGenerationImmutablePublicationRootV1`,
+`PublishHostGenerationImmutableAuditContinuityReplayKeyV1`,
 `ReserveHostGenerationImmutableAuditCapacityV1`,
 `BindHostGenerationImmutableAuditRetentionAnchorV1`,
+`BindHostGenerationImmutableAuditContinuitySourceEvidenceV1`,
 `RepairHostGenerationImmutableAuditContinuityV1`,
 `CompactHostGenerationImmutableAuditContinuityV1`,
 `PublishHostGenerationImmutableAuditBackupV1`,
@@ -2954,8 +2956,8 @@ root has these simultaneous subset and aggregate ceilings:
 | --- | --- | --- | --- |
 | immutable backup members | 256 records and 16,777,216 encoded bytes per intent | 64 intents, 4,096 members, 268,435,456 bytes | current intent unprunable; replaced intent day 30 through mandatory day 90 |
 | restoration private evidence, pre, provenance, settlement, and outcome | 8 records and 1,048,576 bytes per restoration attempt; 256 attempts per intent | included in 32,768 records and 536,870,912 bytes | body-bearing private evidence follows its replaced backup set and is absent by day 90 after a complete exported digest audit |
-| continuity-repair body evidence | exactly 1 evidence record and at most 131,072 encoded bytes per attempt; 256 attempts per intent | included in 32,768 records and 536,870,912 bytes | retained through repair replay; removed only by the typed continuity-compaction operation after governed-set absence and the outcome-specific export predicate below |
-| retention anchors, immutable watermarks, reservations, continuity replay metadata, and prune census state | 1 current anchor, 1 current watermark, 1 reservation ledger, and 2,048 records per intent | included in 32,768 records and 536,870,912 bytes | compact only through the typed continuity-compaction operation after governed-set absence and the outcome-specific fixed-audit export predicate |
+| continuity-repair body evidence and broker-to-source replay bindings | exactly 1 evidence record, 1 binding record, and 1 binding pre/outcome audit pair per attempt, at most 137,216 encoded bytes together per attempt, and 256 attempts per intent | included in 32,768 records and 536,870,912 bytes | retained through exact repair replay; removed only by the typed continuity-compaction operation after governed-set absence and the outcome-specific export predicate below |
+| retention anchors, immutable watermarks, reservations, replay-key identity, settlement prefixes, compaction metadata, and prune census state | 1 current anchor, 1 current replay key, at most 256 immutable watermarks, 1 reservation ledger, 256 retained repair/settlement/compaction prefixes, and 256 per-member reduced-census records per intent | included in 32,768 records and 536,870,912 bytes | the current replay key and current watermark are not compactable; every other leaf compacts only through the typed continuity-compaction operation after governed-set absence, current-head proof, and the outcome-specific fixed-audit export predicate |
 | pending fixed-field audit staging for root operations | 8,192 records and 67,108,864 bytes total | included in 32,768 records and 536,870,912 bytes | append-only export to the existing immutable broker audit segment owner; staging removal only after segment file and directory durability and configured audit retention |
 
 The root-wide record and byte ceilings include every class rather than counting the backup
@@ -2963,37 +2965,53 @@ subset alone. A reservation failure precedes mutation and is typed degradation. 
 operation audit rotates only through the existing append-only broker audit segment owner,
 whose record/byte segment bounds and retention are enforced before old durable segments are
 removed. No record is overwritten, truncated, or silently dropped to regain capacity.
-Every accepted replacement reserves its worst-case later continuity-repair evidence,
-immutable watermark, fixed audit, settlement, and compaction charge in
-`rootRecordDelta`/`rootEncodedByteDelta`; mandatory continuity repair therefore does not
-depend on finding new general capacity at day 90. The reservation ledger also enforces the
-continuity evidence one-record/131,072-byte and 256-attempt subset ceilings. A checked
-subset or aggregate conversion failure occurs before capacity pre-audit.
+Every accepted replacement reserves the complete worst-case retained prefix for all 256
+admitted continuity-repair attempts, rather than one future attempt. This includes every
+broker-to-source binding, evidence record, optional immutable watermark, repair and
+settlement record, compaction record, failed or successful prune pre/outcome pair, and
+per-member reduced-census record in `rootRecordDelta`/`rootEncodedByteDelta`; mandatory
+continuity repair therefore does not depend on finding new general capacity at day 90.
+The reservation ledger separately enforces the one-evidence-record/131,072-byte per-attempt
+ceiling, one source-binding record per attempt, 256-attempt per-intent ceiling, 256
+first-time member-absence proofs, and 512 total member-prune attempts. A checked subset or
+aggregate conversion failure occurs before capacity pre-audit.
 
 `ContinuityReplacementFutureChargeV1` is the fixed conservative charge added to every
-accepted replacement. It is independent of the number of members actually present, so a
-replacement with one member still reserves the 256-member mandatory-prune worst case:
+accepted replacement. It is independent of the number of members actually present. The
+first block reserves every retained per-attempt prefix for 256 attempts. The second block
+reserves up to 256 degraded member-prune attempts plus up to 256 first-time
+`Pruned | AlreadyPruned` absence proofs across those attempts; an already proven absence is
+reused and may not append another `AlreadyPruned` record. A repair attempt that emits a
+degraded member-prune outcome settles before another member is attempted. These bounds make
+512 the exact maximum number of member-prune pre/outcome pairs and 256 the exact maximum
+number of reduced-census records:
 
-| Reserved future class | Records | Encoded bytes |
-| --- | ---: | ---: |
-| one maximum continuity-evidence body | 1 | 131,072 |
-| one maximum immutable continuity watermark | 1 | 1,024 |
-| continuity-repair fixed pre/outcome audit | 2 | 4,096 |
-| 256 mandatory-prune pre/outcome audit pairs | 512 | 1,048,576 |
-| one durable exact-outcome settlement intent | 1 | 2,048 |
-| compaction pre/outcome audit and reduced census | 3 | 6,144 |
-| whole-set mandatory-prune target and proof metadata | 2 | 4,096 |
-| **Exact future charge** | **522** | **1,197,056** |
+| Reserved future class | Multiplier | Records | Encoded bytes |
+| --- | ---: | ---: | ---: |
+| one broker-to-source replay-binding record and fixed pre/outcome audit | 256 | 768 | 1,572,864 |
+| one maximum continuity-evidence body | 256 | 256 | 33,554,432 |
+| one maximum immutable continuity watermark | 256 | 256 | 262,144 |
+| continuity-repair fixed pre/outcome audit | 256 | 512 | 1,048,576 |
+| settlement decision-pre and exact-outcome intent | 256 | 512 | 1,048,576 |
+| compaction pre/outcome audit and attempt-census reduction | 256 | 768 | 1,572,864 |
+| compaction target-set, current-head, and final-absence metadata | 256 | 768 | 1,572,864 |
+| whole-set mandatory-prune target and proof metadata | 256 | 512 | 1,048,576 |
+| member-prune pre/outcome audit pair | 512 | 1,024 | 2,097,152 |
+| per-member reduced-census record | 256 | 256 | 524,288 |
+| **Exact future charge** | - | **5,632** | **44,302,336** |
 
-The reservation adds exactly 522 to `rootRecordDelta` and 1,197,056 to
+The reservation adds exactly 5,632 to `rootRecordDelta` and 44,302,336 to
 `rootEncodedByteDelta`, using checked arithmetic, in addition to the replacement's present
 backup and anchor charge. Later continuity repair debits this reservation and never repeats
 general-capacity admission. Unrelated publication cannot consume reserved capacity.
 Read-independent tests calculate every row literally rather than importing production
 constants. They admit an exact record and byte boundary, refuse one record short and one
-byte short, exhaust all unreserved root capacity after replacement, and then complete
-mandatory repair, whole-set prune, settlement, and compaction solely from the reservation.
-One omission and one count-change poison per row must fail before the lifecycle case runs.
+byte short, exhaust all unreserved root capacity after replacement, retain 255 independently
+settled degraded prefixes with their failed member-prune records, and then complete the
+256th repair, whole-set prune, settlement, and compaction solely from the reservation.
+Separate exact-capacity fresh-process cases cover repeated success, degraded settlement,
+partial prune, restart, later repair, final prune, settlement, and compaction. One omission
+and one multiplier/count-change poison per row must fail before the lifecycle case runs.
 
 Capacity-control audit cannot recursively reserve itself. Initial root creation therefore
 atomically installs and charges a broker-private standing capacity-control reserve of eight
@@ -3842,9 +3860,70 @@ request is only a wake signal. Under the coordinator lock, the broker obtains co
 from its configured authoritative non-caller source, validates that source against the
 disposition-pinned authority and prior private watermark, and only then creates the sealed
 typed operation `RepairHostGenerationImmutableAuditContinuityV1`. The configured source
-contract has two closed methods: acquire one canonical evidence value, and replay that exact
-value by a broker-derived `ContinuityEvidenceReplayHandleV1`. It may not implement
-"latest", caller-selected, timestamp-selected, or fallback lookup.
+contract has one closed, crash-stable broker-to-source binding protocol, entered only after
+the replay key is complete and that attempt's reserved-capacity slice is debited:
+
+1. `pin_acquire(ContinuitySourceBindingAttemptIdV1)` durably creates or exactly reopens one
+   source-private no-replace acquisition record and returns its one canonical evidence
+   value. The source file and containing directory are durable before return.
+2. `resume_pinned(ContinuitySourceBindingAttemptIdV1)` returns only that byte-identical
+   pinned acquisition and cannot select current or newer evidence.
+3. `bind_replay(ContinuityEvidenceReplayBindingV1)` durably associates the broker-supplied
+   opaque `ContinuityEvidenceReplayHandleV1` with that pinned acquisition, exact
+   `authoritativeEvidenceSha256`, source authority/version, and binding attempt. It returns
+   `ContinuityEvidenceReplayBindingReceiptV1` only after the binding file and directory are
+   durable, and is callable only from the typed broker operation after its fixed pre-audit.
+4. `replay(ContinuityEvidenceReplayHandleV1)` returns only the evidence named by that
+   durable association.
+
+The source cannot derive the HMAC handle and cannot accept a handle without the exact
+source-private pinned acquisition. It may not implement "latest", caller-selected,
+timestamp-selected, generic enumeration, fallback lookup, handle replacement, or rebinding.
+The binding attempt is broker-derived before acquisition from the coordinator-private id,
+disposition authority, retention epoch, prior watermark, and repair sequence, so restart
+can resume a pin without knowing or selecting evidence bytes:
+
+```text
+ContinuitySourceBindingAttemptIdV1 =
+  SHA-256("d2b:host-generation:audit-continuity-source-binding-attempt:v1\0" ||
+  coordinator_private_id || disposition_authority_sha256 ||
+  retention_epoch_sha256 || prior_watermark_sha256 ||
+  continuity_repair_sequence_u64_be)
+
+continuitySourceBindingReceiptSha256 =
+  SHA-256("d2b:audit:host-generation:continuity-source-binding-receipt:v1\0" ||
+  continuity_source_binding_attempt_id ||
+  continuity_evidence_replay_handle_sha256 ||
+  authoritative_evidence_sha256 || source_authority_sha256 ||
+  source_version_u32_be || source_durability_generation_u64_be)
+```
+
+Every digest or id member is 32 bytes, the sequence and durability generation are
+eight-byte big-endian integers, and the source version is four-byte big-endian. After
+pinned acquisition and handle derivation, sealed typed operation
+`BindHostGenerationImmutableAuditContinuitySourceEvidenceV1` first publishes fixed
+pre-audit binding the attempt, handle digest, evidence digest, and expected
+authority/version. It then invokes `bind_replay`. After the source receipt, it publishes a
+broker-private no-replace
+`HostGenerationImmutableAuditContinuitySourceBindingV1` containing exactly the binding
+attempt, handle digest, evidence digest, authority/version, durability generation, and
+receipt digest, followed by the matching fixed outcome. It contains neither evidence bytes
+nor the private handle. The broker binding is file-and-directory durable before
+continuity-repair pre-audit or any call to `replay`; that pre-audit includes
+`continuitySourceBindingReceiptSha256`. Replay must match both durable source and broker
+records. A source-only pin or binding before broker final publication is resumed by binding
+attempt and fixed broker pre; it can never authorize replay or a repair prefix by itself.
+The binding pre/final/outcome are mandatory subrecords of the existing
+`continuity-repair-pre` boundary class and add no registry id.
+
+Read-independent fresh-process cases crash before and after source pin creation, source
+file sync, source directory sync, broker-binding pre-audit, handle association, association
+file sync, association directory sync, every broker-binding-final publication boundary,
+and broker-binding outcome. Each resumes the same binding attempt, handle, evidence, and
+receipt. Missing, replaced, rebound, partial, wrong-authority, wrong-version,
+wrong-generation, handle-mismatched, evidence-mismatched, source-only, or broker-only state
+is a distinct closed no-write degradation and admits neither replay nor continuity-repair
+pre-audit. One hook and removal poison covers every prefix and mismatch.
 
 The coordinator method returns one private
 `BindHostGenerationImmutableAuditContinuityRepairPermit<'coordinator>` that owns an
@@ -3861,13 +3940,39 @@ Each negative has its own compile-fail or API assertion and shrinkage poison. Di
 root, backup-administrator claims, caller-supplied evidence, and previously consumed permits
 cannot mint another permit.
 
-Root creation also generates one CSPRNG-derived 32-byte
-`brokerPrivateContinuityReplayKey` and publishes it file-and-directory durably in the
-broker-private sealed root before continuity repair can be admitted. It is persistent across
-broker process death, is never rotated while a retained epoch or continuity prefix exists,
-and is never exported, audited, serialized, logged, displayed, included in a response,
-passed to the daemon, or exposed by `Debug`. Missing, short, duplicated, replaced, or
-identity-mismatched key state degrades the root and admits no source replay. An audit reader
+Root creation also invokes the sealed typed suboperation
+`PublishHostGenerationImmutableAuditContinuityReplayKeyV1`. Its capacity is charged before
+its fixed pre-audit, and the stable private attempt identity binds the coordinator-private
+id, immutable root identity, root generation, and operation generation without binding,
+hashing, or auditing the key bytes. Only after pre-audit does it obtain exactly 32 bytes
+from the broker CSPRNG into an unnamed `O_TMPFILE|O_RDWR|O_CLOEXEC` inode. It enforces a
+root-owned regular file, mode `0600`, link count one, expected mount/device, and no ACL,
+extended security label, symlink, magic-link, or cross-mount substitution; writes and
+file-syncs exactly 32 bytes; procfs-fd links the inode fd-relative to one no-replace leaf;
+final-reopens with `O_RDONLY|O_NOFOLLOW|O_CLOEXEC`; revalidates the same inode, posture, and
+exact bytes; syncs the held parent; and only then publishes the fixed outcome. The
+broker-private root census stores the accepted mount/device/inode identity, never a key
+digest or key bytes.
+
+`ContinuityReplayKeyPublicationPrefixV1` is exactly `Absent | PreAudited | InodeWritten |
+FileDurable | FinalLinked | FinalReopened | ParentDurable | Complete`. Pre-link restart may
+discard the unnamed inode and resample because no key became name-durable. Post-link restart
+must reopen and reuse the exact final, finish the missing parent sync/outcome, and never
+sample, relink, rotate, or replace. An exact `Complete` replay is zero-write. The root is
+unusable and source pin/bind/replay is denied until `Complete`. Key pre/final/outcome are
+mandatory subrecords of the existing ensure-root boundary class and add no registry id.
+
+The resulting `brokerPrivateContinuityReplayKey` is persistent across broker process death,
+is never rotated while a retained epoch or continuity prefix exists, and is never exported,
+audited, serialized, logged, displayed, included in a response, passed to the daemon, or
+exposed by `Debug`. After any completed key publication, missing, short, long, duplicated,
+hard-linked, replaced, wrong-inode, wrong-owner/group/mode/type/mount/device, symlink,
+magic-link, ACL/label-bearing, partial-final, or identity-mismatched key state degrades the
+root and admits no source pin, binding, replay, repair, prune, settlement, or compaction.
+It is never recreated as recovery. Independent ensure-root first-run and fresh-process
+restart cases cover capacity refusal, key pre-audit, CSPRNG failure, every prefix,
+outcome-publication pending, response loss, secure-posture revalidation, exact completed
+reopen, and every missing/partial/replaced poison before descendant use. An audit reader
 therefore has every audit projection and still cannot derive or test a private replay
 handle.
 
@@ -3901,24 +4006,28 @@ continuityRepairAttemptSha256 =
 Every id and digest preimage member is exactly 32 bytes except the eight-byte big-endian
 sequence. The handle is deterministically reconstructible only from the persistent sealed
 key plus the disposition, epoch, prior watermark, sequence, and evidence digest. It is not
-source-selected and remains broker-private. The operation identity is therefore
-reconstructible after a pre-only crash without recovering a request frame or asking a
-changed source to choose bytes, while audit-only inputs are insufficient.
+source-selected and is disclosed only as an opaque value to the disposition-pinned source
+through the typed binding call; it is otherwise broker-private. The operation identity is
+therefore reconstructible after a pre-only crash without recovering a request frame or
+asking a changed source to choose bytes, while audit-only inputs are insufficient.
 
-Before pre-audit, the already reserved replacement charge must cover exactly one continuity
-evidence record, its encoded bytes, one immutable watermark publication, fixed audit and
-settlement records, and later compaction. The operation refuses through the capacity
-controller before continuity pre-audit if the one-record/131,072-byte per-attempt or
-256-attempt per-intent subset is exceeded. An audited capacity refusal may append only its
-capacity pre/outcome pair; it mutates no continuity prefix, watermark, prune state, or
-covered operation. Standing-reserve exhaustion is the separate no-audit admission refusal
-defined above.
+Before source binding or repair pre-audit, the already reserved replacement charge debits
+that attempt's exact slice for one broker binding plus its pre/outcome pair, one continuity
+evidence record and encoded bytes, one optional immutable watermark, fixed repair and
+settlement records, target/head/final-absence metadata, and later compaction. The operation
+refuses through the capacity controller before source-binding pre-audit if the
+one-record/131,072-byte evidence, one-binding-record, 256-attempt per-intent, or other
+reserved subset is exceeded. An audited capacity refusal may append only its capacity
+pre/outcome pair; it mutates no source binding, continuity prefix, watermark, prune state,
+or covered operation. Standing-reserve exhaustion is the separate no-audit admission
+refusal defined above.
 
 The operation first publishes
 `coordinator-immutable-audit-continuity-repair/pre-mutation` with exactly the fixed edge id,
 `continuityRepairAttemptSha256`, `retentionEpochSha256`, `priorWatermarkSha256`,
 `authoritativeEvidenceSha256`, `continuityEvidenceReplayHandleSha256`,
-`continuityRepairSequence`, and exactly one nested deadline plan:
+`continuitySourceBindingReceiptSha256`, `continuityRepairSequence`, and exactly one nested
+deadline plan:
 
 ```text
 ContinuityRepairDeadlinePlanV1 =
@@ -4049,18 +4158,35 @@ terminal outcome and forbidden as a substitute for a degraded terminal outcome:
 
 | Settled terminal outcome | Exact compaction prerequisite |
 | --- | --- |
-| `RepairedBeforeDay90` | matching pre, evidence, immutable watermark final, repaired outcome, durable governed-set absence, and file-and-directory-durable export of the pre, watermark, outcome, and every later prune record that proves absence |
-| `RepairedAfterMandatoryPrune` | matching pre, evidence, whole-set mandatory-prune proof, immutable watermark final, repaired outcome, empty governed census, and file-and-directory-durable export of the pre, every member prune pre/outcome, watermark, outcome, and whole-set proof |
-| `DegradedBeforeDay90` | matching pre and degraded outcome, zero accepted watermark, durable governed-set absence, and file-and-directory-durable export of the pre, outcome, and every later prune record that proves absence |
-| `DegradedDay90BeforePrune` | matching pre and degraded outcome, zero accepted watermark, later durable governed-set absence, and file-and-directory-durable export of the pre, outcome, and every later prune record that proves absence |
-| `DegradedDay90AfterPrune` | matching pre, whole-set mandatory-prune proof, degraded outcome, zero accepted watermark, empty governed census, and file-and-directory-durable export of the pre, every member prune pre/outcome, outcome, and whole-set proof |
+| `RepairedBeforeDay90` | matching source/broker replay binding, pre, exact durable evidence, immutable watermark final, repaired outcome, durable governed-set absence, final absence proof, and file-and-directory-durable export of the binding pre/final/outcome, repair pre, watermark, settlement records, outcome, every partial or later prune pre/outcome and reduced-census record, and final absence proof |
+| `RepairedAfterMandatoryPrune` | matching source/broker replay binding, pre, exact durable evidence, whole-set mandatory-prune proof, immutable watermark final, repaired outcome, empty governed census, final absence proof, and file-and-directory-durable export of the binding pre/final/outcome, repair pre, target, every prune pre/outcome and reduced-census record, whole-set proof, watermark, settlement records, outcome, and final absence proof |
+| `DegradedBeforeDay90` | matching source/broker replay binding and pre, evidence state proven as either never durable or exact durable, degraded outcome, zero accepted watermark, durable governed-set absence, final absence proof, and file-and-directory-durable export of the binding pre/final/outcome, repair pre, settlement records, outcome, every partial or later prune pre/outcome and reduced-census record, and final absence proof |
+| `DegradedDay90BeforePrune` | matching source/broker replay binding and pre, evidence state proven as either never durable or exact durable, degraded outcome, zero accepted watermark, later durable governed-set absence, final absence proof, and file-and-directory-durable export of the binding pre/final/outcome, repair pre, target, settlement records, outcome, every prune pre/outcome and reduced-census record both before and after that degraded outcome, every failed prune outcome, and final absence proof |
+| `DegradedDay90AfterPrune` | matching source/broker replay binding, pre, evidence state proven as either never durable or exact durable, whole-set mandatory-prune proof, degraded outcome, zero accepted watermark, empty governed census, final absence proof, and file-and-directory-durable export of the binding pre/final/outcome, repair pre, target, every prune pre/outcome and reduced-census record including failed attempts, whole-set proof, settlement records, outcome, and final absence proof |
 
-An absent evidence leaf is valid only when the settled attempt never reached evidence
-durability; it yields `AlreadyCompacted` after the same outcome-specific checks. Pending
-outcome publication, a missing terminal outcome, an incomplete repair, a present governed
-member, file-only export, a missing or mismatched pre, a missing or mismatched required
-watermark, an unexpected watermark on a degraded branch, a missing or mismatched outcome,
-or a missing or mismatched mandatory-prune export refuses before compaction pre-audit.
+`ContinuityEvidenceDurabilityStateV1` is exactly `NeverDurable | PresentExact |
+AbsentAfterBoundCompactionUnlink`. `NeverDurable` requires the durable repair publication
+registry to prove that no evidence final was ever linked. `PresentExact` requires the
+expected final identity and canonical digest. `AbsentAfterBoundCompactionUnlink` is legal
+only while replaying an already durable compaction pre whose target set included that exact
+evidence leaf; it still requires anchored-parent revalidation and sync before census
+reduction. Evidence that was durable but is missing before compaction pre-audit, evidence
+absent under a different compaction pre, a mismatched final, or an unprovable
+never-durable state is an integrity degradation, not `AlreadyCompacted`. `NeverDurable`
+still returns `Compacted` when replay binding or census metadata is removed.
+`AlreadyCompacted` is available only after a complete matching prior compaction outcome and
+matching reduced census.
+
+Pending settlement, a missing terminal outcome, an incomplete repair, a present governed
+member, file-only export, a missing or mismatched binding, pre, evidence, settlement
+record, outcome, final absence proof, partial or later prune record, per-member
+reduced-census record, required watermark, target, or mandatory-prune proof, an unexpected
+watermark on a degraded branch, or any malformed replay-key state refuses before
+compaction pre-audit. Fresh-process negatives independently cover missing, short, long,
+partial, replaced, and identity-mismatched replay keys; evidence-never-durable,
+evidence-durable-present, illicit missing durable evidence, mismatched evidence,
+post-bound-unlink absence, and unbound absence; and first, intermediate, and final member
+prune export omission or mismatch. Every negative has a separate hook and removal poison.
 
 Only the typed sealed operation
 `CompactHostGenerationImmutableAuditContinuityV1` may remove continuity evidence, replay
@@ -4068,9 +4194,10 @@ metadata, a no-longer-current watermark, or their census entries. The coordinato
 private
 `CompactHostGenerationImmutableAuditContinuityPermit<'coordinator>` only after validating
 one row above. The permit owns an invariant exclusive borrow and private instance brand,
-binds the exact terminal outcome and export set, and is consumed by value at dispatch. It
-has no public constructor, field, accessor, `Clone`, `Copy`, `Default`, `From`, `TryFrom`,
-serde, conversion, byte/digest/fd reconstruction, cross-coordinator use, lifetime escape, or
+binds the exact terminal outcome, complete unlink target set, current-head proof, evidence
+durability state, and export set, and is consumed by value at dispatch. It has no public
+constructor, field, accessor, `Clone`, `Copy`, `Default`, `From`, `TryFrom`, serde,
+conversion, byte/digest/fd reconstruction, cross-coordinator use, lifetime escape, or
 second-dispatch surface. Compiler and API negatives cover each route independently.
 
 Its stable identity is:
@@ -4080,56 +4207,239 @@ ContinuityCompactionAttemptIdV1 =
   SHA-256("d2b:host-generation:audit-continuity-compaction-attempt:v1\0" ||
   coordinator_private_id || continuity_repair_attempt_sha256 ||
   terminal_outcome_record_sha256 || governed_set_final_census_sha256 ||
-  required_export_set_sha256)
+  required_export_set_sha256 || continuity_compaction_target_set_sha256 ||
+  current_continuity_head_proof_sha256)
 
 continuityCompactionAttemptSha256 =
   SHA-256("d2b:audit:host-generation:continuity-compaction-attempt:v1\0" ||
   private_continuity_compaction_attempt_id)
 ```
 
-Each member is exactly 32 bytes. `terminalOutcomeRecordSha256` is the digest of the validated
-canonical immutable terminal record. `requiredExportSetSha256` is
+Each member is exactly 32 bytes. The canonical terminal digest is outcome-specific:
+
+```text
+terminalOutcomeRecordSha256 =
+  SHA-256("d2b:host-generation:continuity-terminal-outcome-record:v1\0" ||
+  continuity_repair_attempt_sha256 || terminal_outcome_tag_u8 ||
+  deadline_plan_tag_u8 || deadline_plan_payload ||
+  terminal_outcome_payload)
+
+deadline_plan_payload =
+    BeforeDay90: empty
+  | Day90Reached: mandatory_prune_target_sha256
+
+terminal_outcome_payload =
+    RepairedBeforeDay90: repaired_watermark_sha256
+  | RepairedAfterMandatoryPrune:
+      mandatory_prune_proof_sha256 || repaired_watermark_sha256
+  | DegradedBeforeDay90 | DegradedDay90BeforePrune:
+      failure_branch_tag_u8 || failure_class_tag_u8
+  | DegradedDay90AfterPrune:
+      mandatory_prune_proof_sha256 ||
+      failure_branch_tag_u8 || failure_class_tag_u8
+```
+
+Terminal outcome tags are exactly `0x01`, `0x02`, `0x81`, `0x82`, and `0x83` in the
+variant order above. Deadline plan tags are exactly `0x01` before day 90 and `0x02` day 90
+reached; only `0x02` carries the 32-byte mandatory target. Failure branch tags are exactly
+`0x01` source, `0x02` publication,
+and `0x03` retention. Source class tags are `0x01` unavailable and `0x02` conflict.
+Terminal publication class tags are `0x01` hierarchy, `0x02` write, `0x03` file-sync,
+`0x04` link, `0x05` reopen, `0x06` directory-sync, `0x07` conflict, and `0x08`
+audit-publication. Terminal retention class tags are `0x01` clock-rollback, `0x02`
+clock-watermark, `0x03` epoch-invalid, `0x04` clock-forward-discontinuity, `0x05`
+clock-continuity-ambiguous, `0x06` clock-overflow, `0x07` unlink, `0x08`
+directory-sync, `0x09` census, `0x0a` audit-publication, `0x0c`
+standing-reserve-missing, `0x0d` standing-reserve-overdrawn, `0x0e`
+standing-reserve-duplicated, and `0x0f` standing-reserve-unaccounted. Tag `0x0b` is
+unassigned: settlement failure is never a terminal degradation.
+
+For every nonterminal export member, its `recordSha256` is:
+
+```text
+recordSha256 =
+  SHA-256("d2b:host-generation:continuity-compaction-export-record:v1\0" ||
+  record_kind_tag_u8 || canonical_record_length_u32_be ||
+  canonical_record_bytes)
+```
+
+The terminal member's `recordSha256` is exactly `terminalOutcomeRecordSha256`, not a second
+hash. Export record tags are closed: `0x01` source-binding pre, `0x02` source-binding
+final, `0x03` source-binding outcome, `0x04` repair pre, `0x05` mandatory-prune target,
+`0x10` prune pre, `0x11` prune outcome, `0x12`
+reduced census, `0x13` mandatory-prune proof, `0x20` repaired watermark, `0x30`
+settlement decision-pre, `0x31` outcome intent, `0x32` terminal outcome, and `0x40`
+final absence proof.
+
+`requiredExportSetSha256` is
 `SHA-256("d2b:host-generation:continuity-compaction-export-set:v1\0" ||
 record_count_u16_be || for each protocol-ordered record:
 record_kind_tag_u8 || record_sha256)` over exactly the row-specific records above; the
 count is two-byte big-endian, tags are one byte, digests are 32 bytes, and duplicates or
-reordering refuse.
+reordering refuse. Protocol order is binding pre, binding final, binding outcome, repair pre,
+optional mandatory target, all prune records by durable prune-history ordinal with each pre
+immediately followed by its outcome and then its reduced census when one committed,
+optional mandatory proof, optional repaired watermark, settlement decision-pre, outcome
+intent, terminal outcome, and final absence proof. This semantic order includes prune
+history produced after a degraded terminal outcome; wall-clock append order is not
+substituted.
+
+After the governed set becomes empty, the broker publishes one immutable
+`ContinuityGovernedSetFinalAbsenceProofV1`:
+
+```text
+continuityPruneHistorySha256 =
+  SHA-256("d2b:host-generation:continuity-prune-history:v1\0" ||
+  history_count_u16_be ||
+  for each durable prune-history ordinal:
+    continuity_repair_attempt_sha256 || prune_attempt_sha256 ||
+    prune_outcome_sha256 || resulting_census_sha256)
+
+continuityFinalAbsenceProofSha256 =
+  SHA-256("d2b:host-generation:continuity-final-absence-proof:v1\0" ||
+  retention_epoch_sha256 || terminal_continuity_repair_attempt_sha256 ||
+  governed_set_initial_census_sha256 || continuity_prune_history_sha256 ||
+  governed_set_final_census_sha256)
+```
+
+Each history entry contains four 32-byte members; the count is two-byte big-endian. The
+history includes every failed, partial, and later successful prune attempt across repair
+attempts, in durable ordinal order, and the final census must freshly canonicalize as empty
+for the same epoch. Omitting the first, intermediate, or final history entry, substituting a
+later successful outcome for an earlier failure, or citing a nonempty/mismatched census
+refuses compaction.
+
+The complete target set and current-head proof are:
+
+```text
+continuityCompactionTargetSetSha256 =
+  SHA-256("d2b:host-generation:continuity-compaction-target-set:v1\0" ||
+  target_count_u8 ||
+  for each target in target-kind order:
+    target_kind_tag_u8 || expected_leaf_record_sha256)
+
+currentContinuityHeadProofSha256 =
+  SHA-256("d2b:host-generation:continuity-current-head-proof:v1\0" ||
+  retention_epoch_sha256 || current_head_sequence_u64_be ||
+  current_head_attempt_sha256 || current_head_watermark_sha256 ||
+  target_attempt_sha256 || head_disposition_tag_u8 ||
+  optional_target_watermark_sha256)
+```
+
+Target tags are exactly `0x01` evidence, `0x02` source replay binding, `0x03`
+superseded watermark, and `0x04` attempt census, with no duplicate or unknown target.
+Evidence is present in the set only for `PresentExact`; the replay binding and attempt
+census are always present. The watermark target is present only when the proof carries
+head-disposition `0x03`. Head-disposition is exactly `0x01` degraded attempt with no
+attempt watermark, `0x02` repaired attempt whose watermark is still current and therefore
+preserved, or `0x03` repaired attempt whose named strict successor is current and whose
+validated predecessor chain contains the target watermark. The optional target watermark
+is absent for `0x01` and present for `0x02 | 0x03`; `0x02` requires it to equal
+`currentHeadWatermarkSha256`, while `0x03` requires a greater current sequence and a
+byte-exact predecessor link. A current watermark is never an unlink target. The proof is
+created and validated under the same coordinator lock from the complete durable head and
+census, never from a caller or mutable pointer.
+
+The frozen compaction vector uses the continuity vector's `coordinatorPrivateId`,
+`continuityRepairAttemptSha256`, and `repairedWatermarkSha256`, the empty
+`governedSetFinalCensusSha256` from the whole-set vector, and terminal outcome
+`RepairedBeforeDay90` with deadline-plan tag `0x01`. Its export entries are one-byte
+canonical record bodies listed as `(tag, body-hex)` in protocol order:
+
+```text
+(0x01, 01), (0x02, 02), (0x03, 03), (0x04, 04),
+(0x10, 10), (0x11, 11), (0x12, 12),
+(0x10, 20), (0x11, 21), (0x12, 22),
+(0x20, 20), (0x30, 30), (0x31, 31),
+(0x32, terminalOutcomeRecordSha256), (0x40, 40)
+```
+
+The target/head inputs are:
+
+```text
+evidenceExpectedLeafRecordSha256 =
+  000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+sourceBindingExpectedLeafRecordSha256 =
+  202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+targetWatermarkSha256 =
+  ad091f50421f6e5ac3b7a5a33dad976aea3387dcc0fdad6f94a620b625450984
+attemptCensusExpectedLeafRecordSha256 =
+  606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f
+currentHeadSequence = 0x0102030405060709
+currentHeadAttemptSha256 =
+  a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf
+currentHeadWatermarkSha256 =
+  c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf
+headDispositionTag = 0x03
+```
+
+The expected lowercase hex outputs are:
+
+| Identity | Expected bytes |
+| --- | --- |
+| `terminalOutcomeRecordSha256` | `109cead12b62bfb733f730f3dbb5eb2e2ac7796f3cf2469bdee8e72d56590bd0` |
+| `requiredExportSetSha256` | `85bdfee2446a5e8119a7ccaa41d1fb80fad1e1e486dfdfce4105dd79db748f99` |
+| `continuityCompactionTargetSetSha256` | `7745a72f7c4b5a0bb93fa2ee4927c01c8391e7332c7a89486d64d5c63f4a5176` |
+| `currentContinuityHeadProofSha256` | `151b920d5c110b2cad8cb2ffe5ba69219208b3809c893bec7c7a39fba3e3ceff` |
+| `ContinuityCompactionAttemptIdV1` | `1012b4b1ea3f222f066cda09eebdbcffe2b427e3962725f1825e208986ce6ad4` |
+| `continuityCompactionAttemptSha256` | `18070a1112c21c9950e88c7c17ef67d1a206ad57b293659e316b959747a8a28a` |
+
+One literal expected-value table, one separately authored canonical-byte fixture, and
+production are mutually read-independent. Negative vectors perturb each private/audit
+domain, terminal outcome tag and variant member, deadline-plan tag/target pairing, export
+record tag, record length framing, record body, record count, target count/tag/member, head
+sequence/disposition/member, and every ordering boundary one at a time. They substitute
+each digest into every other named field and remove, duplicate, or reorder the first,
+intermediate, and final export/target member. One removal poison per vector, perturbation,
+substitution, framing check, and order check must fail.
 
 The operation publishes fixed redacted
 `coordinator-immutable-audit-continuity-compaction/pre-mutation` audit before unlink. It
 contains only the fixed edge id, `continuityCompactionAttemptSha256`,
 `continuityRepairAttemptSha256`, terminal outcome tag,
 `terminalOutcomeRecordSha256`, `governedSetFinalCensusSha256`,
-`requiredExportSetSha256`, and expected evidence-leaf state `present | absent`. The matching
-outcome repeats them and adds exactly
-`Compacted | AlreadyCompacted | Degraded(unlink | directory-sync | census |
-audit-publication)`.
+`requiredExportSetSha256`, `continuityCompactionTargetSetSha256`,
+`currentContinuityHeadProofSha256`, and exact
+`ContinuityEvidenceDurabilityStateV1`. The matching outcome repeats them and adds exactly
+`Compacted | AlreadyCompacted | Degraded { targetKind, failure }`, where failure is exactly
+`unlink | directory-sync | census | audit-publication`.
 
-For a present leaf, the operation reopens it from the stable root, revalidates identity, and
-calls fd-relative `unlinkat`. For both a present leaf and an already absent leaf, it then
-reopens and identity-revalidates the anchored parent and calls `fsync` on that held parent
-before reading or reducing the census. It reopens and revalidates the parent once more
-before the census commit. Thus an absent leaf with an old census cannot be mistaken for an
-unlink whose parent entry was never made durable. Only after that sync may it commit the
-reduced census and publish the matching outcome.
+Immediately before every target mutation, the operation revalidates the complete target set
+and current head from held root/coordinator descriptors. For each target in target-kind
+order it fd-relatively reopens the exact expected final, revalidates identity and digest,
+calls `unlinkat` on one validated component, reopens and identity-revalidates its anchored
+parent, and calls `fsync` on that held parent. It then durably commits that one target's
+census absence before advancing to the next target. An already absent target is accepted
+only at the bound post-unlink restart prefix and still requires parent revalidation/sync;
+absence before the bound unlink is integrity degradation. The operation revalidates the
+complete current head again before every unlink and before the final census commit. A head
+advance that changes the proof stops before the next mutation; it never broadens the target
+set or authorizes deletion of a now-current watermark.
 
-The restart classifier is exactly `PreOnly | LeafPresent | LeafAbsentParentUnconfirmed |
-ParentDurableOldCensus | CensusCommitted | Complete`. `LeafAbsentParentUnconfirmed` always
-performs the anchored parent revalidation and sync; it never infers durability from absence.
-A crash before unlink retries, a crash after unlink revalidates absence and syncs, a crash
-after parent durability commits only the reduction, and response loss after `Complete`
-returns the stored result with zero write. Failure preserves the evidence or confirmed
-absence, blocks later mutation, and never weakens any capacity ceiling.
+The restart classifier is exactly `PreOnly | Target { ordinal, Present } | Target {
+ordinal, AbsentParentUnconfirmed } | Target { ordinal, ParentDurableOldCensus } |
+Target { ordinal, CensusCommitted } | Complete`. `AbsentParentUnconfirmed` always performs
+the anchored parent revalidation and sync; it never infers durability from absence. A crash
+before an unlink retries only that target, a crash after unlink revalidates absence and
+syncs only that target's parent, a crash after parent durability commits only that target's
+census reduction, and restart advances only across prior targets with matching durable
+reductions. Response loss after `Complete` returns the stored result with zero write.
+Failure preserves every not-yet-removed target and every confirmed prior absence, blocks
+later mutation, and never weakens any capacity ceiling.
 
 The read-independent lifecycle case has separate hooks and removal poisons for missing and
 mismatched pre export, repaired missing and mismatched watermark export, degraded unexpected
 watermark, missing and mismatched outcome export, missing and mismatched mandatory-prune
-export, file-only export, incomplete repair, governed set present, each repaired and
-degraded admission row including degraded-after-evidence with zero watermark, compaction
-pre/outcome publication, leaf present, leaf absent with old census, unlink, both
-anchored-parent revalidations, parent sync, census commit, every fresh-process prefix, and
-completed no-write replay. Only a complete matching export plus governed absence reaches
-mutation.
+export, first/intermediate/final partial-prune export, reduced census, final absence proof,
+file-only export, incomplete repair, governed set present, each repaired and degraded
+admission row including degraded-after-evidence with zero watermark, malformed replay-key
+state, illicit missing or mismatched evidence, target-set omission/reorder/substitution,
+current-head absence/substitution/stale-successor/current-watermark deletion, compaction
+pre/outcome publication, each target present, each target absent with old census, each
+target unlink, both per-target anchored-parent revalidations, every parent sync, every
+per-target census commit, every fresh-process target/ordinal prefix, and completed no-write
+replay. Only a complete matching export, governed absence, target set, and current-head
+proof reaches mutation.
 
 For `ContinuityRepairDeadlinePlanV1::Day90Reached`, the same permit drives every member in
 the pre-bound target through its own prune pre/outcome chain in target order and proves the
@@ -4224,7 +4534,7 @@ ContinuityRepairSourceFailureClassV1 =
     source-unavailable
   | source-conflict
 
-ContinuityRepairPublicationFailureClassV1 =
+ContinuityRepairTerminalPublicationFailureClassV1 =
     hierarchy
   | write
   | file-sync
@@ -4233,13 +4543,70 @@ ContinuityRepairPublicationFailureClassV1 =
   | directory-sync
   | conflict
   | audit-publication
-  | outcome-publication
 
-ContinuityRepairFailureV1 =
+ContinuityRepairTerminalRetentionFailureClassV1 =
+    clock-rollback
+  | clock-watermark
+  | epoch-invalid
+  | clock-forward-discontinuity
+  | clock-continuity-ambiguous
+  | clock-overflow
+  | unlink
+  | directory-sync
+  | census
+  | audit-publication
+  | standing-reserve-missing
+  | standing-reserve-overdrawn
+  | standing-reserve-duplicated
+  | standing-reserve-unaccounted
+
+ContinuityRepairTerminalFailureV1 =
     Source(ContinuityRepairSourceFailureClassV1)
-  | Retention(RetentionDegradedClassV1)
-  | Publication(ContinuityRepairPublicationFailureClassV1)
+  | Retention(ContinuityRepairTerminalRetentionFailureClassV1)
+  | Publication(ContinuityRepairTerminalPublicationFailureClassV1)
 ```
+
+Settlement preparation and publication failures are a disjoint algebra:
+
+```text
+ContinuityRepairSettlementPublicationBoundaryV1 =
+    hierarchy
+  | write
+  | file-sync
+  | link
+  | reopen
+  | directory-sync
+  | conflict
+  | audit-publication
+
+ContinuityRepairSettlementV1 =
+    PreparationIncomplete {
+      stage: DecisionPreAudit,
+      failure: audit-publication
+    }
+  | PendingIntentPublication {
+      intendedOutcome: ContinuityRepairOutcomeDecisionPreV1,
+      prefix: ContinuityRepairOutcomeIntentPublicationPrefixV1,
+      failure: ContinuityRepairSettlementPublicationBoundaryV1
+    }
+  | PendingTerminalPublication {
+      intendedOutcome: ContinuityRepairOutcomeIntentV1,
+      prefix: ContinuityRepairTerminalOutcomePublicationPrefixV1,
+      failure: ContinuityRepairSettlementPublicationBoundaryV1
+    }
+```
+
+No settlement variant converts to, is embedded by, or implements a conversion into
+`ContinuityRepairTerminalFailureV1`. `pending-settlement`, intent publication, and terminal
+outcome publication are not terminal retention or publication classes.
+`ContinuityRepairOutcomeIntentPublicationPrefixV1` and
+`ContinuityRepairTerminalOutcomePublicationPrefixV1` are each exactly `Absent |
+HierarchyDurable | InodeWritten | FileDurable | FinalLinked | FinalReopened |
+ParentDurable | AncestorsDurable | Complete`. Each prefix maps to the first missing closed
+settlement boundary above. Pre-link restart discards only the unnamed inode and republishes
+the same decision-bound bytes; post-link restart accepts only the exact final and completes
+the missing reopen or directory sync without relink/replacement. `Complete` permits only
+the next settlement stage or completed no-write replay.
 
 The matching outcome repeats the exact pre identity and deadline plan and has exactly one
 nested variant:
@@ -4251,11 +4618,11 @@ ContinuityRepairOutcomeV1 =
       mandatoryPruneProofSha256,
       repairedWatermarkSha256
     }
-  | DegradedBeforeDay90(ContinuityRepairFailureV1)
-  | DegradedDay90BeforePrune(ContinuityRepairFailureV1)
+  | DegradedBeforeDay90(ContinuityRepairTerminalFailureV1)
+  | DegradedDay90BeforePrune(ContinuityRepairTerminalFailureV1)
   | DegradedDay90AfterPrune {
       mandatoryPruneProofSha256,
-      failure: ContinuityRepairFailureV1
+      failure: ContinuityRepairTerminalFailureV1
     }
 ```
 
@@ -4272,38 +4639,53 @@ cross-pair and unknown variant. No outcome stores a caller-supplied action.
 The closed outcome tags are `0x01` for `RepairedBeforeDay90`, `0x02` for
 `RepairedAfterMandatoryPrune`, `0x81` for `DegradedBeforeDay90`, `0x82` for
 `DegradedDay90BeforePrune`, and `0x83` for `DegradedDay90AfterPrune`. Once the reachable
-terminal outcome is known, the broker first publishes a broker-private no-replace
-`ContinuityRepairOutcomeIntentV1` containing the exact complete typed outcome above. It is
-charged as settlement, carries no response action, and is tested as a mandatory subrecord
-of the existing `continuity-repair-outcome` publication class rather than adding a registry
-class or id.
+terminal outcome is known, the broker first append-only publishes fixed
+`ContinuityRepairOutcomeDecisionPreV1`. This is the durable pre-intent journal state. It
+contains the exact complete typed outcome above, `terminalOutcomeRecordSha256`, deadline
+plan, and matching repair/source-binding identities, with no response action or sensitive
+body. The fixed audit record is charged before use. If it cannot become durable, the result
+is only `PreparationIncomplete`; no intended terminal outcome has been committed, no
+terminal form may be returned, and restart reclassifies the same durable repair prefix
+before another decision-pre attempt.
 
-Only after that intent is durable may the broker publish the matching fixed terminal
-outcome. `ContinuityRepairSettlementV1` is exactly
-`PendingOutcomePublication { intendedOutcome: ContinuityRepairOutcomeIntentV1 }`; no
-failure, deadline, digest, or posture may be selected again. An inability to publish the
-intent remains at its exact first missing shared-publication boundary and cannot be reported
-as outcome-publication pending. `outcome-publication` means the complete intent is already
-durable but its byte-identical terminal projection is not; it is pending-only and can never
-be the failure stored in a settled degraded outcome.
+Once decision-pre is durable, no failure, deadline, digest, posture, or action may be
+selected again. The broker publishes a broker-private no-replace
+`ContinuityRepairOutcomeIntentV1` byte-identical in typed outcome to decision-pre. It is
+charged as settlement, carries no response action, and is tested with decision-pre as
+mandatory subrecords of the existing `continuity-repair-outcome` publication class rather
+than adding registry classes or ids. Every hierarchy, write, file-sync, link, reopen,
+directory-sync, conflict, and audit-publication boundary is a typed
+`PendingIntentPublication` prefix. Restart reconstructs the intended outcome from durable
+decision-pre and retries only the exact missing intent boundary.
+
+Only after that intent is complete may the broker publish the matching fixed terminal
+outcome. Every terminal publication boundary is `PendingTerminalPublication`; restart
+reloads the byte-identical intent and retries only that terminal projection. Neither
+pending variant is a settled degraded failure, and neither may appear inside
+`ContinuityRepairOutcomeV1`.
 
 If a hard source, hierarchy, write, file-sync, link, reopen, directory-sync, or conflict
 failure occurs after pre, the intended outcome is the one reachable degraded variant and
 advances no watermark. If a repaired watermark is complete, the intended outcome is the
-matching repaired variant. Failure to publish either terminal projection returns typed
-`Pending`, blocks every later mutation, and restart reloads the exact intent before
-acquiring evidence or dispatching another repair. It republishes only that unchanged
-terminal outcome. In particular, a watermark-complete repaired intent can never settle as
-degraded, and a degraded intent can never acquire or validate a watermark during
-settlement. The watermark final is never republished or replaced.
+matching repaired variant. Failure before decision-pre durability returns typed
+`PreparationIncomplete`. Failure after decision-pre durability returns the applicable
+typed pending form, blocks every later mutation, and restart reloads the exact decision
+before acquiring evidence or dispatching another repair. It publishes only the unchanged
+intent and terminal outcome. In particular, a watermark-complete repaired decision can
+never settle as degraded, and a degraded decision can never acquire or validate a
+watermark during settlement. The watermark final is never republished or replaced.
 
 Strict response schemas and human/JSON goldens pin completed repaired, completed degraded,
-and pending forms. Fresh-process cases cover outcome-publication failure for each repaired
-variant and each degraded variant, restart from the durable intent, byte-identical terminal
-publication, response loss, and completed no-write replay. They poison any changed variant,
-failure, deadline plan, prune proof, repaired watermark, or action. Table-driven
-hard-failure tests inject every source/publication class at evidence, watermark, intent, and
-terminal outcome publication and reject fallback strings, nullable sibling failures, or
+preparation-incomplete, pending-intent, and pending-terminal forms. Independent
+fresh-process cases cover decision-pre audit failure and every outcome-intent and terminal
+publication boundary for each repaired variant and each degraded variant, restart from
+durable decision-pre or intent, byte-identical intent/terminal publication, response loss,
+and completed no-write replay. Separate cases pin repaired settlement after immutable
+watermark completion and degraded settlement after evidence durability with zero watermark.
+They poison any changed variant, failure, deadline plan, prune proof, repaired watermark,
+publication stage/boundary, or action. Table-driven hard-failure tests inject every
+terminal source/publication class and every disjoint settlement stage/boundary and reject
+fallback strings, nullable sibling failures, terminal/settlement conversions, or
 class/action substitutions.
 
 The only valid successful prefixes are:
@@ -4315,31 +4697,40 @@ Absent
      BeforeDay90:
        -> WatermarkPublication(<exact prefix>)
        -> WatermarkApplied
+       -> OutcomeDecisionPreDurable(RepairedBeforeDay90)
+       -> OutcomeIntentPublication(<exact prefix>)
        -> OutcomeIntentDurable(RepairedBeforeDay90)
        -> CompletedRepairedBeforeDay90
      Day90Reached:
        -> MandatoryPruneWholeSetProofDurable
        -> WatermarkPublication(<exact prefix>)
        -> WatermarkApplied
+       -> OutcomeDecisionPreDurable(RepairedAfterMandatoryPrune)
+       -> OutcomeIntentPublication(<exact prefix>)
        -> OutcomeIntentDurable(RepairedAfterMandatoryPrune)
        -> CompletedRepairedAfterMandatoryPrune
 ```
 
 `EvidenceDurable` advances directly to watermark publication only for `BeforeDay90`.
-A post-pre failure may instead append one reachable completed degraded outcome with zero
-watermark advance, or enter pending settlement if that append cannot complete. Restart
-reacquires the coordinator, reconstructs the exact handle and attempt, revalidates any
-durable evidence, prune, and watermark final, and resumes only the first missing step.
-Pre-only, evidence-only, prune-complete, every watermark publication boundary,
-watermark-without-intent, intent-without-outcome, outcome-publication, pending-settlement, and
-completed-response-loss prefixes are independent fresh-process cases. Evidence without
-pre, watermark without pre/evidence, watermark before required prune, day-90 success without
-durable whole-set proof and empty census, before-day-90 use of an unrelated prune, duplicate
-pre/evidence/watermark/intent/outcome, nonidentical source replay, sequence/predecessor/handle
-mismatch, deadline/outcome cross-pair, or a second dispatch degrades the root and blocks
-later mutation. The lifecycle malformed-prefix case has an independently named hook and
-removal poison for each listed ordering or pairing conflict. Completed response loss
-returns the stored outcome with zero write.
+A post-pre failure may instead journal one reachable degraded decision with zero watermark
+advance and settle that exact outcome, or return preparation-incomplete/pending if the
+corresponding publication cannot complete. Restart reacquires the coordinator,
+reconstructs the exact handle and attempt, revalidates the source/broker binding and any
+durable evidence, prune, watermark, decision-pre, and intent final, and resumes only the
+first missing step. Pre-only, binding-only, evidence-only, prune-complete, every watermark
+publication boundary, watermark-without-decision, decision-pre-without-intent, every intent
+publication boundary, intent-without-outcome, every terminal publication boundary,
+preparation-incomplete, both pending-settlement variants, and completed-response-loss
+prefixes are independent fresh-process cases. Binding without a source receipt, evidence
+without binding/pre, watermark without pre/evidence, watermark before required prune,
+day-90 success without durable whole-set proof and empty census, before-day-90 use of an
+unrelated prune, duplicate binding/pre/evidence/watermark/decision/intent/outcome,
+nonidentical source replay, binding/sequence/predecessor/handle mismatch,
+decision/intent/outcome mismatch, terminal/settlement failure substitution,
+deadline/outcome cross-pair, or a second dispatch degrades the root and blocks later
+mutation. The lifecycle malformed-prefix case has an independently named hook and removal
+poison for each listed ordering or pairing conflict. Completed response loss returns the
+stored outcome with zero write.
 
 Repair advances the existing epoch's trusted lower bound; it never creates a replacement
 epoch or resets either the day-30 threshold or original day-90 deadline. Startup performs
@@ -4524,14 +4915,16 @@ storing one:
 | `source-conflict` | `preserve-and-escalate-continuity-source-conflict` |
 | `hierarchy`, `write`, `file-sync`, `link`, `reopen`, `directory-sync` | `repair-retention-storage-and-reconcile` |
 | `conflict` | `preserve-and-escalate-continuity-publication-conflict` |
-| `audit-publication`, `outcome-publication` | `repair-retention-audit-and-reconcile` |
+| `audit-publication` | `repair-retention-audit-and-reconcile` |
 
 The nested `Retention` branch uses the existing retention mapping above. Strict continuity
 schemas, wire snapshots, human/JSON goldens, constructors, and deserializers reject a
 source class in the publication branch, a publication class in the retention branch,
-`outcome-publication` in a settled degraded outcome, pending without an exact durable
-intended outcome, pending with any other settlement/action pair, a mismatched derived
-action, and every unknown or multiple branch.
+any settlement stage or boundary in a settled degraded outcome, pending without an exact
+durable decision-pre or intent, preparation-incomplete with an intended outcome, pending
+with any other stage/boundary/settlement/action pair, a mismatched derived action, and every
+unknown or multiple branch. Every settlement preparation or publication failure derives
+`repair-retention-audit-and-reconcile` without entering the terminal failure mapping.
 
 The sealed private age-anchor state is the only wall-clock carrier. No response or audit
 projection carries a path, member bytes, artifact bytes, wall-clock value, errno, uid, pid,
@@ -5666,30 +6059,40 @@ permit case likewise owns separate compile-fail/API assertions and poisons for e
 named in its id. Each release malformed-prefix id independently hooks outcome-without-pre,
 ledger-without-pre, completion-without-ledger, duplicate pre/outcome, wrong generation,
 wrong prior ledger, wrong reason, wrong proof, and cross-release proof substitution. The
-capacity reservation successful-prefix case independently calculates the seven-row
-522-record/1,197,056-byte future charge, tests exact admission and each one-short boundary,
-exhausts unreserved capacity after replacement, and completes mandatory repair from the
-reservation; every row and count has a poison. The
-continuity malformed-prefix id independently hooks evidence-without-pre,
+capacity reservation successful-prefix case independently calculates the ten-row
+5,632-record/44,302,336-byte future charge, tests exact admission and each one-short
+boundary, exhausts unreserved capacity after replacement, retains 255 degraded prefixes
+and their partial-prune history, and completes the 256th repair, final prune, settlement,
+and compaction from the reservation; every row, multiplier, and count has a poison. The
+continuity malformed-prefix id independently hooks binding-without-source-receipt,
+source-only and broker-only binding, evidence-without-binding/pre,
 watermark-before-evidence, watermark-before-required-prune, before-day-90 unrelated prune,
 day-90 success without the whole-set proof or empty census, duplicate
-pre/evidence/watermark/intent/outcome, intent/outcome mismatch, source replay change,
-replay-handle/sequence/predecessor mismatch, multi-member omission/reorder/substitution,
-and every deadline/outcome cross-pair.
+binding/pre/evidence/watermark/decision-pre/intent/outcome, decision/intent/outcome
+mismatch, source replay change, replay-binding/handle/sequence/predecessor mismatch,
+terminal/settlement failure substitution, multi-member omission/reorder/substitution, and
+every deadline/outcome cross-pair.
 Every malformed hook has its own removal poison. The evidence-retention case independently
-hooks missing and mismatched pre, repaired watermark, outcome, and mandatory-prune exports;
-degraded zero-watermark admission and unexpected-watermark refusal; file-only export;
-incomplete repair; governed set present; all repaired and degraded admissions; compaction
-pre/outcome, present and absent evidence, old census, unlink, anchored-parent reopen and
-sync, census commit, restart at every compaction prefix, and completed no-write replay,
-again with one removal poison per hook. The grouped continuity-permit cases run the full
-negative matrix separately for repair and compaction permits. The redaction case visits
-every private identifier, replay key, continuity body member, observable surface,
-`Display` negative, and exact redacted `Debug` implementation independently, with one
-canary-removal poison per identifier/member/surface/seal. The five continuity identity
-vectors, watermark/prune vectors, settlement vectors, every member/domain/framing
-perturbation, and every cross-field substitution are literal and read-independent, with one
-removal poison each. Each meta case
+hooks missing and mismatched binding, pre, durable evidence, repaired watermark, settlement,
+outcome, first/intermediate/final prune, reduced-census, final-absence, and mandatory-prune
+exports; proven never-durable and post-bound-unlink evidence absence versus illicit missing
+durable evidence; degraded zero-watermark admission and unexpected-watermark refusal;
+file-only export; incomplete repair; governed set present; all repaired and degraded
+admissions; complete target-set/current-head proof and stale/current-watermark negatives;
+compaction pre/outcome, every target present/absent-old-census/unlink/parent-sync/census
+prefix, restart at every target ordinal, and completed no-write replay, again with one
+removal poison per hook. The same grouped case has independent fresh-process source
+pin/bind/broker-binding prefixes, replay-key creation/sync/outcome prefixes and secure
+posture/missing/partial/replaced negatives, decision-pre failure, every intent/terminal
+publication boundary, and repaired/degraded exact settlement. The grouped
+continuity-permit cases run the full negative matrix separately for repair and compaction
+permits. The redaction case visits every private identifier, replay key, source binding,
+continuity body member, observable surface, `Display` negative, and exact redacted `Debug`
+implementation independently, with one canary-removal poison per
+identifier/member/surface/seal. The five continuity identity vectors,
+watermark/prune vectors, terminal/export/target/head/compaction vectors, settlement vectors,
+every member/domain/framing/order perturbation, and every cross-field substitution are
+literal and read-independent, with one removal poison each. Each meta case
 deletes exactly one member or visit from one family while all other bytes remain valid. Unknown,
 duplicate, reordered, skipped, dynamically generated, early-generic-refusal, or
 production-derived expectations fail before any case counts. Count reconciliation is

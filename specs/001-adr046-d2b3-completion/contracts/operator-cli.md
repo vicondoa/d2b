@@ -406,21 +406,45 @@ outcome: <REPAIRED_OUTCOME>
 repaired-after-mandatory-prune`. JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-continuity-repair","ok":true,"outcome":"<REPAIRED_OUTCOME>"}`.
 
-Pending exact-outcome publication exits `4`. Its human form is exactly:
+Settlement preparation incomplete before durable decision-pre exits `4`. Its human form is
+exactly:
+
+```text
+host generation handoff immutable audit continuity repair settlement preparation incomplete
+stage: decision-pre-audit
+failure-class: audit-publication
+action: repair-retention-audit-and-reconcile
+```
+
+Its JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-settlement-preparation-incomplete","stage":"decision-pre-audit","failureClass":"audit-publication","action":"repair-retention-audit-and-reconcile"}`.
+It carries no `intendedOutcome`: none is committed until the durable decision-pre record
+exists. Restart reclassifies the same durable repair prefix, performs no new repair mutation,
+and retries decision-pre publication before intent or terminal publication.
+
+Pending exact-outcome publication after durable decision-pre exits `4`. Its human form is
+exactly:
 
 ```text
 host generation handoff immutable audit continuity repair pending
 intended-outcome: <CLOSED_TERMINAL_OUTCOME>
-settlement: exact-outcome-publication-pending
+publication-stage: <CLOSED_SETTLEMENT_PUBLICATION_STAGE>
+failure-boundary: <CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>
+settlement: exact-terminal-settlement-pending
 action: repair-retention-audit-and-reconcile
 ```
 
 `CLOSED_TERMINAL_OUTCOME` is exactly `repaired-before-day-90 |
 repaired-after-mandatory-prune | degraded-before-day-90 |
 degraded-day-90-before-prune | degraded-day-90-after-prune`. JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","settlement":"exact-outcome-publication-pending","action":"repair-retention-audit-and-reconcile"}`.
-The intended outcome is reconstructed from the broker-private durable intent and is never
-changed during settlement.
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","publicationStage":"<CLOSED_SETTLEMENT_PUBLICATION_STAGE>","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"exact-terminal-settlement-pending","action":"repair-retention-audit-and-reconcile"}`.
+`CLOSED_SETTLEMENT_PUBLICATION_STAGE` is exactly `outcome-intent | terminal-outcome`.
+`CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY` is exactly `hierarchy | write | file-sync | link |
+reopen | directory-sync | conflict | audit-publication`. The intended outcome is
+reconstructed from broker-private durable decision-pre for the intent stage and from the
+byte-identical durable intent for the terminal stage; it is never changed during
+settlement. Human/JSON goldens cover every stage/boundary pair for all five intended
+outcomes, and fresh-process cases prove the first missing boundary alone is retried.
 
 A settled degraded result exits `4`. Its human form is exactly:
 
@@ -435,13 +459,16 @@ action: <ACTION_FROM_CONTINUITY_TABLE>
 `DEGRADED_OUTCOME` is exactly `degraded-before-day-90 |
 degraded-day-90-before-prune | degraded-day-90-after-prune`.
 `CLOSED_CONTINUITY_FAILURE_BRANCH` is exactly `source | publication | retention`, and its
-class must belong to that branch's closed enum in `data-model.md`.
-`outcome-publication` is pending-only and is not a settled degraded failure class. JSON is exactly
+class must belong to that branch's closed terminal enum in `data-model.md`; the retention
+branch uses `ContinuityRepairTerminalRetentionFailureClassV1`, not the broader retention
+lifecycle enum.
+Settlement preparation, intent publication, and terminal publication are disjoint from
+these enums and are not settled degraded failure classes. JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-degraded","outcome":"<DEGRADED_OUTCOME>","failure":{"branch":"<CLOSED_CONTINUITY_FAILURE_BRANCH>","class":"<CLOSED_CONTINUITY_FAILURE_CLASS>"},"action":"<ACTION_FROM_CONTINUITY_TABLE>"}`.
 No continuity form contains a replay handle, attempt, watermark, prune proof, evidence,
 clock, boot identity, path, selector, argv, or free-form value. Real-procedure human/JSON
-goldens pin each repaired variant, every degraded branch/class/action, and pending settlement
-for all five intended outcomes.
+goldens pin each repaired variant, every degraded branch/class/action,
+preparation-incomplete, and both pending stages for all five intended outcomes.
 
 The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
 168-case broker registry preserve their exact ids and own only their literal caller,
@@ -497,7 +524,8 @@ above:
 | `source/source-conflict` | `preserve-and-escalate-continuity-source-conflict` |
 | `publication/hierarchy`, `publication/write`, `publication/file-sync`, `publication/link`, `publication/reopen`, `publication/directory-sync` | `repair-retention-storage-and-reconcile` |
 | `publication/conflict` | `preserve-and-escalate-continuity-publication-conflict` |
-| `publication/audit-publication`, `publication/outcome-publication` | `repair-retention-audit-and-reconcile` |
+| `publication/audit-publication` | `repair-retention-audit-and-reconcile` |
+| settlement preparation `decision-pre-audit/audit-publication`; pending publication `outcome-intent|terminal-outcome` at any closed settlement boundary | `repair-retention-audit-and-reconcile` |
 
 Every action is executable or names one external procedure:
 
