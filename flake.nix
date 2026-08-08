@@ -30,7 +30,7 @@
           throw ''
             D2B-BZLEXEC-NIX-PTRACE-SYSTEM: native-system is unsupported.
             Move evaluation and execution to a native x86_64-linux or aarch64-linux runner;
-            run make test-flake; then run the exact phase-valid closed slice command.
+            run make test-flake; then rerun the exact closed slice command.
           '';
       mkRustsecAdvisoryDb = pkgs:
         let
@@ -197,6 +197,11 @@
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
+          # The execution crate accepts this only as a compiler environment
+          # value. Keep the helper in the realized store and do not provide a
+          # worktree, runfiles, or unhashed runtime fallback.
+          D2B_BAZEL_EXEC_SUPERVISOR =
+            "${bazelExecSupervisor}/bin/d2b-bazel-exec-supervisor";
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
         } // args);
@@ -209,6 +214,8 @@
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
+          D2B_BAZEL_EXEC_SUPERVISOR =
+            "${bazelExecSupervisor}/bin/d2b-bazel-exec-supervisor";
           cargoBuildFlags = [
             "--package"
             "d2b-priv-broker"
@@ -757,6 +764,8 @@
             lockFile = ./packages/Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
+          D2B_BAZEL_EXEC_SUPERVISOR =
+            "${bazelExecSupervisor}/bin/d2b-bazel-exec-supervisor";
           # Repo-local .cargo/config.toml files set
           # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
           # have sccache on PATH (and even if it did, sccache wants
@@ -774,6 +783,49 @@
         '';
 
         advisoryDbGit = mkRustsecAdvisoryDb pkgs;
+        bazelToolchainGoldenPath =
+          ./. + "/tests/golden/bazel-toolchain.json";
+        bazelSupervisorGoldenPath =
+          ./. + "/tests/golden/bazel-exec-supervisor.json";
+        bazelToolchainGolden =
+          if builtins.pathExists bazelToolchainGoldenPath
+          then readJson bazelToolchainGoldenPath
+          else null;
+        bazelSupervisorGolden =
+          if builtins.pathExists bazelSupervisorGoldenPath
+          then readJson bazelSupervisorGoldenPath
+          else null;
+        currentBazelSourceHashes = {
+          policy = builtins.hashFile "sha256"
+            ./pkgs/bazel-8.6.0-seccomp/seccomp-policy.json;
+          patch = builtins.hashFile "sha256"
+            ./pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch;
+          supervisor = builtins.hashFile "sha256"
+            ./tests/tools/d2b-bazel-exec-supervisor/supervisor.c;
+          plant = builtins.hashFile "sha256"
+            ./tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c;
+          supervisorExpression = builtins.hashFile "sha256"
+            ./pkgs/d2b-bazel-exec-supervisor/default.nix;
+        };
+        bazelSourceIdentityGate =
+          if bazelToolchainGolden == null || bazelSupervisorGolden == null then
+            throw "D2B-BZLTOOLCHAIN-IDENTITY"
+          else if bazelToolchainGolden.patch.sha256
+            != currentBazelSourceHashes.patch
+          || bazelToolchainGolden.policy.sha256
+            != currentBazelSourceHashes.policy
+          || bazelSupervisorGolden.source.sha256
+            != currentBazelSourceHashes.supervisor
+          || bazelSupervisorGolden.source.plantSha256
+            != currentBazelSourceHashes.plant
+          || bazelSupervisorGolden.expression.sha256
+            != currentBazelSourceHashes.supervisorExpression then
+            throw "D2B-BZLTOOLCHAIN-IDENTITY"
+          else if bazelSeccomp.passthru.d2bSeccomp.policySha256
+            != currentBazelSourceHashes.policy then
+            throw "D2B-BZLTOOLCHAIN-IDENTITY"
+          else
+            true;
 
         nativePrefix =
           if system == "x86_64-linux" then "x86_64"
@@ -787,13 +839,390 @@
           policyInputRoot nativeGnuTarget "broker-production";
         guestPolicyRoot =
           policyInputRoot nativeMuslTarget "guest-real-libshpool";
-        # The guest static policy consumes only
-        # guest-real-libshpool/production/{closure.json,Cargo.lock}; the
-        # guest-real-libshpool/production/closure.json
-        # guest-real-libshpool/production/Cargo.lock
-        # policy metadata and lock are reserved for deny and audit.
         policyInputsPresent = builtins.pathExists
           (./. + "/packages/policy-inputs");
+        getField = name: value:
+          if builtins.isAttrs value && builtins.hasAttr name value
+          then builtins.getAttr name value
+          else null;
+        uniqueList = values:
+          builtins.isList values
+          && builtins.length values == builtins.length (lib.unique values);
+        exactList = expected: actual:
+          builtins.isList actual
+          && uniqueList actual
+          && actual == expected;
+        exactSet = expected: actual:
+          builtins.isList actual
+          && uniqueList actual
+          && builtins.isList expected
+          && uniqueList expected
+          && lib.sort builtins.lessThan actual
+            == lib.sort builtins.lessThan expected;
+        nonemptyStrings = values:
+          builtins.isList values
+          && builtins.length values > 0
+          && builtins.all builtins.isString values
+          && builtins.all (value: value != "") values
+          && uniqueList values;
+        identityKey = value:
+          let
+            name = getField "name" value;
+            version = getField "version" value;
+            source = getField "source" value;
+          in
+          if builtins.isAttrs value
+            && builtins.isString name
+            && name != ""
+            && builtins.isString version
+            && version != ""
+            && (source == null || builtins.isString source)
+          then "${name}|${version}|${if source == null then "" else source}"
+          else null;
+        identityKeys = values:
+          if builtins.isList values then map identityKey values else [ ];
+        validIdentityKeys = values:
+          builtins.isList values
+          && builtins.length values > 0
+          && builtins.all (value: value != null) values
+          && uniqueList values;
+        identitiesEqual = left: right:
+          let
+            leftKeys = identityKeys left;
+            rightKeys = identityKeys right;
+          in
+          validIdentityKeys leftKeys
+          && validIdentityKeys rightKeys
+          && exactSet leftKeys rightKeys;
+        readJson = path: builtins.fromJSON (builtins.readFile path);
+        readToml = path: builtins.fromTOML (builtins.readFile path);
+        lockPackageIdentities = lock:
+          let packages = getField "package" lock;
+          in if builtins.isList packages
+          then map (package: {
+            name = getField "name" package;
+            version = getField "version" package;
+            source = getField "source" package;
+          }) packages
+          else [ ];
+        lockDependenciesClosed = lock:
+          let
+            packages = getField "package" lock;
+            names =
+              if builtins.isList packages
+              then map (package: getField "name" package) packages
+              else [ ];
+            dependencyName = token:
+              let parts = lib.splitString " " token;
+              in if parts == [ ] then "" else builtins.head parts;
+            packageOk = package:
+              let dependencies = getField "dependencies" package;
+              in dependencies == null
+                || (builtins.isList dependencies
+                  && builtins.all (token:
+                    builtins.isString token
+                    && token != ""
+                    && builtins.elem (dependencyName token) names)
+                    dependencies);
+          in
+          builtins.isAttrs lock
+          && builtins.isList packages
+          && builtins.length packages > 0
+          && builtins.all packageOk packages;
+        lockMatches = lock: identities:
+          let
+            lockIdentities = lockPackageIdentities lock;
+            lockKeys = identityKeys lockIdentities;
+            identityKeysExpected = identityKeys identities;
+          in
+          lockDependenciesClosed lock
+          && validIdentityKeys lockKeys
+          && exactSet identityKeysExpected lockKeys;
+        packageForId = packages: id:
+          lib.findFirst
+            (package: getField "id" package == id)
+            null
+            packages;
+        nodeForId = nodes: id:
+          lib.findFirst
+            (node: getField "id" node == id)
+            null
+            nodes;
+        edgeKind = kind:
+          let value = getField "kind" kind;
+          in if value == null then "normal" else value;
+        edgeKey = edge:
+          let
+            package = getField "pkg" edge;
+            name = getField "name" edge;
+            kinds = getField "dep_kinds" edge;
+          in
+          if builtins.isString package
+            && builtins.isString name
+            && builtins.isList kinds
+          then "${package}|${name}|${builtins.toJSON kinds}"
+          else null;
+        resolveNodeEdgesClosed = { node, nodeIds, packages, allowedKinds }:
+          let
+            dependencies = getField "dependencies" node;
+            dependenciesOk =
+              builtins.isList dependencies
+              && builtins.all builtins.isString dependencies
+              && uniqueList dependencies
+              && builtins.all (id: builtins.elem id nodeIds) dependencies;
+            details = getField "deps" node;
+            detailIds =
+              if builtins.isList details
+              then map (detail: getField "pkg" detail) details
+              else [ ];
+            detailKeys =
+              if builtins.isList details
+              then map edgeKey details
+              else [ ];
+            detailsOk =
+              builtins.isList details
+              && builtins.all (detail:
+                let
+                  packageId = getField "pkg" detail;
+                  packageName = getField "name" detail;
+                  kinds = getField "dep_kinds" detail;
+                  target = getField "target" detail;
+                  targetPackage = packageForId packages packageId;
+                in
+                builtins.isAttrs detail
+                && builtins.isString packageId
+                && builtins.elem packageId nodeIds
+                && builtins.isString packageName
+                && builtins.isAttrs targetPackage
+                && packageName == getField "name" targetPackage
+                && (target == null || builtins.isString target)
+                && builtins.isList kinds
+                && builtins.length kinds > 0
+                && builtins.all (kind:
+                  builtins.isAttrs kind
+                  && (getField "kind" kind == null
+                    || builtins.isString (getField "kind" kind))
+                  && ((getField "target" kind) == null
+                    || builtins.isString (getField "target" kind))
+                  && builtins.elem (edgeKind kind) allowedKinds)
+                  kinds)
+                details
+              && builtins.all (key: key != null) detailKeys
+              && uniqueList detailKeys
+              && uniqueList detailIds
+              && exactSet dependencies detailIds;
+          in
+          dependenciesOk && detailsOk;
+        reachableNodeIds = nodes: seen: frontier:
+          if frontier == [ ] then
+            seen
+          else
+            let
+              fresh = lib.filter (id: !(builtins.elem id seen)) frontier;
+              next = lib.concatMap (id:
+                let node = nodeForId nodes id;
+                in if node == null
+                then [ ]
+                else getField "dependencies" node)
+                fresh;
+            in
+            reachableNodeIds nodes (lib.unique (seen ++ fresh)) next;
+        policyArtifactShapeOk =
+          { artifact
+          , lock
+          , expected
+          , variant
+          , expectedEdgeKinds
+          }:
+          let
+            packages = getField "packages" artifact;
+            identities = getField "identities" artifact;
+            resolve = getField "resolve" artifact;
+            nodes = if builtins.isAttrs resolve
+              then getField "nodes" resolve
+              else null;
+            packageIds =
+              if builtins.isList packages
+              then map (package: getField "id" package) packages
+              else [ ];
+            nodeIds =
+              if builtins.isList nodes
+              then map (node: getField "id" node) nodes
+              else [ ];
+            rootPackages =
+              if builtins.isList packages
+              then lib.filter
+                (package: getField "name" package == expected.package)
+                packages
+              else [ ];
+            resolveRoot = if builtins.isAttrs resolve
+              then getField "root" resolve
+              else null;
+            rootNodes =
+              if builtins.isList nodes
+              then lib.filter (node: getField "id" node == resolveRoot) nodes
+              else [ ];
+            rootPackageId =
+              if builtins.length rootPackages == 1
+              then getField "id" (builtins.head rootPackages)
+              else null;
+            graphOk =
+              builtins.isAttrs resolve
+              && builtins.isList packages
+              && builtins.length packages > 0
+              && builtins.all (package:
+                builtins.isAttrs package
+                && identityKey package != null
+                && builtins.isString (getField "id" package)
+                && getField "id" package != "")
+                packages
+              && uniqueList packageIds
+              && builtins.isList nodes
+              && builtins.length nodes > 0
+              && builtins.all (node:
+                builtins.isAttrs node
+                && builtins.isString (getField "id" node)
+                && getField "id" node != "")
+                nodes
+              && uniqueList nodeIds
+              && exactSet packageIds nodeIds
+              && builtins.all (node:
+                resolveNodeEdgesClosed {
+                  inherit node nodeIds packages;
+                  allowedKinds = expectedEdgeKinds;
+                })
+                nodes
+              && builtins.isString resolveRoot
+              && builtins.elem resolveRoot nodeIds
+              && builtins.length rootPackages == 1
+              && builtins.length rootNodes == 1
+              && rootPackageId == resolveRoot
+              && exactSet nodeIds (reachableNodeIds nodes [ ] [ resolveRoot ]);
+          in
+          builtins.isAttrs artifact
+          && getField "system" artifact == expected.system
+          && getField "target" artifact == expected.target
+          && getField "package" artifact == expected.package
+          && getField "root" artifact == expected.package
+          && getField "variant" artifact == variant
+          && getField "edgeKinds" artifact == expectedEdgeKinds
+          && getField "defaultFeatures" artifact == false
+          && exactList expected.features (getField "features" artifact)
+          && builtins.isString (getField "sourceCensusSha256" artifact)
+          && hexDigest (getField "sourceCensusSha256" artifact)
+          && identitiesEqual identities packages
+          && graphOk
+          && lockMatches lock packages;
+        productionArtifactShapeOk =
+          { artifact
+          , lock
+          , expected
+          , policyArtifact
+          }:
+          let
+            identities = getField "identities" artifact;
+            identityKeysValue = identityKeys identities;
+            policyIdentityKeys =
+              identityKeys (getField "packages" policyArtifact);
+          in
+          builtins.isAttrs artifact
+          && getField "system" artifact == expected.system
+          && getField "target" artifact == expected.target
+          && getField "package" artifact == expected.package
+          && getField "root" artifact == expected.package
+          && getField "variant" artifact == "production"
+          && getField "edgeKinds" artifact == "normal,build"
+          && getField "defaultFeatures" artifact == false
+          && exactList expected.features (getField "features" artifact)
+          && validIdentityKeys identityKeysValue
+          && exactSet identityKeysValue identityKeysValue
+          && builtins.all (key: builtins.elem key policyIdentityKeys)
+              identityKeysValue
+          && lockMatches lock identities;
+        policyContexts = [
+          {
+            system = "x86_64-linux";
+            target = "x86_64-unknown-linux-gnu";
+            context = "broker-production";
+            package = "d2b-priv-broker";
+            features = [ ];
+          }
+          {
+            system = "x86_64-linux";
+            target = "x86_64-unknown-linux-musl";
+            context = "guest-real-libshpool";
+            package = "d2b-guest-shell-runner";
+            features = [ "real-libshpool" ];
+          }
+          {
+            system = "aarch64-linux";
+            target = "aarch64-unknown-linux-gnu";
+            context = "broker-production";
+            package = "d2b-priv-broker";
+            features = [ ];
+          }
+          {
+            system = "aarch64-linux";
+            target = "aarch64-unknown-linux-musl";
+            context = "guest-real-libshpool";
+            package = "d2b-guest-shell-runner";
+            features = [ "real-libshpool" ];
+          }
+        ];
+        policyContextRoot = context:
+          ./. + "/packages/policy-inputs/${context.system}/${context.target}/${context.context}";
+        readPolicyContext = context:
+          let root = policyContextRoot context;
+          in {
+            inherit context root;
+            production = readJson (root + "/production/closure.json");
+            productionLock = readToml (root + "/production/Cargo.lock");
+            policy = readJson (root + "/policy/metadata.json");
+            policyLock = readToml (root + "/policy/Cargo.lock");
+          };
+        policyContextRecords =
+          if policyInputsPresent
+          then map readPolicyContext policyContexts
+          else [ ];
+        policyContextKeys = records:
+          map (record:
+            let context = record.context;
+            in "${context.system}/${context.target}/${context.context}/${context.package}/${context.package}")
+            records;
+        policyContextShapeOk = record:
+          let
+            context = record.context;
+            expected = {
+              system = context.system;
+              target = context.target;
+              package = context.package;
+              features = context.features;
+            };
+          in
+          policyArtifactShapeOk {
+            artifact = record.policy;
+            lock = record.policyLock;
+            inherit expected;
+            variant = "policy";
+            expectedEdgeKinds = "normal,build,dev";
+          }
+          && productionArtifactShapeOk {
+            artifact = record.production;
+            lock = record.productionLock;
+            policyArtifact = record.policy;
+            inherit expected;
+          };
+        policyInputCorpusShapeOk =
+          policyInputsPresent
+          && builtins.length policyContextRecords
+            == builtins.length policyContexts
+          && uniqueList (policyContextKeys policyContextRecords)
+          && builtins.length (lib.unique (policyContextKeys policyContextRecords))
+            == builtins.length policyContexts
+          && builtins.all policyContextShapeOk policyContextRecords;
+        policyInputCorpusGate =
+          if policyInputCorpusShapeOk then true
+          else throw "D2B-BZLPOLICY-INPUT";
         artifactBaselinePath =
           ./. + "/tests/golden/bazel-rust-artifact-baselines.json";
         artifactBaselines =
@@ -825,64 +1254,133 @@
         hexDigest = value:
           builtins.isString value
           && builtins.match "[0-9a-fA-F]{64}" value != null;
+        rationalePathOk = authorization:
+          let
+            path = getField "rationalePath" authorization;
+            components =
+              if builtins.isString path then lib.splitString "/" path else [ ];
+            repositoryPath =
+              if builtins.isString path then ./. + "/${path}" else null;
+          in
+          builtins.isString path
+          && path != ""
+          && !(lib.hasPrefix "/" path)
+          && builtins.all
+            (component: component != "" && component != "." && component != "..")
+            components
+          && builtins.pathExists repositoryPath;
+        reviewRecordMatches = authorization:
+          rationalePathOk authorization
+          && hexDigest (getField "reviewRecordSha256" authorization)
+          && builtins.hashFile "sha256"
+            (./. + "/${authorization.rationalePath}")
+            == authorization.reviewRecordSha256;
         artifactAuthorizationShapeOk = row:
           let
-            authorization = row.sizeGrowthAuthorization;
+            authorization = getField "sizeGrowthAuthorization" row;
           in
           authorization == null
           || (builtins.isAttrs authorization
             && lib.sort builtins.lessThan (builtins.attrNames authorization)
               == lib.sort builtins.lessThan artifactAuthFields
-            && authorization.system == row.system
-            && authorization.artifact == row.artifact
+            && authorization.system == getField "system" row
+            && authorization.artifact == getField "artifact" row
             && authorization.decision == "approved"
             && builtins.isInt authorization.priorBinaryBytes
-            && authorization.priorBinaryBytes == row.binaryBytes
+            && authorization.priorBinaryBytes == getField "binaryBytes" row
             && builtins.isInt authorization.newBinaryBytes
             && authorization.newBinaryBytes > authorization.priorBinaryBytes
             && builtins.isInt authorization.deltaBytes
             && authorization.deltaBytes
               == authorization.newBinaryBytes - authorization.priorBinaryBytes
-            && builtins.isString authorization.rationalePath
-            && !(lib.hasPrefix "/" authorization.rationalePath)
-            && !(lib.hasPrefix "../" authorization.rationalePath)
-            && !(lib.hasInfix "/../" authorization.rationalePath)
             && hexDigest authorization.candidateContentSha256
-            && hexDigest authorization.reviewRecordSha256);
+            && rationalePathOk authorization
+            && reviewRecordMatches authorization);
         artifactLinkageShapeOk = row:
-          builtins.isString row.elfType
-          && builtins.isString row.elfMachine
-          && (if row.artifact == "broker-host-artifact-contract" then
-            builtins.isString row.interpreter
-            && builtins.isList row.needed
-            && row.needed == lib.sort builtins.lessThan row.needed
+          let
+            system = getField "system" row;
+            artifact = getField "artifact" row;
+            expectedMachine =
+              if system == "x86_64-linux" then "EM_X86_64"
+              else if system == "aarch64-linux" then "EM_AARCH64"
+              else "";
+            expectedInterpreter =
+              if system == "x86_64-linux" then "ld-linux-x86-64.so.2"
+              else if system == "aarch64-linux" then "ld-linux-aarch64.so.1"
+              else "";
+            expectedNeeded =
+              if system == "x86_64-linux" then [
+                "ld-linux-x86-64.so.2"
+                "libc.so.6"
+                "libgcc_s.so.1"
+                "libm.so.6"
+              ] else if system == "aarch64-linux" then [
+                "ld-linux-aarch64.so.1"
+                "libc.so.6"
+                "libgcc_s.so.1"
+                "libm.so.6"
+              ] else [ ];
+          in
+          getField "elfType" row == "ET_DYN"
+          && getField "elfMachine" row == expectedMachine
+          && (if artifact == "broker-host-artifact-contract" then
+            getField "interpreter" row == expectedInterpreter
+            && exactList expectedNeeded (getField "needed" row)
           else
-            (!(row ? interpreter) || row.interpreter == null)
-            && (row.needed or [ ]) == [ ]);
+            getField "interpreter" row == null
+            && exactList [ ] (getField "needed" row));
+        authorizationRows =
+          lib.filter
+            (row: getField "sizeGrowthAuthorization" row != null)
+            artifactRows;
+        authorizationPaths =
+          map (row:
+            (getField "sizeGrowthAuthorization" row).rationalePath)
+            authorizationRows;
+        authorizationReviewDigests =
+          map (row:
+            (getField "sizeGrowthAuthorization" row).reviewRecordSha256)
+            authorizationRows;
+        authorizationCandidates =
+          map (row:
+            (getField "sizeGrowthAuthorization" row).candidateContentSha256)
+            authorizationRows;
         artifactBaselineShapeOk =
           artifactBaselines != null
           && builtins.isAttrs artifactBaselines
           && builtins.isList artifactRows
           && builtins.length artifactRows == 4
+          && uniqueList (map artifactPair artifactRows)
           && lib.sort builtins.lessThan (map artifactPair artifactRows)
             == lib.sort builtins.lessThan expectedArtifactPairs
           && !(lib.hasInfix storePathMarker (builtins.toJSON artifactBaselines))
           && builtins.all (row:
-            builtins.isString row.system
-            && builtins.isString row.artifact
-            && builtins.isInt row.binaryBytes
-            && builtins.isInt row.closureCount
-            && hexDigest row.closureSha256
-            && builtins.isString row.selectedPolicyDigest
-            && hexDigest row.selectedPolicyDigest
-            && builtins.isString row.measurementCommand
-            && builtins.isString row.candidateCommit
+            builtins.isAttrs row
+            && builtins.isString (getField "system" row)
+            && builtins.isString (getField "artifact" row)
+            && builtins.isInt (getField "binaryBytes" row)
+            && getField "binaryBytes" row > 0
+            && hexDigest (getField "binarySha256" row)
+            && builtins.isInt (getField "closureCount" row)
+            && getField "closureCount" row > 0
+            && hexDigest (getField "closureSha256" row)
+            && hexDigest (getField "selectedPolicyDigest" row)
+            && builtins.isString (getField "measurementCommand" row)
+            && getField "measurementCommand" row != ""
+            && builtins.isString (getField "candidateCommit" row)
+            && builtins.match "[0-9a-fA-F]{40}" (getField "candidateCommit" row) != null
             && artifactLinkageShapeOk row
-            && !(row ? rowAllowance)
-            && !(row ? sizeAllowance)
-            && (row ? sizeGrowthAuthorization)
+            && !(builtins.hasAttr "rowAllowance" row)
+            && !(builtins.hasAttr "sizeAllowance" row)
+            && builtins.hasAttr "sizeGrowthAuthorization" row
             && artifactAuthorizationShapeOk row)
-            artifactRows;
+            artifactRows
+          && uniqueList authorizationPaths
+          && uniqueList authorizationReviewDigests
+          && uniqueList authorizationCandidates;
+        artifactBaselineGate =
+          if artifactBaselineShapeOk then true
+          else throw "D2B-BZLARTIFACT-IDENTITY";
         storePathMarker = lib.concatStringsSep "/" [ "" "nix" "store" "" ];
         baselineRowFor = artifact:
           lib.findFirst
@@ -904,7 +1402,10 @@
           , row
           , guest
           }:
-          if !policyInputsPresent || !artifactBaselineShapeOk || row == null then
+          if !bazelSourceIdentityGate
+            || !policyInputsPresent
+            || !artifactBaselineGate
+            || row == null then
             pkgs.runCommand "d2b-${artifact}-baseline-input" { } ''
               printf '%s\n' D2B-BZLARTIFACT-IDENTITY >&2
               exit 1
@@ -921,27 +1422,38 @@
                 else "AArch64";
               expectedE =
                 if system == "x86_64-linux" then "EM_X86_64" else "EM_AARCH64";
-              expectedInterpreter = row.interpreter or "";
-              expectedNeeded = lib.concatStringsSep "\n" (row.needed or [ ]);
-              authorization = row.sizeGrowthAuthorization or null;
+              expectedInterpreter = getField "interpreter" row;
+              expectedNeeded =
+                lib.concatStringsSep "\n" (getField "needed" row);
+              authorization = getField "sizeGrowthAuthorization" row;
               authorizationDecision =
-                if authorization == null then "" else authorization.decision;
+                if authorization == null then "" else getField "decision" authorization;
               authorizationSystem =
-                if authorization == null then "" else authorization.system;
+                if authorization == null then "" else getField "system" authorization;
               authorizationArtifact =
-                if authorization == null then "" else authorization.artifact;
+                if authorization == null then "" else getField "artifact" authorization;
               authorizationPrior =
-                if authorization == null then 0 else authorization.priorBinaryBytes;
+                if authorization == null then 0
+                else getField "priorBinaryBytes" authorization;
               authorizationNew =
-                if authorization == null then 0 else authorization.newBinaryBytes;
+                if authorization == null then 0
+                else getField "newBinaryBytes" authorization;
               authorizationDelta =
-                if authorization == null then 0 else authorization.deltaBytes;
+                if authorization == null then 0
+                else getField "deltaBytes" authorization;
               authorizationRationale =
-                if authorization == null then "" else authorization.rationalePath;
+                if authorization == null then ""
+                else getField "rationalePath" authorization;
               authorizationCandidate =
-                if authorization == null then "" else authorization.candidateContentSha256;
+                if authorization == null then ""
+                else getField "candidateContentSha256" authorization;
               authorizationReview =
-                if authorization == null then "" else authorization.reviewRecordSha256;
+                if authorization == null then ""
+                else getField "reviewRecordSha256" authorization;
+              authorizationReviewDigest =
+                if authorization == null then ""
+                else builtins.hashFile "sha256"
+                  (./. + "/${authorization.rationalePath}");
             in
             pkgs.runCommand "d2b-${artifact}-contract" {
               nativeBuildInputs = [
@@ -962,7 +1474,29 @@
                 || fail D2B-BZLARTIFACT-LINKAGE
               grep -Eq "^[[:space:]]*Machine:[[:space:]]+${expectedMachine}$" "$header" \
                 || fail D2B-BZLARTIFACT-LINKAGE
+              actual_elf_type=$(
+                ${pkgs.gawk}/bin/awk '/^[[:space:]]*Type:/ { print $2; exit }' "$header"
+              )
+              case "$actual_elf_type" in
+                DYN) actual_elf_type=ET_DYN ;;
+                EXEC) actual_elf_type=ET_EXEC ;;
+                REL) actual_elf_type=ET_REL ;;
+                *) actual_elf_type=unknown ;;
+              esac
+              test "$actual_elf_type" = ${lib.escapeShellArg row.elfType} \
+                || fail D2B-BZLARTIFACT-LINKAGE
+              actual_e_machine=$(
+                case ${lib.escapeShellArg expectedMachine} in
+                  "Advanced Micro Devices X86-64") printf '%s\n' EM_X86_64 ;;
+                  "AArch64") printf '%s\n' EM_AARCH64 ;;
+                  *) printf '%s\n' unknown ;;
+                esac
+              )
               printf '%s\n' ${lib.escapeShellArg expectedE} > "$TMPDIR/expected-e-machine"
+              test "$actual_e_machine" = "$(cat "$TMPDIR/expected-e-machine")" \
+                || fail D2B-BZLARTIFACT-LINKAGE
+              test "$actual_e_machine" = ${lib.escapeShellArg row.elfMachine} \
+                || fail D2B-BZLARTIFACT-LINKAGE
               # Guest artifacts are ET_DYN static PIE and have no PT_INTERP or DT_NEEDED.
               ${if guest then ''
                 grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN([[:space:]]|$)' "$header" \
@@ -999,6 +1533,10 @@
               ''}
 
               actual_bytes=$(${pkgs.coreutils}/bin/stat -c %s "$binary")
+              actual_binary_sha=$(${pkgs.coreutils}/bin/sha256sum "$binary" \
+                | ${pkgs.gawk}/bin/awk '{print $1}')
+              test "$actual_binary_sha" = ${lib.escapeShellArg row.binarySha256} \
+                || fail D2B-BZLARTIFACT-IDENTITY
               baseline_bytes=${toString row.binaryBytes}
               if test "$actual_bytes" -gt "$baseline_bytes"; then
                 test ${lib.escapeShellArg authorizationDecision} = approved \
@@ -1017,13 +1555,19 @@
                 test ${toString authorizationDelta} -gt 0 \
                   || fail D2B-BZLARTIFACT-SIZE-AUTH
                 case ${lib.escapeShellArg authorizationRationale} in
-                  ""|/*|../*|*/../*|*/..) fail D2B-BZLARTIFACT-SIZE-AUTH ;;
+                  ""|/*|*//*|.|./*|*/.|../*|*/../*|*/..) \
+                    fail D2B-BZLARTIFACT-SIZE-AUTH ;;
                 esac
                 printf '%s\n' ${lib.escapeShellArg authorizationCandidate} \
                   | grep -Eq '^[0-9a-fA-F]{64}$' \
                   || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${lib.escapeShellArg authorizationCandidate} = "$actual_binary_sha" \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
                 printf '%s\n' ${lib.escapeShellArg authorizationReview} \
                   | grep -Eq '^[0-9a-fA-F]{64}$' \
+                  || fail D2B-BZLARTIFACT-SIZE-AUTH
+                test ${lib.escapeShellArg authorizationReview} = \
+                  ${lib.escapeShellArg authorizationReviewDigest} \
                   || fail D2B-BZLARTIFACT-SIZE-AUTH
               else
                 test ${lib.escapeShellArg authorizationDecision} = "" \
@@ -1055,51 +1599,41 @@
           , edgeKinds
           , production
           }:
-          if !policyInputsPresent then
+          let
+            expectedContext = lib.findFirst
+              (context:
+                context.system == system
+                && context.target == target
+                && context.package == package
+                && context.features
+                  == (if feature == "" then [ ] else [ feature ]))
+              null
+              policyContexts;
+            contextRecord =
+              if expectedContext == null then null
+              else lib.findFirst
+                (record: record.context.context == expectedContext.context)
+                null
+                policyContextRecords;
+            contextBound =
+              contextRecord != null
+              && toString contextRecord.root == toString root
+              && variant == (if production then "production" else "policy")
+              && edgeKinds
+                == (if production then "normal,build" else "normal,build,dev");
+          in
+          if !bazelSourceIdentityGate
+            || !policyInputsPresent
+            || !policyInputCorpusGate
+            || expectedContext == null || !contextBound then
             pkgs.runCommand "d2b-${name}-input" { } ''
               printf '%s\n' D2B-BZLPOLICY-INPUT >&2
               exit 1
             ''
           else
-            let
-              selectedDir = if production then "production" else "policy";
-              selectedFile =
-                if production then "closure.json" else "metadata.json";
-            in
             pkgs.runCommand "d2b-${name}" {
-              nativeBuildInputs = [ pkgs.gnugrep ];
             } ''
               set -euo pipefail
-              fail() {
-                printf '%s\n' "$1" >&2
-                exit 1
-              }
-              input=${root}/${selectedDir}/${selectedFile}
-              lock=${root}/${selectedDir}/Cargo.lock
-              test -s "$input" || fail D2B-BZLPOLICY-INPUT
-              test -s "$lock" || fail D2B-BZLPOLICY-INPUT
-              grep -Fq '"system": "${system}"' "$input" \
-                || fail D2B-BZLPOLICY-CONTEXT
-              grep -Fq '"target": "${target}"' "$input" \
-                || fail D2B-BZLPOLICY-CONTEXT
-              grep -Fq '"package": "${package}"' "$input" \
-                || fail D2B-BZLPOLICY-ROOT
-              grep -Fq '"defaultFeatures": false' "$input" \
-                || fail D2B-BZLPOLICY-FEATURE
-              ${if feature == "" then ''
-                if grep -Fq 'real-libshpool' "$input"; then
-                  fail D2B-BZLPOLICY-FEATURE
-                fi
-              '' else ''
-                grep -Fq 'real-libshpool' "$input" \
-                  || fail D2B-BZLPOLICY-FEATURE
-              ''}
-              grep -Fq '"variant": "${variant}"' "$input" \
-                || fail D2B-BZLPOLICY-EDGES
-              grep -Fq '"edgeKinds": "${edgeKinds}"' "$input" \
-                || fail D2B-BZLPOLICY-EDGES
-              grep -Fq '"identities": [' "$input" \
-                || fail D2B-BZLPOLICY-CENSUS
               mkdir -p "$out"
               printf '%s\n' ok > "$out/result"
             '';

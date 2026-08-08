@@ -22,6 +22,18 @@ let
     (flakeRoot + "/tests/golden/bazel-toolchain.json"));
   supervisorGolden = builtins.fromJSON (builtins.readFile
     (flakeRoot + "/tests/golden/bazel-exec-supervisor.json"));
+  currentSourceHashes = {
+    policy = builtins.hashFile "sha256"
+      (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/seccomp-policy.json");
+    patch = builtins.hashFile "sha256"
+      (flakeRoot + "/pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch");
+    supervisor = builtins.hashFile "sha256"
+      (flakeRoot + "/tests/tools/d2b-bazel-exec-supervisor/supervisor.c");
+    plant = builtins.hashFile "sha256"
+      (flakeRoot + "/tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c");
+    expression = builtins.hashFile "sha256"
+      (flakeRoot + "/pkgs/d2b-bazel-exec-supervisor/default.nix");
+  };
   zeroSha256 = builtins.concatStringsSep "" (builtins.genList (_: "0") 64);
   supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
   nativeDigestsAreNonzero = record:
@@ -261,5 +273,29 @@ in
       ];
       sourceHasCalls = true;
     };
+  };
+
+  "bazel-toolchain-current-package-hashes" = {
+    expr = builtins.all
+      (hash: builtins.isString hash
+        && builtins.match "[0-9a-fA-F]{64}" hash != null)
+      (builtins.attrValues currentSourceHashes)
+      && builtins.match ".*bazelSourceIdentityGate.*" flakeText != null;
+    expected = true;
+  };
+
+  "bazel-toolchain-native-check-surface" = {
+    expr = builtins.all
+      (check: builtins.match ".*${check}.*" flakeText != null)
+      [
+        "broker-production-dependency-policy"
+        "guest-shell-runner-static-dependency-policy"
+        "broker-production-package-policy"
+        "guest-real-libshpool-package-policy"
+        "broker-host-artifact-contract"
+        "guest-static-elf"
+      ]
+      && flakeText != "";
+    expected = true;
   };
 }

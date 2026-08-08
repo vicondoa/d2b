@@ -5,8 +5,9 @@
 //! generator, so their identity, protocol, policy, and recovery ownership
 //! must be checked without a fixture build.
 
-use d2b_contract_tests::{read_repo_file, repo_path_exists};
+use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 use serde_json::Value;
+use std::process::Command;
 
 const BAZEL_NIX: &str = "pkgs/bazel-8.6.0-seccomp/default.nix";
 const PATCH: &str = "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch";
@@ -57,6 +58,20 @@ fn assert_no_zero_sha256_placeholder(value: &Value, label: &str) {
         !value.to_string().contains(&zero_sha256),
         "{label} contains a zero SHA-256 placeholder"
     );
+}
+
+fn sha256_repo_file(relative: &str) -> String {
+    let output = Command::new("sha256sum")
+        .arg(repo_root().join(relative))
+        .output()
+        .expect("sha256sum must be available for native identity checks");
+    assert!(output.status.success(), "sha256sum must hash {relative}");
+    String::from_utf8(output.stdout)
+        .expect("sha256sum output must be UTF-8")
+        .split_whitespace()
+        .next()
+        .expect("sha256sum output must contain a digest")
+        .to_owned()
 }
 
 #[test]
@@ -668,4 +683,31 @@ fn golden_identity_records_are_redacted_and_native_scoped() {
             "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c"
         ])
     );
+}
+
+#[test]
+fn current_sandbox_and_supervisor_source_hashes_are_bound_to_golden_identity() {
+    let toolchain = json(TOOLCHAIN_GOLDEN);
+    let supervisor = json(SUPERVISOR_GOLDEN);
+    assert_eq!(string(&toolchain, "/patch/sha256"), sha256_repo_file(PATCH));
+    assert_eq!(
+        string(&toolchain, "/policy/sha256"),
+        sha256_repo_file(POLICY)
+    );
+    assert_eq!(
+        string(&supervisor, "/source/sha256"),
+        sha256_repo_file(SUPERVISOR)
+    );
+    assert_eq!(
+        string(&supervisor, "/source/plantSha256"),
+        sha256_repo_file(PLANT)
+    );
+    assert_eq!(
+        string(&supervisor, "/expression/sha256"),
+        sha256_repo_file(SUPERVISOR_NIX)
+    );
+    let flake = read_repo_file("flake.nix");
+    assert!(flake.contains("bazelSourceIdentityGate"));
+    assert!(flake.contains("currentBazelSourceHashes"));
+    assert!(!flake.contains("phase-valid"));
 }

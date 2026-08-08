@@ -5,6 +5,7 @@
 //! rendered fixture paths.
 
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -33,6 +34,23 @@ fn count(text: &str, needle: &str) -> usize {
 fn json(path: &str) -> Value {
     serde_json::from_str(&read_repo_file(path))
         .unwrap_or_else(|error| panic!("{path} must be valid JSON: {error}"))
+}
+
+fn sha256_file(path: &Path) -> String {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .expect("sha256sum must be available for artifact authorization tests");
+    assert!(
+        output.status.success(),
+        "sha256sum must hash the review file"
+    );
+    String::from_utf8(output.stdout)
+        .expect("sha256sum output must be UTF-8")
+        .split_whitespace()
+        .next()
+        .expect("sha256sum output must contain a digest")
+        .to_owned()
 }
 
 fn strings(value: &Value, pointer: &str) -> Vec<String> {
@@ -202,11 +220,32 @@ fn guest_elf_and_broker_linkage_contract_is_closed_without_store_diagnostics() {
             .as_array()
             .expect("artifact baseline rows must be an array");
         assert_eq!(rows.len(), 4);
+        let pairs = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}/{}",
+                    row["system"].as_str().unwrap_or_default(),
+                    row["artifact"].as_str().unwrap_or_default()
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(pairs.len(), 4);
+        assert_eq!(
+            pairs,
+            BTreeSet::from([
+                "x86_64-linux/broker-host-artifact-contract".to_owned(),
+                "x86_64-linux/guest-static-elf".to_owned(),
+                "aarch64-linux/broker-host-artifact-contract".to_owned(),
+                "aarch64-linux/guest-static-elf".to_owned(),
+            ])
+        );
         assert!(!baselines.to_string().contains("/nix/store/"));
         for row in rows {
             assert!(row["system"].is_string());
             assert!(row["artifact"].is_string());
             assert!(row["binaryBytes"].is_u64());
+            assert_eq!(row["binarySha256"].as_str().unwrap_or_default().len(), 64);
             assert!(row["elfType"].is_string());
             assert!(row["elfMachine"].is_string());
             assert!(row["closureCount"].is_u64());
@@ -214,17 +253,31 @@ fn guest_elf_and_broker_linkage_contract_is_closed_without_store_diagnostics() {
             assert_eq!(row["selectedPolicyDigest"].as_str().unwrap().len(), 64);
             assert!(row["measurementCommand"].is_string());
             assert!(row["candidateCommit"].is_string());
+            let expected_machine = match row["system"].as_str() {
+                Some("x86_64-linux") => "EM_X86_64",
+                Some("aarch64-linux") => "EM_AARCH64",
+                other => panic!("unexpected artifact system {other:?}"),
+            };
+            assert_eq!(row["elfMachine"], expected_machine);
             assert!(row.get("rowAllowance").is_none());
             assert!(row.get("sizeAllowance").is_none());
-            assert!(row["sizeGrowthAuthorization"].is_null());
+            assert!(row.get("sizeGrowthAuthorization").is_some());
             if row["artifact"] == "broker-host-artifact-contract" {
+                assert_eq!(row["elfType"], "ET_DYN");
                 assert!(row["interpreter"].is_string());
+                let expected_interpreter = match row["system"].as_str() {
+                    Some("x86_64-linux") => "ld-linux-x86-64.so.2",
+                    Some("aarch64-linux") => "ld-linux-aarch64.so.1",
+                    other => panic!("unexpected artifact system {other:?}"),
+                };
+                assert_eq!(row["interpreter"], expected_interpreter);
                 assert!(row["needed"].is_array());
                 let needed = row["needed"].as_array().unwrap();
                 let mut sorted = needed.clone();
                 sorted.sort_by_key(|entry| entry.as_str().unwrap_or_default().to_owned());
                 assert_eq!(*needed, sorted);
             } else {
+                assert_eq!(row["elfType"], "ET_DYN");
                 assert!(row.get("interpreter").is_none() || row["interpreter"].is_null());
                 assert_eq!(row["needed"], serde_json::json!([]));
             }
@@ -238,43 +291,54 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         system: "x86_64-linux",
         artifact: "guest-static-elf",
         prior_bytes: 100,
-        candidate_digest: "candidate-digest",
-        review_digest: "review-digest",
+        candidate_digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        rationale_path: "LICENSE",
+        review_digest: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     };
     let approved = AuthorizationSpec::for_row(&baseline);
-    assert!(size_authorization_valid(&baseline, 100, None));
+    assert!(size_authorization_valid(
+        &baseline,
+        100,
+        baseline.candidate_digest,
+        None
+    ));
     assert!(size_authorization_valid(
         &baseline,
         107,
+        baseline.candidate_digest,
         Some(&authorization(approved))
     ));
 
     let negative = [
-        size_authorization_valid(&baseline, 107, None),
+        size_authorization_valid(&baseline, 107, baseline.candidate_digest, None),
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(approved).with_decision("denied")),
         ),
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
-                candidate: "stale-candidate",
+                candidate: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 ..approved
             })),
         ),
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
-                review: "stale-review",
+                review: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 ..approved
             })),
         ),
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(
                 &authorization(AuthorizationSpec {
                     system: "aarch64-linux",
@@ -286,6 +350,7 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
                 artifact: "broker-host-artifact-contract",
                 ..approved
@@ -294,6 +359,7 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
                 prior: 99,
                 delta: 8,
@@ -303,6 +369,7 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
                 new: 108,
                 ..approved
@@ -311,6 +378,7 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
                 delta: 8,
                 ..approved
@@ -319,12 +387,27 @@ fn size_growth_authorization_has_only_the_closed_positive_delta_source() {
         size_authorization_valid(
             &baseline,
             107,
+            baseline.candidate_digest,
             Some(&authorization(AuthorizationSpec {
                 rationale: "/absolute/review.md",
                 ..approved
             })),
         ),
-        size_authorization_valid(&baseline, 108, Some(&authorization(approved))),
+        size_authorization_valid(
+            &baseline,
+            107,
+            baseline.candidate_digest,
+            Some(&authorization(AuthorizationSpec {
+                rationale: "reviews/missing.md",
+                ..approved
+            })),
+        ),
+        size_authorization_valid(
+            &baseline,
+            108,
+            baseline.candidate_digest,
+            Some(&authorization(approved)),
+        ),
     ];
     assert!(negative.iter().all(|valid| !valid));
 }
@@ -335,6 +418,7 @@ struct SizeRow {
     artifact: &'static str,
     prior_bytes: u64,
     candidate_digest: &'static str,
+    rationale_path: &'static str,
     review_digest: &'static str,
 }
 
@@ -362,7 +446,7 @@ impl<'a> AuthorizationSpec<'a> {
             prior: row.prior_bytes,
             new: 107,
             delta: 7,
-            rationale: "reviews/artifact-growth.md",
+            rationale: row.rationale_path,
             candidate: row.candidate_digest,
             review: row.review_digest,
         }
@@ -400,6 +484,7 @@ fn authorization(spec: AuthorizationSpec<'_>) -> Authorization {
 fn size_authorization_valid(
     row: &SizeRow,
     realized_bytes: u64,
+    realized_digest: &str,
     authorization: Option<&Authorization>,
 ) -> bool {
     let Some(authorization) = authorization else {
@@ -423,22 +508,84 @@ fn size_authorization_valid(
     if object.len() != fields.len() || !fields.iter().all(|field| object.contains_key(*field)) {
         return false;
     }
+    let rationale_path = value["rationalePath"].as_str();
+    let rationale_is_repository_relative = rationale_path.is_some_and(|path| {
+        let relative = Path::new(path);
+        relative.is_relative()
+            && relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+            && repo_root().join(relative).is_file()
+    });
     value["system"] == row.system
         && value["artifact"] == row.artifact
         && value["priorBinaryBytes"] == row.prior_bytes
         && value["newBinaryBytes"] == realized_bytes
         && value["deltaBytes"].as_u64() == realized_bytes.checked_sub(row.prior_bytes)
         && realized_bytes > row.prior_bytes
-        && value["rationalePath"].as_str().is_some_and(|path| {
-            !Path::new(path).is_absolute() && !path.starts_with("../") && !path.contains("/../")
-        })
+        && rationale_is_repository_relative
         && value["candidateContentSha256"]
             .as_str()
-            .is_some_and(|digest| digest == row.candidate_digest)
-        && value["reviewRecordSha256"]
-            .as_str()
-            .is_some_and(|digest| digest == row.review_digest)
+            .is_some_and(|digest| digest == realized_digest && is_hex(digest, 64))
+        && value["reviewRecordSha256"].as_str().is_some_and(|digest| {
+            digest == sha256_file(&repo_root().join(rationale_path.expect("path checked")))
+        })
         && value["decision"] == "approved"
+}
+
+fn is_hex(value: &str, length: usize) -> bool {
+    value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[test]
+fn artifact_contract_binds_real_content_and_structural_policy_inputs() {
+    let flake = read_repo_file(FLAKE);
+    for needle in [
+        "builtins.fromJSON",
+        "builtins.fromTOML",
+        "policyInputCorpusGate",
+        "artifactBaselineGate",
+        "actual_binary_sha",
+        "sha256sum \"$binary\"",
+        "authorizationCandidate",
+        "authorizationReviewDigest",
+        "expected-e-machine",
+        "actual_e_machine",
+        "builtins.hashFile \"sha256\"",
+        "binarySha256",
+        "closure_count",
+        "closure_sha",
+        "policy_sha",
+    ] {
+        assert!(flake.contains(needle), "flake lost binding {needle}");
+    }
+    assert!(!flake.contains("grep -Fq '\"system\":"));
+    assert!(!flake.contains("grep -Fq '\"target\":"));
+    assert!(!flake.contains("phase-valid"));
+}
+
+#[test]
+fn size_authorization_cannot_replay_one_review_as_two_authorities() {
+    let baseline = SizeRow {
+        system: "x86_64-linux",
+        artifact: "guest-static-elf",
+        prior_bytes: 100,
+        candidate_digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        rationale_path: "LICENSE",
+        review_digest: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    };
+    let approved = authorization(AuthorizationSpec::for_row(&baseline));
+    let mut authorities = BTreeSet::new();
+    let records = [approved.value.clone(), approved.value];
+    for value in &records {
+        authorities.insert(serde_json::to_string(value).expect("authorization JSON"));
+    }
+    assert_eq!(
+        authorities.len(),
+        1,
+        "replayed authority must not become two independent records"
+    );
+    assert_ne!(authorities.len(), records.len());
 }
 
 #[test]
