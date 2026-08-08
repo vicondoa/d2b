@@ -54,6 +54,12 @@ Record this in the plan's drift log and raise it to the integrator; correcting t
 is a specification amendment that would re-open that spec's validation evidence, so it is not
 done inside a wave.
 
+**Historical status note (2026-08-07)**: This research record is historical and
+non-authorizing; its execution guidance is superseded by the authoritative
+`plan.md`/`tasks.md` graph, which governs current execution. The §3.2 destination drift
+remains unresolved and requires correction through the external specification-amendment
+path. Nothing in this note authorizes alternate destinations or clears that external blocker.
+
 ---
 
 ## R2: How is the failed storage footprint target resolved?
