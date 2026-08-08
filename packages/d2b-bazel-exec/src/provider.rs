@@ -1,16 +1,17 @@
 use std::{fmt, io};
 
-use d2b_bazel_support::fsops::{
-    FileSystem, ProviderHandle, VerificationError, VerifiedProvider as SupportVerifiedProvider,
-};
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
 
-/// An opaque, compiler-derived capability for one verified executable
+/// An opaque, compiler-derived capability for one admitted executable
 /// descriptor.
 ///
 /// The type has no public inherent API. It has no path, descriptor, formatting,
 /// conversion, duplication, default, or serialization surface. The only
-/// operation available to a caller is passing the value to
-/// [`crate::execute_verified`].
+/// operation available to a caller is passing the value to the sole consuming
+/// execution API. Production admission is owned by the later immutable
+/// toolchain lane; this crate deliberately has no unchecked path-plus-digest
+/// constructor.
 ///
 /// ```compile_fail
 /// use d2b_bazel_exec::VerifiedExecutable;
@@ -99,55 +100,65 @@ use d2b_bazel_support::fsops::{
 /// }
 /// ```
 pub struct VerifiedExecutable {
-    provider: ProviderHandle,
+    #[cfg(unix)]
+    provider: OwnedFd,
+    #[cfg(not(unix))]
+    provider: (),
 }
 
 #[allow(dead_code)]
 pub(crate) trait VerifiedExecutableMint {}
 
 impl VerifiedExecutable {
-    pub(crate) fn from_support(value: SupportVerifiedProvider) -> Self {
-        let (provider, _metadata, _digest) = value.into_parts();
-        Self { provider }
-    }
-
-    pub(crate) fn duplicate_for_mapping(&self) -> io::Result<std::os::fd::OwnedFd> {
-        self.provider.duplicate_for_mapping()
+    #[cfg(unix)]
+    pub(crate) fn duplicate_for_mapping(&self) -> io::Result<OwnedFd> {
+        rustix::io::fcntl_dupfd_cloexec(&self.provider, 3).map_err(io::Error::from)
     }
 }
 
-/// Verify a provider descriptor and mint the opaque execution capability.
-pub fn verify_provider<F: FileSystem>(
-    filesystem: &F,
-    provider: ProviderHandle,
-    newest_input: Option<&ProviderHandle>,
-    expected_digest: impl AsRef<[u8]>,
-) -> Result<VerifiedExecutable, ProviderError> {
-    d2b_bazel_support::fsops::verify_provider(filesystem, provider, newest_input, expected_digest)
-        .map(VerifiedExecutable::from_support)
-        .map_err(ProviderError::Verification)
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::fs::File;
+
+    use super::VerifiedExecutable;
+
+    /// Construct an execution capability from a test-owned open file.
+    ///
+    /// This module is available only when the package's explicit
+    /// `test-support` feature is enabled. Production dependents do not enable
+    /// that feature; no equivalent unchecked constructor exists in the
+    /// production API.
+    pub fn verified_executable(file: File) -> VerifiedExecutable {
+        #[cfg(unix)]
+        {
+            VerifiedExecutable {
+                provider: file.into(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            VerifiedExecutable { provider: () }
+        }
+    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderError {
-    Verification(VerificationError),
+    AuthorityUnavailable,
+    UnsupportedPlatform,
 }
 
 impl fmt::Display for ProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Verification(error) => error.fmt(formatter),
+            Self::AuthorityUnavailable => formatter.write_str("D2B-BZLEXEC-PROVIDER-AUTHORITY"),
+            Self::UnsupportedPlatform => formatter.write_str("D2B-BZLEXEC-NIX-PTRACE-SYSTEM"),
         }
     }
 }
 
-impl std::error::Error for ProviderError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Verification(error) => Some(error),
-        }
-    }
-}
+impl std::error::Error for ProviderError {}
 
 /// Closed classification for the `execveat` failure surface.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

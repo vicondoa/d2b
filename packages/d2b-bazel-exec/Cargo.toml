@@ -9,6 +9,9 @@ license.workspace = true
 name = "d2b_bazel_exec"
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
 

@@ -1,7 +1,11 @@
 use std::{
-    os::fd::{AsRawFd, OwnedFd},
+    ffi::OsString,
+    fmt,
+    fs::File,
+    io::Read,
+    os::fd::OwnedFd,
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{Mutex, OnceLock},
 };
 
@@ -10,9 +14,14 @@ use nix::sys::signal::{SigSet, Signal};
 
 use crate::provider::VerifiedExecutable;
 
+#[cfg(unix)]
+use rustix::pipe::{PipeFlags, pipe_with};
+
+const PRIVATE_STATUS_FD: i32 = 8;
 const PRIVATE_EXECUTABLE_FD: i32 = 9;
-const IMMUTABLE_SUPERVISOR_PATH: &str =
-    "/nix/store/d2b-bazel-exec-supervisor/bin/d2b-bazel-exec-supervisor";
+pub const SUPERVISOR_ENVIRONMENT: &str = "D2B_BAZEL_EXEC_SUPERVISOR";
+const IMMUTABLE_SUPERVISOR_PATH: Option<&str> = option_env!("D2B_BAZEL_EXEC_SUPERVISOR");
+
 pub const STATUS_BUFFER_CAPACITY: usize = 27;
 pub const STATUS_MAGIC: [u8; 4] = *b"D2BS";
 pub const STATUS_VERSION: u8 = 1;
@@ -22,11 +31,14 @@ pub const RUST_PARENT_STAGE_CODES: &[&str] = &[
     "D2B-BZLEXEC-PARENT-PREPARE",
     "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF",
     "D2B-BZLEXEC-PARENT-SPAWN",
+    "D2B-BZLEXEC-PARENT-HELPER-IDENTITY",
     "D2B-BZLEXEC-PARENT-CLOSE",
     "D2B-BZLEXEC-PARENT-READY",
     "D2B-BZLEXEC-PARENT-EXECUTED",
     "D2B-BZLEXEC-PARENT-TERMINAL",
     "D2B-BZLEXEC-PARENT-WAIT",
+    "D2B-BZLEXEC-PARENT-PROTOCOL",
+    "D2B-BZLEXEC-PARENT-TARGET",
     "D2B-BZLEXEC-PARENT-STATUS",
     "D2B-BZLEXEC-PARENT-CLEANUP",
 ];
@@ -83,11 +95,21 @@ pub enum StdioPolicy {
 }
 
 /// The request fields available to the safe execution owner.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// `target_argv[0]` is passed to the target as its argv0. The helper itself is
+/// never used as the target argv0.
+#[derive(Clone, Eq, PartialEq)]
 pub struct ExecutionRequest {
     pub stdin: StdioPolicy,
     pub stdout: StdioPolicy,
     pub stderr: StdioPolicy,
+    pub target_argv: Vec<OsString>,
+}
+
+impl fmt::Debug for ExecutionRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ExecutionRequest(..)")
+    }
 }
 
 impl Default for ExecutionRequest {
@@ -96,8 +118,15 @@ impl Default for ExecutionRequest {
             stdin: StdioPolicy::Inherit,
             stdout: StdioPolicy::Inherit,
             stderr: StdioPolicy::Inherit,
+            target_argv: vec![OsString::from("target")],
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExecutionResult {
+    pub helper_started: bool,
+    pub terminal: TerminalStatus,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,33 +136,48 @@ pub struct SupervisorIdentity {
 }
 
 impl SupervisorIdentity {
+    const fn immutable() -> Self {
+        Self {
+            label: "d2b-bazel-exec-supervisor",
+            immutable: true,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
     pub const fn label(self) -> &'static str {
         self.label
     }
 
+    #[cfg(feature = "test-support")]
     pub const fn is_immutable(self) -> bool {
         self.immutable
     }
 }
 
-/// The fd and stdio plan produced after consuming the verified capability.
-///
-/// The helper identity is not caller supplied. A test backend can inspect the
-/// plan without starting a process; the production backend uses the fixed
-/// immutable toolchain output.
+/// A launch plan is deliberately compiled into the explicit test-support
+/// surface only. Production callers cannot implement a backend that receives
+/// an executable descriptor or inspect the plan.
+#[cfg(feature = "test-support")]
 pub struct LaunchPlan {
+    #[cfg(unix)]
     private_fd: OwnedFd,
+    #[cfg(not(unix))]
+    private_fd: (),
     request: ExecutionRequest,
     supervisor: SupervisorIdentity,
 }
 
+#[cfg(feature = "test-support")]
 impl LaunchPlan {
+    #[cfg(unix)]
     pub fn private_fd_number(&self) -> i32 {
+        use std::os::fd::AsRawFd;
+
         self.private_fd.as_raw_fd()
     }
 
-    pub const fn request(&self) -> ExecutionRequest {
-        self.request
+    pub fn request(&self) -> &ExecutionRequest {
+        &self.request
     }
 
     pub const fn supervisor(&self) -> SupervisorIdentity {
@@ -147,32 +191,13 @@ impl LaunchPlan {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SpawnReceipt {
-    helper_started: bool,
-}
-
-impl SpawnReceipt {
-    pub const fn started() -> Self {
-        Self {
-            helper_started: true,
-        }
-    }
-
-    pub const fn not_started() -> Self {
-        Self {
-            helper_started: false,
-        }
-    }
-
-    pub const fn helper_started(self) -> bool {
-        self.helper_started
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExecutionResult {
-    pub helper_started: bool,
+struct InternalLaunchPlan {
+    #[cfg(unix)]
+    private_fd: OwnedFd,
+    #[cfg(not(unix))]
+    private_fd: (),
+    request: ExecutionRequest,
+    supervisor: SupervisorIdentity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,6 +207,9 @@ pub enum BackendError {
     Restore,
     Spawn,
     Mapping,
+    HelperIdentity,
+    StatusPipe,
+    TargetArguments,
 }
 
 impl BackendError {
@@ -189,7 +217,9 @@ impl BackendError {
         match self {
             Self::Capture | Self::Block | Self::Restore => "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF",
             Self::Spawn => "D2B-BZLEXEC-PARENT-SPAWN",
-            Self::Mapping => "D2B-BZLEXEC-PARENT-PREPARE",
+            Self::Mapping | Self::StatusPipe => "D2B-BZLEXEC-PARENT-PREPARE",
+            Self::HelperIdentity => "D2B-BZLEXEC-PARENT-HELPER-IDENTITY",
+            Self::TargetArguments => "D2B-BZLEXEC-PARENT-TARGET",
         }
     }
 }
@@ -200,41 +230,42 @@ pub enum HandoffError {
     Backend(BackendError),
     RestoreAfterSpawn,
     RestoreAfterSpawnFailure,
+    Protocol(ProtocolError),
+    Wait,
+    StatusMismatch,
+    Target(TerminalStatus),
 }
 
 impl HandoffError {
     pub const fn code(self) -> &'static str {
         match self {
-            Self::GuardPoisoned => "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF",
-            Self::Backend(error) => error.code(),
-            Self::RestoreAfterSpawn | Self::RestoreAfterSpawnFailure => {
+            Self::GuardPoisoned | Self::RestoreAfterSpawn | Self::RestoreAfterSpawnFailure => {
                 "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF"
             }
+            Self::Backend(error) => error.code(),
+            Self::Protocol(error) => error.code(),
+            Self::Wait => "D2B-BZLEXEC-PARENT-WAIT",
+            Self::StatusMismatch => "D2B-BZLEXEC-PARENT-STATUS",
+            Self::Target(_) => "D2B-BZLEXEC-PARENT-TARGET",
         }
     }
 }
 
-impl std::fmt::Display for HandoffError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for HandoffError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code())
     }
 }
 
 impl std::error::Error for HandoffError {}
 
-/// An opaque captured mask. Production values contain the safe nix mask; test
-/// values let injected backends model failures without changing process state.
+/// An opaque captured mask. Test values exist only in the explicit
+/// `test-support` feature.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MaskSnapshot {
     Native(SigSet),
+    #[cfg(feature = "test-support")]
     Test(u64),
-}
-
-pub trait ExecutionBackend {
-    fn capture_mask(&self) -> Result<MaskSnapshot, BackendError>;
-    fn block_managed(&self) -> Result<(), BackendError>;
-    fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError>;
-    fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError>;
 }
 
 /// One process-wide lock for the complete capture, block, spawn, and restore
@@ -251,8 +282,9 @@ impl LaunchCoordinator {
         }
     }
 
-    /// Poison only an injected coordinator; this is used to prove fail-closed
-    /// refusal before capture.
+    /// Poison only an injected coordinator; this is unavailable to production
+    /// callers.
+    #[cfg(feature = "test-support")]
     pub fn poison_for_test(&self) {
         let _guard = self.gate.lock().expect("coordinator must be unpoisoned");
         panic!("injected poisoned launch coordinator");
@@ -280,15 +312,18 @@ pub fn managed_signals() -> SigSet {
     signals
 }
 
-pub fn run_signal_handoff<B, F, T>(
+trait LaunchBackend {
+    fn capture_mask(&self) -> Result<MaskSnapshot, BackendError>;
+    fn block_managed(&self) -> Result<(), BackendError>;
+    fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError>;
+    fn spawn(&self, plan: InternalLaunchPlan) -> Result<InternalSpawnReceipt, BackendError>;
+}
+
+fn launch_with_signal_handoff<B: LaunchBackend>(
     coordinator: &LaunchCoordinator,
     backend: &B,
-    spawn: F,
-) -> Result<T, HandoffError>
-where
-    B: ExecutionBackend,
-    F: FnOnce() -> Result<T, BackendError>,
-{
+    plan: InternalLaunchPlan,
+) -> Result<InternalSpawnReceipt, HandoffError> {
     let _guard = coordinator
         .gate
         .lock()
@@ -302,7 +337,10 @@ where
         return Err(HandoffError::Backend(error));
     }
 
-    let result = spawn();
+    // `spawn` returns immediately after the helper is created. Waiting for
+    // status is intentionally outside this closure so restoration happens
+    // immediately after spawn and before the process-wide guard is released.
+    let result = backend.spawn(plan);
     let restored = backend.restore_mask(snapshot);
     match (result, restored) {
         (Ok(value), Ok(())) => Ok(value),
@@ -312,37 +350,44 @@ where
     }
 }
 
-/// The one public API that consumes `VerifiedExecutable`.
-pub fn execute_verified<B: ExecutionBackend>(
+/// The only production API that consumes `VerifiedExecutable`.
+pub fn execute_verified(
     executable: VerifiedExecutable,
     request: ExecutionRequest,
-    backend: &B,
 ) -> Result<ExecutionResult, HandoffError> {
-    let private_fd = executable
-        .duplicate_for_mapping()
-        .map_err(|_| HandoffError::Backend(BackendError::Mapping))?;
-    let plan = LaunchPlan {
-        private_fd,
-        request,
-        supervisor: SupervisorIdentity {
-            label: "d2b-bazel-exec-supervisor",
-            immutable: true,
-        },
-    };
-    let receipt = run_signal_handoff(process_launch_coordinator(), backend, || {
-        backend.spawn(plan)
-    })?;
-    Ok(ExecutionResult {
-        helper_started: receipt.helper_started(),
-    })
+    if request.target_argv.is_empty()
+        || request
+            .target_argv
+            .first()
+            .is_some_and(|value| value.as_os_str().is_empty())
+    {
+        return Err(HandoffError::Backend(BackendError::TargetArguments));
+    }
+    #[cfg(unix)]
+    {
+        let private_fd = executable
+            .duplicate_for_mapping()
+            .map_err(|_| HandoffError::Backend(BackendError::Mapping))?;
+        let plan = InternalLaunchPlan {
+            private_fd,
+            request,
+            supervisor: SupervisorIdentity::immutable(),
+        };
+        let receipt =
+            launch_with_signal_handoff(process_launch_coordinator(), &ProductionBackend, plan)?;
+        receipt.finish()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (executable, request);
+        Err(HandoffError::Backend(BackendError::HelperIdentity))
+    }
 }
 
-/// The production backend is kept small and safe. The C supervisor and the
-/// patched sandbox own post-spawn process control.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ProductionBackend;
+struct ProductionBackend;
 
-impl ExecutionBackend for ProductionBackend {
+impl LaunchBackend for ProductionBackend {
     fn capture_mask(&self) -> Result<MaskSnapshot, BackendError> {
         SigSet::thread_get_mask()
             .map(MaskSnapshot::Native)
@@ -358,31 +403,151 @@ impl ExecutionBackend for ProductionBackend {
     fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError> {
         match snapshot {
             MaskSnapshot::Native(mask) => mask.thread_set_mask().map_err(|_| BackendError::Restore),
+            #[cfg(feature = "test-support")]
             MaskSnapshot::Test(_) => Err(BackendError::Restore),
         }
     }
 
-    fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError> {
-        let mut command = Command::new(IMMUTABLE_SUPERVISOR_PATH);
-        command.stdin(stdio(plan.request.stdin));
-        command.stdout(stdio(plan.request.stdout));
-        command.stderr(stdio(plan.request.stderr));
-        command
-            .fd_mappings(vec![FdMapping {
-                parent_fd: plan.private_fd,
-                child_fd: PRIVATE_EXECUTABLE_FD,
-            }])
-            .map_err(|_| BackendError::Mapping)?;
-        let mut child = command.spawn().map_err(|_| BackendError::Spawn)?;
-        child.wait().map_err(|_| BackendError::Spawn)?;
-        Ok(SpawnReceipt::started())
+    fn spawn(&self, plan: InternalLaunchPlan) -> Result<InternalSpawnReceipt, BackendError> {
+        #[cfg(unix)]
+        {
+            if !plan.supervisor.immutable {
+                return Err(BackendError::HelperIdentity);
+            }
+            if plan.request.target_argv.is_empty()
+                || plan
+                    .request
+                    .target_argv
+                    .first()
+                    .is_some_and(|value| value.as_os_str().is_empty())
+            {
+                return Err(BackendError::TargetArguments);
+            }
+            let helper = immutable_supervisor_path().ok_or(BackendError::HelperIdentity)?;
+            let (status_reader, status_writer) =
+                pipe_with(PipeFlags::CLOEXEC).map_err(|_| BackendError::StatusPipe)?;
+
+            let mut command = Command::new(helper);
+            command.stdin(stdio(plan.request.stdin));
+            command.stdout(stdio(plan.request.stdout));
+            command.stderr(stdio(plan.request.stderr));
+            command.args(&plan.request.target_argv);
+            command
+                .fd_mappings(vec![
+                    FdMapping {
+                        parent_fd: plan.private_fd,
+                        child_fd: PRIVATE_EXECUTABLE_FD,
+                    },
+                    FdMapping {
+                        parent_fd: status_writer,
+                        child_fd: PRIVATE_STATUS_FD,
+                    },
+                ])
+                .map_err(|_| BackendError::Mapping)?;
+            let child = command.spawn().map_err(|_| BackendError::Spawn)?;
+            Ok(InternalSpawnReceipt::Child {
+                child,
+                status_reader: File::from(status_reader),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = plan;
+            Err(BackendError::HelperIdentity)
+        }
     }
+}
+
+fn immutable_supervisor_path() -> Option<&'static Path> {
+    let value = IMMUTABLE_SUPERVISOR_PATH?;
+    let path = Path::new(value);
+    let valid_store_path = path.is_absolute()
+        && value.starts_with("/nix/store/")
+        && path
+            .file_name()
+            .is_some_and(|name| name == "d2b-bazel-exec-supervisor");
+    valid_store_path.then_some(path)
 }
 
 fn stdio(policy: StdioPolicy) -> Stdio {
     match policy {
         StdioPolicy::Inherit => Stdio::inherit(),
         StdioPolicy::Null => Stdio::null(),
+    }
+}
+
+enum InternalSpawnReceipt {
+    #[cfg(unix)]
+    Child { child: Child, status_reader: File },
+    #[cfg(feature = "test-support")]
+    Test { helper_started: bool },
+}
+
+impl InternalSpawnReceipt {
+    fn finish(self) -> Result<ExecutionResult, HandoffError> {
+        match self {
+            #[cfg(unix)]
+            Self::Child {
+                mut child,
+                status_reader,
+            } => {
+                let protocol = read_status(status_reader);
+                let waited = child.wait().map_err(|_| HandoffError::Wait);
+                let terminal = match (protocol, waited) {
+                    (Err(error), _) => return Err(HandoffError::Protocol(error)),
+                    (Ok(_), Err(error)) => return Err(error),
+                    (Ok(terminal), Ok(status)) => {
+                        ensure_helper_status(status, terminal)?;
+                        terminal
+                    }
+                };
+                if terminal != TerminalStatus::Exited(0) {
+                    return Err(HandoffError::Target(terminal));
+                }
+                Ok(ExecutionResult {
+                    helper_started: true,
+                    terminal,
+                })
+            }
+            #[cfg(feature = "test-support")]
+            Self::Test { helper_started } => Ok(ExecutionResult {
+                helper_started,
+                terminal: TerminalStatus::Exited(0),
+            }),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn read_status(mut reader: File) -> Result<TerminalStatus, ProtocolError> {
+    let mut protocol = ProtocolReader::new();
+    let mut buffer = [0_u8; STATUS_BUFFER_CAPACITY];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return protocol.eof(),
+            Ok(length) => {
+                protocol.feed(&buffer[..length])?;
+            }
+            Err(_) => return Err(ProtocolError::StatusRead),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn ensure_helper_status(status: ExitStatus, terminal: TerminalStatus) -> Result<(), HandoffError> {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+
+    let matches = match terminal {
+        TerminalStatus::Exited(code) => status.code() == Some(i32::from(code)),
+        TerminalStatus::Signaled(signal) => {
+            status.code() == Some(128_i32.saturating_add(i32::from(signal)))
+        }
+    };
+    if matches && status.signal().is_none() {
+        Ok(())
+    } else {
+        Err(HandoffError::StatusMismatch)
     }
 }
 
@@ -442,6 +607,8 @@ pub enum ProtocolError {
     EmptyExecErrorEof,
     HelperBeforeExecuted,
     StatusEpipe,
+    StatusRead,
+    UnknownChildCode,
 }
 
 impl ProtocolError {
@@ -459,20 +626,24 @@ impl ProtocolError {
             Self::PreExecTermination => "D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION",
             Self::HelperBeforeExecuted => "D2B-BZLEXEC-PARENT-EXECUTED",
             Self::StatusEpipe => "D2B-BZLEXEC-HELPER-EXEC-EPIPE",
-            _ => "D2B-BZLEXEC-PARENT-STATUS",
+            Self::StatusRead => "D2B-BZLEXEC-PARENT-STATUS",
+            Self::UnknownChildCode => "D2B-BZLEXEC-HELPER-EXEC-UNKNOWN",
+            _ => "D2B-BZLEXEC-PARENT-PROTOCOL",
         }
     }
 }
 
-impl std::fmt::Display for ProtocolError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code())
     }
 }
 
 impl std::error::Error for ProtocolError {}
 
-/// A fixed-capacity status decoder. It never probes one byte beyond a frame.
+/// A fixed-capacity status decoder. It retains at most one complete frame
+/// plus coalesced frames and never treats EOF before the terminal frame as
+/// success.
 pub struct StatusDecoder {
     buffer: [u8; STATUS_BUFFER_CAPACITY],
     length: usize,
@@ -499,14 +670,19 @@ impl StatusDecoder {
     }
 
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StatusFrame>, ProtocolError> {
+        let new_length = self
+            .length
+            .checked_add(bytes.len())
+            .ok_or(ProtocolError::BufferOverflow)?;
+        if new_length > STATUS_BUFFER_CAPACITY {
+            return Err(ProtocolError::BufferOverflow);
+        }
         if self.state == ProtocolState::Terminal && !bytes.is_empty() {
             return Err(ProtocolError::TrailingFrame);
         }
-        if self.length + bytes.len() > STATUS_BUFFER_CAPACITY {
-            return Err(ProtocolError::BufferOverflow);
-        }
-        self.buffer[self.length..self.length + bytes.len()].copy_from_slice(bytes);
-        self.length += bytes.len();
+        self.buffer[self.length..new_length].copy_from_slice(bytes);
+        self.length = new_length;
+
         let mut frames = Vec::new();
         loop {
             if self.length < 8 {
@@ -553,10 +729,10 @@ impl StatusDecoder {
         if self.length != 0 {
             return Err(ProtocolError::PartialEof);
         }
-        match self.state {
-            ProtocolState::Terminal => Ok(self.terminal.expect("terminal frame was decoded")),
-            _ => Err(ProtocolError::EofBeforeTerminal),
+        if self.state != ProtocolState::Terminal {
+            return Err(ProtocolError::EofBeforeTerminal);
         }
+        self.terminal.ok_or(ProtocolError::EofBeforeTerminal)
     }
 
     fn accept_order(&mut self, frame: StatusFrame) -> Result<(), ProtocolError> {
@@ -595,33 +771,21 @@ impl Default for StatusDecoder {
 /// Stateful reader wrapper used by the parent-side transport seam.
 pub struct ProtocolReader {
     decoder: StatusDecoder,
-    terminal: Option<TerminalStatus>,
 }
 
 impl ProtocolReader {
     pub const fn new() -> Self {
         Self {
             decoder: StatusDecoder::new(),
-            terminal: None,
         }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StatusFrame>, ProtocolError> {
-        let frames = self.decoder.feed(bytes)?;
-        for frame in &frames {
-            if let StatusFrame::Exited(code) = frame {
-                self.terminal = Some(TerminalStatus::Exited(*code));
-            } else if let StatusFrame::Signaled(signal) = frame {
-                self.terminal = Some(TerminalStatus::Signaled(*signal));
-            }
-        }
-        Ok(frames)
+        self.decoder.feed(bytes)
     }
 
     pub fn eof(&self) -> Result<TerminalStatus, ProtocolError> {
-        self.decoder
-            .finish_eof()
-            .map(|_| self.terminal.expect("terminal frame was decoded"))
+        self.decoder.finish_eof()
     }
 }
 
@@ -656,7 +820,7 @@ pub fn encode_status(frame: StatusFrame) -> Vec<u8> {
     encoded
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ChildIdentity(u64);
 
 impl ChildIdentity {
@@ -665,12 +829,24 @@ impl ChildIdentity {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl fmt::Debug for ChildIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ChildIdentity(..)")
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct GroupIdentity(u64);
 
 impl GroupIdentity {
     pub const fn new(value: u64) -> Self {
         Self(value)
+    }
+}
+
+impl fmt::Debug for GroupIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("GroupIdentity(..)")
     }
 }
 
@@ -885,8 +1061,48 @@ impl Default for SupervisorProtocol {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChildStage {
+    Group,
+    Signal,
+    Stdio,
+    Cloexec,
+    Close,
+    Ptrace,
+    Stop,
+    Execveat,
+}
+
+impl ChildStage {
+    const fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Group),
+            2 => Some(Self::Signal),
+            3 => Some(Self::Stdio),
+            4 => Some(Self::Cloexec),
+            5 => Some(Self::Close),
+            6 => Some(Self::Ptrace),
+            7 => Some(Self::Stop),
+            8 => Some(Self::Execveat),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ExecErrorRecord {
     pub code: u16,
+}
+
+impl ExecErrorRecord {
+    pub const fn stage(self) -> Option<ChildStage> {
+        ChildStage::from_wire(self.code as u8)
+    }
+}
+
+impl fmt::Debug for ExecErrorRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ExecErrorRecord(..)")
+    }
 }
 
 pub const EXEC_ERROR_RECORD_SIZE: usize = 8;
@@ -909,21 +1125,18 @@ pub fn decode_exec_error(
             Err(ProtocolError::ExecErrorHeldOpen)
         };
     }
-    if bytes.len() > EXEC_ERROR_RECORD_SIZE + 1 {
+    if bytes.len() > EXEC_ERROR_RECORD_SIZE {
         return Err(ProtocolError::ExecErrorOverlong);
     }
-    if bytes[..4] != *b"D2BE" || bytes[4] != 1 || bytes[5] != 1 {
+    if bytes[..4] != *b"D2BE" || bytes[4] != 1 || bytes[5] != 1 || bytes[6] != 0 {
         return Err(ProtocolError::ExecErrorUnknown);
-    }
-    if bytes.len() == EXEC_ERROR_RECORD_SIZE + 1 {
-        return Err(ProtocolError::ExecErrorOverlong);
     }
     if !eof {
         return Err(ProtocolError::ExecErrorHeldOpen);
     }
-    Ok(Some(ExecErrorRecord {
-        code: u16::from_be_bytes([bytes[6], bytes[7]]),
-    }))
+    let code = u16::from_be_bytes([bytes[6], bytes[7]]);
+    ChildStage::from_wire(bytes[7]).ok_or(ProtocolError::UnknownChildCode)?;
+    Ok(Some(ExecErrorRecord { code }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -943,7 +1156,136 @@ pub fn helper_exit_before_executed() -> Result<(), ProtocolError> {
     Err(ProtocolError::HelperBeforeExecuted)
 }
 
-#[allow(dead_code)]
-fn _fixed_supervisor_path() -> &'static Path {
-    Path::new(IMMUTABLE_SUPERVISOR_PATH)
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use super::{
+        ExecutionRequest, HandoffError, InternalLaunchPlan, LaunchCoordinator, SupervisorIdentity,
+        TerminalStatus,
+    };
+    use crate::VerifiedExecutable;
+    use crate::provider::test_support::verified_executable;
+    use std::fs::File;
+
+    pub use super::{BackendError, LaunchPlan, MaskSnapshot};
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct SpawnReceipt {
+        helper_started: bool,
+    }
+
+    impl SpawnReceipt {
+        pub const fn started() -> Self {
+            Self {
+                helper_started: true,
+            }
+        }
+
+        pub const fn not_started() -> Self {
+            Self {
+                helper_started: false,
+            }
+        }
+
+        pub const fn helper_started(self) -> bool {
+            self.helper_started
+        }
+    }
+
+    pub trait ExecutionBackend {
+        fn capture_mask(&self) -> Result<MaskSnapshot, BackendError>;
+        fn block_managed(&self) -> Result<(), BackendError>;
+        fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError>;
+        fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError>;
+    }
+
+    struct Adapter<'a, B>(&'a B);
+
+    impl<B: ExecutionBackend> super::LaunchBackend for Adapter<'_, B> {
+        fn capture_mask(&self) -> Result<MaskSnapshot, BackendError> {
+            self.0.capture_mask()
+        }
+
+        fn block_managed(&self) -> Result<(), BackendError> {
+            self.0.block_managed()
+        }
+
+        fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError> {
+            self.0.restore_mask(snapshot)
+        }
+
+        fn spawn(
+            &self,
+            plan: super::InternalLaunchPlan,
+        ) -> Result<super::InternalSpawnReceipt, BackendError> {
+            let public_plan = LaunchPlan {
+                private_fd: plan.private_fd,
+                request: plan.request,
+                supervisor: plan.supervisor,
+            };
+            let receipt = self.0.spawn(public_plan)?;
+            Ok(super::InternalSpawnReceipt::Test {
+                helper_started: receipt.helper_started,
+            })
+        }
+    }
+
+    pub fn execute_verified_with_backend<B: ExecutionBackend>(
+        executable: VerifiedExecutable,
+        request: ExecutionRequest,
+        backend: &B,
+    ) -> Result<super::ExecutionResult, HandoffError> {
+        #[cfg(unix)]
+        let private_fd = executable
+            .duplicate_for_mapping()
+            .map_err(|_| HandoffError::Backend(BackendError::Mapping))?;
+        #[cfg(not(unix))]
+        let private_fd = ();
+        let plan = InternalLaunchPlan {
+            private_fd,
+            request,
+            supervisor: SupervisorIdentity::immutable(),
+        };
+        let receipt =
+            super::launch_with_signal_handoff(&LaunchCoordinator::new(), &Adapter(backend), plan)?;
+        receipt.finish()
+    }
+
+    pub fn run_signal_handoff<B, F, T>(
+        coordinator: &LaunchCoordinator,
+        backend: &B,
+        spawn: F,
+    ) -> Result<T, HandoffError>
+    where
+        B: ExecutionBackend,
+        F: FnOnce() -> Result<T, BackendError>,
+    {
+        let _guard = coordinator
+            .gate
+            .lock()
+            .map_err(|_| HandoffError::GuardPoisoned)?;
+        let snapshot = backend.capture_mask().map_err(HandoffError::Backend)?;
+        if let Err(error) = backend.block_managed() {
+            let restore = backend.restore_mask(snapshot);
+            if let Err(restore_error) = restore {
+                return Err(HandoffError::Backend(restore_error));
+            }
+            return Err(HandoffError::Backend(error));
+        }
+        let result = spawn();
+        let restored = backend.restore_mask(snapshot);
+        match (result, restored) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(_)) => Err(HandoffError::RestoreAfterSpawn),
+            (Err(error), Ok(())) => Err(HandoffError::Backend(error)),
+            (Err(_), Err(_)) => Err(HandoffError::RestoreAfterSpawnFailure),
+        }
+    }
+
+    pub fn verified_file(file: File) -> VerifiedExecutable {
+        verified_executable(file)
+    }
+
+    pub fn target_succeeded(result: &super::ExecutionResult) -> bool {
+        result.terminal == TerminalStatus::Exited(0)
+    }
 }

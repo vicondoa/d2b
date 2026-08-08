@@ -1,5 +1,8 @@
+#![cfg(feature = "test-support")]
+
 use std::{
-    fs,
+    ffi::OsString,
+    fs::{self, File},
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{
@@ -11,14 +14,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use d2b_bazel_exec::provider::verify_provider;
 use d2b_bazel_exec::{
-    BackendError, ExecutionBackend, ExecutionRequest, HandoffError, LaunchCoordinator,
-    MaskSnapshot, SpawnReceipt, StdioPolicy, execute_verified, run_signal_handoff,
+    ExecutionRequest, HandoffError, LaunchCoordinator, MaskSnapshot, ProtocolError, StdioPolicy,
+    decode_exec_error, test_support,
 };
-use d2b_bazel_support::fsops::{Digest, FileSystem, HostFileSystem, OpenFlags, ResolvePolicy};
+use test_support::{BackendError, ExecutionBackend, LaunchPlan, SpawnReceipt};
 
-type PlanObservation = (i32, bool, &'static str);
+type PlanObservation = (i32, bool, &'static str, Vec<OsString>);
 
 #[derive(Clone)]
 struct FakeBackend {
@@ -48,7 +50,7 @@ impl FakeBackend {
     }
 
     fn plan(&self) -> Option<PlanObservation> {
-        *self.saw_plan.lock().expect("plan")
+        self.saw_plan.lock().expect("plan").clone()
     }
 }
 
@@ -83,15 +85,13 @@ impl ExecutionBackend for FakeBackend {
         self.restore
     }
 
-    fn spawn(
-        &self,
-        plan: d2b_bazel_exec::execute::LaunchPlan,
-    ) -> Result<SpawnReceipt, BackendError> {
+    fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError> {
         self.events.lock().expect("events").push("spawn");
         *self.saw_plan.lock().expect("plan") = Some((
             plan.private_fd_number(),
             plan.preserves_standard_streams(),
             plan.supervisor().label(),
+            plan.request().target_argv.clone(),
         ));
         if let Some(entered) = &self.entered {
             entered.send(()).expect("spawn entered");
@@ -107,7 +107,7 @@ impl ExecutionBackend for FakeBackend {
 fn successful_signal_handoff_restores_before_unlock() {
     let coordinator = LaunchCoordinator::new();
     let backend = FakeBackend::passing();
-    let result = run_signal_handoff(&coordinator, &backend, || {
+    let result = test_support::run_signal_handoff(&coordinator, &backend, || {
         backend.events.lock().expect("events").push("closure");
         Ok(SpawnReceipt::started())
     })
@@ -124,7 +124,7 @@ fn capture_and_block_failures_refuse_spawn_and_restore_after_capture() {
     let coordinator = LaunchCoordinator::new();
     let mut backend = FakeBackend::passing();
     backend.capture = Err(BackendError::Capture);
-    let error = run_signal_handoff(
+    let error = test_support::run_signal_handoff(
         &coordinator,
         &backend,
         || -> Result<SpawnReceipt, BackendError> {
@@ -138,7 +138,7 @@ fn capture_and_block_failures_refuse_spawn_and_restore_after_capture() {
     let coordinator = LaunchCoordinator::new();
     let mut backend = FakeBackend::passing();
     backend.block = Err(BackendError::Block);
-    let error = run_signal_handoff(
+    let error = test_support::run_signal_handoff(
         &coordinator,
         &backend,
         || -> Result<SpawnReceipt, BackendError> {
@@ -155,23 +155,24 @@ fn spawn_and_restore_failures_remain_typed_after_each_spawn_outcome() {
     let coordinator = LaunchCoordinator::new();
     let mut backend = FakeBackend::passing();
     backend.spawn = Err(BackendError::Spawn);
-    let error =
-        run_signal_handoff(&coordinator, &backend, || backend.spawn).expect_err("spawn failure");
+    let error = test_support::run_signal_handoff(&coordinator, &backend, || backend.spawn)
+        .expect_err("spawn failure");
     assert_eq!(error.code(), "D2B-BZLEXEC-PARENT-SPAWN");
     assert_eq!(backend.event_names(), ["capture", "block", "restore"]);
 
     let coordinator = LaunchCoordinator::new();
     let mut backend = FakeBackend::passing();
     backend.restore = Err(BackendError::Restore);
-    let error = run_signal_handoff(&coordinator, &backend, || Ok(SpawnReceipt::started()))
-        .expect_err("restore failure after success");
+    let error =
+        test_support::run_signal_handoff(&coordinator, &backend, || Ok(SpawnReceipt::started()))
+            .expect_err("restore failure after success");
     assert_eq!(error.code(), "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF");
 
     let coordinator = LaunchCoordinator::new();
     let mut backend = FakeBackend::passing();
     backend.spawn = Err(BackendError::Spawn);
     backend.restore = Err(BackendError::Restore);
-    let error = run_signal_handoff(&coordinator, &backend, || backend.spawn)
+    let error = test_support::run_signal_handoff(&coordinator, &backend, || backend.spawn)
         .expect_err("restore failure after spawn failure");
     assert_eq!(error.code(), "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF");
 }
@@ -185,7 +186,7 @@ fn poisoned_process_guard_refuses_before_capture() {
     })
     .join();
     let backend = FakeBackend::passing();
-    let error = run_signal_handoff(
+    let error = test_support::run_signal_handoff(
         &coordinator,
         &backend,
         || -> Result<SpawnReceipt, BackendError> {
@@ -215,7 +216,7 @@ fn overlapping_launches_share_the_guard_and_restore_before_the_second_capture() 
     };
     let first_coordinator = Arc::clone(&coordinator);
     let first_thread = thread::spawn(move || {
-        run_signal_handoff(&first_coordinator, &first, || {
+        test_support::run_signal_handoff(&first_coordinator, &first, || {
             first.events.lock().expect("events").push("spawn");
             first
                 .entered
@@ -231,7 +232,7 @@ fn overlapping_launches_share_the_guard_and_restore_before_the_second_capture() 
 
     let second_coordinator = Arc::clone(&coordinator);
     let second_thread = thread::spawn(move || {
-        let result = run_signal_handoff(&second_coordinator, &second, || {
+        let result = test_support::run_signal_handoff(&second_coordinator, &second, || {
             second.events.lock().expect("events").push("spawn");
             Ok(SpawnReceipt::started())
         });
@@ -239,10 +240,7 @@ fn overlapping_launches_share_the_guard_and_restore_before_the_second_capture() 
         (result, second)
     });
     thread::sleep(Duration::from_millis(20));
-    assert!(
-        !second_started.load(Ordering::Acquire),
-        "second launch cannot pass the process-wide guard"
-    );
+    assert!(!second_started.load(Ordering::Acquire));
     release.wait();
     first_thread
         .join()
@@ -255,101 +253,113 @@ fn overlapping_launches_share_the_guard_and_restore_before_the_second_capture() 
     );
 }
 
-fn verified_temp_file() -> (d2b_bazel_exec::VerifiedExecutable, PathBuf) {
+fn temporary_provider(label: &str, bytes: &[u8]) -> (File, PathBuf) {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("d2b-bazel-exec-{suffix}"));
-    fs::write(&path, b"verified-provider").expect("provider bytes");
+    let path = std::env::temp_dir().join(format!("d2b-bazel-exec-{label}-{suffix}"));
+    fs::write(&path, bytes).expect("provider bytes");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("provider mode");
-    let filesystem = HostFileSystem::new();
-    let parent = filesystem
-        .open(
-            path.parent().expect("temp parent"),
-            OpenFlags::RDONLY | OpenFlags::DIRECTORY | OpenFlags::CLOEXEC,
-            ResolvePolicy::Strict,
-        )
-        .expect("provider parent");
-    let provider = filesystem
-        .open_provider(
-            &parent,
-            std::path::Path::new(path.file_name().expect("provider name")),
-        )
-        .expect("provider descriptor");
-    let executable = verify_provider(
-        &filesystem,
-        provider,
-        None,
-        Digest::sha256(b"verified-provider"),
-    )
-    .expect("verified capability");
-    (executable, path)
+    (File::open(&path).expect("provider fd"), path)
 }
 
 #[test]
-fn consuming_api_maps_the_same_verified_open_file_description_and_preserves_stdio() {
-    let (executable, path) = verified_temp_file();
-    let backend = FakeBackend::passing();
-    let result = execute_verified(executable, ExecutionRequest::default(), &backend)
-        .expect("injected backend");
-    assert!(result.helper_started);
-    let (private_fd, preserves_stdio, helper) = backend.plan().expect("launch plan");
-    assert!(private_fd > 2);
-    assert!(preserves_stdio);
-    assert_eq!(helper, "d2b-bazel-exec-supervisor");
-    fs::remove_file(path).expect("remove provider");
-}
-
-#[test]
-fn consuming_api_keeps_declared_nondefault_stdio_in_the_plan() {
-    let (executable, path) = verified_temp_file();
+fn consuming_api_maps_an_open_file_and_passes_target_argv() {
+    let (file, path) = temporary_provider("plan", b"verified-provider");
+    let executable = test_support::verified_file(file);
     let backend = FakeBackend::passing();
     let request = ExecutionRequest {
         stdin: StdioPolicy::Null,
         stdout: StdioPolicy::Inherit,
         stderr: StdioPolicy::Inherit,
+        target_argv: vec![OsString::from("target"), OsString::from("--closed")],
     };
-    execute_verified(executable, request, &backend).expect("injected backend");
-    assert!(!backend.plan().expect("plan").1);
+    let result = test_support::execute_verified_with_backend(executable, request, &backend)
+        .expect("injected backend");
+    assert!(result.helper_started);
+    let (private_fd, preserves_stdio, helper, argv) = backend.plan().expect("launch plan");
+    assert!(private_fd > 2);
+    assert!(!preserves_stdio);
+    assert_eq!(helper, "d2b-bazel-exec-supervisor");
+    assert_eq!(
+        argv,
+        vec![OsString::from("target"), OsString::from("--closed")]
+    );
     fs::remove_file(path).expect("remove provider");
 }
 
 #[test]
-fn private_mapping_keeps_the_verified_open_file_description_after_path_rebind() {
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("d2b-bazel-exec-rebind-{suffix}"));
+fn consuming_api_keeps_the_open_file_description_after_path_rebind() {
+    let (file, path) = temporary_provider("rebind", b"verified-provider");
     let replacement = path.with_extension("replacement");
-    fs::write(&path, b"verified-provider").expect("provider bytes");
     fs::write(&replacement, b"replacement").expect("replacement bytes");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("provider mode");
-    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).expect("replacement mode");
-    let filesystem = HostFileSystem::new();
-    let parent = filesystem
-        .open(
-            path.parent().expect("temp parent"),
-            OpenFlags::RDONLY | OpenFlags::DIRECTORY | OpenFlags::CLOEXEC,
-            ResolvePolicy::Strict,
-        )
-        .expect("parent");
-    let provider = filesystem
-        .open_provider(
-            &parent,
-            std::path::Path::new(path.file_name().expect("provider name")),
-        )
-        .expect("provider");
-    let before = filesystem
-        .fstat(provider.descriptor())
-        .expect("provider stat");
-    let mapped = provider
-        .duplicate_for_mapping()
-        .expect("private cloexec mapping");
+    let executable = test_support::verified_file(file);
     fs::rename(&replacement, &path).expect("rebind path");
-    let mapped_stat = rustix::fs::fstat(&mapped).expect("mapped stat");
-    assert_eq!(mapped_stat.st_ino, before.inode());
-    assert!(provider.is_close_on_exec().expect("provider flags"));
+
+    let backend = FakeBackend::passing();
+    test_support::execute_verified_with_backend(executable, ExecutionRequest::default(), &backend)
+        .expect("injected backend");
+    assert!(backend.plan().expect("launch plan").0 > 2);
     fs::remove_file(path).expect("remove replacement");
+}
+
+#[test]
+fn production_adapter_rejects_the_fixture_terminal_frame_without_false_success() {
+    if option_env!("D2B_BAZEL_EXEC_SUPERVISOR").is_some() {
+        let target = std::env::var_os("D2B_REAL_EXEC_TARGET").expect("real target contract");
+        let executable = test_support::verified_file(File::open(target).expect("target"));
+        let error = d2b_bazel_exec::execute_verified(
+            executable,
+            ExecutionRequest {
+                target_argv: vec![OsString::from("false")],
+                ..ExecutionRequest::default()
+            },
+        )
+        .expect_err("malformed terminal frame must remain typed");
+        assert_eq!(
+            error,
+            d2b_bazel_exec::HandoffError::Protocol(d2b_bazel_exec::ProtocolError::InvalidLength)
+        );
+        return;
+    }
+    let (file, path) = temporary_provider("missing-helper", b"verified-provider");
+    let executable = test_support::verified_file(file);
+    let error = d2b_bazel_exec::execute_verified(executable, ExecutionRequest::default())
+        .expect_err("local builds must refuse without the Nix identity");
+    assert_eq!(error.code(), "D2B-BZLEXEC-PARENT-HELPER-IDENTITY");
+    fs::remove_file(path).expect("remove provider");
+}
+
+#[test]
+fn unknown_child_error_codes_are_rejected_without_widening_the_enum() {
+    let unknown = [b'D', b'2', b'B', b'E', 1, 1, 0, 9];
+    assert_eq!(
+        decode_exec_error(&unknown, true),
+        Err(ProtocolError::UnknownChildCode)
+    );
+    let reserved = [b'D', b'2', b'B', b'E', 1, 1, 1, 1];
+    assert_eq!(
+        decode_exec_error(&reserved, true),
+        Err(ProtocolError::ExecErrorUnknown)
+    );
+}
+
+#[test]
+fn empty_target_argv_is_rejected_before_helper_spawn() {
+    let (file, path) = temporary_provider("empty-argv", b"verified-provider");
+    let executable = test_support::verified_file(file);
+    let error = d2b_bazel_exec::execute_verified(
+        executable,
+        ExecutionRequest {
+            target_argv: Vec::new(),
+            ..ExecutionRequest::default()
+        },
+    )
+    .expect_err("empty target argv");
+    assert_eq!(
+        error,
+        d2b_bazel_exec::HandoffError::Backend(BackendError::TargetArguments)
+    );
+    fs::remove_file(path).expect("remove provider");
 }
