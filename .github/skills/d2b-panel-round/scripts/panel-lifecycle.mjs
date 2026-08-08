@@ -215,10 +215,13 @@ export function writeCreateOrCompare(path, value) {
 
 /*
  * A directory is the publication unit for an artifact family. Build every
- * member in a sibling temporary directory, then make one rename the only
- * visible publication step. Existing output is accepted only when it is a
- * complete, byte-identical set; a partial directory is never completed in
- * place.
+ * member in a sibling temporary directory, then claim the destination with
+ * mkdir(2) before moving any member into it. mkdir is the exclusive
+ * create-new operation here: a concurrent publisher can observe an existing
+ * empty directory, but it can never replace that directory with its own
+ * family. Existing output is accepted only when it is a complete,
+ * byte-identical set; a partial directory is never completed by a second
+ * publisher.
  */
 export function writeDirectoryCreateOrCompare(directory, entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -269,17 +272,13 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
   };
 
   mkdirSync(dirname(directory), { recursive: true });
-  if (existsSync(directory)) return compareExisting(directory);
-
   const temporary = mkdtempSync(
     join(dirname(directory), `.${basename(directory)}.stage-${process.pid}-`),
   );
+  let claimed = false;
   try {
     for (const name of expectedNames) {
-      writeFileSync(join(temporary, name), expected.get(name), {
-        encoding: "utf8",
-        flag: "wx",
-      });
+      writeFileSync(join(temporary, name), expected.get(name), { flag: "wx" });
     }
     const stagedNames = readdirSync(temporary).sort();
     if (
@@ -289,16 +288,41 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
       error(`staged artifact family at ${temporary} is incomplete before publication`);
     }
     try {
-      renameSync(temporary, directory);
+      mkdirSync(directory);
+      claimed = true;
     } catch (cause) {
-      if (cause.code === "EEXIST" || cause.code === "ENOTEMPTY") {
+      if (cause.code === "EEXIST") {
         return compareExisting(directory);
       }
       throw cause;
     }
+    /*
+     * The destination directory is now exclusively ours. Moving each fully
+     * written member is safe against another compliant publisher because no
+     * publisher can replace the claimed directory.
+     */
+    for (const name of expectedNames) {
+      renameSync(join(temporary, name), join(directory, name));
+    }
+    const publishedNames = readdirSync(directory).sort();
+    if (
+      publishedNames.length !== expectedNames.length ||
+      publishedNames.some((name, index) => name !== expectedNames[index])
+    ) {
+      error(`published artifact family at ${directory} is incomplete`);
+    }
     return { path: directory, created: true };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
+    if (claimed) {
+      const names = existsSync(directory) && statSync(directory).isDirectory()
+        ? readdirSync(directory)
+        : [];
+      if (names.length !== expectedNames.length ||
+          names.some((name) => !expected.has(name))) {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
   }
 }
 
@@ -834,6 +858,163 @@ const SELECTION_KEYS = [
   "roster",
 ];
 
+const CANDIDATE_CLASSES = Object.freeze([
+  "code",
+  "configuration",
+  "documentation",
+  "ambiguous",
+]);
+
+function canonicalClassificationArray(value, label, kind) {
+  if (!Array.isArray(value)) error(`${label} must be an array`);
+  const normalized = value.map((entry) => {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      error(`${label} must contain non-blank strings`);
+    }
+    if (/[\u0000-\u001f\u007f]/.test(entry)) {
+      error(`${label} must not contain control characters`);
+    }
+    return kind === "changed_paths"
+      ? entry.replaceAll("\\", "/")
+      : entry.trim().toLowerCase();
+  });
+  const canonical = [...new Set(normalized)].sort();
+  if (normalized.join("\u0000") !== canonical.join("\u0000")) {
+    error(
+      `${label} must be ${kind === "changed_paths"
+        ? "unique and sorted"
+        : "unique, lowercase, and sorted"}`,
+    );
+  }
+  return normalized;
+}
+
+function parseClassificationInputs(
+  value,
+  label,
+  { allowNested = false, allowEmptyFixDeltaPaths = false } = {},
+) {
+  if (!isPlainObject(value)) error(`${label} must be an object`);
+  const allowedKeys = new Set([
+    "changed_paths",
+    "signals",
+    "candidate_class",
+    "ambiguous",
+    ...(allowNested ? ["full_candidate", "fix_delta"] : []),
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      error(`${label} contains unknown field "${key}"`);
+    }
+  }
+  for (const key of ["changed_paths", "signals", "candidate_class", "ambiguous"]) {
+    if (!Object.hasOwn(value, key)) error(`${label} must contain ${key}`);
+  }
+
+  const changedPaths = canonicalClassificationArray(
+    value.changed_paths,
+    `${label}.changed_paths`,
+    "changed_paths",
+  );
+  const signals = canonicalClassificationArray(
+    value.signals,
+    `${label}.signals`,
+    "signals",
+  );
+  if (typeof value.candidate_class !== "string" || value.candidate_class.trim() === "") {
+    error(`${label}.candidate_class must be a non-blank string`);
+  }
+  const candidateClass = value.candidate_class;
+  if (!CANDIDATE_CLASSES.includes(candidateClass)) {
+    error(`${label}.candidate_class "${candidateClass}" is unsupported`);
+  }
+  if (typeof value.ambiguous !== "boolean") {
+    error(`${label}.ambiguous must be boolean`);
+  }
+  /*
+   * A verification selection with an omitted fix delta uses an empty
+   * fix_delta sentinel. Rust permits that sentinel to retain the full
+   * candidate class and a non-widening ambiguity bit.
+   */
+  const emptyFixDeltaSentinel =
+    allowEmptyFixDeltaPaths &&
+    changedPaths.length === 0 &&
+    signals.length === 0 &&
+    value.ambiguous === false &&
+    candidateClass === "ambiguous";
+  if (value.ambiguous !== (candidateClass === "ambiguous") && !emptyFixDeltaSentinel) {
+    error(`${label} candidate_class and ambiguous disagree`);
+  }
+  if (
+    ["code", "configuration"].includes(candidateClass) &&
+    changedPaths.length === 0 &&
+    (!allowEmptyFixDeltaPaths || signals.length > 0)
+  ) {
+    error(`${label} ${candidateClass} classification must contain changed paths`);
+  }
+
+  const fullCandidate = Object.hasOwn(value, "full_candidate")
+    ? parseClassificationInputs(
+        value.full_candidate,
+        `${label}.full_candidate`,
+      )
+    : undefined;
+  const fixDelta = Object.hasOwn(value, "fix_delta")
+    ? parseClassificationInputs(value.fix_delta, `${label}.fix_delta`, {
+        allowEmptyFixDeltaPaths: true,
+      })
+    : undefined;
+  return {
+    changed_paths: changedPaths,
+    signals,
+    candidate_class: candidateClass,
+    ambiguous: value.ambiguous,
+    ...(fullCandidate ? { full_candidate: fullCandidate } : {}),
+    ...(fixDelta ? { fix_delta: fixDelta } : {}),
+  };
+}
+
+function validateNestedClassificationConsistency(inputs) {
+  const nested = [inputs.full_candidate, inputs.fix_delta].filter(Boolean);
+  if (nested.length === 0) return;
+  const changedPaths = [...new Set(
+    nested.flatMap((classification) => classification.changed_paths),
+  )].sort();
+  if (inputs.changed_paths.join("\u0000") !== changedPaths.join("\u0000")) {
+    error(
+      "panel selection classification_inputs changed_paths must equal the union of its " +
+      "nested full_candidate and fix_delta paths",
+    );
+  }
+  const signals = [...new Set(
+    nested.flatMap((classification) => classification.signals),
+  )].sort();
+  if (inputs.signals.join("\u0000") !== signals.join("\u0000")) {
+    error(
+      "panel selection classification_inputs signals must equal the union of its nested " +
+      "full_candidate and fix_delta signals",
+    );
+  }
+  const ambiguous = nested.some((classification) => classification.ambiguous);
+  if (inputs.ambiguous !== ambiguous) {
+    error(
+      "panel selection classification_inputs ambiguous must equal nested classifications",
+    );
+  }
+  const nestedClasses = nested.map((classification) => classification.candidate_class);
+  const expectedClass = nestedClasses.includes("ambiguous")
+    ? "ambiguous"
+    : nestedClasses.includes("code")
+      ? "code"
+      : nestedClasses[0];
+  if (inputs.candidate_class !== expectedClass) {
+    error(
+      "panel selection classification_inputs candidate_class must agree with nested " +
+      "classifications",
+    );
+  }
+}
+
 export function validateSelection(selection, table = readSelectionTable()) {
   assertExactKeys(selection, SELECTION_KEYS, "lifecycle selection");
   if (selection.artifact_kind !== LIFECYCLE_SELECTION_ARTIFACT) {
@@ -860,47 +1041,15 @@ export function validateSelection(selection, table = readSelectionTable()) {
   if (!isPlainObject(selection.classification_inputs)) {
     error("selection.classification_inputs must be an object");
   }
-  if (
-    !Array.isArray(selection.classification_inputs.changed_paths) ||
-    !Array.isArray(selection.classification_inputs.signals)
-  ) {
-    error("selection.classification_inputs must contain changed_paths and signals arrays");
-  }
-  for (const key of ["changed_paths", "signals"]) {
-    if (
-      selection.classification_inputs[key].some(
-        (value) => typeof value !== "string" || value.trim() === "",
-      )
-    ) {
-      error(`selection.classification_inputs.${key} must contain non-blank strings`);
-    }
-    const canonical = [
-      ...new Set(
-        selection.classification_inputs[key].map((value) =>
-          key === "changed_paths" ? value.replaceAll("\\", "/") : value.trim().toLowerCase(),
-        ),
-      ),
-    ].sort();
-    if (selection.classification_inputs[key].join("\u0000") !== canonical.join("\u0000")) {
-      error(`selection.classification_inputs.${key} must be unique and sorted`);
-    }
-  }
-  if (
-    selection.classification_inputs.ambiguous !== undefined &&
-    typeof selection.classification_inputs.ambiguous !== "boolean"
-  ) {
-    error("selection.classification_inputs.ambiguous must be boolean when present");
-  }
-  if (
-    selection.classification_inputs.candidate_class !== undefined &&
-    selection.classification_inputs.candidate_class !== selection.candidate_class
-  ) {
+  const classificationInputs = parseClassificationInputs(
+    selection.classification_inputs,
+    "selection.classification_inputs",
+    { allowNested: selection.phase === "verification" },
+  );
+  if (classificationInputs.candidate_class !== selection.candidate_class) {
     error("selection classification candidate_class disagrees with selection");
   }
-  if (
-    selection.classification_inputs.ambiguous !== undefined &&
-    selection.classification_inputs.ambiguous !== selection.ambiguity_widened
-  ) {
+  if (classificationInputs.ambiguous !== selection.ambiguity_widened) {
     error("selection classification ambiguity disagrees with selection");
   }
   if (typeof selection.ambiguity_widened !== "boolean") {
@@ -910,6 +1059,7 @@ export function validateSelection(selection, table = readSelectionTable()) {
   if (!["code", "configuration", "documentation", "ambiguous"].includes(selection.candidate_class)) {
     error(`selection.candidate_class "${selection.candidate_class}" is unsupported`);
   }
+  validateNestedClassificationConsistency(classificationInputs);
   const roster = validateRoster(selection.roster, table, "selection.roster");
   const canonicalRoster = seatOrder(table).filter((seat) => roster.includes(seat));
   if (roster.join(",") !== canonicalRoster.join(",")) {
@@ -3263,13 +3413,6 @@ export function importLegacyRound(input, options = {}) {
     panelFormat(bundle.attestation, "legacy panel attestation");
   }
   const recordEntries = bundle.records;
-  if (
-    completeEnvelope &&
-    bundle.exactBytes &&
-    recordEntries.length !== LEGACY_ROSTER.length
-  ) {
-    error("an exact legacy request must contain exactly ten records");
-  }
   const ordered = [];
   const seenRoles = new Set();
   let commonAddress = request ? candidateAddress(request) : undefined;
@@ -3347,6 +3490,7 @@ export function importLegacyRound(input, options = {}) {
       bytes: entry.bytes,
     });
   }
+  const recordsByRole = new Map(ordered.map((entry) => [entry.role, entry]));
   if (request) {
     for (const key of ["candidate_id", "content_id", "snapshot_sha256"]) {
       if (commonAddress?.[key] !== request[key]) {
@@ -3366,29 +3510,26 @@ export function importLegacyRound(input, options = {}) {
       runIds.add(entry.record.run_id);
       receipts.add(entry.record.receipt_locator);
     }
-    if (
-      bundle.exactBytes &&
-      recordEntries.length === LEGACY_ROSTER.length &&
-      bundle.attestation === undefined
-    ) {
-      error(
-        "a complete legacy import requires an attestation with exact record digests",
-      );
-    }
-    validateLegacyAttestation(bundle.attestation, recordsByRole, bundle.exactBytes);
-    if (
-      bundle.attestation?.unanimous === true &&
-      ordered.some((entry) => entry.record.signoff !== true)
-    ) {
-      error("legacy unanimous attestation contains a finding record");
-    }
-    const sealPanel =
-      bundle.seal?.seal_panel ??
-      bundle.seal?.panel ??
-      bundle.seal_panel;
-    if (sealPanel !== undefined) {
-      validateLegacyAttestation(sealPanel, recordsByRole, bundle.exactBytes);
-    }
+  }
+  /*
+   * A missing proof means the publication is incomplete, not malformed.
+   * When a proof is supplied, however, validate it even for a partial
+   * publication so a broken attestation cannot be smuggled through as a
+   * request to run current discovery.
+   */
+  validateLegacyAttestation(bundle.attestation, recordsByRole, bundle.exactBytes);
+  if (
+    bundle.attestation?.unanimous === true &&
+    ordered.some((entry) => entry.record.signoff !== true)
+  ) {
+    error("legacy unanimous attestation contains a finding record");
+  }
+  const sealPanel =
+    bundle.seal?.seal_panel ??
+    bundle.seal?.panel ??
+    bundle.seal_panel;
+  if (sealPanel !== undefined) {
+    validateLegacyAttestation(sealPanel, recordsByRole, bundle.exactBytes);
   }
   ordered.sort(
     (left, right) =>
@@ -3553,8 +3694,10 @@ function readJsonDirectory(path, label) {
     return readJson(path, label);
   }
   const entries = readdirSync(path, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
     .sort((left, right) => left.name.localeCompare(right.name));
+  if (entries.some((entry) => !entry.isFile() || !entry.name.endsWith(".json"))) {
+    error(`${label} directory must contain only regular JSON files`);
+  }
   if (entries.length === 0) error(`${label} directory contains no JSON artifacts`);
   return Object.fromEntries(
     entries.map((entry) => [
@@ -3562,6 +3705,35 @@ function readJsonDirectory(path, label) {
       readJson(join(path, entry.name), `${label}/${entry.name}`),
     ]),
   );
+}
+
+function readVerificationVerdicts(path, selection) {
+  const isDirectory = existsSync(path) && statSync(path).isDirectory();
+  const verdicts = readJsonDirectory(path, "actual verification verdicts");
+  if (!isDirectory) return verdicts;
+  const expected = new Set(selection.roster);
+  const actual = Object.keys(verdicts);
+  for (const seat of actual) {
+    if (!expected.has(seat)) {
+      error(
+        `actual verification verdict directory contains unselected seat "${seat}"`,
+      );
+    }
+    const declared = verdicts[seat]?.engineer ?? verdicts[seat]?.seat;
+    if (declared !== seat) {
+      error(
+        `actual verification verdict ${seat}.json declares seat "${declared}"; ` +
+        "filename and selected seat must agree",
+      );
+    }
+  }
+  const missing = selection.roster.filter((seat) => !actual.includes(seat));
+  if (missing.length > 0) {
+    error(
+      `actual verification verdict directory is missing selected seat(s): ${missing.join(", ")}`,
+    );
+  }
+  return verdicts;
 }
 
 function usage() {
@@ -3572,7 +3744,7 @@ function usage() {
     "  panel-lifecycle.mjs adapt-discovery <verdicts.json> <output.json>",
     "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json>",
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
-    "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json> <output.json> --selection PATH --candidate PATH",
+    "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
     "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --delta PATH --full-context PATH",
     "  panel-lifecycle.mjs approval <selection.json> <ledger.json> <responses.json> <verification-results.json> <output.json> --candidate PATH",
     "  panel-lifecycle.mjs metrics --selection PATH --ledger PATH --responses PATH --verification-results PATH --output PATH [--implementation-history PATH] [--verification-history PATH]",
@@ -3719,7 +3891,6 @@ async function main(argv) {
       const ledgerBytes = readFileSync(ledgerPath, "utf8");
       const ledger = JSON.parse(ledgerBytes);
       validateLedger(ledger);
-      const verdicts = readJson(argv[2], "actual verification verdicts");
       const optionsArgv = argv.slice(4);
       const selectionPath = flagValue(optionsArgv, "--selection");
       const candidatePath = flagValue(optionsArgv, "--candidate");
@@ -3728,6 +3899,7 @@ async function main(argv) {
       }
       const selectionBytes = readFileSync(selectionPath, "utf8");
       const selection = readSelection(selectionPath);
+      const verdicts = readVerificationVerdicts(argv[2], selection);
       const artifact = createVerificationResultArtifact({
         selection,
         selection_bytes: selectionBytes,

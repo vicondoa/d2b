@@ -283,16 +283,23 @@ byte-identical bytes:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
-  --lifecycle <lifecycle-id> --selection <selection.json>
+  --lifecycle <lifecycle-id> --selection <selection.json> \
+  --candidate <current-candidate.json> \
+  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --self-verification <self-verification.json>
 ```
 
 Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
 `reviewer-notes/<seat>.md`. The integrator edits the evidence and any
 seat-specific rebuttal, then dispatches every reviewer with the exact generated
-prompt. Later reviews fail closed unless `<prev-tip>` matches the previous
-recorded tip and every seat's prior verdict is available, so the incremental
-range and prior-finding instructions cannot be replaced by a free-form
-summary.
+prompt. It materializes supplied exact artifacts as round-local
+`selection.json`, `current-candidate.json`, `discovery-ledger.json`,
+`responses.json`, and `self-verification.json`. The dispatch prompt is usable
+only when the round's `.complete` marker exists; an unmarked scratch directory
+is non-authoritative and must be cleaned up before retrying. Later reviews fail
+closed unless `<prev-tip>` matches the previous recorded tip and every seat's
+prior verdict is available, so the incremental range and prior-finding
+instructions cannot be replaced by a free-form summary.
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:
@@ -300,15 +307,16 @@ the canonical ledger path or any of the artifact paths:
 ```bash
 ROUND=.scratch/panel/<round>
 SELECTION="$ROUND/selection.json"
+CANDIDATE="$ROUND/current-candidate.json"
 LEDGER="$ROUND/discovery-ledger.json"
 RESPONSES="$ROUND/responses.json"
+SELF_VERIFICATION="$ROUND/self-verification.json"
 VERIFICATION="$ROUND/verification-results.json"
 APPROVAL="$ROUND/approval.json"
 METRICS="$ROUND/metrics.json"
-CANDIDATE="$ROUND/current-candidate.json"
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  adapt-verification "$LEDGER" "$ROUND/verification-verdicts.json" "$VERIFICATION" \
+  adapt-verification "$LEDGER" "$ROUND/verdicts" "$VERIFICATION" \
   --selection "$SELECTION" --candidate "$CANDIDATE"
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   approval "$SELECTION" "$LEDGER" "$RESPONSES" "$VERIFICATION" "$APPROVAL" \

@@ -6,6 +6,7 @@
 
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -134,6 +135,8 @@ try {
     "spec001w1-r1",
     "--selection",
     selectionPath,
+    "--candidate",
+    candidatePath,
   ]);
   check("first review stages successfully", first.status === 0, first.text);
 
@@ -144,7 +147,9 @@ try {
     firstAddress.lifecycle_id === "spec001w1",
   );
   check("first review records its selection digest", typeof firstAddress.selection_sha256 === "string");
-  check("first review stages candidate.json", JSON.parse(readFileSync(join(firstDir, "candidate.json"), "utf8")).candidate_id === "candidate-1");
+  check("first review stages selection.json exactly", readFileSync(join(firstDir, "selection.json"), "utf8") === readFileSync(selectionPath, "utf8"));
+  check("first review stages current-candidate.json exactly", readFileSync(join(firstDir, "current-candidate.json"), "utf8") === readFileSync(candidatePath, "utf8"));
+  check("first review writes its completion marker last", existsSync(join(firstDir, ".complete")));
   const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
   const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
   check(
@@ -167,6 +172,26 @@ try {
     firstRequest.includes("full candidate") &&
       firstRequest.includes("every reasonably discoverable actionable finding"),
   );
+  const malformedSelection = JSON.parse(readFileSync(selectionPath, "utf8"));
+  malformedSelection.classification_inputs.unexpected = true;
+  const validSelectionBytes = readFileSync(selectionPath, "utf8");
+  writeFileSync(join(repo, "malformed-selection.json"), `${JSON.stringify(malformedSelection, null, 2)}\n`);
+  const malformedStage = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    join(repo, "malformed-selection.json"),
+    "--candidate",
+    candidatePath,
+  ]);
+  check(
+    "staging rejects a malformed nested classification",
+    malformedStage.status === 2 &&
+      /unknown field/.test(malformedStage.text),
+    malformedStage.text,
+  );
+  writeFileSync(selectionPath, validSelectionBytes);
   check(
     "first request is phase-aware and names discovery artifacts",
     firstRequest.includes("Phase: `discovery`") &&
@@ -192,6 +217,8 @@ try {
     "spec001w1-r1",
     "--selection",
     selectionPath,
+    "--candidate",
+    candidatePath,
   ]);
   check(
     "stage-diffs stops at the first conflict with a clear retry",
@@ -258,6 +285,12 @@ try {
     ],
     { cwd: repo, encoding: "utf8" },
   ).trim();
+  const stagedLedger = join(repo, "source-ledger.json");
+  const stagedResponses = join(repo, "source-responses.json");
+  const stagedSelfVerification = join(repo, "source-self-verification.json");
+  writeFileSync(stagedLedger, `${JSON.stringify({ source: "ledger" }, null, 2)}\n`);
+  writeFileSync(stagedResponses, `${JSON.stringify({ source: "responses" }, null, 2)}\n`);
+  writeFileSync(stagedSelfVerification, `${JSON.stringify({ source: "self-verification" }, null, 2)}\n`);
 
   console.log("stage-diffs: fail-closed continuity");
   const wrongPreviousTip = run(repo, [
@@ -266,6 +299,14 @@ try {
     "spec001w1-r2",
     "--selection",
     currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
   ]);
   check(
     "later review rejects a non-incremental previous tip",
@@ -285,6 +326,14 @@ try {
     "spec001w1-r2",
     "--selection",
     currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
   ]);
   check(
     "later review rejects a missing prior seat verdict",
@@ -303,6 +352,14 @@ try {
     "spec001w1-r2",
     "--selection",
     currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
   ]);
   check("later review stages successfully", second.status === 0, second.text);
   check(
@@ -312,6 +369,12 @@ try {
   );
 
   const secondDir = join(repo, ".scratch", "panel", "spec001w1-r2");
+  check("later review stages selection.json exactly", readFileSync(join(secondDir, "selection.json"), "utf8") === readFileSync(currentSelectionPath, "utf8"));
+  check("later review stages current-candidate.json exactly", readFileSync(join(secondDir, "current-candidate.json"), "utf8") === readFileSync(currentCandidatePath, "utf8"));
+  check("later review stages the immutable ledger exactly", readFileSync(join(secondDir, "discovery-ledger.json"), "utf8") === readFileSync(stagedLedger, "utf8"));
+  check("later review stages responses exactly", readFileSync(join(secondDir, "responses.json"), "utf8") === readFileSync(stagedResponses, "utf8"));
+  check("later review stages self-verification exactly", readFileSync(join(secondDir, "self-verification.json"), "utf8") === readFileSync(stagedSelfVerification, "utf8"));
+  check("later review writes a completion marker", existsSync(join(secondDir, ".complete")));
   const delta = readFileSync(join(secondDir, "delta.diff"), "utf8");
   const full = readFileSync(join(secondDir, "full.diff"), "utf8");
   const secondRequest = readFileSync(join(secondDir, "review-request.md"), "utf8");
@@ -368,12 +431,37 @@ try {
     "spec001w1-r2",
     "--selection",
     currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
   ]);
   check(
     "a review id with verdicts cannot be restaged",
     reused.status === 2 &&
       reused.text.includes("already has verdicts"),
     reused.text,
+  );
+  rmSync(join(firstDir, ".complete"));
+  const incompleteRetry = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+  ]);
+  check(
+    "an unmarked scratch directory is non-authoritative and names cleanup",
+    incompleteRetry.status === 2 &&
+      /non-authoritative/.test(incompleteRetry.text) &&
+      /rm -rf/.test(incompleteRetry.text),
+    incompleteRetry.text,
   );
 } finally {
   rmSync(repo, { recursive: true, force: true });

@@ -2,6 +2,7 @@
 # Stage byte-identical review evidence for one panel round.
 #
 #   stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json>
+#                  [--candidate <current-candidate.json>]
 #                  [--lifecycle <lifecycle-id>] [--discovery-request PATH]
 #                  [--ledger PATH] [--responses PATH] [--self-verification PATH]
 #                  [--verification-dir PATH] [--approval PATH]
@@ -14,7 +15,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--lifecycle <lifecycle-id>]" >&2
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>]" >&2
   exit 2
 fi
 
@@ -29,6 +30,7 @@ esac
 
 lifecycle=""
 selection_path=""
+candidate_path=""
 discovery_request_path=""
 ledger_path=""
 responses_path=""
@@ -45,6 +47,15 @@ while [ "$#" -gt 0 ]; do
     --selection)
       [ "$#" -ge 2 ] || { echo "--selection requires a path" >&2; exit 2; }
       selection_path="$2"
+      shift 2
+      ;;
+    --candidate|--current-candidate)
+      [ "$#" -ge 2 ] || { echo "$1 requires a path" >&2; exit 2; }
+      if [ -n "$candidate_path" ] && [ "$candidate_path" != "$2" ]; then
+        echo "--candidate and --current-candidate disagree" >&2
+        exit 2
+      fi
+      candidate_path="$2"
       shift 2
       ;;
     --discovery-request)
@@ -111,6 +122,10 @@ if [[ "$selection_path" == *\"* || "$selection_path" == *\\* || "$selection_path
   echo "refusing selection path with JSON control characters: $selection_path" >&2
   exit 2
 fi
+if [[ "$candidate_path" == *\"* || "$candidate_path" == *\\* || "$candidate_path" == *$'\n'* ]]; then
+  echo "refusing candidate path with JSON control characters: $candidate_path" >&2
+  exit 2
+fi
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
@@ -120,6 +135,34 @@ base_sha="$(git rev-parse "$base")"
 prev_sha="$(git rev-parse "$prev")"
 
 out="$root/.scratch/panel/$round"
+completion_marker="$out/.complete"
+staged_selection_path="$out/selection.json"
+staged_candidate_path="$out/current-candidate.json"
+staged_discovery_request_path="$out/discovery-request.json"
+staged_ledger_path="$out/discovery-ledger.json"
+staged_responses_path="$out/responses.json"
+staged_self_verification_path="$out/self-verification.json"
+staged_approval_path="$out/approval.json"
+staged_verification_dir="$out/verification"
+
+partial_cleanup_hint() {
+  echo "partial pre-dispatch scratch directory is non-authoritative: $out" >&2
+  echo "clean it up before retrying: rm -rf -- '$out'" >&2
+}
+
+if [ -e "$out" ] && [ ! -f "$completion_marker" ]; then
+  partial_cleanup_hint
+  exit 2
+fi
+
+stage_exit() {
+  local status="$?"
+  if [ "$status" -ne 0 ] && [ -d "$out" ] && [ ! -f "$completion_marker" ]; then
+    partial_cleanup_hint
+  fi
+  exit "$status"
+}
+trap stage_exit EXIT
 
 read_address() {
   node - "$1" <<'NODE'
@@ -238,14 +281,12 @@ fi
 selection_meta="$(
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, candidatePath, range, helperPath, lifecycle] = process.argv.slice(1);
+const [selectionPath, range, helperPath, lifecycle] = process.argv.slice(1);
 const {
   changedPathsFromGitRange,
-  candidateFromSelection,
   readSelection,
   selectionDigest,
   validateSelectionAgainstTable,
-  writeCreateOrCompare,
 } = await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
 if (selection.lifecycle_id !== lifecycle) {
@@ -265,19 +306,36 @@ if (actual.join("\u0000") !== declared.join("\u0000")) {
     `declared [${declared.join(", ")}], actual [${actual.join(", ")}]`,
   );
 }
-writeCreateOrCompare(candidatePath, candidateFromSelection(selection));
 process.stdout.write([
   selection.phase,
   selectionDigest(selectionPath),
   selection.roster.join(","),
 ].join("\t"));
-' "$selection_path" "$out/candidate.json" "$prev_sha..$tip" \
+' "$selection_path" "$prev_sha..$tip" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" "$lifecycle"
 )" || {
   echo "selection validation or git-range derivation failed" >&2
   exit 2
 }
 IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_meta"
+if [ -z "$candidate_path" ]; then
+  echo "--candidate is required so current-candidate.json can be materialized from exact bytes" >&2
+  exit 2
+fi
+if [ "$phase" = "verification" ]; then
+  if [ -z "$ledger_path" ]; then
+    echo "--ledger is required for verification staging so discovery-ledger.json is exact" >&2
+    exit 2
+  fi
+  if [ -z "$responses_path" ]; then
+    echo "--responses is required for verification staging so responses.json is exact" >&2
+    exit 2
+  fi
+  if [ -z "$self_verification_path" ]; then
+    echo "--self-verification is required for verification staging so self-verification.json is exact" >&2
+    exit 2
+  fi
+fi
 IFS=',' read -r -a panel_seats <<<"$selected_roster"
 if [ "${#panel_seats[@]}" -eq 0 ]; then
   echo "no panel seat agents found under $root/.github/agents" >&2
@@ -309,7 +367,7 @@ if [ "$round_number" -gt 1 ]; then
   done
 fi
 
-for path_value in "$discovery_request_path" "$ledger_path" "$responses_path" \
+for path_value in "$candidate_path" "$discovery_request_path" "$ledger_path" "$responses_path" \
   "$self_verification_path" "$verification_dir" "$approval_path"; do
   if [[ "$path_value" == *\"* || "$path_value" == *\\* || "$path_value" == *$'\n'* ]]; then
     echo "artifact path contains JSON control characters: $path_value" >&2
@@ -328,7 +386,7 @@ if [ -f "$out/address.json" ]; then
      [ "$existing_prev" != "$prev_sha" ] ||
      [ "$existing_tip" != "$tip" ] ||
      [ "$existing_phase" != "$phase" ] ||
-     [ "$existing_selection" != "$selection_path" ] ||
+     [ "$existing_selection" != "$staged_selection_path" ] ||
      [ "$existing_selection_sha" != "$selection_sha256" ]; then
     echo "review address $round was already staged for different commits" >&2
     echo "use the next review id instead of changing evidence beneath an existing address" >&2
@@ -342,6 +400,26 @@ if [ -d "$out/verdicts" ] &&
   echo "review $round already has verdicts; use the next review id" >&2
   exit 2
 fi
+
+claim_round_directory() {
+  mkdir -p "$root/.scratch/panel"
+  if [ -e "$out" ]; then
+    if [ ! -f "$completion_marker" ]; then
+      partial_cleanup_hint
+      exit 2
+    fi
+    return
+  fi
+  if ! mkdir "$out"; then
+    if [ -f "$completion_marker" ]; then
+      return
+    fi
+    partial_cleanup_hint
+    exit 2
+  fi
+}
+
+claim_round_directory
 
 mkdir -p "$out/verdicts" "$out/reviewer-notes"
 
@@ -370,6 +448,26 @@ publish_no_replace() {
   rm -f -- "$tmp"
 }
 
+materialize_exact() {
+  local source="$1"
+  local destination="$2"
+  local label="$3"
+  if [ ! -f "$source" ]; then
+    echo "missing supplied $label: $source" >&2
+    return 1
+  fi
+  local tmp="$destination.$$.copy.tmp"
+  if ! cp -- "$source" "$tmp"; then
+    rm -f -- "$tmp"
+    echo "cannot copy supplied $label: $source" >&2
+    return 1
+  fi
+  if ! publish_no_replace "$tmp" "$destination"; then
+    echo "could not materialize supplied $label at $destination" >&2
+    return 1
+  fi
+}
+
 stage() {
   local dest="$1"
   shift
@@ -387,6 +485,74 @@ stage "$out/commits.txt" git --no-pager log --no-decorate --oneline "$base_sha..
 
 delta_sha="$(sha256sum "$out/delta.diff" | cut -d' ' -f1)"
 full_sha="$(sha256sum "$out/full.diff" | cut -d' ' -f1)"
+
+materialize_exact "$selection_path" "$staged_selection_path" "lifecycle selection"
+if [ -n "$candidate_path" ]; then
+  materialize_exact "$candidate_path" "$staged_candidate_path" "current candidate"
+else
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
+const { candidateFromSelection, readSelection, writeCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+writeCreateOrCompare(candidatePath, candidateFromSelection(selection));
+' "$staged_selection_path" "$staged_candidate_path" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+fi
+node --input-type=module -e '
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
+const { readSelection, validateSelectionCandidate } =
+  await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+validateSelectionCandidate(
+  selection,
+  JSON.parse(fs.readFileSync(candidatePath, "utf8")),
+);
+' "$staged_selection_path" "$staged_candidate_path" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+
+if [ -n "$discovery_request_path" ]; then
+  materialize_exact "$discovery_request_path" "$staged_discovery_request_path" \
+    "discovery request"
+fi
+if [ -n "$ledger_path" ]; then
+  materialize_exact "$ledger_path" "$staged_ledger_path" "discovery ledger"
+fi
+if [ -n "$responses_path" ]; then
+  materialize_exact "$responses_path" "$staged_responses_path" \
+    "implementation responses"
+fi
+if [ -n "$self_verification_path" ]; then
+  materialize_exact "$self_verification_path" "$staged_self_verification_path" \
+    "self-verification"
+fi
+if [ -n "$approval_path" ]; then
+  materialize_exact "$approval_path" "$staged_approval_path" "approval"
+fi
+if [ -n "$verification_dir" ]; then
+  node --input-type=module -e '
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const [source, destination, helperPath] = process.argv.slice(1);
+const entries = fs.readdirSync(source, { withFileTypes: true })
+  .sort((left, right) => left.name.localeCompare(right.name));
+if (entries.length === 0 || entries.some((entry) =>
+  !entry.isFile() || !entry.name.endsWith(".json")
+)) {
+  throw new Error("verification directory must contain only regular JSON files");
+}
+const { writeDirectoryCreateOrCompare } =
+  await import(pathToFileURL(helperPath).href);
+writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
+  name: entry.name,
+  bytes: fs.readFileSync(`${source}/${entry.name}`),
+})));
+' "$verification_dir" "$staged_verification_dir" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+fi
 
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
@@ -407,7 +573,7 @@ writeCreateOrCompare(path, {
   delta_sha256: deltaSha,
   full_sha256: fullSha,
 });
-' "$out/address.json" "$round" "$lifecycle" "$selection_path" "$base_sha" \
+' "$out/address.json" "$round" "$lifecycle" "$staged_selection_path" "$base_sha" \
   "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
@@ -480,24 +646,12 @@ MD
   publish_no_replace "$note_tmp" "$note"
 done
 
-if [ -z "$discovery_request_path" ]; then
-  discovery_request_path="$out/discovery-request.json"
-fi
-if [ -z "$ledger_path" ]; then
-  ledger_path="$out/discovery-ledger.json"
-fi
-if [ -z "$responses_path" ]; then
-  responses_path="$out/responses.json"
-fi
-if [ -z "$self_verification_path" ]; then
-  self_verification_path="$out/self-verification.json"
-fi
-if [ -z "$verification_dir" ]; then
-  verification_dir="$out/verification"
-fi
-if [ -z "$approval_path" ]; then
-  approval_path="$out/approval.json"
-fi
+discovery_request_path="$staged_discovery_request_path"
+ledger_path="$staged_ledger_path"
+responses_path="$staged_responses_path"
+self_verification_path="$staged_self_verification_path"
+verification_dir="$staged_verification_dir"
+approval_path="$staged_approval_path"
 
 request_tmp="$out/review-request.md.$$.tmp"
 dispatch_tmp="$out/dispatch-prompt.txt.$$.tmp"
@@ -510,13 +664,15 @@ with \`view\`; do not substitute a prose summary for them.
 
 ## Review address
 
+- Stage completion marker: \`$completion_marker\` (this request is usable only
+  when that marker exists)
 - Delta to review: \`$out/delta.diff\`
 - Delta range: \`$prev_sha..$tip\`
 - Full branch context: \`$out/full.diff\`
 - Full range: \`$base_sha..$tip\`
 - Phase: \`$phase\`
-- Lifecycle selection: \`$selection_path\` (sha256 \`$selection_sha256\`)
-- Staged candidate: \`$out/candidate.json\`
+- Lifecycle selection: \`$staged_selection_path\` (sha256 \`$selection_sha256\`)
+- Staged current candidate: \`$staged_candidate_path\`
 - Validation evidence and phase deliverable: \`$out/evidence.md\`
 - Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
 - Commit list: \`$out/commits.txt\`
@@ -588,10 +744,32 @@ fi
 publish_no_replace "$request_tmp" "$out/review-request.md"
 
 cat > "$dispatch_tmp" <<MD
-Read and follow the complete phase-aware review request at $out/review-request.md. Use view to read every artifact it names, including the staged candidate, generated lifecycle artifacts, the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
+Use this dispatch prompt only when the stage completion marker exists at $completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying. Read and follow the complete phase-aware review request at $out/review-request.md. Use view to read every artifact it names, including the staged current candidate, generated lifecycle artifacts, the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
 MD
 publish_no_replace "$dispatch_tmp" "$out/dispatch-prompt.txt"
-trap - EXIT
+
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [path, round, lifecycle, base, previousTip, tip, phase, selectionSha,
+  deltaSha, fullSha, helperPath] = process.argv.slice(1);
+const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
+writeCreateOrCompare(path, {
+  artifact_kind: "d2b-panel/stage-completion",
+  schema_version: 1,
+  complete: true,
+  round,
+  lifecycle_id: lifecycle,
+  base,
+  previous_tip: previousTip,
+  tip,
+  phase,
+  selection_sha256: selectionSha,
+  delta_sha256: deltaSha,
+  full_sha256: fullSha,
+});
+' "$completion_marker" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
+  "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
 echo "staged $out"
 echo "  tip          $tip"

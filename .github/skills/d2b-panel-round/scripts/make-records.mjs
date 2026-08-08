@@ -106,7 +106,10 @@ const readJson = (path, label) => {
 };
 
 const address = readJson(join(dir, "address.json"), "round address");
-const candidate = readJson(join(dir, "candidate.json"), "candidate address");
+const candidate = readJson(
+  join(dir, "current-candidate.json"),
+  "current candidate address",
+);
 const observed = readJson(join(dir, "observed.json"), "observed binding table");
 const approval = readJson(approvalPath, "approval artifact");
 let approvalBytes = "";
@@ -246,11 +249,11 @@ try {
 }
 
 if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-  fail("candidate.json must be an object");
+  fail("current-candidate.json must be an object");
 } else {
   for (const key of ["candidate_id", "content_id", "snapshot_sha256"]) {
     if (typeof candidate[key] !== "string" || !candidate[key]) {
-      fail(`candidate.json is missing ${key}`);
+      fail(`current-candidate.json is missing ${key}`);
     }
   }
 }
@@ -267,7 +270,7 @@ if (
     (key) => approval.current_candidate[key] !== candidate[key],
   )
 ) {
-  fail("approval artifact current candidate disagrees with staged candidate.json");
+  fail("approval artifact current candidate disagrees with staged current-candidate.json");
 }
 try {
   validateSelectionCandidate(selection, candidate);

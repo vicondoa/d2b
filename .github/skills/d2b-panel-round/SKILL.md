@@ -91,7 +91,10 @@ Stage the candidate with the same lifecycle and selection:
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <round-id> \
-  --lifecycle <lifecycle-id> --selection <selection.json>
+  --lifecycle <lifecycle-id> --selection <selection.json> \
+  --candidate <current-candidate.json> \
+  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --self-verification <self-verification.json>
 ```
 
 `address.json` records `lifecycle_id`. The selection path is passed unchanged
@@ -112,6 +115,12 @@ Both consumers must refuse a candidate, selection schema, selection-table
 version, or ordered-roster mismatch. Records are current workspace
 schema-version `2` objects with `panel_format_version: 1`.
 
+Staging materializes the supplied exact bytes into the round directory:
+`selection.json`, `current-candidate.json`, `discovery-ledger.json`,
+`responses.json`, and `self-verification.json` when those artifacts are
+supplied. The generated `dispatch-prompt.txt` is usable only when the round's
+`.complete` marker exists; an unmarked scratch directory is non-authoritative.
+
 The phase handoff uses a staged candidate, a discovery request, an immutable
 ledger, a response envelope, verification requests, an approval artifact, and
 a metrics artifact as its canonical inputs. The public command sequence covers
@@ -128,15 +137,16 @@ command:
 ```bash
 ROUND=.scratch/panel/<round-id>
 SELECTION="$ROUND/selection.json"
+CANDIDATE="$ROUND/current-candidate.json"
 LEDGER="$ROUND/discovery-ledger.json"
 RESPONSES="$ROUND/responses.json"
+SELF_VERIFICATION="$ROUND/self-verification.json"
 VERIFICATION="$ROUND/verification-results.json"
 APPROVAL="$ROUND/approval.json"
 METRICS="$ROUND/metrics.json"
-CANDIDATE="$ROUND/current-candidate.json"
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
-  adapt-verification "$LEDGER" "$ROUND/verification-verdicts.json" "$VERIFICATION" \
+  adapt-verification "$LEDGER" "$ROUND/verdicts" "$VERIFICATION" \
   --selection "$SELECTION" --candidate "$CANDIDATE"
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   approval "$SELECTION" "$LEDGER" "$RESPONSES" "$VERIFICATION" "$APPROVAL" \

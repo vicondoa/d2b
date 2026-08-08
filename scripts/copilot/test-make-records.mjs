@@ -178,7 +178,7 @@ function buildRound(mutate) {
   const finalSelectionBytes = stableStringify(state.selection);
   const finalLedgerBytes = stableStringify(state.ledger);
   writeFileSync(join(dir, "address.json"), stableStringify(state.address));
-  writeFileSync(join(dir, "candidate.json"), stableStringify(state.candidate));
+  writeFileSync(join(dir, "current-candidate.json"), stableStringify(state.candidate));
   writeFileSync(join(dir, "selection.json"), finalSelectionBytes);
   writeFileSync(join(dir, "ledger.json"), finalLedgerBytes);
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
@@ -506,6 +506,19 @@ rejects(
   "a selection roster mismatch fails closed",
   (s) => { s.selection.roster = s.selection.roster.slice(0, -1); },
   /mandatory|roster/i,
+);
+rejects(
+  "a record consumer rejects malformed nested classification",
+  (s) => {
+    s.selection.classification_inputs.full_candidate = {
+      changed_paths: ["src/lib.rs"],
+      signals: ["rust"],
+      candidate_class: "code",
+      ambiguous: false,
+      unexpected: true,
+    };
+  },
+  /unknown field|classification/i,
 );
 
 {
