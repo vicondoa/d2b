@@ -2108,30 +2108,36 @@ table before the operation exists.
   `Progress | Conflict` publication states. Every conflict carries the exact durable
   predecessor plus existing and candidate digests; `Conflict` is excluded from every
   progress prefix. The exact no-replace
-  `ContinuityRepairDecisionBasisIntentV1` final and directory chain are the write-ahead
-  decision commit: an in-memory candidate is not selected before complete intent
-  directory-chain durability, and
-  every basis progress state after that reloads the exact intent without source access or outcome
-  reselection. At intent after-link-before-reopen, after-reopen-before-parent-sync, and
-  after-parent-sync-before-ancestor-sync,
-  restart accepts absence or the exact final. Absence means no complete decision commit survived:
-  it discards the lost candidate and incomplete prefix, replays the sealed durable repair
-  state, and reruns precommit selection. The replacement candidate may have different intent
-  bytes, terminal outcome, or degraded branch/class because no prior candidate identity was
-  committed or projected; exact survival resumes durability without reselection. Selection
-  freezes only after the intent directory chain is durable. At all three
+  `ContinuityRepairDecisionBasisIntentV1` final and directory chain plus the private,
+  independently stored no-replace
+  `ContinuityRepairDecisionBasisIntentCommitWitnessV1` are the write-ahead decision commit:
+  an in-memory candidate is not selected before the exact intent chain and matching witness
+  are durable, and every basis progress state after that reloads the exact intent under its
+  sealed witness without source access or outcome reselection. At intent
+  after-link-before-reopen, after-reopen-before-parent-sync, and
+  after-parent-sync-before-ancestor-sync, restart accepts absence or the exact final.
+  Absence without a matching witness means no complete decision commit survived: it
+  discards the lost candidate and incomplete prefix, replays the sealed durable repair
+  state, and reruns precommit selection. The same recovery is mandatory after intent
+  ancestor sync when both final and witness are absent because the surviving durable state
+  is indistinguishable. The replacement candidate may have different intent bytes, terminal
+  outcome, or degraded branch/class because no prior candidate identity was committed or
+  projected; exact survival resumes durability without reselection. Exact intent survival
+  after ancestor sync with no witness publishes only that witness. Selection freezes only
+  after the matching witness is durable. At all three
   pre-`AncestorsDurable` basis points, absence is recreated byte-identically only from that
-  durable intent, with no source access, evidence replay, or outcome reselection, and exact
-  survival resumes. A recreated basis `ParentDurable` prefix repeats parent and ancestor
-  sync and cannot freeze selection early.
-  At `AncestorsDurable` and every downstream durable consumer, both intent and basis require
-  the exact final. Absence returns the closed record/boundary-specific
+  witness-backed durable intent, with no source access, evidence replay, or outcome
+  reselection, and exact survival resumes. A recreated basis `ParentDurable` prefix repeats
+  parent and ancestor sync and cannot freeze selection early.
+  A missing intent returns the closed record/boundary-specific
   `audit-continuity-repair-decision-durability-integrity-incident` exit-`4` response from
-  `contracts/operator-cli.md`, with zero recreation, relink, source access, reselection,
-  decision-selection publication, or settlement. Before the basis file and directory chain
-  are durable, the only legal public form is decision-basis-pending with intrinsic boundary
-  and no intended outcome or terminal failure. No preparation-incomplete form is legal without a durable decision
-  selection. Until the selection
+  `contracts/operator-cli.md` only when its matching witness survives; a basis
+  `AncestorsDurable` final remains mandatory. Either incident performs zero recreation,
+  relink, source access, reselection, decision-selection publication, or settlement. Before
+  the basis file and directory chain are durable, the only legal public form is
+  decision-basis-pending with intrinsic boundary and no intended outcome or terminal
+  failure. No preparation-incomplete form is legal without a durable decision selection.
+  Until the selection
   common-publication final is durable, only `PendingDecisionSelection` carrying the
   sealed durable selected decision and intrinsic publication state is legal, and restart
   may resume no other repair mutation. That selected value is a sealed newtype over the
@@ -2162,11 +2168,13 @@ table before the operation exists.
   accepted watermark and remains compaction-reachable. Fresh-process cases cover
   every decision-basis-intent, decision-basis, and decision-selection boundary, paired
   absence and exact-survival restarts at link, reopen, and parent-durable prefixes before
-  each intent/basis ancestor sync,
-  both closed intent-or-basis at ancestors-durable response DTOs, and fresh-process
+  each intent/basis ancestor sync, plus an independent intent pair after ancestor sync and
+  before witness durability. The no-witness absence case must take the same precommit
+  discard-and-reselect path, while exact survival publishes only the witness. Cases also
+  cover both closed intent-or-basis at ancestors-durable response DTOs and fresh-process
   intent-final-removal cases that physically remove the exact durable intent immediately
-  after intent `AncestorsDurable` and after every decision-basis `Progress` prefix and
-  sealed `Conflict`. Each removal returns the exact
+  after its matching witness is durable and after every decision-basis `Progress` prefix
+  and sealed `Conflict`. Each witness-backed removal returns the exact
   `audit-continuity-repair-decision-durability-integrity-incident` for record
   `decision-basis-intent` at boundary `ancestors-durable`, proves continued physical
   absence, and invokes zero
@@ -2183,7 +2191,7 @@ table before the operation exists.
   no-write completed replay. Separate source-change and foreign-final cases before every
   basis-intent boundary, every later basis boundary, and after durable basis selection
   prove no transient failure is projected, no new evidence/outcome/failure is selected
-  after write-ahead intent directory-chain durability, and no conflict is replaced. Each
+  after witness-backed write-ahead intent durability, and no conflict is replaced. Each
   accepted-absence/exact-survival/record-boundary DTO/downstream-removal/predecessor/conflict
   hook has an independent removal poison. Every downstream removal asserts zero
   reconstruction, relink, source access, reselection, later publication, compaction, or
@@ -2191,6 +2199,8 @@ table before the operation exists.
   `continuityRepairDecisionBasisIntentSha256` and
   `continuityRepairDecisionBasisSha256` formula/vectors pin every input, expected hash,
   same-width substitution, field order, framing, omission, and removal poison; the
+  private witness is not an export, audit, receipt, or hash-preimage member and therefore
+  changes no frozen formula, expected hash, registry id, or count. The
   compaction export vector consumes those expected hashes as ordered tags `0x2d` and
   `0x2e` before decision selection and propagates them through every downstream expected
   hash. Strict schemas, wire
@@ -2295,11 +2305,20 @@ table before the operation exists.
   fd-relatively reopens/revalidates the complete set, current head, and predecessor chain,
   then durably publishes a target mutation intent binding the exact present pre-unlink
   observation before unlinking. `MutationIntentDurable` requires exact-final reopen plus
-  complete intent-directory durability, not only an intent link. It
-  reopens/revalidates/syncs the anchored parent, commits
-  that target's reduced census and immutable receipt, and advances; pre-receipt absence is
-  legal only under that exact original operation and intent, never by citing a receipt that
-  does not yet exist. `head-changed | target-changed | unlink` may settle
+  complete intent-directory durability, not only an intent link. After unlink it
+  reopens/revalidates/syncs the anchored parent, then publishes the private no-replace
+  `ContinuityCompactionTargetUnlinkCommitWitnessV1` in a coordinator-owned namespace
+  independent of the selected leaf. The matching witness binds the exact
+  operation/selection/ordinal/target/intent/absence/parent tuple and must have its own final
+  and complete directory chain durable before census or receipt. It is a sealed
+  recovery-classification capability, not an audit/export/receipt preimage member, and
+  changes no frozen hash. Before the witness, exact target presence retries only the same
+  unlink idempotently and exact absence repeats parent sync and witness publication. Only
+  after the witness may selected-target presence derive `target-changed`. The broker then
+  commits that target's reduced census and immutable receipt and advances; pre-receipt
+  absence is legal only under that exact original operation and intent, never by citing a
+  receipt that does not yet exist. The receipt constructor also consumes the matching
+  sealed witness. `head-changed | target-changed | unlink` may settle
   degraded only before a successful unlink while the failed target remains present; the
   completed receipts are the exact prior ordinal prefix and the residual begins at that
   target. Post-unlink storage, census, conflict, receipt-publication, and audit-publication
@@ -2307,7 +2326,7 @@ table before the operation exists.
   outcome or recovery generation. Every
   target/ordinal/present/intent-durable/absent-without-intent/
   absent-under-intent-parent-unsynced/
-  parent-durable-old-census/census-committed/receipt-committed prefix restarts
+  unlink-witness-durable-old-census/census-committed/receipt-committed prefix restarts
   independently. Pre-only,
   binding-only, evidence-only, prune-complete, all nine watermark boundaries,
   watermark-without-basis-intent, every basis-intent/basis boundary,
@@ -2331,33 +2350,50 @@ table before the operation exists.
   stale/missing head or successor proof; and current-watermark deletion. It admits every
   complete repaired/degraded finalization row plus degraded-after-evidence reclamation with
   zero watermark and hooks pre/outcome, every target
-  prefix/intent/unlink/parent revalidation/sync/census/receipt, every fresh-process target
-  ordinal, durable `TargetsCompacted`, source release, attempt-slice release, overall
-  `Complete`, and response loss with poisons. Each post-unlink failure restarts a fresh
-  process and resumes the original parent/census/receipt prefix; completed-prefix,
+  prefix/intent/unlink/parent revalidation/sync/unlink-witness/census/receipt, every
+  fresh-process target ordinal, durable `TargetsCompacted`, source release,
+  attempt-slice release, overall `Complete`, and response loss with poisons. Each
+  post-unlink failure restarts a fresh process and resumes the original
+  parent/witness/census/receipt prefix; completed-prefix,
   residual-gap/overlap, foreign-intent, and post-unlink recovery substitutions each fail
-  independently. At every ordinal, additional fd-backed negatives mutate each anchored
-  parent identity member and separately each still-selected remaining target's type,
-  identity, or canonical digest after unlink and before census/receipt. The same matrix
+  independently. At every ordinal, independent fresh processes reinsert the exact selected
+  target after unlink but before witness durability and prove the same behavior as
+  crash-before-unlink: complete-selection revalidation and exact idempotent unlink retry,
+  with no `target-changed`, new operation, residual selection, or recovery generation.
+  Witness publication boundaries, alternate classifications, forbidden effects, hooks,
+  and removal poisons are independent. At every ordinal, additional fd-backed negatives
+  mutate each anchored parent identity member and separately each still-selected remaining
+  target's type, identity, or canonical digest after the matching witness is durable and
+  before census/receipt. The same matrix
   includes literal `post-unlink/<ordinal>/namespace-missing` and
   `post-unlink/<ordinal>/namespace-extra` cases for every ordinal. Missing makes the
   canonical namespace observation incomplete, including omission of the required
   empty-census observation at the final ordinal; extra injects one unselected namespace
   member. An additional fd-backed selected-target reappearance matrix starts a fresh
-  process after successful unlink and before census or receipt. At every ordinal, one case
-  reinserts the just-unlinked selected target through an independently held leaf descriptor
-  before restart. At every ordinal with a durable prior receipt prefix, separate cases
-  reinsert each receipted selected target through its independently held leaf descriptor
-  before restart; an unselected namespace member cannot satisfy either family. Parent
-  mutation derives `conflict`; remaining-target, missing, extra, and reappearance mutation
-  derive `target-changed`. Each fresh process must stop on the same original operation with
-  the prior receipt prefix intact, publish no current receipt, perform no next unlink, and
-  publish no census, degraded outcome, residual selection, recovery generation,
-  targets-compacted receipt, source release, or settlement. Every
+  process after the matching witness is durable and before census or receipt. At every
+  ordinal, one case reinserts the just-unlinked selected target through an independently
+  held leaf descriptor before restart. At every ordinal with a durable prior receipt
+  prefix, separate cases reinsert each receipted selected target through its independently
+  held leaf descriptor before restart; an unselected namespace member cannot satisfy either
+  family. Parent mutation derives `conflict`; remaining-target, missing, extra, and
+  witness-backed reappearance mutation derive `target-changed`. Each fresh process must
+  stop on the same original operation with the prior receipt prefix intact, publish no
+  current receipt, perform no next unlink, and publish no census, degraded outcome,
+  residual selection, recovery generation, targets-compacted receipt, source release, or
+  settlement. Every
   ordinal/mutation/missing/extra/reappearing-selected-target/forbidden-effect assertion and
   poisoning check has its own hook and removal poison; a just-unlinked case cannot satisfy
-  a receipted-target case or vice versa. These are subcases of the existing compaction
-  visitor and add no registry id.
+  a receipted-target case or vice versa.
+  A separate fresh-process post-receipt matrix runs immediately after every durable receipt
+  and before the next unlink, or after the final receipt and before `TargetsCompacted`.
+  For each receipt prefix it separately reinserts every receipted selected target through
+  an independently held leaf descriptor and requires `target-changed`, byte-identically
+  unchanged receipts, and zero unlink, census, receipt, degraded outcome, residual
+  selection, recovery generation, targets-compacted, source-release,
+  attempt-slice-release, or settlement effect. Every
+  receipt-prefix/receipted-target/forbidden-effect assertion has its own hook and removal
+  poison, and no post-unlink/pre-census case can satisfy it. These are subcases of the
+  existing compaction visitor and add no registry id.
   The reclamation vector must encode target-zero unlink failure with zero
   completed receipts and all four residual targets, then bind recovery generation one and
   all four successful receipts; no zero-target receipt may coexist with that first failure.
@@ -3028,8 +3064,9 @@ table before the operation exists.
   the corresponding closed fields. Neither form may contain `intendedOutcome`,
   `intended-outcome`, `failure`, `failureClass`, terminal branch/class, candidate basis
   digest, or private identity. Fresh server processes change source availability, version,
-  authority, replay binding, and returned bytes after intent directory-chain durability and
-  at each later basis state, and must receive the same pending form without outcome reselection;
+  authority, replay binding, and returned bytes after matching intent commit-witness
+  durability and at each later basis state, and must receive the same pending form without
+  outcome reselection;
   selection-pending and
   preparation-incomplete are exercised only with their required durable basis or selection.
   A direct renderer test cannot satisfy these cases.
