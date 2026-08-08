@@ -345,6 +345,10 @@ if [ "$phase" = "discovery" ] && [ -z "$discovery_request_path" ]; then
   exit 2
 fi
 if [ "$phase" = "verification" ]; then
+  if [ -z "$previous_selection_path" ]; then
+    echo "verification staging requires a recorded prior selection and verdict directory" >&2
+    exit 2
+  fi
   if [ -z "$ledger_path" ]; then
     echo "--ledger is required for verification staging so discovery-ledger.json is exact" >&2
     exit 2
@@ -759,22 +763,14 @@ const { validateStagedRoundArtifacts } =
   await import(pathToFileURL(helperPath).href);
 const validationOptions = {};
 if (phase === "verification" && previousSelectionPath) {
-  validationOptions.prior_selection = readJson(previousSelectionPath);
-  const previousStatuses = {};
-  for (const [seat, request] of Object.entries(artifacts.verification_requests)) {
-    if (
-      request.previous_status !== null &&
-      request.previous_status !== undefined &&
-      previousDir
-    ) {
-      previousStatuses[seat] = readJson(
-        `${previousDir}/verdicts/${seat}.json`,
-      );
-    }
-  }
-  if (Object.keys(previousStatuses).length > 0) {
-    validationOptions.previous_statuses = previousStatuses;
-  }
+  const priorSelection = readJson(previousSelectionPath);
+  validationOptions.prior_selection = priorSelection;
+  validationOptions.previous_statuses = Object.fromEntries(
+    priorSelection.roster.map((seat) => [
+      seat,
+      readJson(`${previousDir}/verdicts/${seat}.json`),
+    ]),
+  );
 }
 validateStagedRoundArtifacts(artifacts, validationOptions);
 NODE

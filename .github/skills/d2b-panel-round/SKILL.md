@@ -226,8 +226,8 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   <self-verification.json> <verification-dir> \
   --candidate <current-candidate.json> \
   --prior-selection <prior-selection.json> \
-  --delta <actual-delta.json> \
-  --full-context <full-context.json>
+  --prior-verdicts <prior-round>/verdicts \
+  --delta <actual-delta.json>
 ```
 
 ## Fix and verify the ledger

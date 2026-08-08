@@ -611,6 +611,16 @@ console.log("panel lifecycle: selection table");
     () => selectRoster(candidate({ changed_paths: ["src/\u0000panel.js"] })),
     /control characters/,
   );
+  rejects(
+    "classification inputs reject C1 paths",
+    () => selectRoster(candidate({ changed_paths: ["src/\u0080panel.js"] })),
+    /control characters/,
+  );
+  rejects(
+    "classification inputs reject C1 signals",
+    () => selectRoster(candidate({ signals: ["build\u009f"] })),
+    /control characters/,
+  );
 
   const gitPathRoot = mkdtempSync(join(tmpdir(), "d2b-panel-git-paths-"));
   try {
@@ -802,19 +812,23 @@ try {
     }),
     /canonical normalized signals/,
   );
-  rejects(
-    "classification paths must already use normalized separators",
-    () => validateSelection({
-      ...nestedSelection.selection,
-      classification_inputs: {
-        ...nestedSelection.selection.classification_inputs,
-        full_candidate: {
-          ...nestedSelection.selection.classification_inputs.full_candidate,
-          changed_paths: ["src\\panel.js"],
-        },
-      },
-    }),
-    /canonical normalized paths/,
+  const literalBackslashSelection = createSelection(
+    {
+      ...candidate({
+        snapshot_sha256: "6".repeat(64),
+        changed_paths: ["src\\panel.js"],
+      }),
+      lifecycle_id: "spec004w1",
+      phase: "discovery",
+    },
+    { root },
+  );
+  check(
+    "classification paths preserve literal backslashes",
+    literalBackslashSelection.selection.classification_inputs.changed_paths[0] ===
+      "src\\panel.js" &&
+      readSelection(literalBackslashSelection.path).classification_inputs.changed_paths[0] ===
+        "src\\panel.js",
   );
   rejects(
     "actual non-documentation paths cannot be narrowed to documentation",
@@ -1341,6 +1355,17 @@ try {
     },
     { root },
   );
+  const priorVerdicts = Object.fromEntries(
+    initial.selection.roster.map((seat) => [
+      seat,
+      {
+        engineer: seat,
+        signoff: true,
+        summary: "Prior verification passed.",
+        recommendations: [],
+      },
+    ]),
+  );
   const verificationInput = prepareVerification({
     selection: verificationSelection.selection,
     ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
@@ -1351,13 +1376,19 @@ try {
       content_id: "content-1",
     }),
     prior_selection: initial.selection,
+    prior_verdicts: priorVerdicts,
     latest_delta_paths: ["src/panel.js"],
-    actual_delta: { changed_paths: ["src/panel.js"], context: "fix" },
-    full_context: { candidate: "full" },
-    previous_status: {},
   });
   check("verification receives the complete ledger", verificationInput.requests[0].ledger.issues.length === 4);
   check("verification keeps discovery closed", verificationInput.requests[0].comprehensive_discovery_already_complete === true);
+  check(
+    "verification requests carry exact incumbent prior verdicts only",
+    verificationInput.requests.every((request) =>
+      request.previous_status === priorVerdicts[request.seat] &&
+      request.actual_delta.context === undefined &&
+      request.full_context === undefined,
+    ),
+  );
   check(
     "strict verification request validation binds every staged input",
     validateVerificationRequest(verificationInput.requests[0], {
@@ -1369,6 +1400,8 @@ try {
         snapshot_sha256: "c".repeat(64),
         content_id: "content-1",
       }),
+      prior_selection: initial.selection,
+      previous_status: priorVerdicts[verificationInput.requests[0].seat],
     }).seat === verificationInput.requests[0].seat,
   );
   const verified = validateVerificationResults(
@@ -1464,9 +1497,8 @@ try {
       content_id: "content-1",
     }),
     prior_selection: initial.selection,
+    prior_verdicts: priorVerdicts,
     latest_delta_paths: ["src/panel.js"],
-    actual_delta: { changed_paths: ["src/panel.js"], context: "fix" },
-    full_context: { candidate: "full" },
   });
   check(
     "verification generation writes one request per selected seat",
@@ -1485,9 +1517,8 @@ try {
         content_id: "content-1",
       }),
       prior_selection: initial.selection,
+      prior_verdicts: priorVerdicts,
       latest_delta_paths: ["src/panel.js"],
-      actual_delta: { changed_paths: ["src/panel.js"], context: "fix" },
-      full_context: { candidate: "full" },
     }),
     /incomplete or has extra entries/,
   );
@@ -1577,7 +1608,6 @@ try {
       self_verification: selfVerification,
       prior_selection: initial.selection,
       latest_delta_paths: ["src/panel.js"],
-      full_context: { candidate: "full" },
     }),
     /explicit current candidate/,
   );
@@ -1590,7 +1620,6 @@ try {
       self_verification: selfVerification,
       current_candidate: candidate({ snapshot_sha256: "c".repeat(64) }),
       latest_delta_paths: ["src/panel.js"],
-      full_context: { candidate: "full" },
     }),
     /explicit prior selection/,
   );
@@ -1603,13 +1632,13 @@ try {
       self_verification: selfVerification,
       current_candidate: candidate({ snapshot_sha256: "c".repeat(64) }),
       prior_selection: initial.selection,
+      prior_verdicts: priorVerdicts,
       latest_delta_paths: [],
-      full_context: { candidate: "full" },
     }),
     /non-empty actual delta/,
   );
   rejects(
-    "verification requires non-empty full context",
+    "verification requires prior verdicts when a prior selection is supplied",
     () => prepareVerification({
       selection: verificationSelection.selection,
       ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
@@ -1618,9 +1647,8 @@ try {
       current_candidate: candidate({ snapshot_sha256: "c".repeat(64) }),
       prior_selection: initial.selection,
       latest_delta_paths: ["src/panel.js"],
-      full_context: {},
     }),
-    /non-empty full candidate context/,
+    /explicit prior verdicts/,
   );
 
   console.log("panel lifecycle: public CLI integration");
@@ -1676,7 +1704,6 @@ try {
     const cliResponses = join(cliRoot, "responses.json");
     const cliSelf = join(cliRoot, "self.json");
     const cliDelta = join(cliRoot, "actual-delta.json");
-    const cliFullContext = join(cliRoot, "full-context.json");
     const cliVerificationSelectionCandidate = join(cliRoot, "verification-candidate.json");
     const cliFirstRound = join(cliRoot, ".scratch", "panel", "spec004w1-r1");
     const cliRound = join(cliRoot, ".scratch", "panel", "spec004w1-r2");
@@ -1809,10 +1836,6 @@ try {
       changed_paths: ["src/panel.js"],
       diff: "the focused fix",
     }));
-    writeFileSync(cliFullContext, stableStringify({
-      candidate: "full candidate context",
-      validation: "staged evidence",
-    }));
     writeFileSync(join(cliRoot, "src", "panel.js"), "candidate fixed\n");
     execFileSync("git", ["add", "src/panel.js"], { cwd: cliRoot });
     execFileSync("git", ["commit", "--quiet", "-m", "fix"], { cwd: cliRoot });
@@ -1843,10 +1866,10 @@ try {
       cliVerificationSelectionCandidate,
       "--prior-selection",
       discoverySelection,
+      "--prior-verdicts",
+      join(cliFirstRound, "verdicts"),
       "--delta",
       cliDelta,
-      "--full-context",
-      cliFullContext,
     );
     const stagedVerification = spawnSync("bash", [
       cliStageScript,
@@ -1892,9 +1915,9 @@ try {
       join(cliRoot, "verification-missing-flags"),
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
-      "verification CLI refuses empty candidate, prior, delta, and context defaults",
+      "verification CLI refuses empty candidate, prior, verdict, and delta defaults",
       missingVerificationFlags.status !== 0 &&
-        /requires --candidate, --prior-selection, --delta, and --full-context/.test(
+        /requires --candidate, --prior-selection, --prior-verdicts, and --delta/.test(
           `${missingVerificationFlags.stdout}${missingVerificationFlags.stderr}`,
         ),
     );
@@ -1935,10 +1958,10 @@ try {
       join(cliRound, "current-candidate.json"),
       "--prior-selection",
       join(cliFirstRound, "selection.json"),
+      "--prior-verdicts",
+      join(cliFirstRound, "verdicts"),
       "--delta",
       cliDelta,
-      "--full-context",
-      cliFullContext,
     );
     const approvalResult = spawnSync("node", [
       LIFECYCLE_CLI,

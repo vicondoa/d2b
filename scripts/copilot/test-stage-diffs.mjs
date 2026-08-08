@@ -105,8 +105,10 @@ try {
   git(repo, "commit", "--quiet", "-m", "base");
   const base = git(repo, "rev-parse", "HEAD");
 
+  const literalBackslashPath = "literal\\backslash.txt";
   writeFileSync(join(repo, "first.txt"), "first change\n");
-  git(repo, "add", "first.txt");
+  writeFileSync(join(repo, literalBackslashPath), "literal backslash change\n");
+  git(repo, "add", "first.txt", literalBackslashPath);
   git(repo, "commit", "--quiet", "-m", "first");
   const firstTip = git(repo, "rev-parse", "HEAD");
 
@@ -119,12 +121,19 @@ try {
       candidate_id: "candidate-1",
       content_id: "content-1",
       snapshot_sha256: "a".repeat(64),
-      changed_paths: ["first.txt"],
+      changed_paths: ["first.txt", literalBackslashPath],
     }, null, 2)}\n`,
   );
   const selectionPath = execFileSync(
     "node",
-    [lifecycleScript, "select", candidatePath, "spec001w1"],
+    [
+      lifecycleScript,
+      "select",
+      candidatePath,
+      "spec001w1",
+      "--git-range",
+      `${base}..${firstTip}`,
+    ],
     { cwd: repo, encoding: "utf8" },
   ).trim();
   const discoveryRequestPath = join(repo, "discovery-request.json");
@@ -203,6 +212,13 @@ try {
   check("first review records its selection digest", typeof firstAddress.selection_sha256 === "string");
   check("first review stages selection.json exactly", readFileSync(join(firstDir, "selection.json"), "utf8") === readFileSync(selectionPath, "utf8"));
   check("first review stages current-candidate.json exactly", readFileSync(join(firstDir, "current-candidate.json"), "utf8") === readFileSync(candidatePath, "utf8"));
+  check(
+    "git-range selection and staging preserve a literal backslash path",
+    JSON.parse(readFileSync(join(firstDir, "selection.json"), "utf8"))
+      .classification_inputs.changed_paths.includes(literalBackslashPath) &&
+      JSON.parse(readFileSync(join(firstDir, "current-candidate.json"), "utf8"))
+        .changed_paths.includes(literalBackslashPath),
+  );
   check("first review stages discovery-request.json exactly", readFileSync(join(firstDir, "discovery-request.json"), "utf8") === readFileSync(discoveryRequestPath, "utf8"));
   check("first review writes its completion marker last", existsSync(join(firstDir, ".complete")));
   const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
@@ -344,7 +360,7 @@ try {
       candidate_id: "candidate-2",
       content_id: "content-2",
       snapshot_sha256: "b".repeat(64),
-      changed_paths: ["Makefile", "first.txt"],
+      changed_paths: ["Makefile", "first.txt", literalBackslashPath],
     }, null, 2)}\n`,
   );
   const deltaPath = join(repo, "fix-delta.json");
@@ -362,6 +378,8 @@ try {
       selectionPath,
       "--fix-delta",
       deltaPath,
+      "--git-range",
+      `${base}..${secondTip}`,
     ],
     { cwd: repo, encoding: "utf8" },
   ).trim();
@@ -433,11 +451,6 @@ try {
     }, null, 2)}\n`,
   );
   const verificationSourceDir = join(repo, "verification-requests");
-  const fullContextPath = join(repo, "full-context.json");
-  writeFileSync(fullContextPath, `${JSON.stringify({
-    candidate: "full candidate context",
-    evidence: "staged validation",
-  }, null, 2)}\n`);
   execFileSync(
     "node",
     [
@@ -452,10 +465,10 @@ try {
       currentCandidatePath,
       "--prior-selection",
       selectionPath,
+      "--prior-verdicts",
+      join(firstDir, "verdicts"),
       "--delta",
       deltaPath,
-      "--full-context",
-      fullContextPath,
     ],
     { cwd: repo, encoding: "utf8" },
   );
@@ -704,11 +717,19 @@ try {
     },
   );
   rejectsStagedVerification(
-    "verification staging rejects stale full context",
+    "verification staging rejects removed full context",
     (request) => {
       request.full_context = {
         candidate: "context from an earlier candidate",
         validation: "stale evidence",
+      };
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects removed actual delta context",
+    (request) => {
+      request.actual_delta.context = {
+        changed_paths: ["Makefile"],
       };
     },
   );
@@ -722,6 +743,12 @@ try {
     "verification staging rejects stale prior selection",
     (request) => {
       request.prior_selection.content_id = "stale-prior-content";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a null incumbent prior status",
+    (request) => {
+      request.previous_status = null;
     },
   );
   rejectsStagedVerification(
@@ -770,6 +797,11 @@ try {
     verificationRoster.every((seat) =>
       readFileSync(join(secondDir, "verification", `${seat}.json`), "utf8") ===
         readFileSync(join(verificationSourceDir, `${seat}.json`), "utf8")),
+  );
+  check(
+    "newly selected seats carry a null prior status",
+    JSON.parse(readFileSync(join(secondDir, "verification", "build.json"), "utf8"))
+      .previous_status === null,
   );
   check("later review writes a completion marker", existsSync(join(secondDir, ".complete")));
   const delta = readFileSync(join(secondDir, "delta.diff"), "utf8");
@@ -863,6 +895,59 @@ try {
       /non-authoritative/.test(incompleteRetry.text) &&
       /rm -rf/.test(incompleteRetry.text),
     incompleteRetry.text,
+  );
+
+  const c1Path = `c1-${"\u0080"}.txt`;
+  writeFileSync(join(repo, c1Path), "c1 control character\n");
+  git(repo, "add", c1Path);
+  git(repo, "commit", "--quiet", "-m", "c1 path");
+  const c1Selection = spawnSync(
+    "node",
+    [
+      lifecycleScript,
+      "select",
+      currentCandidatePath,
+      "spec001w1",
+      "--phase",
+      "verification",
+      "--previous-selection",
+      selectionPath,
+      "--fix-delta",
+      deltaPath,
+      "--git-range",
+      `${secondTip}..HEAD`,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
+  check(
+    "git-range selection refuses a C1 path",
+    c1Selection.status !== 0 &&
+      /control character/.test(`${c1Selection.stdout}${c1Selection.stderr}`),
+    `${c1Selection.stdout}${c1Selection.stderr}`,
+  );
+  const c1Staging = run(repo, [
+    base,
+    secondTip,
+    "spec001w1-r3",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    stagedLedger,
+    "--responses",
+    stagedResponses,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    verificationSourceDir,
+  ]);
+  check(
+    "staging refuses a git range containing a C1 path",
+    c1Staging.status === 2 &&
+      /control character/.test(c1Staging.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r3", ".complete")),
+    c1Staging.text,
   );
 } finally {
   rmSync(repo, { recursive: true, force: true });

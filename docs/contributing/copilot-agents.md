@@ -344,8 +344,9 @@ node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
 ```
 
 The verification command that precedes this sequence requires
-`--candidate`, `--prior-selection`, `--delta`, and `--full-context`; none of
-those inputs has an empty default.
+`--candidate`, `--prior-selection`, `--prior-verdicts`, and `--delta`; none of
+those inputs has an empty default. The staged full diff is the canonical full
+candidate context rather than a duplicate request field.
 
 Independent selected reviewers are a deliberate cost. This repository's own
 history is the argument: an early panel returned zero sign-offs with eleven

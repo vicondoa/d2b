@@ -24,7 +24,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, normalize, resolve } from "node:path";
+import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -130,6 +130,7 @@ const compareUtf8 = (left, right) =>
   utf8Bytes(left, "ordered string").compare(utf8Bytes(right, "ordered string"));
 
 const sortUtf8 = (values) => [...values].sort(compareUtf8);
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 
 const isPlainObject = (value) =>
   value !== null &&
@@ -177,7 +178,9 @@ const readJson = (path, label = path) => {
 
 export function changedPathsFromGitRange(range, cwd = process.cwd()) {
   nonBlank(range, "git range");
-  if (/[\0\n\r]/.test(range)) error("git range contains a control character");
+  if (CONTROL_CHARACTER_PATTERN.test(range)) {
+    error("git range contains a control character");
+  }
   let output;
   try {
     output = execFileSync(
@@ -210,7 +213,7 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
       error(`git changed-path output contains invalid UTF-8: ${cause.message}`);
     }
     utf8Bytes(path, "git changed path");
-    if (/[\u0000-\u001f\u007f]/.test(path)) {
+    if (CONTROL_CHARACTER_PATTERN.test(path)) {
       error("git changed path contains an unrepresentable control character");
     }
     paths.push(path);
@@ -515,7 +518,7 @@ function candidateInputs(input) {
   }
   for (const path of paths) {
     utf8Bytes(path, "changed path");
-    if (/[\u0000-\u001f\u007f]/.test(path)) {
+    if (CONTROL_CHARACTER_PATTERN.test(path)) {
       error("changed paths must not contain control characters");
     }
   }
@@ -532,7 +535,7 @@ function candidateInputs(input) {
   }
   for (const signal of signals) {
     utf8Bytes(signal, "signal");
-    if (/[\u0000-\u001f\u007f]/.test(signal)) {
+    if (CONTROL_CHARACTER_PATTERN.test(signal)) {
       error("signals must not contain control characters");
     }
   }
@@ -552,9 +555,7 @@ function candidateInputs(input) {
     candidate?.ambiguity === true ||
     candidateClass === "ambiguous";
   return {
-    changed_paths: sortUtf8([
-      ...new Set(paths.map((path) => path.replaceAll("\\", "/"))),
-    ]),
+    changed_paths: sortUtf8([...new Set(paths)]),
     signals: sortUtf8([
       ...new Set(signals.map((signal) => signal.trim().toLowerCase())),
     ]),
@@ -1035,11 +1036,11 @@ function canonicalClassificationArray(value, label, kind) {
     if (typeof entry !== "string" || entry.trim() === "") {
       error(`${label} must contain non-blank strings`);
     }
-    if (/[\u0000-\u001f\u007f]/.test(entry)) {
+    if (CONTROL_CHARACTER_PATTERN.test(entry)) {
       error(`${label} must not contain control characters`);
     }
     const canonicalEntry = kind === "changed_paths"
-      ? normalize(entry.replaceAll("\\", "/"))
+      ? posix.normalize(entry)
       : entry.trim().toLowerCase();
     if (
       canonicalEntry !== entry ||
@@ -2308,9 +2309,13 @@ function changedSurface(response, label) {
   if (paths.some((path) => typeof path !== "string" || path.trim() === "")) {
     error(`${label}.changed_surface must contain non-blank path strings`);
   }
-  return sortUtf8([
-    ...new Set(paths.map((path) => path.replaceAll("\\", "/"))),
-  ]);
+  for (const path of paths) {
+    utf8Bytes(path, `${label}.changed_surface path`);
+    if (CONTROL_CHARACTER_PATTERN.test(path)) {
+      error(`${label}.changed_surface must not contain control characters`);
+    }
+  }
+  return sortUtf8([...new Set(paths)]);
 }
 
 export function validateResponseEnvelope(ledger, envelope) {
@@ -2672,7 +2677,6 @@ const VERIFICATION_REQUEST_KEYS = [
   "current_candidate",
   "full_candidate",
   "current_selection",
-  "full_context",
   "fix_delta",
   "prior_selection",
   "previous_status",
@@ -2690,7 +2694,6 @@ const SHARED_VERIFICATION_REQUEST_KEYS = [
   "current_candidate",
   "full_candidate",
   "current_selection",
-  "full_context",
   "fix_delta",
   "prior_selection",
 ];
@@ -2751,11 +2754,6 @@ export function validateVerificationRequest(request, options = {}) {
     Object.hasOwn(options, "actualDelta");
   const canonicalActualDelta =
     options.actual_delta ?? options.actualDelta;
-  const hasCanonicalFullContext =
-    Object.hasOwn(options, "full_context") ||
-    Object.hasOwn(options, "fullContext");
-  const canonicalFullContext =
-    options.full_context ?? options.fullContext;
   const hasCanonicalPriorSelection =
     Object.hasOwn(options, "prior_selection") ||
     Object.hasOwn(options, "priorSelection");
@@ -2853,7 +2851,7 @@ export function validateVerificationRequest(request, options = {}) {
   const expectedDeltaPaths = request.latest_delta_paths;
   assertExactKeys(
     request.actual_delta,
-    ["paths", "context"],
+    ["paths"],
     "verification request actual_delta",
   );
   if (
@@ -2861,9 +2859,6 @@ export function validateVerificationRequest(request, options = {}) {
     request.actual_delta.paths.join("\u0000") !== expectedDeltaPaths.join("\u0000")
   ) {
     error("verification request actual_delta paths disagree with selection");
-  }
-  if (!isPlainObject(request.actual_delta.context)) {
-    error("verification request actual_delta context must be an object");
   }
   assertCanonicalEqual(
     request.current_candidate,
@@ -2875,9 +2870,6 @@ export function validateVerificationRequest(request, options = {}) {
     candidateAddress(currentCandidate),
     "verification request full_candidate",
   );
-  if (!isPlainObject(request.full_context) || Object.keys(request.full_context).length === 0) {
-    error("verification request full_context must be a non-empty object");
-  }
   validateVerificationFixDelta(
     request.fix_delta,
     expectedDeltaPaths,
@@ -2891,13 +2883,6 @@ export function validateVerificationRequest(request, options = {}) {
       "verification request actual_delta",
     );
   }
-  if (hasCanonicalFullContext) {
-    assertCanonicalEqual(
-      request.full_context,
-      canonicalFullContext,
-      "verification request full_context",
-    );
-  }
   if (hasCanonicalPriorSelection) {
     const expectedPriorSelection = canonicalSelectionSummary(
       canonicalPriorSelection,
@@ -2908,6 +2893,17 @@ export function validateVerificationRequest(request, options = {}) {
       request.prior_selection,
       expectedPriorSelection,
       "verification request prior_selection",
+    );
+  }
+  const incumbent = request.prior_selection.roster.includes(request.seat);
+  if (incumbent && !isPlainObject(request.previous_status)) {
+    error(
+      `verification request incumbent seat "${request.seat}" must carry its prior verdict`,
+    );
+  }
+  if (!incumbent && request.previous_status !== null) {
+    error(
+      `verification request newly selected seat "${request.seat}" must carry a null prior status`,
     );
   }
   if (
@@ -2955,6 +2951,35 @@ export function validateVerificationRequests(
   const seen = new Set();
   let canonicalSharedRequest;
   const validated = [];
+  const priorSelectionOption =
+    options.prior_selection ?? options.priorSelection;
+  const previousStatuses =
+    options.previous_statuses ?? options.previousStatuses;
+  let priorSummary;
+  if (priorSelectionOption !== undefined) {
+    priorSummary = canonicalSelectionSummary(
+      priorSelectionOption,
+      table,
+      "canonical verification prior_selection",
+    );
+    if (!isPlainObject(previousStatuses)) {
+      error(
+        "verification requests require prior statuses for every incumbent seat",
+      );
+    }
+    const actualPriorStatusKeys = Object.keys(previousStatuses).sort();
+    const expectedPriorStatusKeys = [...priorSummary.roster].sort();
+    if (
+      actualPriorStatusKeys.length !== expectedPriorStatusKeys.length ||
+      actualPriorStatusKeys.some(
+        (key, index) => key !== expectedPriorStatusKeys[index],
+      )
+    ) {
+      error(
+        "verification requests prior statuses must contain exactly the incumbent seats",
+      );
+    }
+  }
   for (const [seat, request] of entries) {
     if (seat !== request?.seat) {
       error(`verification request key "${seat}" disagrees with its declared seat`);
@@ -2979,10 +3004,13 @@ export function validateVerificationRequests(
       self_verification:
         options.self_verification ?? options.selfVerification,
     };
-    const previousStatuses =
-      options.previous_statuses ?? options.previousStatuses;
-    if (isPlainObject(previousStatuses) &&
-        Object.hasOwn(previousStatuses, seat)) {
+    if (priorSelectionOption !== undefined) {
+      requestOptions.prior_selection = priorSelectionOption;
+      requestOptions.previous_status = priorSummary.roster.includes(seat)
+        ? previousStatuses[seat]
+        : null;
+    } else if (isPlainObject(previousStatuses) &&
+               Object.hasOwn(previousStatuses, seat)) {
       requestOptions.previous_status = previousStatuses[seat];
     }
     if (
@@ -2990,12 +3018,6 @@ export function validateVerificationRequests(
       Object.hasOwn(options, "actualDelta")
     ) {
       requestOptions.actual_delta = options.actual_delta ?? options.actualDelta;
-    }
-    if (
-      Object.hasOwn(options, "full_context") ||
-      Object.hasOwn(options, "fullContext")
-    ) {
-      requestOptions.full_context = options.full_context ?? options.fullContext;
     }
     if (
       Object.hasOwn(options, "prior_selection") ||
@@ -3091,10 +3113,6 @@ export function validateStagedRoundArtifacts(input, options = {}) {
       options.actual_delta ??
       options.actualDelta ??
       canonicalRequest.actual_delta,
-    full_context:
-      options.full_context ??
-      options.fullContext ??
-      canonicalRequest.full_context,
     prior_selection:
       options.prior_selection ??
       options.priorSelection ??
@@ -3121,11 +3139,23 @@ export function validateFixScope(input) {
   if (!Array.isArray(latestDelta) || latestDelta.some((path) => typeof path !== "string")) {
     error("latest_delta_paths must be an array of strings");
   }
+  for (const path of latestDelta) {
+    if (path.trim() === "" || CONTROL_CHARACTER_PATTERN.test(path)) {
+      error("latest_delta_paths must contain non-blank paths without control characters");
+    }
+    utf8Bytes(path, "latest delta path");
+  }
   const explicit = input.allowed_paths ?? input.scope?.allowed_paths;
   let allowed;
   if (explicit !== undefined) {
     if (!Array.isArray(explicit) || explicit.some((path) => typeof path !== "string")) {
       error("allowed_paths must be an array of strings");
+    }
+    for (const path of explicit) {
+      if (path.trim() === "" || CONTROL_CHARACTER_PATTERN.test(path)) {
+        error("allowed_paths must contain non-blank paths without control characters");
+      }
+      utf8Bytes(path, "allowed path");
     }
     allowed = explicit;
   } else {
@@ -3369,6 +3399,38 @@ export function validateVerificationResults(selection, results, options = {}) {
   );
 }
 
+function normalizePriorVerdicts(input, priorSelection) {
+  const verdicts = typeof input === "string"
+    ? readJsonDirectory(input, "prior verdicts")
+    : input;
+  if (!isPlainObject(verdicts)) {
+    error("verification preparation prior verdicts must be an object keyed by seat");
+  }
+  const expectedSeats = [...priorSelection.roster].sort();
+  const actualSeats = Object.keys(verdicts).sort();
+  if (
+    actualSeats.length !== expectedSeats.length ||
+    actualSeats.some((seat, index) => seat !== expectedSeats[index])
+  ) {
+    error(
+      "verification preparation prior verdicts must contain exactly one verdict for every prior seat",
+    );
+  }
+  for (const seat of priorSelection.roster) {
+    const verdict = verdicts[seat];
+    if (!isPlainObject(verdict)) {
+      error(`verification preparation prior verdict for ${seat} must be an object`);
+    }
+    const declaredSeat = verdict.engineer ?? verdict.seat;
+    if (declaredSeat !== seat) {
+      error(
+        `verification preparation prior verdict ${seat} declares seat "${declaredSeat}"`,
+      );
+    }
+  }
+  return verdicts;
+}
+
 export function prepareVerification(input, options = {}) {
   const table = options.table ?? readSelectionTable(options.table_path);
   const selection =
@@ -3420,24 +3482,20 @@ export function prepareVerification(input, options = {}) {
     }
     validateMonotonicRoster(priorSelection.roster, selection.roster, table);
   }
+  const priorVerdictsInput =
+    input.prior_verdicts ??
+    input.priorVerdicts;
+  if (priorVerdictsInput === undefined || priorVerdictsInput === null) {
+    error("verification preparation requires explicit prior verdicts");
+  }
+  const priorVerdicts = normalizePriorVerdicts(
+    priorVerdictsInput,
+    priorSelection,
+  );
   const responses = validateResponses(discoveryLedger, input.responses);
   const selfVerification = validateSelfVerification(
     input.self_verification ?? input.selfVerification,
   );
-  const fullContext =
-    input.full_context ??
-    input.full_candidate_context ??
-    input.context ??
-    undefined;
-  if (!fullContext) {
-    error("verification preparation requires explicit full candidate context");
-  }
-  if (!isPlainObject(fullContext)) {
-    error("full_context must be an object");
-  }
-  if (Object.keys(fullContext).length === 0) {
-    error("verification preparation requires non-empty full candidate context");
-  }
   const actualDeltaPaths =
     input.actual_delta_paths ??
     input.latest_delta_paths ??
@@ -3446,7 +3504,12 @@ export function prepareVerification(input, options = {}) {
   if (!Array.isArray(actualDeltaPaths) || actualDeltaPaths.length === 0) {
     error("verification preparation requires a non-empty actual delta");
   }
-  if (actualDeltaPaths.some((path) => typeof path !== "string" || path.trim() === "")) {
+  if (actualDeltaPaths.some(
+    (path) =>
+      typeof path !== "string" ||
+      path.trim() === "" ||
+      CONTROL_CHARACTER_PATTERN.test(path),
+  )) {
     error("verification preparation actual delta paths must be non-blank strings");
   }
   const scope = validateFixScope({
@@ -3471,21 +3534,19 @@ export function prepareVerification(input, options = {}) {
     latest_delta_paths: scope.latest_delta_paths,
     actual_delta: {
       paths: scope.latest_delta_paths,
-      context: input.actual_delta ?? {
-        changed_paths: scope.latest_delta_paths,
-      },
     },
     current_candidate: candidateAddress(currentCandidate),
     full_candidate: candidateAddress(currentCandidate),
     current_selection: selectionSummary(selection, table),
-    full_context: fullContext,
     fix_delta: input.fix_delta ?? input.fixDelta ?? {
       changed_paths: scope.latest_delta_paths,
     },
     prior_selection: priorSelection
       ? selectionSummary(priorSelection, table)
       : null,
-    previous_status: input.previous_status?.[seat] ?? null,
+    previous_status: priorSelection.roster.includes(seat)
+      ? priorVerdicts[seat]
+      : null,
     obligations: {
       focus: table.seats[seat].focus,
       profiles: selection.profiles[seat],
@@ -3505,7 +3566,6 @@ export function prepareVerification(input, options = {}) {
     current_candidate: candidateAddress(currentCandidate),
     full_candidate: candidateAddress(currentCandidate),
     current_selection: selectionSummary(selection, table),
-    full_context: fullContext,
     fix_delta: input.fix_delta ?? input.fixDelta ?? {
       changed_paths: scope.latest_delta_paths,
     },
@@ -4641,7 +4701,7 @@ function usage() {
     "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json>",
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
     "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
-    "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --delta PATH --full-context PATH",
+    "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH",
     "  panel-lifecycle.mjs approval <selection.json> <ledger.json> <responses.json> <verification-results.json> <output.json> --candidate PATH",
     "  panel-lifecycle.mjs metrics --selection PATH --ledger PATH --responses PATH --verification-results PATH --output PATH [--implementation-history PATH] [--verification-history PATH]",
     "  panel-lifecycle.mjs import-legacy <legacy-dir-or-json> [candidate.json] <output.json>",
@@ -4756,15 +4816,14 @@ async function main(argv) {
       const priorPath =
         flagValue(optionsArgv, "--prior-selection") ??
         flagValue(optionsArgv, "--previous-selection");
+      const priorVerdictsPath = flagValue(optionsArgv, "--prior-verdicts");
       const deltaPath = flagValue(optionsArgv, "--delta");
-      const fullContextPath = flagValue(optionsArgv, "--full-context");
-      if (!candidatePath || !priorPath || !deltaPath || !fullContextPath) {
+      if (!candidatePath || !priorPath || !priorVerdictsPath || !deltaPath) {
         error(
-          "verification requires --candidate, --prior-selection, --delta, and --full-context",
+          "verification requires --candidate, --prior-selection, --prior-verdicts, and --delta",
         );
       }
       const delta = readJson(deltaPath, "actual fix delta");
-      const fullContext = readJson(fullContextPath, "full candidate context");
       const actualDeltaPaths = Array.isArray(delta)
         ? delta
         : delta?.changed_paths ?? delta?.paths ?? [];
@@ -4775,9 +4834,8 @@ async function main(argv) {
         self_verification: selfVerification,
         current_candidate: readJson(candidatePath, "current candidate"),
         prior_selection: readSelection(priorPath),
+        prior_verdicts: readJsonDirectory(priorVerdictsPath, "prior verdicts"),
         actual_delta_paths: actualDeltaPaths,
-        actual_delta: delta,
-        full_context: fullContext,
       });
       console.log(`wrote ${result.written.length} verification artifacts to ${argv[5]}`);
       return;
