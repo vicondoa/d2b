@@ -1615,7 +1615,11 @@
             contextRecord =
               if expectedContext == null then null
               else lib.findFirst
-                (record: record.context.context == expectedContext.context)
+                (record:
+                  record.context.system == system
+                  && record.context.target == target
+                  && record.context.package == package
+                  && record.context.context == expectedContext.context)
                 null
                 policyContextRecords;
             contextBound =
