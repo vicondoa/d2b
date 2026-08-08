@@ -1926,15 +1926,17 @@ table before the operation exists.
   2,048-byte decision-intent witness and four 2,048-byte target-unlink witness slots; unused
   target-witness slots remain reserved, and durable witnesses are reclaimed only in the
   ordered successor-proved, parent-synced phase before source release and slot reuse.
-  Independent read-literal target-cardinality zero, one, two, and three probes fill
-  unrelated general capacity to its exact remaining record and byte boundary, accept that
-  boundary, and refuse one record or byte beyond it. Fresh processes at attempt admission,
-  targets compacted, every applicable witness-reclamation prefix, source `Released`, and
-  immediately before and after attempt-slice `CompletedReleased` must prove that the full
-  46-record/222,208-byte slice remains charged until that exact release and then returns
-  atomically; unused witness slots, witness absence/unlink, and source release return no
-  partial capacity. Every cardinality/boundary/restart hook and premature-credit removal
-  poison is independent of the four-target case.
+  Four independent read-literal general-capacity probes use target cardinality `0`, `1`,
+  `2`, and `3`. For each cardinality, separate record-bound and byte-bound fixtures fill
+  unrelated general capacity to its independently calculated remaining boundary, accept
+  that exact boundary, and refuse respectively one record or one byte beyond it. Fresh
+  processes at attempt admission, targets compacted, every applicable
+  witness-reclamation prefix, source `Released`, and immediately before and after
+  attempt-slice `CompletedReleased` must prove that the full 46-record/222,208-byte slice
+  remains charged until that exact release and then returns atomically; completed replay
+  returns no second credit, and unused witness slots, witness absence/unlink, and source
+  release return no partial capacity. Every cardinality/boundary/restart hook and
+  premature-credit removal poison is independent of the four-target case.
   Read-independent record/byte boundary cases calculate each row and multiplier without
   production constants, refuse either one-short boundary, poison every omission/count,
   exhaust all unreserved capacity after replacement, retain 255 degraded or partial-prune
@@ -2140,12 +2142,17 @@ table before the operation exists.
   that empty-descendant proof. Any surviving basis, selection, decision-pre,
   outcome-intent, terminal, final-absence, compaction, or completed prefix proves prior
   consumption and forbids reselection. Before authorized reclamation it returns the closed
-  witness-missing integrity incident with zero mutation; at or after reclamation, only the
-  exact targets-compacted/immediate-receipt successor chain may classify absence and resume
-  that successor. The exact post-reclamation chain is the byte-identical basis/downstream
+  witness-missing integrity incident with zero mutation; at or after decision-witness
+  reclamation, only the exact prefix-appropriate successor chain may classify absence and
+  resume that successor. Its invariant members are the byte-identical basis/downstream
   decision predecessors, targets-compacted receipt, complete immediate target-receipt
-  chain, and ordered coordinator-parent absences. If the intent final is absent too, that
-  complete validated chain proves prior consumption and constructs
+  chain, and decision-witness coordinator-parent-synced absence. During target-witness
+  reclamation it additionally carries the ordered completed parent-synced absence prefix,
+  any current absent-but-parent-sync-pending name, and exact still-present witness/receipt
+  pairs for later names. At later states it carries all ordered witness-parent absences and
+  the exact source-release and attempt-slice prefix through the current checkpoint. If the
+  intent final is absent too, that complete validated prefix-appropriate chain proves prior
+  consumption and constructs
   `IntentFinalMissingAfterAncestorsDurable` instead of resuming, recreating, or reselecting.
   The replacement candidate may have different intent bytes, terminal
   outcome, or degraded branch/class because no prior candidate identity was committed or
@@ -2215,11 +2222,15 @@ table before the operation exists.
   `decision-intent-witness/after-reopen`,
   `decision-intent-witness/after-parent-sync`, and every
   `decision-intent-witness/after-ancestor-sync/<depth>` hook. Each hook starts a fresh
-  process before the next operation, requires zero basis construction/consumption and zero
-  selected-outcome projection until the final ancestor sync, and resumes at the exact first
-  missing operation without rewriting or relinking a durable prefix. Only complete witness
-  directory-chain durability admits the basis consumer. Every prefix, resume point,
-  forbidden-effect assertion, hook-removal poison, and early-consumer poison is
+  process before the next operation and requires zero basis construction/consumption and
+  zero selected-outcome projection until complete witness directory-chain durability. The
+  two pre-link cases observe no named final, discard the lost unnamed inode, and
+  idempotently republish the same canonical bytes beginning at write; independent poisons
+  prove after-write did not infer file sync and after-file-sync did not infer link. Every
+  post-link case reopens the byte-identical named final and resumes the first missing
+  reopen, parent-sync, or ancestor-sync operation without rewrite or relink. Only the final
+  ancestor-sync case admits the basis consumer. Every observable prefix, exact resume
+  point, forbidden-effect assertion, hook-removal poison, and early-consumer poison is
   independent; the absent/fully-durable pair cannot satisfy this matrix. Cases also cover
   fresh-process
   intent-final-removal cases that physically remove the exact durable intent immediately
@@ -2256,18 +2267,32 @@ table before the operation exists.
   proves zero reconstruction, relink, witness publication, source access, reselection,
   later publication, compaction, settlement, cleanup, or slot-reuse mutation. Every
   prefix, substitution, forbidden effect, hook, and removal poison is independent. Four
-  additional intent-final-removal cases start independent fresh processes at
-  `WitnessReclamationPending`, `WitnessReclamationReleased`, `CompletedReleased`, and
-  `Complete`. `WitnessReclamationReleased` is the test-only checkpoint after the
-  decision-intent witness unlink and coordinator-parent sync, not a new lifecycle variant
-  or registry id. The pending case uses the surviving witness; each later case validates
-  the complete post-reclamation successor chain and constructs
-  `IntentFinalMissingAfterAncestorsDurable`, preserving the absent intent and performing
-  zero reconstruction, relink, witness publication, source access, reselection,
-  continuation, cleanup, settlement, response replay, or slot reuse. Removing or changing
-  each chain member at each post-reclamation checkpoint fails closed with zero mutation.
-  Every checkpoint/chain-member/response/forbidden-effect hook and removal poison is
-  independent. The independent literal
+  anchor intent-final-removal cases start independent fresh processes at
+  `WitnessReclamationPending`, source `Released` under `AttemptSliceReleasePending`,
+  attempt-slice `CompletedReleased`, and `Complete`. The pending anchor uses the surviving
+  exact decision witness. After that witness's unlink and coordinator-parent sync, an
+  independent matrix removes the intent at every reachable target-witness
+  `WitnessReclamationPending { nextWitness }` prefix before unlink, after unlink before
+  parent sync, and after parent sync; at `TargetsCompacted`; at every
+  `SourceReleasePending` prefix; and at every `AttemptSliceReleasePending` prefix. Every
+  valid prefix-appropriate successor chain constructs
+  `IntentFinalMissingAfterAncestorsDurable` and returns the exact exit-`4`
+  `audit-continuity-repair-decision-durability-integrity-incident` for record
+  `decision-basis-intent`, boundary `ancestors-durable`, failure
+  `final-missing-after-durable-boundary`, and action
+  `preserve-and-escalate-audit-integrity-incident`, while preserving the absent intent and
+  performing zero reconstruction, relink, witness publication or reclamation, parent sync,
+  source access or release, reselection, continuation, cleanup, settlement, response
+  replay, attempt-slice or ledger mutation, or slot reuse. At every anchor and intervening
+  prefix, independent successor cases remove, substitute, reorder, or change the digest or
+  predecessor of each required chain member. They return that member's exact existing
+  closed terminal integrity result with zero mutation, never construct the intent-final
+  incident from incomplete proof, and never fall back to precommit reselection, cleanup
+  continuation, pending settlement, or completed response replay. Literal
+  `decision-intent-final-removal/<checkpoint>` and
+  `decision-intent-final-removal/<checkpoint>/successor/<member>/<poison>` hooks and every
+  lifecycle-prefix/chain-member/response/forbidden-effect/removal poison are independent
+  and add no lifecycle variant, registry id, or public state. The independent literal
   `continuityRepairDecisionBasisIntentSha256` and
   `continuityRepairDecisionBasisSha256` formula/vectors pin every input, expected hash,
   same-width substitution, field order, framing, omission, and removal poison; the
@@ -2515,13 +2540,14 @@ table before the operation exists.
   poison each successor and mismatch check, and prove the full
   46-record/222,208-byte slice and live slot remain charged through source `Released` and
   attempt-slice `CompletedReleased`. Four additional independent target-cardinality
-  probes use exactly zero, one, two, and three targets and restart at admission, targets
-  compacted, every applicable reclamation prefix, source `Released`, and immediately before
-  and after `CompletedReleased`. Literal ledger and exact-bound unrelated
-  general-capacity checks prove the full 46-record/222,208-byte charge remains through the
-  exact release and returns only as one complete slice; every unused-slot,
-  premature-credit, cardinality, record/byte boundary, hook, and removal poison is
-  independent of the maximum four-target vector. Separate restarts after source `Released`,
+  probes use exactly `0`, `1`, `2`, and `3` targets, with separate record-bound and
+  byte-bound unrelated general-capacity saturation, and restart at admission, targets
+  compacted, every applicable reclamation prefix, source `Released`, and immediately
+  before and after `CompletedReleased`. Literal ledger and exact-bound general-capacity
+  checks prove the full 46-record/222,208-byte charge remains through the exact release,
+  returns only as one complete slice, and gives no second credit on completed replay; every
+  unused-slot, premature-credit, cardinality, record/byte boundary, hook, and removal poison
+  is independent of the maximum four-target vector. Separate restarts after source `Released`,
   attempt-slice `CompletedReleased`, and `Complete` must reconstruct authorized witness
   absence from the exact targets-compacted and immediate-receipt successor chain; removing
   or changing one successor is the closed zero-mutation integrity incident and cannot
