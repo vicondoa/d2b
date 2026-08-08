@@ -92,7 +92,9 @@ Stage the candidate with the same lifecycle and selection:
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <round-id> --discovery-request <request.json> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
-  --candidate <current-candidate.json>
+  --candidate <current-candidate.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
 For verification staging, supply the complete canonical handoff instead:
@@ -102,6 +104,8 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <round-id> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
   --candidate <current-candidate.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes> \
   --ledger <discovery-ledger.json> --responses <responses.json> \
   --self-verification <self-verification.json> \
   --verification-dir <verification-requests>
@@ -129,15 +133,24 @@ Staging materializes the supplied exact bytes into the round directory:
 `selection.json`, `current-candidate.json`, `discovery-request.json`,
 `discovery-ledger.json`,
 `responses.json`, and `self-verification.json` when those artifacts are
-supplied. Discovery staging additionally requires a readable
-`--discovery-request` artifact. Verification staging requires a readable
-complete per-seat `--verification-dir`; it also requires the ledger, response,
-and self-verification artifacts above. All canonical artifacts and verification
-requests are materialized before the round's `.complete` marker is published.
-Once `.complete` exists, staging may only compare or reuse existing canonical
-artifacts and never add a missing one. The generated `dispatch-prompt.txt` is
-usable only when the round's `.complete` marker exists; an unmarked scratch
-directory is non-authoritative.
+supplied. Finalize the non-empty validation evidence before staging and pass it
+with the required `--evidence` argument. To supply integrator-authored notes,
+finalize them before staging and pass `--reviewer-notes-dir`; that directory
+must contain exactly one non-empty regular `<seat>.md` file per selected seat
+and no other entries. Omitting the notes argument uses the generated defaults.
+Discovery staging additionally requires a readable `--discovery-request`
+artifact. Verification staging requires a readable complete per-seat
+`--verification-dir`; it also requires the ledger, response, and
+self-verification artifacts above.
+
+All canonical artifacts, evidence, reviewer notes, and verification requests
+are materialized before the round's `.complete` marker is published. That
+marker byte-binds every reviewer-visible artifact. Once `.complete` exists,
+the round is immutable: do not edit, replace, delete, or backfill a staged
+artifact. Staging may only compare or reuse the existing bytes; changed
+evidence or reviewer notes require a new qualified round. The generated
+`dispatch-prompt.txt` is usable only when the round's `.complete` marker
+exists; an unmarked scratch directory is non-authoritative.
 
 The phase handoff uses a staged candidate, a discovery request, an immutable
 ledger, a response envelope, verification requests, an approval artifact, and

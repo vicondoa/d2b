@@ -1909,6 +1909,15 @@ try {
     const cliVerificationResults = join(cliRound, "verification-results.json");
     const cliApproval = join(cliRound, "approval.json");
     const cliMetrics = join(cliRound, "metrics.json");
+    const cliEvidence = join(cliRoot, "finalized-evidence.md");
+    const cliDiscoveryReviewerNotes = join(
+      cliRoot,
+      "finalized-discovery-reviewer-notes",
+    );
+    const cliVerificationReviewerNotes = join(
+      cliRoot,
+      "finalized-verification-reviewer-notes",
+    );
     const cliMakeRecords = join(
       fileURLToPath(new URL(".", import.meta.url)),
       "..",
@@ -1933,9 +1942,29 @@ try {
         cwd: cliRoot,
         encoding: "utf8",
       }).trim();
+    const writeFinalizedReviewerNotes = (directory, selectionPath, phase) => {
+      const roster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
+      mkdirSync(directory);
+      for (const seat of roster) {
+        writeFileSync(
+          join(directory, `${seat}.md`),
+          `# Reviewer notes for ${seat}\n\n${phase} notes finalized before staging.\n`,
+        );
+      }
+      return roster;
+    };
     const discoverySelection = runCli("select", cliCandidate, "spec004w1");
     const discoveryRequest = join(cliRoot, "discovery-request.json");
     runCli("discovery-request", discoverySelection, cliCandidate, discoveryRequest);
+    writeFileSync(
+      cliEvidence,
+      "# Finalized validation evidence\n\n- Focused public CLI fixture: PASS\n",
+    );
+    const discoveryRoster = writeFinalizedReviewerNotes(
+      cliDiscoveryReviewerNotes,
+      discoverySelection,
+      "Discovery",
+    );
     const staged = spawnSync("bash", [
       cliStageScript,
       cliBase,
@@ -1947,11 +1976,26 @@ try {
       cliCandidate,
       "--discovery-request",
       discoveryRequest,
+      "--evidence",
+      cliEvidence,
+      "--reviewer-notes-dir",
+      cliDiscoveryReviewerNotes,
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
-      "CLI integration reaches staged review evidence",
+      "CLI integration reaches finalized staged review evidence",
       staged.status === 0 &&
-        existsSync(join(cliRoot, ".scratch", "panel", "spec004w1-r1", "review-request.md")),
+        existsSync(join(cliFirstRound, "review-request.md")) &&
+        existsSync(join(cliFirstRound, ".complete")) &&
+        readFileSync(join(cliFirstRound, "evidence.md"), "utf8") ===
+          readFileSync(cliEvidence, "utf8") &&
+        discoveryRoster.every((seat) =>
+          readFileSync(
+            join(cliFirstRound, "reviewer-notes", `${seat}.md`),
+            "utf8",
+          ) === readFileSync(
+            join(cliDiscoveryReviewerNotes, `${seat}.md`),
+            "utf8",
+          )),
       `${staged.stdout}${staged.stderr}`,
     );
     const stagedDiscoveryRequest = spawnSync("bash", [
@@ -1965,15 +2009,38 @@ try {
       cliCandidate,
       "--discovery-request",
       discoveryRequest,
+      "--evidence",
+      cliEvidence,
+      "--reviewer-notes-dir",
+      cliDiscoveryReviewerNotes,
     ], { cwd: cliRoot, encoding: "utf8" });
+    const discoveryRequestBindsEvidence = () => {
+      const source = JSON.parse(readFileSync(discoveryRequest, "utf8"));
+      const actual = JSON.parse(
+        readFileSync(join(cliFirstRound, "discovery-request.json"), "utf8"),
+      );
+      const evidenceBytes = readFileSync(cliEvidence, "utf8");
+      const expectedDescriptor = {
+        artifact_kind: "d2b-panel/validation-evidence",
+        path: "evidence.md",
+        sha256: sha256(evidenceBytes),
+        size_bytes: Buffer.byteLength(evidenceBytes),
+      };
+      return JSON.stringify({
+        ...actual,
+        validation_evidence: source.validation_evidence,
+      }) === JSON.stringify(source) &&
+        actual.validation_evidence.length ===
+          source.validation_evidence.length + 1 &&
+        actual.validation_evidence.some((entry) =>
+          JSON.stringify(entry) === JSON.stringify(expectedDescriptor));
+    };
     check(
-      "CLI stage materializes the exact discovery request",
+      "CLI stage preserves the discovery request and binds finalized evidence",
       stagedDiscoveryRequest.status === 0 &&
-        readFileSync(join(cliFirstRound, "discovery-request.json"), "utf8") ===
-          readFileSync(discoveryRequest, "utf8"),
+        discoveryRequestBindsEvidence(),
       `${stagedDiscoveryRequest.stdout}${stagedDiscoveryRequest.stderr}`,
     );
-    const discoveryRoster = JSON.parse(readFileSync(discoverySelection, "utf8")).roster;
     writeFileSync(
       cliDiscoveryVerdicts,
       stableStringify(Object.fromEntries(discoveryRoster.map((seat) => [seat, {
@@ -2070,6 +2137,11 @@ try {
       "--delta",
       cliDelta,
     );
+    const verificationRoster = writeFinalizedReviewerNotes(
+      cliVerificationReviewerNotes,
+      verificationSelection,
+      "Verification",
+    );
     const stagedVerification = spawnSync("bash", [
       cliStageScript,
       cliBase,
@@ -2087,6 +2159,10 @@ try {
       cliSelf,
       "--verification-dir",
       cliVerificationRequests,
+      "--evidence",
+      cliEvidence,
+      "--reviewer-notes-dir",
+      cliVerificationReviewerNotes,
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
       "CLI verification stage materializes exact canonical artifacts",
@@ -2101,6 +2177,16 @@ try {
           readFileSync(cliResponses, "utf8") &&
         readFileSync(join(cliRound, "self-verification.json"), "utf8") ===
           readFileSync(cliSelf, "utf8") &&
+        readFileSync(join(cliRound, "evidence.md"), "utf8") ===
+          readFileSync(cliEvidence, "utf8") &&
+        verificationRoster.every((seat) =>
+          readFileSync(
+            join(cliRound, "reviewer-notes", `${seat}.md`),
+            "utf8",
+          ) === readFileSync(
+            join(cliVerificationReviewerNotes, `${seat}.md`),
+            "utf8",
+          )) &&
         existsSync(join(cliRound, ".complete")),
       `${stagedVerification.stdout}${stagedVerification.stderr}`,
     );
@@ -2120,7 +2206,6 @@ try {
           `${missingVerificationFlags.stdout}${missingVerificationFlags.stderr}`,
         ),
     );
-    const verificationRoster = JSON.parse(readFileSync(verificationSelection, "utf8")).roster;
     const ledgerIssues = JSON.parse(readFileSync(cliLedger, "utf8")).issues;
     for (const seat of verificationRoster) {
       writeFileSync(join(cliRound, "verdicts", `${seat}.json`), stableStringify({

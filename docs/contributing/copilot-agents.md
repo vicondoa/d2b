@@ -285,7 +285,9 @@ byte-identical bytes:
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
   --discovery-request <request.json> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
-  --candidate <current-candidate.json>
+  --candidate <current-candidate.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
 Verification staging supplies the complete canonical handoff:
@@ -294,28 +296,39 @@ Verification staging supplies the complete canonical handoff:
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
   --candidate <current-candidate.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes> \
   --ledger <discovery-ledger.json> --responses <responses.json> \
   --self-verification <self-verification.json> \
   --verification-dir <verification-requests>
 ```
 
 Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
-`reviewer-notes/<seat>.md`. The integrator edits the evidence and any
-seat-specific rebuttal, then dispatches every reviewer with the exact generated
-prompt. It materializes supplied exact artifacts as round-local
+`reviewer-notes/<seat>.md`. The integrator finalizes the non-empty evidence and
+any seat-specific rebuttal before staging, passes the evidence with the
+required `--evidence` argument, and passes integrator-authored notes with
+`--reviewer-notes-dir`. A supplied notes directory must contain exactly one
+non-empty regular `<seat>.md` file per selected seat and no other entries;
+omitting it uses generated defaults. The integrator then dispatches every
+reviewer with the exact generated prompt. Staging materializes supplied exact
+artifacts as round-local
 `selection.json`, `current-candidate.json`, `discovery-request.json`,
 `discovery-ledger.json`,
 `responses.json`, and `self-verification.json` before `.complete`. Discovery
 staging requires a readable `--discovery-request`; verification staging
 requires a readable complete per-seat `--verification-dir`, which is staged
-under `verification/`. Once `.complete` exists, staging may compare or reuse
-canonical artifacts but never add a missing one. The dispatch prompt is usable
-only when the round's `.complete`
-marker exists; an unmarked scratch directory is non-authoritative and must be
-cleaned up before retrying. Later reviews fail closed unless `<prev-tip>` matches
-the previous recorded tip and every seat's prior verdict is available, so the
-incremental range and prior-finding instructions cannot be replaced by a
-free-form summary.
+under `verification/`.
+
+The `.complete` marker byte-binds every reviewer-visible canonical artifact,
+including the finalized evidence and reviewer notes. Once it exists, the round
+is immutable: do not edit, replace, delete, or backfill a staged artifact.
+Staging may compare or reuse only the existing bytes; changed evidence or notes
+require a new qualified round. The dispatch prompt is usable only when the
+round's `.complete` marker exists; an unmarked scratch directory is
+non-authoritative and must be cleaned up before retrying. Later reviews fail
+closed unless `<prev-tip>` matches the previous recorded tip and every seat's
+prior verdict is available, so the incremental range and prior-finding
+instructions cannot be replaced by a free-form summary.
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:
