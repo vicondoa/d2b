@@ -593,15 +593,18 @@ This form deliberately has no `intendedOutcome` or terminal `failure`: neither i
 until the exact private `ContinuityRepairDecisionBasisV1` final and directory chain are
 durable. The private `ContinuityRepairDecisionBasisIntentV1` final and directory chain are
 the write-ahead decision commit; an in-memory candidate before intent durability is not a
-selected outcome. Before intent parent durability, restart accepts an absent or exact final:
-absence means no decision commit survived and replays the exact preceding durable repair
-result to reconstruct the same canonical intent bytes without source access, evidence
-replay, outcome reselection, or settlement mutation, while an exact final resumes
-durability. After the intent directory chain is durable, every later basis state reloads
-that frozen intent. Before basis parent durability, restart accepts absence or the exact
-basis and recreates absence byte-identically only from the durable intent. At
-`ParentDurable` and `AncestorsDurable`, both finals are required and absence uses the
-decision-durability integrity form below. The closed intent and basis boundary set is exactly
+selected outcome. At intent `FinalLinked`, `FinalReopened`, and `ParentDurable` before
+`AncestorsDurable`, restart accepts an absent or exact final. Absence means no complete
+decision commit survived and replays the exact preceding durable repair result to
+reconstruct the same canonical intent bytes without source access, evidence replay,
+outcome reselection, or settlement mutation, while an exact final resumes the first
+missing durability step. After the intent directory chain is durable, every later basis
+state reloads that frozen intent. At the same three pre-`AncestorsDurable` basis prefixes,
+restart accepts absence or the exact basis and recreates absence byte-identically only
+from the durable intent. A recreated parent-durable final repeats parent and ancestor
+sync; it cannot freeze selection early. At `AncestorsDurable` and every downstream durable
+consumer, both finals are required and absence uses the decision-durability integrity form
+below. The closed intent and basis boundary set is exactly
 `hierarchy | write | file-sync | link | reopen | directory-sync | conflict |
 audit-publication`; every member has this one legal response shape and exact exit. The
 boundary is derived from either the sealed `Progress` prefix or sealed `Conflict` state.
@@ -626,12 +629,14 @@ Its JSON is exactly
 `CLOSED_DECISION_DURABILITY_RECORD` is exactly `decision-basis-intent | decision-basis`;
 `CLOSED_DECISION_DURABILITY_BOUNDARY` is exactly
 `parent-durable | ancestors-durable`, and all four pairs are valid. The form contains no
-intended outcome, terminal failure, candidate digest, predecessor, settlement, retry,
-successor, or identifier. It authorizes no recreation, relink, reselection, settlement
-publication, or later repair mutation.
+`intendedOutcome`, `intended-outcome`, `failure`, `failureBranch`, `failure-branch`,
+terminal failure class, candidate digest, predecessor, `settlement`, `pending`, `retry`,
+`successor`, source or repair identifier, extra JSON field, or extra human line. It
+authorizes no recreation, relink, reselection, settlement publication, or later repair
+mutation.
 
 Decision selection publication pending exits `4` before an intended outcome is publicly
-committed. Its human form is exactly:
+committed. The repaired human form is exactly:
 
 ```text
 host generation handoff immutable audit continuity repair decision selection pending
@@ -642,13 +647,28 @@ settlement: decision-selection-pending
 action: <ACTION_FROM_SETTLEMENT_BOUNDARY>
 ```
 
-Its JSON is exactly
+Its repaired JSON is exactly
 `{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
-`intendedOutcome` comes only from the durable sealed decision basis recorded before
-decision-selection publication. The boundary is derived from the incomplete durable prefix
-or sealed conflict state and cannot be supplied independently. `conflict` is not a progress
-prefix; it carries the same durable basis predecessor plus existing and candidate private
-selection digests and permits no replacement or reselection.
+For any degraded `CLOSED_TERMINAL_OUTCOME`, the human form instead has exactly these two
+additional lines immediately after `intended-outcome`:
+
+```text
+failure-branch: <CLOSED_CONTINUITY_FAILURE_BRANCH>
+failure-class: <CLOSED_CONTINUITY_FAILURE_CLASS>
+```
+
+Its degraded JSON is exactly
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","intendedOutcome":"<DEGRADED_OUTCOME>","failure":{"branch":"<CLOSED_CONTINUITY_FAILURE_BRANCH>","class":"<CLOSED_CONTINUITY_FAILURE_CLASS>"},"publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
+`intendedOutcome` and, for a degraded decision, the exact nested failure come only from
+the sealed durable selected-decision value reopened from the durable basis before
+decision-selection publication. A repaired pending form rejects `failure`; a degraded
+pending form rejects an absent, changed, or cross-branch failure. Neither may select from
+current source observations. The boundary is derived from the incomplete durable prefix
+or sealed conflict state and cannot be supplied independently. `conflict` is not a
+progress prefix; it carries the same durable selected decision plus existing and candidate
+private selection digests and permits no replacement or reselection. A fresh source change
+or foreign selection final preserves that selected outcome/failure and produces only the
+same progress projection or the sealed `conflict` projection.
 
 Settlement preparation incomplete after durable decision selection but before durable
 decision-pre exits `4`. Its human form is exactly:
@@ -720,14 +740,18 @@ clock, boot identity, path, selector, argv, or free-form value. Real-procedure h
 goldens pin each repaired variant, every degraded branch/class/action,
 decision-basis pending without an intended outcome, decision-selection pending,
 preparation-incomplete, and both later pending stages for all five intended outcomes.
+Decision-selection pending additionally pins the absence of a failure for each repaired
+outcome and the exact durable branch/class for each degraded outcome.
 Constructor and deserializer negatives reject an intended outcome or terminal failure in
 the basis-pending form, `Complete` in any pending form, and any independently supplied
 boundary that disagrees with its state. Across the four publication-pending types -
 decision basis, decision selection, outcome intent, and terminal outcome - `Conflict` is a
 sealed state variant carrying predecessor, existing digest, and candidate digest, never a
 progress prefix or free failure field; basis pending alone omits `intendedOutcome`, while
-the other three derive it only from their required durable predecessor. Human/JSON output
-never renders any of those private digests or predecessor bytes.
+the other three derive it only from their required durable predecessor.
+Decision-selection progress and conflict both carry the same sealed durable selected
+decision, so fresh source/failure changes cannot erase or replace its degraded failure.
+Human/JSON output never renders any of those private digests or predecessor bytes.
 
 The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
 168-case broker registry preserve their exact ids and own only their literal caller,

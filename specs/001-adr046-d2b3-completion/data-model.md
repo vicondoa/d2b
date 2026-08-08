@@ -4888,6 +4888,17 @@ AnchoredParentIdentityV1 = {
   linkCount: u64
 }
 
+ContinuityCompactionCensusTargetV1 = {
+  kind: Evidence | SourceReplayBinding | SupersededWatermark | AttemptCensus,
+  expectedLeafRecordSha256: [u8; 32]
+}
+
+ContinuityCompactionAttemptCensusV1 = {
+  repairAttemptSha256: [u8; 32],
+  selectionSha256: [u8; 32],
+  remainingTargets: BoundedOrderedSet<ContinuityCompactionCensusTargetV1, 0, 4>
+}
+
 anchoredParentIdentitySha256 =
   SHA-256("d2b:host-generation:continuity-compaction-anchored-parent-identity:v1\0" ||
   parent_mount_id_u64_be ||
@@ -4943,8 +4954,11 @@ continuityCompactionOutcomeAuditSha256 =
 Every identity member after the domain is fixed-width. All integer fields are unsigned
 big-endian at the width named above; `mode` contains the complete file-type and permission
 bits, and no serializer bytes, path, timestamp, padding, host-endian value, or implicit
-length enters either formula. The parent identity is computed from the freshly reopened
-held dirfd and must match before unlink and after absence;
+length enters either formula. `ContinuityCompactionAttemptCensusV1` is a sealed typed
+value, not a caller-supplied digest: its target set is unique, strictly target-kind ordered,
+and encoded with tags `0x01 | 0x02 | 0x03 | 0x04` in the variant order above. The parent
+identity is computed from the freshly reopened held dirfd and must match before unlink and
+after absence;
 `anchored_parent_identity_sha256` in the mutation and receipt formulas is exactly
 `anchoredParentIdentitySha256`. The census is freshly
 canonicalized from held descriptors after the named target is absent. In each target
@@ -5141,8 +5155,9 @@ missing boundary, accepts only the exact no-replace final, preserves a nonidenti
 conflict, and returns a stored completed response with zero write after response loss.
 The existing `continuity-repair-outcome` record-boundary ids therefore run an independently
 hooked final-absence proof publication family at all nine boundaries. The complete pinned
-set is the decision-basis subvisitor, decision selection, decision-pre, exact-outcome
-intent, terminal outcome, and final-absence proof. The decision-basis subvisitor
+set is exactly `decision-basis`, `decision-selection`, `decision-pre`,
+`exact-outcome-intent`, `terminal-outcome`, and `final-absence-proof`. The
+`decision-basis` subvisitor
 independently visits its write-ahead intent and basis final at the named boundary. The
 fixture pins all six subvisitor names for every id; one cannot satisfy another. Independent hierarchy,
 write, file-sync, link, reopen, parent-sync, ancestor-sync, conflict, fresh-process, and
@@ -5481,6 +5496,60 @@ digests. Its literal expected lowercase outputs are:
 | `continuityAttemptReservedSliceReleaseOutcomeSha256` | `d207e565cc47ef9b1549bd032381af11f7c18ca0053298000e78d43cad79339b` |
 | `brokerCompactionCompletionSha256` | `56f00aa0a343b0dff01aa3c9e7f02f9383d363ba9c5f26388687110121f9ac1b` |
 
+Independent recalculation of the changed parent/census chain is a release obligation, not
+an assertion inferred from either table. The recalculator must take exactly these literal
+inputs:
+
+```text
+continuityRepairAttemptSha256 =
+  0e7225df2517e961b428335533cd4cd1cb2a3e4db5999d0c46b89da8b6fdc0a0
+reclamationPrivateOperationId =
+  ecc685c33bdbb04693e646992e1d15b33bfa17a9f47d7ad35c61d9ddd6cf738c
+reclamationSelectionSha256 =
+  5ed3a97a71bd92cf09dd9db8acd5a663a05e58d0591c015e4236796a7ee8f70c
+recoveryPrivateOperationId =
+  d2b6477cd3a2dba78b6614729a44c32229d1b17b6384ad0e8b0cb8f92d47c2a0
+recoveryOperationSha256 =
+  036d7f61bce8e1ed6a97d276ba91ec595a64abc02dea0c0e693eed29157a87fc
+recoverySelectionSha256 =
+  58eed8fdfad20d115c849cfa7d8c9550307c7497d6a9312a2d3c5899a0027e04
+parentTuple =
+  (0x0102030405060708, 0x11121314, 0x21222324,
+   0x3031323334353637, 0, 0, 0x000041c0, 2)
+orderedTargets =
+  (0x01, 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f)
+  (0x02, 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f)
+  (0x03, ad091f50421f6e5ac3b7a5a33dad976aea3387dcc0fdad6f94a620b625450984)
+  (0x04, 606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f)
+coordinatorPrivateId =
+  808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f
+continuitySourceReleaseOutcomeSha256 =
+  303571fa69c60af7583cf6aee8574809211e172ac396f39c54dad7d856f32e88
+reservationAttemptId =
+  c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf
+priorReservationLedgerSha256 =
+  e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff
+reservationGeneration = 0x2122232425262728
+releasedRecordCount = 41
+releasedEncodedByteCount = 211968
+```
+
+It must independently encode the typed parent tuple, reclamation remaining set
+`[0x02,0x03,0x04]`, and recovery remaining sets
+`[0x02,0x03,0x04]`, `[0x03,0x04]`, `[0x04]`, and `[]`; then derive, rather than accept,
+the parent hash, all five census hashes, all five mutation intents and receipts, the
+four-receipt set, targets-compacted receipt/audit projection, attempt-slice release chain,
+and final completion. Every derived byte string must equal the corresponding literal
+expected output in the two tables above. The recalculator, the canonical-byte fixture, and
+production must share no hash helper, encoder, generated expected value, or imported
+constant other than these printed literals. Validation is incomplete unless the
+recalculator prints one input/preimage/result row for every named identity and the
+integrator runs
+`(cd packages/d2b-priv-broker && cargo test --locked
+continuity_compaction_parent_census_downstream_vectors_recalculate -- --exact --nocapture)`
+and records that successful command output in panel evidence outside this feature root; a
+changed formula or expected output requires a fresh recalculation.
+
 One literal expected-value table, one separately authored canonical-byte fixture, and
 production are mutually read-independent. Negative vectors perturb each private/audit
 domain, terminal outcome tag and variant member, deadline-plan tag/target pairing, export
@@ -5548,7 +5617,15 @@ and resulting census before advancing. An already absent target before receipt i
 only under that exact durable mutation intent; it still requires absence revalidation,
 parent revalidation/sync, census commit, and receipt publication. Absence without the
 intent, under another operation/selection/ordinal, or before intent durability is integrity
-degradation. The
+degradation. After unlink and before census or receipt publication, the broker recomputes
+the complete `AnchoredParentIdentityV1` from the reopened held parent and recomputes every
+remaining `ContinuityCompactionCensusTargetV1` from independently held leaf descriptors.
+A changed parent member derives `conflict`; a changed, missing, substituted, or extra
+remaining target derives `target-changed`. Either class keeps the original post-unlink
+operation pending, publishes no census or receipt, performs no next unlink, and cannot
+publish a degraded outcome, residual selection, recovery generation, targets-compacted
+receipt, source release, or settlement.
+The
 operation revalidates the complete immutable target selection and complete current head
 again after each committed target, before every next unlink, and immediately before the
 final census/outcome commit. A head advance, predecessor-link change, target substitution,
@@ -5628,7 +5705,14 @@ matching intent resumes parent sync, census, and receipt. Companion pre-unlink
 present, the completed receipt set is the exact prior ordinal prefix, and the residual set
 begins at that target before recovery is admitted. Every completed-receipt omission,
 extra receipt, residual-prefix overlap/gap, foreign intent, and post-unlink recovery
-substitution has an independent poison. A source `Released`/attempt-slice-pending case proves that no slot, reserved byte,
+substitution has an independent poison. For every ordinal, two additional fd-backed
+fresh-process negatives run after successful unlink and before census or receipt: one
+changes each parent identity member in turn through a replacement parent descriptor, and
+one changes each still-selected remaining target's type, identity, or canonical digest
+through its held leaf descriptor. Each case must stop at the named ordinal with the prior
+receipt prefix intact, no current receipt, no next unlink, and no later publication; every
+ordinal/mutation member and each of those five forbidden effects has an independent hook
+and removal poison. A source `Released`/attempt-slice-pending case proves that no slot, reserved byte,
 repair sequence, source acquisition, or next cleanup operation changes before the exact
 slice-release outcome; the same fixture succeeds only after that final prerequisite. A
 recovery-recycling matrix independently withholds prior outcome export, first/intermediate/
@@ -5845,14 +5929,20 @@ ContinuityRepairDecisionBasisPublishingV1 =
       candidateBasisSha256
     }
 
+ContinuityRepairDurableSelectedDecisionV1 = {
+  predecessor: ContinuityRepairDecisionBasisV1,
+  selectedOutcome: ContinuityRepairOutcomeV1,
+  terminalOutcomeRecordSha256: [u8; 32]
+}
+
 ContinuityRepairDecisionSelectionStateV1 =
     Progress {
-      predecessor: ContinuityRepairDecisionBasisV1,
+      selected: ContinuityRepairDurableSelectedDecisionV1,
       candidateSelectionSha256,
       prefix: ContinuityRepairDecisionSelectionIncompletePrefixV1
     }
   | Conflict {
-      predecessor: ContinuityRepairDecisionBasisV1,
+      selected: ContinuityRepairDurableSelectedDecisionV1,
       existingSelectionSha256,
       candidateSelectionSha256
     }
@@ -5889,7 +5979,14 @@ borrow of the exact durable repair/source-binding/deadline/prune/watermark facts
 the candidate is computed; it has no public constructor, fields, serde, or digest-only
 reconstruction. Thus every `Conflict` carries its exact durable predecessor plus distinct
 existing and candidate digests, and no conflict can overlap a progress prefix or omit the
-existing final.
+existing final. `ContinuityRepairDurableSelectedDecisionV1` is likewise sealed and is
+constructed only by reopening the exact file-and-directory-durable basis, matching it
+byte-for-byte to its durable intent, and decoding its already selected typed outcome and
+terminal record. For a degraded selection the nested terminal failure branch and class are
+members of `selectedOutcome`; no settlement constructor may discard them, replace them
+with a transient source failure, or reconstruct them from current source state. Both
+selection `Progress` and selection `Conflict` therefore carry the same durable selected
+outcome/failure before the first vulnerable selection-publication operation.
 
 Durable-final loss is a separate closed integrity algebra:
 
@@ -5907,7 +6004,12 @@ with durable boundary `parent-durable | ancestors-durable`. Every variant derive
 `preserve-and-escalate-audit-integrity-incident`; no constructor accepts a caller-supplied
 record, boundary, failure, or action. This incident is neither `PendingDecisionBasis` nor a
 publication `Conflict`, terminal repair outcome, or settlement state. Its exact public
-human/JSON response is fixed in `contracts/operator-cli.md`.
+human/JSON response is fixed in `contracts/operator-cli.md`. A live
+`ParentDurable`-only reconciliation prefix still follows the absent-or-exact rule below;
+the `*FinalMissingAfterParentDurable` incident variants require a separately durable
+downstream consumer proving that the exact parent-durable final had already been consumed.
+They cannot be constructed merely because the current incomplete prefix says
+`ParentDurable`.
 
 This is the write-ahead basis lifecycle, not a transient outcome-selection wrapper. The
 complete typed outcome becomes selected only when the exact no-replace
@@ -5926,18 +6028,20 @@ accepts a second failure-boundary value, so state/boundary disagreement is
 unrepresentable.
 
 Restart after either decision-intent or basis `FinalLinked` always attempts an exact final
-reopen before classifying the next step. At `FinalLinked` and `FinalReopened`, before
-parent-directory durability, absence and the byte-identical exact final are the only valid
-results. Exact survival resumes the first missing reopen or directory sync. Intent absence
-means no decision commit survived: the broker replays the exact preceding durable repair
-result and reconstructs the same canonical intent bytes from its sealed predecessor,
-including `terminalOutcomeRecordSha256`; it performs no source access, evidence replay,
-outcome reselection, or settlement mutation. Basis absence is recreated byte-identically
-only from that exact durable intent. No durable intent or basis bytes are presumed to exist
-when the pre-parent final is absent.
+reopen before classifying the next step. At `FinalLinked`, `FinalReopened`, and
+`ParentDurable` while `AncestorsDurable` has not committed, absence and the byte-identical
+exact final are the only valid results. Exact survival resumes the first missing reopen or
+directory sync. Intent absence means no complete decision commit survived: the broker
+replays the exact preceding durable repair result and reconstructs the same canonical
+intent bytes from its sealed predecessor, including `terminalOutcomeRecordSha256`; it
+performs no source access, evidence replay, outcome reselection, or settlement mutation.
+Basis absence is recreated byte-identically only from that exact durable intent. A
+`ParentDurable`-only prefix is not silently upgraded to directory-chain durability:
+recreation repeats parent sync and every missing ancestor sync. No durable intent or basis
+bytes are presumed to exist when the pre-`AncestorsDurable` final is absent.
 
-At `ParentDurable`, including the interval before ancestor sync, and at
-`AncestorsDurable`, the byte-identical final is mandatory. Absence returns the matching
+At `AncestorsDurable` and at every state that has consumed that completed chain, the
+byte-identical final is mandatory. Absence returns the matching
 `ContinuityRepairDecisionDurabilityIncidentV1` variant and performs zero recreation,
 relink, source access, reselection, decision-selection publication, or later settlement.
 A nonidentical final at any point or a predecessor mismatch remains the matching sealed
@@ -6019,17 +6123,18 @@ selected before `AncestorsDurable`. A fresh process before intent durability ret
 basis-pending and may replay only the exact preceding durable repair/source-binding
 operation; it cannot project an intended outcome or terminal failure.
 
-At `FinalLinked` and `FinalReopened` restart first reopens the named final and accepts
-absence or the exact candidate. An absent pre-parent-durable intent proves that no decision
-commit survived and causes replay of the exact preceding durable repair result; the intent
-is reconstructed byte-identically from that sealed result and relinked without source
-access, evidence replay, outcome reselection, or settlement mutation. An exact surviving
-intent resumes directory durability. Before its own parent durability, a basis restart
-likewise accepts absence or the exact final and recreates absence byte-identically only from
-the durable intent. At both `ParentDurable` and `AncestorsDurable`, intent and basis require
-the exact final; absence returns the matching closed decision-durability integrity incident
-and never recreates or relinks. Once intent `AncestorsDurable` exists, its exact final is
-the frozen selection source. Every later basis state reconstructs solely from it.
+At `FinalLinked`, `FinalReopened`, and `ParentDurable` before ancestor-chain durability,
+restart first reopens the named final and accepts absence or the exact candidate. An absent
+pre-`AncestorsDurable` intent proves that no complete decision commit survived and causes
+replay of the exact preceding durable repair result; the intent is reconstructed
+byte-identically from that sealed result and relinked without source access, evidence
+replay, outcome reselection, or settlement mutation. An exact surviving intent resumes the
+first missing durability step. Before its own `AncestorsDurable`, a basis restart likewise
+accepts absence or the exact final and recreates absence byte-identically only from the
+durable intent. At `AncestorsDurable`, intent and basis require the exact final; absence
+returns the matching closed decision-durability integrity incident and never recreates or
+relinks. Once intent `AncestorsDurable` exists, its exact final is the frozen selection
+source. Every later basis state reconstructs solely from it.
 
 A nonidentical intent final becomes only the intent publisher's sealed `Conflict` and
 preserves the predecessor plus both intent digests. A nonidentical basis final becomes only
@@ -6070,12 +6175,17 @@ publish no-replace `ContinuityRepairDecisionSelectionV1` through the common publ
 protocol. This is the first durable public decision state. It contains the exact complete typed outcome above,
 `terminalOutcomeRecordSha256`, deadline plan, and matching repair/source-binding
 identities, with no response action or sensitive body. Until its exact final and directory
-chain are durable, failure is `PendingDecisionSelection` carrying the basis-selected
-outcome and intrinsic prefix; no
+chain are durable, failure is `PendingDecisionSelection` carrying
+`ContinuityRepairDecisionSelectionStateV1`. Both its `Progress` and `Conflict` variants
+carry the sealed `ContinuityRepairDurableSelectedDecisionV1` created before publication,
+so the public projection preserves the basis-selected outcome and, for a degraded
+selection, its exact nested terminal failure branch/class. The intrinsic prefix or sealed
+conflict derives the publication boundary; no
 preparation-incomplete or terminal/degraded result may be returned and restart performs no
 new source acquisition, prune, watermark, or other repair mutation. It resumes only the
 same selected canonical bytes from the durable basis. A nonidentical selection final is
-preserved as the sealed selection-state `Conflict` variant.
+preserved as the sealed selection-state `Conflict` variant with the durable selected
+decision plus existing and candidate digests.
 
 After selection is durable, the broker append-only publishes fixed
 `ContinuityRepairOutcomeDecisionPreV1`, byte-identical in typed decision and digest. This is
@@ -6116,35 +6226,53 @@ never settle as degraded, and a degraded decision can never acquire or validate 
 watermark during settlement. The watermark final is never republished or replaced.
 
 Fresh-process source-change cases mutate source availability, version, authority, replay
-binding, and returned bytes before every decision-basis and decision-selection boundary.
+binding, terminal failure, and returned bytes before every decision-basis and
+decision-selection boundary.
 Before write-ahead intent directory-chain durability, the only response is basis-pending
 without an intended outcome or terminal failure. Those mutations cannot influence
-pre-parent intent recovery: an absent intent replays only the sealed preceding durable
+pre-`AncestorsDurable` intent recovery: an absent intent replays only the sealed preceding durable
 repair result and reconstructs the same canonical bytes without touching the changed
 source. At each intent and basis
-after-link-before-reopen and after-reopen-before-parent-sync point, paired tests simulate
-both link absence and exact-final survival. Intent absence replays the preceding durable
-repair result and recreates only the same deterministic candidate because no prior
-decision was committed; exact survival resumes without relink. Basis absence republishes
-only from the durable intent; exact survival resumes without relink. Separate fresh-process
-removal cases delete the intent and basis final after `ParentDurable` and again after
-`AncestorsDurable`. Each must return its exact decision-durability integrity response with
-zero recreation, relink, source access, outcome reselection, decision-selection
-publication, or settlement hook. After intent
+after-link-before-reopen, after-reopen-before-parent-sync, and
+after-parent-sync-before-ancestor-sync point, paired tests simulate both final absence and
+exact-final survival. Intent absence replays the preceding durable repair result and
+recreates only the same deterministic candidate because no complete decision was
+committed; exact survival resumes without relink. Basis absence republishes only from the
+durable intent; exact survival resumes without relink. Both parent-durable absence cases
+repeat parent sync and ancestor sync and cannot freeze selection early.
+
+Separate fresh-process removal cases delete the intent and, once it exists, the basis final
+at every downstream durable prefix: each decision-selection publication prefix and
+conflict, decision-pre durable, each outcome-intent publication prefix and conflict,
+outcome-intent durable, each terminal publication prefix and conflict, terminal durable,
+each final-absence-proof prefix and conflict, and completed replay. The immediate
+post-`ParentDurable` and post-`AncestorsDurable` hooks do not satisfy any of those cases.
+Each downstream removal must return its exact decision-durability integrity response with
+zero reconstruction, relink, source access, outcome reselection, decision-selection
+publication, decision-pre publication, outcome-intent publication, terminal publication,
+final-absence publication, compaction, or settlement hook. Every
+record/downstream-prefix/forbidden-effect combination has a separate hook and removal
+poison. After intent
 `AncestorsDurable`, every fresh process must preserve its selected outcome through every
 basis boundary. After basis durability, each case must render and publish only the
-basis-selected outcome or its sealed selection `Conflict`. None may project a transient
-failure, reacquire evidence, choose a different outcome after intent durability, or advance
-a watermark. Separate conflict cases cover a foreign intent, basis, or selection final
-before link, after link, and after every directory boundary, with zero replacement and zero
-later publication. Each accepted-absence, exact-survival, conflict, post-parent-removal,
-post-ancestor-removal, and state/boundary check has an independent hook and removal poison.
+basis-selected outcome and exact nested terminal failure or its sealed selection
+`Conflict`. A fresh nonidentical selection final must remain `Conflict`; a changed source
+or newly observed failure cannot replace either its existing or candidate digest. None may
+project a transient failure, reacquire evidence, choose a different outcome after intent
+durability, or advance a watermark. Separate conflict cases cover a foreign intent, basis,
+or selection final before link, after link, and after every directory boundary, with zero
+replacement and zero later publication. Each accepted-absence, exact-survival, conflict,
+downstream-removal, and state/boundary check has an independent hook and removal poison.
 
 Strict response schemas and human/JSON goldens pin completed repaired, completed degraded,
 pending-decision-basis, pending-decision-selection, preparation-incomplete,
 pending-intent, and pending-terminal forms. Progress prefixes reject `Conflict`; each
 publisher's sealed `Conflict` requires predecessor, existing digest, and candidate digest,
 and schema/constructor negatives reject omission or substitution of any member.
+Decision-selection-pending has separate repaired and degraded projections: the repaired
+projection cannot carry a failure, while the degraded projection must carry the exact
+branch/class nested in the durable selected decision. Omitting, changing, adding, or
+transiently recomputing that failure is a hard schema/constructor/golden failure.
 Independent fresh-process cases cover every
 decision-basis-intent, decision-basis, and decision-selection boundary,
 decision-pre audit failure, and every outcome-intent and terminal publication boundary for
@@ -7653,11 +7781,18 @@ read-independent pin contains all six names; a five-name registry, an omitted
 counts. Each subvisitor has an independent missing-visit, wrong-boundary, wrong-predecessor,
 and poison-removal assertion. At every decision-basis intent and basis boundary, the
 decision-basis subvisitor also pins the exact exit-`4` decision-basis-pending response
-schema and human/JSON golden. Its paired pre-parent absence/exact-survival hooks and its
-post-`ParentDurable` and post-`AncestorsDurable` final-removal hooks are independent for
-intent and basis. The latter four hooks require the exact decision-durability integrity
-response and zero recreation, relink, reselection, or settlement; each hook and response
-assertion has a separate removal poison. No registry id is added.
+schema and human/JSON golden. Its paired pre-`AncestorsDurable`
+absence/exact-survival hooks are independent for intent and basis at link, reopen, and
+parent-durable prefixes. Its durable final-removal hooks independently delete intent and
+basis at every downstream decision-selection, decision-pre, outcome-intent,
+terminal-outcome, final-absence-proof, and completed prefix. Every downstream case requires
+the exact decision-durability integrity response and zero reconstruction, relink,
+reselection, later publication, compaction, or settlement; each hook and response
+assertion has a separate removal poison. Separate renderer/DTO assertions retain all four
+closed `decision-basis-intent | decision-basis` by
+`parent-durable | ancestors-durable` integrity projections, exact exit `4`, and exact
+human/JSON bytes; none is inferred from another pair. The six-name pin, these subhooks, and
+their renderer assertions add no registry id.
 
 `tests/golden/delivery/host-generation-immutable-audit-lifecycle-case-ids.txt`
 contains exactly these 88 newline-terminated ids in order:
@@ -7812,8 +7947,10 @@ secure-posture/missing/partial/replaced negatives. It also owns write-ahead
 decision-basis-intent, decision-basis, decision-selection, decision-pre, outcome-intent,
 terminal, and final-absence publication at every common boundary,
 intrinsic incomplete-prefix actions, completed-prefix rejection, and repaired/degraded
-exact settlement, including source change after write-ahead intent durability and sealed
-intent, basis, and selection conflict. The grouped
+exact settlement, including pre-`AncestorsDurable` absent/exact intent and basis replay,
+source/failure change after write-ahead intent durability, sealed intent/basis/selection
+conflict, and independent intent/basis removal at every downstream durable prefix with no
+reconstruction or later publication. The grouped
 continuity-permit cases run the full negative matrix separately for repair, compaction,
 source release, and source-prefix reconciliation permits. The redaction case visits every
 private identifier, replay key, source binding,
