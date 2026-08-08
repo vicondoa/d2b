@@ -14,12 +14,12 @@
   },
   "patch": {
     "path": "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch",
-    "sha256": "3293478bf69c07dd16963f7ab7efeb6e4afcbb274c6461a8a8d94a4b211f2786",
+    "sha256": "efb0f2d806cc9f91ecdaab25be77586e744040bbf8263404302b5ecdd1a4906c",
     "loadPoint": "after-sandbox-construction-before-action-command-exec"
   },
   "policy": {
     "path": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
-    "sha256": "b1ce0e3607e6888af24475cac8ca4ab59555a42fed791dcc6420fbb4434831a9",
+    "sha256": "971210290491c3d359ae2540827ab1f544e86ead84db31ab7400e8dbdef2b68d",
     "abiSha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f",
     "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
     "denialErrno": "EACCES",
@@ -32,14 +32,14 @@
     "sha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f"
   },
   "output": {
-    "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
-    "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a"
+    "narSha256": "197e2e792a7a3cf72bc9a5892b418d4abcce590dad969d23619f2bb492486be5",
+    "executableSha256": "7cbf33369f34c39ceaed716ab26f4c37d32df009f290243e301e0cf8b83eafa8"
   },
   "nativeOutputs": {
     "x86_64-linux": {
-      "derivationSha256": "5c00bb451a0851f096f4a396bc4efd0bed2deedaf1c37ac649ee3a988c03116d",
-      "narSha256": "b57d32790554461844f240fb376e406ac36cdfec7b211f3d5968cc50f41cefba",
-      "executableSha256": "743147d39b56b4a18b9f794995bd333cb57534fbb406bc07e882bf6913603e3a",
+      "derivationSha256": "3bd25f12e8446d9391ea27c302023b538858d915c02d5e7f9010963bccfd3490",
+      "narSha256": "197e2e792a7a3cf72bc9a5892b418d4abcce590dad969d23619f2bb492486be5",
+      "executableSha256": "7cbf33369f34c39ceaed716ab26f4c37d32df009f290243e301e0cf8b83eafa8",
       "nativeExecutable": "bazel-8.6.0-linux-x86_64",
       "startupProbe": {
         "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
@@ -48,9 +48,9 @@
       }
     },
     "aarch64-linux": {
-      "derivationSha256": "84a3d3df481794798afbdd9459073cb6e8c2ff845b028066bceb01687574b9e5",
-      "narSha256": "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91",
-      "executableSha256": "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb",
+      "derivationSha256": "71844ea14ac76e4135e2fd8f49165517caaae05be0899aacf20360805cb5450e",
+      "narSha256": "8318412b0722765167051e15ff735819b8e9f0b2ab619e1653975c25db3bbb16",
+      "executableSha256": "9898ce560dc199283b26c9f0efee8a217c53f45d1687a0c6b0c36cb9a2d7ee59",
       "nativeExecutable": "bazel-8.6.0-linux-aarch64",
       "startupProbe": {
         "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
@@ -118,7 +118,7 @@
       "code": "D2B-BZLEXEC-NIX-PTRACE-SYSTEM",
       "causingInput": "native-system",
       "locator": "flake.nix",
-      "correction": "Move evaluation and execution to a native x86_64-linux or aarch64-linux runner; run make test-flake; then run the exact phase-valid closed slice command."
+      "correction": "Move evaluation and execution to a native x86_64-linux or aarch64-linux runner; run make test-flake; then rerun the exact closed slice command."
     },
     {
       "owner": "toolchain-startup",
@@ -126,7 +126,7 @@
       "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-KERNEL",
       "causingInput": "linux-minimum-3.19",
       "locator": "tests/golden/bazel-exec-supervisor.json",
-      "correction": "Migrate to a native supported runner with Linux 3.19 or newer; run make test-flake; then run the exact phase-valid closed slice command."
+      "correction": "Migrate to a native supported runner with Linux 3.19 or newer; run make test-flake; then rerun the exact closed slice command."
     },
     {
       "owner": "toolchain-startup",
@@ -134,7 +134,7 @@
       "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-YAMA",
       "causingInput": "yama-parent-child-mode",
       "locator": "tests/golden/bazel-exec-supervisor.json",
-      "correction": "Migrate to a native supported runner whose boot policy fixes kernel.yama.ptrace_scope=1; grant no CAP_SYS_PTRACE; run make test-flake; then run the exact phase-valid closed slice command."
+      "correction": "Migrate to a native supported runner whose boot policy fixes kernel.yama.ptrace_scope=1; grant no CAP_SYS_PTRACE; run make test-flake; then rerun the exact closed slice command."
     },
     {
       "owner": "toolchain-startup",
@@ -142,7 +142,7 @@
       "code": "D2B-BZLEXEC-TOOLCHAIN-PTRACE-PROBE",
       "causingInput": "immutable-ptrace-startup-probe",
       "locator": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
-      "correction": "Restore and rebuild the pinned static supervisor and startup probe; if exact identities pass but the probe refuses, migrate to a native runner satisfying the kernel and Yama rows; run make test-flake; then run the exact phase-valid closed slice command."
+      "correction": "Restore and rebuild the pinned static supervisor and startup probe; if exact identities pass but the probe refuses, migrate to a native runner satisfying the kernel and Yama rows; run make test-flake; then rerun the exact closed slice command."
     },
     {
       "owner": "patched-sandbox",
@@ -150,7 +150,7 @@
       "code": "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
       "causingInput": "pinned-ptrace-seccomp-policy",
       "locator": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
-      "correction": "Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run make test-flake; then run the phase-valid closed slice command selected verbatim from the command-version table."
+      "correction": "Restore the pinned patch and policy so seccomp admits only the four request values with the enforceable constant arguments and retains every no-network denial; run make test-flake; then rerun the exact closed slice command."
     }
   ]
 }
