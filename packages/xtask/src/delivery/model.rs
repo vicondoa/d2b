@@ -2366,13 +2366,15 @@ mod tests {
 
     #[test]
     fn selection_validation_requires_table_profiles_and_rejects_unknown_profiles() {
-        let missing_rust = selection(
+        let mut missing_rust = selection(
             &PANEL_CURRENT_ROLES[..10],
             "code",
             &["packages/xtask/src/main.rs"],
             &[],
             &[],
         );
+        missing_rust.roster.push(PanelRole::Build);
+        missing_rust.profiles.insert("build".to_owned(), Vec::new());
         let error = missing_rust
             .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
             .expect_err("Rust is a required software profile for a Rust path");
