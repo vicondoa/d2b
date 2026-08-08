@@ -564,7 +564,10 @@ const CASES = [
       mutateFile(
         dir,
         "docs/adr/specs/0053-panel-prompt-sources.md",
-        (text) => text.replace(/\bbuild\b/i, "removed-build"),
+        (text) => text.replace(
+          "### Build seat source guidance",
+          "### Removed seat source guidance",
+        ),
       ),
     expectExit: 1,
     expectText: "missing required current guidance",

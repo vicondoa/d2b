@@ -1039,7 +1039,8 @@ if (!existsSync(panelPromptSource)) {
     "complete discovery",
     "shared ledger",
     "scoped verification",
-    "build",
+    "Build seat source guidance",
+    "citation-only prose does not",
   ]) {
     if (!source.toLowerCase().includes(required.toLowerCase())) {
       fail(`panel prompt source is missing required current guidance: ${required}`);
