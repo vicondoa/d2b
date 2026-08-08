@@ -698,6 +698,16 @@ terminal failure class, candidate digest, predecessor, `settlement`, `pending`, 
 authorizes no reconstruction, relink, witness publication, reselection, settlement
 publication, cleanup, or later repair mutation and poisons the attempt.
 
+One separately pinned negative uses the literal tuple
+`decision-basis-intent | parent-durable | final-missing-after-durable-boundary`.
+It is outside the two-boundary known domain and therefore does not change the exact
+nineteen invalid known cross-products. Independent
+`decision-durability-parent-durable-negative/<construction|schema|raw-wire|serde>` cases
+refuse typed construction, strict schema validation, shared raw-wire decoding, and serde
+deserialization respectively. Each surface has its own visit and acceptance poison; the
+generic unknown-boundary negative and any one of the nineteen known cross-products cannot
+satisfy it.
+
 Decision selection publication pending exits `4` before an intended outcome is publicly
 committed. The repaired human form is exactly:
 

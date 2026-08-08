@@ -3042,6 +3042,14 @@ general capacity, and completed-response replay returns no additional capacity; 
 cardinality, witness absence, witness unlink, or source release returns a partial charge.
 Each cardinality/boundary/restart assertion has its own hook and removal poison and does
 not reuse the maximum four-target reclamation case.
+The read-independent expected fixture literally enumerates the `0`, `1`, `2`, and `3`
+target rows for both the record and byte bounds. For cardinality `c`, it independently
+visits all `1 + c` reclamation names at before-unlink, after-unlink-before-parent-sync,
+and after-parent-sync prefixes, then source `Released`, attempt-slice
+`CompletedReleased`, and completed replay. No row is generated from the maximum-target
+case or production cardinality. Every row observes the full 46-record/222,208-byte charge
+until `CompletedReleased`, exactly one atomic 46-record/222,208-byte credit at that
+transition, and no second credit at replay.
 The one recovery pre/outcome pair is recyclable only after its prior outcome and every
 completed-target intent and receipt are file-and-directory-durably exported and the
 residual selection is durably superseded. Each missing prerequisite is a no-mutation
@@ -5735,6 +5743,19 @@ only with either its exact intent, witness, and receipt or its byte-identical im
 receipt successor proof; it never uses a later prefix to bridge a missing or mismatched
 predecessor.
 
+Missing-witness precedence is closed. With no reduced census, receipt, or later attempt
+prefix, the exact durable intent permits only the same-intent retry above. A durable
+reduced census without its exact immediate receipt is
+`ImmediateReceiptMissing`. An exact immediate receipt is the only proof-carrying
+successor and resumes from that receipt; every later receipt, targets-compacted receipt,
+reclamation prefix, release prefix, or completed prefix must retain that immediate
+receipt byte-for-byte. If it does not, absence is `ImmediateReceiptMissing`; if its
+predecessor differs, absence is `ImmediateReceiptPredecessorMismatch`. A present
+nonidentical witness is always `WitnessMismatch` before successor consideration. Thus
+every downstream census or receipt prefix either carries the one admitted successor proof
+or fails closed with a typed incident; none falls back to witness publication, target
+retry, or operation reselection.
+
 The closed classification for a witness or predecessor that cannot satisfy either rule is:
 
 ```text
@@ -5779,7 +5800,9 @@ decision-basis-intent commit witness, then one target-unlink witness for each se
 target ordinal, at most zero through three.
 Before each unlink, the broker reopens and validates the exact witness and its exact durable
 successor - the byte-identical basis/downstream decision chain for the decision witness and
-the matching target receipt for an unlink witness. A missing witness under that exact
+the matching target receipt for an unlink witness - and obtains a `PresentExact`
+observation of the current witness. The unlink is unreachable unless that current witness
+and successor are both present and exact. A missing witness under that exact
 successor is already reclaimed and advances to the next name. A present foreign or
 field-mismatched witness, or any missing/mismatched immediate successor, returns the
 applicable closed integrity incident with zero mutation. An exact witness is unlinked
@@ -5850,8 +5873,10 @@ For every ordinal, independent fresh-process witness-loss cases run after each c
 prefix: reduced census, matching receipt, every later receipt prefix, and the
 targets-compacted receipt. With the exact immediate target receipt, absence resumes only
 from that receipt and never republishes the witness. A descendant without the exact
-immediate receipt, or a descendant whose receipt predecessor differs in any field, returns
-the closed integrity incident and zero mutation. The no-successor pre-receipt control
+immediate receipt returns `ImmediateReceiptMissing`; a receipt whose predecessor differs
+in any field returns `ImmediateReceiptPredecessorMismatch`. Both are terminal with zero
+mutation. The reduced-census-only case independently proves that a durable census is not
+a proof-carrying successor. The no-successor pre-census control
 instead resumes only the original same-intent parent-sync/witness sequence. These three
 classifications have independent hooks and poisons. For every ordinal,
 independent fresh-process cases reinsert the exact selected target after successful unlink
@@ -5917,6 +5942,13 @@ release despite unused witness slots, that exactly the complete slice rather tha
 cardinality-dependent subset returns afterward, and that completed replay returns no
 second credit. Every cardinality, record/byte boundary, restart, premature-credit
 assertion, hook, and removal poison is independent of the maximum four-target matrix.
+Their literal hook namespace is
+`continuity-reserve/cardinality/<0|1|2|3>/<records|bytes>/<checkpoint>`, where
+`<checkpoint>` separately names attempt admission, targets compacted, each applicable
+reclamation name before unlink, after unlink before parent sync, and after parent sync,
+source released, slice release pending, slice completed released, and complete replay.
+Each literal hook has independent missing-visit, premature-credit, wrong-credit, and
+second-credit poisons.
 Independent fresh processes also restart after source `Released`, attempt-slice
 `CompletedReleased`, and `Complete`; each must reconstruct authorized witness absence from
 the exact targets-compacted receipt, complete immediate-receipt chain, and ordered
@@ -6231,13 +6263,19 @@ beginning at write. The after-write poison proves file sync was not inferred, an
 after-file-sync poison proves link was not inferred. Every post-link case reopens the
 byte-identical named final and resumes at the first missing reopen, parent-sync, or
 ancestor-sync operation without rewriting or relinking it. At every observable prefix
-whose complete witness directory chain is not yet durable, the basis constructor and
-consumer hooks and the selected-outcome hook must all remain at zero. Only the final
-ancestor-sync case may classify the witness directory chain complete and admit the basis
-consumer. Every fault hook, exact observable-prefix resume assertion, forbidden
-basis/selection effect, hook removal poison, and early-consumer poison is independent; no
-earlier generic absent-or-fully-durable case can satisfy this matrix. These are test hooks,
-not record boundaries, registry ids, or public states.
+whose complete witness directory chain is not yet durable, every consumer remains at
+zero: basis construction and publication, decision selection, decision-pre, outcome
+intent, terminal outcome, final-absence proof, compaction, settlement, and selected-outcome
+projection. Only the final ancestor-sync case may classify the witness directory chain
+complete and admit the basis consumer. For each literal `<hook>` above, the expected
+fixture separately pins `<hook>/hook-removed`, `<hook>/consumer-ran`, and
+`<hook>/wrong-resume` poisons. The wrong-resume assertion requires write after either
+pre-link crash, reopen after link, parent sync after reopen, the first missing ancestor
+sync after parent sync or an intermediate ancestor sync, and basis consumption only after
+the final ancestor sync. Every fault hook, exact observable-prefix resume assertion,
+forbidden consumer effect, and poison is independent; no earlier generic
+absent-or-fully-durable case can satisfy this matrix. These are test hooks, not record
+boundaries, registry ids, or public states.
 
 Durable-final loss is a separate closed integrity algebra:
 
@@ -6260,12 +6298,17 @@ predecessor-mismatch-after-consumption`. Every variant derives only its listed t
 `preserve-and-escalate-audit-integrity-incident`; no constructor accepts a caller-supplied
 record, boundary, failure, or action. The intent variant is constructible only when the
 intent final does not and either the matching independent commit witness survives or an
-exact validated successor chain for the current post-decision-witness-removal lifecycle
-prefix proves that the witness was consumed and then reclaimed. The invariant chain
-consists of the byte-identical basis and downstream decision predecessors, the exact
-targets-compacted receipt, the complete immediate target-receipt chain, and the
-decision-witness coordinator-parent-synced absence. During target-witness reclamation it
-also contains, in ordinal order, every completed target-witness parent-synced absence, the
+exact validated successor chain for the current lifecycle prefix proves that the witness
+was consumed. The latter proof does not require pretending an in-progress unlink is
+already durable. Immediately after decision-witness unlink and before coordinator-parent
+sync, it consists of the exact current-name absence, identity-revalidated held coordinator
+parent, and the durable successor chain; after parent sync it instead carries the exact
+parent-synced absence. The pre-unlink `PresentExact` observation is a required guard on the
+unlink operation, not durable evidence consumed by a fresh-process constructor. The
+invariant chain consists of the byte-identical basis and downstream decision predecessors,
+the exact targets-compacted receipt, the complete immediate target-receipt chain, and the
+prefix-appropriate decision-witness removal observation. During target-witness reclamation
+it also contains, in ordinal order, every completed target-witness parent-synced absence, the
 exact absent-but-parent-sync-pending current name when applicable, and every exact
 still-present witness/receipt pair for later names. At `TargetsCompacted` and later it
 contains all ordered witness-parent absences plus the exact source-release and
@@ -6328,6 +6371,23 @@ exact durable intent, with no source access, evidence replay, or outcome reselec
 `ParentDurable`-only prefix is not silently upgraded to directory-chain durability:
 recreation repeats parent sync and every missing ancestor sync. No durable intent or basis
 bytes are presumed to exist when the pre-`AncestorsDurable` final is absent.
+
+Decision-witness precedence is likewise closed. An empty complete descendant census is
+the only no-witness input that permits precommit reselection. Any surviving basis
+`Progress | Conflict`, decision-selection `Progress | Conflict`, decision-pre,
+outcome-intent `Progress | Conflict`, terminal `Progress | Conflict`, final-absence
+prefix, compaction census or receipt, `PreparationIncomplete`,
+`PendingIntentPublication`, `PendingTerminalPublication`, or completed settlement proves
+consumption and forbids reselection. Before authorized reclamation, missing or mismatched
+witness state returns the matching
+`IntentCommitWitnessMissingAfterConsumption |
+IntentCommitWitnessMismatchAfterConsumption |
+IntentCommitWitnessPredecessorMismatchAfterConsumption` incident. During or after
+authorized reclamation, only the exact prefix-appropriate successor chain above can replace
+the witness as proof; an incomplete or corrupt chain returns its existing typed integrity
+incident with zero mutation. Every durable basis, selection, and settlement prefix
+therefore has exactly one of a surviving witness, a proof-carrying successor, or a
+fail-closed incident.
 
 Once the matching intent commit witness is durable, and at every state that has consumed
 it, both the byte-identical intent final and the byte-identical witness are mandatory until
@@ -6625,13 +6685,42 @@ settlement, cleanup, or slot-reuse mutation. Every
 prefix/substitution/forbidden-effect assertion has a separate hook and removal poison. No
 pre-consumer conflict, no-witness reselection, later-prefix incident, or authorized
 post-targets-compacted witness-reclamation case may satisfy another.
-Four anchor intent-final-removal cases start independent fresh processes at the exact
-checkpoints `WitnessReclamationPending`, source `Released` under
+An independent decision-witness removal matrix starts a fresh process for target
+cardinality `0`, `1`, `2`, and `3` immediately before decision-witness unlink, after that
+unlink but before coordinator-parent sync, and after that sync. The existing maximum
+four-target case independently applies the same three prefixes at cardinality `4`. The
+before-unlink case requires the current exact decision witness, targets-compacted receipt,
+and complete durable basis/downstream successor chain to be present. The after-unlink case
+requires a recorded `PresentExact` pre-unlink hook assertion, exact current-name absence,
+and identity-revalidated held parent; the fresh-process incident constructor consumes only
+the absence, parent, and
+durable successor proof. It must not perform the pending parent sync after the intent final
+is removed. The after-parent-sync case requires the exact synced absence. For each nonzero
+target cardinality, the same three-prefix matrix applies to every target witness and
+requires the current exact witness and matching immediate receipt before unlink. The
+zero-target case proves no target witness or receipt can be synthesized; without the
+injected removal its next state is directly `TargetsCompacted`, while the removal case
+remains terminal.
+
+At every one of those prefixes the case physically removes the intent final before process
+start. The surviving witness or prefix-appropriate successor proof constructs
+`IntentFinalMissingAfterAncestorsDurable` and returns the exact terminal response below
+with zero reconstruction, relink, witness publication or reclamation, parent sync,
+continuation, release, settlement, ledger mutation, or slot reuse. The literal hook family
+is
+`decision-intent-final-removal/witness-reclamation/<decision|target-ordinal>/<0|1|2|3>/<before-unlink|after-unlink-before-parent-sync|after-parent-sync>`;
+each hook has independent current-witness, applicable current-receipt, successor-member,
+terminal-response, forbidden-effect, and hook-removal poisons.
+
+Four post-decision-witness-reclamation anchor cases start independent fresh processes at
+the exact checkpoints `WitnessReclamationPending`, source `Released` under
 `AttemptSliceReleasePending`, attempt-slice `CompletedReleased`, and `Complete`. The
-pending anchor uses the surviving exact decision witness. After that witness's unlink and
-coordinator-parent sync, an independent matrix removes the intent at every reachable
-target-witness `WitnessReclamationPending { nextWitness }` prefix before unlink, after
-unlink before parent sync, and after parent sync; at `TargetsCompacted`; at every
+`WitnessReclamationPending` anchor is after decision-witness parent sync and before the
+current target-witness unlink; it requires the exact current target witness and matching
+receipt. A separate zero-target control uses the immediately following `TargetsCompacted`
+checkpoint. The matrix also removes the intent at every reachable target-witness
+`WitnessReclamationPending { nextWitness }` prefix before unlink, after unlink before
+parent sync, and after parent sync; at `TargetsCompacted`; at every
 `SourceReleasePending` prefix; and at every `AttemptSliceReleasePending` prefix. Each valid
 prefix-appropriate successor chain constructs
 `IntentFinalMissingAfterAncestorsDurable` and returns exit `4` error
