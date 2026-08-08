@@ -10,6 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { TextDecoder } from "node:util";
 import {
   existsSync,
   linkSync,
@@ -99,6 +100,37 @@ const error = (message) => {
 
 let temporaryCounter = 0;
 
+/*
+ * Rust's ordered sets compare the UTF-8 representation of valid strings.
+ * JavaScript's default Array#sort compares UTF-16 code units, which puts a
+ * non-BMP string in a different position from the equivalent Rust ordering.
+ * Keep one comparator for every path or signal array that crosses the
+ * lifecycle artifact boundary.
+ */
+function utf8Bytes(value, label) {
+  if (typeof value !== "string") {
+    error(`${label} must be a string`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        error(`${label} is not representable as UTF-8`);
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      error(`${label} is not representable as UTF-8`);
+    }
+  }
+  return Buffer.from(value, "utf8");
+}
+
+const compareUtf8 = (left, right) =>
+  utf8Bytes(left, "ordered string").compare(utf8Bytes(right, "ordered string"));
+
+const sortUtf8 = (values) => [...values].sort(compareUtf8);
+
 const isPlainObject = (value) =>
   value !== null &&
   typeof value === "object" &&
@@ -150,18 +182,41 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
   try {
     output = execFileSync(
       "git",
-      ["diff", "--name-only", "--diff-filter=ACDMRTUXB", range],
-      { cwd, encoding: "utf8" },
+      ["diff", "--name-only", "-z", "--diff-filter=ACDMRTUXB", range],
+      { cwd },
     );
   } catch (cause) {
     error(`cannot derive changed paths from git range ${range}: ${cause.message}`);
   }
-  return [...new Set(
-    output
-      .split(/\r?\n/)
-      .filter((path) => path !== "")
-      .map((path) => path.replaceAll("\\", "/")),
-  )].sort();
+  if (!Buffer.isBuffer(output)) {
+    error("git changed-path output was not returned as bytes");
+  }
+  if (output.length === 0) return [];
+  if (output[output.length - 1] !== 0) {
+    error("git changed-path output is not NUL-terminated");
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const paths = [];
+  let start = 0;
+  for (let index = 0; index < output.length; index += 1) {
+    if (output[index] !== 0) continue;
+    if (index === start) {
+      error("git changed-path output contains an unrepresentable NUL path");
+    }
+    let path;
+    try {
+      path = decoder.decode(output.subarray(start, index));
+    } catch (cause) {
+      error(`git changed-path output contains invalid UTF-8: ${cause.message}`);
+    }
+    utf8Bytes(path, "git changed path");
+    if (/[\u0000-\u001f\u007f]/.test(path)) {
+      error("git changed path contains an unrepresentable control character");
+    }
+    paths.push(path);
+    start = index + 1;
+  }
+  return sortUtf8([...new Set(paths)]);
 }
 
 /*
@@ -458,6 +513,12 @@ function candidateInputs(input) {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) {
     error("changed_paths must be an array of strings");
   }
+  for (const path of paths) {
+    utf8Bytes(path, "changed path");
+    if (/[\u0000-\u001f\u007f]/.test(path)) {
+      error("changed paths must not contain control characters");
+    }
+  }
   const signals = input?.signals ??
     input?.content_signals ??
     input?.contentSignals ??
@@ -468,6 +529,12 @@ function candidateInputs(input) {
   [];
   if (!Array.isArray(signals) || signals.some((signal) => typeof signal !== "string")) {
     error("signals must be an array of strings");
+  }
+  for (const signal of signals) {
+    utf8Bytes(signal, "signal");
+    if (/[\u0000-\u001f\u007f]/.test(signal)) {
+      error("signals must not contain control characters");
+    }
   }
   const candidateClass = input?.candidate_class ??
     input?.candidateClass ??
@@ -485,8 +552,12 @@ function candidateInputs(input) {
     candidate?.ambiguity === true ||
     candidateClass === "ambiguous";
   return {
-    changed_paths: [...new Set(paths.map((path) => path.replaceAll("\\", "/")))].sort(),
-    signals: [...new Set(signals.map((signal) => signal.trim().toLowerCase()))].sort(),
+    changed_paths: sortUtf8([
+      ...new Set(paths.map((path) => path.replaceAll("\\", "/"))),
+    ]),
+    signals: sortUtf8([
+      ...new Set(signals.map((signal) => signal.trim().toLowerCase())),
+    ]),
     candidate_class: candidateClass ?? undefined,
     ambiguous,
   };
@@ -643,11 +714,7 @@ function inferCandidateClass(inputs) {
   const paths = inputs.changed_paths;
   if (
     paths.length > 0 &&
-    paths.every((path) =>
-      /^(?:docs\/|changelog\.d\/|README(?:\.[^/]*)?$|CHANGELOG(?:\.[^/]*)?$|[^/]+\.md$|[^/]+\.mdx$|[^/]+\.rst$|[^/]+\.txt$)/i.test(
-        path,
-      ),
-    )
+    paths.every((path) => isDocumentationPath(path))
   ) {
     return "documentation";
   }
@@ -655,8 +722,23 @@ function inferCandidateClass(inputs) {
 }
 
 function isDocumentationPath(path) {
-  return /^(?:docs\/|changelog\.d\/|README(?:\.[^/]*)?$|CHANGELOG(?:\.[^/]*)?$|[^/]+\.md$|[^/]+\.mdx$|[^/]+\.rst$|[^/]+\.txt$)/i.test(
-    path,
+  const asciiLower = path.replace(/[A-Z]/g, (character) =>
+    character.toLowerCase(),
+  );
+  if (asciiLower.startsWith("docs/") || asciiLower.startsWith("changelog.d/")) {
+    return true;
+  }
+  if (asciiLower.includes("/")) return false;
+  if (
+    asciiLower === "readme" ||
+    asciiLower.startsWith("readme.") ||
+    asciiLower === "changelog" ||
+    asciiLower.startsWith("changelog.")
+  ) {
+    return true;
+  }
+  return [".md", ".mdx", ".rst", ".txt"].some((suffix) =>
+    asciiLower.endsWith(suffix) && asciiLower.length > suffix.length,
   );
 }
 
@@ -973,7 +1055,7 @@ function canonicalClassificationArray(value, label, kind) {
     }
     return canonicalEntry;
   });
-  const canonical = [...new Set(normalized)].sort();
+  const canonical = sortUtf8([...new Set(normalized)]);
   if (normalized.join("\u0000") !== canonical.join("\u0000")) {
     error(
       `${label} must be ${kind === "changed_paths"
@@ -1022,6 +1104,14 @@ function parseClassificationInputs(
   const candidateClass = value.candidate_class;
   if (!CANDIDATE_CLASSES.includes(candidateClass)) {
     error(`${label}.candidate_class "${candidateClass}" is unsupported`);
+  }
+  if (
+    candidateClass === "documentation" &&
+    changedPaths.some((path) => !isDocumentationPath(path))
+  ) {
+    error(
+      `${label} candidate_class documentation cannot narrow actual non-documentation paths`,
+    );
   }
   if (typeof value.ambiguous !== "boolean") {
     error(`${label}.ambiguous must be boolean`);
@@ -1072,18 +1162,18 @@ function parseClassificationInputs(
 function validateNestedClassificationConsistency(inputs) {
   const nested = [inputs.full_candidate, inputs.fix_delta].filter(Boolean);
   if (nested.length === 0) return;
-  const changedPaths = [...new Set(
+  const changedPaths = sortUtf8([...new Set(
     nested.flatMap((classification) => classification.changed_paths),
-  )].sort();
+  )]);
   if (inputs.changed_paths.join("\u0000") !== changedPaths.join("\u0000")) {
     error(
       "panel selection classification_inputs changed_paths must equal the union of its " +
       "nested full_candidate and fix_delta paths",
     );
   }
-  const signals = [...new Set(
+  const signals = sortUtf8([...new Set(
     nested.flatMap((classification) => classification.signals),
-  )].sort();
+  )]);
   if (inputs.signals.join("\u0000") !== signals.join("\u0000")) {
     error(
       "panel selection classification_inputs signals must equal the union of its nested " +
@@ -1327,14 +1417,14 @@ export function createSelection(input, options = {}) {
         ]),
         classification_inputs: {
           ...plan.full.classification_inputs,
-          changed_paths: [...new Set([
+          changed_paths: sortUtf8([...new Set([
             ...plan.full.classification_inputs.changed_paths,
             ...plan.delta.classification_inputs.changed_paths,
-          ])].sort(),
-          signals: [...new Set([
+          ])]),
+          signals: sortUtf8([...new Set([
             ...plan.full.classification_inputs.signals,
             ...plan.delta.classification_inputs.signals,
-          ])].sort(),
+          ])]),
           candidate_class: candidateClassPrecedence([
             plan.full.candidate_class,
             plan.delta.candidate_class,
@@ -2218,7 +2308,9 @@ function changedSurface(response, label) {
   if (paths.some((path) => typeof path !== "string" || path.trim() === "")) {
     error(`${label}.changed_surface must contain non-blank path strings`);
   }
-  return [...new Set(paths.map((path) => path.replaceAll("\\", "/")))].sort();
+  return sortUtf8([
+    ...new Set(paths.map((path) => path.replaceAll("\\", "/"))),
+  ]);
 }
 
 export function validateResponseEnvelope(ledger, envelope) {
@@ -2470,6 +2562,16 @@ function validatePriorSelectionSummary(summary, selection, table) {
   return summary;
 }
 
+function canonicalSelectionSummary(value, table, label) {
+  if (!isPlainObject(value)) {
+    error(`${label} must be a selection artifact or selection summary`);
+  }
+  if (value.artifact_kind === LIFECYCLE_SELECTION_ARTIFACT) {
+    return selectionSummary(validateSelection(value, table), table);
+  }
+  return validateSelectionSummary(value, table, label);
+}
+
 export function validateDiscoveryRequest(request, options = {}) {
   const table = options.table ?? readSelectionTable(options.table_path);
   const selection = options.selection;
@@ -2577,6 +2679,22 @@ const VERIFICATION_REQUEST_KEYS = [
   "obligations",
 ];
 
+const SHARED_VERIFICATION_REQUEST_KEYS = [
+  "selection",
+  "discovery_ledger",
+  "ledger",
+  "responses",
+  "self_verification",
+  "latest_delta_paths",
+  "actual_delta",
+  "current_candidate",
+  "full_candidate",
+  "current_selection",
+  "full_context",
+  "fix_delta",
+  "prior_selection",
+];
+
 function validateVerificationFixDelta(fixDelta, expectedPaths, selection) {
   if (!isPlainObject(fixDelta)) {
     error("verification request fix_delta must be an object");
@@ -2628,6 +2746,23 @@ export function validateVerificationRequest(request, options = {}) {
     options.current_candidate ??
     options.currentCandidate ??
     options.candidate;
+  const hasCanonicalActualDelta =
+    Object.hasOwn(options, "actual_delta") ||
+    Object.hasOwn(options, "actualDelta");
+  const canonicalActualDelta =
+    options.actual_delta ?? options.actualDelta;
+  const hasCanonicalFullContext =
+    Object.hasOwn(options, "full_context") ||
+    Object.hasOwn(options, "fullContext");
+  const canonicalFullContext =
+    options.full_context ?? options.fullContext;
+  const hasCanonicalPriorSelection =
+    Object.hasOwn(options, "prior_selection") ||
+    Object.hasOwn(options, "priorSelection");
+  const canonicalPriorSelection =
+    options.prior_selection ?? options.priorSelection;
+  const hasCanonicalPreviousStatus = Object.hasOwn(options, "previous_status");
+  const canonicalPreviousStatus = options.previous_status;
   if (!selection) error("verification request validation requires the exact selection");
   if (!ledger) error("verification request validation requires the exact immutable ledger");
   if (responses === undefined) {
@@ -2749,12 +2884,45 @@ export function validateVerificationRequest(request, options = {}) {
     selection,
   );
   validatePriorSelectionSummary(request.prior_selection, selection, table);
+  if (hasCanonicalActualDelta) {
+    assertCanonicalEqual(
+      request.actual_delta,
+      canonicalActualDelta,
+      "verification request actual_delta",
+    );
+  }
+  if (hasCanonicalFullContext) {
+    assertCanonicalEqual(
+      request.full_context,
+      canonicalFullContext,
+      "verification request full_context",
+    );
+  }
+  if (hasCanonicalPriorSelection) {
+    const expectedPriorSelection = canonicalSelectionSummary(
+      canonicalPriorSelection,
+      table,
+      "canonical verification prior_selection",
+    );
+    assertCanonicalEqual(
+      request.prior_selection,
+      expectedPriorSelection,
+      "verification request prior_selection",
+    );
+  }
   if (
     request.previous_status !== null &&
     request.previous_status !== undefined &&
     !isPlainObject(request.previous_status)
   ) {
     error("verification request previous_status must be null or an object");
+  }
+  if (hasCanonicalPreviousStatus) {
+    assertCanonicalEqual(
+      request.previous_status,
+      canonicalPreviousStatus,
+      "verification request previous_status",
+    );
   }
   assertExactKeys(
     request.obligations,
@@ -2781,13 +2949,12 @@ export function validateVerificationRequests(
   const entries = Array.isArray(requests)
     ? requests.map((request) => [request?.seat, request])
     : isPlainObject(requests)
-      ? Object.entries(requests).map(([seat, request]) => [
-          request?.seat ?? seat,
-          request,
-        ])
+      ? Object.entries(requests).map(([seat, request]) => [seat, request])
       : error("verification requests must be an array or object keyed by seat");
   const expected = new Set(selection.roster);
   const seen = new Set();
+  let canonicalSharedRequest;
+  const validated = [];
   for (const [seat, request] of entries) {
     if (seat !== request?.seat) {
       error(`verification request key "${seat}" disagrees with its declared seat`);
@@ -2799,7 +2966,7 @@ export function validateVerificationRequests(
       error(`duplicate verification request for seat "${seat}"`);
     }
     seen.add(seat);
-    validateVerificationRequest(request, {
+    const requestOptions = {
       ...options,
       table,
       selection,
@@ -2811,7 +2978,45 @@ export function validateVerificationRequests(
       responses: options.responses,
       self_verification:
         options.self_verification ?? options.selfVerification,
-    });
+    };
+    const previousStatuses =
+      options.previous_statuses ?? options.previousStatuses;
+    if (isPlainObject(previousStatuses) &&
+        Object.hasOwn(previousStatuses, seat)) {
+      requestOptions.previous_status = previousStatuses[seat];
+    }
+    if (
+      Object.hasOwn(options, "actual_delta") ||
+      Object.hasOwn(options, "actualDelta")
+    ) {
+      requestOptions.actual_delta = options.actual_delta ?? options.actualDelta;
+    }
+    if (
+      Object.hasOwn(options, "full_context") ||
+      Object.hasOwn(options, "fullContext")
+    ) {
+      requestOptions.full_context = options.full_context ?? options.fullContext;
+    }
+    if (
+      Object.hasOwn(options, "prior_selection") ||
+      Object.hasOwn(options, "priorSelection")
+    ) {
+      requestOptions.prior_selection =
+        options.prior_selection ?? options.priorSelection;
+    }
+    validateVerificationRequest(request, requestOptions);
+    if (canonicalSharedRequest === undefined) {
+      canonicalSharedRequest = request;
+    } else {
+      for (const key of SHARED_VERIFICATION_REQUEST_KEYS) {
+        assertCanonicalEqual(
+          request[key],
+          canonicalSharedRequest[key],
+          `verification request ${seat} shared ${key}`,
+        );
+      }
+    }
+    validated.push(request);
   }
   const missing = selection.roster.filter((seat) => !seen.has(seat));
   if (missing.length > 0) {
@@ -2819,7 +3024,7 @@ export function validateVerificationRequests(
       `verification requests are missing selected seat(s): ${missing.join(", ")}`,
     );
   }
-  return entries.map(([, request]) => request);
+  return validated;
 }
 
 export function validateStagedRoundArtifacts(input, options = {}) {
@@ -2864,12 +3069,39 @@ export function validateStagedRoundArtifacts(input, options = {}) {
   validateLedger(ledger, { table, selection });
   validateResponses(ledger, input.responses);
   validateSelfVerification(input.self_verification ?? input.selfVerification);
-  validateVerificationRequests(selection, input.verification_requests ?? input.verificationRequests, {
+  const verificationRequests =
+    input.verification_requests ?? input.verificationRequests;
+  if (!verificationRequests) {
+    error("staged verification artifacts require verification requests");
+  }
+  const requestValues = Array.isArray(verificationRequests)
+    ? verificationRequests
+    : Object.values(verificationRequests);
+  const canonicalRequest = requestValues[0];
+  if (!isPlainObject(canonicalRequest)) {
+    error("staged verification artifacts require JSON verification requests");
+  }
+  validateVerificationRequests(selection, verificationRequests, {
     table,
     current_candidate: currentCandidate,
     ledger,
     responses: input.responses,
     self_verification: input.self_verification ?? input.selfVerification,
+    actual_delta:
+      options.actual_delta ??
+      options.actualDelta ??
+      canonicalRequest.actual_delta,
+    full_context:
+      options.full_context ??
+      options.fullContext ??
+      canonicalRequest.full_context,
+    prior_selection:
+      options.prior_selection ??
+      options.priorSelection ??
+      canonicalRequest.prior_selection,
+    ...((options.previous_statuses ?? options.previousStatuses)
+      ? { previous_statuses: options.previous_statuses ?? options.previousStatuses }
+      : {}),
   });
   return { phase: selection.phase, roster: [...selection.roster] };
 }
@@ -2908,8 +3140,8 @@ export function validateFixScope(input) {
     );
   }
   return {
-    latest_delta_paths: [...new Set(latestDelta)].sort(),
-    allowed_paths: [...new Set(allowed)].sort(),
+    latest_delta_paths: sortUtf8([...new Set(latestDelta)]),
+    allowed_paths: sortUtf8([...new Set(allowed)]),
   };
 }
 

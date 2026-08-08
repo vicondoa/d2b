@@ -6,6 +6,7 @@ import {
   adaptDiscoveryVerdict,
   adaptVerificationVerdict,
   calculateMetrics,
+  changedPathsFromGitRange,
   createApprovalArtifact,
   createDiscoveryRequest,
   createResponseTemplate,
@@ -586,6 +587,81 @@ console.log("panel lifecycle: selection table");
     previous_roster: code.roster,
   });
   check("lifecycle selection examines the full candidate and fix delta", lifecycleSelection.roster.includes("build"));
+
+  const bmpPath = "\uE000.txt";
+  const nonBmpPath = "\u{10000}.txt";
+  const bmpSignal = "\uE000-signal";
+  const nonBmpSignal = "\u{10000}-signal";
+  const utf8Ordered = selectRoster(candidate({
+    changed_paths: [nonBmpPath, bmpPath],
+    signals: [nonBmpSignal, bmpSignal],
+  }));
+  check(
+    "classification paths use UTF-8 byte ordering for BMP and non-BMP names",
+    utf8Ordered.classification_inputs.changed_paths.join(",") ===
+      [bmpPath, nonBmpPath].join(","),
+  );
+  check(
+    "classification signals use UTF-8 byte ordering for BMP and non-BMP names",
+    utf8Ordered.classification_inputs.signals.join(",") ===
+      [bmpSignal, nonBmpSignal].join(","),
+  );
+  rejects(
+    "classification inputs reject NUL-unrepresentable paths",
+    () => selectRoster(candidate({ changed_paths: ["src/\u0000panel.js"] })),
+    /control characters/,
+  );
+
+  const gitPathRoot = mkdtempSync(join(tmpdir(), "d2b-panel-git-paths-"));
+  try {
+    execFileSync("git", ["init", "--quiet"], { cwd: gitPathRoot });
+    execFileSync("git", ["config", "user.name", "d2b test"], { cwd: gitPathRoot });
+    execFileSync("git", ["config", "user.email", "d2b-test@example.invalid"], {
+      cwd: gitPathRoot,
+    });
+    writeFileSync(join(gitPathRoot, "base.txt"), "base\n");
+    execFileSync("git", ["add", "base.txt"], { cwd: gitPathRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "base"], { cwd: gitPathRoot });
+    const literalBackslashPath = "literal\\backslash.txt";
+    writeFileSync(join(gitPathRoot, literalBackslashPath), "backslash\n");
+    writeFileSync(join(gitPathRoot, bmpPath), "bmp\n");
+    writeFileSync(join(gitPathRoot, nonBmpPath), "non-bmp\n");
+    execFileSync("git", ["add", "."], { cwd: gitPathRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "paths"], { cwd: gitPathRoot });
+    const changedGitPaths = changedPathsFromGitRange("HEAD^..HEAD", gitPathRoot);
+    const changedUnicodePaths = changedGitPaths.filter((path) =>
+      [bmpPath, nonBmpPath].includes(path),
+    );
+    check(
+      "git path derivation preserves literal backslashes",
+      changedGitPaths.includes(literalBackslashPath),
+    );
+    check(
+      "git path derivation sorts BMP and non-BMP names by UTF-8 bytes",
+      changedUnicodePaths.join(",") === [bmpPath, nonBmpPath].join(","),
+    );
+    const invalidUtf8Path = Buffer.concat([
+      Buffer.from(`${gitPathRoot}/`),
+      Buffer.from([0xc3, 0x28]),
+    ]);
+    writeFileSync(invalidUtf8Path, "invalid\n");
+    execFileSync("git", ["add", "."], { cwd: gitPathRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "invalid utf8"], {
+      cwd: gitPathRoot,
+    });
+    rejects(
+      "git path derivation rejects invalid UTF-8",
+      () => changedPathsFromGitRange("HEAD^..HEAD", gitPathRoot),
+      /invalid UTF-8/,
+    );
+    rejects(
+      "git path derivation rejects NUL-unrepresentable ranges",
+      () => changedPathsFromGitRange("HEAD\u0000..HEAD", gitPathRoot),
+      /control character/,
+    );
+  } finally {
+    rmSync(gitPathRoot, { recursive: true, force: true });
+  }
 }
 
 console.log("panel lifecycle: selection artifact");
@@ -748,6 +824,40 @@ try {
     })),
     /cannot narrow actual non-documentation paths/,
   );
+  rejects(
+    "nested documentation classifications cannot narrow source paths",
+    () => validateSelection({
+      ...nestedSelection.selection,
+      classification_inputs: {
+        ...nestedSelection.selection.classification_inputs,
+        fix_delta: {
+          ...nestedSelection.selection.classification_inputs.fix_delta,
+          changed_paths: ["src/fix.js"],
+        },
+      },
+    }),
+    /candidate_class documentation cannot narrow actual non-documentation paths/,
+  );
+  const recursiveRoot = mkdtempSync(join(tmpdir(), "d2b-panel-recursive-docs-"));
+  try {
+    const recursiveDocumentation = createSelection(
+      {
+        ...candidate({
+          snapshot_sha256: "7".repeat(64),
+          changed_paths: ["docs/nested/review.md"],
+        }),
+        lifecycle_id: "spec004w1",
+        phase: "discovery",
+      },
+      { root: recursiveRoot },
+    );
+    check(
+      "nested documentation paths retain documentation classification",
+      recursiveDocumentation.selection.candidate_class === "documentation",
+    );
+  } finally {
+    rmSync(recursiveRoot, { recursive: true, force: true });
+  }
   rejects(
     "nested classification unknown fields are refused",
     () => validateSelection({

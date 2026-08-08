@@ -703,6 +703,38 @@ try {
       request.responses[0].justification = "stale response from an earlier ledger";
     },
   );
+  rejectsStagedVerification(
+    "verification staging rejects stale full context",
+    (request) => {
+      request.full_context = {
+        candidate: "context from an earlier candidate",
+        validation: "stale evidence",
+      };
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a swapped request seat",
+    (request) => {
+      request.seat = "test";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects stale prior selection",
+    (request) => {
+      request.prior_selection.content_id = "stale-prior-content";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects stale incumbent prior status",
+    (request) => {
+      request.previous_status = {
+        engineer: "software",
+        signoff: false,
+        summary: "status from a different prior review",
+        recommendations: ["stale"],
+      };
+    },
+  );
   const second = run(repo, [
     base,
     firstTip,

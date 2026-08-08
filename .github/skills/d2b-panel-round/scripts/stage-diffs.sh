@@ -220,6 +220,7 @@ NODE
 
 previous_round=""
 previous_dir=""
+previous_selection_path=""
 if [ "$round_number" -eq 1 ]; then
   if [ "$prev_sha" != "$base_sha" ]; then
     echo "round 1 must use the branch base as <prev-tip>" >&2
@@ -259,6 +260,7 @@ else
     echo "previous review does not record a readable lifecycle selection" >&2
     exit 2
   fi
+  previous_selection_path="$recorded_selection"
   actual_recorded_selection_sha="$(sha256sum "$recorded_selection" | cut -d' ' -f1)"
   if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
     echo "previous review selection bytes disagree with address.json" >&2
@@ -710,6 +712,7 @@ if ! node --input-type=module - \
   "$staged_discovery_request_path" "$staged_ledger_path" \
   "$staged_responses_path" "$staged_self_verification_path" \
   "$staged_verification_dir" \
+  "$previous_selection_path" "$previous_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -724,6 +727,8 @@ const [
   responsesPath,
   selfVerificationPath,
   verificationDir,
+  previousSelectionPath,
+  previousDir,
   helperPath,
 ] = process.argv.slice(2);
 const readJson = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
@@ -752,7 +757,26 @@ if (phase === "discovery") {
 }
 const { validateStagedRoundArtifacts } =
   await import(pathToFileURL(helperPath).href);
-validateStagedRoundArtifacts(artifacts);
+const validationOptions = {};
+if (phase === "verification" && previousSelectionPath) {
+  validationOptions.prior_selection = readJson(previousSelectionPath);
+  const previousStatuses = {};
+  for (const [seat, request] of Object.entries(artifacts.verification_requests)) {
+    if (
+      request.previous_status !== null &&
+      request.previous_status !== undefined &&
+      previousDir
+    ) {
+      previousStatuses[seat] = readJson(
+        `${previousDir}/verdicts/${seat}.json`,
+      );
+    }
+  }
+  if (Object.keys(previousStatuses).length > 0) {
+    validationOptions.previous_statuses = previousStatuses;
+  }
+}
+validateStagedRoundArtifacts(artifacts, validationOptions);
 NODE
 then
   echo "staged panel artifacts failed strict lifecycle validation; .complete will not be written" >&2
