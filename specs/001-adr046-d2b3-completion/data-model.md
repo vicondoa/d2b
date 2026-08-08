@@ -6685,15 +6685,17 @@ settlement, cleanup, or slot-reuse mutation. Every
 prefix/substitution/forbidden-effect assertion has a separate hook and removal poison. No
 pre-consumer conflict, no-witness reselection, later-prefix incident, or authorized
 post-targets-compacted witness-reclamation case may satisfy another.
-An independent decision-witness removal matrix starts a fresh process for target
-cardinality `0`, `1`, `2`, and `3` immediately before decision-witness unlink, after that
-unlink but before coordinator-parent sync, and after that sync. The existing maximum
-four-target case independently applies the same three prefixes at cardinality `4`. The
-before-unlink case requires the current exact decision witness, targets-compacted receipt,
-and complete durable basis/downstream successor chain to be present. The after-unlink case
-requires a recorded `PresentExact` pre-unlink hook assertion, exact current-name absence,
-and identity-revalidated held parent; the fresh-process incident constructor consumes only
-the absence, parent, and
+An independent decision-witness removal matrix starts a fresh process for every target
+cardinality `0`, `1`, `2`, `3`, and `4` immediately before decision-witness unlink, after
+that unlink but before coordinator-parent sync, and after that sync. Every cardinality
+covers the decision witness, and each nonzero cardinality additionally covers every target
+witness at its zero-based ordinal less than the cardinality. The maximum four-target case
+is a member of this matrix and cannot satisfy any lower-cardinality or other-witness
+member. The before-unlink case requires the current exact decision witness,
+targets-compacted receipt, and complete durable basis/downstream successor chain to be
+present. The after-unlink case requires a recorded `PresentExact` pre-unlink hook
+assertion, exact current-name absence, and identity-revalidated held parent; the
+fresh-process incident constructor consumes only the absence, parent, and
 durable successor proof. It must not perform the pending parent sync after the intent final
 is removed. The after-parent-sync case requires the exact synced absence. For each nonzero
 target cardinality, the same three-prefix matrix applies to every target witness and
@@ -6707,9 +6709,24 @@ start. The surviving witness or prefix-appropriate successor proof constructs
 `IntentFinalMissingAfterAncestorsDurable` and returns the exact terminal response below
 with zero reconstruction, relink, witness publication or reclamation, parent sync,
 continuation, release, settlement, ledger mutation, or slot reuse. The literal hook family
-is
-`decision-intent-final-removal/witness-reclamation/<decision|target-ordinal>/<0|1|2|3>/<before-unlink|after-unlink-before-parent-sync|after-parent-sync>`;
-each hook has independent current-witness, applicable current-receipt, successor-member,
+is defined by a separately authored read-independent expected-hook literal before any case
+runs. It enumerates the valid witness coordinates exactly as `decision/0`; `decision/1`,
+`target-0/1`; `decision/2`, `target-0/2`, `target-1/2`; `decision/3`, `target-0/3`,
+`target-1/3`, `target-2/3`; and `decision/4`, `target-0/4`, `target-1/4`, `target-2/4`,
+`target-3/4`, each at each literal prefix `before-unlink`,
+`after-unlink-before-parent-sync`, and `after-parent-sync`. It lists the full hooks rather
+than generating them from the case visitor, production enumeration, cardinality, or target
+collection. Every full hook has the shape
+`decision-intent-final-removal/witness-reclamation/<witness>/<cardinality>/<prefix>`,
+where `<witness>` is exactly `decision` or `target-<zero-based-ordinal>`,
+`<cardinality>` is exactly `0`, `1`, `2`, `3`, or `4`, and `<prefix>` is one of the
+three literal prefixes above.
+Generated visits must be bijective with that literal: every valid full hook occurs exactly
+once and no other hook occurs. For every full hook, an independent omission poison removes
+only that visit while retaining the expected literal, and an independent duplication
+poison repeats only that visit while retaining the expected literal; both must fail with
+the exact missing or duplicate hook before semantic assertions. Each hook also has
+independent current-witness, applicable current-receipt, successor-member,
 terminal-response, forbidden-effect, and hook-removal poisons.
 
 Four post-decision-witness-reclamation anchor cases start independent fresh processes at
