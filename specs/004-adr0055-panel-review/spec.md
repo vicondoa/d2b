@@ -66,8 +66,9 @@ and previous status.
 5. **Given** a BLOCKER response, **When** approval is evaluated, **Then** only
    Fixed, or Invalid or Withdrawn with verified factual status, can approve it.
 6. **Given** a MAJOR response, **When** approval is evaluated, **Then** it is
-   Fixed or carries recorded acceptance by the repository maintainer or merge
-   owner; Deferred alone cannot approve it.
+   resolved by Fixed or factually verified Invalid or Withdrawn, while an
+   unresolved Intentionally rejected or Deferred response approves only with
+   recorded acceptance by the repository maintainer or merge owner.
 
 ---
 
@@ -98,6 +99,13 @@ conversion into current artifacts.
    generation consume it, **Then** both require its candidate, selection-schema
    version, selection-table version, and ordered roster to match their own
    inputs.
+6. **Given** legacy or current panel delivery JSON, **When** a delivery reader
+   loads it, **Then** it probes `panel_format_version` from bounded JSON before
+   selecting a strict legacy or current DTO.
+7. **Given** a current variable roster or a legacy fixed-ten roster, **When**
+   panel attestation and sealing run, **Then** current artifacts carry panel
+   format version 1 and the legacy artifacts omit it while retaining exactly
+   the historical ten roles including `rust`.
 
 ### Edge Cases
 
@@ -112,10 +120,13 @@ conversion into current artifacts.
 - A selected seat has no discovery result; generation refuses the lifecycle
   rather than treating absence as zero findings.
 - A ledger issue has no implementation response, or a response omits required
-  justification, evidence, factual verification, or acceptance; verification
-  preparation refuses the incomplete artifact.
+  justification, evidence, factual verification, or acceptance when required;
+  verification preparation refuses the incomplete artifact.
 - A selected seat returns an explicit complete discovery result with an empty
   findings list; it is accepted as a positive zero-finding result.
+- A panel artifact carries an unknown, malformed, misplaced, or mixed-family
+  `panel_format_version`; the bounded probe or strict family parser refuses it
+  without retrying the other DTO.
 - No implementation iteration has occurred; the average fixed-per-iteration
   metric is `0.0`.
 
@@ -188,8 +199,11 @@ conversion into current artifacts.
   Withdrawn based on verified factual status. Intentionally rejected and
   Deferred MUST NOT approve a BLOCKER.
 - **FR-029**: Approval MUST require every MAJOR to be Fixed or to carry
-  recorded acceptance by the repository maintainer or merge owner. Deferred
-  MUST NOT approve an unaccepted MAJOR.
+  verified factual Invalid or Withdrawn status, or - only for unresolved
+  Intentionally rejected or Deferred responses - recorded acceptance by the
+  repository maintainer or merge owner. The acceptance MUST remain plain
+  recorded process data and MUST NOT require identity verification, signatures,
+  GitHub API lookup, a service, or authority.
 - **FR-030**: Each reviewed candidate state MUST have exactly one versioned
   selection artifact bound to its lifecycle identifier, candidate digest
   triple, selection-table version, profiles, and ordered lifecycle roster.
@@ -198,19 +212,32 @@ conversion into current artifacts.
   candidate, selection-schema version, selection-table version, or ordered
   roster disagreement.
 - **FR-032**: xtask `delivery wave panel-request --selection` MUST populate the
-  existing schema-version-2 request's `roles` and `record_files` from the
-  validated selection, and `make-records.mjs` MUST emit the existing
-  schema-version-2 `PanelRecord` shape for exactly those roles.
+  schema-version-2 request's `roles` and `record_files` from the validated
+  selection and add `panel_format_version: 1`; `make-records.mjs` MUST emit a
+  current schema-version-2 `PanelRecord` with the same panel format version for
+  exactly those roles.
 - **FR-033**: `panel-attest` MUST validate exactly the ordered roster already
-  stored in the panel request. Existing schema-version-2 request, record,
-  attestation, and seal shapes MUST NOT gain lifecycle, selection digest, or
-  panel-version fields. Existing ten-seat requests and records, including
-  `rust`, MUST remain readable through the same types; the allowed role domain
-  retains Rust while current selection excludes it.
+  stored in the panel request. Current request, record, attestation, and the
+  seal's embedded panel object MUST carry `panel_format_version: 1`; legacy
+  fixed-ten artifacts MUST omit it and retain exactly the historical ten roles
+  including `rust`. `DELIVERY_SCHEMA_VERSION` MUST remain `2`, and neither
+  family may gain lifecycle or selection-digest fields.
 - **FR-034**: The build seat prompt and source guidance MUST be added to
-  `docs/adr/specs/0053-panel-prompt-sources.md`, and prompt-corpus shape checks
-  and tests MUST account for the resulting 35-file corpus with sixteen agent
-  files.
+  `docs/adr/specs/0053-panel-prompt-sources.md`; that document MUST also replace
+  or explicitly withdraw every superseded fixed-roster,
+  `relevant`/`signoff`/`recommendations`/`prior_resolutions` verdict,
+  held-reviewer, repeated-round, and old verification contract rather than
+  merely adding build guidance. Its operative replacements MUST be the
+  selected roster, complete discovery results, shared ledger and responses,
+  and scoped verification from ADR 0055. Prompt-corpus shape checks and tests
+  MUST account for the resulting 35-file corpus with sixteen agent files.
+- **FR-035**: Delivery readers MUST inspect `panel_format_version` only after a
+  bounded JSON read and before strict DTO deserialization. Absence MUST select
+  the strict legacy family, value `1` MUST select the strict current family,
+  and malformed, unknown, or mixed families MUST be refused without fallback.
+  The current role domain MUST contain the thirteen selected-roster seats and
+  exclude `rust`; the legacy role domain MUST remain the exact fixed ten
+  including `rust`.
 
 ### Key Entities
 
@@ -228,6 +255,9 @@ conversion into current artifacts.
 - **Lifecycle Selection Artifact**: The single artifact shape for a
   candidate-bound and lifecycle-bound current selection, including its schema
   version, selection-table version, profiles, and ordered roster.
+- **Panel Delivery Format**: The panel-specific current-or-legacy discriminator
+  inside workspace delivery schema version 2, with strict family DTOs and role
+  domains.
 - **Review Artifact**: Generated discovery or verification input bound to one
   lifecycle and candidate state.
 
@@ -252,16 +282,24 @@ conversion into current artifacts.
 - **SC-008**: The delivered change adds zero privileged services, runtime
   daemons, operating-system principals, or product control-plane surfaces.
 - **SC-009**: Candidate, selection-schema, selection-table-version, ordered
-  roster, missing or extra record, and mismatched-selection cases fail in the
-  responsible panel-request, record-generation, or panel-attest tests.
-- **SC-010**: Existing test helpers prove schema-version-2 delivery shapes are
-  unchanged and a ten-seat request and record set including `rust` remains
-  readable without a new fixture family.
+  roster, panel-format-version, missing or extra record, mixed-family, and
+  mismatched-selection cases fail in the responsible panel-request,
+  record-generation, panel-attest, or seal tests.
+- **SC-010**: One compact legacy ten-seat fixture bundle and one compact current
+  variable-roster fixture bundle prove strict compatibility under workspace
+  schema version 2, including omitted versus required
+  `panel_format_version`, legacy `rust`, and a current expanded-domain seat.
 - **SC-011**: Planted negatives refuse a missing selected-seat discovery
   result, a missing ledger response, and incomplete required justification or
   evidence, while a complete zero-finding seat result passes.
-- **SC-012**: Approval tests accept verified BLOCKER and accepted MAJOR cases
-  and refuse Deferred BLOCKER and unaccepted Deferred MAJOR cases.
+- **SC-012**: Approval tests accept verified BLOCKER; Fixed, verified Invalid,
+  and verified Withdrawn MAJOR; and accepted Intentionally rejected and
+  Deferred MAJOR cases. They refuse Deferred BLOCKER, unverified Invalid or
+  Withdrawn, and unaccepted Intentionally rejected or Deferred MAJOR cases.
+- **SC-013**: A focused prompt-source contract test proves the current
+  thirteen-seat Discover-Fix-Verify guidance is present and the superseded
+  fixed-roster, four-field verdict, held-reviewer, repeated-round, and old
+  verification requirements are absent or explicitly marked withdrawn.
 
 ## Assumptions
 
@@ -273,4 +311,8 @@ conversion into current artifacts.
   judgement to deduplicate findings.
 - Ordinary repository history and review controls provide sufficient
   auditability for this quality gate.
+- Maintainer or merge-owner acceptance is a plain recorded response whose
+  shape is checked. ADR 0055 treats panel artifacts as bypassable process
+  records, so authoritative identity verification, signatures, GitHub API
+  lookup, services, and authorization machinery are deliberately excluded.
 - The first implementation targets the standard Copilot panel skill only.

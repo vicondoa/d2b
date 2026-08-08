@@ -150,13 +150,18 @@ Rules:
 - Withdrawn and Invalid require a verified factual status and non-empty
   supporting evidence.
 - Recorded acceptance is ordinary repository process data. It is not a
-  protected principal, authorization, capability, or separate service.
+  protected principal, authorization, capability, or separate service. Its
+  claimed repository username and capacity are shape-checked but not resolved
+  through signatures, GitHub API lookup, or another identity authority.
 - A BLOCKER approves only as Fixed, Invalid, or Withdrawn. Invalid and
   Withdrawn must satisfy the verified-factual-status rule; Intentionally
   rejected and Deferred cannot approve a BLOCKER.
-- A MAJOR approves when Fixed. Any non-Fixed MAJOR also requires recorded
-  acceptance by the repository maintainer or merge owner; Deferred without
-  that acceptance cannot approve.
+- A MAJOR is resolved as Fixed, or as Invalid or Withdrawn after satisfying the
+  verified-factual-status rule. Those resolved factual dispositions require no
+  acceptance.
+- An unresolved Intentionally rejected or Deferred MAJOR requires recorded
+  acceptance by the repository maintainer or merge owner. Without it the MAJOR
+  cannot approve.
 - MINOR and NIT responses remain in the ledger but do not block after their
   required response data is complete.
 
@@ -178,34 +183,59 @@ Rules:
 - Pre-existing late MINOR and NIT observations cannot become blockers.
 - Approval evaluates the response rules above before reviewer unanimity.
 
-## Existing delivery schema integration
+## Delivery panel format integration
 
 Fields:
 
-- the existing schema-version-2 panel request fields, including `roles` and
+- workspace delivery schema version `2`
+- current panel format version `1`
+- current request fields, including `panel_format_version`, `roles`, and
   `record_files`
-- the existing schema-version-2 panel record fields, including `role` and the
+- current record fields, including `panel_format_version`, `role`, and the
   candidate digest triple
-- the existing panel attestation fields: `roles`, `records`, and `unanimous`
-- the existing schema-version-2 seal fields and embedded panel attestation
+- current attestation fields: `panel_format_version`, `roles`, `records`, and
+  `unanimous`
+- the schema-version-2 seal fields, whose current embedded panel object carries
+  `panel_format_version`
+- strict legacy request, record, attestation, and seal DTOs whose panel objects
+  omit `panel_format_version`
 
 Rules:
 
 - `DELIVERY_SCHEMA_VERSION` remains `2`.
 - `panel-request --selection` validates selection schema version `1`,
   selection-table version `2`, candidate identity, and ordered roster, then
-  populates the request's existing `roles` and `record_files`.
+  populates `roles` and `record_files` and writes
+  `panel_format_version: 1`.
 - `make-records.mjs` validates the same selection artifact and emits the
-  existing `PanelRecord` shape for exactly its ordered roles.
-- `panel-attest` uses the stored request as the roster authority. It rejects
-  every missing, extra, duplicated, misnamed, or out-of-order record.
+  current `PanelRecord` shape with `panel_format_version: 1` for exactly its
+  ordered roles.
+- Every read is bounded by the existing delivery JSON limit. A shallow probe
+  inspects the top-level discriminator for requests, records, and attestations,
+  or `panel.panel_format_version` for seals, before any strict DTO is selected.
+- An absent discriminator selects the legacy DTO. Integer value `1` selects
+  the current DTO. A malformed, misplaced, or unknown value is refused.
+  Failure to parse the selected strict DTO never falls back to the other
+  family.
+- Every DTO denies unknown fields. A request selects the family for all records,
+  attestation, and its seal; mixing legacy and current artifacts is refused.
+- `panel-attest` uses a current request's ordered roster as authority and
+  rejects every missing, extra, duplicated, misnamed, or out-of-order current
+  record.
+- The current role domain is the thirteen-seat selection-table domain:
+  `software`, `test`, `product`, `docs`, `security`, `observability`,
+  `simplicity`, `reliability`, `agentic`, `nixos`, `networking`, `kernel`, and
+  `build`. It excludes `rust`, whose current responsibility is a `software`
+  profile.
+- The legacy role domain and ordering remain exactly the historical fixed ten,
+  including `rust`. Legacy validation does not accept a variable roster.
 - Request, record, attestation, and seal gain no lifecycle identifier,
-  selection digest, panel schema version, or other new delivery field.
-- The allowed `PanelRole` domain retains `rust` for existing ten-seat data.
-  Current lifecycle selection excludes `rust` and assigns Rust review through
-  the `software` profile.
-- Focused compatibility tests use existing helpers, including for the ten-seat
-  legacy case; no raw DTO or serialization-golden families are introduced.
+  selection digest, new workspace delivery schema, or top-level seal
+  discriminator.
+- Exactly two compact checked-in fixture bundles pin compatibility: one legacy
+  fixed-ten set and one current variable-roster set. They cover request,
+  records, attestation, and the seal's embedded panel object without creating
+  a general migration or serialization-golden family.
 
 ## Metrics
 

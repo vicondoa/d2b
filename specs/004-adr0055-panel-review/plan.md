@@ -23,9 +23,12 @@ delta and only widen the lifecycle roster. Generate the discovery, ledger,
 response, and per-seat verification artifacts automatically; fail on
 conflicting regeneration. Automatically import complete or partial legacy
 rounds, preserve raw findings and attribution, and keep metrics informational.
-Keep the existing schema-version-2 panel request, record, attestation, and seal
-shapes unchanged. The request's existing `roles` and `record_files` fields
-carry the selected roster, and existing ten-seat artifacts remain readable.
+Keep workspace delivery schema version 2, but add the smallest panel-specific
+discriminator: current request, record, attestation, and the seal's embedded
+panel object carry `panel_format_version: 1`; legacy fixed-ten artifacts omit
+it. Probe bounded JSON before selecting strict legacy or current DTOs. The
+current format supports the expanded role domain, while legacy remains exactly
+the historical ten roles including `rust`.
 
 This is contributor tooling only. It adds no service, daemon, broker surface,
 socket, operating-system principal, authorization protocol, cryptographic
@@ -39,8 +42,17 @@ crash/process machinery.
 | The feature describes the accepted lifecycle as the target behavior. | `stage-diffs.sh`, `make-records.mjs`, the panel agents, and xtask still implement repeated fixed ten-seat rounds. | Preserve that behavior until every replacement part lands in `spec004w1`; do not ship a half-cutover. |
 | Current contributor docs and Constitution Principle VI name a fixed ten-seat roster. | Passing `PANEL_ROLES` validation and those docs agree today. | Update code and every binding contributor document together to the ADR 0055 selected-roster contract. |
 | Current delivery records require exactly the legacy ten roles. | `packages/xtask/src/delivery/panel.rs` and `make-records.mjs` each carry a separate fixed roster. No shared candidate-bound selection artifact exists. | Generate one lifecycle-selection artifact per candidate state, require both producers to consume it, populate the request's existing ordered `roles` and `record_files`, and validate records against that request-bound roster. |
-| Every delivery artifact currently uses the workspace-wide schema version `2` and has no selection or lifecycle fields. | Existing request, record, attestation, and seal shapes already carry the roster and candidate data needed for compatibility. | Keep those serialized shapes and `DELIVERY_SCHEMA_VERSION` unchanged. Version only the lifecycle-selection artifact, retain `rust` in the allowed role domain for existing data, and exclude it from current selection. |
-| The checked prompt corpus enforces an exact 32-file shape with thirteen agent files, and ADR 0053's prompt-source specification describes a twelve-role pool with no build seat. | `prompt-corpus.mjs`, its binding tests, and `docs/adr/specs/0053-panel-prompt-sources.md` agree with the current pool. | Update the prompt-source build guidance and pin the prompt-corpus shape and tests to 35 files with sixteen agent files in the same atomic cutover as the build agent. |
+| Every delivery artifact currently uses workspace schema version `2` and no panel-specific discriminator. | Existing fixed-ten request, record, attestation, and seal panel objects cannot be distinguished safely from the selected-roster format if only their shared schema version is inspected. | Keep `DELIVERY_SCHEMA_VERSION = 2`; add `panel_format_version: 1` only to current panel request, record, attestation, and the seal's embedded panel object. Legacy fixed-ten DTOs omit it and retain `rust`. |
+| The checked prompt corpus enforces an exact 32-file shape with thirteen agent files, and ADR 0053's prompt-source specification describes the superseded twelve-role, `relevant`/`signoff`/`recommendations`/`prior_resolutions` verdict, held-reviewer, repeated-round lifecycle with no build seat. | `prompt-corpus.mjs`, its binding tests, and `docs/adr/specs/0053-panel-prompt-sources.md` agree with the current pre-ADR-0055 contract. | Replace or explicitly withdraw every superseded fixed-roster, four-field verdict, held-reviewer, repeated-round, and old verification contract in that source document; make the selected roster, complete discovery results, shared ledger and responses, and scoped verification operative; add build guidance; and pin the corpus and tests to 35 files with sixteen agent files in the same atomic cutover. |
+
+## Adjudication
+
+The round-2 security recommendation to make maintainer or merge-owner
+acceptance authoritative is rejected. Accepted ADR 0055 explicitly classifies
+panel artifacts as bypassable process records rather than authorization.
+Acceptance remains a plain recorded response under ordinary repository
+controls. The implementation shape-checks it but adds no identity verification,
+signature, GitHub API lookup, service, protected principal, or authority.
 
 ## Technical Context
 
@@ -71,12 +83,13 @@ processing in selected seats and findings, and byte-identical output for
 identical inputs.
 
 **Constraints**: Fail closed on selection candidate, selection-schema,
-selection-table-version, or ordered-roster mismatch; missing seat results,
-mappings, or ledger responses;
-incomplete required justification, evidence, factual verification, or
-acceptance; conflicting bytes; roster narrowing; malformed legacy data;
-unrelated fix scope; or incomplete merge blockers. Cutover is one PR with no
-wave seal.
+selection-table-version, panel-format-version, family, or ordered-roster
+mismatch; missing seat results, mappings, or ledger responses; incomplete
+required justification, evidence, factual verification, or acceptance when
+required; conflicting bytes; roster narrowing; malformed legacy data;
+unrelated fix scope; or incomplete merge blockers. Every delivery JSON read is
+bounded before discriminator probing and strict DTO parsing. Cutover is one PR
+with no wave seal.
 
 **Scale/Scope**: Thirteen-seat pool, code/configuration floor of ten,
 documentation-only floor of eight, existing ten-seat legacy rounds, and
@@ -95,10 +108,11 @@ finished-diff panel lifecycle, one PR, and no seal.
   socket, principal, broker operation, capability, authorization, or audit
   surface is introduced.
 - **III - isolation**: Pass. No VM or host isolation path is touched.
-- **IV - compatibility**: Pass. Panel requests, records, attestations, and
-  seals retain their existing schema-version-2 serialized shapes. Existing
-  ten-seat data, including `rust`, remains readable through the same DTOs,
-  while current selection simply does not choose `rust`.
+- **IV - compatibility**: Pass. Workspace delivery schema version 2 remains
+  unchanged. Current panel request, record, attestation, and seal panel objects
+  add only `panel_format_version: 1`; strict legacy DTOs omit it and preserve
+  exactly the fixed ten including `rust`. A bounded version-first probe
+  prevents ambiguous fallback.
 - **V - test discipline**: Pass. Behavior is covered by existing Layer 1
   Node.js and Rust unit surfaces; no new top-level gate or integration tier is
   added.
@@ -176,7 +190,10 @@ packages/xtask/src/delivery/
 ├── seal.rs
 ├── evidence.rs
 ├── command.rs
-└── mod.rs
+├── mod.rs
+└── testdata/
+    ├── panel-legacy-ten.json
+    └── panel-current-variable.json
 
 tests/test-lint.sh
 AGENTS.md
@@ -191,11 +208,11 @@ changelog.d/adr055-panel-review.md
 scripts. Add only one focused JavaScript lifecycle helper and the normative
 selection table. Retire the separate `panel-rust` agent only after legacy Rust
 attribution maps to the Rust profile on `software`. Extend the existing xtask
-crate rather than adding a crate. Exercise compatibility through existing test
-helpers rather than creating a parallel delivery schema or fixture family. The
-ownership set below is closed for this wave; an undeclared changed path fails
-the final allowlist instead of being admitted by an implementation-time
-adjustment.
+crate rather than adding a crate. Add only strict legacy/current panel DTOs and
+two compact fixture bundles; do not create a parallel workspace schema, generic
+migration framework, or fixture family. The ownership set below is closed for
+this wave; an undeclared changed path fails the final allowlist instead of being
+admitted by an implementation-time adjustment.
 
 ## Wave Graph
 
@@ -272,9 +289,12 @@ delivery validation work together at merge.
    `Withdrawn`, and `Invalid`. Validate disposition-specific justification,
    change evidence, and verified factual status. A BLOCKER approves only as
    Fixed, Invalid, or Withdrawn, with factual verification for the latter two.
-   A MAJOR approves when Fixed or when its non-Fixed response records acceptance
-   by the repository maintainer or merge owner. Deferred cannot approve a
-   BLOCKER or an unaccepted MAJOR.
+   A MAJOR approves as Fixed or as factually verified Invalid or Withdrawn
+   without acceptance. Only unresolved Intentionally rejected or Deferred
+   MAJOR responses require recorded acceptance by the repository maintainer or
+   merge owner. That acceptance is plain shape-checked process data, not
+   verified identity or authorization. Deferred cannot approve a BLOCKER or an
+   unaccepted MAJOR.
 5. Reselect over the full candidate and every fix delta, union the result with
    the prior lifecycle roster, and reject narrowing or unrelated scope
    expansion with an actionable new-lifecycle remedy.
@@ -295,15 +315,18 @@ delivery validation work together at merge.
 9. Make `make-records.mjs` require the lifecycle-selection path. Validate its
    schema version, selection-table version, candidate identity, and ordered
    roster against `candidate.json`, verdicts, observed bindings, and emitted
-   records. Emit the existing schema-version-2 `PanelRecord` shape for exactly
-   those roles. Preserve model and effort checks, candidate binding, distinct
-   run provenance, and `signoff == recommendations.is_empty()`.
+   records. Emit current schema-version-2 `PanelRecord` objects with
+   `panel_format_version: 1` for exactly those roles. Preserve model and effort
+   checks, candidate binding, distinct run provenance, and
+   `signoff == recommendations.is_empty()`.
 
 ### Slice 2 - Delivery and Documentation Integration
 
 **Owned files**
 
 - `packages/xtask/src/delivery/{model,panel,seal,evidence,command,mod}.rs`
+- `packages/xtask/src/delivery/testdata/panel-legacy-ten.json` (new)
+- `packages/xtask/src/delivery/testdata/panel-current-variable.json` (new)
 - `.github/agents/d2b-integrator.agent.md`
 - `.github/skills/d2b-autopilot/SKILL.md`
 - `.github/skills/d2b-wave-delivery/SKILL.md`
@@ -323,31 +346,49 @@ delivery validation work together at merge.
 1. Parse the version-1 lifecycle-selection artifact at xtask
    `panel-request --selection`, validate its candidate identity,
    selection-schema version, selection-table version, and ordered roster, and
-   populate the existing schema-version-2 request's `roles` and `record_files`.
-   Do not add a panel envelope, alternate DTO, or delivery field.
-2. Keep the existing schema-version-2 `PanelRequest`, `PanelRecord`,
-   `PanelAttestation`, and `SealRecord` serialized shapes. Retain
-   `PanelRole::Rust` in the allowed role domain so existing ten-seat requests
-   and records parse naturally, while the current selection table excludes it.
-3. Make `panel-attest` validate exactly the ordered roles and record files
-   already stored in the request. Focused tests use existing helpers to cover
-   variable rosters, missing and extra records, mismatched selections, and a
-   ten-seat request with `rust`.
-4. Preserve model and effort checks, candidate binding, distinct run
+   populate the schema-version-2 request's `roles` and `record_files`, with
+   `panel_format_version: 1`. Keep lifecycle selection version 1 and the same
+   selection path flowing to both `panel-request` and `make-records.mjs`.
+2. Read each request, record, attestation, and seal through the existing bounded
+   JSON path. Probe the top-level `panel_format_version`, or the seal's nested
+   `panel.panel_format_version`, before DTO deserialization. Absence selects a
+   strict legacy DTO; integer `1` selects a strict current DTO; malformed,
+   unknown, or mixed families fail without fallback. Both families deny unknown
+   fields.
+3. Give current request, record, attestation, and the seal's embedded panel
+   object `panel_format_version: 1`. Keep the top-level seal field set and
+   `DELIVERY_SCHEMA_VERSION = 2`. The current role domain is the exact
+   thirteen-seat selection pool and excludes `rust`; the legacy domain remains
+   the exact historical fixed ten including `rust`.
+4. Make `panel-attest` validate exactly the ordered roles and record files
+   already stored in a current request, while a legacy request remains exact
+   fixed-ten and may finish only with legacy records and a legacy attestation.
+   Pin exactly two compact fixture bundles: one legacy ten-seat set and one
+   current variable-roster set, each covering request, records, attestation,
+   and the seal panel object.
+5. Preserve model and effort checks, candidate binding, distinct run
    provenance, `signoff == recommendations.is_empty()`, seal validation, and
-   history-only rebase behavior. Do not add shared schema migration,
-   cryptographic, or privileged receipt machinery.
-5. Teach autopilot, integrator, and delivery prompts to drive discovery once,
+   history-only rebase behavior. Do not add a new workspace schema, generic
+   migration or fixture framework, identity verification, signatures, GitHub
+   API lookup, cryptographic or privileged receipt machinery, service, or
+   authority.
+6. Teach autopilot, integrator, and delivery prompts to drive discovery once,
    hand the full ledger to implementation, collect batch responses and
    self-verification, and run scoped verification until the selected lifecycle
    roster is unanimously merge-ready.
-6. Replace fixed-ten and repeated-round prose in binding docs and the
+7. Replace fixed-ten and repeated-round prose in binding docs and the
    constitution with the accepted selected-roster lifecycle. Keep ADR 0055
    unchanged as the historical decision and update the existing changelog
    fragment without process markers.
-7. Add the build seat's source guidance and ownership boundary to
-   `docs/adr/specs/0053-panel-prompt-sources.md`. Update
-   `prompt-corpus.mjs` and the manifest from the old 32-file and
+8. In `docs/adr/specs/0053-panel-prompt-sources.md`, replace or explicitly
+   withdraw every superseded fixed-roster,
+   `relevant`/`signoff`/`recommendations`/`prior_resolutions` verdict,
+   held-reviewer, repeated-round, and old verification contract across its
+   metadata, shared contract, stage/seam guidance, local-conflict table,
+   caveats, and change discipline. Make the selected roster, complete discovery
+   results, shared ledger and responses, and scoped verification operative. Add
+   the build seat's source guidance and ownership boundary.
+   Update `prompt-corpus.mjs` and the manifest from the old 32-file and
    thirteen-agent assumptions to the exact 35-file and sixteen-agent current
    pool, as pinned by Slice 1's binding tests. Recapture only after all governed
    prompts and contributor documents are final.
@@ -396,6 +437,7 @@ specs/004-adr0055-panel-review/contracts/panel-artifacts.md
 .github/skills/d2b-wave-delivery/SKILL.md
 scripts/copilot/{check-bindings.mjs,test-check-bindings.mjs,test-stage-diffs.mjs,test-make-records.mjs,test-panel-lifecycle.mjs,prompt-corpus.mjs,prompt-corpus-manifest.json}
 packages/xtask/src/delivery/{model,panel,seal,evidence,command,mod}.rs
+packages/xtask/src/delivery/testdata/{panel-legacy-ten,panel-current-variable}.json
 tests/test-lint.sh
 docs/contributing/{README,panel-review,copilot-agents}.md
 docs/adr/specs/0053-panel-prompt-sources.md
@@ -422,21 +464,30 @@ It does not merely prove that selected runtime paths stayed clean.
    and incomplete required justification or evidence, while accepting an
    explicit complete zero-finding seat result.
 3. Both JavaScript record-generation tests and xtask panel-request tests refuse
-   candidate, selection-schema, selection-table-version, and ordered-roster
-   mismatches against the same selection artifact.
+   candidate, selection-schema, selection-table-version, panel-format-version,
+   and ordered-roster mismatches against the same selection artifact.
 4. Approval tests accept Fixed BLOCKER, factually verified Invalid and
-   Withdrawn BLOCKER, Fixed MAJOR, and maintainer- or merge-owner-accepted
-   non-Fixed MAJOR responses. They refuse Intentionally rejected and Deferred
-   BLOCKER responses and every unaccepted non-Fixed MAJOR, including Deferred.
-5. xtask tests prove two different selected-roster sizes attest only their
-   request's exact roles and record files, missing or extra records fail, and
-   a schema-version-2 ten-seat request and record set including `rust` remains
-   readable. Serialization tests prove no delivery field was added to request,
-   record, attestation, or seal.
+   Withdrawn BLOCKER; Fixed, factually verified Invalid, and factually verified
+   Withdrawn MAJOR without acceptance; and maintainer- or merge-owner-accepted
+   Intentionally rejected and Deferred MAJOR responses. They refuse
+   Intentionally rejected and Deferred BLOCKER responses, unverified Invalid
+   or Withdrawn responses, and unaccepted Intentionally rejected or Deferred
+   MAJOR responses.
+5. xtask tests prove two different current selected-roster sizes attest only
+   their request's exact roles and record files; missing, extra, out-of-order,
+   malformed-version, unknown-version, and mixed-family records fail; and the
+   two compact fixtures parse as strict legacy fixed-ten including `rust` and
+   strict current variable-roster data. Serialized-field assertions prove
+   current request, record, attestation, and the seal panel object carry
+   `panel_format_version: 1`, legacy counterparts omit it, the top-level seal
+   shape is unchanged, and workspace schema version remains `2`.
 6. `node scripts/copilot/prompt-corpus.mjs` exits zero after the final capture,
    its shape test requires 35 files and sixteen agent files including `build`
-   and excluding current `rust`,
-   and a second lifecycle artifact generation produces identical bytes.
+   and excluding current `rust`; focused source-contract checks prove
+   `docs/adr/specs/0053-panel-prompt-sources.md` replaces or explicitly
+   withdraws the fixed-roster, four-field verdict, held-reviewer,
+   repeated-round, and old verification contracts; and a second lifecycle
+   artifact generation produces identical bytes.
 7. The work review records `signoff: true` with empty recommendations for every
    selected lifecycle seat; only unresolved `CRITICAL` or `HIGH` merge blockers
    may prevent that state.
@@ -455,12 +506,15 @@ It does not merely prove that selected runtime paths stayed clean.
 | One consumer uses a different candidate, selection schema, selection-table version, or roster. | Both panel-request and make-records validate the same selection artifact and planted mismatch cases refuse output. |
 | A selected discovery seat is absent but is treated as finding-free. | Complete-result coverage refuses the missing seat; a separate zero-finding positive proves the valid empty shape. |
 | A ledger item disappears from implementation responses or carries incomplete justification or evidence. | Exact response coverage and disposition-specific completeness validation refuse verification preparation. |
-| Deferred is used to approve a BLOCKER or an unaccepted MAJOR. | Severity-by-disposition approval matrix tests refuse both and positively cover verified factual and recorded-acceptance paths. |
+| A factually verified Invalid or Withdrawn MAJOR is wrongly held for acceptance, or an unresolved Intentionally rejected or Deferred MAJOR passes without it. | Severity-by-disposition tests positively cover resolved factual responses without acceptance and require recorded acceptance only for the two unresolved dispositions. |
 | A fix silently removes a reviewer. | Recorded set-union validation requires monotonic roster widening. |
 | A late style issue restarts discovery. | Verification admission rejects non-blocking late issues. |
 | Partial legacy import loses completed work or relabels Rust attribution. | Lifecycle import fixtures assert raw-byte preservation, source identity stability, and Rust-profile responsibility. |
 | xtask accepts a global default instead of the selected roster. | Request-bound variable-roster tests reject every missing or extra record. |
-| Delivery compatibility grows a second schema or silently drops legacy `rust`. | Serialized-field assertions and the ten-seat compatibility case require the existing schema-version-2 shapes and retained Rust role. |
+| A malformed current artifact falls back to legacy parsing, or a current record is mixed into a legacy request. | Bounded discriminator probes select exactly one strict DTO family; malformed, unknown, and mixed-family fixture negatives fail without fallback. |
+| Delivery compatibility grows a new workspace schema or silently drops legacy `rust`. | Serialized-field assertions keep workspace schema version 2, and the compact legacy fixture requires exact fixed-ten ordering including `rust`. |
+| The prompt-source document adds `build` but leaves old roster, verdict, held-seat, repeated-round, or verification requirements operative. | Focused prompt-source contract checks require the current lifecycle markers and reject the superseded operative clauses unless explicitly withdrawn. |
+| Maintainer acceptance becomes an identity or authorization boundary. | Contract tests validate only the plain response shape; the owned-file set has no signature, GitHub API, service, principal, or authority surface. |
 | A changed runtime or other undeclared file escapes a narrow denylist. | The final literal changed-path allowlist fails on every undeclared path. |
 | Review expands the accepted scope. | Only `CRITICAL` and `HIGH` merge blockers enter implementation recommendations; all other feedback stays informational. |
 
