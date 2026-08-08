@@ -12,11 +12,11 @@
     },
     {
       "path": "bazel/generated/output-manifest.json",
-      "sha256": "30a81da9a1009c46482dd9e2c0b32e830c846366aa1b5b4a658385c8bc6337da"
+      "sha256": "c5dbe11652b3a9a40e9bd043c323588c20292aff4991ca5527aeefb63665b3ac"
     },
     {
       "path": "bazel/generated/source-census.json",
-      "sha256": "8bd36bb0c1095363e5783ff63667f73cfc5979e48358c29f1e14e9bc2d770f3d"
+      "sha256": "272e376838b3eeb228abbb458f9738d2ab1ec710d545701387035acd489138e7"
     }
   ],
   "mappingStatus": "planned",
