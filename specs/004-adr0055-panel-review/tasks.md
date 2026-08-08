@@ -15,7 +15,7 @@ cross-cutting delivery changes are complete.
 
 - [ ] T001 Add version 2 seat classes, floors, fill order, focus, profiles, and triggers to `.github/skills/d2b-panel-round/selection-table.json`
 - [ ] T002 Add panel lifecycle behavior test invocation to `tests/test-lint.sh` and create the initial harness in `scripts/copilot/test-panel-lifecycle.mjs`
-- [ ] T003 Update roster and binding drift fixtures for a selection-table-driven pool in `scripts/copilot/check-bindings.mjs` and `scripts/copilot/test-check-bindings.mjs`
+- [ ] T003 Update roster and binding drift fixtures for a selection-table-driven pool in `scripts/copilot/check-bindings.mjs` and `scripts/copilot/test-check-bindings.mjs`, including the 35-file and sixteen-agent prompt-corpus shape with current `build` and without current `rust`
 
 **Checkpoint**: The repository can parse and mechanically validate the planned
 thirteen-seat selection contract before lifecycle behavior changes.
@@ -27,9 +27,9 @@ thirteen-seat selection contract before lifecycle behavior changes.
 **Purpose**: Build the shared deterministic lifecycle functions used by every
 user story.
 
-- [ ] T004 Implement selection, deterministic rendering, create-or-compare writes, and lifecycle state validation in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
-- [ ] T005 Add selection floor, optional trigger, ambiguity, build-positive, citation-negative, and deterministic rendering cases to `scripts/copilot/test-panel-lifecycle.mjs`
-- [ ] T006 Update `.github/skills/d2b-panel-round/SKILL.md` to define generated lifecycle addresses, selected-roster dispatch, and the atomic compatibility cutover
+- [ ] T004 Implement candidate-bound selection schema version 1, deterministic rendering under `.scratch/panel/<lifecycle>/selections/<candidate-id>/<snapshot-sha256>.json`, create-or-compare writes, and monotonic lifecycle roster validation in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
+- [ ] T005 Add selection floor, optional trigger, ambiguity, build-positive, citation-negative, deterministic rendering, and candidate, selection-schema, selection-table-version, and roster mismatch cases to `scripts/copilot/test-panel-lifecycle.mjs`
+- [ ] T006 Update `.github/skills/d2b-panel-round/SKILL.md` to define the one lifecycle-selection artifact shape, its generated address, the `--selection` handoff to both consumers, selected-roster dispatch, and the atomic compatibility cutover
 
 **Checkpoint**: Selection and artifact generation primitives are deterministic
 and fail closed, but no finished panel is considered migrated yet.
@@ -45,9 +45,9 @@ ledger.
 deduplication groups into the lifecycle helper and verify stable `R` identifiers,
 complete source mappings, retained attribution, and byte-identical regeneration.
 
-- [ ] T007 [US1] Add discovery, deduplication, stable identifier, source completeness, and conflicting regeneration cases to `scripts/copilot/test-panel-lifecycle.mjs`
-- [ ] T008 [US1] Implement discovery request, source finding, orchestrator grouping, and merged ledger generation in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
-- [ ] T009 [US1] Replace first-round delta-only instructions with full-candidate comprehensive discovery staging in `.github/skills/d2b-panel-round/scripts/stage-diffs.sh` and update `scripts/copilot/test-stage-diffs.mjs`
+- [ ] T007 [US1] Add discovery, deduplication, stable identifier, source completeness, conflicting regeneration, missing selected-seat result refusal, and explicit complete zero-finding seat acceptance cases to `scripts/copilot/test-panel-lifecycle.mjs`
+- [ ] T008 [US1] Implement discovery request, explicit complete seat result, source finding, orchestrator grouping, and merged ledger generation in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
+- [ ] T009 [US1] Replace first-round delta-only instructions with full-candidate comprehensive discovery staging, record `lifecycle_id` in `address.json`, and update `.github/skills/d2b-panel-round/scripts/stage-diffs.sh` and `scripts/copilot/test-stage-diffs.mjs`
 
 **Checkpoint**: One discovery accounts for every selected reviewer finding in a
 stable shared ledger.
@@ -64,8 +64,8 @@ from a complete ledger, then prove unsupported dispositions, unrelated fix
 scope, roster narrowing, late MINOR/NIT blockers, and conflicting regeneration
 are refused.
 
-- [ ] T010 [US2] Add disposition, self-verification, scope, monotonic roster, late issue, metric, and merge-readiness cases to `scripts/copilot/test-panel-lifecycle.mjs`
-- [ ] T011 [US2] Implement response templates, evidence capture, scope validation, per-seat verification artifacts, late issue admission, metrics, and approval checks in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
+- [ ] T010 [US2] Add planted missing-ledger-response and incomplete required justification or evidence refusals; positive Fixed, verified Invalid and Withdrawn BLOCKER cases; refusal Intentionally rejected and Deferred BLOCKER cases; positive Fixed and maintainer- or merge-owner-accepted MAJOR cases; refusal unaccepted non-Fixed MAJOR including Deferred; and self-verification, scope, monotonic roster, late issue, metric, and merge-readiness cases to `scripts/copilot/test-panel-lifecycle.mjs`
+- [ ] T011 [US2] Implement exact response coverage, the unchanged Fixed, Intentionally rejected, Deferred, Withdrawn, and Invalid dispositions, disposition-specific justification and evidence validation, verified factual status, plain maintainer or merge-owner acceptance records, scope validation, per-seat verification artifacts, late issue admission, metrics, and approval checks in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
 - [ ] T012 [US2] Update retained panel agent prompts and add `.github/agents/panel-simplicity.agent.md`, `.github/agents/panel-reliability.agent.md`, and `.github/agents/panel-agentic.agent.md` with comprehensive discovery and scoped verification contracts
 
 **Checkpoint**: Every issue has a visible disposition, and verification blocks
@@ -85,8 +85,8 @@ union.
 
 - [ ] T013 [US3] Add complete and partial legacy import, repeated import, raw evidence, severity prefix, Rust attribution, and build-trigger cases to `scripts/copilot/test-panel-lifecycle.mjs`
 - [ ] T014 [US3] Implement version-first legacy import, source identity, severity normalization, partial discovery continuation, Rust profile responsibility, and roster union in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`
-- [ ] T015 [US3] Add `.github/agents/panel-build.agent.md`, retire `.github/agents/panel-rust.agent.md` from current selection, and update `scripts/copilot/prompt-corpus-manifest.json` for the current agent pool
-- [ ] T016 [US3] Make `.github/skills/d2b-panel-round/scripts/make-records.mjs` consume the selected roster and update `scripts/copilot/test-make-records.mjs` for variable rosters and legacy compatibility
+- [ ] T015 [US3] Add `.github/agents/panel-build.agent.md` and retire `.github/agents/panel-rust.agent.md` from current selection while preserving legacy Rust attribution and `software` Rust-profile responsibility
+- [ ] T016 [US3] Make `.github/skills/d2b-panel-round/scripts/make-records.mjs` require and validate the same lifecycle-selection artifact consumed by xtask, emit the existing schema-version-2 `PanelRecord` shape for exactly its ordered roles, and update `scripts/copilot/test-make-records.mjs` for variable rosters, natural ten-seat compatibility, and candidate, selection-schema, selection-table-version, roster, and mismatched-selection refusals
 
 **Checkpoint**: Relevant experts are deterministic, legacy work is retained
 automatically, and current records match the lifecycle roster.
@@ -98,11 +98,13 @@ automatically, and current records match the lifecycle roster.
 **Purpose**: Bind the selected roster into existing delivery validation and
 update all contributor-facing process owners.
 
-- [ ] T017 Add request-bound selected-roster, missing/extra record, variable-size attestation, legacy fixed-ten, and seal propagation tests in `packages/xtask/src/delivery/panel.rs`, `packages/xtask/src/delivery/seal.rs`, and `packages/xtask/src/delivery/evidence.rs`
-- [ ] T018 Update current panel roles and request-bound roster validation in `packages/xtask/src/delivery/model.rs`, `packages/xtask/src/delivery/panel.rs`, `packages/xtask/src/delivery/seal.rs`, `packages/xtask/src/delivery/evidence.rs`, `packages/xtask/src/delivery/command.rs`, and `packages/xtask/src/delivery/mod.rs`
-- [ ] T019 Update lifecycle ownership and prompts in `.github/agents/d2b-integrator.agent.md`, `.github/skills/d2b-autopilot/SKILL.md`, and `.github/skills/d2b-wave-delivery/SKILL.md`
-- [ ] T020 Update binding process text in `AGENTS.md`, `.specify/memory/constitution.md`, `docs/contributing/README.md`, `docs/contributing/panel-review.md`, `docs/contributing/copilot-agents.md`, and `docs/specs/ADR-046-validation-and-delivery.md`
-- [ ] T021 Add the implementation release note in `changelog.d/adr055-panel-review.md` and recapture governed prompt inputs with `scripts/copilot/prompt-corpus.mjs`
+- [ ] T017 Add focused compatibility tests with existing xtask helpers for candidate, selection-schema, selection-table-version, ordered-roster, and mismatched-selection refusal; unchanged schema-version-2 serialized field sets; and a ten-seat request and record set containing `rust`
+- [ ] T018 Implement strict `PanelSelectionV1` parsing and `panel-request --selection` in `packages/xtask/src/delivery/model.rs`, `packages/xtask/src/delivery/panel.rs`, `packages/xtask/src/delivery/command.rs`, and `packages/xtask/src/delivery/mod.rs`; validate candidate identity and ordered roster, populate the existing request `roles` and `record_files`, add the current role domain while retaining `PanelRole::Rust`, and leave every schema-version-2 delivery field unchanged
+- [ ] T019 Make `panel-attest` validate exactly the roles and record files stored in the request, add missing and extra record and variable-roster tests, and update dependent seal and evidence validation in `packages/xtask/src/delivery/panel.rs`, `packages/xtask/src/delivery/seal.rs`, and `packages/xtask/src/delivery/evidence.rs` without adding lifecycle, selection digest, panel-version, alternate DTO, or migration fields
+- [ ] T020 Update lifecycle ownership and prompts in `.github/agents/d2b-integrator.agent.md`, `.github/skills/d2b-autopilot/SKILL.md`, and `.github/skills/d2b-wave-delivery/SKILL.md`
+- [ ] T021 Update binding process text in `AGENTS.md`, `.specify/memory/constitution.md`, `docs/contributing/README.md`, `docs/contributing/panel-review.md`, `docs/contributing/copilot-agents.md`, and `docs/specs/ADR-046-validation-and-delivery.md`, and add the build seat source guidance and ownership boundary to `docs/adr/specs/0053-panel-prompt-sources.md`
+- [ ] T022 Update the exact 35-file and sixteen-agent shape in `scripts/copilot/prompt-corpus.mjs`, satisfy the corresponding `scripts/copilot/test-check-bindings.mjs` cases from T003, and recapture `scripts/copilot/prompt-corpus-manifest.json` only after prompts and contributor docs are final
+- [ ] T023 Add the implementation release note in `changelog.d/adr055-panel-review.md`
 
 **Checkpoint**: Standard Copilot tooling, delivery validation, and binding docs
 describe and enforce one selected-roster Discover-Fix-Verify lifecycle.
@@ -113,10 +115,10 @@ describe and enforce one selected-roster Discover-Fix-Verify lifecycle.
 
 **Purpose**: Prove the atomic cutover and close the Track B gate.
 
-- [ ] T022 Run `make test-lint`, focused xtask test/clippy/fmt, `make check-tier0`, `make test-changelog`, and `make test-policy`, recording exact results in panel evidence
-- [ ] T023 Confirm the feature diff adds no runtime, broker, contract-crate, or workspace dependency surface using the path guard in `specs/004-adr0055-panel-review/plan.md`
-- [ ] T024 Run the finished-diff panel lifecycle with only HIGH or CRITICAL merge blockers admitted, resolve its complete ledger in batches, and obtain unanimous selected-roster verification
-- [ ] T025 Push `spec004-panel-review-pragmatic`, open one Track B PR to `v3`, wait for required checks, and merge after the panel and CI are green
+- [ ] T024 Run `make test-lint`, focused xtask test/clippy/fmt, `make check-tier0`, `make test-changelog`, and `make test-policy`, recording exact results in panel evidence
+- [ ] T025 Expand the literal changed-path allowlist in `specs/004-adr0055-panel-review/plan.md`, compare it with `git diff --name-only "$(git merge-base origin/v3 HEAD)"...HEAD`, print every undeclared changed path, and fail if any path is outside the declared feature artifacts, contributor tooling, docs, xtask delivery files, tests, or changelog set
+- [ ] T026 Run the finished-diff panel lifecycle with only HIGH or CRITICAL merge blockers admitted, resolve its complete ledger in batches, and obtain unanimous selected-roster verification
+- [ ] T027 Push `spec004-panel-review-pragmatic`, open one Track B PR to `v3`, wait for required checks, and merge after the panel and CI are green
 
 ---
 
@@ -135,19 +137,20 @@ describe and enforce one selected-roster Discover-Fix-Verify lifecycle.
 
 ### Parallel Opportunities
 
-- T017 can start after the selected-roster contract is stable while T019 and
-  T020 update disjoint prompt and documentation files.
-- Within T012, the four new or retained agent files can be edited in parallel
-  if each lane owns distinct files.
-- T019 and T020 can proceed in parallel after lifecycle behavior and field
-  names are final.
+- T017 and T018 can start after the selection and request-roster contracts are
+  stable while T020 and T021 update disjoint prompt and documentation files.
+- Within T012 and T015, agent files can be edited in parallel if each lane owns
+  distinct files.
+- T020 and T021 can proceed in parallel after lifecycle behavior and field
+  names are final. T022 waits for both and performs the one final corpus
+  capture.
 
 ## Parallel Example: Delivery Integration
 
 ```text
-Task: "Implement request-bound roster tests and validation in packages/xtask/src/delivery/"
+Task: "Implement request-bound roster parsing and compatibility tests in packages/xtask/"
 Task: "Update integrator and skill ownership in .github/agents/ and .github/skills/"
-Task: "Update binding contributor process in AGENTS.md and docs/contributing/"
+Task: "Update binding contributor process and panel prompt sources in AGENTS.md and docs/"
 ```
 
 These tasks use disjoint file ownership but converge before prompt capture and
