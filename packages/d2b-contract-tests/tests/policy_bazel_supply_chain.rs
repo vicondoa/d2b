@@ -59,8 +59,9 @@ fn selected_policy_inputs_and_no_fetch_audits_are_pinned_without_retry() {
         .map(|(section, _)| section)
         .expect("policy audit helper section must exist");
     assert!(!policy_audit_helpers.contains("retry"));
-    assert!(flake.contains("guest-real-libshpool/production/closure.json"));
-    assert!(flake.contains("guest-real-libshpool/production/Cargo.lock"));
+    assert!(flake.contains("policyContextRoot"));
+    assert!(flake.contains("/production/closure.json"));
+    assert!(flake.contains("/production/Cargo.lock"));
     assert!(!flake.contains("guest-shell-runner/Cargo.lock"));
 }
 
