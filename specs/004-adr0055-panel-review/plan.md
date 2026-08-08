@@ -450,6 +450,8 @@ docs/adr/specs/0053-panel-prompt-sources.md
 docs/specs/ADR-046-validation-and-delivery.md
 docs/specs/ADR-046-spec-set.json
 docs/specs/ADR-046-work-items.json
+docs/specs/ADR-046-implementation-graph.json
+docs/specs/ADR-046-implementation-graph.md
 changelog.d/adr055-panel-review.md
 ```
 
