@@ -151,6 +151,36 @@ try {
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
     missingDiscoveryRequest.text,
   );
+  const originalDiscoveryRequest = readFileSync(discoveryRequestPath, "utf8");
+  const crossCandidateDiscovery = JSON.parse(originalDiscoveryRequest);
+  crossCandidateDiscovery.candidate.content_id = "stale-content";
+  writeFileSync(
+    discoveryRequestPath,
+    `${JSON.stringify(crossCandidateDiscovery, null, 2)}\n`,
+  );
+  const staleDiscoveryRequest = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "discovery staging rejects a well-formed cross-candidate request",
+    staleDiscoveryRequest.status === 2 &&
+      /strict lifecycle validation/.test(staleDiscoveryRequest.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+    staleDiscoveryRequest.text,
+  );
+  rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
+    recursive: true,
+    force: true,
+  });
+  writeFileSync(discoveryRequestPath, originalDiscoveryRequest);
   const first = run(repo, [
     base,
     base,
@@ -338,20 +368,100 @@ try {
   const stagedLedger = join(repo, "source-ledger.json");
   const stagedResponses = join(repo, "source-responses.json");
   const stagedSelfVerification = join(repo, "source-self-verification.json");
-  writeFileSync(stagedLedger, `${JSON.stringify({ source: "ledger" }, null, 2)}\n`);
-  writeFileSync(stagedResponses, `${JSON.stringify({ source: "responses" }, null, 2)}\n`);
-  writeFileSync(stagedSelfVerification, `${JSON.stringify({ source: "self-verification" }, null, 2)}\n`);
+  const discoveryResultsPath = join(repo, "discovery-results.json");
+  const groupsPath = join(repo, "discovery-groups.json");
+  writeFileSync(
+    discoveryResultsPath,
+    `${JSON.stringify(Object.fromEntries(firstRoster.map((seat) => [
+      seat,
+      {
+        seat,
+        complete: true,
+        findings: seat === "software"
+          ? [{
+              source_id: "software:1",
+              source_ordinal: 1,
+              raw_text: "The fix needs verification.",
+              attribution: "software",
+              severity: "MAJOR",
+              impact: "The change could regress the handoff.",
+              recommendation: "Verify the fix.",
+            }]
+          : [],
+      },
+    ])), null, 2)}\n`,
+  );
+  writeFileSync(
+    groupsPath,
+    `${JSON.stringify([{
+      source_finding_ids: ["software:1"],
+      description: "The fix needs verification.",
+      severity: "MAJOR",
+      impact: "The change could regress the handoff.",
+      recommendation: "Verify the fix.",
+    }], null, 2)}\n`,
+  );
+  execFileSync(
+    "node",
+    [lifecycleScript, "merge-ledger", selectionPath, discoveryResultsPath, groupsPath, stagedLedger],
+    { cwd: repo, encoding: "utf8" },
+  );
+  execFileSync(
+    "node",
+    [lifecycleScript, "response-template", stagedLedger, stagedResponses],
+    { cwd: repo, encoding: "utf8" },
+  );
+  const responseEnvelope = JSON.parse(readFileSync(stagedResponses, "utf8"));
+  responseEnvelope.responses[0] = {
+    issue_id: "R1",
+    disposition: "Fixed",
+    changed_surface: ["Makefile"],
+    justification: "The fix is staged for verification.",
+    evidence: "focused test",
+  };
+  writeFileSync(stagedResponses, `${JSON.stringify(responseEnvelope, null, 2)}\n`);
+  writeFileSync(
+    stagedSelfVerification,
+    `${JSON.stringify({
+      tests: ["focused stage test"],
+      lint: "passed",
+      formatting: "passed",
+      static_analysis: "passed",
+      build: "not applicable",
+      uncovered_areas: ["none"],
+      self_review: "passed",
+    }, null, 2)}\n`,
+  );
   const verificationSourceDir = join(repo, "verification-requests");
-  mkdirSync(verificationSourceDir);
+  const fullContextPath = join(repo, "full-context.json");
+  writeFileSync(fullContextPath, `${JSON.stringify({
+    candidate: "full candidate context",
+    evidence: "staged validation",
+  }, null, 2)}\n`);
+  execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "verification",
+      currentSelectionPath,
+      stagedLedger,
+      stagedResponses,
+      stagedSelfVerification,
+      verificationSourceDir,
+      "--candidate",
+      currentCandidatePath,
+      "--prior-selection",
+      selectionPath,
+      "--delta",
+      deltaPath,
+      "--full-context",
+      fullContextPath,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
   const verificationRoster = JSON.parse(
     readFileSync(currentSelectionPath, "utf8"),
   ).roster;
-  for (const seat of verificationRoster) {
-    writeFileSync(
-      join(verificationSourceDir, `${seat}.json`),
-      `${JSON.stringify({ seat, request: "complete" })}\n`,
-    );
-  }
 
   console.log("stage-diffs: fail-closed continuity");
   const wrongPreviousTip = run(repo, [
@@ -525,6 +635,73 @@ try {
       /fix-delta paths do not match git range/.test(deltaRangeMismatch.text) &&
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
     deltaRangeMismatch.text,
+  );
+  const invalidVerificationDirectory = (name, mutate) => {
+    const directory = join(repo, name);
+    mkdirSync(directory);
+    for (const seat of verificationRoster) {
+      const request = JSON.parse(
+        readFileSync(join(verificationSourceDir, `${seat}.json`), "utf8"),
+      );
+      if (seat === "software") mutate(request);
+      writeFileSync(directory + `/${seat}.json`, `${JSON.stringify(request, null, 2)}\n`);
+    }
+    return directory;
+  };
+  const rejectsStagedVerification = (name, mutate) => {
+    const directory = invalidVerificationDirectory(name, mutate);
+    const result = run(repo, [
+      base,
+      firstTip,
+      "spec001w1-r2",
+      "--selection",
+      currentSelectionPath,
+      "--candidate",
+      currentCandidatePath,
+      "--ledger",
+      stagedLedger,
+      "--responses",
+      stagedResponses,
+      "--self-verification",
+      stagedSelfVerification,
+      "--verification-dir",
+      directory,
+    ]);
+    check(
+      name,
+      result.status === 2 &&
+        /strict lifecycle validation/.test(result.text) &&
+        !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+      result.text,
+    );
+    rmSync(join(repo, ".scratch", "panel", "spec001w1-r2"), {
+      recursive: true,
+      force: true,
+    });
+  };
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed cross-candidate request",
+    (request) => {
+      request.current_candidate.candidate_id = "stale-candidate";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed cross-ledger request",
+    (request) => {
+      request.ledger.candidate_id = "foreign-candidate";
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed cross-selection profile",
+    (request) => {
+      request.selection.profiles.software = ["javascript"];
+    },
+  );
+  rejectsStagedVerification(
+    "verification staging rejects a well-formed stale response",
+    (request) => {
+      request.responses[0].justification = "stale response from an earlier ledger";
+    },
   );
   const second = run(repo, [
     base,

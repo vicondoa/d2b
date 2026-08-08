@@ -22,11 +22,13 @@ import {
   sha256,
   stableStringify,
   validateDiscoveryResults,
+  validateCandidateAgainstSelection,
   validateFixScope,
   validateMonotonicRoster,
   validateResponses,
   validateSelection,
   validateSelfVerification,
+  validateVerificationRequest,
   validateVerificationResults,
   writeDirectoryCreateOrCompare,
   writeVerificationArtifacts,
@@ -92,7 +94,10 @@ try {
   const { writeDirectoryCreateOrCompare } =
     await import(pathToFileURL(helperPath).href);
   process.argv[1] = entry;
-  writeDirectoryCreateOrCompare(directory, [{ name: "seat.json", bytes }]);
+  const result = writeDirectoryCreateOrCompare(directory, [
+    { name: "seat.json", bytes },
+  ]);
+  console.log(JSON.stringify(result));
 } catch (cause) {
   console.error(cause.message);
   process.exitCode = 1;
@@ -109,16 +114,20 @@ try {
         ["--input-type=module", "-e", source, helperPath, directory, bytes],
         { encoding: "utf8" },
       );
+      let stdout = "";
       let stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
       child.stderr.on("data", (chunk) => {
         stderr += chunk;
       });
       child.on("error", (cause) => {
-        results.push({ index, status: 1, stderr: cause.message });
+        results.push({ index, status: 1, stdout, stderr: cause.message });
         finish();
       });
       child.on("close", (status) => {
-        results.push({ index, status, stderr });
+        results.push({ index, status, stdout, stderr });
         finish();
       });
     }
@@ -185,29 +194,57 @@ try {
   });
 }
 
-function faultedDirectoryPublish(directory, helperPath) {
+function compareExistingDirectory(directory, helperPath, bytes) {
   const source = `
-import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { pathToFileURL } from "node:url";
-const [helperPath, directory] = process.argv.slice(1);
-const originalRename = fs.renameSync;
-fs.renameSync = (from, to) => {
-  if (to === directory) {
-    const error = new Error("injected directory publication fault");
-    error.code = "EIO";
-    throw error;
-  }
-  return originalRename(from, to);
-};
-syncBuiltinESMExports();
+const [helperPath, directory, bytes] = process.argv.slice(1);
 try {
   const entry = process.argv[1];
   process.argv[1] = "";
   const { writeDirectoryCreateOrCompare } =
     await import(pathToFileURL(helperPath).href);
   process.argv[1] = entry;
-  writeDirectoryCreateOrCompare(directory, [{ name: "seat.json", bytes: "fault\\n" }]);
+  const result = writeDirectoryCreateOrCompare(directory, [
+    { name: "seat.json", bytes },
+  ]);
+  console.log(JSON.stringify(result));
+} catch (cause) {
+  console.error(cause.message);
+  process.exitCode = 1;
+}
+`;
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", source, helperPath, directory, bytes],
+      { encoding: "utf8" },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+function unavailableDirectoryPublish(directory, helperPath, pathWithoutMv) {
+  const source = `
+import { pathToFileURL } from "node:url";
+const [helperPath, directory] = process.argv.slice(1);
+try {
+  const entry = process.argv[1];
+  process.argv[1] = "";
+  const { writeDirectoryCreateOrCompare } =
+    await import(pathToFileURL(helperPath).href);
+  process.argv[1] = entry;
+  const result = writeDirectoryCreateOrCompare(directory, [
+    { name: "seat.json", bytes: "fault\\n" },
+  ]);
+  console.log(JSON.stringify(result));
 } catch (cause) {
   console.error(cause.message);
   process.exitCode = 1;
@@ -217,7 +254,10 @@ try {
     const child = spawn(
       process.execPath,
       ["--input-type=module", "-e", source, helperPath, directory],
-      { encoding: "utf8" },
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: pathWithoutMv },
+      },
     );
     let stderr = "";
     child.stderr.on("data", (chunk) => {
@@ -564,6 +604,16 @@ try {
   check("selection schema version is one", initial.selection.schema_version === 1);
   check("selection table version is two", initial.selection.selection_table_version === 2);
   check("selection is readable after rendering", readSelection(initial.path).candidate_id === "candidate-1");
+  check(
+    "identity-only current candidates remain valid staged addresses",
+    validateCandidateAgainstSelection(initial.selection, {
+      program: initial.selection.program,
+      wave: initial.selection.wave,
+      candidate_id: initial.selection.candidate_id,
+      content_id: initial.selection.content_id,
+      snapshot_sha256: initial.selection.snapshot_sha256,
+    }) === true,
+  );
   const repeated = makeSelection(root);
   check("identical selection regeneration is a compare", repeated.created === false);
   rejects(
@@ -1198,6 +1248,19 @@ try {
   });
   check("verification receives the complete ledger", verificationInput.requests[0].ledger.issues.length === 4);
   check("verification keeps discovery closed", verificationInput.requests[0].comprehensive_discovery_already_complete === true);
+  check(
+    "strict verification request validation binds every staged input",
+    validateVerificationRequest(verificationInput.requests[0], {
+      selection: verificationSelection.selection,
+      ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+      responses,
+      self_verification: selfVerification,
+      current_candidate: candidate({
+        snapshot_sha256: "c".repeat(64),
+        content_id: "content-1",
+      }),
+    }).seat === verificationInput.requests[0].seat,
+  );
   const verified = validateVerificationResults(
     verificationSelection.selection,
     allVerificationResults(verificationSelection.selection.roster),
@@ -1333,12 +1396,25 @@ try {
   const raceResults = await concurrentDirectoryPublish(raceDirectory, LIFECYCLE_CLI);
   const raceBytes = readFileSync(join(raceDirectory, "seat.json"), "utf8");
   check(
-    "concurrent directory publishers use an exclusive claim",
-    raceResults.filter((result) => result.status === 0).length === 1 &&
+    "concurrent directory publishers have exactly one atomic winner",
+    raceResults.filter((result) =>
+      result.status === 0 && /"created":true/.test(result.stdout),
+    ).length === 1 &&
       ["first\n", "second\n"].includes(raceBytes) &&
       !existsSync(`${raceDirectory}.claim`) &&
       raceResults.every((result) => result.status === 0 || result.status === 1),
-    raceResults.map((result) => result.stderr).join(" "),
+    raceResults.map((result) => `${result.stdout}${result.stderr}`).join(" "),
+  );
+  const existingComparison = await compareExistingDirectory(
+    raceDirectory,
+    LIFECYCLE_CLI,
+    raceBytes,
+  );
+  check(
+    "an existing complete directory is compared without replacement",
+    existingComparison.status === 0 &&
+      /"created":false/.test(existingComparison.stdout),
+    `${existingComparison.stdout}${existingComparison.stderr}`,
   );
   const observedDirectory = join(root, "observed-family");
   const observation = await observeDirectoryPublish(observedDirectory, LIFECYCLE_CLI);
@@ -1352,17 +1428,23 @@ try {
         readFileSync(join(observedDirectory, name)).length === 8 * 1024 * 1024),
     observation.violation || observation.stderr,
   );
-  const faultDirectory = join(root, "fault-family");
-  const fault = await faultedDirectoryPublish(faultDirectory, LIFECYCLE_CLI);
+  const faultDirectory = join(root, "unavailable-mv-family");
+  const noMvPath = join(root, "no-mv-bin");
+  mkdirSync(noMvPath);
+  const fault = await unavailableDirectoryPublish(
+    faultDirectory,
+    LIFECYCLE_CLI,
+    noMvPath,
+  );
   const faultSiblings = readdirSync(dirname(faultDirectory))
     .filter((name) => name.startsWith(`.${basename(faultDirectory)}.stage-`));
   check(
-    "a publication fault leaves the destination absent and cleans only its claim",
+    "an unavailable atomic primitive fails clearly and cleans its staging state",
     fault.status === 1 &&
       !existsSync(faultDirectory) &&
       !existsSync(`${faultDirectory}.claim`) &&
       faultSiblings.length === 0 &&
-      /injected directory publication fault/.test(fault.stderr),
+      /requires GNU mv.*no-clobber.*no-target-directory/.test(fault.stderr),
     fault.stderr,
   );
   const staleDirectory = join(root, "stale-family");

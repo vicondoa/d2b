@@ -18,7 +18,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -214,13 +213,59 @@ export function writeCreateOrCompare(path, value) {
   }
 }
 
+let atomicDirectoryMoveAvailable;
+
+function requireAtomicDirectoryMove() {
+  if (atomicDirectoryMoveAvailable !== undefined) {
+    if (!atomicDirectoryMoveAvailable) {
+      error(
+        "directory publication requires GNU mv with --no-clobber and " +
+        "--no-target-directory; the atomic no-clobber primitive is unavailable",
+      );
+    }
+    return;
+  }
+  try {
+    const help = execFileSync("mv", ["--help"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    atomicDirectoryMoveAvailable =
+      help.includes("--no-clobber") && help.includes("--no-target-directory");
+  } catch {
+    atomicDirectoryMoveAvailable = false;
+  }
+  if (!atomicDirectoryMoveAvailable) {
+    error(
+      "directory publication requires GNU mv with --no-clobber and " +
+      "--no-target-directory; the atomic no-clobber primitive is unavailable",
+    );
+  }
+}
+
+function atomicNoClobberDirectoryMove(source, destination) {
+  requireAtomicDirectoryMove();
+  try {
+    execFileSync(
+      "mv",
+      ["--no-clobber", "--no-target-directory", "--", source, destination],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch (cause) {
+    error(
+      `atomic no-clobber directory publication failed for ${destination}: ` +
+      `${cause.message}`,
+    );
+  }
+}
+
 /*
  * A directory is the publication unit for an artifact family. Build every
  * member in a complete sibling temporary directory, claim a separate sibling
- * claim directory, and rename the complete directory into place exactly once.
- * The destination therefore changes from absent to complete, never from
- * absent to partially populated. A claim left by a crashed publisher is not
- * reclaimed implicitly: its error names the cleanup needed before retrying.
+ * claim directory, and publish with Linux's atomic no-clobber move. The
+ * destination therefore changes from absent to complete, never from absent to
+ * partially populated. A claim left by a crashed publisher is not reclaimed
+ * implicitly: its error names the cleanup needed before retrying.
  */
 export function writeDirectoryCreateOrCompare(directory, entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -318,11 +363,24 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
     }
 
     /*
-     * The staged directory is complete and the claim is exclusive. This is
-     * the sole publication operation: readers see either no destination or
-     * the complete sibling directory.
+     * The staged directory is complete and the claim serializes compliant
+     * publishers. The no-clobber move is still required: a publisher that
+     * does not take the claim must not win a check-then-rename race.
      */
-    renameSync(temporary, directory);
+    atomicNoClobberDirectoryMove(temporary, directory);
+    if (pathExists(temporary)) {
+      /*
+       * GNU mv leaves the source in place when --no-clobber declines an
+       * existing destination. Compare only after that atomic decision.
+       */
+      return compareExisting(directory);
+    }
+    if (!pathExists(directory)) {
+      error(
+        `atomic directory publication moved ${temporary} but destination ` +
+        `${directory} is absent`,
+      );
+    }
     return { path: directory, created: true };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
@@ -1152,6 +1210,85 @@ export function validateSelectionCandidate(selection, expected) {
   }
   return true;
 }
+
+const CURRENT_CANDIDATE_OPTIONAL_KEYS = [
+  "candidate_class",
+  "changed_paths",
+  "signals",
+  "ambiguous",
+];
+
+export function validateCandidateAgainstSelection(
+  selection,
+  currentCandidate,
+  table = readSelectionTable(),
+) {
+  validateSelection(selection, table);
+  if (!isPlainObject(currentCandidate)) {
+    error("current candidate must be a JSON object");
+  }
+  const candidateKeys = Object.keys(currentCandidate);
+  const allowedKeys = new Set([
+    "program",
+    "wave",
+    "candidate_id",
+    "content_id",
+    "snapshot_sha256",
+    ...CURRENT_CANDIDATE_OPTIONAL_KEYS,
+  ]);
+  const unknown = candidateKeys.filter((key) => !allowedKeys.has(key));
+  if (unknown.length > 0) {
+    error(
+      `current candidate contains unknown field(s): ${unknown.join(", ")}`,
+    );
+  }
+  validateSelectionCandidate(selection, currentCandidate);
+  const hasClassification = CURRENT_CANDIDATE_OPTIONAL_KEYS.some((key) =>
+    Object.hasOwn(currentCandidate, key),
+  );
+  if (!hasClassification) return true;
+  const actual = candidateInputs(currentCandidate);
+  const actualClass = actual.candidate_class ?? inferCandidateClass(actual);
+  const expected =
+    selection.phase === "verification"
+      ? selection.classification_inputs.full_candidate
+      : selection.classification_inputs;
+  if (
+    Object.hasOwn(currentCandidate, "changed_paths") &&
+    actual.changed_paths.join("\u0000") !== expected.changed_paths.join("\u0000")
+  ) {
+    error(
+      "current candidate changed_paths disagree with the exact lifecycle selection",
+    );
+  }
+  if (
+    Object.hasOwn(currentCandidate, "signals") &&
+    actual.signals.join("\u0000") !== expected.signals.join("\u0000")
+  ) {
+    error(
+      "current candidate signals disagree with the exact lifecycle selection",
+    );
+  }
+  if (
+    Object.hasOwn(currentCandidate, "candidate_class") &&
+    actualClass !== expected.candidate_class
+  ) {
+    error(
+      "current candidate candidate_class disagrees with the exact lifecycle selection",
+    );
+  }
+  if (
+    Object.hasOwn(currentCandidate, "ambiguous") &&
+    actual.ambiguous !== expected.ambiguous
+  ) {
+    error(
+      "current candidate ambiguity disagrees with the exact lifecycle selection",
+    );
+  }
+  return true;
+}
+
+export const validateCurrentCandidate = validateCandidateAgainstSelection;
 
 export function createSelection(input, options = {}) {
   const table = options.table ?? readSelectionTable(options.table_path);
@@ -2033,8 +2170,10 @@ export function validateLedger(ledger, options = {}) {
   }
   if (mapped.size !== sourceIds.size) error("ledger does not map every source finding exactly once");
   if (options.selection) {
-    if (options.selection.lifecycle_id !== ledger.lifecycle_id) {
-      error("ledger and selection lifecycle_id disagree");
+    for (const key of ["lifecycle_id", "program", "wave"]) {
+      if (options.selection[key] !== ledger[key]) {
+        error(`ledger and selection ${key} disagree`);
+      }
     }
     validateMonotonicRoster(ledger.roster, options.selection.roster, table);
   }
@@ -2243,6 +2382,496 @@ export function validateSelfVerification(selfVerification) {
     }
   }
   return sortedObject(value);
+}
+
+function assertCanonicalEqual(actual, expected, label) {
+  if (stableStringify(actual) !== stableStringify(expected)) {
+    error(`${label} disagrees with the exact staged artifact`);
+  }
+  return actual;
+}
+
+const SELECTION_SUMMARY_KEYS = [
+  "candidate_id",
+  "content_id",
+  "lifecycle_id",
+  "phase",
+  "profiles",
+  "program",
+  "roster",
+  "selection_schema_version",
+  "selection_table_version",
+  "snapshot_sha256",
+  "wave",
+];
+
+function validateSelectionSummary(summary, table, label = "selection summary") {
+  assertExactKeys(summary, SELECTION_SUMMARY_KEYS, label);
+  if (!["discovery", "verification"].includes(summary.phase)) {
+    error(`${label}.phase must be discovery or verification`);
+  }
+  safePathPart(summary.lifecycle_id, `${label}.lifecycle_id`);
+  nonBlank(summary.program, `${label}.program`);
+  nonBlank(summary.wave, `${label}.wave`);
+  safePathPart(summary.candidate_id, `${label}.candidate_id`);
+  nonBlank(summary.content_id, `${label}.content_id`);
+  assertDigest(summary.snapshot_sha256, `${label}.snapshot_sha256`);
+  if (summary.selection_schema_version !== SELECTION_SCHEMA_VERSION) {
+    error(`${label}.selection_schema_version is unsupported`);
+  }
+  if (summary.selection_table_version !== SELECTION_TABLE_VERSION) {
+    error(`${label}.selection_table_version is unsupported`);
+  }
+  const roster = validateRoster(summary.roster, table, `${label}.roster`);
+  const canonicalRoster = seatOrder(table).filter((seat) => roster.includes(seat));
+  if (roster.join(",") !== canonicalRoster.join(",")) {
+    error(`${label}.roster is not in deterministic table order`);
+  }
+  if (!isPlainObject(summary.profiles)) {
+    error(`${label}.profiles must be an object`);
+  }
+  const profileKeys = Object.keys(summary.profiles).sort();
+  const expectedProfileKeys = [...roster].sort();
+  if (
+    profileKeys.length !== expectedProfileKeys.length ||
+    profileKeys.some((key, index) => key !== expectedProfileKeys[index])
+  ) {
+    error(`${label}.profiles must contain exactly the roster seats`);
+  }
+  for (const seat of roster) {
+    const profiles = summary.profiles[seat];
+    if (!Array.isArray(profiles)) {
+      error(`${label}.profiles.${seat} must be an array`);
+    }
+    const knownProfiles = new Set(Object.keys(table.seats[seat].profiles));
+    if (profiles.some((profile) => typeof profile !== "string" || !knownProfiles.has(profile))) {
+      error(`${label}.profiles.${seat} contains an unknown profile`);
+    }
+    const sortedProfiles = [...new Set(profiles)].sort();
+    if (profiles.join(",") !== sortedProfiles.join(",")) {
+      error(`${label}.profiles.${seat} must be unique and sorted`);
+    }
+  }
+  return summary;
+}
+
+function validatePriorSelectionSummary(summary, selection, table) {
+  if (!isPlainObject(summary)) {
+    error("verification prior_selection must be a selection summary object");
+  }
+  validateSelectionSummary(summary, table, "verification prior_selection");
+  if (summary.lifecycle_id !== selection.lifecycle_id) {
+    error("verification prior_selection lifecycle_id disagrees with selection");
+  }
+  if (summary.program !== selection.program || summary.wave !== selection.wave) {
+    error("verification prior_selection candidate lineage disagrees with selection");
+  }
+  validateMonotonicRoster(summary.roster, selection.roster, table);
+  return summary;
+}
+
+export function validateDiscoveryRequest(request, options = {}) {
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection = options.selection;
+  const currentCandidate =
+    options.current_candidate ??
+    options.currentCandidate ??
+    options.candidate;
+  if (!selection) error("discovery request validation requires the exact selection");
+  if (!currentCandidate) {
+    error("discovery request validation requires the exact current candidate");
+  }
+  validateSelection(selection, table);
+  if (selection.phase !== "discovery") {
+    error("discovery request validation requires a discovery selection");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  assertExactKeys(
+    request,
+    [
+      "artifact_kind",
+      "schema_version",
+      "lifecycle_id",
+      "phase",
+      "selection",
+      "candidate",
+      "full_candidate",
+      "comprehensive",
+      "instruction",
+      "context",
+      "validation_evidence",
+      "seats",
+    ],
+    "discovery request",
+  );
+  if (request.artifact_kind !== DISCOVERY_REQUEST_ARTIFACT) {
+    error("discovery request has an unexpected artifact_kind");
+  }
+  if (request.schema_version !== SELECTION_SCHEMA_VERSION) {
+    error("discovery request schema_version is unsupported");
+  }
+  if (request.lifecycle_id !== selection.lifecycle_id) {
+    error("discovery request lifecycle_id disagrees with selection");
+  }
+  if (request.phase !== "discovery") {
+    error("discovery request phase must be discovery");
+  }
+  validateSelectionSummary(request.selection, table, "discovery request selection");
+  assertCanonicalEqual(
+    request.selection,
+    selectionSummary(selection, table),
+    "discovery request selection",
+  );
+  assertCanonicalEqual(
+    request.candidate,
+    candidateAddress(currentCandidate),
+    "discovery request candidate",
+  );
+  if (request.full_candidate !== true || request.comprehensive !== true) {
+    error("discovery request must be a comprehensive full-candidate request");
+  }
+  if (
+    typeof request.instruction !== "string" ||
+    request.instruction.trim() === ""
+  ) {
+    error("discovery request instruction must be non-blank");
+  }
+  if (!isPlainObject(request.context)) {
+    error("discovery request context must be an object");
+  }
+  if (!Array.isArray(request.validation_evidence)) {
+    error("discovery request validation_evidence must be an array");
+  }
+  const expected = createDiscoveryRequest({
+    selection,
+    candidate: currentCandidate,
+    context: request.context,
+    validation_evidence: request.validation_evidence,
+  }, { table });
+  assertCanonicalEqual(request, expected, "discovery request");
+  return request;
+}
+
+const VERIFICATION_REQUEST_KEYS = [
+  "artifact_kind",
+  "schema_version",
+  "lifecycle_id",
+  "phase",
+  "seat",
+  "selection",
+  "comprehensive_discovery_already_complete",
+  "instruction",
+  "discovery_ledger",
+  "ledger",
+  "responses",
+  "self_verification",
+  "latest_delta_paths",
+  "actual_delta",
+  "current_candidate",
+  "full_candidate",
+  "current_selection",
+  "full_context",
+  "fix_delta",
+  "prior_selection",
+  "previous_status",
+  "obligations",
+];
+
+function validateVerificationFixDelta(fixDelta, expectedPaths, selection) {
+  if (!isPlainObject(fixDelta)) {
+    error("verification request fix_delta must be an object");
+  }
+  const allowedKeys = new Set([
+    "changed_paths",
+    "signals",
+    "candidate_class",
+    "ambiguous",
+  ]);
+  const unknown = Object.keys(fixDelta).filter((key) => !allowedKeys.has(key));
+  if (unknown.length > 0) {
+    error(`verification request fix_delta contains unknown field(s): ${unknown.join(", ")}`);
+  }
+  const actual = candidateInputs(fixDelta);
+  if (actual.changed_paths.join("\u0000") !== expectedPaths.join("\u0000")) {
+    error("verification request fix_delta changed_paths disagree with selection");
+  }
+  const expected = selection.classification_inputs.fix_delta;
+  if (
+    Object.hasOwn(fixDelta, "signals") &&
+    actual.signals.join("\u0000") !== expected.signals.join("\u0000")
+  ) {
+    error("verification request fix_delta signals disagree with selection");
+  }
+  if (
+    Object.hasOwn(fixDelta, "candidate_class") &&
+    actual.candidate_class !== expected.candidate_class
+  ) {
+    error("verification request fix_delta candidate_class disagrees with selection");
+  }
+  if (
+    Object.hasOwn(fixDelta, "ambiguous") &&
+    actual.ambiguous !== expected.ambiguous
+  ) {
+    error("verification request fix_delta ambiguity disagrees with selection");
+  }
+  return fixDelta;
+}
+
+export function validateVerificationRequest(request, options = {}) {
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection = options.selection;
+  const ledger = options.ledger ?? options.discovery_ledger;
+  const responses = options.responses;
+  const selfVerification =
+    options.self_verification ?? options.selfVerification;
+  const currentCandidate =
+    options.current_candidate ??
+    options.currentCandidate ??
+    options.candidate;
+  if (!selection) error("verification request validation requires the exact selection");
+  if (!ledger) error("verification request validation requires the exact immutable ledger");
+  if (responses === undefined) {
+    error("verification request validation requires the exact responses");
+  }
+  if (selfVerification === undefined) {
+    error("verification request validation requires the exact self-verification");
+  }
+  if (!currentCandidate) {
+    error("verification request validation requires the exact current candidate");
+  }
+  validateSelection(selection, table);
+  if (selection.phase !== "verification") {
+    error("verification request validation requires a verification selection");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  validateLedger(ledger, { table, selection });
+  const normalizedResponses = validateResponses(ledger, responses);
+  const normalizedSelfVerification = validateSelfVerification(selfVerification);
+  assertExactKeys(request, VERIFICATION_REQUEST_KEYS, "verification request");
+  if (request.artifact_kind !== VERIFICATION_ARTIFACT) {
+    error("verification request has an unexpected artifact_kind");
+  }
+  if (request.schema_version !== SELECTION_SCHEMA_VERSION) {
+    error("verification request schema_version is unsupported");
+  }
+  if (request.lifecycle_id !== selection.lifecycle_id) {
+    error("verification request lifecycle_id disagrees with selection");
+  }
+  if (request.phase !== "verification") {
+    error("verification request phase must be verification");
+  }
+  if (!selection.roster.includes(request.seat)) {
+    error(`verification request is for unselected seat "${request.seat}"`);
+  }
+  const summary = selectionSummary(selection, table);
+  validateSelectionSummary(request.selection, table, "verification request selection");
+  validateSelectionSummary(
+    request.current_selection,
+    table,
+    "verification request current_selection",
+  );
+  assertCanonicalEqual(
+    request.selection,
+    summary,
+    "verification request selection",
+  );
+  assertCanonicalEqual(
+    request.current_selection,
+    summary,
+    "verification request current_selection",
+  );
+  if (request.comprehensive_discovery_already_complete !== true) {
+    error("verification request must state that comprehensive discovery is complete");
+  }
+  const expectedInstruction =
+    "Verify prior findings, responses, evidence, and regressions, including a new surface that selected this seat. " +
+    "Do not reopen the whole review unless an introduced regression or a previously missed BLOCKER or MAJOR makes approval unsafe.";
+  if (request.instruction !== expectedInstruction) {
+    error("verification request instruction is not the canonical scoped-verification instruction");
+  }
+  assertCanonicalEqual(
+    request.discovery_ledger,
+    ledger,
+    "verification request discovery_ledger",
+  );
+  assertCanonicalEqual(request.ledger, ledger, "verification request ledger");
+  assertCanonicalEqual(
+    request.responses,
+    normalizedResponses,
+    "verification request responses",
+  );
+  assertCanonicalEqual(
+    request.self_verification,
+    normalizedSelfVerification,
+    "verification request self-verification",
+  );
+  const declaredDeltaPaths =
+    selection.classification_inputs.fix_delta.changed_paths;
+  if (
+    !Array.isArray(request.latest_delta_paths) ||
+    request.latest_delta_paths.length === 0 ||
+    (declaredDeltaPaths.length > 0 &&
+      request.latest_delta_paths.join("\u0000") !== declaredDeltaPaths.join("\u0000"))
+  ) {
+    error("verification request latest_delta_paths disagree with selection");
+  }
+  const expectedDeltaPaths = request.latest_delta_paths;
+  assertExactKeys(
+    request.actual_delta,
+    ["paths", "context"],
+    "verification request actual_delta",
+  );
+  if (
+    !Array.isArray(request.actual_delta.paths) ||
+    request.actual_delta.paths.join("\u0000") !== expectedDeltaPaths.join("\u0000")
+  ) {
+    error("verification request actual_delta paths disagree with selection");
+  }
+  if (!isPlainObject(request.actual_delta.context)) {
+    error("verification request actual_delta context must be an object");
+  }
+  assertCanonicalEqual(
+    request.current_candidate,
+    candidateAddress(currentCandidate),
+    "verification request current_candidate",
+  );
+  assertCanonicalEqual(
+    request.full_candidate,
+    candidateAddress(currentCandidate),
+    "verification request full_candidate",
+  );
+  if (!isPlainObject(request.full_context) || Object.keys(request.full_context).length === 0) {
+    error("verification request full_context must be a non-empty object");
+  }
+  validateVerificationFixDelta(
+    request.fix_delta,
+    expectedDeltaPaths,
+    selection,
+  );
+  validatePriorSelectionSummary(request.prior_selection, selection, table);
+  if (
+    request.previous_status !== null &&
+    request.previous_status !== undefined &&
+    !isPlainObject(request.previous_status)
+  ) {
+    error("verification request previous_status must be null or an object");
+  }
+  assertExactKeys(
+    request.obligations,
+    ["focus", "profiles"],
+    "verification request obligations",
+  );
+  if (request.obligations.focus !== table.seats[request.seat].focus) {
+    error("verification request focus disagrees with the selected seat profile");
+  }
+  assertCanonicalEqual(
+    request.obligations.profiles,
+    selection.profiles[request.seat],
+    "verification request profiles",
+  );
+  return request;
+}
+
+export function validateVerificationRequests(
+  selection,
+  requests,
+  options = {},
+) {
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const entries = Array.isArray(requests)
+    ? requests.map((request) => [request?.seat, request])
+    : isPlainObject(requests)
+      ? Object.entries(requests).map(([seat, request]) => [
+          request?.seat ?? seat,
+          request,
+        ])
+      : error("verification requests must be an array or object keyed by seat");
+  const expected = new Set(selection.roster);
+  const seen = new Set();
+  for (const [seat, request] of entries) {
+    if (seat !== request?.seat) {
+      error(`verification request key "${seat}" disagrees with its declared seat`);
+    }
+    if (!expected.has(seat)) {
+      error(`verification request for unselected seat "${seat}"`);
+    }
+    if (seen.has(seat)) {
+      error(`duplicate verification request for seat "${seat}"`);
+    }
+    seen.add(seat);
+    validateVerificationRequest(request, {
+      ...options,
+      table,
+      selection,
+      current_candidate:
+        options.current_candidate ??
+        options.currentCandidate ??
+        options.candidate,
+      ledger: options.ledger ?? options.discovery_ledger,
+      responses: options.responses,
+      self_verification:
+        options.self_verification ?? options.selfVerification,
+    });
+  }
+  const missing = selection.roster.filter((seat) => !seen.has(seat));
+  if (missing.length > 0) {
+    error(
+      `verification requests are missing selected seat(s): ${missing.join(", ")}`,
+    );
+  }
+  return entries.map(([, request]) => request);
+}
+
+export function validateStagedRoundArtifacts(input, options = {}) {
+  if (!isPlainObject(input)) {
+    error("staged panel artifacts must be an object");
+  }
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection = input.selection;
+  const currentCandidate =
+    input.current_candidate ??
+    input.currentCandidate ??
+    input.candidate;
+  if (!selection) error("staged panel artifacts require selection");
+  if (!currentCandidate) error("staged panel artifacts require current candidate");
+  validateSelection(selection, table);
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  if (input.phase !== undefined && input.phase !== selection.phase) {
+    error("staged panel artifact phase disagrees with selection");
+  }
+  if (input.lifecycle_id !== undefined && input.lifecycle_id !== selection.lifecycle_id) {
+    error("staged panel artifact lifecycle_id disagrees with selection");
+  }
+  if (selection.phase === "discovery") {
+    if (!input.discovery_request) {
+      error("staged discovery artifacts require discovery_request");
+    }
+    validateDiscoveryRequest(input.discovery_request, {
+      table,
+      selection,
+      current_candidate: currentCandidate,
+    });
+    return { phase: selection.phase, roster: [...selection.roster] };
+  }
+  const ledger = input.ledger ?? input.discovery_ledger;
+  if (!ledger) error("staged verification artifacts require immutable ledger");
+  if (input.responses === undefined) {
+    error("staged verification artifacts require responses");
+  }
+  if (input.self_verification === undefined && input.selfVerification === undefined) {
+    error("staged verification artifacts require self-verification");
+  }
+  validateLedger(ledger, { table, selection });
+  validateResponses(ledger, input.responses);
+  validateSelfVerification(input.self_verification ?? input.selfVerification);
+  validateVerificationRequests(selection, input.verification_requests ?? input.verificationRequests, {
+    table,
+    current_candidate: currentCandidate,
+    ledger,
+    responses: input.responses,
+    self_verification: input.self_verification ?? input.selfVerification,
+  });
+  return { phase: selection.phase, roster: [...selection.roster] };
 }
 
 function pathCovered(path, declared) {

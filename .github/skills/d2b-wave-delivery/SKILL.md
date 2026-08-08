@@ -79,7 +79,7 @@ Track B work has no seal, so it is genuinely one PR for the whole feature.
 
 Bind the wave's base and head commits into one immutable candidate. Downstream
 steps use this address. Record the `candidate_id`, `content_id`, and
-`snapshot_sha256` in `.scratch/panel/<round>/candidate.json` so the panel
+`snapshot_sha256` in `.scratch/panel/<round>/current-candidate.json` so the panel
 record helper can join verdicts.
 
 A content change after snapshot invalidates every wave record and requires a new

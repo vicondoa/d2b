@@ -429,16 +429,7 @@ if (
 for (const entry of entries) {
   const path = `${source}/${entry.name}`;
   try {
-    const request = JSON.parse(fs.readFileSync(path, "utf8"));
-    const seat = entry.name.slice(0, -5);
-    if (
-      request === null ||
-      typeof request !== "object" ||
-      Array.isArray(request) ||
-      request.seat !== seat
-    ) {
-      throw new Error(`request must declare seat "${seat}"`);
-    }
+    JSON.parse(fs.readFileSync(path, "utf8"));
   } catch (error) {
     console.error(`${path}: verification request is not readable JSON: ${error.message}`);
     process.exit(1);
@@ -712,6 +703,60 @@ writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
 })));
 ' "$verification_dir" "$staged_verification_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+fi
+
+if ! node --input-type=module - \
+  "$phase" "$lifecycle" "$staged_selection_path" "$staged_candidate_path" \
+  "$staged_discovery_request_path" "$staged_ledger_path" \
+  "$staged_responses_path" "$staged_self_verification_path" \
+  "$staged_verification_dir" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const [
+  phase,
+  lifecycle,
+  selectionPath,
+  candidatePath,
+  discoveryRequestPath,
+  ledgerPath,
+  responsesPath,
+  selfVerificationPath,
+  verificationDir,
+  helperPath,
+] = process.argv.slice(2);
+const readJson = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
+const selection = readJson(selectionPath);
+const artifacts = {
+  phase,
+  lifecycle_id: lifecycle,
+  selection,
+  current_candidate: readJson(candidatePath),
+};
+if (phase === "discovery") {
+  artifacts.discovery_request = readJson(discoveryRequestPath);
+} else {
+  artifacts.ledger = readJson(ledgerPath);
+  artifacts.responses = readJson(responsesPath);
+  artifacts.self_verification = readJson(selfVerificationPath);
+  const entries = fs.readdirSync(verificationDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .sort((left, right) => left.name.localeCompare(right.name));
+  artifacts.verification_requests = Object.fromEntries(
+    entries.map((entry) => [
+      entry.name.slice(0, -5),
+      readJson(`${verificationDir}/${entry.name}`),
+    ]),
+  );
+}
+const { validateStagedRoundArtifacts } =
+  await import(pathToFileURL(helperPath).href);
+validateStagedRoundArtifacts(artifacts);
+NODE
+then
+  echo "staged panel artifacts failed strict lifecycle validation; .complete will not be written" >&2
+  exit 2
 fi
 
 node --input-type=module -e '
