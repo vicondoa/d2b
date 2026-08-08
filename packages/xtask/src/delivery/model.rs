@@ -961,7 +961,7 @@ fn trigger_matches(trigger: &SelectionTrigger, inputs: &SelectionInputs) -> bool
         }),
         "signal" => trigger.values.as_ref().is_some_and(|values| {
             values.iter().any(|value| {
-                let value = value.trim().to_ascii_lowercase();
+                let value = value.to_lowercase();
                 inputs.signals.iter().any(|signal| signal == &value)
             })
         }),
@@ -986,9 +986,14 @@ fn glob_matches(path: &str, pattern: &str) -> bool {
             if pattern.get(pattern_index + 1) == Some(&b'*') {
                 let next = pattern_index + 2;
                 if pattern.get(next) == Some(&b'/') {
+                    let next_segment = path[path_index..]
+                        .iter()
+                        .position(|byte| *byte == b'/')
+                        .map(|offset| path_index + offset + 1);
                     visit(path, pattern, path_index, next + 1, memo)
-                        || (path_index < path.len()
-                            && visit(path, pattern, path_index + 1, pattern_index, memo))
+                        || next_segment.is_some_and(|path_index| {
+                            visit(path, pattern, path_index, pattern_index, memo)
+                        })
                 } else {
                     visit(path, pattern, path_index, next, memo)
                         || (path_index < path.len()
@@ -1250,7 +1255,7 @@ impl PanelSelectionV1 {
                         .iter()
                         .any(|path| glob_matches(path, pattern))
                 }) || profile_definition.signals.iter().any(|signal| {
-                    let signal = signal.trim().to_ascii_lowercase();
+                    let signal = signal.to_lowercase();
                     inputs.signals.iter().any(|input| input == &signal)
                 });
                 if required && !profile_names.contains(profile) {
@@ -2782,6 +2787,64 @@ mod tests {
                 "{signal:?}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn glob_matching_matches_javascript_segment_and_literal_parity() {
+        let cargo_pattern = "**/Cargo.toml";
+        assert!(glob_matches("Cargo.toml", cargo_pattern));
+        assert!(glob_matches("dir/Cargo.toml", cargo_pattern));
+        assert!(!glob_matches("xCargo.toml", cargo_pattern));
+
+        assert!(!glob_matches(r"dir\Cargo.toml", cargo_pattern));
+        assert!(glob_matches(r"dir\Cargo.toml", r"dir\Cargo.toml"));
+        assert!(glob_matches("\u{e000}/Cargo.toml", cargo_pattern));
+        assert!(glob_matches("\u{10000}/Cargo.toml", cargo_pattern));
+    }
+
+    #[test]
+    fn unicode_classification_keeps_rust_byte_order_and_signal_case_parity() {
+        let bmp = "\u{e000}";
+        let non_bmp = "\u{10000}";
+        assert!(bmp.as_bytes() < non_bmp.as_bytes());
+
+        let ordered = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &[bmp, non_bmp],
+            &[bmp, non_bmp],
+            &[],
+        );
+        ordered
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("classification paths and signals use UTF-8 byte ordering");
+
+        let reversed = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &[non_bmp, bmp],
+            &[non_bmp, bmp],
+            &[],
+        );
+        let error = reversed
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("classification ordering must remain UTF-8 byte lexicographic");
+        assert!(error.message().contains("unique and sorted"), "{error}");
+
+        let inputs = SelectionInputs {
+            changed_paths: Vec::new(),
+            signals: vec!["ä".to_owned(), "\u{10428}".to_owned()],
+            candidate_class: "code".to_owned(),
+            ambiguous: false,
+            full_candidate: None,
+            fix_delta: None,
+        };
+        let trigger = SelectionTrigger {
+            kind: "signal".to_owned(),
+            patterns: None,
+            values: Some(vec!["Ä".to_owned(), "\u{10400}".to_owned()]),
+        };
+        assert!(trigger_matches(&trigger, &inputs));
     }
 
     fn mandatory_only_snapshot_digests() -> CandidateDigests {
