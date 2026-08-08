@@ -1112,6 +1112,11 @@ adding continuity-evidence 1/2-record, 131,072/131,073-byte and 256/257-attempt 
 malformed-prefix machines for both releases and continuity, and one evidence export/
 compaction restart family. Every grouped malformed and compaction hook has its own removal
 poison.
+The existing `prune-pre` and `prune-outcome` ids each retain independent backup-member-prune
+and continuity-compaction subvisitors, while the existing `continuity-repair-outcome` ids
+retain independent private-exact-outcome-intent and terminal-outcome-publication subvisitors.
+Neither member of either pair may satisfy the other, and this coverage does not change the
+216-id census.
 
 Continuity pre-audit binds a deterministically reconstructible private replay handle and one
 deadline/prune-plan variant. Fresh-process replay cannot ask a changed source to select new

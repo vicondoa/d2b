@@ -189,8 +189,14 @@ directly prohibited by Principle I and ADR 0015, and the specs already chose par
 
 ## R6: What is the delivery tooling's actual readiness?
 
-**Decision**: The tooling exists and is production-reachable; the remaining work is hardening
-and process, not creation. Wave delivery can start immediately.
+**Decision (historical, conditional, and non-authorizing)**: The tooling exists and is
+production-reachable; the remaining work is hardening and process, not creation. At research
+time, wave delivery was considered ready to start immediately only after every binding entry
+prerequisite was satisfied. This does not authorize current delivery; FR-036 blocks every
+implementation/resume boundary.
+
+**Historical tooling snapshot (superseded where current plan or committed code differs;
+non-authorizing)**: The values below preserve the original research record.
 
 **Findings**:
 - `packages/xtask/src/delivery/` implements `snapshot`, `validate-import`, `panel-request`,
@@ -219,8 +225,10 @@ record's evidence scope; the record authorizes nothing, and FR-035 requires them
 
 ## R7: Toolchain, platform, and scale parameters
 
-**Decision**: Inherit the existing pinned environment unchanged. No new toolchain, linter,
-formatter, or overlay is introduced (Principle: constitution "Additional Constraints").
+**Historical environment snapshot (superseded where current plan or committed code differs;
+non-authorizing)**: The research inherited the then-pinned environment unchanged. No new
+toolchain, linter, formatter, or overlay was introduced (Principle: constitution "Additional
+Constraints").
 
 | Parameter | Value | Source |
 | --- | --- | --- |
