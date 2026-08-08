@@ -1,0 +1,80 @@
+name: ARM toolchain identity measurement
+
+on:
+  pull_request:
+    branches:
+      - v3
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    if: github.head_ref == 'arm-toolchain-measurement'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Install ELF tooling
+        run: sudo apt-get update && sudo apt-get install -y binutils
+      - name: Measure identities
+        run: |
+          set -euo pipefail
+          bazel_out=$(nix build --no-link --print-out-paths \
+            '.#packages.aarch64-linux."bazel-8.6.0-seccomp"')
+          supervisor_out=$(nix build --no-link --print-out-paths \
+            '.#packages.aarch64-linux.d2b-bazel-exec-supervisor')
+          bazel_drv=$(nix-store -q --deriver "$bazel_out")
+          supervisor_drv=$(nix-store -q --deriver "$supervisor_out")
+          bazel_executable="$bazel_out/bin/.bazel-8.6.0-linux-aarch64-wrapped"
+          supervisor_executable="$supervisor_out/bin/d2b-bazel-exec-supervisor"
+
+          export BAZEL_DRV_SHA
+          BAZEL_DRV_SHA=$(sha256sum "$bazel_drv" | cut -d' ' -f1)
+          export BAZEL_NAR_SHA
+          BAZEL_NAR_SHA=$(nix hash path --type sha256 --base16 "$bazel_out")
+          export BAZEL_EXECUTABLE_SHA
+          BAZEL_EXECUTABLE_SHA=$(sha256sum "$bazel_executable" | cut -d' ' -f1)
+          export SUPERVISOR_DRV_SHA
+          SUPERVISOR_DRV_SHA=$(sha256sum "$supervisor_drv" | cut -d' ' -f1)
+          export SUPERVISOR_NAR_SHA
+          SUPERVISOR_NAR_SHA=$(nix hash path --type sha256 --base16 "$supervisor_out")
+          export SUPERVISOR_EXECUTABLE_SHA
+          SUPERVISOR_EXECUTABLE_SHA=$(sha256sum "$supervisor_executable" | cut -d' ' -f1)
+          export SUPERVISOR_ELF_SHA
+          SUPERVISOR_ELF_SHA=$(
+            {
+              readelf -h "$supervisor_executable"
+              readelf -l "$supervisor_executable"
+              readelf -d "$supervisor_executable" 2>&1
+            } | sha256sum | cut -d' ' -f1
+          )
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          result = {
+              "bazel": {
+                  "derivationSha256": os.environ["BAZEL_DRV_SHA"],
+                  "executableSha256": os.environ["BAZEL_EXECUTABLE_SHA"],
+                  "narSha256": os.environ["BAZEL_NAR_SHA"],
+              },
+              "supervisor": {
+                  "derivationSha256": os.environ["SUPERVISOR_DRV_SHA"],
+                  "executableSha256": os.environ["SUPERVISOR_EXECUTABLE_SHA"],
+                  "narSha256": os.environ["SUPERVISOR_NAR_SHA"],
+                  "staticElfSha256": os.environ["SUPERVISOR_ELF_SHA"],
+              },
+          }
+          print("D2B_ARM_TOOLCHAIN_JSON=" + json.dumps(result, sort_keys=True, separators=(",", ":")))
+          PY
