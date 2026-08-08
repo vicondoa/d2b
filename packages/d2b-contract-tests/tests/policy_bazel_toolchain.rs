@@ -616,11 +616,11 @@ fn golden_identity_records_are_redacted_and_native_scoped() {
     }
     assert_eq!(
         string(&toolchain, "/nativeOutputs/x86_64-linux/derivationSha256"),
-        "5c00bb451a0851f096f4a396bc4efd0bed2deedaf1c37ac649ee3a988c03116d"
+        "3bd25f12e8446d9391ea27c302023b538858d915c02d5e7f9010963bccfd3490"
     );
     assert_eq!(
         string(&toolchain, "/nativeOutputs/aarch64-linux/derivationSha256"),
-        "84a3d3df481794798afbdd9459073cb6e8c2ff845b028066bceb01687574b9e5"
+        "71844ea14ac76e4135e2fd8f49165517caaae05be0899aacf20360805cb5450e"
     );
     assert_eq!(
         string(&toolchain, "/nativeOutputs/aarch64-linux/narSha256"),
