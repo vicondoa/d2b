@@ -83,7 +83,7 @@
             + "-C linker=${pkgs.llvmPackages.clang-unwrapped}/bin/clang "
             + "-C link-arg=--target=${target} "
             + "-C link-arg=-fuse-ld=${pkgs.llvmPackages.lld}/bin/ld.lld "
-            + "-C link-arg=-pie "
+            + "-C link-arg=-Wl,-pie "
             + "-C link-arg=-Wl,--no-dynamic-linker";
         };
       mkBazelSeccomp = system:
