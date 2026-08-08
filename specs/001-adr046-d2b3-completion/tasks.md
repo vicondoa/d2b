@@ -2115,13 +2115,15 @@ table before the operation exists.
   reselection. At intent after-link-before-reopen, after-reopen-before-parent-sync, and
   after-parent-sync-before-ancestor-sync,
   restart accepts absence or the exact final. Absence means no complete decision commit survived:
-  it replays the exact preceding durable repair result and reconstructs the same canonical
-  intent bytes from that sealed predecessor, with no source access, evidence replay, outcome
-  reselection, or settlement mutation; exact survival resumes durability. Selection freezes
-  only after the intent directory chain is durable. At the first two basis points, absence is
-  recreated byte-identically only from that durable intent and exact survival resumes. The
-  same absent-or-exact rule applies at basis `ParentDurable` before ancestor durability;
-  recreation repeats parent and ancestor sync and cannot freeze selection early.
+  it discards the lost candidate and incomplete prefix, replays the sealed durable repair
+  state, and reruns precommit selection. The replacement candidate may have different intent
+  bytes, terminal outcome, or degraded branch/class because no prior candidate identity was
+  committed or projected; exact survival resumes durability without reselection. Selection
+  freezes only after the intent directory chain is durable. At all three
+  pre-`AncestorsDurable` basis points, absence is recreated byte-identically only from that
+  durable intent, with no source access, evidence replay, or outcome reselection, and exact
+  survival resumes. A recreated basis `ParentDurable` prefix repeats parent and ancestor
+  sync and cannot freeze selection early.
   At `AncestorsDurable` and every downstream durable consumer, both intent and basis require
   the exact final. Absence returns the closed record/boundary-specific
   `audit-continuity-repair-decision-durability-integrity-incident` exit-`4` response from
@@ -2132,9 +2134,11 @@ table before the operation exists.
   selection. Until the selection
   common-publication final is durable, only `PendingDecisionSelection` carrying the
   sealed durable selected decision and intrinsic publication state is legal, and restart
-  may resume no other repair mutation. That selected value contains the exact basis-selected
-  typed outcome, terminal record, and nested failure branch/class for a degraded decision
-  before selection publication begins. The sealed decision-selection state sum includes
+  may resume no other repair mutation. That selected value is a sealed newtype over the
+  exact durable basis, stores no duplicate outcome or terminal digest, and derives the
+  basis-selected typed outcome, terminal record, and nested failure branch/class through
+  private borrowing accessors before selection publication begins. The sealed
+  decision-selection state sum includes
   `Progress` and `Conflict`, both carrying that same durable selected decision; conflict
   also carries existing and candidate selection digests, and a foreign selection final
   cannot reselect from transient source or failure state. The response must preserve the
@@ -2159,8 +2163,9 @@ table before the operation exists.
   every decision-basis-intent, decision-basis, and decision-selection boundary, paired
   absence and exact-survival restarts at link, reopen, and parent-durable prefixes before
   each intent/basis ancestor sync,
-  every one of the four closed intent-or-basis by parent-or-ancestors durability response
-  DTOs, and separate intent/basis final-removal fresh processes at every downstream
+  both closed intent-or-basis at ancestors-durable response DTOs, and separate
+  intent/basis final-removal fresh processes that physically remove the exact durable final
+  before start at every downstream
   decision-selection, decision-pre, outcome-intent, terminal-outcome,
   final-absence-proof, and completed prefix,
   decision-pre failure, every
@@ -2173,7 +2178,7 @@ table before the operation exists.
   accepted-absence/exact-survival/record-boundary DTO/downstream-removal/predecessor/conflict
   hook has an independent removal poison. Every downstream removal asserts zero
   reconstruction, relink, source access, reselection, later publication, compaction, or
-  settlement. The independent literal
+  settlement and proves the removed final remains absent after refusal. The independent literal
   `continuityRepairDecisionBasisIntentSha256` and
   `continuityRepairDecisionBasisSha256` formula/vectors pin every input, expected hash,
   same-width substitution, field order, framing, omission, and removal poison; the
@@ -2324,12 +2329,19 @@ table before the operation exists.
   residual-gap/overlap, foreign-intent, and post-unlink recovery substitutions each fail
   independently. At every ordinal, additional fd-backed negatives mutate each anchored
   parent identity member and separately each still-selected remaining target's type,
-  identity, or canonical digest after unlink and before census/receipt. Parent mutation
-  derives `conflict`; remaining-target mutation derives `target-changed`. Each fresh
-  process must stop on the same original operation with the prior receipt prefix intact,
-  no current receipt, no next unlink, and no degraded outcome, residual selection,
-  recovery generation, targets-compacted receipt, source release, or settlement. Every
-  ordinal/mutation/forbidden-effect assertion has its own hook and removal poison.
+  identity, or canonical digest after unlink and before census/receipt. The same matrix
+  includes literal `post-unlink/<ordinal>/namespace-missing` and
+  `post-unlink/<ordinal>/namespace-extra` cases for every ordinal. Missing makes the
+  canonical namespace observation incomplete, including omission of the required
+  empty-census observation at the final ordinal; extra injects one unselected namespace
+  member. Parent mutation derives `conflict`; remaining-target, missing, and extra mutation
+  derive `target-changed`. Each fresh process must stop on the same original operation with
+  the prior receipt prefix intact, publish no current receipt, perform no next unlink, and
+  publish no census, degraded outcome, residual selection, recovery generation,
+  targets-compacted receipt, source release, or settlement. Every
+  ordinal/mutation/missing/extra/forbidden-effect assertion and poisoning check has its own
+  hook and removal poison. These are subcases of the existing compaction visitor and add no
+  registry id.
   The reclamation vector must encode target-zero unlink failure with zero
   completed receipts and all four residual targets, then bind recovery generation one and
   all four successful receipts; no zero-target receipt may coexist with that first failure.
@@ -2376,11 +2388,16 @@ table before the operation exists.
   targets-compacted/attempt-slice-release/final-completion preimage and result, and match
   every listed expected output. T592 records that command and successful output as panel
   evidence outside the feature root by running
-  `(cd packages/d2b-priv-broker && cargo test --locked
+  `(cd packages/d2b-priv-broker && cargo test --locked --test
+  host_generation_coordinator_v5
   continuity_compaction_parent_census_downstream_vectors_recalculate -- --exact
-  --nocapture)`; prose claiming read independence or a test that reads production expected
-  constants is ineligible. Any changed formula or expected output requires a fresh complete
-  recalculation. Read-independent schema,
+  --nocapture)`. The named function is a root test in that exact integration target, and
+  eligible evidence must show both `running 1 test` and a successful result with exactly
+  `1 passed`; zero executed tests, a same-named test in another target, prose claiming read
+  independence, or a test that reads production expected constants is ineligible. Any
+  changed formula or expected output requires a fresh complete recalculation and replacement
+  evidence from this exact command. T592 cannot complete and T220 cannot accept its
+  validation until that external panel evidence is present. Read-independent schema,
   serde, constructor, and known-answer vectors pin finalize, reclamation, and recovery
   private ids, tagged common operation hashes, selections, target intents/receipts,
   outcomes, targets-compacted, and final completion. Unknown/missing/dual variants,
@@ -2982,9 +2999,13 @@ table before the operation exists.
   The same pinned AF_UNIX real-binary test must also feed T592's continuity DTO through
   every decision-basis-intent and decision-basis `Progress` boundary plus each sealed
   `Conflict` carrying predecessor/existing/candidate, for both human and JSON modes. It
-  separately feeds link-absence and exact-final-survival states after link and after reopen
-  but before parent sync; the intent-absence case is uncommitted, while basis absence is
-  reconstructed only from the durable intent. Every case exits `4` and matches the exact
+  separately feeds paired absence and exact-final-survival states after link, after reopen,
+  and after parent durability but before ancestor durability for both intent and basis.
+  Intent absence discards the uncommitted candidate and permits one fresh precommit
+  selection without projecting either candidate; exact intent survival performs no
+  reselection. Basis absence is reconstructed byte-identically only from the durable intent,
+  and exact basis survival performs no relink. Parent-durable absence repeats parent and
+  ancestor sync and cannot freeze selection. Every case exits `4` and matches the exact
   `contracts/operator-cli.md` bytes. The human form contains only the fixed heading,
   `publication-stage: decision-basis`, intrinsic `failure-boundary`,
   `settlement: decision-basis-pending`, and derived action. The JSON form contains exactly
@@ -2997,9 +3018,9 @@ table before the operation exists.
   preparation-incomplete are exercised only with their required durable basis or selection.
   A direct renderer test cannot satisfy these cases.
   The same already pinned Type-3 real-binary continuity test must contain an independently
-  literal eight-row matrix: `decision-basis-intent | decision-basis` crossed with
-  `parent-durable | ancestors-durable` and `human | json`. Each row uses a fresh AF_UNIX
-  server to feed one of T592's four closed
+  literal four-row matrix: `decision-basis-intent | decision-basis` crossed with the sole
+  incident boundary `ancestors-durable` and `human | json`. Each row uses a fresh AF_UNIX
+  server to feed one of T592's two closed
   record/boundary durability DTOs through the shared wire decoder and production renderer,
   exits `4`, and matches the exact human or no-trailing-newline JSON bytes in
   `contracts/operator-cli.md`. The pin and test must reject omission or duplication of any
@@ -3007,8 +3028,9 @@ table before the operation exists.
   `failureBranch`, `failure-branch`, terminal failure class, candidate digest,
   predecessor, `settlement`, `pending`, `retry`, `successor`, every source or repair
   identifier, every extra JSON field, and every extra human line. A direct DTO constructor
-  assertion, renderer unit, or one pair reused for another is ineligible. This matrix adds
-  no registry, subvisitor, or top-level pinned test id.
+  assertion, renderer unit, or one pair reused for another is ineligible. A
+  `parent-durable` incident DTO must fail wire construction and deserialization. This matrix
+  adds no registry, subvisitor, or top-level pinned test id.
   A separate decision-selection real-binary matrix feeds every progress boundary and the
   sealed conflict form after the durable selected decision exists. For repaired selection
   it proves no failure field; for every degraded outcome it proves the exact selected
@@ -3273,14 +3295,14 @@ table before the operation exists.
   a wrong boundary/predecessor, one subvisitor satisfying another, or removal of any
   poison fails before a golden can count. Every intent/basis boundary pins the exit-`4`
   decision-basis-pending strict schema and exact human/JSON golden. At a live
-  `ParentDurable`-only prefix, intent or basis final absence accepts byte-identical
-  reconstruction; the `ParentDurable` incident requires a separately durable downstream
-  consumer proving prior consumption of the exact parent-durable final. Removal after that
-  proof or after `AncestorsDurable` instead renders the exact decision-durability integrity
-  response for all four record/boundary pairs and rejects recreation, relink, reselection,
-  settlement, retry, successor, or identifier fields.
-  T595's pinned production-AF_UNIX test exercises those four DTOs in both modes under the
-  existing pinned real-binary test id as the literal eight-row matrix assigned above, with
+  `ParentDurable`-only prefix, basis final absence accepts byte-identical reconstruction
+  from the durable intent; intent absence discards the uncommitted candidate and permits
+  precommit reselection while projecting neither candidate. No parent-durable
+  incident variant exists. Removal at or after `AncestorsDurable` renders the exact
+  decision-durability integrity response for both record pairs and rejects recreation,
+  relink, reselection, settlement, retry, successor, or identifier fields.
+  T595's pinned production-AF_UNIX test exercises those two DTOs in both modes under the
+  existing pinned real-binary test id as the literal four-row matrix assigned above, with
   exit `4`, exact bytes, and the complete forbidden-field list; renderer-only coverage is
   ineligible. The same production path
   covers decision-selection progress and sealed conflict with fresh changed source/failure
@@ -3340,7 +3362,7 @@ table before the operation exists.
   acquisition/submission/repair/escalation goldens. It also pins literal id
   `source_prefix_reconciliation_recovery_generation_overflow_real_binary` and proves the
   exact human/JSON exit-`4` integrity projection through that same production AF_UNIX path,
-  plus all eight literal decision-durability rows and the durable decision-selection
+  plus all four literal decision-durability rows and the durable decision-selection
   progress/conflict matrix above, not a renderer unit. T595 consumes T592's typed broker op and
   cannot mutate the pointer locally. The Type-1 `host-generation-rebuild-ref.nix` case remains option grammar only and
   is ineligible for runtime handoff evidence. The Type-10
