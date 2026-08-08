@@ -592,20 +592,28 @@ Its JSON is exactly
 This form deliberately has no `intendedOutcome` or terminal `failure`: neither is public
 until the exact private `ContinuityRepairDecisionBasisV1` final and directory chain are
 durable. The private `ContinuityRepairDecisionBasisIntentV1` final and directory chain are
-the write-ahead decision commit; an in-memory candidate before intent durability is not a
-selected outcome. At intent `FinalLinked`, `FinalReopened`, and `ParentDurable` before
-`AncestorsDurable`, restart accepts an absent or exact final. Absence means no complete
-decision commit survived. The lost candidate and incomplete prefix are discarded, the
-sealed durable repair state is replayed, and precommit selection runs again; the new intent
-need not be byte-identical to the abandoned candidate, and neither candidate is projected
-as selected. An exact final resumes the first missing durability step without reselection.
-After the intent directory chain is durable, every later basis state reloads that frozen
-intent. At the same three pre-`AncestorsDurable` basis prefixes, restart accepts absence or
-the exact basis and recreates absence byte-identically only from the durable intent, with
-no reselection. A recreated parent-durable final repeats parent and ancestor sync; it
+not the write-ahead decision commit by themselves. Commit requires that exact intent final,
+its complete durable directory chain, and the independent matching
+`ContinuityRepairDecisionBasisIntentCommitWitnessV1` final and directory chain. An
+in-memory candidate or an intent final without that witness is not a selected outcome. At
+intent `FinalLinked`, `FinalReopened`, and `ParentDurable` before `AncestorsDurable`,
+restart accepts an absent or exact final. Absence permits precommit reselection only after
+a complete attempt-local census proves that no basis or later durable descendant survives.
+The lost candidate and incomplete prefix are then discarded, the sealed durable repair
+state is replayed, and selection runs again; the new intent need not be byte-identical to
+the abandoned candidate, and neither candidate is projected as selected. An exact final
+resumes the first missing durability step without reselection. After intent ancestor sync,
+an exact final without a witness may publish only that exact witness and only when no
+consumer survives; both absent may reselect only under the same empty-descendant proof.
+At the three pre-`AncestorsDurable` basis prefixes, restart accepts absence or the exact
+basis and recreates absence byte-identically only from the witness-backed durable intent,
+with no reselection. A recreated parent-durable final repeats parent and ancestor sync; it
 cannot freeze selection early. At `AncestorsDurable` and every downstream durable
-consumer, both finals are required and absence uses the decision-durability integrity form
-below. The closed intent and basis boundary set is exactly
+consumer, the intent, witness, basis, and each exact predecessor are required. Missing or
+mismatched witness/predecessor uses the decision-durability integrity form below with zero
+mutation. The only authorized later witness absence is the ordered successor-proved
+reclamation after the targets-compacted receipt; it cannot reopen selection. The closed
+intent and basis boundary set is exactly
 `hierarchy | write | file-sync | link | reopen | directory-sync | conflict |
 audit-publication`; every member has this one legal response shape and exact exit. The
 boundary is derived from either the sealed `Progress` prefix or sealed `Conflict` state.
@@ -613,29 +621,41 @@ Progress prefixes exclude `Conflict`. A `conflict` state preserves its durable p
 plus existing and candidate private digests, publishes no intended outcome, and maps only to
 `preserve-and-escalate-continuity-publication-conflict`.
 
-Loss of a decision-basis intent or decision-basis final after a durable directory boundary
-is not basis-pending. It exits `4` with exactly:
+Loss of a decision-basis intent or decision-basis final after a durable directory boundary,
+or loss/mismatch of the decision-intent witness or its predecessor after consumption, is
+not basis-pending. It exits `4` with exactly:
 
 ```text
 host generation handoff immutable audit continuity decision durability integrity incident
 publication-stage: decision-basis
 record: <CLOSED_DECISION_DURABILITY_RECORD>
 durable-boundary: <CLOSED_DECISION_DURABILITY_BOUNDARY>
-failure-class: final-missing-after-durable-boundary
+failure-class: <CLOSED_DECISION_DURABILITY_FAILURE_CLASS>
 action: preserve-and-escalate-audit-integrity-incident
 ```
 
 Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-durability-integrity-incident","publicationStage":"decision-basis","record":"<CLOSED_DECISION_DURABILITY_RECORD>","durableBoundary":"<CLOSED_DECISION_DURABILITY_BOUNDARY>","failureClass":"final-missing-after-durable-boundary","action":"preserve-and-escalate-audit-integrity-incident"}`.
-`CLOSED_DECISION_DURABILITY_RECORD` is exactly `decision-basis-intent | decision-basis`;
-`CLOSED_DECISION_DURABILITY_BOUNDARY` is exactly `ancestors-durable`, and both record pairs
-are valid. No parent-durable incident variant is wire-valid because pre-ancestor absence
-restarts through the absent-or-exact rules above. The form contains no
+`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-durability-integrity-incident","publicationStage":"decision-basis","record":"<CLOSED_DECISION_DURABILITY_RECORD>","durableBoundary":"<CLOSED_DECISION_DURABILITY_BOUNDARY>","failureClass":"<CLOSED_DECISION_DURABILITY_FAILURE_CLASS>","action":"preserve-and-escalate-audit-integrity-incident"}`.
+The `failureClass` is derived, not a caller string. The only valid
+record/boundary/failure tuples are:
+
+| `record` | `durableBoundary` | `failureClass` |
+| --- | --- | --- |
+| `decision-basis-intent` | `ancestors-durable` | `final-missing-after-durable-boundary` |
+| `decision-basis` | `ancestors-durable` | `final-missing-after-durable-boundary` |
+| `decision-basis-intent-commit-witness` | `consumed-by-durable-successor` | `witness-missing-after-consumption` |
+| `decision-basis-intent-commit-witness` | `consumed-by-durable-successor` | `witness-mismatch-after-consumption` |
+| `decision-basis-intent-commit-witness` | `consumed-by-durable-successor` | `predecessor-mismatch-after-consumption` |
+
+`CLOSED_DECISION_DURABILITY_RECORD`, `CLOSED_DECISION_DURABILITY_BOUNDARY`, and
+`CLOSED_DECISION_DURABILITY_FAILURE_CLASS` are derived from this table. Every other
+cross-product refuses. No parent-durable incident variant is wire-valid because
+pre-ancestor absence restarts through the absent-or-exact rules above. The form contains no
 `intendedOutcome`, `intended-outcome`, `failure`, `failureBranch`, `failure-branch`,
 terminal failure class, candidate digest, predecessor, `settlement`, `pending`, `retry`,
 `successor`, source or repair identifier, extra JSON field, or extra human line. It
-authorizes no recreation, relink, reselection, settlement publication, or later repair
-mutation.
+authorizes no reconstruction, relink, witness publication, reselection, settlement
+publication, cleanup, or later repair mutation and poisons the attempt.
 
 Decision selection publication pending exits `4` before an intended outcome is publicly
 committed. The repaired human form is exactly:

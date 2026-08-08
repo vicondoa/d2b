@@ -1744,8 +1744,9 @@ table before the operation exists.
   141,312/141,313-byte combined source-attempt, and 256/257-live-attempt limits,
   all five standing capacity-control reserve classes/actions, cycle-unique reservation
   success/refusal/retry and malformed prefixes, both release prefix machines and their
-  proof/reason substitutions, the independently calculated ten-row
-  11,776-record/56,885,248-byte future-continuity charge, all 256 retained attempt prefixes,
+  proof/reason substitutions, the independently calculated eleven-row
+  13,056-record/59,506,688-byte future-continuity charge, including one decision-intent
+  witness and four target-unlink witness slots per attempt, all 256 retained attempt prefixes,
   512 prune pairs, 256 reduced censuses, 256-degradation reclamation/source-release/slot
   reuse, and post-replacement unreserved-capacity exhaustion, retention-anchor conflict,
   crash-stable pre-audited source pin/replay binding and audited source release, typed
@@ -1914,13 +1915,17 @@ table before the operation exists.
   stale/current-head/successor proof refuses before either compaction mode. A present
   governed member refuses final replaced-set compaction but is preserved and never targeted
   by safe degraded reclamation. Every
-  accepted replacement adds the exact ten-row
-  `ContinuityReplacementFutureChargeV1` of 11,776 records and 56,885,248 encoded bytes to
+  accepted replacement adds the exact eleven-row
+  `ContinuityReplacementFutureChargeV1` of 13,056 records and 59,506,688 encoded bytes to
   its reservation for all 256 maximum retained
   binding/source-prefix-reconciliation/evidence/watermark/repair/decision-basis/
-  decision-selection/settlement/
+  decision-selection/settlement/decision-intent-witness/
   compaction/target-intent/successor/head/receipt/targets-compacted/source-release/
-  attempt-slice-release prefixes, 512 member-prune pairs, and 256 reduced censuses.
+  target-unlink-witness/attempt-slice-release prefixes, 512 member-prune pairs, and 256
+  reduced censuses. Each attempt owns a fixed 46-record/222,208-byte slice containing one
+  2,048-byte decision-intent witness and four 2,048-byte target-unlink witness slots; unused
+  target-witness slots remain reserved, and durable witnesses are reclaimed only in the
+  ordered successor-proved, parent-synced phase before source release and slot reuse.
   Read-independent record/byte boundary cases calculate each row and multiplier without
   production constants, refuse either one-short boundary, poison every omission/count,
   exhaust all unreserved capacity after replacement, retain 255 degraded or partial-prune
@@ -2044,9 +2049,10 @@ table before the operation exists.
   the same handle and attempt from durable binding/pre fields and invokes only exact source
   replay; source removal, version/authority/handle/binding change, or nonidentical bytes
   returns a closed source failure with no new evidence choice or watermark.
-  After a durable intermediate `ContinuityTargetsCompactedReceiptV1` and exports prove
-  replay unnecessary, the consumed `ContinuitySourceReleasePermitV1` alone may call
-  `release_pinned`. It publishes fixed audit using only
+  After a durable intermediate `ContinuityTargetsCompactedReceiptV1`, the exact bounded
+  successor-proved witness reclamation, and exports prove replay unnecessary, the consumed
+  `ContinuitySourceReleasePermitV1` alone may call `release_pinned`. The receipt without
+  completed witness reclamation cannot mint the permit. It publishes fixed audit using only
   `continuitySourceReleaseAttemptSha256`, unlinks and parent-syncs the replay binding then
   pin with a durable census after each, and releases the live slot only after source and
   broker outcomes are complete. The permit has private fields and constructor, owns the
@@ -2056,9 +2062,10 @@ table before the operation exists.
   unlink/sync/census/outcome prefix, release before targets-compacted, foreign receipt,
   an attempted source-release permit minted from asserted overall `Complete`, source
   outage, response loss, exact no-write replay, and admission of pair 257 only after one
-  release. The ordered broker states are exactly `TargetsCompacted`, source `Released`,
-  attempt-slice `CompletedReleased`, and overall `Complete`; constructor negatives remove
-  or substitute every receipt and prove that source binding `Complete` cannot satisfy
+  release. The ordered broker states are exactly targets-compacted receipt,
+  `WitnessReclamationPending`, `TargetsCompacted`, source `Released`, attempt-slice
+  `CompletedReleased`, and overall `Complete`; constructor negatives remove or substitute
+  every receipt and successor proof and prove that source binding `Complete` cannot satisfy
   either broker completion state. Compile-fail/API negatives and poisons cover every
   permit-mint/reuse route.
   Sealed source-prefix reconciliation binds a checked 32-bit recovery generation, exact
@@ -2117,10 +2124,17 @@ table before the operation exists.
   after-link-before-reopen, after-reopen-before-parent-sync, and
   after-parent-sync-before-ancestor-sync, restart accepts absence or the exact final.
   Absence without a matching witness means no complete decision commit survived: it
-  discards the lost candidate and incomplete prefix, replays the sealed durable repair
-  state, and reruns precommit selection. The same recovery is mandatory after intent
-  ancestor sync when both final and witness are absent because the surviving durable state
-  is indistinguishable. The replacement candidate may have different intent bytes, terminal
+  first proves through a complete attempt-local census that no basis or later durable
+  descendant survives, then discards the lost candidate and incomplete prefix, replays the
+  sealed durable repair state, and reruns precommit selection. The same recovery is
+  mandatory after intent ancestor sync when both final and witness are absent only under
+  that empty-descendant proof. Any surviving basis, selection, decision-pre,
+  outcome-intent, terminal, final-absence, compaction, or completed prefix proves prior
+  consumption and forbids reselection. Before authorized reclamation it returns the closed
+  witness-missing integrity incident with zero mutation; at or after reclamation, only the
+  exact targets-compacted/immediate-receipt successor chain may classify absence and resume
+  that successor.
+  The replacement candidate may have different intent bytes, terminal
   outcome, or degraded branch/class because no prior candidate identity was committed or
   projected; exact survival resumes durability without reselection. Exact intent survival
   after ancestor sync with no witness publishes only that witness. Selection freezes only
@@ -2132,8 +2146,12 @@ table before the operation exists.
   A missing intent returns the closed record/boundary-specific
   `audit-continuity-repair-decision-durability-integrity-incident` exit-`4` response from
   `contracts/operator-cli.md` only when its matching witness survives; a basis
-  `AncestorsDurable` final remains mandatory. Either incident performs zero recreation,
-  relink, source access, reselection, decision-selection publication, or settlement. Before
+  `AncestorsDurable` final remains mandatory. After any basis or later durable consumer,
+  the exact decision-intent witness and exact predecessor are also mandatory; a missing,
+  foreign, field-mismatched, digest-mismatched, or predecessor-mismatched witness returns
+  the corresponding closed consumed-witness incident, poisons the attempt, and performs
+  zero reconstruction, relink, witness publication, source access, reselection, later
+  publication, compaction, settlement, or cleanup. Before
   the basis file and directory chain are durable, the only legal public form is
   decision-basis-pending with intrinsic boundary and no intended outcome or terminal
   failure. No preparation-incomplete form is legal without a durable decision selection.
@@ -2170,8 +2188,12 @@ table before the operation exists.
   absence and exact-survival restarts at link, reopen, and parent-durable prefixes before
   each intent/basis ancestor sync, plus an independent intent pair after ancestor sync and
   before witness durability. The no-witness absence case must take the same precommit
-  discard-and-reselect path, while exact survival publishes only the witness. Cases also
-  cover both closed intent-or-basis at ancestors-durable response DTOs and fresh-process
+  discard-and-reselect path only after proving the descendant census empty, while exact
+  survival publishes only the witness. Independent fresh-process negatives retain each
+  later descendant in turn and prove no-witness reselection refuses with the exact
+  consumed-witness incident and zero mutation. Cases also cover all five closed
+  record/boundary/failure response DTO tuples from `contracts/operator-cli.md` and
+  fresh-process
   intent-final-removal cases that physically remove the exact durable intent immediately
   after its matching witness is durable and after every decision-basis `Progress` prefix
   and sealed `Conflict`. Each witness-backed removal returns the exact
@@ -2195,12 +2217,23 @@ table before the operation exists.
   accepted-absence/exact-survival/record-boundary DTO/downstream-removal/predecessor/conflict
   hook has an independent removal poison. Every downstream removal asserts zero
   reconstruction, relink, source access, reselection, later publication, compaction, or
-  settlement and proves the removed final remains absent after refusal. The independent literal
+  settlement and proves the removed final remains absent after refusal. A parallel
+  fresh-process matrix removes the witness, substitutes a foreign witness, changes its
+  intent predecessor, and changes its canonical digest before the basis consumer and after
+  every basis, decision-selection, decision-pre, outcome-intent, terminal, final-absence,
+  and compaction prefix through the targets-compacted receipt before witness reclamation.
+  Before consumption, mismatch is the sealed publisher
+  `Conflict` and exact-intent/no-witness resumes only exact witness publication. After
+  consumption, every case returns its closed integrity incident, poisons the attempt, and
+  proves zero reconstruction, relink, witness publication, source access, reselection,
+  later publication, compaction, settlement, cleanup, or slot-reuse mutation. Every
+  prefix, substitution, forbidden effect, hook, and removal poison is independent. The independent literal
   `continuityRepairDecisionBasisIntentSha256` and
   `continuityRepairDecisionBasisSha256` formula/vectors pin every input, expected hash,
   same-width substitution, field order, framing, omission, and removal poison; the
   private witness is not an export, audit, receipt, or hash-preimage member and therefore
-  changes no frozen formula, expected hash, registry id, or count. The
+  changes no frozen formula, expected hash, registry id, or census. It is nevertheless one
+  charged 2,048-byte record in every attempt's fixed reserved slice. The
   compaction export vector consumes those expected hashes as ordered tags `0x2d` and
   `0x2e` before decision selection and propagates them through every downstream expected
   hash. Strict schemas, wire
@@ -2273,7 +2306,8 @@ table before the operation exists.
   restoration-settlement formulas have frozen read-independent known-answer
   vectors. Source release uses literal zero pin/replay census counts and expected
   census/record/audit-outcome hashes. Attempt-slice release consumes that exact output,
-  literal prior/reservation ledger inputs, generation, released record/byte counts, and
+  literal prior/reservation ledger inputs, generation, released count `46`, released bytes
+  `222208`, and the recalculated witness-inclusive
   expected applied-ledger/record/audit-outcome hashes; final completion consumes only those
   tested outputs, never arbitrary digest bytes. Independent downstream substitution and
   removal poisons cover both chains in addition to every
@@ -2310,7 +2344,10 @@ table before the operation exists.
   `ContinuityCompactionTargetUnlinkCommitWitnessV1` in a coordinator-owned namespace
   independent of the selected leaf. The matching witness binds the exact
   operation/selection/ordinal/target/intent/absence/parent tuple and must have its own final
-  and complete directory chain durable before census or receipt. It is a sealed
+  and complete directory chain durable before census or receipt. It is one charged,
+  fixed record of at most 2,048 encoded bytes. Every reopen validates the complete tuple,
+  exact mutation-intent predecessor, and canonical record digest; no foreign or
+  field-mismatched witness can substitute. It is a sealed
   recovery-classification capability, not an audit/export/receipt preimage member, and
   changes no frozen hash. Before the witness, exact target presence retries only the same
   unlink idempotently and exact absence repeats parent sync and witness publication. Only
@@ -2318,7 +2355,13 @@ table before the operation exists.
   commits that target's reduced census and immutable receipt and advances; pre-receipt
   absence is legal only under that exact original operation and intent, never by citing a
   receipt that does not yet exist. The receipt constructor also consumes the matching
-  sealed witness. `head-changed | target-changed | unlink` may settle
+  sealed witness. On restart, absence with no target receipt retries only that original
+  same-intent sequence. The byte-identical immediate target receipt is the sole successor
+  proof that may dominate an absent witness and resume without republication; a later
+  prefix without that receipt, any mismatched receipt predecessor, or any present
+  nonidentical witness returns the closed
+  `ContinuityCompactionWitnessIntegrityIncidentV1`, poisons the attempt, and performs zero
+  mutation. `head-changed | target-changed | unlink` may settle
   degraded only before a successful unlink while the failed target remains present; the
   completed receipts are the exact prior ordinal prefix and the residual begins at that
   target. Post-unlink storage, census, conflict, receipt-publication, and audit-publication
@@ -2361,7 +2404,19 @@ table before the operation exists.
   crash-before-unlink: complete-selection revalidation and exact idempotent unlink retry,
   with no `target-changed`, new operation, residual selection, or recovery generation.
   Witness publication boundaries, alternate classifications, forbidden effects, hooks,
-  and removal poisons are independent. At every ordinal, additional fd-backed negatives
+  and removal poisons are independent. For every ordinal, independent fresh-process
+  negatives run before census, receipt, every later target, targets-compacted, and witness
+  reclamation. They separately substitute a foreign witness and each closed member
+  `operation`, `selection`, `ordinal`, `intent`, `parent`, and `digest`. Every case returns
+  the exact conflict/integrity class, poisons the attempt, and proves zero unlink, witness,
+  census, receipt, next-target, outcome, recovery, targets-compacted, reclamation,
+  source-release, attempt-slice-release, settlement, or slot-reuse mutation. Independent
+  witness-loss cases after reduced census, the matching receipt, every later receipt
+  prefix, and targets-compacted prove exact immediate-receipt precedence; a later prefix
+  without that receipt or with a mismatched predecessor is the closed incident, while the
+  no-successor control resumes only the original pre-receipt sequence. Every
+  ordinal/member/consumer/classification/forbidden-effect assertion has its own hook and
+  removal poison; no case may satisfy another. At every ordinal, additional fd-backed negatives
   mutate each anchored parent identity member and separately each still-selected remaining
   target's type, identity, or canonical digest after the matching witness is durable and
   before census/receipt. The same matrix
@@ -2394,6 +2449,20 @@ table before the operation exists.
   receipt-prefix/receipted-target/forbidden-effect assertion has its own hook and removal
   poison, and no post-unlink/pre-census case can satisfy it. These are subcases of the
   existing compaction visitor and add no registry id.
+  After the targets-compacted receipt, a bounded `WitnessReclamationPending` phase removes
+  the decision-intent witness and then one target-unlink witness for each selected ordinal,
+  at most zero through three, in that order. Each unlink requires the exact witness plus its exact durable successor,
+  identity-revalidates and syncs the held coordinator parent, and is crash-resumed at the
+  same name. Missing under the exact successor is already reclaimed; mismatch is the
+  closed integrity incident. Source release cannot begin until every selected name is absent.
+  Fresh-process cases crash before and after every unlink and parent sync, independently
+  poison each successor and mismatch check, and prove the full
+  46-record/222,208-byte slice and live slot remain charged through source `Released` and
+  attempt-slice `CompletedReleased`. Separate restarts after source `Released`,
+  attempt-slice `CompletedReleased`, and `Complete` must reconstruct authorized witness
+  absence from the exact targets-compacted and immediate-receipt successor chain; removing
+  or changing one successor is the closed zero-mutation integrity incident and cannot
+  recreate a witness or reselect an operation.
   The reclamation vector must encode target-zero unlink failure with zero
   completed receipts and all four residual targets, then bind recovery generation one and
   all four successful receipts; no zero-target receipt may coexist with that first failure.
@@ -3071,10 +3140,10 @@ table before the operation exists.
   preparation-incomplete are exercised only with their required durable basis or selection.
   A direct renderer test cannot satisfy these cases.
   The same already pinned Type-3 real-binary continuity test must contain an independently
-  literal four-row matrix: `decision-basis-intent | decision-basis` crossed with the sole
-  incident boundary `ancestors-durable` and `human | json`. Each row uses a fresh AF_UNIX
-  server to feed one of T592's two closed
-  record/boundary durability DTOs through the shared wire decoder and production renderer,
+  literal ten-row matrix: the five closed record/boundary/failure tuples in
+  `contracts/operator-cli.md`, each crossed with `human | json`. Each row uses a fresh
+  AF_UNIX server to feed one of T592's five closed
+  durability DTO tuples through the shared wire decoder and production renderer,
   exits `4`, and matches the exact human or no-trailing-newline JSON bytes in
   `contracts/operator-cli.md`. The pin and test must reject omission or duplication of any
   pair and must assert the absence of `intendedOutcome`, `intended-outcome`, `failure`,
@@ -3351,11 +3420,13 @@ table before the operation exists.
   `ParentDurable`-only prefix, basis final absence accepts byte-identical reconstruction
   from the durable intent; intent absence discards the uncommitted candidate and permits
   precommit reselection while projecting neither candidate. No parent-durable
-  incident variant exists. Removal at or after `AncestorsDurable` renders the exact
-  decision-durability integrity response for both record pairs and rejects recreation,
-  relink, reselection, settlement, retry, successor, or identifier fields.
-  T595's pinned production-AF_UNIX test exercises those two DTOs in both modes under the
-  existing pinned real-binary test id as the literal four-row matrix assigned above, with
+  incident variant exists. No-witness reselection additionally requires an empty complete
+  descendant census. Removal at or after `AncestorsDurable`, or a missing/mismatched
+  witness or predecessor after consumption, renders the exact decision-durability integrity
+  response for its closed tuple and rejects reconstruction, relink, witness publication,
+  reselection, settlement, retry, successor, cleanup, or identifier fields.
+  T595's pinned production-AF_UNIX test exercises all five tuples in both modes under the
+  existing pinned real-binary test id as the literal ten-row matrix assigned above, with
   exit `4`, exact bytes, and the complete forbidden-field list; renderer-only coverage is
   ineligible. The same production path
   covers decision-selection progress and sealed conflict with fresh changed source/failure
