@@ -807,6 +807,9 @@
           mkdir -p $out/tests
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
+          mkdir -p $out/nixos-modules/components/observability
+          cp -r ${./nixos-modules/components/observability/dashboards} \
+            $out/nixos-modules/components/observability/dashboards
         '';
         guestRustPackagesSrc = mkGuestRustPackagesSrc pkgs;
         rustWorkspace = args: rustPlatform.buildRustPackage ({

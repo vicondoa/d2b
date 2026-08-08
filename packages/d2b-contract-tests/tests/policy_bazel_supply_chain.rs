@@ -532,10 +532,11 @@ fn validate_policy_metadata(
                 if !allowed_kinds.contains(kind_name) {
                     return Err(format!("{node_id} dependency kind is not authorized"));
                 }
-                if let Some(target) = field(kind, "target") {
-                    if !target.is_null() && !target.is_string() {
-                        return Err(format!("{node_id} dependency target cfg is malformed"));
-                    }
+                if let Some(target) = field(kind, "target")
+                    && !target.is_null()
+                    && !target.is_string()
+                {
+                    return Err(format!("{node_id} dependency target cfg is malformed"));
                 }
             }
         }
