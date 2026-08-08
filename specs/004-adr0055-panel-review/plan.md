@@ -445,6 +445,7 @@ scripts/copilot/{check-bindings.mjs,test-check-bindings.mjs,test-stage-diffs.mjs
 packages/xtask/src/delivery/{model,panel,seal,evidence,command,mod}.rs
 packages/xtask/src/delivery/testdata/{panel-legacy-ten,panel-current-variable}.json
 tests/test-lint.sh
+tests/golden/api-surface/input-fingerprint.txt
 docs/contributing/{README,panel-review,copilot-agents}.md
 docs/adr/specs/0053-panel-prompt-sources.md
 docs/specs/ADR-046-validation-and-delivery.md
