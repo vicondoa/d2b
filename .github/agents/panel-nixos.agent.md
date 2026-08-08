@@ -103,4 +103,9 @@ Return exactly one JSON object and nothing else:
 }
 ```
 
+During verification, add `verified_issue_statuses` with exactly one entry for
+every ledger issue and add `late_findings` as an array. Use `verified` for a
+confirmed resolution; use `open`, `blocked`, `unresolved`, or `regression`
+when the issue still blocks and include the corresponding recommendation.
+
 `signoff` is true if and only if `recommendations` is empty.

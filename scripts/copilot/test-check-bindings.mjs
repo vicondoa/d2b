@@ -355,6 +355,20 @@ const CASES = [
     expectText: "panel verdict JSON output schema changed",
   },
   {
+    name: "panel verification output extension drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/panel-test.agent.md",
+        (text) => text.replace(
+          "During verification, add `verified_issue_statuses`",
+          "During verification, omit `verified_issue_statuses`",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "panel verification output extension changed",
+  },
+  {
     name: "non-owner direct feature write claim is rejected",
     mutate: (dir) =>
       mutateFile(

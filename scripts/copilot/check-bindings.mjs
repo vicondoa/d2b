@@ -1275,11 +1275,17 @@ const panelOutputSchema = (role) => [
   `}`,
   "```",
 ].join("\n");
+const panelVerificationOutputContract =
+  "During verification, add `verified_issue_statuses` with exactly one entry for\n" +
+  "every ledger issue and add `late_findings` as an array.";
 for (const [name, agent] of panelAgents) {
   const role = name.slice("panel-".length);
   const output = agent.text.match(/## Output\n\nReturn exactly one JSON object and nothing else:\n\n```json\n[\s\S]*?\n```\n?/);
   if (!output || !output[0].includes(panelOutputSchema(role))) {
     fail(`${agent.file}: panel verdict JSON output schema changed or is missing.`);
+  }
+  if (!agent.text.includes(panelVerificationOutputContract)) {
+    fail(`${agent.file}: panel verification output extension changed or is missing.`);
   }
 }
 
