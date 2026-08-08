@@ -650,6 +650,21 @@ console.log("panel lifecycle: selection table");
       "git path derivation sorts BMP and non-BMP names by UTF-8 bytes",
       changedUnicodePaths.join(",") === [bmpPath, nonBmpPath].join(","),
     );
+    writeFileSync(join(gitPathRoot, "Makefile"), "all:\n\ttrue\n");
+    execFileSync("git", ["add", "Makefile"], { cwd: gitPathRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "build path"], {
+      cwd: gitPathRoot,
+    });
+    execFileSync("git", ["mv", "Makefile", "notes.txt"], { cwd: gitPathRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "rename build path"], {
+      cwd: gitPathRoot,
+    });
+    const renamedPaths = changedPathsFromGitRange("HEAD^..HEAD", gitPathRoot);
+    check(
+      "git path derivation retains both sides of a rename",
+      renamedPaths.includes("Makefile") && renamedPaths.includes("notes.txt"),
+      renamedPaths.join(","),
+    );
     const invalidUtf8Path = Buffer.concat([
       Buffer.from(`${gitPathRoot}/`),
       Buffer.from([0xc3, 0x28]),

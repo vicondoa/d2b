@@ -185,7 +185,14 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
   try {
     output = execFileSync(
       "git",
-      ["diff", "--name-only", "-z", "--diff-filter=ACDMRTUXB", range],
+      [
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        "--diff-filter=ACDMRTUXB",
+        range,
+      ],
       { cwd },
     );
   } catch (cause) {
