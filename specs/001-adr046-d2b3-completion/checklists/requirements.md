@@ -30,10 +30,10 @@
 - [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
-- [x] T070/T071 preserve W4 history; T604/T220 remain blocked on the accepted
+- [x] T070/T071 preserve W4 history; T604/T479 remain blocked on the accepted
   `effectiveEastWest = Network.spec.isolation.allowEastWest &&
-  d2b.site.allowUnsafeEastWest` migration, pulled-forward T336-T355 production path, and all
-  four real Network/Host cases
+  d2b.site.allowUnsafeEastWest` migration, authoritative W6 T336-T355 production path under
+  T221, and all four real Network/Host cases
 - [x] T219 performs only externally authorized historical adjudication, emits an actionable
   external-disposition refusal, and offers no successor or second-request path
 
@@ -111,13 +111,13 @@ clarifications.
 
 Ready for `/speckit-plan`.
 
-**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 33 current checklist rows
+**Iteration 4 (2026-08-06, current artifact reconciliation)** - all 22 current checklist rows
 pass under the completion-program scope reflected by the current specification. The original
-16-item baseline remains fully passing; 17 reconciliation checks were added after that baseline.
+16-item baseline remains fully passing; 6 reconciliation checks were added after that baseline.
 The current shape is **75 functional requirements and 35 buildable success criteria**. The
 earlier 45/26 shape records the end of Iteration 3; it is not the current census.
 
-Lifecycle state: **specification reconciled - plan approval pending**. Passing these 33 current
+Lifecycle state: **specification reconciled - plan approval pending**. Passing these 22 current
 specification-quality checks means the artifacts are ready to request the required analysis
 and plan-review gates. It does not record plan approval, implementation completion, or
 permission to bypass the later exact-C/Q gate before T589.

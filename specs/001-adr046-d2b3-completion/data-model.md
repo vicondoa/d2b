@@ -173,7 +173,7 @@ them (FR-025 through FR-045).
 | **Wave** | id `W0`-`W8`, member specs, parallel groups, entry and exit criteria | entered, snapshotted, panelled, sealed, merged |
 | **Work item** | `workItemId`, owning `specId`, exact destination paths, validation obligations, `reuseAction` | `Planned` -> `Merged` (68 of 545 at receipt HEAD; 477 remain `Planned`) |
 | **Candidate snapshot** | `candidate_id`, `content_id`, `snapshot_sha256`, base and head OIDs, expected pull requests | immutable; any content change invalidates it |
-| **Panel receipt** | one per role, 10 roles, 14 fields, pinned provider/model/reasoning effort | `signoff` true iff `recommendations` is empty |
+| **Panel receipt** | one per selected seat from the current thirteen-seat role domain, 14 fields, pinned provider/model/reasoning effort | `signoff` true iff `recommendations` is empty; candidate-bound selection may only widen over fix deltas |
 | **Seal** | binds candidate, content, and snapshot digests after all lanes and the panel pass | requires every wave work item `Merged` |
 
 Delivery state lives outside the repository at `$XDG_STATE_HOME/d2b/delivery` and the tooling
@@ -227,8 +227,8 @@ Version 2 and the generated traceability table MUST publish these stable identif
 The generated JSON is the machine authority and the generated Markdown is its review view.
 Generation MUST fail on a missing, duplicate, extra, or ownerless identifier and drift gates
 MUST compare both artifacts byte-for-byte. T589 implements only rows assigned to T589; T604
-emits only the acceptance evidence assigned to T604; T600 imports the exact candidate result;
-and T220 verifies that every generated row is complete. No feature-local field list, count,
+emits only its W6 acceptance evidence after T221 and T336-T355; T479 imports the exact-F6
+result; and T220 verifies every generated Wave 5 row while T479 verifies the T604 rows. No feature-local field list, count,
 digest recipe, state table, or recovery matrix may substitute for those generated rows.
 
 ---
@@ -5691,7 +5691,8 @@ edge fixture, and the independent restoration broker-case registry;
 T595 owns the private variant constructors, current-pointer classifier, shared renderer,
 focused hermetic tests, and the dedicated Type-10 `host-generation-handoff.nix` VM test that
 proves real service failure/restart and rollback effects. T604 later exercises the public
-handoff as part of exact-candidate operator acceptance without owning that dedicated test.
+handoff in W6 as part of exact-F6 operator acceptance after T221 and T336-T355, without
+owning that dedicated test.
 The fixture and literal test constant cover every row, every allowed and forbidden edge,
 every forbidden inspect input, source/target active/failed partitions, transfer-pending
 failure, every independently enumerated rollback-proof member and edge, terminal pointer
@@ -6499,7 +6500,7 @@ No in-feature task produces, installs, or validates the authority.
 | `closeAction` | one of `remain-blocked`, `abandon-without-merge`, or `recover-panel-without-new-request` |
 | `requestPolicy` | literal `no-second-request` |
 | `historyPolicy` | literal `preserve-retained-request-bytes` |
-| `panelPolicy` | literal `unanimous-ten-role-exact-final-candidate`, retained only by this strict legacy record |
+| `panelPolicy` | literal `unanimous-selected-roster-exact-final-candidate`, using the current thirteen-seat role domain and widen-only fix deltas |
 
 The installed external validator is the sole import authority. It derives the Git and
 delivery-state identities, verifies the authority and prerequisite commits are ancestors of
@@ -6522,7 +6523,7 @@ absent -> externally-accepted -> imported
 imported + remain-blocked -> blocked
 imported + abandon-without-merge -> abandoned-unmerged
 imported + recover-panel-without-new-request -> panel-pending
-panel-pending + exact unanimous strict legacy fixed-ten F-bound attestations -> panel-satisfied
+panel-pending + exact unanimous selected-roster F-bound attestations -> panel-satisfied
 panel-satisfied -> seal-eligible -> merge-eligible -> merged-byte-identical-F
 panel-pending + completed/terminal panel with any missing role, recommendation,
   disagreement, or stale binding
@@ -6532,9 +6533,10 @@ panel-pending + completed/terminal panel with any missing role, recommendation,
 `blocked`, `abandoned-unmerged`, and `panel-refused` authorize no seal, merge, successor
 wave, or release. `recover-panel-without-new-request` authorizes only the externally defined
 recovery-attestation surface linked to the retained request; it creates no second request and
-cannot itself satisfy the panel. The validator requires the repository strict legacy fixed-ten
-roster, `signoff = true` iff recommendations are empty, identical F/commit/tree/disposition
-bindings, and every constitutional predecessor. No action or field can encode `waived`,
-partial, force, reduced roster, stale-candidate attestation, or panel substitution. A content
+cannot itself satisfy the panel. The validator requires a candidate-bound selection from the
+current thirteen-seat role domain, permits that selection only to widen over fix deltas,
+requires `signoff = true` iff recommendations are empty, and requires identical
+F/commit/tree/disposition bindings plus every constitutional predecessor. No action or field
+can encode `waived`, partial, force, reduced roster, stale-candidate attestation, or panel substitution. A content
 or history change after F, or any failed recovered panel, returns to external escalation
 rather than admitting another feature-local request.

@@ -41,8 +41,9 @@ remedial receipts cannot satisfy it. After that external prerequisite, entry req
 passed, no unresolved contention flag on this wave's destination paths,
 the stack proposed against the exact named parent commit rather than a stale `v3`, a free
 heavy-gate semaphore, and a green fast hermetic suite. If the predecessor is not yet merged,
-implementation may start only after at least 5 of its 10 reviews return and integration is
-green on its converged tree. Prior-wave `Merged` state is not entry evidence. It is checked at
+implementation may start only after at least five of its selected-roster reviews return and
+integration is green on its converged tree. The candidate-bound selection uses the current
+thirteen-seat role domain and may only widen over fix deltas. Prior-wave `Merged` state is not entry evidence. It is checked at
 the successor's panel request, seal, and merge-eligibility boundary, after the successor
 rebases onto the merged predecessor.
 
@@ -73,7 +74,7 @@ A ready slice left unlaunched without a recorded blocker fails wave entry.
 
 For `adr046w5`, the exact implementation and close chain is
 `T589 -> {T590,T591,T594}; T591 -> T592 -> T593 -> T605;
-{T590,T592,T594,T605} -> T595 -> {T596,T597,T598,T599,T604} ->
+{T590,T592,T594,T605} -> T595 -> {T596,T597,T598,T599} ->
 T220 -> F -> {T600,T601} -> T602 -> T219`.
 T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
 `SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
@@ -85,7 +86,8 @@ retained request and exact F, the actionable refusal is: `adr046w5 binding reque
 consumed; obtain an accepted external delivery-contract/tooling disposition naming the
 retained request, exact F, and one closed action`. `remain-blocked` stays blocked;
 `abandon-without-merge` cannot advance; and `recover-panel-without-new-request` still requires
-the complete unanimous strict legacy fixed-ten exact-F panel before seal or merge. The record creates no
+the complete unanimous selected-roster exact-F lifecycle from the current thirteen-seat role
+domain, with selection allowed only to widen over fix deltas, before seal or merge. The record creates no
 second request and is never panel sign-off or a constitutional waiver.
 
 ### 3. Inner loop while implementing
@@ -149,11 +151,12 @@ lane. Bind each lane explicitly to
 `gpt-5.6-luna`, reasoning effort `max`, and context tier `long_context`; give
 both the wave diff plus `spec.md`, `plan.md`, `tasks.md`, and the constitution,
 and require read-only findings. Then run the actual Copilot panel skill,
-`/d2b-panel-round work`, whose ten read-only seats are bound in its table to
+`/d2b-panel-round work`, whose candidate-selected read-only seats come from the current
+thirteen-seat role domain and are bound in its table to
 `gpt-5.6-sol` at reasoning effort `xhigh` and context tier `default`.
 There is no separate dotted verification or review command.
 
-Clear every verification HIGH and CRITICAL, including constitution conflicts, before the
+Clear every actionable content finding, at any severity, including constitution conflicts, before the
 binding panel request on an ordinary unconsumed wave. For `adr046w5`, a defect found here
 returns to T220, reruns its nonbinding plan round, freezes a replacement F, reruns T600-T602,
 and stops again for the external disposition; no binding panel is invoked.
@@ -241,12 +244,14 @@ emitted-action coverage.
 
 ## Operator loop: prove the plane works
 
-This is the loop that distinguishes a live control plane from a sealed wave. It becomes
-runnable as W2-W5 land; before then it fails by design, because nothing is wired.
+This is the loop that distinguishes a live control plane from a sealed wave. Its exact
+operator activation positive becomes runnable in W6 after T221 and T336-T355; before then it
+fails by design because the authoritative Network production path is not merged.
 
 ### Story 1 - declare and reconcile
 
-The exact-candidate automated proof is T604. Its fixture-contract leg owns
+The exact-F6 automated proof is T604. It remains W6 work under T221 and consumes the merged
+T336-T355 result without moving those tasks into W5. Its fixture-contract leg owns
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; its lowest feasible
 production-boundary leg owns `packages/d2bd/tests/resource_operator_activation.rs`; and its
 real activation/effect leg owns
@@ -259,7 +264,7 @@ make test-rust
 make test-host-integration
 ```
 
-The host leg declares Zone `acceptance` with the exact Wave 5 acceptance set -
+The host leg declares Zone `acceptance` with the exact W6 operator acceptance set -
 `Volume/acceptance-state` through `Provider/volume-local`,
 `Network/acceptance-net` through `Provider/network-local`, and
 `Device/acceptance-tpm` through `Provider/device-tpm` - and consumes the emitted
@@ -761,17 +766,17 @@ remediation and runs no privileged command.
 
 **Expected**: all three exact resources are ready through their owned effects; removal of
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
-passes on the same candidate. Actionable refusal coverage runs
-separately and cannot satisfy this positive proof. Guest is not expected to pass until Wave 6
-`Provider/runtime-cloud-hypervisor` and its T479/T480 exact-F6 acceptance exist. T604 does
-not run until pulled-forward T336-T355 have landed the real Network production path.
+passes separately through T479 on the same candidate. Actionable refusal coverage runs
+separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
+`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. T604 does not run until
+T221 has gated and T336-T355 have merged the real Network production path in W6.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not prove or introduce
 Host/Network double opt-in. The historical external Network specification remains sole-opt-in
-canon, but Wave 5 closure requires the accepted migration to
+canon, but T479/T480 require the accepted migration to
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
 both default false, plus all four cases through the real adapter and net-VM path. Historical
-sole opt-in cannot close T604 or T220. Do not change feature status to bypass that stop.
+sole opt-in cannot close T604 or T479. Do not change feature status to bypass that stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an

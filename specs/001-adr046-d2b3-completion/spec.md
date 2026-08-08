@@ -174,18 +174,16 @@ needed to satisfy the declared resources, and without performing a host cutover.
    read or modify that resource, **Then** the attempt is refused and the refusal is
    recorded in the audit trail.
 
-**Wave checkpoint**: Wave 5 is only a partial US1 production-plane checkpoint. Its
-acceptance set is exactly `Volume/acceptance-state`, `Network/acceptance-net`, and
-`Device/acceptance-tpm` in Zone `acceptance`; no other resource may substitute for one of
-those three. "Acceptance set" does not assign implementation ownership, and Network
-implementation remains owned by Wave 4. Wave 5 does not claim a positive Guest runtime
-effect and therefore cannot complete this story.
-Full US1 completion occurs only after the Wave 6
-`Provider/runtime-cloud-hypervisor` family supplies positive runtime-effect acceptance for
-the declared Guest. Missing, skipped, status-only, fake-boundary, or refusal evidence leaves
-US1 incomplete.
+**Wave checkpoint**: Wave 5 is only a partial US1 production-plane checkpoint and does not
+claim the three-resource operator activation positive. The exact acceptance set is
+`Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in Zone
+`acceptance`; no other resource may substitute for one of those three. T604 exercises that
+set in Wave 6 only after T221 gates authoritative T336-T355. Full US1 completion occurs only
+after that result and the Wave 6 `Provider/runtime-cloud-hypervisor` family supply positive
+runtime-effect acceptance for the declared Guest. Missing, skipped, status-only,
+fake-boundary, or refusal evidence leaves US1 incomplete.
 
-#### Exact Wave 5 acceptance fixture
+#### Exact Wave 6 operator acceptance fixture
 
 The T604 fixture MAY contain the Host, User, Guest, system Provider, and artifact-catalog
 prerequisites that these three resources require, but those support objects are not acceptance
@@ -211,14 +209,14 @@ This single denied-east-west acceptance case does not establish Host/Network dou
 The untouched external `ADR-046-resources-network` remains the historical sole-opt-in canon,
 so T070 and T071 may only report that historical result. The required contract is
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
-both inputs default false. T220 MUST NOT close Wave 5 until an accepted external versioned
+both inputs default false. T479 MUST NOT freeze F6 until an accepted external versioned
 correction and migration preserve that exact Host/site option as the second gate, the
 production implementation is an
-ancestor of final F, and all four Network/Host combinations pass through the actual
+ancestor of final F6, and all four Network/Host combinations pass through the actual
 emitter/controller/production-effect/net-VM path. Preserving sole Network opt-in is not a
-prospective close path. T336-T355 are therefore pull-forward implementation prerequisites of
-T604 and T220; a feature-local status, declaration-only fixture, fake effect port, or
-historical W4 record cannot unblock either task.
+prospective close path. T336-T355 remain authoritative W6 implementation prerequisites of
+T604 under T221; a feature-local status, declaration-only fixture, fake effect port, or
+historical W4 record cannot unblock T604 or T479.
 
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
@@ -815,20 +813,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   single-owner fan-in at 10,000 resources and 100 watches; current removal proofs; and
   reference documentation compared with emitted behavior; and T605's exact enum
   round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
-  API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. T604 MUST
-  additionally prove on that same candidate that an operator Nix declaration for the exact
-  Wave 5 acceptance fixture - `Volume/acceptance-state`, `Network/acceptance-net`, and
-  `Device/acceptance-tpm`, with the selected Provider resources, configs, and artifacts pinned
-  above - emits the installed per-Zone bundle,
-  activates on initial startup and public declaration/removal NixOS switches without manual
-  daemon restart or private reload, reaches a real owned effect and readiness for every
-  one of those three resources, and removes one declaration with dependency-safe
-  cleanup while unrelated resources remain ready and intact. Actionable refusals are separate
-  negative cases and cannot satisfy this positive story. Positive Guest runtime-effect
-  acceptance belongs specifically to Wave 6 `Provider/runtime-cloud-hypervisor`, owned by
-  T384-T390 and accepted at T479/T480, and is not a Wave 5 success criterion; Guest bundle
-  emission, ingestion, status, or refusal MUST NOT satisfy FR-072 or SC-034.
-  This acceptance scope does not reassign implementation: Network remains Wave 4-owned.
+  API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. The exact
+  three-resource operator activation positive is not Wave 5 evidence: T604 runs in Wave 6
+  after T221 and authoritative T336-T355, and T479/T480 bind it to F6 together with the
+  `Provider/runtime-cloud-hypervisor` Guest result. Actionable refusals remain separate
+  negative cases and cannot satisfy either positive story.
   Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and
   historical proof artifacts are not evidence for this gate. T220 MUST converge all slice and
@@ -836,13 +825,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   the full drift gate, before freezing final candidate F. Exact-candidate evidence MUST use
   this closed feature-local `EvidenceRecord.validation` set:
   `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`,
-  `system-core-handler-contract`, `operator-nix-activation-cleanup`,
-  `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
-  `cli-reference-conformance`. T600 exclusively owns the first five; T601 exclusively owns
-  the final three. Before F freezes, T589 MUST implement one hermetic closed-profile validator
+  `system-core-handler-contract`, `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
+  `cli-reference-conformance`. T600 owns the first four and T601 owns the final three. Before F freezes,
+  T589 MUST implement one hermetic closed-profile validator
   used by panel-request/panel-attest, seal, and merge-eligibility, with negative tests for missing, extra,
   duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
-  MUST require all eight records to bind F and F's tree. Before F is final, T220 MUST run the
+  MUST require all seven records to bind F and F's tree. Before F is final, T220 MUST run the
   nonbinding `/d2b-panel-round plan` phase surface over each integrated provisional candidate.
   Findings scope a fix round through T220 and require validation plus a delta/full-context
   phase-panel rerun; that loop may iterate and issues no binding delivery request. Only a
@@ -853,8 +841,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `Wave5RetainedRequestDispositionV1` from `data-model.md`. The record preserves the request,
   binds exact F, and selects only `remain-blocked`, `abandon-without-merge`, or
   `recover-panel-without-new-request`. Only the final action can reach successful close, and
-  it authorizes no seal or merge until the complete strict legacy fixed-ten panel independently returns
-  unanimous F-bound sign-off with no recommendations. The disposition creates no second
+  it authorizes no seal or merge until the complete selected-roster lifecycle from the
+  current thirteen-seat role domain independently returns unanimous F-bound sign-off with no
+  recommendations, with selection allowed only to widen over fix deltas. The disposition creates no second
   request and cannot waive, reduce, replace, or satisfy a constitutional panel. A
   retained-state fixture MUST run unanimous and finding-plus-rerun nonbinding phase sequences
   and prove byte-identical delivery state with no reservation or request mutation. No
@@ -910,8 +899,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `d2b-unexpected.service`; both survive the sole `d2b.slice` exclusion and MUST fail exact
   equality. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
   cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
-  is limited to T220/T604 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
-  results only and MUST NOT rerun the target. T604 is the sole prospective owner of the
+  is limited to T220/T600 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
+  results only and MUST NOT rerun the target. T604 is the sole W6 source owner of the
   existing host VM case and its Makefile discovery/build recipe; every current or later close
   reuses that
   candidate-bound predicate. Passing evidence MUST name the enumerated and successfully built
@@ -1094,7 +1083,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   implementation start under FR-048, but never relaxes the successor wave's own plan-review
   gate; see FR-057.
 - **FR-048**: A wave's implementation MAY begin before its predecessor's panel completes,
-  provided at least five of the predecessor's ten roster reviews have returned and the
+  provided at least five of the predecessor's selected-roster reviews have returned and the
   predecessor's integration tests pass on its converged tree.
 - **FR-049**: A wave that started under FR-048 MUST NOT issue a panel request, produce a seal,
   or merge until its predecessor is sealed at N/N unanimity for its selected roster with zero recommendations and
@@ -1104,26 +1093,26 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-050**: Rework caused by a predecessor finding that invalidates in-flight work started
   under FR-048 MUST be absorbed by the wave that started early. Such rework MUST NOT be used
   as grounds to weaken, shorten, or partially accept the predecessor's panel.
-- **FR-051**: Once a wave has completed eight panel rounds, a reviewer in round nine or later
-  MAY classify a LOW or MEDIUM finding as deferred rather than blocking. CRITICAL and HIGH
-  findings are never deferrable and MUST continue to block sign-off in every round.
-- **FR-052**: A deferred finding MUST be moved out of `recommendations` and recorded in the
-  deferred-findings register with its severity, subject area, wave, round, and reviewer role.
-  The sign-off invariant is unchanged: `signoff` is `true` if and only if `recommendations`
-  is empty. Deferring without recording, and re-ranking a CRITICAL or HIGH finding downward
-  in order to defer it, are both process violations.
-- **FR-053**: The program MUST maintain a deferred-findings register and a friction log as
-  continuous planning inputs. Both MUST be reviewed at every wave close, MUST feed the
-  terminal wave's triage, and MUST contain only classification metadata - never panel
-  transcripts, validation command output, or attestation payloads.
+- **FR-051**: Every current lifecycle MUST follow Constitution 3.0
+  Discover-Fix-Verify: one comprehensive discovery from every selected seat, one stable
+  shared ledger, batched implementation responses and self-verification, and scoped
+  verification against the ledger and full candidate.
+- **FR-052**: Verification MUST keep pre-existing late MINOR and NIT observations as
+  nonblocking history and MUST keep admitted late BLOCKER and MAJOR findings blocking.
+  There is no round-count threshold and no later transition from blocking to nonblocking.
+- **FR-053**: The program MUST maintain the friction log as a continuous planning input,
+  review it at every wave close, and feed it to the terminal wave's triage. The legacy
+  deferred-findings register is historical compatibility data and MUST NOT receive current
+  lifecycle findings. Neither register may contain panel transcripts, validation command
+  output, or attestation payloads.
 - **FR-054**: After a wave's slices converge and its integration tests pass, and **before any
   panel lane is dispatched**, the wave MUST pass two read-only gates run in parallel: a
   verification gate against the specification artifacts and the constitution, and a
   code-review gate across its quality aspects. Every actionable content finding from either
   gate, at any severity, MUST be resolved before the panel is dispatched. A note that does
   not meet the finding bar is a nonblocking observation and MUST NOT enter the
-  deferred-findings register. The round-nine LOW/MEDIUM deferral in FR-051 applies only to
-  panel rounds, never to these pre-panel gates.
+  legacy deferred-findings register. No round-count threshold makes an actionable content
+  finding nonblocking at these pre-panel gates.
 - **FR-055**: The code-review gate MUST be scoped to the wave's own diff against its actual
   base - the integration lineage, or the predecessor wave branch when stacked - and MUST NOT
   be scoped against the repository default branch, which does not share the integration
@@ -1541,7 +1530,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   2,000 ms. This outer budget neither replaces nor sums the tighter FR-030 component budgets:
   every applicable p95 component budget and this end-to-end ceiling MUST pass independently,
   and passing either one cannot excuse failure of the other. T604 owns collection of this
-  measurement without taking implementation ownership. Its host-acceptance leg emits exactly
+  measurement on proposed F6 without taking implementation ownership. Its host-acceptance leg emits exactly
   one separately encoded `Sc002ActivationReceiptV1` referenced by the unchanged schema-v2
   `EvidenceRecord` for `operator-nix-activation-cleanup`: schema version 1, kind
   `sc002-activation-live`, encoded size at most 16,384 bytes, one `CLOCK_MONOTONIC` start
@@ -1553,7 +1542,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   receipt, unchanged outer `EvidenceRecord`, and its errors use fixed redacted `Debug` and
   contain no free-form strings, host identity, path, command, argv, or log text. T589 owns one
   validator used unchanged at import, durable reopen, panel-request/panel-attest, seal, and
-  merge-eligibility. T600 passes T604's external receipt as the explicit
+  merge-eligibility. T479 passes T604's external receipt as the explicit
   `wave validate-import --sc002-receipt PATH` input. For this validation the importer rejects
   caller-supplied `--locator`, opens the source once without following links, requires a
   regular single-link file owned by the current effective uid with mode exactly `0600`, hashes
@@ -1843,12 +1832,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: At clean base A, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If all T073-T218 obligations have qualifying evidence, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records the exact checkbox-only change in dedicated commit C. The editor receipt and Git history are the sole authority. Any open row leaves all 147 boxes unchanged. T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Before T589, fresh analysis and a new selected-roster lifecycle must bind clean C and the changed snapshot. T219 additionally requires C to be an ancestor of final F and the exact eight T600/T601 evidence identifiers to bind F and its tree.
+- **SC-034**: At clean base A, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If all T073-T218 obligations have qualifying evidence, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records the exact checkbox-only change in dedicated commit C. The editor receipt and Git history are the sole authority. Any open row leaves all 147 boxes unchanged. T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Before T589, fresh analysis and a new selected-roster lifecycle must bind clean C and the changed snapshot. T219 additionally requires C to be an ancestor of final F and the exact seven T600/T601 evidence identifiers to bind F and its tree.
 
 - **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
   for `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and
   built and no skip. W2-W4 carry the closed continuity result directly; W5 carries it only
-  inside `operator-nix-activation-cleanup`; W6 carries it only inside
+  inside `production-session-watch`; W6 carries it only inside
   `w6-cloud-hypervisor-guest-acceptance`. The corresponding close task revalidates that result
   before panel request, seal, merge eligibility, and merge.
 
@@ -1921,12 +1910,12 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-027**: Every current wave seals at N/N unanimity for its selected roster and merges strictly after its predecessor
   did, in 100 percent of waves. Zero waves issue a panel request while their predecessor is
   unsealed, and zero waves panel against a snapshot that predates their post-merge rebase.
-- **SC-028**: Zero CRITICAL or HIGH findings are deferred in any wave. Every LOW or MEDIUM
-  finding deferred by a round-nine-or-later panel appears in the deferred-findings register
-  with a disposition, and zero deferred findings reach the release still marked open without
-  an explicit withdrawal or schedule. Pre-panel observations never enter this register.
+- **SC-028**: Every current lifecycle completes one comprehensive discovery, one stable
+  shared ledger, batched fixes and self-verification, and scoped verification. Zero findings
+  become nonblocking because of a round count: pre-existing late MINOR and NIT observations
+  remain nonblocking history, while admitted BLOCKER and MAJOR findings remain blocking.
 - **SC-029**: 100 percent of waves pass the pre-panel verification and code-review gates,
-  scoped to the wave diff, with zero CRITICAL verification findings outstanding, before
+  scoped to the wave diff, with zero actionable content findings outstanding, before
   any panel lane is dispatched.
 
 ## Assumptions

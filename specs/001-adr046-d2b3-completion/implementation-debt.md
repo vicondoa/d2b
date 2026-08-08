@@ -8,9 +8,9 @@ exists but is unreachable, and gate coverage that is not yet enforcing.
 
 ## What belongs here, and why it is separate
 
-This register is **not** [`deferred-findings.md`](./deferred-findings.md). That
-one records panel findings deferred under the bounded-deferral rule, and only
-after a wave's eighth round. This one records debt created by *building*
+This register is **not** the current lifecycle's shared finding ledger.
+[`deferred-findings.md`](./deferred-findings.md) is retained as historical compatibility
+data and receives no findings under Constitution 3.0. This register records debt created by *building*
 against a specification set that is not uniformly complete, which is a
 different thing with a different owner and a different closing condition.
 
@@ -1054,7 +1054,7 @@ Three, all small, all recorded rather than corrected in place.
 
 Recorded the way section 9 was, before the wave's slices open, so its scope and
 its shared-file decisions are settled rather than argued at review. Wave 4 is
-the program's largest wave - 32 work items across six parallel groups, against
+the program's largest wave - 31 work items across six parallel groups, against
 Wave 3's four - so a shared-file collision that Wave 3 could absorb in a
 follow-up round would here collide across three groups at once.
 
@@ -1679,9 +1679,10 @@ The current tree corrects one ownership assumption in that table:
 that trait and owns the production implementation in
 `packages/d2bd/src/network_effect_adapter.rs`, with serialized post-T595 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
-broker operations and performs no direct host mutation. T336-T355 are pulled forward before
-T604. Until the accepted double-opt-in migration, that adapter, the executable network-local
-path, and all four production Network/Host cases land, T604 and T220 remain blocked.
+broker operations and performs no direct host mutation. T336-T355 remain authoritative W6
+work under T221. T604 consumes their merged result in W6; it does not pull them into W5.
+Until the accepted double-opt-in migration, that adapter, the executable network-local path,
+and all four production Network/Host cases land, T604 and T479 remain blocked.
 
 ### 16.3 Credential Provider work is in progress, not complete
 
