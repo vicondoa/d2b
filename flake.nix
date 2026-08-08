@@ -1625,8 +1625,7 @@
               && edgeKinds
                 == (if production then "normal,build" else "normal,build,dev");
           in
-          if !bazelSourceIdentityGate
-            || !policyInputsPresent
+          if !policyInputsPresent
             || !policyInputCorpusGate
             || expectedContext == null || !contextBound then
             pkgs.runCommand "d2b-${name}-input" { } ''
