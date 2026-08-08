@@ -943,16 +943,17 @@ fn collect_fresh_files(
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let name = entry.file_name();
-        if matches!(name.to_str(), Some(".git" | ".scratch" | "target")) {
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() && is_fresh_ignored_directory(&name) {
             continue;
         }
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        if file_type.is_dir() {
             if path != root {
                 paths.push(path.strip_prefix(root)?.to_path_buf());
             }
             collect_fresh_files(root, &path, paths)?;
-        } else if entry.file_type()?.is_file() || entry.file_type()?.is_symlink() {
+        } else if file_type.is_file() || file_type.is_symlink() {
             paths.push(path.strip_prefix(root)?.to_path_buf());
         } else {
             return Err("unsupported filesystem node in bootstrap audit".into());
@@ -1044,14 +1045,15 @@ fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let name = entry.file_name();
-        if name == "target" || name == ".scratch" {
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() && is_fresh_ignored_directory(&name) {
             continue;
         }
         let source_path = entry.path();
         let destination_path = destination.join(name);
-        if entry.file_type()?.is_dir() {
+        if file_type.is_dir() {
             copy_tree_without_build_outputs(&source_path, &destination_path)?;
-        } else if entry.file_type()?.is_file() {
+        } else if file_type.is_file() {
             fs::copy(source_path, destination_path)?;
         } else {
             return Err(std::io::Error::other(
@@ -1060,6 +1062,13 @@ fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io
         }
     }
     Ok(())
+}
+
+fn is_fresh_ignored_directory(name: &std::ffi::OsStr) -> bool {
+    matches!(name.to_str(), Some(".git" | ".scratch" | "target"))
+        || name
+            .to_str()
+            .is_some_and(|name| name.starts_with("target-"))
 }
 
 struct ExecutableBazelExecutor;
@@ -2437,6 +2446,28 @@ mod fresh_bootstrap_tests {
         )
         .expect("walker inputs");
         root
+    }
+
+    #[test]
+    fn fresh_copy_excludes_every_cargo_target_directory() {
+        let root = create_exclusive_temp_dir("xtask-fresh-copy").expect("fixture");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("Cargo.toml"), b"[workspace]\n").expect("source file");
+        for name in ["target", "target-layer1", "target-fakebackends"] {
+            let directory = source.join(name);
+            fs::create_dir_all(&directory).expect("target directory");
+            fs::write(directory.join("transient"), b"build output").expect("target output");
+        }
+
+        copy_tree_without_build_outputs(&source, &destination).expect("copy source tree");
+
+        assert!(destination.join("Cargo.toml").is_file());
+        for name in ["target", "target-layer1", "target-fakebackends"] {
+            assert!(!destination.join(name).exists(), "{name} must be excluded");
+        }
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
