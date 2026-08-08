@@ -454,6 +454,8 @@ struct SelectionInputs {
 }
 
 const CANDIDATE_CLASSES: [&str; 4] = ["code", "configuration", "documentation", "ambiguous"];
+const CANDIDATE_CLASS_PRECEDENCE: [&str; 4] =
+    ["ambiguous", "code", "configuration", "documentation"];
 
 fn authoritative_selection_table() -> Result<SelectionTable> {
     let table: SelectionTable =
@@ -651,6 +653,74 @@ fn table_roles(names: &[String], label: &str) -> Result<Vec<PanelRole>> {
         .collect()
 }
 
+/// Mirrors the POSIX `path.normalize` behavior used by the JavaScript
+/// lifecycle helper after it has converted backslashes to slashes.
+fn normalize_classification_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let absolute = path.starts_with('/');
+    let trailing_separator = path.ends_with('/');
+    let mut components = Vec::new();
+
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if components
+                    .last()
+                    .is_some_and(|component| *component != "..")
+                {
+                    components.pop();
+                } else if !absolute {
+                    components.push(component);
+                }
+            }
+            component => components.push(component),
+        }
+    }
+
+    let mut normalized = if absolute {
+        "/".to_owned()
+    } else {
+        String::new()
+    };
+    normalized.push_str(&components.join("/"));
+    if normalized.is_empty() {
+        normalized.push('.');
+    }
+    if trailing_separator && normalized != "/" {
+        normalized.push('/');
+    }
+    normalized
+}
+
+fn is_documentation_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    if path.starts_with("docs/") || path.starts_with("changelog.d/") {
+        return true;
+    }
+    if path.contains('/') {
+        return false;
+    }
+    if path == "readme"
+        || path.starts_with("readme.")
+        || path == "changelog"
+        || path.starts_with("changelog.")
+    {
+        return true;
+    }
+    [".md", ".mdx", ".rst", ".txt"]
+        .iter()
+        .any(|suffix| path.ends_with(suffix) && path.len() > suffix.len())
+}
+
+fn candidate_class_precedence(classes: &[&str]) -> &'static str {
+    CANDIDATE_CLASS_PRECEDENCE
+        .iter()
+        .copied()
+        .find(|candidate_class| classes.contains(candidate_class))
+        .expect("nested classification exists")
+}
+
 fn parse_classification_inputs(
     value: &Value,
     label: &str,
@@ -697,11 +767,24 @@ fn parse_classification_inputs(
         .collect::<Result<Vec<_>>>()?;
     let canonical_changed_paths = raw_changed_paths
         .iter()
-        .map(|path| path.replace('\\', "/"))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if raw_changed_paths != canonical_changed_paths {
+        .map(|path| {
+            let canonical = normalize_classification_path(path);
+            if canonical.as_str() != path
+                || canonical == "."
+                || canonical.starts_with('/')
+                || canonical.ends_with('/')
+            {
+                return Err(DeliveryError::new(format!(
+                    "{label} changed_paths must contain canonical normalized paths"
+                )));
+            }
+            Ok(canonical)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut sorted_changed_paths = canonical_changed_paths.clone();
+    sorted_changed_paths.sort();
+    sorted_changed_paths.dedup();
+    if canonical_changed_paths != sorted_changed_paths {
         return Err(DeliveryError::new(format!(
             "{label} changed_paths must be unique and sorted"
         )));
@@ -727,7 +810,7 @@ fn parse_classification_inputs(
         .collect::<Result<Vec<_>>>()?;
     let canonical_signals = raw_signals
         .iter()
-        .map(|signal| signal.trim().to_ascii_lowercase())
+        .map(|signal| signal.trim().to_lowercase())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
@@ -745,6 +828,15 @@ fn parse_classification_inputs(
     if !CANDIDATE_CLASSES.contains(&candidate_class) {
         return Err(DeliveryError::new(format!(
             "{label} candidate_class {candidate_class:?} is unsupported"
+        )));
+    }
+    if candidate_class == "documentation"
+        && canonical_changed_paths
+            .iter()
+            .any(|path| !is_documentation_path(path))
+    {
+        return Err(DeliveryError::new(format!(
+            "{label} candidate_class documentation cannot narrow actual non-documentation paths"
         )));
     }
     let ambiguous = object
@@ -848,18 +940,7 @@ fn validate_nested_classification_consistency(inputs: &SelectionInputs) -> Resul
             "panel selection classification_inputs ambiguous must equal nested classifications",
         ));
     }
-    let expected_class = if nested_classes.contains(&"ambiguous") {
-        "ambiguous"
-    } else if nested_classes.contains(&"code") {
-        "code"
-    } else {
-        inputs
-            .full_candidate
-            .as_deref()
-            .or(inputs.fix_delta.as_deref())
-            .map(|nested| nested.candidate_class.as_str())
-            .expect("nested classification exists")
-    };
+    let expected_class = candidate_class_precedence(&nested_classes);
     if inputs.candidate_class != expected_class {
         return Err(DeliveryError::new(
             "panel selection classification_inputs candidate_class must agree with nested \
@@ -1031,6 +1112,14 @@ impl PanelSelectionV1 {
             ));
         }
         let inputs = selection_inputs(&self.classification_inputs, &self.phase)?;
+        if self.phase == "verification"
+            && (inputs.full_candidate.is_none() || inputs.fix_delta.is_none())
+        {
+            return Err(DeliveryError::new(
+                "verification selection classification_inputs must contain both \
+                 full_candidate and fix_delta",
+            ));
+        }
         if self.candidate_class != inputs.candidate_class {
             return Err(DeliveryError::new(
                 "panel selection candidate_class disagrees with classification_inputs",
@@ -2571,6 +2660,128 @@ mod tests {
         empty_fix_delta
             .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
             .expect("the standard no-op fix delta remains readable");
+
+        let mut missing_nested_classification = verification.clone();
+        missing_nested_classification
+            .classification_inputs
+            .as_object_mut()
+            .expect("classification inputs object")
+            .remove("fix_delta");
+        let error = missing_nested_classification
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("verification selections require both nested classifications");
+        assert!(
+            error
+                .message()
+                .contains("must contain both full_candidate and fix_delta"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn selection_validation_matches_javascript_classification_parity() {
+        assert_eq!(
+            candidate_class_precedence(&["documentation", "configuration"]),
+            "configuration"
+        );
+        assert_eq!(
+            candidate_class_precedence(&["documentation", "code"]),
+            "code"
+        );
+        assert_eq!(
+            candidate_class_precedence(&["configuration", "ambiguous"]),
+            "ambiguous"
+        );
+
+        let mut documentation_full_configuration_delta = selection(
+            &PANEL_CURRENT_ROLES,
+            "configuration",
+            &["docs/full-review.md", "nixos/panel.nix"],
+            &[],
+            &["markdown", "nix"],
+        );
+        documentation_full_configuration_delta.phase = "verification".to_owned();
+        documentation_full_configuration_delta.classification_inputs = serde_json::json!({
+            "changed_paths": ["docs/full-review.md", "nixos/panel.nix"],
+            "signals": [],
+            "candidate_class": "configuration",
+            "ambiguous": false,
+            "full_candidate": {
+                "changed_paths": ["docs/full-review.md"],
+                "signals": [],
+                "candidate_class": "documentation",
+                "ambiguous": false,
+            },
+            "fix_delta": {
+                "changed_paths": ["nixos/panel.nix"],
+                "signals": [],
+                "candidate_class": "configuration",
+                "ambiguous": false,
+            },
+        });
+        documentation_full_configuration_delta
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("configuration must take precedence over documentation");
+
+        let non_documentation = selection(
+            &PANEL_CURRENT_ROLES[..8],
+            "documentation",
+            &["src/panel.rs"],
+            &[],
+            &[],
+        );
+        let error = non_documentation
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("documentation must not narrow a non-documentation path");
+        assert!(
+            error
+                .message()
+                .contains("cannot narrow actual non-documentation paths"),
+            "{error}"
+        );
+
+        for path in [
+            "src\\panel.rs",
+            "./src/panel.rs",
+            "src//panel.rs",
+            "src/panel.rs/",
+        ] {
+            let noncanonical = selection(&PANEL_CURRENT_ROLES[..10], "code", &[path], &[], &[]);
+            let error = noncanonical
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .expect_err("classification paths must already be canonical");
+            assert!(
+                error.message().contains("canonical normalized paths"),
+                "{path:?}: {error}"
+            );
+        }
+
+        let canonical_signal = selection(
+            &PANEL_CURRENT_ROLES[..10],
+            "code",
+            &["src/panel.rs"],
+            &["rust"],
+            &["rust"],
+        );
+        canonical_signal
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("canonical lowercase signals remain accepted");
+        for signal in ["Rust", " rust", "rust "] {
+            let noncanonical_signal = selection(
+                &PANEL_CURRENT_ROLES[..10],
+                "code",
+                &["src/panel.rs"],
+                &[signal],
+                &["rust"],
+            );
+            let error = noncanonical_signal
+                .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+                .expect_err("classification signals must already be canonical");
+            assert!(
+                error.message().contains("lowercase, and sorted"),
+                "{signal:?}: {error}"
+            );
+        }
     }
 
     fn mandatory_only_snapshot_digests() -> CandidateDigests {
