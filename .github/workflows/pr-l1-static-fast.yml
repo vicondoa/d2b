@@ -1353,6 +1353,29 @@ jobs:
           test "$actual" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
           printf 'commit=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+      - name: Emit disposable native artifact measurements
+        run: |
+          set -euo pipefail
+          broker=$(nix build --no-link --print-out-paths .#packages.aarch64-linux.d2b-priv-broker)
+          guest=$(nix build --no-link --print-out-paths .#packages.aarch64-linux.d2b-guest-shell-runner-static)
+          flake_ref="git+file://$PWD"
+          broker_closure=$(nix build --impure --no-link --print-out-paths --expr \
+            "let f = builtins.getFlake \"$flake_ref\"; pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; }; in pkgs.closureInfo { rootPaths = [ f.packages.aarch64-linux.\"d2b-priv-broker\" ]; }")
+          guest_closure=$(nix build --impure --no-link --print-out-paths --expr \
+            "let f = builtins.getFlake \"$flake_ref\"; pkgs = import f.inputs.nixpkgs { system = \"aarch64-linux\"; }; in pkgs.closureInfo { rootPaths = [ f.packages.aarch64-linux.\"d2b-guest-shell-runner-static\" ]; }")
+          printf 'broker-bytes=%s\n' "$(stat -c %s "$broker/bin/d2b-priv-broker")"
+          printf 'broker-sha256=%s\n' "$(sha256sum "$broker/bin/d2b-priv-broker" | cut -d' ' -f1)"
+          printf 'broker-closure-count=%s\n' "$(wc -l < "$broker_closure/store-paths" | tr -d '[:space:]')"
+          printf 'broker-closure-sha256=%s\n' "$(sha256sum "$broker_closure/store-paths" | cut -d' ' -f1)"
+          printf 'guest-bytes=%s\n' "$(stat -c %s "$guest/bin/d2b-guest-shell-runner")"
+          printf 'guest-sha256=%s\n' "$(sha256sum "$guest/bin/d2b-guest-shell-runner" | cut -d' ' -f1)"
+          printf 'guest-closure-count=%s\n' "$(wc -l < "$guest_closure/store-paths" | tr -d '[:space:]')"
+          printf 'guest-closure-sha256=%s\n' "$(sha256sum "$guest_closure/store-paths" | cut -d' ' -f1)"
+          readelf -l "$broker/bin/d2b-priv-broker" | grep 'Requesting program interpreter'
+          readelf -d "$broker/bin/d2b-priv-broker" | grep '(NEEDED)'
+          readelf -h "$guest/bin/d2b-guest-shell-runner" | grep -E 'Type:|Machine:'
+          ! readelf -l "$guest/bin/d2b-guest-shell-runner" | grep -q 'Requesting program interpreter'
+          ! readelf -d "$guest/bin/d2b-guest-shell-runner" | grep -q '(NEEDED)'
       - name: Realize native aarch64 flake checks
         env:
           D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
