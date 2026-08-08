@@ -39,9 +39,16 @@ let
     if builtins.isAttrs value && builtins.hasAttr name value
     then builtins.getAttr name value
     else null;
+  stringSet = values:
+    builtins.listToAttrs (map (value: {
+      name = value;
+      value = true;
+    }) values);
   unique = values:
     builtins.isList values
-    && builtins.length values == builtins.length (lib.unique values);
+    && builtins.all builtins.isString values
+    && builtins.length values
+      == builtins.length (builtins.attrNames (stringSet values));
   identityKey = value:
     let
       source = get "source" value;
@@ -60,7 +67,8 @@ let
     && builtins.isList right
     && unique left
     && unique right
-    && lib.sort builtins.lessThan left == lib.sort builtins.lessThan right;
+    && builtins.attrNames (stringSet left)
+      == builtins.attrNames (stringSet right);
   packageForId = packages: id:
     lib.findFirst (package: get "id" package == id) null packages;
   nodeForId = nodes: id:
@@ -110,16 +118,20 @@ let
     && builtins.all (key: key != null) detailKeys
     && unique detailKeys
     && exactSet dependencies detailIds;
-  reachable = nodes: seen: frontier:
-    if frontier == [ ] then seen else
+  reachable = nodes: root:
     let
-      fresh = lib.filter (id: !(builtins.elem id seen)) frontier;
-      next = lib.concatMap (id:
-        let node = nodeForId nodes id;
-        in if node == null then [ ] else node.dependencies)
-        fresh;
+      nodeIndex = builtins.listToAttrs (map (node: {
+        name = node.id;
+        value = node;
+      }) nodes);
+      closure = builtins.genericClosure {
+        startSet = [ { key = root; } ];
+        operator = item:
+          let node = builtins.getAttr item.key nodeIndex;
+          in map (id: { key = id; }) node.dependencies;
+      };
     in
-    reachable nodes (lib.unique (seen ++ fresh)) next;
+    map (item: item.key) closure;
   policyValid = artifact: lock:
     let
       packages = get "packages" artifact;
@@ -179,7 +191,7 @@ let
     && rootId == (builtins.head roots).id
     && builtins.isAttrs rootNode
     && builtins.all (node: nodeEdgesClosed node packageIds packages) nodes
-    && exactSet packageIds (reachable nodes [ ] [ rootId ])
+    && exactSet packageIds (reachable nodes rootId)
     && builtins.isList lockPackages
     && builtins.length lockPackages > 0
     && exactSet graphIdentities lockKeys;
