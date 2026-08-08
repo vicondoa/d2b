@@ -1733,31 +1733,37 @@ table before the operation exists.
   repair-resume, and continuity-repair pre/evidence/watermark/outcome, at all nine publication
   boundaries. The unchanged 168-id registry remains the independent owner of the three
   legacy backup/restoration-evidence/restoration-pre class families omitted from that
-  supplemental list. Replay-key publication is a mandatory ensure-root subrecord and source
-  replay binding is a mandatory continuity-repair-pre subrecord; neither adds a class or id
-  to the 216-id census. The 88-id registry independently pins root-aggregate storage limits,
-  continuity-evidence 1/2-record, 131,072/131,073-byte and 256/257-attempt limits,
+  supplemental list. Replay-key publication is a mandatory ensure-root subvisitor, while
+  source acquisition/binding and release are mandatory continuity-repair-pre/compaction
+  subvisitors; none adds a class or id to the 216-id census. The 88-id registry independently pins root-aggregate storage limits,
+  continuity-evidence 1/2-record, 131,072/131,073-byte body,
+  141,312/141,313-byte combined source-attempt, and 256/257-live-attempt limits,
   all five standing capacity-control reserve classes/actions, cycle-unique reservation
   success/refusal/retry and malformed prefixes, both release prefix machines and their
   proof/reason substitutions, the independently calculated ten-row
-  5,632-record/44,302,336-byte future-continuity charge, all 256 retained attempt prefixes,
-  512 prune pairs, 256 reduced censuses, and post-replacement unreserved-capacity
-  exhaustion, retention-anchor conflict, crash-stable source pin/replay binding, typed
-  continuity repair including the five frozen replay/attempt/audit/evidence vectors,
-  watermark/prune/whole-set, terminal/export/target/head/compaction, and settlement vectors,
-  typed replay-key publication plus private-key non-derivability, durable decision-pre and
-  exact outcome-intent settlement for repaired and degraded variants, multi-member
+  8,704-record/50,593,792-byte future-continuity charge, all 256 retained attempt prefixes,
+  512 prune pairs, 256 reduced censuses, 256-degradation reclamation/source-release/slot
+  reuse, and post-replacement unreserved-capacity exhaustion, retention-anchor conflict,
+  crash-stable pre-audited source pin/replay binding and audited source release, typed
+  continuity repair including replay/attempt/audit/evidence, source-binding
+  attempt/receipt, replay-key attempt, prune-history/final-absence,
+  watermark/prune/whole-set, terminal/export/target/successor/head/compaction, and
+  settlement vectors, typed replay-key candidate publication plus private-key
+  non-derivability, durable decision selection/decision-pre and exact outcome-intent
+  settlement for repaired and degraded variants, multi-member
   whole-set prune proof and malformed ordering/pairing, outcome-specific evidence
   export/compaction admission and restart, and the full repair and compaction permit
   compiler/API negatives. The existing `prune-pre`/`prune-outcome`
   boundary ids independently visit backup prune and continuity compaction, and the existing
-  `continuity-repair-outcome` ids independently visit decision-pre, intent, and terminal
-  publication,
+  `continuity-repair-outcome` ids independently visit decision selection, decision-pre,
+  intent, terminal, and final-absence publication,
   without changing the 216-id census. The 88-id visitor also owns startup/idle day-90
   catch-up without Admin traffic, prune-permit negatives, transport-loss restoration
-  resubmission, every private publication identifier, source-binding and replay-key canary,
-  every continuity body member across every observable surface, `Display` denial, exact
-  redacted `Debug`, and shrinkage. Fixture, literal
+  resubmission, compaction recovery and current-head/target changes at every ordinal,
+  every private publication identifier, source pin/binding/release and replay-key
+  candidate canaries, every continuity body member across every observable surface,
+  audit-field record-family allowlists, `Display` denial, exact redacted `Debug`, and
+  shrinkage. Fixture, literal
   constant, production visitor, and poison visitors must be mutually read-independent; no
   runtime Cartesian generation is accepted. Grouped prefix and permit ids still require
   independent named hooks or compile-fail/API assertions plus one removal poison for every
@@ -1870,31 +1876,43 @@ table before the operation exists.
   operation and generation until durable export replenishes capacity. Enforce the
   per-restoration 8-record/1,048,576-byte and per-intent 256-attempt subset, the
   per-continuity-attempt 1 evidence record/131,072-byte body, 1 broker source-binding
-  record plus its fixed pre/outcome pair, the per-intent 256-attempt, 256 first-time
-  member-absence, and 512 total member-prune-attempt subsets, and the
+  record plus acquisition pre/outcome, association pre, and binding outcome, the per-intent
+  256 simultaneously retained
+  repair slots, 256 retained first-time member-absence proofs, and 512 retained
+  member-prune-attempt subsets, and the
   8,192-record/67,108,864-byte pending-audit staging subset, body-bearing evidence removal
   with its replaced set by day 90 only after digest audit export, continuity evidence
-  retention through repair replay and removal only through typed compaction after governed
-  absence and the outcome-specific export matrix. Repaired outcomes require matching
+  retention through repair replay, safe degraded-attempt reclamation before governed-set
+  absence, and final replaced-set compaction after governed absence and the
+  outcome-specific export matrix. Repaired outcomes require matching
   binding/pre/evidence/watermark/settlement/outcome, while degraded outcomes require
   matching binding/pre/settlement/outcome, proven never-durable or exact durable evidence,
-  and no accepted watermark. Every row requires all partial and later prune pre/outcome and
-  reduced-census records plus the final absence proof; the day-90 complete rows additionally
-  require target and whole-set proof. Pending or incomplete repair, missing/mismatched
+  and no accepted watermark. Finalization rows require all partial and later prune
+  pre/outcome and reduced-census records plus the final absence proof; safe degraded
+  reclamation instead preserves any exported prune history in the epoch census and never
+  targets a governed member. The day-90 complete rows additionally require target and
+  whole-set proof. Pending or incomplete repair, missing/mismatched
   durable evidence or required export, unbound evidence absence, an unexpected degraded
-  watermark, file-only export, a present governed member, malformed replay key, incomplete
-  target set, or stale/current-head proof refuses before compaction pre-audit. Every
+  watermark, file-only export, malformed replay key, incomplete target set, or
+  stale/current-head/successor proof refuses before either compaction mode. A present
+  governed member refuses final replaced-set compaction but is preserved and never targeted
+  by safe degraded reclamation. Every
   accepted replacement adds the exact ten-row
-  `ContinuityReplacementFutureChargeV1` of 5,632 records and 44,302,336 encoded bytes to
-  its reservation for all 256 maximum retained binding/evidence/watermark/repair/settlement/
-  compaction/target/head prefixes, 512 member-prune pairs, and 256 reduced censuses.
+  `ContinuityReplacementFutureChargeV1` of 8,704 records and 50,593,792 encoded bytes to
+  its reservation for all 256 maximum retained
+  binding/evidence/watermark/repair/decision-selection/settlement/
+  compaction/target/successor/head/receipt/source-release prefixes, 512 member-prune pairs,
+  and 256 reduced censuses.
   Read-independent record/byte boundary cases calculate each row and multiplier without
   production constants, refuse either one-short boundary, poison every omission/count,
   exhaust all unreserved capacity after replacement, retain 255 degraded or partial-prune
-  attempts across fresh-process restarts, and still complete the 256th repair, final prune,
-  settlement, and compaction from the reservation. Separate exact-capacity sequences cover
-  repeated success, degraded settlement, partial prune, restart, later repair, final prune,
-  settlement, and compaction. Root-operation
+  attempts across fresh-process restarts, and still complete the 256th repair, then
+  reclaim all 256 degraded attempts before governed-set absence, release every source
+  pin/binding, reuse a slot for a later repair, and complete final prune, settlement, and
+  compaction from the reservation. Separate exact-capacity sequences cover repeated
+  success, degraded settlement, partial prune, restart, later repair, final prune,
+  settlement, per-target compaction recovery, audited source release, and zero-backlog
+  completion. Root-operation
   audit rotates only through the existing bounded append-only broker audit segment owner;
   overwrite, truncation, or silent record drop is forbidden. Exact accepted/refused
   record/byte boundaries and every lifecycle transition are tests. It
@@ -1924,41 +1942,67 @@ table before the operation exists.
   `PublishHostGenerationImmutableAuditContinuityReplayKeyV1` owns key creation as a typed
   no-replace, fd-anchored, capacity-charged pre/outcome operation before the root becomes
   usable. It obtains exactly 32 CSPRNG bytes only after pre-audit, uses an unnamed mode-0600
-  root-owned regular inode, write/file sync, procfs-fd no-replace link, exact final reopen
-  and inode/posture/byte revalidation, and held-parent sync. Its private root census binds
-  mount/device/inode identity without a key digest. Fresh-process cases cover pre-only,
-  write, file-sync, link, reopen, parent-sync, outcome, response loss, completed zero-write
-  reopen, CSPRNG/capacity failure, and missing/short/long/partial/hard-linked/replaced/
+  root-owned regular inode with link count zero through write/file sync, durably publishes
+  a broker-private candidate commitment binding publication attempt, generation,
+  mount/device/inode, posture, and key commitment, then uses procfs-fd no-replace link,
+  exact final reopen with link count one and inode/posture/byte/commitment revalidation, and
+  held-parent sync. Its fixed audit uses only the two-step
+  `ContinuityReplayKeyPublicationAttemptIdV1` audit projection; its private root census
+  binds mount/device/inode identity without key bytes or digest. Fresh-process cases cover
+  pre-only, candidate commitment/supersession, write, file-sync, link, reopen, parent-sync,
+  outcome, response loss, completed zero-write reopen, CSPRNG/capacity failure, exact-final
+  reuse or absent-final resampling before parent durability, absent-final degradation after
+  parent durability, and missing/short/long/partial/hard-linked/replaced/
   owner/group/mode/type/mount/device/symlink/magic-link/ACL/label identity negatives.
-  Pre-link restart may resample; post-link restart must reuse and never rotate or replace.
+  Before parent durability restart reuses an exact commitment-bound final or durably
+  supersedes an absent candidate before resampling; after parent durability absence is
+  integrity degradation and never rotates or replaces.
   The key is sealed, durable across process death, absent from
   audit/export/wire/response/log/metric/span/panic/Debug, and required to prevent an audit
   reader from reconstructing the handle.
 
-  The authoritative source durably pins acquisition by the broker-derived
-  `ContinuitySourceBindingAttemptIdV1`, then accepts the opaque HMAC handle only through
-  typed `BindHostGenerationImmutableAuditContinuitySourceEvidenceV1`. That broker operation
-  publishes fixed pre-audit before the source mutation, invokes no-replace
+  The authoritative source first holds and revalidates a disposition-pinned stable root
+  dirfd and side-effect-free checks its 256-live-pair ceiling. The broker then publishes
+  fixed acquisition pre-audit using only
+  `continuitySourceBindingAttemptSha256` and the source-authority audit projection before
+  the source durably pins acquisition by broker-derived
+  `ContinuitySourceBindingAttemptIdV1`. After the pin outcome it publishes a second fixed
+  association pre-audit and accepts the opaque HMAC handle only through typed
+  `BindHostGenerationImmutableAuditContinuitySourceEvidenceV1`, which invokes no-replace
   `ContinuityEvidenceReplayBindingV1`, requires source binding file and directory sync
   before its receipt, then durably publishes the exact private
   `HostGenerationImmutableAuditContinuitySourceBindingV1` and fixed outcome before replay
-  or repair pre-audit. Restart resumes only the pinned binding attempt, fixed broker pre,
-  and exact source/broker association; no latest, enumeration, fallback, rebind, or caller
-  selector exists. Independent fresh-process hooks and poisons cover every source pin/file/
-  directory, broker binding pre, source handle association/file/directory, broker binding
-  final/publication/outcome prefix and missing/replaced/rebound/partial/authority/version/
-  generation/handle/evidence/source-only/broker-only mismatch. Only after both bindings
-  match does it durably
+  or repair pre-audit. Restart resumes only the acquisition pre, pinned binding attempt,
+  association pre, and
+  exact source/broker association; no latest, enumeration, fallback, rebind, generic
+  removal, or caller selector exists. Every source pin/replay leaf is published and removed
+  through the stable fd-relative `openat2`/single-component no-replace link or
+  `unlinkat`/parent-sync protocol with `CLOEXEC`, no symlink/magiclink/cross-mount
+  traversal, and mount/inode revalidation. Independent fresh-process hooks and poisons
+  cover every source acquisition pre, pin/file/directory/outcome, broker association pre,
+  source handle association/file/directory, broker binding final/publication/outcome prefix
+  and missing/replaced/rebound/partial/authority/version/generation/handle/evidence/
+  source-only/broker-only mismatch, plus exact 141,312-byte admission and 141,313-byte
+  pre-audit refusal. Only after both bindings match does it durably
   publish fixed-field repair pre-audit binding the handle and source-binding receipt
   digests and one nested
   `BeforeDay90 | Day90Reached { mandatoryPruneTargetSha256 }` plan, then broker-private
   sealed evidence, any exact mandatory prune over the complete pre-bound 1-through-256
   member census, one immutable no-replace watermark final under the shared nine-boundary
-  publication protocol, durable decision-pre, a broker-private exact terminal-outcome
-  intent, and one matching fixed nested outcome. Fresh-process pre-only replay reconstructs
+  publication protocol, durable decision selection, decision-pre, a broker-private exact
+  terminal-outcome intent, and one matching fixed nested outcome. Fresh-process pre-only
+  replay reconstructs
   the same handle and attempt from durable binding/pre fields and invokes only exact source
   replay; source removal, version/authority/handle/binding change, or nonidentical bytes
-  returns a closed source failure with no new evidence choice or watermark. Caller
+  returns a closed source failure with no new evidence choice or watermark.
+  After a complete matching broker compaction outcome and durable exports prove replay
+  unnecessary, the consumed `ContinuitySourceReleasePermitV1` alone may call
+  `release_pinned`. It publishes fixed audit using only
+  `continuitySourceReleaseAttemptSha256`, unlinks and parent-syncs the replay binding then
+  pin with a durable census after each, and releases the live slot only after source and
+  broker outcomes are complete. Crash/restart tests cover every unlink/sync/census/outcome
+  prefix, release before compaction, foreign compaction receipt, source outage, response
+  loss, exact no-write replay, and admission of pair 257 only after one release. Caller
   evidence, root, a direct broker client, or the site backup administrator's claim can never
   publish an anchor. Compiler/API negatives separately
   reject construction, field/accessor use, Clone/Copy/Default, conversion/serde,
@@ -1980,59 +2024,85 @@ table before the operation exists.
   represents source, retention, and every `hierarchy | write | file-sync | link | reopen |
   directory-sync | conflict | audit-publication` terminal publication failure. It uses a
   terminal-retention subset that cannot encode `pending-settlement`; no settlement stage or
-  boundary converts into either terminal enum. Before intent publication it append-only
-  persists `ContinuityRepairOutcomeDecisionPreV1` with the complete typed outcome and
-  terminal digest. Decision-pre audit failure returns only typed preparation-incomplete
-  with no intended outcome. After decision-pre, every hierarchy/write/file-sync/link/
+  boundary converts into either terminal enum. Once a terminal outcome is reachable it
+  first publishes broker-private no-replace `ContinuityRepairDecisionSelectionV1` with the
+  complete typed outcome and terminal digest. Until that common-publication final is
+  durable, only the intrinsic incomplete-prefix `PendingDecisionSelection` is legal and
+  restart may resume no other repair mutation. It then append-only persists
+  `ContinuityRepairOutcomeDecisionPreV1` byte-identical to the durable selection.
+  Decision-pre audit failure returns typed preparation-incomplete carrying only that
+  selected intended outcome. After decision-pre, every hierarchy/write/file-sync/link/
   reopen/directory-sync/conflict/audit boundary of no-replace intent publication is typed
   pending-intent; after intent, every terminal boundary is typed pending-terminal. Both
   block later mutation and reconstruct the byte-identical outcome from durable
-  decision-pre/intent before new source acquisition. A watermark-complete repaired
+  selection/decision-pre/intent before new source acquisition. All three pending
+  publication types use an incomplete prefix that intrinsically derives the boundary;
+  `Complete` and an independent disagreeing failure are unrepresentable. A
+  watermark-complete repaired
   decision settles repaired unchanged; a degraded-after-evidence decision settles with zero
   accepted watermark and remains compaction-reachable. Fresh-process cases cover
-  decision-pre failure, every boundary for every repaired and degraded intent, restart,
-  response loss, and no-write completed replay. Strict schemas, wire snapshots, the exact
-  exit-`0` repaired and exit-`4` preparation-incomplete/pending/degraded human/JSON forms in
+  every decision-selection boundary, decision-pre failure, every boundary for every
+  repaired and degraded intent, restart from each durable prefix, response loss, and
+  no-write completed replay. Strict schemas, wire snapshots, the exact
+  exit-`0` repaired and exit-`4` decision-selection-pending/
+  preparation-incomplete/pending/degraded human/JSON forms in
   `contracts/operator-cli.md`, constructors, and hard-failure tests pin every variant,
-  terminal failure branch/class, settlement stage/boundary, intended outcome, and derived
-  action while rejecting every terminal/settlement conversion. T592 owns the broker DTO;
+  terminal failure branch/class, settlement stage/intrinsic boundary, intended outcome, and
+  derived action while rejecting every terminal/settlement conversion. T592 owns the broker DTO;
   T595's already assigned helper ownership renders those exact forms and action tokens,
-  while `contracts/operator-cli.md` maps all three continuity source/conflict actions to
-  their named external owners and procedures.
+  while `contracts/operator-cli.md` maps replay-key, reserved-subset, source
+  pin/bind/release, cleanup, settlement storage, conflict, and audit actions to their named
+  external owners and procedures. T592's closed wire variants distinguish replay-key
+  unavailable, source-lifecycle unavailable, reserved capacity, cleanup pending,
+  decision-selection pending, preparation-incomplete, later settlement pending, and
+  settled degraded; constructors reject every cross-domain class, illegal stage/class,
+  completed pending prefix, and mismatched derived action.
 
   The canonical continuity-evidence body is at most 131,072 bytes and its raw evidence,
   real-time value, boot-time value, boot identity, and authority proof each have independent
   canaries on every audit, wire, response, error, log, metric label/value/exemplar, span,
   panic, `Debug`, and `Display` surface. The type and every containing wrapper implement no
   `Display` and only exact type-name-plus-`([REDACTED])` `Debug`; independent member/surface
-  and seal-removal poisons enforce the matrix. The five replay/repair/audit/evidence
-  formulas and the mandatory-target, per-member prune outcome, whole-set proof, watermark,
-  repaired-watermark, terminal-outcome record, generic export-record,
-  required-export-set, compaction target-set, current-head proof, private/audit compaction
-  attempt, and restoration-settlement formulas have frozen read-independent known-answer
+  and seal-removal poisons enforce the matrix. The replay/repair/audit/evidence,
+  source-binding attempt/audit/receipt, replay-key publication attempt/audit,
+  source-release attempt/audit, mandatory-target, per-member prune outcome, whole-set proof,
+  prune-history/final-absence, watermark, repaired-watermark, terminal-outcome record,
+  generic export-record, required-export-set, compaction
+  target-set/successor/current-head proof, private/audit compaction attempt, and
+  restoration-settlement formulas have frozen read-independent known-answer
   vectors, every domain/member/tag/count/framing/order perturbation, excluded-self/body-field
   check, first/intermediate/final member removal/reorder, cross-field substitution, and one
   removal poison each.
 
   `CompactHostGenerationImmutableAuditContinuityV1` consumes its own sealed
   lifetime-bound private permit after validating the exact repaired or degraded
-  prerequisite row. It has a stable coordinator/attempt/terminal-outcome/final-census/export
-  identity plus complete target-set/current-head proof, fixed pre/outcome audit, and the full
+  prerequisite row. Its closed modes are final replaced-set compaction after governed
+  absence and attempt-local degraded reclamation after exact export while governed members
+  may remain. It has a stable coordinator/attempt/terminal-outcome/census/export identity
+  plus complete target-set/current-head/successor proof, fixed pre/outcome audit, and the full
   no-construction/accessor/clone/copy/default/conversion/serde/byte-digest-fd-reconstruction/
-  cross-coordinator/lifetime/second-dispatch seal. It unlinks only the bound evidence,
+  cross-coordinator/lifetime/second-dispatch seal. Immutable
+  `ContinuityCompactionSelectionV1` binds mode, every target's kind/expected leaf, evidence
+  selection, full current head and predecessor chain, export set, and prior target receipts;
+  transient `PresentExact | AbsentAfterSelectedUnlink` observations never enter identity
+  or pre/outcome. It unlinks only the bound evidence,
   source replay-binding, optional strict-successor-obsoleted watermark, and attempt-census
-  targets. The current watermark is preserved. Immediately before each target it
-  fd-relatively reopens/revalidates the complete set and current head, then unlinks that
-  target, reopens/revalidates/syncs its anchored parent, commits that target's reduced
-  census, and advances; every target/ordinal/present/post-unlink-parent-unsynced/
-  parent-durable-old-census/census-committed prefix restarts independently. Pre-only,
+  targets; degraded reclamation cannot target a watermark or governed member. The current
+  watermark is preserved. Immediately before each target it
+  fd-relatively reopens/revalidates the complete set, current head, and predecessor chain,
+  then unlinks that target, reopens/revalidates/syncs its anchored parent, commits that
+  target's reduced census and immutable receipt, and advances; every
+  target/ordinal/present/post-unlink-parent-unsynced/
+  parent-durable-old-census/census-committed/receipt-committed prefix restarts
+  independently. Pre-only,
   binding-only, evidence-only, prune-complete, all nine watermark boundaries,
-  watermark-without-decision, decision-without-intent, every intent/terminal boundary,
-  both pending settlement states, malformed-prefix, source-change, compaction, and
+  watermark-without-decision, selection-without-decision-pre, decision-without-intent,
+  every selection/intent/terminal/final-absence boundary,
+  all pending settlement states, malformed-prefix, source-change, compaction, and
   completed-response-loss tests pin exact replay. The malformed visitor independently hooks
   and poisons binding/evidence without required predecessors, watermark-before-evidence/
   prune, before-day-90 unrelated prune, day-90 success without whole-set proof, duplicate
-  records, decision/intent/outcome mismatch, source/binding change,
+  records, selection/decision/intent/outcome mismatch, source/binding change,
   handle/sequence/predecessor mismatch, terminal/settlement substitution, multi-member
   proof mismatch, and every deadline/outcome cross-pair. The compaction visitor
   independently refuses every missing/mismatched binding, pre, durable evidence, repaired
@@ -2040,11 +2110,20 @@ table before the operation exists.
   reduced-census record, final absence proof, and mandatory-prune export; unexpected
   degraded watermark; malformed replay-key state; illicit missing durable or mismatched
   evidence while accepting only proven never-durable and bound post-unlink absence;
-  file-only export; incomplete repair; governed-set presence; target omission/reorder/
-  substitution; stale/missing head proof; and current-watermark deletion. It admits every
-  complete repaired/degraded row including degraded-after-evidence with zero watermark and
-  hooks pre/outcome, every target prefix/unlink/parent revalidation/sync/census, every
-  fresh-process target ordinal, and response loss with poisons.
+  file-only export; incomplete repair; governed-set presence for finalization while
+  separately admitting safe degraded reclamation; target omission/reorder/substitution;
+  stale/missing head or successor proof; and current-watermark deletion. It admits every
+  complete repaired/degraded finalization row plus degraded-after-evidence reclamation with
+  zero watermark and hooks pre/outcome, every target
+  prefix/unlink/parent revalidation/sync/census/receipt, every fresh-process target ordinal,
+  source release, capacity release, and response loss with poisons. After every completed
+  ordinal and before final commit, tests independently advance the head, alter a predecessor
+  link, and substitute each residual target; each stops before another unlink and may resume
+  only through one `ContinuityCompactionRecoveryGenerationV1` binding prior outcome,
+  completed receipts, residual selection, and fresh head proof. Cleanup-failure tests settle
+  256 degraded repairs before governed-set absence, crash at every broker/source cleanup
+  boundary, restart, repair, reclaim every slot, and require bounded zero-backlog
+  convergence.
   Reboot, discontinuity, delayed repair, startup, idle wake, and repeated Admin wake tests
   pin the original deadline without Admin-dependent catch-up.
   Pruning is typed op
@@ -2104,9 +2183,10 @@ table before the operation exists.
   observed digest as append-only supersession provenance. The shared
   `HostGenerationImmutablePublicationV1` protocol covers dispatch, repair pre/outcome,
   ensure-root pre/outcome, reservation and both release pre/outcome pairs, retention-anchor
-  pre/candidate/outcome, replay-key pre/final/outcome, source-binding pre/final/outcome,
-  continuity-repair pre/evidence/watermark/decision-pre/intent/outcome,
-  continuity-compaction pre/outcome, backup, private
+  pre/candidate/outcome, replay-key pre/candidate/final/outcome, source-acquisition and
+  source-binding pre/final/outcome, source-release pre/outcome,
+  continuity-repair pre/evidence/watermark/decision-selection/decision-pre/intent/outcome/
+  final-absence-proof, continuity-compaction selection/target-receipt/pre/outcome, backup, private
   evidence, restoration pre/provenance/outcome, settlement, repair-resume, and prune
   pre/outcome. It
   begins only after `EnsureHostGenerationImmutablePublicationRootV1` has durably created or
@@ -2162,11 +2242,15 @@ table before the operation exists.
   `restorationAttemptSha256`. Independent vectors and record-family negatives prohibit
   substitution. Leakage canaries independently cover the publication-root private operation and
   root reference, governing capacity operation, reservation/release attempts,
-  retention-anchor attempt, continuity replay handle, continuity-repair attempt, prune
-  attempt, restoration attempt, restoration-settlement attempt, every preimage, and every
+  retention-anchor attempt, replay-key publication attempt and candidate commitment,
+  continuity source-binding/replay/release attempts and source-private records, continuity
+  repair/compaction/reclamation/recovery attempts, prune attempt, restoration attempt,
+  restoration-settlement attempt, every preimage, and every
   unqualified encoding across DTO/schema/example, response, human/JSON, error, `Display`,
   audit, log, trace/span, metric, panic, and `Debug`. Audit may expose only each identifier's
-  specifically named domain-separated digest field on its named record family. Independent
+  specifically named domain-separated digest field on its named record family; raw source
+  authority digests, private pin/replay/receipt bytes, and digest-family substitution are
+  denied by an explicit record-family allowlist. Independent
   body-field canaries cover continuity raw evidence, both clock values, boot identity, and
   authority proof on every surface, with one removal poison per identifier/preimage/
   encoding/body-field/surface.
@@ -2179,7 +2263,9 @@ table before the operation exists.
   registry are mandatory and mutually read-independent from production and the 156-id
   status registry. The 168 ids retain only their literal legacy responsibilities; the 216
   ids own the listed amendment classes including continuity-repair
-  pre/evidence/watermark/outcome at all nine boundaries; the 88 ids own capacity/lifecycle
+  pre/evidence/watermark/outcome at all nine boundaries, with the outcome ids pinning five
+  independent decision-selection/decision-pre/intent/terminal/final-absence subvisitors;
+  the 88 ids own capacity/lifecycle
   taxonomy and limits, both release malformed machines, continuity ordering/pairing and
   evidence compaction, permit seals, transport loss, all private-id/body canaries, and
   shrinkage. Every named
@@ -2844,6 +2930,20 @@ table before the operation exists.
   with zero write. T595 does not parse a second wire shape or mutate coordinator/audit files
   locally.
 
+  T595 also renders T592's selector-free continuity responses byte-for-byte from
+  `contracts/operator-cli.md`: replay-key unavailable, reserved-subset capacity, source
+  pin/binding/release unavailable, cleanup pending, decision-selection pending,
+  decision-pre preparation-incomplete, outcome-intent/terminal pending, settled degraded,
+  and repaired. Repaired exits `0`; every other continuity form exits `4`. Human/JSON
+  goldens cover every closed class, stage, intrinsic incomplete prefix, intended outcome,
+  and derived action. Hierarchy/write/file-sync/link/reopen/directory-sync settlement maps
+  to storage repair, conflict to preservation/escalation, and audit-publication to audit
+  repair; no all-audit fallback is accepted. Goldens and deserializers reject a source,
+  replay-key, reserved-capacity, cleanup, terminal, or settlement class in another domain,
+  a `Complete` pending prefix, a separately supplied mismatched boundary, missing durable
+  decision selection on preparation-incomplete, raw private identity, and every unknown or
+  mismatched action.
+
   Every rendered action maps to the public command or exact named external procedure in
   `contracts/operator-cli.md`: bootstrap, signed backup acquisition plus restoration
   submission, invalid-coordinator escalation, pointer-conflict escalation,
@@ -2852,8 +2952,9 @@ table before the operation exists.
   procedures are owned by the site security authority and authorize no repair/copy/delete/
   replace/retry/force action. Every retention class maps to the exact reconciliation,
   clock, storage, census, audit, or overflow procedure in `contracts/operator-cli.md`;
-  restoration publication pending/degraded and root refusal likewise map to one exact
-  owner procedure.
+  replay-key generation, continuity source storage, source authority, source/publication
+  conflict, cleanup, restoration publication pending/degraded, and root refusal likewise
+  map to one exact owner procedure.
 
   Focused hermetic Rust tests own variant validation, exact schema and human/JSON/error
   goldens, all forbidden inspect inputs, and independently pinned repair intent/generation
