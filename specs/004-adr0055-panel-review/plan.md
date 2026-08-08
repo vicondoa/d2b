@@ -448,6 +448,8 @@ tests/test-lint.sh
 docs/contributing/{README,panel-review,copilot-agents}.md
 docs/adr/specs/0053-panel-prompt-sources.md
 docs/specs/ADR-046-validation-and-delivery.md
+docs/specs/ADR-046-spec-set.json
+docs/specs/ADR-046-work-items.json
 changelog.d/adr055-panel-review.md
 ```
 
