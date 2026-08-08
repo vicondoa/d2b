@@ -29,6 +29,9 @@ MAKEFILE = ROOT / "Makefile"
 RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
 NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
+API_INPUT_FINGERPRINT = (
+    ROOT / "tests" / "tools" / "api-surface-input-fingerprint.sh"
+)
 
 
 EXECUTION_MANIFEST_HARNESS = r"""
@@ -345,6 +348,62 @@ class CiRunnerRegressionTests(unittest.TestCase):
             check=False,
         )
 
+    def make_api_fingerprint_tree(self) -> pathlib.Path:
+        tree = self.scratch / "api-fingerprint-tree"
+        fixture_files = {
+            "packages/Cargo.toml": (
+                '[workspace]\nmembers = ["example"]\nresolver = "2"\n'
+            ),
+            "packages/Cargo.lock": "# fixture lock\n",
+            "packages/rust-toolchain.toml": (
+                '[toolchain]\nchannel = "1.97.0"\n'
+            ),
+            "packages/example/Cargo.toml": (
+                '[package]\nname = "example"\nversion = "0.0.0"\n'
+            ),
+            "packages/example/src/lib.rs": "pub struct Example;\n",
+            "tests/golden/api-surface/roots.json": "{}\n",
+            "tests/tools/api-surface-json.sh": "#!/usr/bin/env bash\n",
+            "tests/tools/gen-api-surface-metadata.sh": "#!/usr/bin/env bash\n",
+        }
+        for relative, content in fixture_files.items():
+            path = tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        fingerprint = tree / "tests/tools/api-surface-input-fingerprint.sh"
+        shutil.copy2(API_INPUT_FINGERPRINT, fingerprint)
+        return tree
+
+    def run_api_fingerprint(
+        self,
+        tree: pathlib.Path,
+        mode: str,
+        *,
+        path_prefix: pathlib.Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        path = os.environ.get("PATH", "")
+        if path_prefix is not None:
+            path = f"{path_prefix}{os.pathsep}{path}"
+        env = {
+            "HOME": str(self.scratch),
+            "LC_ALL": "C",
+            "PATH": path,
+            "ROOT": str(tree),
+        }
+        return subprocess.run(
+            [
+                "bash",
+                str(tree / "tests/tools/api-surface-input-fingerprint.sh"),
+                mode,
+            ],
+            cwd=tree,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
     def test_shell_bootstrap_rejects_bash_startup_poison(self) -> None:
         layer1_jobs = load_layer1_jobs()
         bootstrap = shlex.split(layer1_jobs.SCRUBBED_BASH)
@@ -531,6 +590,236 @@ set -euo pipefail
         self.assertIn("api-surface-input-fingerprint.sh", lint_driver)
         self.assertIn("tests/test-rust.sh\" fast-lint", lint_driver)
         self.assertIn("run_fast_lint_gate", RUST_DRIVER.read_text(encoding="utf-8"))
+
+    def test_api_fingerprint_rejects_stale_and_missing_pins(self) -> None:
+        tree = self.make_api_fingerprint_tree()
+        update = self.run_api_fingerprint(tree, "--write")
+        self.assertEqual(update.returncode, 0, msg=update.stderr)
+
+        source = tree / "packages/example/src/lib.rs"
+        original_source = source.read_text(encoding="utf-8")
+        source.write_text(f"{original_source}pub struct Changed;\n", encoding="utf-8")
+        stale = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("api-surface inputs changed", stale.stderr)
+        self.assertIn("make api-surface-pin", stale.stderr)
+
+        source.write_text(original_source, encoding="utf-8")
+        (tree / "tests/golden/api-surface/input-fingerprint.txt").unlink()
+        missing = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("api-surface inputs changed", missing.stderr)
+        self.assertIn("make api-surface-pin", missing.stderr)
+
+    def test_api_fingerprint_rejects_enumerator_failures_and_special_entries(
+        self,
+    ) -> None:
+        tree = self.make_api_fingerprint_tree()
+        update = self.run_api_fingerprint(tree, "--write")
+        self.assertEqual(update.returncode, 0, msg=update.stderr)
+
+        shim_dir = self.scratch / "failing-enumerator"
+        shim_dir.mkdir()
+        find_shim = shim_dir / "find"
+        find_shim.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
+        find_shim.chmod(0o755)
+        producer_failure = self.run_api_fingerprint(
+            tree,
+            "--check",
+            path_prefix=shim_dir,
+        )
+        self.assertNotEqual(producer_failure.returncode, 0)
+        self.assertIn(
+            "api-surface package enumeration failed",
+            producer_failure.stderr,
+        )
+
+        unexpected_entry = tree / "packages/unexpected-entry"
+        os.mkfifo(unexpected_entry)
+        special_entry = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(special_entry.returncode, 0)
+        self.assertIn(
+            "api-surface package entry has an unexpected type: "
+            "packages/unexpected-entry",
+            special_entry.stderr,
+        )
+        unexpected_entry.unlink()
+
+        source_link = tree / "packages/example/src/linked.rs"
+        source_link.symlink_to("lib.rs")
+        linked_source = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(linked_source.returncode, 0)
+        self.assertIn(
+            "api-surface input has an unexpected type: "
+            "packages/example/src/linked.rs",
+            linked_source.stderr,
+        )
+
+    def test_fast_lint_changed_scope_selection_is_hermetic(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        function_start = driver.index("run_fast_lint_gate() {")
+        function_end = driver.index(
+            "\n}\n\n# The compiler-derived API census",
+            function_start,
+        )
+        fast_lint_function = driver[function_start : function_end + 2]
+        harness = self.scratch / "fast-lint-scope-harness.sh"
+        harness.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+ROOT=$1
+D2B_CARGO_LOG=$2
+manifest="$ROOT/packages/Cargo.toml"
+broker_manifest="$ROOT/packages/d2b-priv-broker/Cargo.toml"
+guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
+no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
+workspace_target_dir="$ROOT/packages/target"
+guest_shell_runner_target_dir="$ROOT/packages/d2b-guest-shell-runner/target"
+D2B_RUST_CARGO_JOBS=1
+suite_started=$SECONDS
+fail() { printf 'FAIL: %s\\n' "$*" >&2; }
+log() { :; }
+ok() { :; }
+cargo() {
+  {
+    printf '%q ' "$@"
+    printf '\\n'
+  } >>"$D2B_CARGO_LOG"
+}
+"""
+            + fast_lint_function
+            + "\nrun_fast_lint_gate\n",
+            encoding="utf-8",
+        )
+        harness.chmod(0o755)
+
+        def run_scenario(name: str, changed_path: str) -> list[str]:
+            tree = self.scratch / f"fast-lint-{name}"
+            fixture_files = {
+                "packages/Cargo.toml": (
+                    '[workspace]\nmembers = ["d2b-core"]\nresolver = "2"\n'
+                ),
+                "packages/Cargo.lock": "# fixture lock\n",
+                "packages/rust-toolchain.toml": (
+                    '[toolchain]\nchannel = "1.97.0"\n'
+                ),
+                "packages/.cargo/config.toml": "[build]\n",
+                "packages/d2b-core/Cargo.toml": (
+                    '[package]\nname = "d2b-core"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-core/src/lib.rs": "pub struct Core;\n",
+                "packages/d2b-priv-broker/Cargo.toml": (
+                    '[package]\nname = "broker"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-priv-broker/src/lib.rs": "pub struct Broker;\n",
+                "packages/d2b-guest-shell-runner/Cargo.toml": (
+                    '[package]\nname = "guest"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-guest-shell-runner/src/lib.rs": (
+                    "pub struct Guest;\n"
+                ),
+                "tests/tools/no-bash-ast-walker/Cargo.toml": (
+                    '[package]\nname = "walker"\nversion = "0.0.0"\n'
+                ),
+            }
+            for relative, content in fixture_files.items():
+                path = tree / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            def run_git(*args: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=d2b test",
+                        "-c",
+                        "user.email=d2b@example.invalid",
+                        *args,
+                    ],
+                    cwd=tree,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                )
+
+            run_git("init", "-q")
+            run_git("add", ".")
+            run_git("commit", "-q", "-m", "fixture")
+            base = run_git("rev-parse", "HEAD").stdout.strip()
+
+            changed = tree / changed_path
+            changed.parent.mkdir(parents=True, exist_ok=True)
+            if changed.exists():
+                changed.write_text(
+                    f"{changed.read_text(encoding='utf-8')}# changed\n",
+                    encoding="utf-8",
+                )
+            else:
+                changed.write_text("changed\n", encoding="utf-8")
+
+            cargo_log = self.scratch / f"fast-lint-{name}.log"
+            env = {
+                "D2B_LINT_BASE": base,
+                "HOME": str(self.scratch),
+                "LC_ALL": "C",
+                "PATH": os.environ.get("PATH", ""),
+                "ROOT": str(tree),
+            }
+            result = subprocess.run(
+                ["bash", str(harness), str(tree), str(cargo_log)],
+                cwd=tree,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=(
+                    f"{name} changed-scope probe failed\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                ),
+            )
+            return cargo_log.read_text(encoding="utf-8").splitlines()
+
+        unrelated = run_scenario("unrelated", "docs/note.md")
+        broker = run_scenario("broker", "packages/d2b-priv-broker/src/lib.rs")
+        main = run_scenario("main", "packages/d2b-core/src/lib.rs")
+        guest = run_scenario(
+            "guest",
+            "packages/d2b-guest-shell-runner/src/lib.rs",
+        )
+
+        for commands in (unrelated, broker, main, guest):
+            self.assertEqual(
+                sum(command.startswith("fmt ") for command in commands),
+                4,
+            )
+        self.assertFalse(
+            any(command.startswith("clippy ") for command in unrelated)
+        )
+        self.assertFalse(any(command.startswith("clippy ") for command in broker))
+
+        main_clippy = [
+            command for command in main if command.startswith("clippy ")
+        ]
+        self.assertEqual(len(main_clippy), 1)
+        self.assertIn("-p d2b-core", main_clippy[0])
+        self.assertNotIn("--workspace", main_clippy[0])
+
+        guest_clippy = [
+            command for command in guest if command.startswith("clippy ")
+        ]
+        self.assertEqual(len(guest_clippy), 1)
+        self.assertIn(
+            "packages/d2b-guest-shell-runner/Cargo.toml",
+            guest_clippy[0],
+        )
+        self.assertIn("--features real-libshpool", guest_clippy[0])
 
     def test_rust_gate_is_three_required_shards_with_one_stable_rollup(self) -> None:
         layer1_jobs = load_layer1_jobs()
