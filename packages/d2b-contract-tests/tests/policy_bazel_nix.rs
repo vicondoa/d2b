@@ -156,7 +156,7 @@ fn all_four_selected_contexts_and_six_native_checks_are_bound() {
             .as_str()
             .expect("native context policy input");
         assert!(
-            package_policy.contains(&context["system"].as_str().unwrap()),
+            package_policy.contains(context["system"].as_str().unwrap()),
             "selected system missing from generator contract: {path}"
         );
     }
