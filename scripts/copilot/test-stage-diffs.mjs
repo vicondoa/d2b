@@ -401,7 +401,7 @@ try {
   };
   const copyCompletedDiscoveryPacket = (name, relocateSelection = true) => {
     const packet = join(repo, ".scratch", "panel", name);
-    cpSync(firstDir, packet, { recursive: true });
+    cpSync(firstPacketTemplateDir, packet, { recursive: true });
     if (existsSync(join(packet, ".complete"))) {
       chmodSync(join(packet, ".complete"), 0o644);
     }
@@ -476,7 +476,6 @@ try {
       existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
     markerOnlyDiscovery.text,
   );
-  renameSync(firstPacketTemplateDir, firstDir);
   rmSync(alternateDiscoveryDir, { recursive: true, force: true });
   rmSync(join(repo, ".scratch", "panel", "otherprefix-r1"), {
     recursive: true,
@@ -584,9 +583,6 @@ try {
     /invalid tip/,
   );
 
-  writeFileSync(join(firstDir, ".complete"), savedFirstCompletionMarker);
-  chmodSync(join(firstDir, ".complete"), 0o444);
-
   const deletedMarkerPacket = copyCompletedDiscoveryPacket(
     "deletedmarker",
     true,
@@ -672,6 +668,10 @@ try {
     recursive: true,
     force: true,
   });
+
+  renameSync(firstPacketTemplateDir, firstDir);
+  writeFileSync(join(firstDir, ".complete"), savedFirstCompletionMarker);
+  chmodSync(join(firstDir, ".complete"), 0o444);
 
   const reusedSecondDiscovery = run(
     repo,
