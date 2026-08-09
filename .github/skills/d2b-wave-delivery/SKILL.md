@@ -71,12 +71,15 @@ Read this before planning a wave; it determines the PR shape:
 
 Thus wave N+1 cannot open a panel request until wave N merges. Running every
 wave and raising one PR at the end fails at the first seal.
+Feedback approval is nonbinding: it permits final binding, but it never
+authorizes a direct merge.
 The Track A order is:
 
 ```
 implement -> validate -> nonbinding discovery -> fix -> scoped verification
 -> unanimous approval -> final snapshot/selection -> one panel-request
--> records -> panel-attest -> push -> PR -> CI -> merge -> seal
+-> make-records -> panel-attest -> push owned branch -> PR -> CI
+-> merge through PR -> seal
 -> merge-eligibility
 ```
 
@@ -106,7 +109,8 @@ After unanimous approval and no further content-changing fix is pending, bind
 the wave's final base and head commits into one immutable candidate. Downstream
 steps use this address. Record the `candidate_id`, `content_id`, and
 `snapshot_sha256` in `.scratch/panel/<round>/current-candidate.json` so the panel
-record helper can join verdicts.
+record helper can join verdicts. The candidate-bound selection also carries the
+exact selected process binding, including `context_tier`.
 
 A content change after snapshot invalidates every wave record and requires a new
 snapshot. This is mechanism, not policy: no override, force flag, or partial
@@ -120,7 +124,7 @@ triple. Validator evidence uses the opposite rule.
 
 Run `panel-request --selection PATH` only after the final snapshot and
 selection exist. It stores the exact ordered roster, provider, model, and
-reasoning effort for that candidate. Generate the final records from the
+reasoning effort for that candidate. Run `make-records` from the
 candidate-bound lifecycle packet. A pipelined successor waits for predecessor
 completion before this request, even if its implementation and feedback
 lifecycle started early.

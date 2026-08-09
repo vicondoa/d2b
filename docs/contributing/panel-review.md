@@ -37,7 +37,8 @@ For each phase:
    until this gate passes.
 2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
-3. **Integration** - integrator merges subagent output.
+3. **Integration** - integrator integrates subagent output into the owned
+   feature/integration branch; protected branches are reached only through PR.
 4. **Work review** - panel runs one comprehensive discovery over the
    integrated candidate, batches fixes, and performs scoped verification until
    N/N sign-off.
@@ -106,22 +107,22 @@ never spawn a nested `copilot` CLI reviewer. If the current session registry
 cannot supply every selected exact agent definition, park and restart in the
 reviewed worktree before dispatch.
 
-The completed packet also contains the exact selected agent definition bytes
-at `agent-definitions/panel-<seat>.agent.md`. The completion marker binds those
-bytes, and both the immutable request and generated dispatch prompt direct the
-reviewer to that copy for seat focus and the shared finding bar. Their active
-phase contract is authoritative for output: discovery uses exactly
+The completion-bound packet carries the exact selected agent-definition bytes
+at `agent-definitions/panel-<seat>.agent.md`, their SHA-256 digests, and each
+seat's exact `context_tier`. These are process evidence for the round. The
+active phase contract is authoritative for output: discovery uses exactly
 `engineer`, `signoff`, `summary`, and `recommendations`, while verification
 adds required `verified_issue_statuses` and `late_findings`. Keeping the
 schemas distinct lets first discovery bootstrap the ledger before issue
 statuses exist.
 
-Current observed bindings also carry the exact `agent_type` and
-`agent_definition_sha256` for the custom definition loaded by each task
-subagent. `make-records` compares the type with the selected dispatch table
-and the digest with the matching immutable definition bytes bound by
-`.complete`. A missing, substituted, parent-worktree, or legacy definition is
-not a valid current record.
+The observed `agent_type` and `agent_definition_sha256` value are checked
+against the completion-bound selection and definition bytes when records are
+generated.
+Observed `run_id` and `receipt_locator` fields are same-user process metadata
+for correlation and uniqueness only. They do not authenticate a run or
+establish a security boundary, and a self-reported value cannot prove which
+definition ran.
 
 Any content change invalidates sign-off for that candidate. The lifecycle
 roster remains selected, may widen, and verifies the new candidate without
@@ -281,8 +282,10 @@ omit it. The workspace delivery schema remains version `2`.
 For Track A delivery, the lifecycle above is the nonbinding feedback phase.
 After unanimous approval and any content-changing fixes are complete, freeze
 the final candidate, create its snapshot and selection, issue the sole
-candidate-bound `panel-request`, generate records, and run `panel-attest`.
-Never create that request while the lifecycle can still change the tree.
+candidate-bound `panel-request`, run `make-records`, and run `panel-attest`.
+Only then may the owned branch proceed through PR and merge; seal follows the
+merge. Never create that request while the lifecycle can still change the
+tree. Feedback approval alone is not merge approval.
 
 ## Fix passes are scoped to the ledger
 

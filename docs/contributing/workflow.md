@@ -148,9 +148,11 @@ For waves whose thematic scopes are NOT file-disjoint by default -
 W3 host-prepare is the canonical example, with scopes s1-s5
 naturally sharing `packages/d2b-contracts`, `packages/d2b-core`
 DTOs, schemas, and `Cargo.toml` workspace pins - the wave is
-preceded by an **integrator API/contract prep commit landed
-directly on `main`** before any scope worktree is opened. That
-prep commit:
+preceded by an **integrator API/contract prep commit on the owned
+feature/integration branch** before any scope worktree is opened. The owned
+branch is based on the applicable protected target; the prep commit and all
+worktree commits reach `main` or `v3` only through the required pull request
+flow. That prep commit:
 
 - adds every shared crate, DTO module, broker enum variant,
   privileges row, schema regeneration, and `Cargo.toml`

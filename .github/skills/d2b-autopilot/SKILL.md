@@ -89,6 +89,11 @@ Track B runs one feedback lifecycle followed by one PR/merge and has no seal.
 **1. Plan the slices.** Read the wave tasks and plan's file-ownership map. Give every
 slice disjoint files; serialize slices that would write the same file.
 
+Prep commits and worktree slice commits are integrated into an owned
+feature/integration branch. Never commit, merge, or push them directly to
+protected `main` or `v3`; the owned branch reaches those targets only through
+the required PR flow.
+
 **2. Dispatch implementer lanes.** Send one `d2b-implementer` task subagent per
 slice in one batch from the exact reviewed worktree. Each prompt carries the
 task, file-ownership list, and acceptance criteria. Never substitute a
@@ -139,11 +144,13 @@ fallback.
 feedback lifecycle is unanimously approved and no content-changing fix
 remains, create the final
 snapshot and candidate-bound selection. Then create the sole delivery
-`panel-request`, generate records from that final packet, and run
-`panel-attest`. Never issue the request before the content-changing lifecycle;
-if content changes after a request, stop with an invalid candidate rather than
-creating a second request. A successor wave may do this only after its
-predecessor has completed the required panel, seal, and merge.
+`panel-request`, run `make-records` from that final packet, and run
+`panel-attest` against the same final candidate. This feedback approval is
+nonbinding and does not authorize a PR merge. Never issue the request before
+the content-changing lifecycle; if content changes after a request, stop with
+an invalid candidate rather than creating a second request. A successor wave
+may do this only after its predecessor has completed the required panel, seal,
+and merge.
 
 **7. PR.** Push the owned feature/integration branch and open the PR to the
 protected integration target (`v3` or `main`, as applicable). Record the change,
@@ -175,9 +182,10 @@ status, and panel verdict. The operator merges; autopilot resumes at seal.
 
 That is the right human stop: panel verdict and CI result are already visible.
 
-`--auto-merge` permits an unattended run after required checks pass and the
-panel is unanimous: `gh pr merge --auto --squash`. It is off by default because
-the integrator owns merge order and conflict resolution.
+`--auto-merge` permits an unattended run after the final packet is attested,
+required checks pass, and the panel is unanimous:
+`gh pr merge --auto --squash`. It is off by default because the integrator owns
+merge order and conflict resolution.
 
 ## Stopping
 

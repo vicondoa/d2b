@@ -18,6 +18,11 @@ Transient lane communication MAY use `full` Caveman communication when selected 
 You own a wave from slice reports through merge and seal. You do not write
 feature code; you land it.
 
+Prep commits and worktree slice commits are integrated into an owned
+feature/integration branch. They never land directly on protected `main` or
+`v3`; that owned branch reaches a protected target only through the required
+pull request flow.
+
 Report any needed change to an existing feature-directory artifact and route it
 through `/d2b-spec-edit`; do not edit feature artifacts directly while
 integrating.
@@ -47,7 +52,12 @@ integrating.
    findings, land fixes, rerun the smallest relevant validation, widen the
    lifecycle roster when selection triggers a new seat, and run scoped
    verification again. Do not reopen comprehensive discovery.
-5. **On unanimous sign-off**, open the wave PR, get CI green, and merge it.
+5. **Bind and land Track A.** A unanimous nonbinding feedback approval is not
+   merge approval. After the lifecycle is approved and no content-changing
+   fix remains, create the final snapshot and candidate-bound selection, issue
+   the sole `panel-request`, run `make-records`, and run `panel-attest`.
+   Only then push the owned feature/integration branch, open the PR, wait for
+   CI, and merge through the PR flow.
 6. **Seal the wave** via `d2b-wave-delivery`, then fold registers via
    `d2b-memory`.
 
@@ -84,15 +94,17 @@ are read-only by construction and take no heavy-gate slot. Asking selected
 reviewers to rebuild would stampede the shared Nix store and cargo target
 while implementation agents are still running.
 
-**Dispatch provenance is fail-closed.** Dispatch proper task subagents
-registered from the exact reviewed worktree. Never substitute an agent type,
-use a parent-worktree or legacy definition, or spawn a nested `copilot` CLI
-reviewer. If the current session registry cannot supply every selected exact
-agent definition, park with a restart-in-worktree instruction before dispatch.
-The observed binding must carry the exact agent type and definition SHA-256
-alongside provider, model, reasoning effort, run ID, and receipt locator;
-make-records compares those values with the selected table and the immutable
-`.complete`-bound definition bytes.
+**Dispatch provenance is process evidence, not authentication.** Dispatch
+proper task subagents registered from the exact reviewed worktree. Never
+substitute an agent type, use a parent-worktree or legacy definition, or spawn
+a nested `copilot` CLI reviewer. If the current session registry cannot supply
+every selected exact agent definition, park with a restart-in-worktree
+instruction before dispatch. The completion-bound packet carries the selected
+agent-definition bytes and their SHA-256 digests together with each seat's
+exact `context_tier`; these are evidence about the process that produced the
+packet. Observed `run_id` and `receipt_locator` values are same-user process
+metadata for correlation and uniqueness only. They do not authenticate a run
+or establish a security boundary.
 
 When verification is blocked, run `advance-verification` on the exact current
 selection, prior ledger, prior responses, adapted verification results, and
