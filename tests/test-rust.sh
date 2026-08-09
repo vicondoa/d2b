@@ -918,7 +918,8 @@ run_fast_lint_gate() {
     esac
   done <<<"$changed_paths"
 
-  if [ "$main_workspace_metadata_needed" -eq 1 ]; then
+  if [ "$main_workspace_metadata_needed" -eq 1 ] \
+    && [ "$main_workspace_changed" -eq 0 ]; then
     command -v jq >/dev/null 2>&1 || {
       fail "jq is required to derive changed main workspace package scope"
       exit 1
