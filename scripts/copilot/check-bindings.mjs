@@ -1302,6 +1302,7 @@ for (const [label, path] of panelContinuationDocs) {
   }
   const source = readFileSync(path, "utf8");
   const normalizedSource = source.toLowerCase();
+  const normalizedWhitespace = normalizedSource.replace(/\s+/g, " ");
   for (const field of observedBindingFields) {
     if (!source.includes(`\`${field}\``)) {
       fail(`${label}: observed binding documentation is missing ${field}.`);
@@ -1320,11 +1321,14 @@ for (const [label, path] of panelContinuationDocs) {
     if (!normalizedSource.includes(phrase.toLowerCase())) {
       fail(`${label}: continuation documentation is missing required text: ${phrase}`);
     }
-    if (/\bblank(?:\/partial)?\b[^\n]{0,80}(?:response|responses\.json)/i.test(source)) {
-      fail(
-        `${label}: continuation documentation still describes the carried response envelope as blank`,
-      );
-    }
+  }
+  if (
+    /\bblank(?:\/partial)?\b[^.]{0,80}(?:response|responses\.json|template)/i
+      .test(normalizedWhitespace)
+  ) {
+    fail(
+      `${label}: continuation documentation still describes the carried response envelope as blank`,
+    );
   }
   if (/atomic (?:directory|ledger\/response|handoff)/i.test(source)) {
     fail(

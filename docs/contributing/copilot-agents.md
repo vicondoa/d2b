@@ -418,7 +418,7 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 ledger and completed-response bytes, but it is not an atomic transaction or a
 security proof. The finalized continuation requires all three files before use:
 the ledger, completed responses, and `handoff.json`. Never edit the blank
-template, ledger, or completed responses after finalization. Rerun selection
+partial template, ledger, or completed responses after finalization. Rerun selection
 with the new fix delta, prepare
 verification from `NEXT/discovery-ledger.json` and
 `NEXT/responses-completed.json`, and stage the new packet with the finalized

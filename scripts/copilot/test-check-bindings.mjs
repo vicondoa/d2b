@@ -373,6 +373,20 @@ const CASES = [
     expectText: "carried response envelope as blank",
   },
   {
+    name: "cross-line blank template guidance is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/copilot-agents.md",
+        (text) => text.replace(
+          "Never edit the partial template",
+          "Never edit the blank\ntemplate",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "carried response envelope as blank",
+  },
+  {
     name: "unsupported continuation lifecycle flag is rejected",
     mutate: (dir) =>
       mutateFile(
