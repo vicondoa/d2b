@@ -852,6 +852,7 @@ cargo() {
             "packages/d2b-priv-broker/src/lib.rs",
         )
         _, main = run_scenario("main", "packages/d2b-core/src/lib.rs")
+        _, workspace = run_scenario("workspace", "packages/Cargo.toml")
         _, independent = run_scenario(
             "independent",
             "packages/d2b-core/fuzz/src/lib.rs",
@@ -866,7 +867,7 @@ cargo() {
             "packages/d2b-guest-shell-runner/src/lib.rs",
         )
 
-        for commands in (unrelated, broker, main, independent, guest):
+        for commands in (unrelated, broker, main, workspace, independent, guest):
             self.assertEqual(
                 sum(command.startswith("fmt ") for command in commands),
                 4,
@@ -882,6 +883,11 @@ cargo() {
         self.assertEqual(len(main_clippy), 1)
         self.assertIn("-p d2b-core", main_clippy[0])
         self.assertNotIn("--workspace", main_clippy[0])
+        workspace_clippy = [
+            command for command in workspace if command.startswith("clippy ")
+        ]
+        self.assertEqual(len(workspace_clippy), 1)
+        self.assertIn("--workspace", workspace_clippy[0])
         self.assertFalse(
             any(command.startswith("clippy ") for command in independent)
         )

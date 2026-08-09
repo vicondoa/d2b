@@ -999,6 +999,9 @@ run_fast_lint_gate() {
     while IFS= read -r path; do
       [ -n "$path" ] || continue
       case "$path" in
+        packages/Cargo.toml)
+          continue
+          ;;
         packages/d2b-priv-broker/*|packages/d2b-guest-shell-runner/*)
           continue
           ;;
