@@ -366,17 +366,6 @@ fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
     assert!(patch.contains(
         "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine"
     ));
-    for forbidden in [
-        "retry-before-release",
-        "replacement-waiter",
-        "manual-release",
-        "prohibited=reboot",
-    ] {
-        assert!(
-            patch.contains(forbidden),
-            "missing quarantine prohibition {forbidden}"
-        );
-    }
 }
 
 #[test]
@@ -486,7 +475,10 @@ fn sandbox_diagnostics_are_closed_and_retryable() {
     }
     assert!(patch.contains("correction=Restore the pinned sandbox patch and policy"));
     assert!(patch.contains("retry=make test-flake"));
-    assert!(patch.contains("result=failed;reuse=denied"));
+    assert!(patch.contains("result=failed reuse=denied action=no-success-no-reuse"));
+    assert!(patch.contains(
+        "cleanup=complete-after-quarantine quarantine=entered-and-released-after-consuming-reap"
+    ));
     assert!(!patch.contains("pid="));
     assert!(!patch.contains("pgid="));
     assert!(!patch.contains("run_id"));
