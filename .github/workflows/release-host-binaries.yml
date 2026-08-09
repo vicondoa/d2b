@@ -388,6 +388,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    defaults: { run: { shell: bash } }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -600,7 +601,14 @@ jobs:
           release_endpoint="repos/$GITHUB_REPOSITORY/releases/tags/$tag_name"
           release_json=$(mktemp)
           release_response=$(mktemp)
-          trap 'rm -f "$release_json" "$release_response"' EXIT
+          release_body_file=$(mktemp)
+          asset_download_dir=$(mktemp -d)
+
+          cleanup_release_temp() {
+            rm -f "$release_json" "$release_response" "$release_body_file"
+            rm -rf "$asset_download_dir"
+          }
+          trap cleanup_release_temp EXIT
 
           asset_names=(
             "d2b-${VERSION}-x86_64-linux.tar.gz"
@@ -683,6 +691,12 @@ jobs:
               true|false) ;;
               *) reject_release_conflict ;;
             esac
+            if ! jq -e -j \
+              'if (.body | type) == "string" then .body else error("body is not a string") end' \
+              "$release_json" > "$release_body_file"; then
+              reject_release_conflict
+            fi
+            cmp -s "$release_body_file" release-notes.md || reject_release_conflict
             release_draft_state="$release_draft"
           }
 
@@ -705,7 +719,8 @@ jobs:
 
           validate_release_assets() {
             local asset_name asset_path expected_size expected_digest matching_assets matching_count
-            local remote_state remote_size remote_digest
+            local remote_state remote_size remote_digest remote_digest_state
+            local remote_asset_url remote_asset_id remote_download remote_download_digest
             missing_assets=()
             while IFS= read -r asset_name; do
               if ! asset_is_expected "$asset_name"; then
@@ -737,14 +752,62 @@ jobs:
                     echo "Publication blocked: existing GitHub release asset $asset_name has a conflicting size." >&2
                     exit 1
                   }
-                  remote_digest=$(jq -r '.[0].digest // empty' <<<"$matching_assets" | tr '[:upper:]' '[:lower:]')
-                  if [ -n "$remote_digest" ]; then
+                  remote_digest_state=$(jq -r \
+                    '.[0] | if has("digest") and .digest != null then "present" else "absent" end' \
+                    <<<"$matching_assets")
+                  if [ "$remote_digest_state" = "present" ]; then
+                    if ! remote_digest=$(jq -er \
+                      '.[0].digest | select(type == "string" and length > 0)' \
+                      <<<"$matching_assets"); then
+                      echo "Publication blocked: existing GitHub release asset $asset_name has an invalid digest." >&2
+                      exit 1
+                    fi
+                    remote_digest=$(printf '%s' "$remote_digest" | tr '[:upper:]' '[:lower:]')
+                    printf '%s' "$remote_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+                      echo "Publication blocked: existing GitHub release asset $asset_name has an invalid digest." >&2
+                      exit 1
+                    }
                     [ "$remote_digest" = "sha256:$expected_digest" ] || {
                       echo "Publication blocked: existing GitHub release asset $asset_name has a conflicting digest." >&2
                       exit 1
                     }
                   else
-                    echo "GitHub API did not provide a digest for existing asset $asset_name; accepting the exact size identity."
+                    if ! remote_asset_url=$(jq -er \
+                      '.[0].url | select(type == "string" and length > 0)' \
+                      <<<"$matching_assets"); then
+                      echo "Publication blocked: existing GitHub release asset $asset_name has no provable bytes." >&2
+                      exit 1
+                    fi
+                    case "$remote_asset_url" in
+                      */repos/"$GITHUB_REPOSITORY"/releases/assets/*) ;;
+                      *)
+                        echo "Publication blocked: existing GitHub release asset $asset_name has no provable bytes." >&2
+                        exit 1
+                        ;;
+                    esac
+                    remote_asset_id=${remote_asset_url##*/}
+                    printf '%s' "$remote_asset_id" | grep -Eq '^[1-9][0-9]*$' || {
+                      echo "Publication blocked: existing GitHub release asset $asset_name has no provable bytes." >&2
+                      exit 1
+                    }
+                    remote_download="$asset_download_dir/$asset_name"
+                    if ! gh api \
+                      --header 'Accept: application/octet-stream' \
+                      "repos/$GITHUB_REPOSITORY/releases/assets/$remote_asset_id" \
+                      > "$remote_download"; then
+                      echo "Publication blocked: existing GitHub release asset $asset_name could not be downloaded for verification." >&2
+                      exit 1
+                    fi
+                    [ -f "$remote_download" ] || {
+                      echo "Publication blocked: existing GitHub release asset $asset_name could not be downloaded for verification." >&2
+                      exit 1
+                    }
+                    remote_download_digest=$(sha256sum "$remote_download" | awk '{print $1}')
+                    [ "$remote_download_digest" = "$expected_digest" ] || {
+                      echo "Publication blocked: existing GitHub release asset $asset_name has conflicting bytes." >&2
+                      exit 1
+                    }
+                    rm -f "$remote_download"
                   fi
                   ;;
                 *)

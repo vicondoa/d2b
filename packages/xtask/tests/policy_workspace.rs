@@ -111,6 +111,53 @@ fn release_build_block(workflow: &str) -> &str {
     &remainder[..end]
 }
 
+fn release_publication_violations(workflow: &str) -> Vec<String> {
+    let Some(start) = workflow.find("  release:\n") else {
+        return vec!["release job is missing".to_owned()];
+    };
+    let block = &workflow[start..];
+    let mut violations = Vec::new();
+    for required in [
+        "contents: write",
+        "defaults: { run: { shell: bash } }",
+        "release-notes.md",
+        "release_body_file",
+        ".body",
+        "cmp -s",
+        "asset_download_dir",
+        "mktemp -d",
+        "application/octet-stream",
+        "remote_asset_url",
+        "remote_asset_id",
+        "remote_download",
+        "remote_download_digest",
+        "sha256sum \"$remote_download\"",
+        "[ \"$remote_download_digest\" = \"$expected_digest\" ] || {",
+        "rm -rf \"$asset_download_dir\"",
+        "no provable bytes",
+        "conflicting bytes",
+    ] {
+        if !block.contains(required) {
+            violations.push(format!(
+                "release publication is missing the guarded path `{required}`"
+            ));
+        }
+    }
+    if block.contains("tests/tools/ci-shell") {
+        violations.push(
+            "contents:write release publication must not invoke the repository CI shell".to_owned(),
+        );
+    }
+    if block.contains("uses: ./") {
+        violations
+            .push("contents:write release publication must not invoke a local action".to_owned());
+    }
+    if block.contains("bash tests/") || block.contains("sh tests/") {
+        violations.push("contents:write token steps must not invoke repository scripts".to_owned());
+    }
+    violations
+}
+
 fn release_workspace_violations(workflow: &str) -> Vec<String> {
     let build = release_build_block(workflow);
     let mut violations = Vec::new();
@@ -1196,6 +1243,77 @@ fn release_workflow_keeps_exact_locked_workspace_selectors() {
         assert!(
             !release_workspace_violations(&mutated).is_empty(),
             "release workspace policy missed {label} mutation"
+        );
+    }
+}
+
+#[test]
+fn release_publication_verifies_body_bytes_and_runner_shell_isolation() {
+    let workflow = read_repo_file(RELEASE_WORKFLOW);
+    let violations = release_publication_violations(&workflow);
+    assert!(
+        violations.is_empty(),
+        "release publication policy drifted:\n{}",
+        violations.join("\n")
+    );
+
+    let repository_shell_mutation = workflow.replacen(
+        "shell: sh tests/tools/ci-shell {0}",
+        "shell: sh tests/tools/ci-shell-token-observer {0}",
+        1,
+    );
+    assert!(
+        release_publication_violations(&repository_shell_mutation).is_empty(),
+        "changing the repository shell must not affect privileged publication"
+    );
+
+    let mutations = [
+        (
+            workflow.replacen(
+                "defaults: { run: { shell: bash } }",
+                "defaults: { run: { shell: sh tests/tools/ci-shell {0} } }",
+                1,
+            ),
+            "repository shell",
+        ),
+        (
+            workflow.replacen(
+                "cmp -s \"$release_body_file\" release-notes.md || reject_release_conflict",
+                "true",
+                1,
+            ),
+            "release body comparison",
+        ),
+        (
+            workflow.replacen(
+                "gh api \\\n                      --header 'Accept: application/octet-stream'",
+                "true",
+                1,
+            ),
+            "absent digest download",
+        ),
+        (
+            workflow.replacen(
+                "[ \"$remote_download_digest\" = \"$expected_digest\" ] || {",
+                "true || {",
+                1,
+            ),
+            "same-size byte comparison",
+        ),
+        (
+            workflow.replacen(
+                "      - uses: actions/download-artifact@",
+                "      - uses: ./tests/tools/token-observer\n      - uses: actions/download-artifact@",
+                1,
+            ),
+            "local action",
+        ),
+    ];
+    for (mutated, label) in mutations {
+        let violations = release_publication_violations(&mutated);
+        assert!(
+            !violations.is_empty(),
+            "release publication policy missed {label} mutation"
         );
     }
 }

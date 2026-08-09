@@ -410,6 +410,8 @@ def release_api_fixture_result(
     expected_tag: str,
     expected_target: str,
     local_assets: dict[str, tuple[int, str]],
+    expected_body: str = "release notes\n",
+    downloaded_digests: dict[str, str] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Model release adoption, completion, and conflict decisions."""
     if release is None:
@@ -420,6 +422,7 @@ def release_api_fixture_result(
         or release.get("name") != expected_tag
         or release.get("prerelease") is not False
         or not isinstance(release.get("draft"), bool)
+        or release.get("body") != expected_body
     ):
         return "reject", ()
 
@@ -442,10 +445,48 @@ def release_api_fixture_result(
         if raw_asset.get("size") != expected_size:
             return "reject", ()
         remote_digest = raw_asset.get("digest")
-        if remote_digest is not None and remote_digest != f"sha256:{expected_digest}":
+        if remote_digest is None:
+            if (
+                downloaded_digests is None
+                or downloaded_digests.get(name) != expected_digest
+            ):
+                return "reject", ()
+        elif remote_digest != f"sha256:{expected_digest}":
             return "reject", ()
     missing.extend(sorted(expected_names - seen))
     return ("complete" if release["draft"] else "adopt"), tuple(missing)
+
+
+def release_privileged_shell_contract_violations(release: str) -> list[str]:
+    """Keep write-token steps on runner-owned shells and code only."""
+    violations: list[str] = []
+    if not re.search(
+        r"(?m)^\s{4}defaults:\s*\{\s*run:\s*\{\s*shell:\s*bash\s*\}\s*\}\s*$",
+        release,
+    ):
+        violations.append(
+            "contents:write release job must default to the runner-owned bash shell"
+        )
+    if "tests/tools/ci-shell" in release:
+        violations.append(
+            "contents:write release job must not invoke the repository CI shell"
+        )
+    if re.search(r"(?m)^\s*-?\s*uses:\s+\./", release):
+        violations.append(
+            "contents:write release job must not invoke a local action"
+        )
+    for step in workflow_step_blocks(release):
+        if not re.search(r"(?m)^\s+(?:GITHUB_TOKEN|GH_TOKEN):", step):
+            continue
+        body = workflow_step_run_source(step) or ""
+        if re.search(
+            r"(?m)^\s*(?:bash|sh|source|\.)\s+(?:tests|scripts)/",
+            body,
+        ) or re.search(r"(?m)^\s*(?:tests|scripts)/", body):
+            violations.append(
+                "contents:write token steps must not invoke repository scripts"
+            )
+    return violations
 
 
 def release_workflow_contract_violations(workflow: str) -> list[str]:
@@ -689,6 +730,7 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
 
     release_steps = workflow_step_blocks(release)
     release_runs = workflow_shell_steps(release)
+    violations.extend(release_privileged_shell_contract_violations(release))
     release_verifications = [
         (index, step, source)
         for index, step, source in release_runs
@@ -787,8 +829,24 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
                 "gh release edit",
                 "--draft=false",
                 "release_draft_state",
+                ".body",
+                "release_body_file",
+                "cmp -s",
                 ".digest",
                 '[ "$remote_digest" = "sha256:$expected_digest" ]',
+                "remote_digest_state",
+                "asset_download_dir",
+                "mktemp -d",
+                "application/octet-stream",
+                "remote_asset_url",
+                "remote_asset_id",
+                "remote_download",
+                "remote_download_digest",
+                'sha256sum "$remote_download"',
+                '[ "$remote_download_digest" = "$expected_digest" ] || {',
+                'rm -rf "$asset_download_dir"',
+                "no provable bytes",
+                "conflicting bytes",
                 "conflicting size",
                 "conflicting digest",
                 "existing GitHub release conflicts",
@@ -2830,6 +2888,39 @@ wait
                 ),
                 "conflicting asset rejection",
             ),
+            (
+                workflow.replace(
+                    "defaults: { run: { shell: bash } }",
+                    "defaults: { run: { shell: sh tests/tools/ci-shell {0} } }",
+                    1,
+                ),
+                "repository shell token isolation",
+            ),
+            (
+                workflow.replace(
+                    "cmp -s \"$release_body_file\" release-notes.md || reject_release_conflict",
+                    "true",
+                    1,
+                ),
+                "release body rejection",
+            ),
+            (
+                workflow.replace(
+                    "gh api \\\n"
+                    "                      --header 'Accept: application/octet-stream'",
+                    "true",
+                    1,
+                ),
+                "absent digest byte download",
+            ),
+            (
+                workflow.replace(
+                    '[ "$remote_download_digest" = "$expected_digest" ] || {',
+                    "true || {",
+                    1,
+                ),
+                "absent digest same-size byte conflict",
+            ),
         )
         for mutated, label in mutations:
             self.assertNotEqual(
@@ -2837,6 +2928,40 @@ wait
                 [],
                 msg=f"workflow mutation escaped the {label} regression check",
             )
+
+        repository_shell_mutation = workflow.replace(
+            "shell: sh tests/tools/ci-shell {0}",
+            "shell: sh tests/tools/ci-shell-token-observer {0}",
+            1,
+        )
+        self.assertEqual(
+            release_workflow_contract_violations(repository_shell_mutation),
+            [],
+            "changing the repository shell must not affect the runner-owned "
+            "contents:write publication steps",
+        )
+        local_action_mutation = workflow.replace(
+            "      - uses: actions/download-artifact@",
+            "      - uses: ./tests/tools/token-observer\n"
+            "      - uses: actions/download-artifact@",
+            1,
+        )
+        self.assertNotEqual(
+            release_workflow_contract_violations(local_action_mutation),
+            [],
+            "a local action must not enter the contents:write job",
+        )
+        repository_script_mutation = workflow.replace(
+            "          bash -s <<'RELEASE_TAG_SCRIPT'",
+            '          bash tests/tools/token-observer "$GITHUB_TOKEN"\n'
+            "          bash -s <<'RELEASE_TAG_SCRIPT'",
+            1,
+        )
+        self.assertNotEqual(
+            release_workflow_contract_violations(repository_script_mutation),
+            [],
+            "a token-bearing step must not invoke a checked-out repository script",
+        )
 
     def test_release_retry_tag_and_api_fixtures_are_fail_closed(self) -> None:
         version = "9.8.7"
@@ -2897,6 +3022,7 @@ wait
             "name": tag_name,
             "prerelease": False,
             "draft": True,
+            "body": "release notes\n",
             "assets": [
                 {
                     "name": asset_names[0],
@@ -2914,6 +3040,53 @@ wait
         )
         self.assertEqual(outcome, "complete")
         self.assertEqual(set(missing), set(asset_names[1:]))
+
+        absent_digest = dict(partial)
+        absent_digest["assets"] = [
+            dict(partial["assets"][0], digest=None)
+        ]
+        downloaded_digests = {
+            asset_names[0]: local_assets[asset_names[0]][1],
+        }
+        outcome, missing = release_api_fixture_result(
+            absent_digest,
+            expected_tag=tag_name,
+            expected_target=merged_head,
+            local_assets=local_assets,
+            downloaded_digests=downloaded_digests,
+        )
+        self.assertEqual(outcome, "complete")
+        self.assertEqual(set(missing), set(asset_names[1:]))
+        self.assertEqual(
+            release_api_fixture_result(
+                absent_digest,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
+        self.assertEqual(
+            release_api_fixture_result(
+                absent_digest,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+                downloaded_digests={asset_names[0]: "f" * 64},
+            )[0],
+            "reject",
+        )
+
+        conflicting_body = dict(partial, body="different release notes\n")
+        self.assertEqual(
+            release_api_fixture_result(
+                conflicting_body,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
 
         conflicting_release = dict(partial)
         conflicting_release["target_commitish"] = "c" * 40
