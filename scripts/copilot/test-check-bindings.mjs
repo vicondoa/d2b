@@ -379,7 +379,7 @@ const CASES = [
         dir,
         "docs/contributing/copilot-agents.md",
         (text) => text.replace(
-          "Never edit the partial template",
+          "Never edit the partial\ntemplate",
           "Never edit the blank\ntemplate",
         ),
       ),
