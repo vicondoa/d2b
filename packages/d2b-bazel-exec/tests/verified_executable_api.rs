@@ -62,7 +62,8 @@ fn only_the_dependency_leaf_invokes_the_immutable_helper() {
     assert!(execute.contains("child_fd: PRIVATE_STATUS_FD"));
     assert!(execute.contains("child_fd: PRIVATE_EXECUTABLE_FD"));
     assert!(execute.contains("command.args(&plan.request.target_argv)"));
-    assert!(execute.contains("read_status(status_reader)"));
+    assert!(execute.contains("read_status(status_reader, helper_error_reader)"));
+    assert!(execute.contains("child_fd: PRIVATE_HELPER_ERROR_FD"));
     assert!(execute.contains("ensure_helper_status(status, terminal)"));
     assert!(!execute.contains("std::env::var"));
     assert!(!execute.contains("CARGO_BIN_EXE"));
@@ -88,8 +89,9 @@ fn production_backend_is_not_a_public_injection_trait() {
     let lib = source("src/lib.rs");
     let execute = source("src/execute.rs");
     assert!(!lib.contains("ExecutionBackend"));
-    assert!(execute.contains("#[cfg(feature = \"test-support\")]"));
-    assert!(execute.contains("pub trait ExecutionBackend"));
+    assert!(!execute.contains("#[cfg(feature ="));
+    assert!(execute.contains("#[cfg(test)]"));
+    assert!(execute.contains("trait ExecutionBackend"));
     assert!(!execute.contains("pub struct ProductionBackend"));
 }
 

@@ -143,6 +143,11 @@ static void exit_on_term(int signal_number) {
   _exit(73);
 }
 
+static void write_target_noise(void) {
+  const char noise[] = "target-noise\n";
+  (void)write(STDERR_FILENO, noise, sizeof(noise) - 1);
+}
+
 static int has_inherited_signalfd(void) {
   DIR *directory = opendir("/proc/self/fd");
   if (directory == NULL) return -1;
@@ -169,6 +174,17 @@ static int has_inherited_signalfd(void) {
   }
   closedir(directory);
   return found;
+}
+
+static int has_inherited_private_or_planted_fd(void) {
+  const int descriptors[] = {8, 9, 10, 11, 12};
+  for (size_t index = 0; index < sizeof(descriptors) / sizeof(descriptors[0]);
+       ++index) {
+    if (fcntl(descriptors[index], F_GETFD) >= 0 || errno != EBADF) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 int main(int argc, char **argv) {
@@ -199,6 +215,7 @@ int main(int argc, char **argv) {
     case PLANT_AFTER_READY:
       _exit(crash_with_signal ? 128 + SIGSEGV : 71);
     case PLANT_AFTER_EXECUTED:
+      write_target_noise();
       _exit(crash_with_signal ? 128 + SIGSEGV : 72);
     case PLANT_DURING_GRACE:
       signal(SIGTERM, SIG_IGN);
@@ -209,7 +226,10 @@ int main(int argc, char **argv) {
       barrier_until_release();
       _exit(73);
     case PLANT_FD_AUDIT:
-      _exit(has_inherited_signalfd() == 0 ? 0 : 69);
+      _exit(has_inherited_signalfd() == 0 &&
+                    has_inherited_private_or_planted_fd() == 0
+                ? 0
+                : 69);
     case PLANT_DESCENDANT:
       start_descendants(false);
       _exit(74);

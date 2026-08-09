@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use d2b_bazel_support::startup::{
-    KernelVersion, NativeSystem, ProbeResult, StartupCode, StartupProbe, StartupRequirements,
-    validate_startup,
+    KernelVersion, NativeSystem, ProbeResult, RuntimeStartupProbe, StartupCode, StartupProbe,
+    StartupRequirements, validate_startup,
 };
 
 #[derive(Clone)]
@@ -98,4 +98,28 @@ fn unsupported_system_and_real_probe_failure_have_distinct_owners() {
         StartupCode::SandboxPolicyDrift
     );
     assert_eq!(probe.calls(), 1);
+}
+
+#[test]
+fn supported_aarch64_and_the_linux_3_19_boundary_are_admitted() {
+    let probe = RecordingProbe::new(ProbeResult::Pass);
+    let requirements = StartupRequirements {
+        system: NativeSystem::Aarch64Linux,
+        kernel: KernelVersion::new(3, 19),
+        yama_scope: Some(1),
+        sandbox_policy_ok: true,
+    };
+    validate_startup(requirements, &probe).expect("AArch64 at Linux 3.19 is supported");
+    assert_eq!(probe.calls(), 1);
+}
+
+#[test]
+fn runtime_probe_is_a_distinct_non_injected_startup_seam() {
+    let probe = RuntimeStartupProbe;
+    #[cfg(target_os = "linux")]
+    probe
+        .run()
+        .expect("the current Linux process has proc status");
+    #[cfg(not(target_os = "linux"))]
+    assert!(probe.run().is_err());
 }

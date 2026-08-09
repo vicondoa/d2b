@@ -756,8 +756,30 @@ run_api_surface_gate() {
   log "test-rust api-surface OK (duration: $((SECONDS - suite_started))s)"
 }
 
+assert_execute_integration_surface() {
+  local listing
+  if ! listing=$(cargo nextest list --locked --manifest-path "$manifest" \
+      -p d2b-bazel-exec --test execute --message-format json); then
+    fail "d2b-bazel-exec execute integration listing failed"
+    return 1
+  fi
+  if ! printf '%s' "$listing" | jq -e '
+        ."rust-suites"
+        | to_entries
+        | map(.value
+          | select(.kind == "test")
+          | select((.testcases | length) > 0))
+        | length == 1
+      ' >/dev/null; then
+    fail "d2b-bazel-exec execute integration surface is empty; refusing a harness=false pass"
+    return 1
+  fi
+  ok "d2b-bazel-exec execute integration surface is nonempty and enforcing"
+}
+
 run_main_workspace_gate() {
   require_nextest "$rust_mode"
+  assert_execute_integration_surface
   rust_surface_start rust-main-format
   log "--> cargo fmt --check"
   cargo fmt --manifest-path "$manifest" --all --check

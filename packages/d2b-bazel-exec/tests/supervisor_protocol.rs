@@ -25,10 +25,10 @@ use nix::{
 
 use d2b_bazel_exec::{
     CHILD_STAGE_CODES, ChildIdentity, ContainmentBackend, ExecErrorRecord, ExecStop, GroupIdentity,
-    InitialStop, PTRACE_EVENT_EXEC, ProtocolError, RUST_PARENT_STAGE_CODES, SUPERVISOR_STAGE_CODES,
-    StatusDecoder, StatusFrame, StatusWriteError, SupervisorProtocol, TerminalStatus,
-    classify_status_write, decode_exec_error, encode_status, helper_exit_before_executed,
-    managed_signals,
+    HELPER_ERROR_CODES, InitialStop, PTRACE_EVENT_EXEC, ProtocolError, RUST_PARENT_STAGE_CODES,
+    SUPERVISOR_STAGE_CODES, StatusDecoder, StatusFrame, StatusWriteError, SupervisorProtocol,
+    TerminalStatus, classify_status_write, decode_exec_error, decode_helper_error, encode_status,
+    helper_exit_before_executed, managed_signals,
 };
 
 #[derive(Default)]
@@ -416,6 +416,7 @@ fn parent_supervisor_and_child_stage_tables_are_closed_and_nonempty() {
         RUST_PARENT_STAGE_CODES,
         SUPERVISOR_STAGE_CODES,
         CHILD_STAGE_CODES,
+        HELPER_ERROR_CODES,
     ] {
         assert!(!table.is_empty());
         assert!(table.iter().all(|code| code.starts_with("D2B-BZLEXEC-")));
@@ -684,9 +685,17 @@ fn status_events(mut reader: File) -> Receiver<StatusEvent> {
     receiver
 }
 
-fn spawn_real_supervisor(target: &Path, arguments: &[&str]) -> (Child, File) {
+fn spawn_real_supervisor(target: &Path, arguments: &[&str]) -> (Child, File, File) {
     let (status_reader, status_writer) = pipe2(OFlag::O_CLOEXEC).expect("status transport pipe");
+    let (helper_error_reader, helper_error_writer) =
+        pipe2(OFlag::O_CLOEXEC).expect("helper error transport pipe");
     let target_fd: OwnedFd = File::open(target).expect("target executable").into();
+    let planted_one: OwnedFd = File::open("/dev/null")
+        .expect("first planted descriptor")
+        .into();
+    let planted_two: OwnedFd = File::open("/dev/null")
+        .expect("second planted descriptor")
+        .into();
     let mut command = Command::new(&real_binaries().supervisor);
     command
         .args(arguments)
@@ -703,8 +712,20 @@ fn spawn_real_supervisor(target: &Path, arguments: &[&str]) -> (Child, File) {
                 parent_fd: target_fd,
                 child_fd: 9,
             },
+            FdMapping {
+                parent_fd: helper_error_writer,
+                child_fd: 10,
+            },
+            FdMapping {
+                parent_fd: planted_one,
+                child_fd: 11,
+            },
+            FdMapping {
+                parent_fd: planted_two,
+                child_fd: 12,
+            },
         ])
-        .expect("status and executable fd mappings");
+        .expect("status, error, executable, and planted fd mappings");
 
     let previous_mask = SigSet::thread_get_mask().expect("test signal mask");
     managed_signals()
@@ -717,6 +738,7 @@ fn spawn_real_supervisor(target: &Path, arguments: &[&str]) -> (Child, File) {
     (
         child.expect("spawn real C supervisor"),
         File::from(status_reader),
+        File::from(helper_error_reader),
     )
 }
 
@@ -778,8 +800,9 @@ fn real_c_exec_error_transport_covers_deadline_and_closed_mapping() {
 #[test]
 fn real_c_supervisor_closes_signalfd_and_preserves_order_on_fast_exit() {
     let binaries = real_binaries();
-    let (mut child, reader) =
+    let (mut child, reader, error_reader) =
         spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "fd-audit"]);
+    drop(error_reader);
     let receiver = status_events(reader);
     let status = wait_for_complete(&receiver, &mut child);
     let exit = child.wait().expect("fd-audit supervisor wait");
@@ -796,20 +819,64 @@ fn real_c_supervisor_closes_signalfd_and_preserves_order_on_fast_exit() {
 }
 
 #[test]
+fn real_c_supervisor_drains_an_entry_signal_before_ready_publication() {
+    let binaries = real_binaries();
+    let mut observed_without_ready = false;
+    for _attempt in 0..8 {
+        let (mut child, reader, mut error_reader) =
+            spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "fd-audit"]);
+        for _ in 0..32 {
+            let _ = signal::kill(
+                nix::unistd::Pid::from_raw(child.id() as i32),
+                signal::Signal::SIGTERM,
+            );
+        }
+        let receiver = status_events(reader);
+        let status = wait_for_complete(&receiver, &mut child);
+        let exit = child.wait().expect("entry-signal supervisor wait");
+        let mut helper_error = Vec::new();
+        error_reader
+            .read_to_end(&mut helper_error)
+            .expect("entry-signal error record");
+        if status.is_empty() {
+            assert_eq!(exit.code(), Some(1));
+            assert_eq!(
+                decode_helper_error(&helper_error, true)
+                    .expect("entry-signal typed error")
+                    .expect("entry-signal error")
+                    .code(),
+                "D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION"
+            );
+            observed_without_ready = true;
+            break;
+        }
+    }
+    assert!(
+        observed_without_ready,
+        "entry signal must prevent READY publication in at least one deterministic window"
+    );
+}
+
+#[test]
 fn real_c_supervisor_maps_child_exec_failure_without_false_executed_success() {
-    let (mut child, reader) = spawn_real_supervisor(Path::new("/dev/null"), &["target"]);
+    let (mut child, reader, mut error_reader) =
+        spawn_real_supervisor(Path::new("/dev/null"), &["target"]);
     let receiver = status_events(reader);
     let status = wait_for_complete(&receiver, &mut child);
-    let mut stderr = child.stderr.take().expect("supervisor stderr");
     let exit = child.wait().expect("exec-error supervisor wait");
-    let mut diagnostics = String::new();
-    stderr
-        .read_to_string(&mut diagnostics)
-        .expect("exec-error diagnostics");
     assert_eq!(exit.code(), Some(1));
     assert_eq!(status, encode_status(StatusFrame::Ready));
-    assert!(diagnostics.contains("D2B-BZLEXEC-CHILD-EXECVEAT"));
-    assert!(!diagnostics.contains("D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH"));
+    let mut helper_error = Vec::new();
+    error_reader
+        .read_to_end(&mut helper_error)
+        .expect("helper error record");
+    assert_eq!(
+        decode_helper_error(&helper_error, true)
+            .expect("typed helper error")
+            .expect("helper error")
+            .code(),
+        "D2B-BZLEXEC-CHILD-EXECVEAT"
+    );
 }
 
 #[test]
@@ -824,7 +891,7 @@ fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
     let barrier = barrier_dir.join("ready.fifo");
     mkfifo(&barrier, Mode::S_IRUSR | Mode::S_IWUSR).expect("grace barrier FIFO");
     let barrier_path = barrier.to_str().expect("UTF-8 grace barrier path");
-    let (mut child, reader) = spawn_real_supervisor(
+    let (mut child, reader, _error_reader) = spawn_real_supervisor(
         &binaries.plant,
         &[
             "plant",
@@ -887,15 +954,42 @@ fn real_c_supervisor_reaps_once_after_full_grace_when_leader_exits_early() {
 #[test]
 fn real_c_supervisor_classifies_closed_status_reader_as_epipe_without_success() {
     let binaries = real_binaries();
-    let (mut child, reader) =
+    let (mut child, reader, mut error_reader) =
         spawn_real_supervisor(&binaries.plant, &["plant", "--stage", "after-executed"]);
+    let mut reader = reader;
+    let mut pre_terminal = [0_u8; 16];
+    reader
+        .read_exact(&mut pre_terminal)
+        .expect("READY and EXECUTED status");
+    assert_eq!(
+        pre_terminal,
+        [
+            encode_status(StatusFrame::Ready),
+            encode_status(StatusFrame::Executed)
+        ]
+        .concat()
+        .as_slice()
+    );
     drop(reader);
-    let mut stderr = child.stderr.take().expect("supervisor stderr");
+    let mut helper_error = Vec::new();
+    error_reader
+        .read_to_end(&mut helper_error)
+        .expect("status publication error record");
+    let mut target_stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("target stderr")
+        .read_to_string(&mut target_stderr)
+        .expect("target stderr bytes");
     let exit = child.wait().expect("EPIPE supervisor wait");
-    let mut diagnostics = String::new();
-    stderr
-        .read_to_string(&mut diagnostics)
-        .expect("EPIPE diagnostics");
     assert_eq!(exit.code(), Some(1));
-    assert!(diagnostics.contains("D2B-BZLEXEC-HELPER-EXEC-EPIPE"));
+    assert_eq!(target_stderr, "target-noise\n");
+    assert_eq!(
+        decode_helper_error(&helper_error, true)
+            .expect("status publication error")
+            .expect("status publication record")
+            .code(),
+        "D2B-BZLEXEC-HELPER-EXEC-EPIPE"
+    );
 }

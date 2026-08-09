@@ -2,15 +2,28 @@ use std::{
     ffi::OsString,
     fmt,
     fs::File,
-    io::Read,
+    io::{self, Read},
     os::fd::OwnedFd,
     path::Path,
     process::{Child, Command, ExitStatus, Stdio},
     sync::{Mutex, OnceLock},
+    thread,
+    time::{Duration, Instant},
 };
 
+#[cfg(unix)]
+use std::os::fd::AsFd;
+
 use command_fds::{CommandFdExt, FdMapping};
-use nix::sys::signal::{SigSet, Signal};
+use d2b_bazel_support::startup::{
+    KernelVersion, NativeSystem, RuntimeStartupProbe, StartupCode, StartupProbe,
+    StartupRequirements, validate_startup,
+};
+use nix::{
+    poll::{PollFd, PollFlags, poll},
+    sys::signal::{SigSet, Signal, kill},
+    unistd::Pid,
+};
 
 use crate::provider::VerifiedExecutable;
 
@@ -19,8 +32,11 @@ use rustix::pipe::{PipeFlags, pipe_with};
 
 const PRIVATE_STATUS_FD: i32 = 8;
 const PRIVATE_EXECUTABLE_FD: i32 = 9;
+const PRIVATE_HELPER_ERROR_FD: i32 = 10;
 pub const SUPERVISOR_ENVIRONMENT: &str = "D2B_BAZEL_EXEC_SUPERVISOR";
 const IMMUTABLE_SUPERVISOR_PATH: Option<&str> = option_env!("D2B_BAZEL_EXEC_SUPERVISOR");
+const STATUS_PHASE_TIMEOUT: Duration = Duration::from_secs(10);
+const RECEIPT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub const STATUS_BUFFER_CAPACITY: usize = 27;
 pub const STATUS_MAGIC: [u8; 4] = *b"D2BS";
@@ -87,6 +103,47 @@ pub const CHILD_STAGE_CODES: &[&str] = &[
     "D2B-BZLEXEC-CHILD-EXECVEAT",
 ];
 
+pub const HELPER_ERROR_CODES: &[&str] = &[
+    "D2B-BZLEXEC-HELPER-SIGNAL-INHERITED-IGNORED",
+    "D2B-BZLEXEC-HELPER-SIGNAL-HANDOFF",
+    "D2B-BZLEXEC-HELPER-ADOPT",
+    "D2B-BZLEXEC-HELPER-SIGNAL-NORMALIZE",
+    "D2B-BZLEXEC-HELPER-EXEC-PIPE",
+    "D2B-BZLEXEC-HELPER-FORK",
+    "D2B-BZLEXEC-HELPER-GROUP-ESRCH",
+    "D2B-BZLEXEC-HELPER-GROUP-EPERM",
+    "D2B-BZLEXEC-HELPER-GROUP-ERROR",
+    "D2B-BZLEXEC-HELPER-GROUP-EARLY-EXIT",
+    "D2B-BZLEXEC-HELPER-PTRACE-STOP",
+    "D2B-BZLEXEC-HELPER-PTRACE-OPTIONS",
+    "D2B-BZLEXEC-HELPER-PTRACE-CONT",
+    "D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION",
+    "D2B-BZLEXEC-HELPER-PRE-EXEC-DEATH",
+    "D2B-BZLEXEC-HELPER-PTRACE-EVENT",
+    "D2B-BZLEXEC-HELPER-PTRACE-DETACH",
+    "D2B-BZLEXEC-HELPER-EXEC-TIMEOUT",
+    "D2B-BZLEXEC-HELPER-EXEC-PARTIAL",
+    "D2B-BZLEXEC-HELPER-EXEC-OVERLONG",
+    "D2B-BZLEXEC-HELPER-EXEC-UNKNOWN",
+    "D2B-BZLEXEC-HELPER-EXEC-EPIPE",
+    "D2B-BZLEXEC-HELPER-EXEC-IO",
+    "D2B-BZLEXEC-HELPER-SIGNAL-FORWARD",
+    "D2B-BZLEXEC-HELPER-DEADLINE",
+    "D2B-BZLEXEC-HELPER-WAIT",
+    "D2B-BZLEXEC-HELPER-REAP",
+    "D2B-BZLEXEC-HELPER-TERMINAL-WRITE",
+    "D2B-BZLEXEC-HELPER-STATUS-MIRROR",
+    "D2B-BZLEXEC-HELPER-CLEANUP",
+    "D2B-BZLEXEC-CHILD-GROUP",
+    "D2B-BZLEXEC-CHILD-SIGNAL",
+    "D2B-BZLEXEC-CHILD-STDIO",
+    "D2B-BZLEXEC-CHILD-CLOEXEC",
+    "D2B-BZLEXEC-CHILD-CLOSE",
+    "D2B-BZLEXEC-CHILD-PTRACE",
+    "D2B-BZLEXEC-CHILD-STOP",
+    "D2B-BZLEXEC-CHILD-EXECVEAT",
+];
+
 /// The standard streams are deliberately inherited unchanged by the helper.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StdioPolicy {
@@ -143,21 +200,20 @@ impl SupervisorIdentity {
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(test)]
     pub const fn label(self) -> &'static str {
         self.label
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(test)]
     pub const fn is_immutable(self) -> bool {
         self.immutable
     }
 }
 
-/// A launch plan is deliberately compiled into the explicit test-support
-/// surface only. Production callers cannot implement a backend that receives
-/// an executable descriptor or inspect the plan.
-#[cfg(feature = "test-support")]
+/// A launch plan is crate-internal test state. Production callers cannot
+/// implement a backend that receives an executable descriptor or inspect it.
+#[cfg(test)]
 pub struct LaunchPlan {
     #[cfg(unix)]
     private_fd: OwnedFd,
@@ -167,7 +223,7 @@ pub struct LaunchPlan {
     supervisor: SupervisorIdentity,
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(test)]
 impl LaunchPlan {
     #[cfg(unix)]
     pub fn private_fd_number(&self) -> i32 {
@@ -209,6 +265,8 @@ pub enum BackendError {
     Mapping,
     HelperIdentity,
     StatusPipe,
+    HelperErrorPipe,
+    Startup(StartupCode),
     TargetArguments,
 }
 
@@ -217,8 +275,11 @@ impl BackendError {
         match self {
             Self::Capture | Self::Block | Self::Restore => "D2B-BZLEXEC-PARENT-SIGNAL-HANDOFF",
             Self::Spawn => "D2B-BZLEXEC-PARENT-SPAWN",
-            Self::Mapping | Self::StatusPipe => "D2B-BZLEXEC-PARENT-PREPARE",
+            Self::Mapping | Self::StatusPipe | Self::HelperErrorPipe => {
+                "D2B-BZLEXEC-PARENT-PREPARE"
+            }
             Self::HelperIdentity => "D2B-BZLEXEC-PARENT-HELPER-IDENTITY",
+            Self::Startup(code) => code.as_str(),
             Self::TargetArguments => "D2B-BZLEXEC-PARENT-TARGET",
         }
     }
@@ -259,12 +320,12 @@ impl fmt::Display for HandoffError {
 
 impl std::error::Error for HandoffError {}
 
-/// An opaque captured mask. Test values exist only in the explicit
-/// `test-support` feature.
+/// An opaque captured mask. Synthetic values exist only in crate-internal
+/// tests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MaskSnapshot {
     Native(SigSet),
-    #[cfg(feature = "test-support")]
+    #[cfg(test)]
     Test(u64),
 }
 
@@ -284,7 +345,7 @@ impl LaunchCoordinator {
 
     /// Poison only an injected coordinator; this is unavailable to production
     /// callers.
-    #[cfg(feature = "test-support")]
+    #[cfg(test)]
     pub fn poison_for_test(&self) {
         let _guard = self.gate.lock().expect("coordinator must be unpoisoned");
         panic!("injected poisoned launch coordinator");
@@ -310,6 +371,98 @@ pub fn managed_signals() -> SigSet {
     signals.add(Signal::SIGTERM);
     signals.add(Signal::SIGQUIT);
     signals
+}
+
+fn runtime_native_system() -> NativeSystem {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        NativeSystem::X86_64Linux
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        NativeSystem::Aarch64Linux
+    }
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64")
+    )))]
+    {
+        NativeSystem::Unsupported
+    }
+}
+
+fn runtime_kernel_version() -> Result<KernelVersion, StartupCode> {
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map_err(|_| StartupCode::ProbeFailed)?;
+    let mut components = release.trim().split('.');
+    let major = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or(StartupCode::ProbeFailed)?;
+    let minor = components
+        .next()
+        .and_then(|value| value.split('-').next())
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or(StartupCode::ProbeFailed)?;
+    Ok(KernelVersion::new(major, minor))
+}
+
+fn runtime_yama_scope() -> Result<Option<u8>, StartupCode> {
+    match std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope") {
+        Ok(value) => value
+            .trim()
+            .parse::<u8>()
+            .map(Some)
+            .map_err(|_| StartupCode::ProbeFailed),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(StartupCode::ProbeFailed),
+    }
+}
+
+fn runtime_startup_requirements() -> Result<StartupRequirements, StartupCode> {
+    Ok(StartupRequirements {
+        system: runtime_native_system(),
+        kernel: runtime_kernel_version()?,
+        yama_scope: runtime_yama_scope()?,
+        sandbox_policy_ok: immutable_supervisor_path().is_some(),
+    })
+}
+
+fn execute_after_startup<B: LaunchBackend, P: StartupProbe>(
+    executable: VerifiedExecutable,
+    request: ExecutionRequest,
+    backend: &B,
+    requirements: StartupRequirements,
+    probe: &P,
+) -> Result<ExecutionResult, HandoffError> {
+    if request.target_argv.is_empty()
+        || request
+            .target_argv
+            .first()
+            .is_some_and(|value| value.as_os_str().is_empty())
+    {
+        return Err(HandoffError::Backend(BackendError::TargetArguments));
+    }
+    validate_startup(requirements, probe)
+        .map_err(|error| HandoffError::Backend(BackendError::Startup(error.code())))?;
+    #[cfg(unix)]
+    {
+        let private_fd = executable
+            .duplicate_for_mapping()
+            .map_err(|_| HandoffError::Backend(BackendError::Mapping))?;
+        let plan = InternalLaunchPlan {
+            private_fd,
+            request,
+            supervisor: SupervisorIdentity::immutable(),
+        };
+        let receipt = launch_with_signal_handoff(process_launch_coordinator(), backend, plan)?;
+        receipt.finish()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (executable, request, backend);
+        Err(HandoffError::Backend(BackendError::HelperIdentity))
+    }
 }
 
 trait LaunchBackend {
@@ -344,7 +497,10 @@ fn launch_with_signal_handoff<B: LaunchBackend>(
     let restored = backend.restore_mask(snapshot);
     match (result, restored) {
         (Ok(value), Ok(())) => Ok(value),
-        (Ok(_), Err(_)) => Err(HandoffError::RestoreAfterSpawn),
+        (Ok(value), Err(_)) => {
+            value.cleanup();
+            Err(HandoffError::RestoreAfterSpawn)
+        }
         (Err(error), Ok(())) => Err(HandoffError::Backend(error)),
         (Err(_), Err(_)) => Err(HandoffError::RestoreAfterSpawnFailure),
     }
@@ -355,33 +511,15 @@ pub fn execute_verified(
     executable: VerifiedExecutable,
     request: ExecutionRequest,
 ) -> Result<ExecutionResult, HandoffError> {
-    if request.target_argv.is_empty()
-        || request
-            .target_argv
-            .first()
-            .is_some_and(|value| value.as_os_str().is_empty())
-    {
-        return Err(HandoffError::Backend(BackendError::TargetArguments));
-    }
-    #[cfg(unix)]
-    {
-        let private_fd = executable
-            .duplicate_for_mapping()
-            .map_err(|_| HandoffError::Backend(BackendError::Mapping))?;
-        let plan = InternalLaunchPlan {
-            private_fd,
-            request,
-            supervisor: SupervisorIdentity::immutable(),
-        };
-        let receipt =
-            launch_with_signal_handoff(process_launch_coordinator(), &ProductionBackend, plan)?;
-        receipt.finish()
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (executable, request);
-        Err(HandoffError::Backend(BackendError::HelperIdentity))
-    }
+    let requirements = runtime_startup_requirements()
+        .map_err(|code| HandoffError::Backend(BackendError::Startup(code)))?;
+    execute_after_startup(
+        executable,
+        request,
+        &ProductionBackend,
+        requirements,
+        &RuntimeStartupProbe,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -403,7 +541,7 @@ impl LaunchBackend for ProductionBackend {
     fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError> {
         match snapshot {
             MaskSnapshot::Native(mask) => mask.thread_set_mask().map_err(|_| BackendError::Restore),
-            #[cfg(feature = "test-support")]
+            #[cfg(test)]
             MaskSnapshot::Test(_) => Err(BackendError::Restore),
         }
     }
@@ -426,6 +564,8 @@ impl LaunchBackend for ProductionBackend {
             let helper = immutable_supervisor_path().ok_or(BackendError::HelperIdentity)?;
             let (status_reader, status_writer) =
                 pipe_with(PipeFlags::CLOEXEC).map_err(|_| BackendError::StatusPipe)?;
+            let (helper_error_reader, helper_error_writer) =
+                pipe_with(PipeFlags::CLOEXEC).map_err(|_| BackendError::HelperErrorPipe)?;
 
             let mut command = Command::new(helper);
             command.stdin(stdio(plan.request.stdin));
@@ -442,12 +582,17 @@ impl LaunchBackend for ProductionBackend {
                         parent_fd: status_writer,
                         child_fd: PRIVATE_STATUS_FD,
                     },
+                    FdMapping {
+                        parent_fd: helper_error_writer,
+                        child_fd: PRIVATE_HELPER_ERROR_FD,
+                    },
                 ])
                 .map_err(|_| BackendError::Mapping)?;
             let child = command.spawn().map_err(|_| BackendError::Spawn)?;
             Ok(InternalSpawnReceipt::Child {
                 child,
                 status_reader: File::from(status_reader),
+                helper_error_reader: File::from(helper_error_reader),
             })
         }
         #[cfg(not(unix))]
@@ -478,29 +623,56 @@ fn stdio(policy: StdioPolicy) -> Stdio {
 
 enum InternalSpawnReceipt {
     #[cfg(unix)]
-    Child { child: Child, status_reader: File },
-    #[cfg(feature = "test-support")]
+    Child {
+        child: Child,
+        status_reader: File,
+        helper_error_reader: File,
+    },
+    #[cfg(test)]
     Test { helper_started: bool },
 }
 
 impl InternalSpawnReceipt {
+    fn cleanup(self) {
+        match self {
+            #[cfg(unix)]
+            Self::Child {
+                mut child,
+                status_reader,
+                helper_error_reader,
+            } => {
+                drop(status_reader);
+                drop(helper_error_reader);
+                cleanup_child(&mut child);
+            }
+            #[cfg(test)]
+            Self::Test { .. } => {}
+        }
+    }
+
     fn finish(self) -> Result<ExecutionResult, HandoffError> {
         match self {
             #[cfg(unix)]
             Self::Child {
                 mut child,
                 status_reader,
+                helper_error_reader,
             } => {
-                let protocol = read_status(status_reader);
-                let waited = child.wait().map_err(|_| HandoffError::Wait);
-                let terminal = match (protocol, waited) {
-                    (Err(error), _) => return Err(HandoffError::Protocol(error)),
-                    (Ok(_), Err(error)) => return Err(error),
-                    (Ok(terminal), Ok(status)) => {
-                        ensure_helper_status(status, terminal)?;
-                        terminal
+                let terminal = match read_status(status_reader, helper_error_reader) {
+                    Ok(terminal) => terminal,
+                    Err(error) => {
+                        cleanup_child(&mut child);
+                        return Err(HandoffError::Protocol(error));
                     }
                 };
+                let status = match child.wait() {
+                    Ok(status) => status,
+                    Err(_) => {
+                        cleanup_child(&mut child);
+                        return Err(HandoffError::Wait);
+                    }
+                };
+                ensure_helper_status(status, terminal)?;
                 if terminal != TerminalStatus::Exited(0) {
                     return Err(HandoffError::Target(terminal));
                 }
@@ -509,7 +681,7 @@ impl InternalSpawnReceipt {
                     terminal,
                 })
             }
-            #[cfg(feature = "test-support")]
+            #[cfg(test)]
             Self::Test { helper_started } => Ok(ExecutionResult {
                 helper_started,
                 terminal: TerminalStatus::Exited(0),
@@ -519,16 +691,130 @@ impl InternalSpawnReceipt {
 }
 
 #[cfg(unix)]
-fn read_status(mut reader: File) -> Result<TerminalStatus, ProtocolError> {
+fn cleanup_child(child: &mut Child) {
+    let pid = Pid::from_raw(child.id() as i32);
+    let _ = kill(pid, Signal::SIGTERM);
+    let deadline = Instant::now() + RECEIPT_CLEANUP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    let _ = kill(pid, Signal::SIGKILL);
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn phase_timeout(state: ProtocolState) -> ProtocolError {
+    match state {
+        ProtocolState::Start => ProtocolError::ReadyTimeout,
+        ProtocolState::Ready => ProtocolError::ExecutedTimeout,
+        ProtocolState::Executed => ProtocolError::TerminalTimeout,
+        ProtocolState::Terminal => ProtocolError::StatusRead,
+    }
+}
+
+#[cfg(unix)]
+fn remaining_poll_timeout(deadline: Instant) -> u16 {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return 0;
+    }
+    u16::try_from(remaining.as_millis().min(u16::MAX as u128)).unwrap_or(u16::MAX)
+}
+
+#[cfg(unix)]
+fn read_helper_error(
+    reader: &mut File,
+    bytes: &mut Vec<u8>,
+) -> Result<(Option<HelperStage>, bool), ProtocolError> {
+    let mut buffer = [0_u8; EXEC_ERROR_RECORD_SIZE + 1];
+    match reader.read(&mut buffer) {
+        Ok(0) if bytes.is_empty() => Ok((None, true)),
+        Ok(0) => Err(decode_helper_error(bytes, true).expect_err("partial helper record")),
+        Ok(length) => {
+            bytes.extend_from_slice(&buffer[..length]);
+            if bytes.len() > EXEC_ERROR_RECORD_SIZE {
+                return Err(ProtocolError::ExecErrorOverlong);
+            }
+            if bytes.len() == EXEC_ERROR_RECORD_SIZE {
+                let stage =
+                    decode_helper_error(bytes, true)?.ok_or(ProtocolError::EmptyExecErrorEof)?;
+                return Ok((Some(stage), false));
+            }
+            Ok((None, false))
+        }
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok((None, false)),
+        Err(_) => Err(ProtocolError::StatusRead),
+    }
+}
+
+#[cfg(unix)]
+fn read_status(
+    mut status_reader: File,
+    mut helper_error_reader: File,
+) -> Result<TerminalStatus, ProtocolError> {
     let mut protocol = ProtocolReader::new();
     let mut buffer = [0_u8; STATUS_BUFFER_CAPACITY];
+    let mut helper_error = Vec::with_capacity(EXEC_ERROR_RECORD_SIZE);
+    let mut helper_closed = false;
+    let mut phase = protocol.state();
+    let mut deadline = Instant::now() + STATUS_PHASE_TIMEOUT;
     loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => return protocol.eof(),
-            Ok(length) => {
-                protocol.feed(&buffer[..length])?;
-            }
+        let mut poll_fds = vec![PollFd::new(
+            status_reader.as_fd(),
+            PollFlags::POLLIN | PollFlags::POLLHUP,
+        )];
+        if !helper_closed {
+            poll_fds.push(PollFd::new(
+                helper_error_reader.as_fd(),
+                PollFlags::POLLIN | PollFlags::POLLHUP,
+            ));
+        }
+        let poll_result = match poll(&mut poll_fds, remaining_poll_timeout(deadline)) {
+            Ok(value) => value,
+            Err(nix::errno::Errno::EINTR) => continue,
             Err(_) => return Err(ProtocolError::StatusRead),
+        };
+        if poll_result == 0 {
+            return Err(phase_timeout(protocol.state()));
+        }
+        let status_events = poll_fds[0].revents().unwrap_or(PollFlags::empty());
+        let helper_events = poll_fds
+            .get(1)
+            .and_then(|descriptor| descriptor.revents())
+            .unwrap_or(PollFlags::empty());
+        drop(poll_fds);
+
+        if !helper_closed && helper_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP) {
+            let (stage, closed) = read_helper_error(&mut helper_error_reader, &mut helper_error)?;
+            helper_closed |= closed;
+            if let Some(stage) = stage {
+                return Err(ProtocolError::HelperStage(stage));
+            }
+        }
+
+        if status_events.intersects(PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(ProtocolError::StatusRead);
+        }
+        if status_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP) {
+            match status_reader.read(&mut buffer) {
+                Ok(0) => return protocol.eof(),
+                Ok(length) => {
+                    protocol.feed(&buffer[..length])?;
+                    if protocol.state() != phase {
+                        phase = protocol.state();
+                        deadline = Instant::now() + STATUS_PHASE_TIMEOUT;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return Err(ProtocolError::StatusRead),
+            }
         }
     }
 }
@@ -606,6 +892,10 @@ pub enum ProtocolError {
     ExecErrorHeldOpen,
     EmptyExecErrorEof,
     HelperBeforeExecuted,
+    HelperStage(HelperStage),
+    ReadyTimeout,
+    ExecutedTimeout,
+    TerminalTimeout,
     StatusEpipe,
     StatusRead,
     UnknownChildCode,
@@ -625,6 +915,10 @@ impl ProtocolError {
             Self::DetachFailed => "D2B-BZLEXEC-HELPER-PTRACE-DETACH",
             Self::PreExecTermination => "D2B-BZLEXEC-HELPER-PRE-EXEC-TERMINATION",
             Self::HelperBeforeExecuted => "D2B-BZLEXEC-PARENT-EXECUTED",
+            Self::HelperStage(stage) => stage.code(),
+            Self::ReadyTimeout => "D2B-BZLEXEC-PARENT-READY",
+            Self::ExecutedTimeout => "D2B-BZLEXEC-PARENT-EXECUTED",
+            Self::TerminalTimeout => "D2B-BZLEXEC-PARENT-TERMINAL",
             Self::StatusEpipe => "D2B-BZLEXEC-HELPER-EXEC-EPIPE",
             Self::StatusRead => "D2B-BZLEXEC-PARENT-STATUS",
             Self::UnknownChildCode => "D2B-BZLEXEC-HELPER-EXEC-UNKNOWN",
@@ -782,6 +1076,10 @@ impl ProtocolReader {
 
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StatusFrame>, ProtocolError> {
         self.decoder.feed(bytes)
+    }
+
+    pub const fn state(&self) -> ProtocolState {
+        self.decoder.state()
     }
 
     pub fn eof(&self) -> Result<TerminalStatus, ProtocolError> {
@@ -1088,6 +1386,33 @@ impl ChildStage {
     }
 }
 
+/// A typed, closed helper failure received over the private parent channel.
+///
+/// The wire value is deliberately opaque to callers; only the fixed
+/// repository diagnostic code is exposed.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct HelperStage(u8);
+
+impl HelperStage {
+    const fn from_wire(value: u8) -> Option<Self> {
+        if value == 0 || value as usize > HELPER_ERROR_CODES.len() {
+            None
+        } else {
+            Some(Self(value))
+        }
+    }
+
+    pub const fn code(self) -> &'static str {
+        HELPER_ERROR_CODES[self.0 as usize - 1]
+    }
+}
+
+impl fmt::Debug for HelperStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HelperStage(..)")
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ExecErrorRecord {
     pub code: u16,
@@ -1139,6 +1464,43 @@ pub fn decode_exec_error(
     Ok(Some(ExecErrorRecord { code }))
 }
 
+/// Decode one helper failure from the private helper-to-parent channel.
+///
+/// Unlike the child exec pipe, this record is never inherited by the target.
+/// A complete record is sufficient to publish the typed failure; EOF is still
+/// required for partial-record diagnostics.
+pub fn decode_helper_error(bytes: &[u8], eof: bool) -> Result<Option<HelperStage>, ProtocolError> {
+    if bytes.is_empty() {
+        return if eof {
+            Err(ProtocolError::EmptyExecErrorEof)
+        } else {
+            Err(ProtocolError::ExecErrorHeldOpen)
+        };
+    }
+    if bytes.len() < EXEC_ERROR_RECORD_SIZE {
+        return if eof {
+            Err(ProtocolError::ExecErrorPartial)
+        } else {
+            Err(ProtocolError::ExecErrorHeldOpen)
+        };
+    }
+    if bytes.len() > EXEC_ERROR_RECORD_SIZE {
+        return Err(ProtocolError::ExecErrorOverlong);
+    }
+    if bytes[..4] != *b"D2BE" || bytes[4] != STATUS_VERSION || bytes[5] != 2 {
+        return Err(ProtocolError::ExecErrorUnknown);
+    }
+    if !eof {
+        return Err(ProtocolError::ExecErrorHeldOpen);
+    }
+    if bytes[6] != 0 {
+        return Err(ProtocolError::ExecErrorUnknown);
+    }
+    HelperStage::from_wire(bytes[7])
+        .map(Some)
+        .ok_or(ProtocolError::UnknownChildCode)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatusWriteError {
     ClosedReader,
@@ -1156,46 +1518,101 @@ pub fn helper_exit_before_executed() -> Result<(), ProtocolError> {
     Err(ProtocolError::HelperBeforeExecuted)
 }
 
-#[cfg(feature = "test-support")]
-pub mod test_support {
+#[cfg(test)]
+mod tests {
     use super::{
-        ExecutionRequest, HandoffError, InternalLaunchPlan, LaunchCoordinator, SupervisorIdentity,
-        TerminalStatus,
+        BackendError, ExecutionRequest, HandoffError, InternalLaunchPlan, LaunchCoordinator,
+        LaunchPlan, MaskSnapshot, SupervisorIdentity,
     };
     use crate::VerifiedExecutable;
-    use crate::provider::test_support::verified_executable;
-    use std::fs::File;
-
-    pub use super::{BackendError, LaunchPlan, MaskSnapshot};
+    use crate::provider::verified_executable_for_test;
+    use d2b_bazel_support::startup::{
+        KernelVersion, NativeSystem, ProbeResult, StartupCode, StartupRequirements,
+    };
+    use std::{
+        fs::File,
+        sync::{Arc, Mutex},
+    };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub struct SpawnReceipt {
+    struct SpawnReceipt {
         helper_started: bool,
     }
 
     impl SpawnReceipt {
-        pub const fn started() -> Self {
+        const fn started() -> Self {
             Self {
                 helper_started: true,
             }
         }
 
-        pub const fn not_started() -> Self {
-            Self {
-                helper_started: false,
-            }
-        }
-
-        pub const fn helper_started(self) -> bool {
+        const fn helper_started(self) -> bool {
             self.helper_started
         }
     }
 
-    pub trait ExecutionBackend {
+    #[derive(Clone)]
+    struct FakeBackend {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        capture: Result<MaskSnapshot, BackendError>,
+        block: Result<(), BackendError>,
+        restore: Result<(), BackendError>,
+        spawn: Result<SpawnReceipt, BackendError>,
+        spawn_count: Arc<Mutex<usize>>,
+        plan_seen: Arc<Mutex<bool>>,
+    }
+
+    impl FakeBackend {
+        fn passing() -> Self {
+            Self {
+                events: Arc::new(Mutex::new(Vec::new())),
+                capture: Ok(MaskSnapshot::Test(7)),
+                block: Ok(()),
+                restore: Ok(()),
+                spawn: Ok(SpawnReceipt::started()),
+                spawn_count: Arc::new(Mutex::new(0)),
+                plan_seen: Arc::new(Mutex::new(false)),
+            }
+        }
+
+        fn event_names(&self) -> Vec<&'static str> {
+            self.events.lock().expect("events").clone()
+        }
+
+        fn spawn_count(&self) -> usize {
+            *self.spawn_count.lock().expect("spawn count")
+        }
+    }
+
+    trait ExecutionBackend {
         fn capture_mask(&self) -> Result<MaskSnapshot, BackendError>;
         fn block_managed(&self) -> Result<(), BackendError>;
         fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError>;
         fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError>;
+    }
+
+    impl ExecutionBackend for FakeBackend {
+        fn capture_mask(&self) -> Result<MaskSnapshot, BackendError> {
+            self.events.lock().expect("events").push("capture");
+            self.capture
+        }
+
+        fn block_managed(&self) -> Result<(), BackendError> {
+            self.events.lock().expect("events").push("block");
+            self.block
+        }
+
+        fn restore_mask(&self, _snapshot: MaskSnapshot) -> Result<(), BackendError> {
+            self.events.lock().expect("events").push("restore");
+            self.restore
+        }
+
+        fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError> {
+            self.events.lock().expect("events").push("spawn");
+            *self.spawn_count.lock().expect("spawn count") += 1;
+            *self.plan_seen.lock().expect("plan") = plan.preserves_standard_streams();
+            self.spawn
+        }
     }
 
     struct Adapter<'a, B>(&'a B);
@@ -1229,7 +1646,7 @@ pub mod test_support {
         }
     }
 
-    pub fn execute_verified_with_backend<B: ExecutionBackend>(
+    fn execute_verified_with_backend<B: ExecutionBackend>(
         executable: VerifiedExecutable,
         request: ExecutionRequest,
         backend: &B,
@@ -1250,7 +1667,7 @@ pub mod test_support {
         receipt.finish()
     }
 
-    pub fn run_signal_handoff<B, F, T>(
+    fn run_signal_handoff<B, F, T>(
         coordinator: &LaunchCoordinator,
         backend: &B,
         spawn: F,
@@ -1281,11 +1698,185 @@ pub mod test_support {
         }
     }
 
-    pub fn verified_file(file: File) -> VerifiedExecutable {
-        verified_executable(file)
+    fn verified_file(file: File) -> VerifiedExecutable {
+        verified_executable_for_test(file)
     }
 
-    pub fn target_succeeded(result: &super::ExecutionResult) -> bool {
-        result.terminal == TerminalStatus::Exited(0)
+    fn passing_requirements() -> StartupRequirements {
+        StartupRequirements {
+            system: NativeSystem::X86_64Linux,
+            kernel: KernelVersion::new(6, 1),
+            yama_scope: Some(1),
+            sandbox_policy_ok: true,
+        }
+    }
+
+    #[test]
+    fn signal_handoff_restores_before_returning_to_the_caller() {
+        let coordinator = LaunchCoordinator::new();
+        let backend = FakeBackend::passing();
+        let result = run_signal_handoff(&coordinator, &backend, || {
+            backend.events.lock().expect("events").push("closure");
+            Ok(SpawnReceipt::started())
+        })
+        .expect("handoff");
+        assert!(result.helper_started());
+        assert_eq!(
+            backend.event_names(),
+            ["capture", "block", "closure", "restore"]
+        );
+    }
+
+    #[test]
+    fn capture_and_block_failures_never_enter_the_spawn_closure() {
+        let coordinator = LaunchCoordinator::new();
+        let mut backend = FakeBackend::passing();
+        backend.capture = Err(BackendError::Capture);
+        let error = run_signal_handoff(
+            &coordinator,
+            &backend,
+            || -> Result<SpawnReceipt, BackendError> {
+                panic!("capture failure must not spawn");
+            },
+        )
+        .expect_err("capture failure");
+        assert_eq!(error, HandoffError::Backend(BackendError::Capture));
+        assert_eq!(backend.event_names(), ["capture"]);
+
+        let coordinator = LaunchCoordinator::new();
+        let mut backend = FakeBackend::passing();
+        backend.block = Err(BackendError::Block);
+        let error = run_signal_handoff(
+            &coordinator,
+            &backend,
+            || -> Result<SpawnReceipt, BackendError> {
+                panic!("block failure must not spawn");
+            },
+        )
+        .expect_err("block failure");
+        assert_eq!(error, HandoffError::Backend(BackendError::Block));
+        assert_eq!(backend.event_names(), ["capture", "block", "restore"]);
+    }
+
+    #[test]
+    fn spawn_and_restore_failures_keep_their_first_typed_error() {
+        let mut backend = FakeBackend::passing();
+        backend.spawn = Err(BackendError::Spawn);
+        let error = execute_verified_with_backend(
+            verified_file(File::open("/dev/null").expect("test descriptor")),
+            ExecutionRequest::default(),
+            &backend,
+        )
+        .expect_err("spawn failure");
+        assert_eq!(error, HandoffError::Backend(BackendError::Spawn));
+        assert_eq!(
+            backend.event_names(),
+            ["capture", "block", "spawn", "restore"]
+        );
+
+        let mut backend = FakeBackend::passing();
+        backend.restore = Err(BackendError::Restore);
+        let error = execute_verified_with_backend(
+            verified_file(File::open("/dev/null").expect("test descriptor")),
+            ExecutionRequest::default(),
+            &backend,
+        )
+        .expect_err("restore failure");
+        assert_eq!(error, HandoffError::RestoreAfterSpawn);
+        assert_eq!(
+            backend.event_names(),
+            ["capture", "block", "spawn", "restore"]
+        );
+    }
+
+    #[test]
+    fn poisoned_launch_coordinator_refuses_before_capture() {
+        let coordinator = LaunchCoordinator::new();
+        let _ = std::panic::catch_unwind(|| coordinator.poison_for_test());
+        let backend = FakeBackend::passing();
+        let error = run_signal_handoff(
+            &coordinator,
+            &backend,
+            || -> Result<SpawnReceipt, BackendError> {
+                panic!("poisoned coordinator must not spawn");
+            },
+        )
+        .expect_err("poisoned coordinator");
+        assert_eq!(error, HandoffError::GuardPoisoned);
+        assert!(backend.event_names().is_empty());
+    }
+
+    #[test]
+    fn startup_refusal_is_before_any_backend_spawn() {
+        let cases = [
+            (
+                StartupRequirements {
+                    system: NativeSystem::Unsupported,
+                    ..passing_requirements()
+                },
+                ProbeResult::Pass,
+                StartupCode::UnsupportedSystem,
+            ),
+            (
+                StartupRequirements {
+                    kernel: KernelVersion::new(3, 18),
+                    ..passing_requirements()
+                },
+                ProbeResult::Pass,
+                StartupCode::KernelTooOld,
+            ),
+            (
+                StartupRequirements {
+                    yama_scope: Some(2),
+                    ..passing_requirements()
+                },
+                ProbeResult::Pass,
+                StartupCode::YamaRefused,
+            ),
+            (
+                passing_requirements(),
+                ProbeResult::Fail,
+                StartupCode::ProbeFailed,
+            ),
+            (
+                StartupRequirements {
+                    sandbox_policy_ok: false,
+                    ..passing_requirements()
+                },
+                ProbeResult::Pass,
+                StartupCode::SandboxPolicyDrift,
+            ),
+        ];
+
+        for (requirements, probe, expected) in cases {
+            let backend = FakeBackend::passing();
+            let error = super::execute_after_startup(
+                verified_file(File::open("/dev/null").expect("test descriptor")),
+                ExecutionRequest::default(),
+                &Adapter(&backend),
+                requirements,
+                &probe,
+            )
+            .expect_err("startup refusal");
+            assert_eq!(
+                error,
+                HandoffError::Backend(BackendError::Startup(expected))
+            );
+            assert_eq!(backend.spawn_count(), 0);
+        }
+    }
+
+    #[test]
+    fn internal_test_backend_receives_only_the_consumed_capability_plan() {
+        let backend = FakeBackend::passing();
+        let result = execute_verified_with_backend(
+            verified_file(File::open("/dev/null").expect("test descriptor")),
+            ExecutionRequest::default(),
+            &backend,
+        )
+        .expect("internal backend");
+        assert!(result.helper_started);
+        assert!(*backend.plan_seen.lock().expect("plan"));
+        assert_eq!(backend.spawn_count(), 1);
     }
 }

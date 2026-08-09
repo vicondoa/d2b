@@ -71,10 +71,40 @@ impl fmt::Display for StartupError {
 
 impl std::error::Error for StartupError {}
 
-/// The real probe is supplied by the immutable toolchain scope. The prep
-/// boundary deliberately accepts only an injected result.
+/// The probe is kept behind a narrow boundary so the admission order can be
+/// tested without making the production execution owner injectable.
 pub trait StartupProbe {
     fn run(&self) -> io::Result<()>;
+}
+
+/// The process-local part of the ptrace admission check.
+///
+/// Kernel and Yama values are supplied separately in [`StartupRequirements`].
+/// This probe verifies that the running Linux process exposes the proc status
+/// needed by the ptrace handoff and is not already being traced by another
+/// process.  It deliberately emits no proc path or kernel text.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeStartupProbe;
+
+impl StartupProbe for RuntimeStartupProbe {
+    fn run(&self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let status = std::fs::read_to_string("/proc/self/status")?;
+            let tracer = status
+                .lines()
+                .find_map(|line| line.strip_prefix("TracerPid:"))
+                .ok_or_else(|| io::Error::other("ptrace status is unavailable"))?;
+            if tracer.trim() != "0" {
+                return Err(io::Error::other("process is already traced"));
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::Error::other("ptrace startup probe is Linux-only"))
+        }
+    }
 }
 
 pub fn validate_startup(

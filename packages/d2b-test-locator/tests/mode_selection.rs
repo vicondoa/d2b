@@ -143,6 +143,21 @@ fn bazel_binary_reports_a_missing_declared_entry_instead_of_using_cargo() {
 }
 
 #[test]
+fn bazel_binary_opens_a_present_declared_entry_before_private_admission() {
+    let (filesystem, digest) = fixture();
+    let runfiles = InMemoryRunfilesView::present("/runfiles/root", [PathBuf::from("provider")]);
+
+    let error = match bazel_binary(&filesystem, &runfiles, Path::new("provider")) {
+        Ok(_) => panic!("the downstream crate cannot mint execution authority"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, LocatorError::ExecutionAuthorityUnavailable));
+    assert_eq!(digest, Digest::sha256(b"verified-provider"));
+    assert_eq!(filesystem.inner.provider_open_count(), 1);
+}
+
+#[test]
 fn locator_and_runfiles_debug_renderings_are_fixed() {
     let location = RunfilesLocation {
         anchor: PathBuf::from("/sensitive/anchor"),

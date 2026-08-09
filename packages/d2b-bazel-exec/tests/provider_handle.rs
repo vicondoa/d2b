@@ -194,6 +194,56 @@ fn provider_verification_rejects_bad_kind_mode_freshness_bytes_and_races() {
 }
 
 #[test]
+fn provider_verification_rejects_stale_inputs_and_digest_mismatches() {
+    let filesystem = InMemoryFileSystem::new();
+    let root = filesystem.root();
+    filesystem
+        .add_file(
+            &root,
+            OsStr::new(PROVIDER),
+            b"verified-provider",
+            0o755,
+            Timestamp::new(10, 0),
+            Timestamp::new(10, 0),
+        )
+        .expect("provider");
+    filesystem
+        .add_file(
+            &root,
+            OsStr::new("newest-input"),
+            b"input",
+            0o644,
+            Timestamp::new(11, 0),
+            Timestamp::new(11, 0),
+        )
+        .expect("newest input");
+
+    let provider = filesystem
+        .open_provider(&root, Path::new(PROVIDER))
+        .expect("provider open");
+    let newest_input = filesystem
+        .open_provider(&root, Path::new("newest-input"))
+        .expect("input open");
+    assert!(matches!(
+        verify_provider(
+            &filesystem,
+            provider,
+            Some(&newest_input),
+            Digest::sha256(b"verified-provider"),
+        ),
+        Err(d2b_bazel_support::fsops::VerificationError::Stale)
+    ));
+
+    let provider = filesystem
+        .open_provider(&root, Path::new(PROVIDER))
+        .expect("provider reopen");
+    assert!(matches!(
+        verify_provider(&filesystem, provider, None, Digest::sha256(b"other")),
+        Err(d2b_bazel_support::fsops::VerificationError::DigestMismatch)
+    ));
+}
+
+#[test]
 fn execveat_enosys_is_a_named_refusal_without_path_fallback() {
     let error = io::Error::from_raw_os_error(rustix::io::Errno::NOSYS.raw_os_error());
     assert_eq!(

@@ -14,8 +14,8 @@ fn main() {
         }
     };
 
-    let mut status_present = false;
-    let mut executable_present = false;
+    let mut private_descriptor_present = false;
+    let mut planted_descriptor_present = false;
     for entry in entries {
         let Ok(entry) = entry else {
             println!("{PROBE_REFUSED}");
@@ -24,11 +24,11 @@ fn main() {
         let Ok(descriptor) = entry.file_name().to_string_lossy().parse::<i32>() else {
             continue;
         };
-        status_present |= descriptor == 8;
-        executable_present |= descriptor == 9;
+        private_descriptor_present |= (8..=10).contains(&descriptor);
+        planted_descriptor_present |= (11..=12).contains(&descriptor);
     }
 
-    if status_present && executable_present {
+    if !private_descriptor_present && !planted_descriptor_present {
         println!("{PROBE_OK}");
     } else {
         println!("{PROBE_REFUSED}");

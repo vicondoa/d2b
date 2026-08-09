@@ -116,30 +116,18 @@ impl VerifiedExecutable {
     }
 }
 
-#[cfg(feature = "test-support")]
-pub mod test_support {
-    use std::fs::File;
-
-    use super::VerifiedExecutable;
-
-    /// Construct an execution capability from a test-owned open file.
-    ///
-    /// This module is available only when the package's explicit
-    /// `test-support` feature is enabled. Production dependents do not enable
-    /// that feature; no equivalent unchecked constructor exists in the
-    /// production API.
-    pub fn verified_executable(file: File) -> VerifiedExecutable {
-        #[cfg(unix)]
-        {
-            VerifiedExecutable {
-                provider: file.into(),
-            }
+#[cfg(test)]
+pub(crate) fn verified_executable_for_test(file: std::fs::File) -> VerifiedExecutable {
+    #[cfg(unix)]
+    {
+        VerifiedExecutable {
+            provider: file.into(),
         }
-        #[cfg(not(unix))]
-        {
-            let _ = file;
-            VerifiedExecutable { provider: () }
-        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        VerifiedExecutable { provider: () }
     }
 }
 

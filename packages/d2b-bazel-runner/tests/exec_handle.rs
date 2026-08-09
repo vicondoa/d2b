@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, process::Command};
 
 #[test]
 fn adapter_delegates_once_to_the_dependency_leaf_consumer() {
@@ -34,4 +34,16 @@ fn runner_library_exports_only_the_typed_adapter() {
     assert!(source.contains("pub use exec_handle::execute"));
     assert!(!source.contains("std::process::Command"));
     assert!(!source.contains("CARGO_BIN_EXE_"));
+}
+
+#[test]
+fn execution_probe_accepts_a_clean_descriptor_set() {
+    let output = Command::new(env!("CARGO_BIN_EXE_d2b-exec-probe"))
+        .output()
+        .expect("execution probe");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("probe output"),
+        "D2B-BZLEXEC-PROBE status=closed\n"
+    );
 }
