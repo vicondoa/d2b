@@ -822,7 +822,8 @@ fi
 # The local fail-fast lane uses the normal stable targets, so checking a changed
 # package also warms the later authoritative workspace clippy pass.
 run_fast_lint_gate() {
-  local lint_base path package
+  local lint_base path package tracked_paths untracked_paths changed_paths
+  local sorted_packages
   local main_workspace_changed=0
   local guest_shell_runner_changed=0
   local -a main_package_args=()
@@ -868,6 +869,21 @@ run_fast_lint_gate() {
       ;;
   esac
 
+  if ! tracked_paths=$(git diff --name-only --diff-filter=ACMRTD "$lint_base" --); then
+    fail "git diff failed while enumerating changed-scope clippy paths"
+    exit 1
+  fi
+  if ! untracked_paths=$(git ls-files --others --exclude-standard); then
+    fail "git ls-files failed while enumerating changed-scope clippy paths"
+    exit 1
+  fi
+  if ! changed_paths=$(
+    printf '%s\n%s\n' "$tracked_paths" "$untracked_paths" | sort -u
+  ); then
+    fail "sort failed while ordering changed-scope clippy paths"
+    exit 1
+  fi
+
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     case "$path" in
@@ -892,20 +908,19 @@ run_fast_lint_gate() {
         fi
         ;;
     esac
-  done < <(
-    {
-      git diff --name-only --diff-filter=ACMRTD "$lint_base" --
-      git ls-files --others --exclude-standard
-    } | sort -u
-  )
+  done <<<"$changed_paths"
 
   if [ "$main_workspace_changed" -eq 1 ]; then
     main_package_args=(--workspace)
   elif [ "${#main_packages[@]}" -gt 0 ]; then
+    if ! sorted_packages=$(printf '%s\n' "${!main_packages[@]}" | sort); then
+      fail "sort failed while ordering changed-scope clippy packages"
+      exit 1
+    fi
     while IFS= read -r package; do
       [ -n "$package" ] || continue
       main_package_args+=(-p "$package")
-    done < <(printf '%s\n' "${!main_packages[@]}" | sort)
+    done <<<"$sorted_packages"
   fi
 
   if [ "${#main_package_args[@]}" -gt 0 ]; then

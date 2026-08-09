@@ -693,7 +693,13 @@ cargo() {
         )
         harness.chmod(0o755)
 
-        def run_scenario(name: str, changed_path: str) -> list[str]:
+        def run_scenario(
+            name: str,
+            changed_path: str,
+            *,
+            extra_env: dict[str, str] | None = None,
+            expect_success: bool = True,
+        ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
             tree = self.scratch / f"fast-lint-{name}"
             fixture_files = {
                 "packages/Cargo.toml": (
@@ -767,6 +773,8 @@ cargo() {
                 "PATH": os.environ.get("PATH", ""),
                 "ROOT": str(tree),
             }
+            if extra_env is not None:
+                env.update(extra_env)
             result = subprocess.run(
                 ["bash", str(harness), str(tree), str(cargo_log)],
                 cwd=tree,
@@ -776,20 +784,29 @@ cargo() {
                 text=True,
                 check=False,
             )
-            self.assertEqual(
-                result.returncode,
-                0,
-                msg=(
-                    f"{name} changed-scope probe failed\n"
-                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-                ),
+            if expect_success:
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    msg=(
+                        f"{name} changed-scope probe failed\n"
+                        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                    ),
+                )
+            commands = (
+                cargo_log.read_text(encoding="utf-8").splitlines()
+                if cargo_log.exists()
+                else []
             )
-            return cargo_log.read_text(encoding="utf-8").splitlines()
+            return result, commands
 
-        unrelated = run_scenario("unrelated", "docs/note.md")
-        broker = run_scenario("broker", "packages/d2b-priv-broker/src/lib.rs")
-        main = run_scenario("main", "packages/d2b-core/src/lib.rs")
-        guest = run_scenario(
+        _, unrelated = run_scenario("unrelated", "docs/note.md")
+        _, broker = run_scenario(
+            "broker",
+            "packages/d2b-priv-broker/src/lib.rs",
+        )
+        _, main = run_scenario("main", "packages/d2b-core/src/lib.rs")
+        _, guest = run_scenario(
             "guest",
             "packages/d2b-guest-shell-runner/src/lib.rs",
         )
@@ -820,6 +837,81 @@ cargo() {
             guest_clippy[0],
         )
         self.assertIn("--features real-libshpool", guest_clippy[0])
+
+        real_git = shutil.which("git")
+        real_sort = shutil.which("sort")
+        self.assertIsNotNone(real_git)
+        self.assertIsNotNone(real_sort)
+        assert real_git is not None
+        assert real_sort is not None
+        shim_dir = self.scratch / "fast-lint-producer-shims"
+        shim_dir.mkdir()
+        git_shim = shim_dir / "git"
+        git_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ -n "${D2B_FAIL_GIT_COMMAND:-}" ] '
+            '&& [ "${1:-}" = "$D2B_FAIL_GIT_COMMAND" ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            f"exec {shlex.quote(real_git)} \"$@\"\n",
+            encoding="utf-8",
+        )
+        git_shim.chmod(0o755)
+        sort_shim = shim_dir / "sort"
+        sort_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "${D2B_FAIL_SORT_STAGE:-}" = paths ] '
+            '&& [ "${1:-}" = -u ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            'if [ "${D2B_FAIL_SORT_STAGE:-}" = packages ] '
+            '&& [ "$#" -eq 0 ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            f"exec {shlex.quote(real_sort)} \"$@\"\n",
+            encoding="utf-8",
+        )
+        sort_shim.chmod(0o755)
+
+        shim_path = f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        producer_failures = (
+            (
+                "git-diff-failure",
+                {"D2B_FAIL_GIT_COMMAND": "diff"},
+                "git diff failed while enumerating changed-scope clippy paths",
+            ),
+            (
+                "git-ls-files-failure",
+                {"D2B_FAIL_GIT_COMMAND": "ls-files"},
+                "git ls-files failed while enumerating changed-scope clippy paths",
+            ),
+            (
+                "path-sort-failure",
+                {"D2B_FAIL_SORT_STAGE": "paths"},
+                "sort failed while ordering changed-scope clippy paths",
+            ),
+            (
+                "package-sort-failure",
+                {"D2B_FAIL_SORT_STAGE": "packages"},
+                "sort failed while ordering changed-scope clippy packages",
+            ),
+        )
+        for name, failure_env, diagnostic in producer_failures:
+            result, commands = run_scenario(
+                name,
+                "packages/d2b-core/src/lib.rs",
+                extra_env={"PATH": shim_path, **failure_env},
+                expect_success=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(diagnostic, result.stderr)
+            self.assertEqual(
+                sum(command.startswith("fmt ") for command in commands),
+                4,
+            )
+            self.assertFalse(
+                any(command.startswith("clippy ") for command in commands)
+            )
 
     def test_rust_gate_is_three_required_shards_with_one_stable_rollup(self) -> None:
         layer1_jobs = load_layer1_jobs()
