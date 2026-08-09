@@ -96,6 +96,10 @@ jobs:
                 exit 1
                 ;;
             esac
+            if [ "$package_version" != "$VERSION" ]; then
+              echo "Release blocked: $manifest has package identity $package_version, expected $VERSION." >&2
+              exit 1
+            fi
           done
 
   build:
