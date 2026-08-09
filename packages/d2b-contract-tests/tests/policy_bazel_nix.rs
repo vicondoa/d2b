@@ -671,6 +671,7 @@ fn real_supervisor_rebinds_by_open_file_description_and_emits_exact_output() {
     let provider = scratch.path().join("provider");
     let replacement = scratch.path().join("replacement");
     let status = scratch.path().join("status");
+    let helper_error = scratch.path().join("helper-error");
     let stdin = scratch.path().join("stdin");
     let stdout = scratch.path().join("stdout");
     let stderr = scratch.path().join("stderr");
@@ -706,10 +707,10 @@ fn real_supervisor_rebinds_by_open_file_description_and_emits_exact_output() {
     let launcher = r#"
 use strict;
 use warnings;
-use Fcntl qw(O_CREAT O_RDONLY O_TRUNC O_WRONLY);
+use Fcntl qw(F_DUPFD O_CREAT O_RDONLY O_TRUNC O_WRONLY);
 use POSIX qw(SIG_BLOCK SIGHUP SIGINT SIGQUIT SIGTERM dup2 sigprocmask);
 
-my ($_label, $provider, $replacement, $status, $stdin, $stdout, $stderr, $supervisor, $script) = @ARGV;
+my ($_label, $provider, $replacement, $status, $helper_error, $stdin, $stdout, $stderr, $supervisor, $script) = @ARGV;
 my $managed = POSIX::SigSet->new(SIGHUP, SIGINT, SIGTERM, SIGQUIT);
 sigprocmask(SIG_BLOCK, $managed) or die "signal mask";
 
@@ -717,22 +718,32 @@ sysopen(my $provider_fd, $provider, O_RDONLY) or die "provider";
 rename($replacement, $provider) or die "rebind";
 sysopen(my $status_fd, $status, O_WRONLY | O_CREAT | O_TRUNC, 0600)
     or die "status";
+sysopen(my $helper_error_fd, $helper_error, O_WRONLY | O_CREAT | O_TRUNC, 0600)
+    or die "helper error";
 sysopen(my $stdin_fd, $stdin, O_RDONLY) or die "stdin";
 sysopen(my $stdout_fd, $stdout, O_WRONLY | O_CREAT | O_TRUNC, 0600)
     or die "stdout";
 sysopen(my $stderr_fd, $stderr, O_WRONLY | O_CREAT | O_TRUNC, 0600)
     or die "stderr";
 
-dup2(fileno($provider_fd), 9) or die "provider fd";
-dup2(fileno($status_fd), 8) or die "status fd";
-dup2(fileno($stdin_fd), 0) or die "stdin fd";
-dup2(fileno($stdout_fd), 1) or die "stdout fd";
-dup2(fileno($stderr_fd), 2) or die "stderr fd";
-close($provider_fd);
-close($status_fd);
-close($stdin_fd);
-close($stdout_fd);
-close($stderr_fd);
+my @mappings = (
+    [$provider_fd, 9, "provider"],
+    [$status_fd, 8, "status"],
+    [$helper_error_fd, 10, "helper error"],
+    [$stdin_fd, 0, "stdin"],
+    [$stdout_fd, 1, "stdout"],
+    [$stderr_fd, 2, "stderr"],
+);
+my @sources = map {
+    my $duplicate = fcntl($_->[0], F_DUPFD, 20);
+    defined($duplicate) or die "$_->[2] duplicate";
+    $duplicate;
+} @mappings;
+for my $index (0 .. $#mappings) {
+    dup2($sources[$index], $mappings[$index]->[1])
+        or die "$mappings[$index]->[2] fd";
+}
+POSIX::close($_) for @sources;
 
 exec { $supervisor } $supervisor, "opened-provider", "-c", $script
     or die "exec";
@@ -752,6 +763,7 @@ test ! -e /proc/self/fd/9
             provider.to_str().expect("provider path is UTF-8"),
             replacement.to_str().expect("replacement path is UTF-8"),
             status.to_str().expect("status path is UTF-8"),
+            helper_error.to_str().expect("helper error path is UTF-8"),
             stdin.to_str().expect("stdin path is UTF-8"),
             stdout.to_str().expect("stdout path is UTF-8"),
             stderr.to_str().expect("stderr path is UTF-8"),
@@ -763,7 +775,11 @@ test ! -e /proc/self/fd/9
 
     assert!(
         result.status.success(),
-        "host-backed supervisor must succeed"
+        "host-backed supervisor must succeed: status={:?} launcher-stderr={} helper-error={:?} status-bytes={:?}",
+        result.status,
+        String::from_utf8_lossy(&result.stderr),
+        fs::read(&helper_error).unwrap_or_default(),
+        fs::read(&status).unwrap_or_default(),
     );
     assert_eq!(
         fs::read_to_string(&stdout).expect("stdout capture"),
@@ -779,6 +795,11 @@ test ! -e /proc/self/fd/9
             b'D', b'2', b'B', b'S', 1, 1, 0, 0, b'D', b'2', b'B', b'S', 1, 2, 0, 0, b'D', b'2',
             b'B', b'S', 1, 3, 0, 1, 0,
         ]
+    );
+    assert!(
+        fs::read(&helper_error)
+            .expect("helper error capture")
+            .is_empty()
     );
 }
 

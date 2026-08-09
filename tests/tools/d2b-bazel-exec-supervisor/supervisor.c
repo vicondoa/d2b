@@ -13,16 +13,15 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
-#include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
-#include <sys/resource.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/ptrace.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
@@ -374,32 +373,6 @@ static void d2b_child_fail(int error_fd, enum d2b_child_error error,
 }
 
 static int d2b_close_inherited_descriptors(int error_writer) {
-  DIR *directory = opendir("/proc/self/fd");
-  if (directory != NULL) {
-    int directory_fd = dirfd(directory);
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL) {
-      char *end = NULL;
-      long value = strtol(entry->d_name, &end, 10);
-      if (end == entry->d_name || *end != '\0' || value < 3 ||
-          value > INT_MAX) {
-        continue;
-      }
-      int descriptor = (int)value;
-      if (descriptor == directory_fd ||
-          descriptor == D2B_PRIVATE_EXECUTABLE_FD ||
-          descriptor == error_writer) {
-        continue;
-      }
-      if (close(descriptor) != 0 && errno != EBADF) {
-        closedir(directory);
-        return -1;
-      }
-    }
-    closedir(directory);
-    return 0;
-  }
-
   struct rlimit limit;
   if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
     return -1;
