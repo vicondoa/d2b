@@ -52,7 +52,7 @@ use std::{
     process::Command,
 };
 
-use d2b_contract_tests::repo_root;
+use d2b_contract_tests::{read_repo_file, repo_root};
 use regex::Regex;
 
 /// A single violation: the repo-relative file, 1-based line number, and the
@@ -2644,6 +2644,489 @@ fn docs_specs_qualify_resource_types_under_d2bus_org() {
 fn docs_specs_use_the_frozen_retry_scalar() {
     let violations = scan_spec_tree(scan_d108);
     assert!(violations.is_empty(), "{}", report("D108", &violations));
+}
+
+// ---------------------------------------------------------------------------
+// R55 - expected-base merge contract.
+//
+// This is deliberately a policy lint rather than delivery-tool coverage. The
+// lowest-layer contract is the contributor-facing ADR-046 procedure itself:
+// the active feature's quickstart is executable guidance, while plan.md and
+// tasks.md are the normative restatements that must not drift independently.
+// Read all three committed artifacts and validate both the prose contract and
+// the ordering of the quickstart's shell checks.
+// ---------------------------------------------------------------------------
+
+const R55_QUICKSTART: &str = "specs/001-adr046-d2b3-completion/quickstart.md";
+const R55_PLAN: &str = "specs/001-adr046-d2b3-completion/plan.md";
+const R55_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
+const R55_FILES: [&str; 3] = [R55_QUICKSTART, R55_PLAN, R55_TASKS];
+
+type R55Documents = BTreeMap<&'static str, String>;
+
+fn r55_documents() -> R55Documents {
+    R55_FILES
+        .into_iter()
+        .map(|path| (path, read_repo_file(path)))
+        .collect()
+}
+
+fn r55_require_raw(
+    findings: &mut Vec<String>,
+    file: &str,
+    content: &str,
+    needle: &str,
+    requirement: &str,
+) {
+    if !content.contains(needle) {
+        findings.push(format!(
+            "{file}: R55 {requirement} is missing required text {needle:?}"
+        ));
+    }
+}
+
+fn r55_require_normalized(
+    findings: &mut Vec<String>,
+    file: &str,
+    content: &str,
+    needle: &str,
+    requirement: &str,
+) {
+    let normalized = normalized_whitespace(content);
+    if !normalized.contains(needle) {
+        findings.push(format!(
+            "{file}: R55 {requirement} is missing normalized text {needle:?}"
+        ));
+    }
+}
+
+fn r55_require_order(
+    findings: &mut Vec<String>,
+    file: &str,
+    content: &str,
+    needles: &[&str],
+    requirement: &str,
+) {
+    let mut cursor = 0;
+    for needle in needles {
+        let Some(relative) = content[cursor..].find(needle) else {
+            findings.push(format!(
+                "{file}: R55 {requirement} is missing ordered step {needle:?}"
+            ));
+            return;
+        };
+        cursor += relative + needle.len();
+    }
+}
+
+fn r55_mutate_once(
+    documents: &R55Documents,
+    path: &str,
+    needle: &str,
+    replacement: &str,
+) -> R55Documents {
+    let mut mutated = documents.clone();
+    let content = mutated
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("R55 mutation path is not loaded: {path}"));
+    assert_eq!(
+        content.matches(needle).count(),
+        1,
+        "R55 mutation needle must identify one planted fixture site: {needle:?} in {path}"
+    );
+    *content = content.replacen(needle, replacement, 1);
+    mutated
+}
+
+fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
+    let quickstart = documents
+        .get(R55_QUICKSTART)
+        .expect("R55 quickstart must be loaded");
+    let plan = documents.get(R55_PLAN).expect("R55 plan must be loaded");
+    let tasks = documents.get(R55_TASKS).expect("R55 tasks must be loaded");
+    let mut findings = Vec::new();
+
+    // Every active feature artifact must retain the default server-side
+    // refusal, not merely a statement that a base is checked somewhere.
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "nonempty set of required status checks for strict up-to-date enforcement",
+        "default strict required-check policy",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "nonempty set of required status checks with strict up-to-date enforcement",
+        "plan strict required-check policy",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_TASKS,
+        tasks,
+        "nonempty required-check set with strict up-to-date enforcement",
+        "task strict required-check policy",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#"BRANCH_RULES="$(gh api"#,
+        "server-side branch-rule query",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#".type == "required_status_checks""#,
+        "required status-check rule selection",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        ".parameters.strict_required_status_checks_policy == true",
+        "strict up-to-date enforcement",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#"((.parameters.required_status_checks // []) | length) > 0"#,
+        "nonempty required-check enforcement",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "This requirement applies whether or not a merge queue is enabled",
+        "server-side guard as the default, not a queue-only substitute",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            r#"BRANCH_RULES="$(gh api"#,
+            r#"MERGE_MODE="direct""#,
+            ".parameters.strict_required_status_checks_policy == true",
+            r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+            "SNAPSHOT_RESULT=",
+        ],
+        "default strict guard must run before the optional merge-queue branch and snapshot",
+    );
+
+    // The current artifacts mention merge queues, so they must also bind a
+    // required merge-group check to the snapshot's integration tree and reject
+    // a tree mismatch. The branch-rule context check is kept in the executable
+    // quickstart, not left as an unbound prose promise.
+    let queue_mentioned = [quickstart, plan, tasks].into_iter().any(|content| {
+        let normalized = normalized_whitespace(content).to_ascii_lowercase();
+        normalized.contains("merge queue")
+            || normalized.contains("merge_queue")
+            || normalized.contains("merge_group")
+            || normalized.contains("merge-group")
+    });
+    if queue_mentioned {
+        r55_require_normalized(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            "MERGE_GROUP_TREE_CHECK names a required check triggered for merge_group",
+            "required merge-group check",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+            "merge-group check must be configured",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            "any(.parameters.required_status_checks[]?;",
+            "merge-group check must be required by branch protection",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            ".context == $context",
+            "merge-group check must bind the configured required context",
+        );
+        r55_require_order(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            &[
+                r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                ".context == $context",
+                "SNAPSHOT_RESULT=",
+            ],
+            "required merge-group check must be established before snapshot binding",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            "| .integration_tree_oid",
+            "snapshot must expose integration_tree_oid",
+        );
+
+        for (file, content) in [
+            (R55_QUICKSTART, quickstart),
+            (R55_PLAN, plan),
+            (R55_TASKS, tasks),
+        ] {
+            r55_require_normalized(
+                &mut findings,
+                file,
+                content,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            );
+            r55_require_order(
+                &mut findings,
+                file,
+                content,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+            );
+        }
+    }
+
+    // These are exact OID checks, in the three race windows named by R55:
+    // before snapshot, after the required checks, and immediately before merge.
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+        "BASE_OID capture",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+            r#"PR_IDENTITY="$(gh pr view"#,
+            r#"--arg base_oid "$BASE_OID""#,
+            ".baseRefOid == $base_oid",
+            "SNAPSHOT_RESULT=",
+        ],
+        "exact BASE_OID check before snapshot",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            r#"gh pr checks "$PR_NUMBER" --required --watch"#,
+            r#"REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)""#,
+            r#"jq -e 'length > 0 and all(.state == "SUCCESS")'"#,
+            r#"CURRENT_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)""#,
+            r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+            "EVIDENCE_GITHUB_CI_RESULT=",
+        ],
+        "exact BASE_OID check after required checks",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            "IMMEDIATE_BASE_OID=",
+            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+            "gh pr merge",
+        ],
+        "exact BASE_OID check immediately before merge",
+    );
+
+    // A base movement starts a new validation/binding sequence. The old
+    // post-merge comparison is deliberately retained only as defense in depth.
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "branch and restarts validation, selected-roster verification, snapshot creation, and candidate binding, then reruns the required checks in the same Track A order",
+        "base movement restart",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "base move requires the operator to update the integration branch and restart validation, selected-roster verification, snapshot creation, binding, and required checks in Track A order",
+        "plan base movement restart",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_TASKS,
+        tasks,
+        "On any base change, the operator updates the integration branch and restarts validation, selected-roster verification, snapshot creation, binding, and required checks in the existing Track A order",
+        "task base movement restart",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "post-merge tree comparison is defense in depth, not the guard",
+        "post-merge comparison is not the preventive guard",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "post-merge tree comparison is defense in depth only",
+        "plan post-merge comparison is not the preventive guard",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_TASKS,
+        tasks,
+        "A head-only match and a post-merge tree comparison are insufficient",
+        "task post-merge comparison is not the preventive guard",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "No post-merge check substitutes",
+        "post-merge check cannot substitute",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            "IMMEDIATE_BASE_OID=",
+            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+            "gh pr merge",
+            "MERGE_COMMIT=",
+            "${MERGE_COMMIT}^{tree}",
+        ],
+        "post-merge tree comparison must follow the preventive pre-merge guard",
+    );
+
+    findings
+}
+
+#[test]
+fn r55_expected_base_merge_contract_matches_the_active_feature_artifacts() {
+    let documents = r55_documents();
+    let findings = validate_r55_contract(&documents);
+    assert!(
+        findings.is_empty(),
+        "R55 expected-base merge contract drift:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn r55_mutation_fixtures_reject_each_removed_merge_guard() {
+    let documents = r55_documents();
+    let baseline = validate_r55_contract(&documents);
+    assert!(
+        baseline.is_empty(),
+        "R55 mutation fixtures require a clean baseline:\n{}",
+        baseline.join("\n")
+    );
+
+    // Each mutation is a source-level negative fixture. The table intentionally
+    // removes one exact clause at a time, including the queue integration-tree
+    // mismatch and base-movement restart obligations.
+    let mutations = [
+        (
+            "strict up-to-date policy",
+            R55_QUICKSTART,
+            ".parameters.strict_required_status_checks_policy == true",
+            "",
+            "strict up-to-date enforcement",
+        ),
+        (
+            "nonempty required-check set",
+            R55_QUICKSTART,
+            r#"((.parameters.required_status_checks // []) | length) > 0"#,
+            "",
+            "nonempty required-check enforcement",
+        ),
+        (
+            "required merge-group integration-tree check",
+            R55_QUICKSTART,
+            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+            "",
+            "merge-group check must be configured",
+        ),
+        (
+            "integration-tree snapshot binding",
+            R55_QUICKSTART,
+            "| .integration_tree_oid",
+            "",
+            "snapshot must expose integration_tree_oid",
+        ),
+        (
+            "integration-tree mismatch refusal",
+            R55_TASKS,
+            "refuses a mismatch",
+            "permits a mismatch",
+            "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+        ),
+        (
+            "BASE_OID before snapshot",
+            R55_QUICKSTART,
+            ".baseRefOid == $base_oid",
+            "",
+            "exact BASE_OID check before snapshot",
+        ),
+        (
+            "BASE_OID after required checks",
+            R55_QUICKSTART,
+            r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+            "",
+            "exact BASE_OID check after required checks",
+        ),
+        (
+            "BASE_OID immediately before merge",
+            R55_QUICKSTART,
+            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+            "",
+            "exact BASE_OID check immediately before merge",
+        ),
+        (
+            "base-movement restart",
+            R55_TASKS,
+            "and required checks in the existing Track A order",
+            "and required checks",
+            "task base movement restart",
+        ),
+        (
+            "post-merge comparison classification",
+            R55_QUICKSTART,
+            "The post-merge tree comparison is defense in depth, not the guard.",
+            "The post-merge tree comparison is the guard.",
+            "post-merge comparison is not the preventive guard",
+        ),
+    ];
+
+    for (name, path, needle, replacement, expected_finding) in mutations {
+        let mutated = r55_mutate_once(&documents, path, needle, replacement);
+        let findings = validate_r55_contract(&mutated);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains(expected_finding)),
+            "{name} mutation must be rejected with {expected_finding:?}; findings:\n{}",
+            findings.join("\n")
+        );
+    }
 }
 
 #[test]
