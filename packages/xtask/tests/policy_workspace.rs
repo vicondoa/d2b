@@ -460,9 +460,8 @@ fn heavy_gate_build_violations(makefile: &str) -> Vec<String> {
         violations.push("heavy-gate-build must execute Cargo from packages/".to_owned());
     }
     if block.contains("--manifest-path packages/Cargo.toml") {
-        violations.push(
-            "heavy-gate-build must keep the manifest path relative to packages/".to_owned(),
-        );
+        violations
+            .push("heavy-gate-build must keep the manifest path relative to packages/".to_owned());
     }
     violations
 }

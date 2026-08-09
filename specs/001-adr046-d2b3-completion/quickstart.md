@@ -169,10 +169,16 @@ widen-only selection and scoped verification without comprehensive discovery, fr
 replacement F, reruns T600-T602, and stops again for the external disposition; no binding
 panel is invoked.
 
-### 5. Snapshot, validate, panel, seal
+### 5. Track A - approve, bind, merge, seal, and close
 
 This procedure applies only to a wave whose binding request has not been consumed.
 `adr046w5` MUST NOT execute any command in this subsection.
+
+Enter only after the final nonbinding Discover-Fix-Verify lifecycle is unanimously approved
+and no content-changing fix remains. The PR may already exist as a draft because `snapshot`
+must bind its real number and head, but it stays unmergeable until the sole request, records,
+and attestation below are complete. The changelog fold and every generated artifact must
+already be part of the approved tree.
 
 ```bash
 set -eu
@@ -185,10 +191,15 @@ HEAD_REF="$(git symbolic-ref --short HEAD)"
 PR_NUMBER="$(gh pr view --json number --jq .number)"
 PROGRAM="ADR046"
 WAVE="W2"
+ROUND=".scratch/panel/<final-verification-round>"
 
-: "${SELECTION:?set SELECTION to the candidate-bound lifecycle selection JSON}"
-: "${RECORDS_DIR:?set RECORDS_DIR to the exact selected-roster record directory}"
-: "${MERGE_TARGET_INPUT:?set MERGE_TARGET_INPUT to the current merge-target JSON}"
+SELECTION="$ROUND/selection.json"
+LEDGER="$ROUND/discovery-ledger.json"
+RESPONSES="$ROUND/responses.json"
+VERIFICATION_RESULTS="$ROUND/verification-results.json"
+APPROVAL="$ROUND/approval.json"
+
+jq -e '.approved == true' "$APPROVAL"
 
 artifact_ref() {
   jq -er 'select(.status == "ok") | .artifact'
@@ -204,6 +215,43 @@ SNAPSHOT_RESULT="$("${X[@]}" snapshot \
   --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF" \
   --state-dir "$STATE_DIR")"
 SNAPSHOT="$(printf '%s\n' "$SNAPSHOT_RESULT" | artifact_ref)"
+
+jq -e --slurpfile snapshot "$STATE_DIR/$SNAPSHOT" '
+  .candidate_id == $snapshot[0].candidate_id and
+  .content_id == $snapshot[0].content_id and
+  .snapshot_sha256 == $snapshot[0].snapshot_sha256
+' "$SELECTION"
+
+PANEL_REQUEST_RESULT="$("${X[@]}" panel-request \
+  --snapshot "$SNAPSHOT" \
+  --selection "$SELECTION" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+PANEL_REQUEST="$(printf '%s\n' "$PANEL_REQUEST_RESULT" | artifact_ref)"
+
+node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
+  --selection "$SELECTION" \
+  --ledger "$LEDGER" \
+  --responses "$RESPONSES" \
+  --verification-results "$VERIFICATION_RESULTS" \
+  --approval "$APPROVAL"
+RECORDS_DIR="$ROUND/records"
+
+PANEL_ATTEST_RESULT="$("${X[@]}" panel-attest \
+  --snapshot "$SNAPSHOT" \
+  --records "$RECORDS_DIR" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+PANEL_RECORDS="$(printf '%s\n' "$PANEL_ATTEST_RESULT" | artifact_ref)"
+
+# Wait for the protected PR's required checks, then import exact-snapshot
+# validator results. A failed or empty required-check set stops here.
+if [ "$(gh pr view "$PR_NUMBER" --json isDraft --jq .isDraft)" = "true" ]; then
+  gh pr ready "$PR_NUMBER"
+fi
+gh pr checks "$PR_NUMBER" --required --watch
+REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)"
+jq -e 'length > 0 and all(.state == "SUCCESS")' <<<"$REQUIRED_CHECKS"
 
 EVIDENCE_GITHUB_CI_RESULT="$("${X[@]}" validate-import \
   --snapshot "$SNAPSHOT" \
@@ -223,19 +271,48 @@ EVIDENCE_LOCAL_HOST_RESULT="$("${X[@]}" validate-import \
   --state-dir "$STATE_DIR")"
 EVIDENCE_LOCAL_HOST="$(printf '%s\n' "$EVIDENCE_LOCAL_HOST_RESULT" | artifact_ref)"
 
-PANEL_REQUEST_RESULT="$("${X[@]}" panel-request \
-  --snapshot "$SNAPSHOT" \
-  --selection "$SELECTION" \
-  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
-  --state-dir "$STATE_DIR")"
-PANEL_REQUEST="$(printf '%s\n' "$PANEL_REQUEST_RESULT" | artifact_ref)"
+# Capture the exact green pre-merge PR state. Registration remains post-merge
+# because it consumes the seal that can exist only after the PR merge.
+PR_STATE="$(gh pr view "$PR_NUMBER" \
+  --json number,baseRefName,baseRefOid,headRefName,headRefOid)"
+HEAD_OID="$(git rev-parse HEAD)"
+jq -e --arg head "$HEAD_OID" '.headRefOid == $head' <<<"$PR_STATE"
+MERGE_TARGET_INPUT="$(mktemp)"
+trap 'rm -f "$MERGE_TARGET_INPUT"' EXIT
+jq -n \
+  --slurpfile snapshot "$STATE_DIR/$SNAPSHOT" \
+  --arg repository "$REPOSITORY" \
+  --argjson pr "$PR_STATE" \
+  --argjson checks "$REQUIRED_CHECKS" '
+  {
+    artifact_kind: "d2b-delivery/merge-target",
+    schema_version: $snapshot[0].schema_version,
+    material: $snapshot[0].material,
+    pull_requests: [
+      {
+        repository: $repository,
+        number: $pr.number,
+        base_ref: $pr.baseRefName,
+        base_oid: $pr.baseRefOid,
+        head_ref: $pr.headRefName,
+        head_oid: $pr.headRefOid,
+        required_checks: ($checks | map({
+          name: .name,
+          conclusion: (.state | ascii_downcase)
+        }))
+      }
+    ]
+  }
+' >"$MERGE_TARGET_INPUT"
 
-PANEL_ATTEST_RESULT="$("${X[@]}" panel-attest \
-  --snapshot "$SNAPSHOT" \
-  --records "$RECORDS_DIR" \
-  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
-  --state-dir "$STATE_DIR")"
-PANEL_RECORDS="$(printf '%s\n' "$PANEL_ATTEST_RESULT" | artifact_ref)"
+# This is the point of no return. The protected PR merge must preserve the
+# approved head tree and must complete before seal is attempted.
+gh pr merge "$PR_NUMBER" --merge --match-head-commit "$HEAD_OID"
+test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = "MERGED"
+MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
+git fetch origin v3
+test "$(git rev-parse "${MERGE_COMMIT}^{tree}")" = \
+  "$(git rev-parse "${HEAD_OID}^{tree}")"
 
 SEAL_RESULT="$("${X[@]}" seal \
   --snapshot "$SNAPSHOT" \
@@ -273,6 +350,13 @@ through `--snapshot`, so the delivery CLI has no separate `--evidence` option. E
 above still captures its emitted artifact reference and repeats the same valid repository
 mapping.
 
+The order is deliberate: final nonbinding approval, final snapshot and selection, the sole
+request, records and attestation, protected PR checks, merge, seal, merge-target registration,
+and merge eligibility. `seal` refuses until every current-wave item is `Merged`; moving it
+before the PR merge recreates the cycle this workflow is designed to prevent. The
+merge-target input is captured from the green PR immediately before merge, then registered
+after the seal so the post-merge commands consume the exact pre-merge head and check state.
+
 `history-proof` is **not** a separate subcommand; it runs inside `merge-eligibility`.
 
 Panel lanes are exactly the read-only seats and profiles in the lifecycle selection artifact, dispatched on their recorded bindings
@@ -280,18 +364,19 @@ together in one message. They take no heavy-gate slot, so all selected lanes run
 concurrently. They must not run tests or builds unless you explicitly ask a
 specific lane to.
 
-For ordinary waves, required CI, local/host validators, and panel lanes may run concurrently
-against the snapshot. For `adr046w5`, T600/T601 evidence and T602's closed-set check complete,
-then execution stops before T219 until the accepted external disposition exists. They do not
-authorize another binding request.
+For ordinary waves, local/host validators may run against the snapshot while the final
+records are assembled. Required PR checks must be green and imported before merge. For
+`adr046w5`, T600/T601 evidence and T602's closed-set check complete, then execution stops
+before T219 until the accepted external disposition exists. They do not authorize another
+binding request.
 
-### 6. Merge, rebase, and clean up
+### 6. Rebase and clean up
 
-Merge the wave integration branch to `v3` only after `merge-eligibility` reports
-eligible. Never a local octopus merge, never a direct push (FR-044).
+Section 5 has already merged the protected PR, sealed the merged wave, registered the captured
+merge target, and passed merge eligibility. Never substitute a local octopus merge or direct
+push (FR-044).
 
 ```bash
-make changelog-fold              # before snapshot/panel; T220 owns this for adr046w5
 git -C ../d2b-w<N+1> rebase v3   # re-point the stacked next wave onto the updated v3
 
 # Cleanup, in this order - target dir first or removal reclaims nothing
@@ -931,7 +1016,7 @@ decision, so the attestation gate is the actual safety net, not a formality.
 
 ## Release validation (W8)
 
-Do not triage or enter W8 until T556 has completed W7 seal, merge, ordered worktree/branch/
+Do not triage or enter W8 until T556 has completed W7 merge, seal, ordered worktree/branch/
 target/Nix-store cleanup, and the residue audit. T557 derives the terminal work set only from
 that complete observed friction, and T558 starts from the resulting updated `v3` HEAD.
 
@@ -941,7 +1026,8 @@ All six release-gate conditions, evaluated against the **final** candidate:
 2. Every DELETE and REPLACE row's removal proof passing **on the shipping tree**
 3. The complete test matrix including manual hardware, live-host, and cloud tiers with
    recorded external evidence, plus the reset and cutover scenarios
-4. Unanimous selected-roster panel, seal, and merge-eligibility on the W8 snapshot
+4. Unanimous selected-roster panel, byte-identical PR merge, post-merge seal, and
+   merge-eligibility on the W8 snapshot
 5. A new `CHANGELOG.md` 3.0.0 version header, matching release-binary and flake package
    versions, with every wave and finding marker stripped; F8 contains either a complete
    matching prebuilt manifest or explicit `version: null`/`system: "x86_64-linux"`/

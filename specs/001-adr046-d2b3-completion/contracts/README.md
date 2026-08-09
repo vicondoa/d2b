@@ -111,8 +111,8 @@ requalification does not assert that original W2 entry complied.
 T589 later hardens accepted v1 with the `adr046w5` strict storage profile. It must see accepted
 v1 on its own actual base, but it does not retroactively complete T008, T030, or T037.
 T029, T036, and T071 invoke this same validator, not local predicates, before pre-panel
-dispatch, panel request, panel-attest, seal, merge-target registration, merge eligibility,
-and merge. Any matrix case that would pass at one of those boundaries leaves the
+dispatch, panel request, panel-attest, merge, post-merge seal, merge-target registration,
+and merge eligibility. Any matrix case that would pass at one of those boundaries leaves the
 corresponding wave open.
 
 ## Recovery-point attestation validator v1
@@ -149,8 +149,8 @@ cargo test --manifest-path packages/Cargo.toml -p xtask \
 ```
 
 Cargo listing failure, zero discovery, any ignored matching test, any skip, or a failing
-per-field case blocks import, pre-panel dispatch, panel request, panel-attest, seal,
-merge-target registration, merge eligibility, and merge.
+per-field case blocks import, pre-panel dispatch, panel request, panel-attest, merge,
+post-merge seal, merge-target registration, and merge eligibility.
 
 ## Rules that apply to every surface
 

@@ -30,7 +30,8 @@ consumed its once-per-wave request, one binding selected-roster `/d2b-panel-roun
 request bound to that immutable snapshot. Entry-plan review, iterative phase-plan review, and
 the binding delivery panel are separate surfaces and none substitutes for another. A retained
 delivery request is never reclassified as a phase-plan round. Merge an attested tree through a
-pull request without a post-attestation content change, and cut exactly one release at the end.
+pull request without a post-attestation content change, then seal and run merge-target and
+merge-eligibility against the merged wave. Cut exactly one release at the end.
 
 Wave 5 now includes an approved production-completion graph in addition to its 146 manifest
 items. The graph wires the store, policy, authenticated ComponentSession route, controller
@@ -244,7 +245,7 @@ which is a worse failure than referencing the authoritative bytes. Instead:
 
 **Completeness reconciles**: the initial 545-item census was 14 `Merged` and 531 `Planned`.
 At the receipt HEAD it is 68 `Merged` and 477 `Planned`, splitting
-8/6/19/4/31/146/258/73 across W0-W7 with W8 recorded only after W7 seal, merge, and cleanup.
+8/6/19/4/31/146/258/73 across W0-W7 with W8 recorded only after W7 merge, seal, and cleanup.
 The graph moved
 `ADR046-process-002` from W4 to W6 and leaves it `Planned`; T039 follows that state and wave
 without renumbering. Every item carries a non-empty `removalProof`, so FR-023's per-path
@@ -319,7 +320,7 @@ applies without modification.
 | W5 (`adr046w5` delivery address) | 7 | 146 + 15 local completion/evidence tasks + T603 | 12 manifest groups + the serialized completion graph | FR-036 and T072 gate T603's exclusive-editor reconciliation. Before T220 may freeze F, an accepted Network contract/work-item amendment must replace every current-facing sole Network-opt-in path with the double-opt-in contract, default both inputs false, and regenerate the settled T336-T355 W6 ownership plus four-case obligations without moving them before T221. The retained binding request remains externally dispositioned only. |
 | W6 | 27 manifest dossiers | 258 manifest items + T604 operator acceptance | 5 families; T604 is a later file-disjoint acceptance slice after T336-T355 merge | FR-036 first; T221 selected-roster plan lifecycle before W6 implementation. T336-T355 own the double-opt-in Network production path and four-case matrix. T604 remains W6 acceptance-only, consumes that merged implementation, and emits `operator-nix-activation-cleanup` only for F6; T479 requires that result plus `Provider/runtime-cloud-hypervisor` Guest acceptance, and T480 revalidates both before close. |
 | W7 | 5 | 73 | 5 parallel | FR-036 external constitution amendment first; T481 plan panel before implementation; T555 work panel after convergence |
-| W8 | 0 | determined by T557 after W7 seal, merge, and cleanup | friction closure | FR-036 external constitution amendment first; no pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
+| W8 | 0 | determined by T557 after W7 merge, seal, and cleanup | friction closure | FR-036 external constitution amendment first; no pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
 #### W8 release freeze and publication
 
@@ -333,7 +334,7 @@ T556 -> T557 -> T558 -> T559 -> T571
   -> T573 identity/prepublication check -> merged-v3-HEAD tag and publication
 ```
 
-T556 completion includes W7 seal, merge, ordered cleanup, and the residue audit. T557 and
+T556 completion includes W7 merge, seal, ordered cleanup, and the residue audit. T557 and
 T558 cannot start from a partial W7 close.
 
 T566 is the sole pre-freeze release-state writer after W8 convergence. It owns
@@ -406,8 +407,8 @@ external correction. The evidence map is closed:
 Missing, duplicate, wrong-candidate, empty, skipped, status-only, private-hook, missing
 Ready/Stopped state, non-fresh-pidfd adoption, incomplete unit enumeration, or stale
 continuity evidence blocks historical close confirmation for W2-W4 and any externally
-authorized W5 close action; it blocks W6's prospective work-panel request, seal, merge
-eligibility, and merge. It never licenses a new W2-W5 binding request. No new W5 evidence
+authorized W5 close action; it blocks W6's prospective work-panel request, merge, post-merge
+seal, and merge eligibility. It never licenses a new W2-W5 binding request. No new W5 evidence
 identifier is introduced. W7's explicit cutover is the only point that ends this gate.
 
 #### W6 Guest acceptance ownership
@@ -980,15 +981,16 @@ the current thirteen-seat role domain, with selection allowed only to widen over
 all records bound to F/commit/tree/disposition, and `signoff = true` exactly when
 recommendations are empty. The disposition is neither an attestation nor a waiver. Missing,
 partial, stale, nonunanimous, reduced-roster, or recommendation-bearing panel state enters
-terminal `panel-refused` and authorizes no seal or merge. Only `panel-satisfied` may proceed
-to seal and byte-identical-F merge eligibility. Any permitted successful merge preserves F's
-tree; afterward W6 rebases its own branch while F and `adr046w5` delivery history remain
-immutable.
+terminal `panel-refused` and authorizes no merge or seal. Only `panel-satisfied` may proceed
+to a byte-identical-F PR merge, followed by the post-merge seal, merge-target registration,
+and merge eligibility. Afterward W6 rebases its own branch while F and `adr046w5` delivery
+history remain immutable.
 
 ### Spec corrections
 
 | Prose drift | Canon kept | Planning correction |
 | --- | --- | --- |
+| The copyable Track A close ran `seal`, `merge-target`, and `merge-eligibility` before the protected PR merge, while prospective W6-W8 tasks required that pre-merge eligibility result. | Committed `seal_checked` refuses until every current-wave work item is `Merged`; `merge-target` consumes the resulting seal, and the current contributor contract places the protected PR merge before seal. | After final nonbinding approval, create the final snapshot and selection, issue the sole request, generate records, and attest. Then complete PR CI, capture the green merge-target input, merge the byte-identical tree, run `seal`, register the captured target, and run `merge-eligibility`. T480, T555/T556, and T565/T561 use that order without changing IDs or checkbox state. |
 | Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the four Guest-capable runtime families are assigned to Wave 6 and absent at this Wave 5 base. The authoritative `ADR046-ch-001` validation already names real-KVM end-to-end Guest boot through `make test-host-integration`. | T604 remains acceptance-only in W6 after T221 and merged T336-T355 for exactly `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`. Full US1 acceptance is mechanically bounded to that operator result plus `Provider/runtime-cloud-hypervisor`: T384 owns the controller and authoritative real-KVM/guest-control integration obligation, T384-T390 own the exact family files, and T479/T480 require both exact-F6 candidate-bound records. Guest emission, ingestion, status, or an actionable refusal is not evidence. |
 | Earlier amendment prose treated W4 Network work as sufficient for the operator positive. | W4 landed the Provider trait and hermetic fake-port behavior, but the real production adapter is absent and current generated rows T336-T355 place the remaining network-local implementation after the W5 close. `NetworkEffectPort` is in the Provider crate, contrary to the generated destination. | Preserve W4 history and the destination drift, but do not accept sole Network opt-in as a close path. An accepted external Network contract/work-item amendment must remove every current-facing sole-opt-in path before T220 while retaining T336-T355 and all four Network/Host production cases as W6 work under T221. T604 stays W6 acceptance-only and consumes their merged result. |
 | Earlier feature prose asserted that W4 implemented Host/site plus Network double opt-in for east-west traffic. | Untouched external `ADR-046-resources-network` makes `Network.spec.isolation.allowEastWest` the sole opt-in, and committed code has no production adapter composing `NetworkEffectPort` to the broker. Existing code and external manifests therefore prove a blocking gap rather than a valid W4 close. | T070 and T071 may preserve the historical bytes only while recording sole opt-in as nonconforming and non-authorizing. They cannot complete from a sole-opt-in disposition. Before T220 or T219 may freeze, seal, or merge, an accepted versioned Network amendment and migration must remove every current-facing sole-opt-in path and regenerate the settled T336-T355 W6 implementation plus four-case ownership. Production implementation and evidence remain W6 work. Missing either the migration or settled ownership fails closed with remediation to amend the external Network contract and work-item manifest. |
