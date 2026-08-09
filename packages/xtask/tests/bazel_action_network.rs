@@ -398,21 +398,25 @@ mod native_patched_bazel {
         arguments
     }
 
+    struct NativeBazel<'a> {
+        executable: &'a Path,
+        root: &'a Path,
+        scratch: &'a Path,
+        secret: &'a str,
+    }
+
     fn run_bazel(
-        bazel: &Path,
-        root: &Path,
-        scratch: &Path,
+        bazel: &NativeBazel<'_>,
         channel: &str,
         command_name: &str,
         labels: &[&str],
         execution_log: Option<&Path>,
         defines: &[(&str, &str)],
-        secret: &str,
     ) -> Output {
-        let mut command = Command::new(bazel);
-        command.current_dir(root);
-        configure_environment(&mut command, secret);
-        let mut arguments = bazel_arguments(scratch, channel, command_name, execution_log);
+        let mut command = Command::new(bazel.executable);
+        command.current_dir(bazel.root);
+        configure_environment(&mut command, bazel.secret);
+        let mut arguments = bazel_arguments(bazel.scratch, channel, command_name, execution_log);
         for (name, value) in defines {
             arguments.push(format!("--define={name}={value}"));
         }
@@ -422,21 +426,18 @@ mod native_patched_bazel {
     }
 
     fn run_query(
-        bazel: &Path,
-        root: &Path,
-        scratch: &Path,
+        bazel: &NativeBazel<'_>,
         channel: &str,
         kind: &str,
         output: &str,
         expression: &str,
-        secret: &str,
     ) -> Output {
-        let mut arguments = bazel_arguments(scratch, channel, kind, None);
+        let mut arguments = bazel_arguments(bazel.scratch, channel, kind, None);
         arguments.push(format!("--output={output}"));
         arguments.push(expression.to_owned());
-        let mut command = Command::new(bazel);
-        command.current_dir(root);
-        configure_environment(&mut command, secret);
+        let mut command = Command::new(bazel.executable);
+        command.current_dir(bazel.root);
+        configure_environment(&mut command, bazel.secret);
         command.args(arguments);
         command.output().expect("run pinned Bazel query")
     }
@@ -735,6 +736,12 @@ mod native_patched_bazel {
                 .expect("secret clock")
                 .as_nanos()
         );
+        let native_bazel = NativeBazel {
+            executable: &bazel,
+            root: &root,
+            scratch: &scratch,
+            secret: &secret,
+        };
 
         for bypass in [
             "--invocation_policy=/dev/null",
@@ -779,15 +786,12 @@ mod native_patched_bazel {
         );
 
         let network = run_bazel(
-            &bazel,
-            &root,
-            &scratch,
+            &native_bazel,
             "stable",
             "build",
             &["//bazel/evidence:network-plant-action"],
             None,
             &[],
-            &secret,
         );
         assert!(
             network.status.success(),
@@ -851,14 +855,11 @@ mod native_patched_bazel {
             ),
         ] {
             let cquery = run_query(
-                &bazel,
-                &root,
-                &scratch,
+                &native_bazel,
                 channel,
                 "cquery",
                 "label",
                 &labels_expression,
-                &secret,
             );
             assert!(
                 cquery.status.success(),
@@ -876,14 +877,11 @@ mod native_patched_bazel {
             observed_labels.extend(labels);
 
             let aquery = run_query(
-                &bazel,
-                &root,
-                &scratch,
+                &native_bazel,
                 channel,
                 "aquery",
                 "jsonproto",
                 aquery_expression,
-                &secret,
             );
             assert!(
                 aquery.status.success(),
@@ -896,9 +894,7 @@ mod native_patched_bazel {
 
             let metadata_log = scratch.join(format!("{channel}-metadata-execution.json"));
             let metadata = run_bazel(
-                &bazel,
-                &root,
-                &scratch,
+                &native_bazel,
                 channel,
                 "build",
                 &[
@@ -907,7 +903,6 @@ mod native_patched_bazel {
                 ],
                 Some(&metadata_log),
                 &[],
-                &secret,
             );
             assert!(
                 metadata.status.success(),
@@ -919,9 +914,7 @@ mod native_patched_bazel {
 
             let rustdoc_zip_log = scratch.join(format!("{channel}-rustdoc-zip-execution.json"));
             let rustdoc_zip = run_bazel(
-                &bazel,
-                &root,
-                &scratch,
+                &native_bazel,
                 channel,
                 "build",
                 &[
@@ -930,7 +923,6 @@ mod native_patched_bazel {
                 ],
                 Some(&rustdoc_zip_log),
                 &[],
-                &secret,
             );
             assert!(
                 rustdoc_zip.status.success(),
@@ -942,15 +934,12 @@ mod native_patched_bazel {
 
             let build_log = scratch.join(format!("{channel}-build-execution.json"));
             let build = run_bazel(
-                &bazel,
-                &root,
-                &scratch,
+                &native_bazel,
                 channel,
                 "build",
                 &[build_target],
                 Some(&build_log),
                 &[],
-                &secret,
             );
             assert!(
                 build.status.success(),
@@ -962,9 +951,7 @@ mod native_patched_bazel {
 
             let test_log = scratch.join(format!("{channel}-test-execution.json"));
             let tests = run_bazel(
-                &bazel,
-                &root,
-                &scratch,
+                &native_bazel,
                 channel,
                 "test",
                 &[
@@ -974,7 +961,6 @@ mod native_patched_bazel {
                 ],
                 Some(&test_log),
                 &[],
-                &secret,
             );
             assert!(
                 tests.status.success(),
@@ -1024,15 +1010,12 @@ mod native_patched_bazel {
             .expect("runtime cquery/aquery/execution evidence must reconcile exactly");
 
         let environment = run_bazel(
-            &bazel,
-            &root,
-            &scratch,
+            &native_bazel,
             "stable",
             "build",
             &["//bazel/evidence:environment-probe-action"],
             None,
             &[],
-            &secret,
         );
         assert!(
             environment.status.success(),
@@ -1056,9 +1039,7 @@ mod native_patched_bazel {
         );
 
         let launcher = run_bazel(
-            &bazel,
-            &root,
-            &scratch,
+            &native_bazel,
             "stable",
             "build",
             &[
@@ -1067,7 +1048,6 @@ mod native_patched_bazel {
             ],
             None,
             &[],
-            &secret,
         );
         assert!(
             launcher.status.success(),
