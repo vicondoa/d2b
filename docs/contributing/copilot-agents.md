@@ -110,7 +110,7 @@ chain, or artifact-state file is introduced.
 
 ## Prompt corpus
 
-The checked-in manifest is an exact membership list for 35 files: three
+The checked-in manifest is an exact membership list for 36 files: three
 `AGENTS.md` files, all eight `docs/contributing/*.md` files, all sixteen
 `.github/agents/*.agent.md` files, and all eight `.github/skills/d2b-*/SKILL.md`
 files. `prompt-corpus.mjs` verifies frontmatter, headings, fenced blocks, inline code,

@@ -35,48 +35,32 @@
     {
       "crate_name": "d2b_bazel_exec",
       "private_census": {
-        "external_crates": 31,
-        "index_items": 1071,
-        "path_items": 3733
+        "external_crates": 42,
+        "index_items": 1740,
+        "path_items": 3976
       },
-      "private_hidden_items": 42,
+      "private_hidden_items": 44,
       "private_json_file": "d2b_bazel_exec.json",
       "public_census": {
-        "external_crates": 31,
-        "index_items": 861,
-        "path_items": 3686
+        "external_crates": 42,
+        "index_items": 931,
+        "path_items": 3907
       },
       "public_json_file": "d2b_bazel_exec.json"
-    },
-    {
-      "crate_name": "d2b_bazel_runner",
-      "private_census": {
-        "external_crates": 46,
-        "index_items": 114,
-        "path_items": 4103
-      },
-      "private_hidden_items": 2,
-      "private_json_file": "d2b_bazel_runner.json",
-      "public_census": {
-        "external_crates": 46,
-        "index_items": 55,
-        "path_items": 4057
-      },
-      "public_json_file": "d2b_bazel_runner.json"
     },
     {
       "crate_name": "d2b_bazel_support",
       "private_census": {
         "external_crates": 35,
-        "index_items": 1738,
-        "path_items": 3579
+        "index_items": 1791,
+        "path_items": 3580
       },
-      "private_hidden_items": 33,
+      "private_hidden_items": 35,
       "private_json_file": "d2b_bazel_support.json",
       "public_census": {
         "external_crates": 35,
-        "index_items": 831,
-        "path_items": 3517
+        "index_items": 862,
+        "path_items": 3518
       },
       "public_json_file": "d2b_bazel_support.json"
     },
@@ -783,22 +767,6 @@
         "path_items": 12868
       },
       "public_json_file": "d2b_session_unix.json"
-    },
-    {
-      "crate_name": "d2b_test_locator",
-      "private_census": {
-        "external_crates": 43,
-        "index_items": 177,
-        "path_items": 3854
-      },
-      "private_hidden_items": 2,
-      "private_json_file": "d2b_test_locator.json",
-      "public_census": {
-        "external_crates": 43,
-        "index_items": 90,
-        "path_items": 3810
-      },
-      "public_json_file": "d2b_test_locator.json"
     },
     {
       "crate_name": "d2b_unsafe_local_helper",

@@ -206,14 +206,14 @@ function checkCurrentPromptShape(dir) {
   );
   const membership = manifest.membership ?? [];
   if (
-    membership.length !== 35 ||
+    membership.length !== 36 ||
     membership.filter((path) => path.startsWith(".github/agents/")).length !== 16 ||
     membership.some((path) => path.endsWith("panel-rust.agent.md")) ||
     !membership.some((path) => path.endsWith("panel-build.agent.md"))
   ) {
     failures += 1;
     console.error(
-      `FAIL current prompt corpus shape: expected 35 files and sixteen agent files with build and without current rust`,
+      `FAIL current prompt corpus shape: expected 36 files and sixteen agent files with build and without current rust`,
     );
   }
 }
@@ -532,8 +532,8 @@ const CASES = [
     name: "prompt number fingerprint drift is rejected",
     mutate: (dir) =>
       mutateFile(dir, "docs/contributing/copilot-agents.md", (text) =>
-        text.includes("35 files")
-          ? text.replace("35 files", "36 files")
+        text.includes("36 files")
+          ? text.replace("36 files", "37 files")
           : text.includes("13 agents")
             ? text.replace("13 agents", "14 agents")
             : `${text}\n36 files\n`),
