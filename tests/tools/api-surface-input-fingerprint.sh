@@ -8,10 +8,13 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 PIN="$ROOT/tests/golden/api-surface/input-fingerprint.txt"
 MODE=${1:---check}
 enumeration_file=
+workspace_manifest_enumeration=
 temporary=
 
 cleanup() {
   [ -z "$enumeration_file" ] || rm -f -- "$enumeration_file"
+  [ -z "$workspace_manifest_enumeration" ] \
+    || rm -f -- "$workspace_manifest_enumeration"
   [ -z "$temporary" ] || rm -f -- "$temporary"
 }
 trap cleanup EXIT
@@ -35,6 +38,25 @@ inputs=(
   tests/tools/api-surface-input-fingerprint.sh
   tests/tools/gen-api-surface-metadata.sh
 )
+
+independent_workspace_roots=(
+  packages/d2b-bus/tests/ui/public-api-mutations
+  packages/d2b-controller-toolkit/tests/ui/external-seals
+  packages/d2b-core/fuzz
+  packages/d2b-guest-shell-runner
+  packages/d2b-priv-broker
+  packages/d2b-resource-api/tests/ui/external-seals
+  packages/d2b-wlproxy-spike
+)
+
+is_independent_workspace_root() {
+  local candidate="$1"
+  local allowed
+  for allowed in "${independent_workspace_roots[@]}"; do
+    [ "$candidate" = "$allowed" ] && return 0
+  done
+  return 1
+}
 
 package_root="$ROOT/packages"
 if [ ! -d "$package_root" ] || [ -L "$package_root" ]; then
@@ -97,6 +119,34 @@ if [ "$workspace_root_real" != "$package_root_real" ]; then
     "api-surface workspace metadata root does not match packages/" >&2
   exit 1
 fi
+
+# Every independent workspace under packages/ is a deliberate, closed
+# exception. Checking all nested manifests prevents an unclassified workspace
+# from disappearing beneath an ordinary workspace member.
+workspace_manifest_enumeration=$(
+  mktemp "${TMPDIR:-/tmp}/d2b-api-surface-workspaces.XXXXXX"
+)
+if ! find -P "$package_root" -type f -name Cargo.toml -print0 \
+    | sort -z >"$workspace_manifest_enumeration"; then
+  printf '%s\n' "api-surface package enumeration failed" >&2
+  exit 1
+fi
+while IFS= read -r -d '' workspace_manifest; do
+  if ! grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
+      "$workspace_manifest"; then
+    continue
+  fi
+  workspace_root=${workspace_manifest#"$ROOT/"}
+  workspace_root=${workspace_root%/Cargo.toml}
+  [ "$workspace_root" = "packages" ] && continue
+  if ! is_independent_workspace_root "$workspace_root"; then
+    printf '%s\n' \
+      "api-surface unknown independent workspace root: $workspace_root" >&2
+    exit 1
+  fi
+done <"$workspace_manifest_enumeration"
+rm -f -- "$workspace_manifest_enumeration"
+workspace_manifest_enumeration=
 
 declare -A workspace_member_roots=()
 member_rows=$(
@@ -234,10 +284,13 @@ while IFS= read -r -d '' package_entry; do
 
   if [ -d "$package_entry" ] && [ ! -L "$package_entry" ] \
     && [ -f "$package_entry/Cargo.toml" ] \
-    && [ ! -L "$package_entry/Cargo.toml" ] \
-    && grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
-      "$package_entry/Cargo.toml"; then
-    continue
+    && [ ! -L "$package_entry/Cargo.toml" ]; then
+    independent_root="packages/$entry_name"
+    if grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
+        "$package_entry/Cargo.toml" \
+      && is_independent_workspace_root "$independent_root"; then
+      continue
+    fi
   fi
   printf '%s\n' \
     "api-surface package entry is not a workspace member or classified generated/independent directory: packages/$entry_name" >&2

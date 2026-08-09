@@ -741,12 +741,12 @@ endif
 HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
-## heavy-gate-build - build the semaphore wrapper. Runs from packages/ so the
-## workspace cargo config (and its rustc wrapper) applies. The build target dir
-## is forced to the same absolute HEAVY_GATE_TARGET_DIR the wrapper is executed
-## from, so a relative CARGO_TARGET_DIR cannot split the two.
+## heavy-gate-build - build the semaphore wrapper from the governed workspace
+## manifest. The build target dir is forced to the same absolute
+## HEAVY_GATE_TARGET_DIR the wrapper is executed from, so a relative
+## CARGO_TARGET_DIR cannot split the two.
 heavy-gate-build:
-	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
+	@CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet --manifest-path packages/Cargo.toml --locked -p xtask --bin xtask
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
 ## current numeric uid without resolving a user name through NSS. This is the

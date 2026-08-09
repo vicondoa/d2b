@@ -32,6 +32,15 @@ EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
 API_INPUT_FINGERPRINT = (
     ROOT / "tests" / "tools" / "api-surface-input-fingerprint.sh"
 )
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-host-binaries.yml"
+RELEASE_BINARY_SELECTORS = (
+    ("d2bd", "d2bd"),
+    ("d2b", "d2b"),
+    ("d2b-wayland-proxy", "d2b-wayland-proxy"),
+    ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper"),
+    ("d2b-host", "d2b-activation-helper"),
+    ("d2b-priv-broker", "d2b-priv-broker"),
+)
 
 
 EXECUTION_MANIFEST_HARNESS = r"""
@@ -284,6 +293,76 @@ def workflow_job_block(workflow: str, job_id: str) -> str:
     next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", remainder)
     end = match.end() + (next_job.start() if next_job else len(remainder))
     return workflow[match.start() : end]
+
+
+def release_workflow_contract_violations(workflow: str) -> list[str]:
+    violations: list[str] = []
+    dispatch = workflow.split("permissions:", 1)[0]
+    if "workflow_dispatch:" not in dispatch:
+        violations.append("release publication must be manual-only")
+    if re.search(r"(?m)^\s+push:", dispatch):
+        violations.append("release publication must not have a push trigger")
+    for input_name in ("version", "merged_v3_head", "sealed_tree"):
+        if f"      {input_name}:" not in dispatch:
+            violations.append(f"manual input {input_name} is missing")
+    if "gh pr create" in workflow or "release/prebuilt" in workflow:
+        violations.append("release workflow must not repair the prebuilt manifest")
+
+    build = workflow_job_block(workflow, "build")
+    release = workflow_job_block(workflow, "release")
+    for job_name, block in (("build", build), ("release", release)):
+        if "needs: [prepublication-identity" not in block:
+            violations.append(f"{job_name} is not behind prepublication identity")
+        for required in ("MERGED_V3_HEAD", "SEALED_TREE", "refs/remotes/origin/v3"):
+            if required not in block:
+                violations.append(f"{job_name} does not recheck {required}")
+        if "^{tree}" not in block:
+            violations.append(f"{job_name} does not recheck the sealed tree")
+        if "nix/prebuilt.json" not in block:
+            violations.append(f"{job_name} does not recheck the prebuilt manifest")
+
+    activation = build.find("Activate pinned Rust toolchain")
+    cache = build.find("Swatinem/rust-cache")
+    build_step = build.find("Build release binaries")
+    if activation < 0 or cache < 0 or build_step < 0:
+        violations.append("release build ordering steps are incomplete")
+    elif not activation < cache < build_step:
+        violations.append("the pinned toolchain must be active before the cache and build")
+    if "Assert active Rust toolchain versions" not in build:
+        violations.append("release build must assert active toolchain versions")
+
+    build_commands = build[build_step:] if build_step >= 0 else ""
+    command_blocks: list[str] = []
+    for package_name, binary_name in RELEASE_BINARY_SELECTORS:
+        selector = f"--package {package_name} --bin {binary_name}"
+        if build_commands.count(selector) != 1:
+            violations.append(f"release selector is not unique: {selector}")
+            continue
+        position = build_commands.find(selector)
+        command_start = build_commands.rfind("cargo build", 0, position)
+        command_end = build_commands.find("\n          cargo build", position)
+        if command_start < 0:
+            violations.append(f"release selector has no cargo build: {selector}")
+            continue
+        if command_end < 0:
+            command_end = len(build_commands)
+        command_blocks.append(build_commands[command_start:command_end])
+    if len(command_blocks) == len(RELEASE_BINARY_SELECTORS):
+        for block in command_blocks:
+            if "--locked" not in block:
+                violations.append("every release cargo build must use --locked")
+        ordinary_blocks = command_blocks[:-1]
+        if any("--no-default-features" in block for block in ordinary_blocks):
+            violations.append("ordinary release packages must retain default features")
+        if "--no-default-features" not in command_blocks[-1]:
+            violations.append("the broker release build must disable default features")
+
+    tag = release.find("Create annotated tag")
+    artifact_check = release.find("Verify release identity and artifacts")
+    release_creation = release.find("Create GitHub release")
+    if not artifact_check < tag < release_creation:
+        violations.append("release artifacts must be verified before tag and release")
+    return violations
 
 
 def executable_shell_source(source: str) -> str:
@@ -643,6 +722,56 @@ set -euo pipefail
         self.assertIn("api-surface inputs changed", missing.stderr)
         self.assertIn("make api-surface-pin", missing.stderr)
 
+    def test_api_fingerprint_tracks_toolchain_and_cargo_config_independently(
+        self,
+    ) -> None:
+        for relative in (
+            "packages/.cargo/config.toml",
+            "packages/d2b-api-surface/rust-toolchain.toml",
+        ):
+            tree = self.make_api_fingerprint_tree()
+            update = self.run_api_fingerprint(tree, "--write")
+            self.assertEqual(update.returncode, 0, msg=update.stderr)
+            path = tree / relative
+            original = path.read_text(encoding="utf-8")
+            path.write_text(f"{original}# independent mutation\n", encoding="utf-8")
+            stale = self.run_api_fingerprint(tree, "--check")
+            self.assertNotEqual(stale.returncode, 0, msg=relative)
+            self.assertIn("api-surface inputs changed", stale.stderr)
+            self.assertIn("make api-surface-pin", stale.stderr)
+            shutil.rmtree(tree)
+
+    def test_api_fingerprint_rejects_unknown_top_level_and_nested_workspaces(
+        self,
+    ) -> None:
+        for name, relative in (
+            (
+                "unknown-top-level-workspace",
+                "packages/unknown-workspace/src/lib.rs",
+            ),
+            (
+                "unknown-nested-workspace",
+                "packages/example/unknown-workspace/src/lib.rs",
+            ),
+        ):
+            tree = self.make_api_fingerprint_tree()
+            update = self.run_api_fingerprint(tree, "--write")
+            self.assertEqual(update.returncode, 0, msg=update.stderr)
+            source = tree / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            (source.parent / "Cargo.toml").write_text(
+                "[workspace]\n",
+                encoding="utf-8",
+            )
+            source.write_text("pub struct Unknown;\n", encoding="utf-8")
+            stale = self.run_api_fingerprint(tree, "--check")
+            self.assertNotEqual(stale.returncode, 0, msg=name)
+            self.assertIn(
+                "api-surface unknown independent workspace root",
+                stale.stderr,
+            )
+            shutil.rmtree(tree)
+
     def test_api_fingerprint_rejects_enumerator_failures_and_special_entries(
         self,
     ) -> None:
@@ -801,6 +930,17 @@ cargo() {
             run_git("commit", "-q", "-m", "fixture")
             base = run_git("rev-parse", "HEAD").stdout.strip()
 
+            if name == "unknown-top-level-workspace":
+                unknown_manifest = tree / "packages/unknown-workspace/Cargo.toml"
+                unknown_manifest.parent.mkdir(parents=True, exist_ok=True)
+                unknown_manifest.write_text("[workspace]\n", encoding="utf-8")
+            elif name == "unknown-nested-workspace":
+                unknown_manifest = (
+                    tree / "packages/d2b-core/unknown-workspace/Cargo.toml"
+                )
+                unknown_manifest.parent.mkdir(parents=True, exist_ok=True)
+                unknown_manifest.write_text("[workspace]\n", encoding="utf-8")
+
             changed = tree / changed_path
             changed.parent.mkdir(parents=True, exist_ok=True)
             if changed.exists():
@@ -862,6 +1002,16 @@ cargo() {
             "packages/not-a-member/src/lib.rs",
             expect_success=False,
         )
+        unknown_top_result, unknown_top = run_scenario(
+            "unknown-top-level-workspace",
+            "packages/unknown-workspace/src/lib.rs",
+            expect_success=False,
+        )
+        unknown_nested_result, unknown_nested = run_scenario(
+            "unknown-nested-workspace",
+            "packages/d2b-core/unknown-workspace/src/lib.rs",
+            expect_success=False,
+        )
         _, guest = run_scenario(
             "guest",
             "packages/d2b-guest-shell-runner/src/lib.rs",
@@ -900,6 +1050,13 @@ cargo() {
             unknown_result.stderr,
         )
         self.assertFalse(any(command.startswith("clippy ") for command in unknown))
+        for result, commands in (
+            (unknown_top_result, unknown_top),
+            (unknown_nested_result, unknown_nested),
+        ):
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown independent workspace root", result.stderr)
+            self.assertFalse(any(command.startswith("clippy ") for command in commands))
 
         guest_clippy = [
             command for command in guest if command.startswith("clippy ")
@@ -2079,6 +2236,67 @@ wait
         self.assertIn("api-surface-pin:", makefile)
         self.assertIn("D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh", makefile)
         self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+
+    def test_release_workflow_is_manual_identity_bound_and_feature_safe(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(
+            release_workflow_contract_violations(workflow),
+            [],
+        )
+
+        mutations = (
+            (
+                workflow.replace("workflow_dispatch:", "workflow_manual:", 1),
+                "manual trigger",
+            ),
+            (
+                workflow.replace(
+                    "      - name: Activate pinned Rust toolchain",
+                    "      - name: Cache before toolchain activation",
+                    1,
+                ),
+                "toolchain ordering",
+            ),
+            (
+                workflow.replace(
+                    "--package d2b --bin d2b",
+                    "--package d2b",
+                    1,
+                ),
+                "ordinary selector",
+            ),
+            (
+                workflow.replace(
+                    "--package d2bd --bin d2bd",
+                    "--package d2bd --bin d2bd --no-default-features",
+                    1,
+                ),
+                "ordinary default features",
+            ),
+            (
+                workflow.replace(
+                    "--package d2b-priv-broker --bin d2b-priv-broker "
+                    "--no-default-features",
+                    "--package d2b-priv-broker --bin d2b-priv-broker",
+                    1,
+                ),
+                "broker default features",
+            ),
+            (
+                workflow.replace(
+                    "cargo build --release --locked --manifest-path",
+                    "cargo build --release --manifest-path",
+                    1,
+                ),
+                "locked build",
+            ),
+        )
+        for mutated, label in mutations:
+            self.assertNotEqual(
+                release_workflow_contract_violations(mutated),
+                [],
+                msg=f"workflow mutation escaped the {label} regression check",
+            )
 
     def test_rust_aggregate_is_a_make_owned_keep_going_dag(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")

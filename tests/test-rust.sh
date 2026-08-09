@@ -826,12 +826,58 @@ run_fast_lint_gate() {
   local sorted_packages workspace_metadata workspace_rows workspace_root
   local workspace_root_real package_root_real package_manifest package_root
   local path_abs candidate_dir candidate_real independent matched
+  local workspace_manifest_list workspace_manifest workspace_root_path
   local main_workspace_changed=0
   local guest_shell_runner_changed=0
   local main_workspace_metadata_needed=0
   local -a main_package_args=()
+  local -a independent_workspace_roots=(
+    packages/d2b-bus/tests/ui/public-api-mutations
+    packages/d2b-controller-toolkit/tests/ui/external-seals
+    packages/d2b-core/fuzz
+    packages/d2b-guest-shell-runner
+    packages/d2b-priv-broker
+    packages/d2b-resource-api/tests/ui/external-seals
+    packages/d2b-wlproxy-spike
+  )
   declare -A main_packages=()
   declare -A main_package_roots=()
+
+  is_independent_workspace_root() {
+    local candidate="$1"
+    local allowed
+    for allowed in "${independent_workspace_roots[@]}"; do
+      [ "$candidate" = "$allowed" ] && return 0
+    done
+    return 1
+  }
+
+  # Independent workspaces are a closed set. Scan nested manifests before
+  # changed-scope classification so a new top-level or nested workspace cannot
+  # be silently treated as a non-product path.
+  workspace_manifest_list=$(mktemp "${TMPDIR:-/tmp}/d2b-rust-workspaces.XXXXXX")
+  if declare -F add_cleanup >/dev/null 2>&1; then
+    add_cleanup "rm -f -- \"$workspace_manifest_list\""
+  fi
+  if ! find -P "$ROOT/packages" -type f -name Cargo.toml -print0 \
+      | sort -z >"$workspace_manifest_list"; then
+    fail "Rust workspace manifest enumeration failed"
+    exit 1
+  fi
+  while IFS= read -r -d '' workspace_manifest; do
+    if ! grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
+        "$workspace_manifest"; then
+      continue
+    fi
+    workspace_root_path=${workspace_manifest#"$ROOT/"}
+    workspace_root_path=${workspace_root_path%/Cargo.toml}
+    [ "$workspace_root_path" = "packages" ] && continue
+    if ! is_independent_workspace_root "$workspace_root_path"; then
+      fail "unknown independent workspace root: $workspace_root_path"
+      exit 1
+    fi
+  done <"$workspace_manifest_list"
+  rm -f -- "$workspace_manifest_list"
 
   [ -f "$no_bash_manifest" ] || {
     fail "missing Rust workspace input: $no_bash_manifest"
@@ -1030,7 +1076,12 @@ run_fast_lint_gate() {
               fail "independent workspace root could not be resolved for $path"
               exit 1
             }
-            if [ "$candidate_real" != "$workspace_root_real" ]; then
+            workspace_root_path=${candidate_real#"$ROOT/"}
+            if [ "$workspace_root_path" != "packages" ]; then
+              if ! is_independent_workspace_root "$workspace_root_path"; then
+                fail "unknown independent workspace root: $workspace_root_path"
+                exit 1
+              fi
               independent=1
             fi
             break

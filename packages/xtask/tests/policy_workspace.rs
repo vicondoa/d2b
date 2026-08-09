@@ -6,6 +6,15 @@ use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
 const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &[
+    "packages/d2b-bus/tests/ui/public-api-mutations",
+    "packages/d2b-controller-toolkit/tests/ui/external-seals",
+    "packages/d2b-core/fuzz",
+    "packages/d2b-guest-shell-runner",
+    "packages/d2b-priv-broker",
+    "packages/d2b-resource-api/tests/ui/external-seals",
+    "packages/d2b-wlproxy-spike",
+];
 const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RUST_DAG_LEAVES: &[&str] = &[
@@ -254,6 +263,42 @@ fn discovered_package_manifests() -> Vec<(String, String)> {
     manifests
 }
 
+fn discovered_independent_workspace_roots() -> BTreeSet<String> {
+    git_tracked_files()
+        .into_iter()
+        .filter(|rel| {
+            rel.starts_with("packages/")
+                && rel.ends_with("/Cargo.toml")
+                && rel != "packages/Cargo.toml"
+        })
+        .filter_map(|rel| {
+            let content = std::fs::read_to_string(repo_root().join(&rel)).ok()?;
+            if !content.lines().any(|line| line.trim() == "[workspace]") {
+                return None;
+            }
+            Some(rel.trim_end_matches("/Cargo.toml").to_owned())
+        })
+        .collect()
+}
+
+fn independent_workspace_violations(manifests: &[(String, String)]) -> Vec<String> {
+    let allowed = INDEPENDENT_WORKSPACE_ROOTS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    manifests
+        .iter()
+        .filter_map(|(rel, content)| {
+            if !content.lines().any(|line| line.trim() == "[workspace]") {
+                return None;
+            }
+            let root = rel.trim_end_matches("/Cargo.toml");
+            (root != "packages" && !allowed.contains(root))
+                .then(|| format!("unknown independent workspace root: {root}"))
+        })
+        .collect()
+}
+
 fn quoted_key(block: &str, key: &str) -> Option<String> {
     let prefix = format!("{key} = \"");
     block.lines().find_map(|line| {
@@ -382,6 +427,31 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
         if !makefile.contains(required) {
             violations.push(format!(
                 "profile-aware main-workspace dependency contract is missing `{required}`"
+            ));
+        }
+    }
+    violations
+}
+
+fn heavy_gate_build_violations(makefile: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    let Some(start) = makefile.find("heavy-gate-build:\n") else {
+        return vec!["heavy-gate-build has no Make rule".to_owned()];
+    };
+    let block = &makefile[start..];
+    let block = block
+        .split("\n\n## heavy-gate-provision")
+        .next()
+        .unwrap_or(block);
+    for required in [
+        "--manifest-path packages/Cargo.toml",
+        "--locked",
+        "-p xtask",
+        "--bin xtask",
+    ] {
+        if !block.contains(required) {
+            violations.push(format!(
+                "heavy-gate-build must use the governed xtask selector `{required}`"
             ));
         }
     }
@@ -713,6 +783,69 @@ fn excluded_workspace_violations(main_workspace: &str, flake: &str, driver: &str
 }
 
 #[test]
+fn independent_workspace_roots_are_closed_and_explicit() {
+    let expected = INDEPENDENT_WORKSPACE_ROOTS
+        .iter()
+        .copied()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let discovered = discovered_independent_workspace_roots();
+    assert_eq!(
+        discovered, expected,
+        "every package workspace root must be an explicit supported exception"
+    );
+
+    let api_driver = read_repo_file("tests/tools/api-surface-input-fingerprint.sh");
+    let rust_driver = read_repo_file(RUST_DRIVER);
+    for root in INDEPENDENT_WORKSPACE_ROOTS {
+        assert!(
+            api_driver.contains(root),
+            "API fingerprint must name independent workspace root {root}"
+        );
+        assert!(
+            rust_driver.contains(root),
+            "changed-scope Clippy must name independent workspace root {root}"
+        );
+    }
+}
+
+#[test]
+fn independent_workspace_policy_rejects_unknown_top_level_and_nested_roots() {
+    let good = INDEPENDENT_WORKSPACE_ROOTS
+        .iter()
+        .map(|root| (format!("{root}/Cargo.toml"), "[workspace]\n".to_owned()))
+        .collect::<Vec<_>>();
+    assert!(
+        independent_workspace_violations(&good).is_empty(),
+        "the supported independent workspace fixture must pass"
+    );
+
+    let mut mutated = good;
+    mutated.push((
+        "packages/unknown-workspace/Cargo.toml".to_owned(),
+        "[workspace]\n".to_owned(),
+    ));
+    mutated.push((
+        "packages/d2b-core/unknown-nested-workspace/Cargo.toml".to_owned(),
+        "[workspace]\n".to_owned(),
+    ));
+    let violations = independent_workspace_violations(&mutated);
+    assert_eq!(violations.len(), 2);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("packages/unknown-workspace")),
+        "unknown top-level workspace must be rejected: {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("packages/d2b-core/unknown-nested-workspace")),
+        "unknown nested workspace must be rejected: {violations:?}"
+    );
+}
+
+#[test]
 fn rust_companion_surfaces_are_retained_and_fail_closed() {
     let manifests = discovered_package_manifests();
     assert!(
@@ -913,6 +1046,38 @@ test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)
             .any(|violation| violation.contains("profile-aware main-workspace")),
         "removing the aggregate-only dependency edge must be rejected: {violations:?}"
     );
+}
+
+#[test]
+fn heavy_gate_build_uses_the_locked_xtask_binary_manifest() {
+    let makefile = read_repo_file("Makefile");
+    let violations = heavy_gate_build_violations(&makefile);
+    assert!(
+        violations.is_empty(),
+        "heavy-gate-build must select the locked xtask binary explicitly:\n{}",
+        violations.join("\n")
+    );
+
+    for required in [
+        "--manifest-path packages/Cargo.toml",
+        "--locked",
+        "-p xtask",
+        "--bin xtask",
+    ] {
+        let start = makefile
+            .find("heavy-gate-build:\n")
+            .expect("heavy-gate-build rule");
+        let mutated = format!(
+            "{}{}",
+            &makefile[..start],
+            makefile[start..].replacen(required, "", 1)
+        );
+        let violations = heavy_gate_build_violations(&mutated);
+        assert!(
+            !violations.is_empty(),
+            "removing {required} must invalidate heavy-gate-build"
+        );
+    }
 }
 
 #[test]

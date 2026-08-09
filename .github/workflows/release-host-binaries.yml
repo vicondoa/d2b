@@ -1,7 +1,19 @@
 name: release-host-binaries
 on:
-  push:
-    branches: [v3]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to publish
+        required: true
+        type: string
+      merged_v3_head:
+        description: Current merged v3 HEAD commit
+        required: true
+        type: string
+      sealed_tree:
+        description: Sealed release tree object
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,69 +23,65 @@ defaults:
     shell: sh tests/tools/ci-shell {0}
 
 jobs:
-  detect-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.detect.outputs.version }}
-      tag: ${{ steps.detect.outputs.tag }}
-      skip: ${{ steps.detect.outputs.skip }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - id: detect
-        name: Detect changelog release cut
-        run: |
-          set -euo pipefail
-          version=$(perl -e 'use strict; use warnings;
-            open my $fh, q{<}, q{CHANGELOG.md} or die qq{open CHANGELOG.md: $!\\n};
-            while (my $line = <$fh>) {
-              if ($line =~ /^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
-                print $1;
-                exit 0;
-              }
-            }
-            die qq{No numbered release header found in CHANGELOG.md\\n};
-          ')
-          tag="v$version"
-          if git tag -l "$tag" | grep -qx "$tag"; then
-            skip=true
-          else
-            skip=false
-          fi
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
-          printf 'skip=%s\n' "$skip" >> "$GITHUB_OUTPUT"
-      - name: Reject unfolded changelog fragments
-        if: steps.detect.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          stray=$(find changelog.d -type f ! -name README.md -printf '%P\n' 2>/dev/null | sort || true)
-          if [ -n "$stray" ]; then
-            echo "Release blocked: unfolded changelog fragments remain under changelog.d/:" >&2
-            echo "$stray" >&2
-            echo "Run 'make changelog-fold' and commit the folded CHANGELOG.md before cutting a release." >&2
-            exit 1
-          fi
-
-  prepublication-gate:
-    needs: detect-version
-    if: needs.detect-version.outputs.skip != 'true'
+  prepublication-identity:
     runs-on: ubuntu-latest
     permissions: {}
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      merged_v3_head: ${{ steps.identity.outputs.merged_v3_head }}
+      sealed_tree: ${{ steps.identity.outputs.sealed_tree }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-      - name: Validate release identity and prebuilt manifest
+          ref: ${{ inputs.merged_v3_head }}
+          fetch-depth: 0
+      - id: identity
+        name: Validate publication identity
         env:
-          VERSION: ${{ needs.detect-version.outputs.version }}
+          VERSION: ${{ inputs.version }}
+          MERGED_V3_HEAD: ${{ inputs.merged_v3_head }}
+          SEALED_TREE: ${{ inputs.sealed_tree }}
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
-          manifest_version=$(jq -er '.version | strings' nix/prebuilt.json)
-          if [ "$manifest_version" = "$VERSION" ]; then
-            echo "Release blocked: nix/prebuilt.json already advertises v$VERSION; refusing to publish stale or duplicate binaries." >&2
+
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "Publication blocked: manual version is not a semantic version." >&2
+            exit 1
+          }
+          printf '%s' "$MERGED_V3_HEAD" | grep -Eq '^[0-9a-fA-F]{40}$' || {
+            echo "Publication blocked: manual merged_v3_head is not a commit object id." >&2
+            exit 1
+          }
+          printf '%s' "$SEALED_TREE" | grep -Eq '^[0-9a-fA-F]{40}$' || {
+            echo "Publication blocked: manual sealed_tree is not a tree object id." >&2
+            exit 1
+          }
+          MERGED_V3_HEAD=$(printf '%s' "$MERGED_V3_HEAD" | tr '[:upper:]' '[:lower:]')
+          SEALED_TREE=$(printf '%s' "$SEALED_TREE" | tr '[:upper:]' '[:lower:]')
+
+          git fetch origin v3 --no-tags --force
+          git cat-file -e "$MERGED_V3_HEAD^{commit}"
+          actual_head=$(git rev-parse HEAD)
+          remote_v3_head=$(git rev-parse refs/remotes/origin/v3)
+          actual_tree=$(git rev-parse "$MERGED_V3_HEAD^{tree}")
+          git cat-file -e "$SEALED_TREE^{tree}"
+          [ "$actual_head" = "$MERGED_V3_HEAD" ] || {
+            echo "Publication blocked: checkout is not the manually selected merged v3 HEAD." >&2
+            exit 1
+          }
+          [ "$remote_v3_head" = "$MERGED_V3_HEAD" ] || {
+            echo "Publication blocked: manual merged_v3_head is not the current v3 HEAD." >&2
+            exit 1
+          }
+          [ "$actual_tree" = "$SEALED_TREE" ] || {
+            echo "Publication blocked: merged v3 HEAD does not have the sealed tree." >&2
+            exit 1
+          }
+          if git ls-remote --exit-code --refs origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Publication blocked: release tag v$VERSION already exists." >&2
             exit 1
           fi
 
@@ -86,41 +94,93 @@ jobs:
             packages/d2b-priv-broker/Cargo.toml
           do
             package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
-            [ -n "$package_version" ] || {
-              echo "Release blocked: no package version in $manifest." >&2
+            [ "$package_version" = "$VERSION" ] || {
+              echo "Publication blocked: $manifest is not version $VERSION." >&2
               exit 1
             }
-            case "$package_version" in
-              0.0.0-bootstrap)
-                echo "Release blocked: $manifest still has bootstrap package identity." >&2
-                exit 1
-                ;;
-            esac
-            if [ "$package_version" != "$VERSION" ]; then
-              echo "Release blocked: $manifest has package identity $package_version, expected $VERSION." >&2
-              exit 1
-            fi
           done
+          grep -Eq "^## \[$VERSION\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md || {
+            echo "Publication blocked: CHANGELOG.md has no release section for $VERSION." >&2
+            exit 1
+          }
+
+          flake_versions=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' flake.nix | sort -u)
+          [ "$(printf '%s\n' "$flake_versions" | grep -c .)" -gt 0 ] \
+            && [ "$(printf '%s\n' "$flake_versions" | awk -v expected="$VERSION" '$0 != expected && NF { count++ } END { print count + 0 }')" -eq 0 ] || {
+            echo "Publication blocked: flake package versions do not match $VERSION." >&2
+            exit 1
+          }
+
+          manifest_version=$(jq -r 'if .version == null then "null" else (.version | strings) end' nix/prebuilt.json)
+          expected_keys='["d2b","d2b-activation-helper","d2b-priv-broker","d2b-unsafe-local-helper","d2b-wayland-proxy","d2bd"]'
+          if [ "$manifest_version" = "null" ]; then
+            jq -e '.version == null and .system == "x86_64-linux" and .binaries == {}' \
+              nix/prebuilt.json >/dev/null || {
+              echo "Publication blocked: nix/prebuilt.json is not the explicit source fallback." >&2
+              exit 1
+            }
+          else
+            [ "$manifest_version" = "$VERSION" ] || {
+              echo "Publication blocked: nix/prebuilt.json does not match $VERSION." >&2
+              exit 1
+            }
+            [ "$(jq -c '.binaries | keys' nix/prebuilt.json)" = "$expected_keys" ] || {
+              echo "Publication blocked: nix/prebuilt.json does not enumerate the six release binaries." >&2
+              exit 1
+            }
+            for binary in \
+              d2b \
+              d2b-activation-helper \
+              d2b-priv-broker \
+              d2b-unsafe-local-helper \
+              d2b-wayland-proxy \
+              d2bd
+            do
+              asset="${binary}-${VERSION}-x86_64-linux.tar.gz"
+              url=$(jq -er --arg binary "$binary" '.binaries[$binary].url | strings' nix/prebuilt.json)
+              hash=$(jq -er --arg binary "$binary" '.binaries[$binary].hash | strings' nix/prebuilt.json)
+              case "$url" in
+                *"/releases/download/v${VERSION}/${asset}") ;;
+                *)
+                  echo "Publication blocked: manifest URL for $binary has the wrong release identity." >&2
+                  exit 1
+                  ;;
+              esac
+              printf '%s' "$hash" | grep -Eq '^sha256-[A-Za-z0-9+/]+={0,2}$' || {
+                echo "Publication blocked: manifest hash for $binary is not an SRI SHA-256." >&2
+                exit 1
+              }
+            done
+          fi
+
+          {
+            printf 'version=%s\n' "$VERSION"
+            printf 'merged_v3_head=%s\n' "$MERGED_V3_HEAD"
+            printf 'sealed_tree=%s\n' "$SEALED_TREE"
+          } >> "$GITHUB_OUTPUT"
 
   build:
-    needs: [detect-version, prepublication-gate]
-    if: needs.detect-version.outputs.skip != 'true'
+    needs: [prepublication-identity]
     runs-on: ubuntu-latest
+    permissions: {}
     env:
       GITHUB_TOKEN: ""
       ACTIONS_RUNTIME_TOKEN: ""
       CARGO_INCREMENTAL: "0"
-    permissions: {}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          ref: ${{ inputs.merged_v3_head }}
+          fetch-depth: 0
       - name: Activate pinned Rust toolchain
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
           PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
           [ -n "$PINNED" ] || {
-            echo "Release blocked: packages/rust-toolchain.toml has no channel." >&2
+            echo "Publication blocked: packages/rust-toolchain.toml has no channel." >&2
             exit 1
           }
           rustup toolchain install "$PINNED" \
@@ -130,13 +190,15 @@ jobs:
           rustup default "$PINNED"
       - name: Assert active Rust toolchain versions
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
           PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
           active=$(rustup show active-toolchain | awk '{print $1}')
           case "$active" in
             "$PINNED"|"$PINNED"-*) ;;
             *)
-              echo "Release blocked: active Rust toolchain '$active' is not $PINNED." >&2
+              echo "Publication blocked: active Rust toolchain '$active' is not $PINNED." >&2
               exit 1
               ;;
           esac
@@ -145,16 +207,13 @@ jobs:
           actual_cargo=$(cargo --version)
           actual_rustc=$(rustc --version)
           [ "$actual_cargo" = "$expected_cargo" ] || {
-            echo "Release blocked: cargo is not running from $PINNED." >&2
-            printf 'expected: %s\nactual: %s\n' "$expected_cargo" "$actual_cargo" >&2
+            echo "Publication blocked: cargo is not running from $PINNED." >&2
             exit 1
           }
           [ "$actual_rustc" = "$expected_rustc" ] || {
-            echo "Release blocked: rustc is not running from $PINNED." >&2
-            printf 'expected: %s\nactual: %s\n' "$expected_rustc" "$actual_rustc" >&2
+            echo "Publication blocked: rustc is not running from $PINNED." >&2
             exit 1
           }
-          printf 'cargo: %s\nrustc: %s\n' "$actual_cargo" "$actual_rustc"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
@@ -164,26 +223,83 @@ jobs:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"
-          shared-key: "test-rust-${{ runner.os }}"
+          shared-key: "release-${{ runner.os }}"
           save-if: "true"
-      - name: Install ripgrep + acl
+      - name: Verify selected merged tree before build
+        env:
+          VERSION: ${{ inputs.version }}
+          MERGED_V3_HEAD: ${{ inputs.merged_v3_head }}
+          SEALED_TREE: ${{ inputs.sealed_tree }}
+        run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
+          set -euo pipefail
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          printf '%s' "$MERGED_V3_HEAD" | grep -Eq '^[0-9a-fA-F]{40}$'
+          printf '%s' "$SEALED_TREE" | grep -Eq '^[0-9a-fA-F]{40}$'
+          MERGED_V3_HEAD=$(printf '%s' "$MERGED_V3_HEAD" | tr '[:upper:]' '[:lower:]')
+          SEALED_TREE=$(printf '%s' "$SEALED_TREE" | tr '[:upper:]' '[:lower:]')
+          git fetch origin v3 --no-tags --force
+          [ "$(git rev-parse HEAD)" = "$MERGED_V3_HEAD" ] || {
+            echo "Publication blocked: build checkout is not the selected merged v3 HEAD." >&2
+            exit 1
+          }
+          [ "$(git rev-parse refs/remotes/origin/v3)" = "$MERGED_V3_HEAD" ] || {
+            echo "Publication blocked: v3 moved after identity validation." >&2
+            exit 1
+          }
+          [ "$(git rev-parse "$MERGED_V3_HEAD^{tree}")" = "$SEALED_TREE" ] || {
+            echo "Publication blocked: build checkout does not have the sealed tree." >&2
+            exit 1
+          }
+          git cat-file -e "$SEALED_TREE^{tree}"
+          if git ls-remote --exit-code --refs origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Publication blocked: release tag v$VERSION already exists." >&2
+            exit 1
+          fi
+          for manifest in \
+            packages/d2bd/Cargo.toml \
+            packages/d2b/Cargo.toml \
+            packages/d2b-wayland-proxy/Cargo.toml \
+            packages/d2b-unsafe-local-helper/Cargo.toml \
+            packages/d2b-host/Cargo.toml \
+            packages/d2b-priv-broker/Cargo.toml
+          do
+            package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
+            [ "$package_version" = "$VERSION" ] || {
+              echo "Publication blocked: $manifest is not version $VERSION." >&2
+              exit 1
+            }
+          done
+          grep -Eq "^## \[$VERSION\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
+          flake_versions=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' flake.nix | sort -u)
+          [ "$(printf '%s\n' "$flake_versions" | awk -v expected="$VERSION" '$0 != expected && NF { count++ } END { print count + 0 }')" -eq 0 ]
+          manifest_version=$(jq -r 'if .version == null then "null" else (.version | strings) end' nix/prebuilt.json)
+          if [ "$manifest_version" = "null" ]; then
+            jq -e '.version == null and .system == "x86_64-linux" and .binaries == {}' nix/prebuilt.json >/dev/null
+          else
+            [ "$manifest_version" = "$VERSION" ]
+            [ "$(jq -r '.binaries | keys | length' nix/prebuilt.json)" -eq 6 ]
+          fi
+      - name: Install ripgrep and acl
         run: sudo apt-get update && sudo apt-get install -y ripgrep acl
       - name: Build release binaries
         env:
-          VERSION: ${{ needs.detect-version.outputs.version }}
+          VERSION: ${{ inputs.version }}
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
           cargo build --release --locked --manifest-path packages/Cargo.toml \
-            --package d2bd --bin d2bd --no-default-features
+            --package d2bd --bin d2bd
           cargo build --release --locked --manifest-path packages/Cargo.toml \
-            --package d2b --bin d2b --no-default-features
+            --package d2b --bin d2b
           cargo build --release --locked --manifest-path packages/Cargo.toml \
-            --package d2b-wayland-proxy --bin d2b-wayland-proxy --no-default-features
+            --package d2b-wayland-proxy --bin d2b-wayland-proxy
           cargo build --release --locked --manifest-path packages/Cargo.toml \
-            --package d2b-unsafe-local-helper --bin d2b-unsafe-local-helper \
-            --no-default-features
+            --package d2b-unsafe-local-helper --bin d2b-unsafe-local-helper
           cargo build --release --locked --manifest-path packages/Cargo.toml \
-            --package d2b-host --bin d2b-activation-helper --no-default-features
+            --package d2b-host --bin d2b-activation-helper
           cargo build --release --locked \
             --manifest-path packages/d2b-priv-broker/Cargo.toml \
             --package d2b-priv-broker --bin d2b-priv-broker --no-default-features
@@ -198,48 +314,153 @@ jobs:
           cp packages/d2b-priv-broker/target/release/d2b-priv-broker dist/bin/
 
           for binary in \
-            d2bd \
             d2b \
-            d2b-wayland-proxy \
-            d2b-unsafe-local-helper \
             d2b-activation-helper \
-            d2b-priv-broker
+            d2b-priv-broker \
+            d2b-unsafe-local-helper \
+            d2b-wayland-proxy \
+            d2bd
           do
+            [ -x "dist/bin/$binary" ] || {
+              echo "Publication blocked: expected binary $binary was not built." >&2
+              exit 1
+            }
             tar -C dist/bin -czf "dist/${binary}-${VERSION}-x86_64-linux.tar.gz" "$binary"
+            [ "$(tar -tzf "dist/${binary}-${VERSION}-x86_64-linux.tar.gz" | sed '/^$/d')" = "$binary" ] || {
+              echo "Publication blocked: archive identity for $binary is invalid." >&2
+              exit 1
+            }
           done
-
           (
             cd dist
             sha256sum ./*.tar.gz > SHA256SUMS
           )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: host-binaries-${{ needs.detect-version.outputs.version }}
+          name: host-binaries-${{ inputs.version }}
           path: |
             dist/*.tar.gz
             dist/SHA256SUMS
           if-no-files-found: error
 
   release:
-    needs: [detect-version, prepublication-gate, build]
-    if: needs.detect-version.outputs.skip != 'true'
+    needs: [prepublication-identity, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          ref: ${{ inputs.merged_v3_head }}
           fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: host-binaries-${{ needs.detect-version.outputs.version }}
+          name: host-binaries-${{ inputs.version }}
           path: dist
-      - name: Extract release notes from CHANGELOG.md
+      - name: Install Nix for artifact identity checks
+        uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87e
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Verify release identity and artifacts
         env:
-          VERSION: ${{ needs.detect-version.outputs.version }}
+          VERSION: ${{ inputs.version }}
+          MERGED_V3_HEAD: ${{ inputs.merged_v3_head }}
+          SEALED_TREE: ${{ inputs.sealed_tree }}
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
+          set -euo pipefail
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          printf '%s' "$MERGED_V3_HEAD" | grep -Eq '^[0-9a-fA-F]{40}$'
+          printf '%s' "$SEALED_TREE" | grep -Eq '^[0-9a-fA-F]{40}$'
+          MERGED_V3_HEAD=$(printf '%s' "$MERGED_V3_HEAD" | tr '[:upper:]' '[:lower:]')
+          SEALED_TREE=$(printf '%s' "$SEALED_TREE" | tr '[:upper:]' '[:lower:]')
+          git fetch origin v3 --no-tags --force
+          [ "$(git rev-parse HEAD)" = "$MERGED_V3_HEAD" ] || {
+            echo "Publication blocked: release checkout is not the selected merged v3 HEAD." >&2
+            exit 1
+          }
+          [ "$(git rev-parse refs/remotes/origin/v3)" = "$MERGED_V3_HEAD" ] || {
+            echo "Publication blocked: v3 moved after artifact creation." >&2
+            exit 1
+          }
+          [ "$(git rev-parse "$MERGED_V3_HEAD^{tree}")" = "$SEALED_TREE" ] || {
+            echo "Publication blocked: release checkout does not have the sealed tree." >&2
+            exit 1
+          }
+          git cat-file -e "$SEALED_TREE^{tree}"
+          if git ls-remote --exit-code --refs origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Publication blocked: release tag v$VERSION already exists." >&2
+            exit 1
+          fi
+          for manifest in \
+            packages/d2bd/Cargo.toml \
+            packages/d2b/Cargo.toml \
+            packages/d2b-wayland-proxy/Cargo.toml \
+            packages/d2b-unsafe-local-helper/Cargo.toml \
+            packages/d2b-host/Cargo.toml \
+            packages/d2b-priv-broker/Cargo.toml
+          do
+            package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
+            [ "$package_version" = "$VERSION" ] || {
+              echo "Publication blocked: $manifest is not version $VERSION." >&2
+              exit 1
+            }
+          done
+          grep -Eq "^## \[$VERSION\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
+          flake_versions=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' flake.nix | sort -u)
+          [ "$(printf '%s\n' "$flake_versions" | awk -v expected="$VERSION" '$0 != expected && NF { count++ } END { print count + 0 }')" -eq 0 ]
+
+          expected_keys='["d2b","d2b-activation-helper","d2b-priv-broker","d2b-unsafe-local-helper","d2b-wayland-proxy","d2bd"]'
+          manifest_version=$(jq -r 'if .version == null then "null" else (.version | strings) end' nix/prebuilt.json)
+          if [ "$manifest_version" = "null" ]; then
+            jq -e '.version == null and .system == "x86_64-linux" and .binaries == {}' nix/prebuilt.json >/dev/null
+          else
+            [ "$manifest_version" = "$VERSION" ]
+            [ "$(jq -c '.binaries | keys' nix/prebuilt.json)" = "$expected_keys" ]
+          fi
+
+          expected_count=6
+          actual_count=$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print | awk 'NF { count++ } END { print count + 0 }')
+          [ "$actual_count" -eq "$expected_count" ] || {
+            echo "Publication blocked: artifact count is not six." >&2
+            exit 1
+          }
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          for binary in \
+            d2b \
+            d2b-activation-helper \
+            d2b-priv-broker \
+            d2b-unsafe-local-helper \
+            d2b-wayland-proxy \
+            d2bd
+          do
+            asset="dist/${binary}-${VERSION}-x86_64-linux.tar.gz"
+            [ -f "$asset" ] || {
+              echo "Publication blocked: missing artifact $asset." >&2
+              exit 1
+            }
+            [ "$(tar -tzf "$asset" | sed '/^$/d')" = "$binary" ] || {
+              echo "Publication blocked: artifact $asset contains the wrong binary." >&2
+              exit 1
+            }
+            if [ "$manifest_version" != "null" ]; then
+              actual_sri=$(nix hash file --type sha256 --sri "$asset")
+              expected_sri=$(jq -er --arg binary "$binary" '.binaries[$binary].hash | strings' nix/prebuilt.json)
+              [ "$actual_sri" = "$expected_sri" ] || {
+                echo "Publication blocked: manifest hash and artifact hash differ for $binary." >&2
+                exit 1
+              }
+            fi
+          done
+      - name: Extract release notes
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
           perl -0ne '
             my $version = $ENV{VERSION};
@@ -254,100 +475,26 @@ jobs:
           ' CHANGELOG.md > release-notes.md
       - name: Create annotated tag
         env:
-          TAG: ${{ needs.detect-version.outputs.tag }}
+          VERSION: ${{ inputs.version }}
+          MERGED_V3_HEAD: ${{ inputs.merged_v3_head }}
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG"
-          git push origin "$TAG"
+          git tag -a "v$VERSION" "$MERGED_V3_HEAD" -m "v$VERSION"
+          git push origin "v$VERSION"
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.detect-version.outputs.tag }}
+          VERSION: ${{ inputs.version }}
         run: |
+          # shellcheck shell=bash
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
           set -euo pipefail
-          gh release create "$TAG" \
+          gh release create "v$VERSION" \
             dist/*.tar.gz \
             dist/SHA256SUMS \
-            --title "$TAG" \
+            --title "v$VERSION" \
             --notes-file release-notes.md
-      - name: Install Nix
-        uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - name: Compute SRI hashes and commit prebuilt manifest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ needs.detect-version.outputs.tag }}
-          VERSION: ${{ needs.detect-version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin v3
-          git checkout -B v3 origin/v3
-
-          rm -rf release-assets
-          mkdir -p nix release-assets
-          gh release download "$TAG" --pattern '*.tar.gz' --dir release-assets
-
-          python3 <<'PY'
-          import json
-          import os
-          import pathlib
-          import subprocess
-
-          version = os.environ["VERSION"]
-          repo = os.environ["REPO"]
-          release_dir = pathlib.Path("release-assets")
-          suffix = f"-{version}-x86_64-linux.tar.gz"
-          binaries = {}
-          assets = sorted(release_dir.glob("*.tar.gz"))
-
-          if not assets:
-              raise SystemExit("no release tarballs downloaded")
-
-          for asset in assets:
-              base = asset.name
-              if not base.endswith(suffix):
-                  raise SystemExit(f"unexpected release asset name: {base}")
-              name = base[: -len(suffix)]
-              sri = subprocess.check_output(
-                  ["nix", "hash", "file", "--type", "sha256", "--sri", str(asset)],
-                  text=True,
-              ).strip()
-              binaries[name] = {
-                  "url": f"https://github.com/{repo}/releases/download/v{version}/{base}",
-                  "hash": sri,
-              }
-
-          manifest = {
-              "version": version,
-              "system": "x86_64-linux",
-              "binaries": binaries,
-          }
-
-          with open("nix/prebuilt.json", "w", encoding="utf-8") as fh:
-              json.dump(manifest, fh, indent=2)
-              fh.write("\n")
-          PY
-
-          git add nix/prebuilt.json
-          git diff --cached --quiet && exit 0
-
-          BRANCH="release/prebuilt-v${VERSION}"
-          git checkout -b "$BRANCH"
-          git commit -m "release: update prebuilt manifest for v${VERSION}" -m \
-            "Auto-generated by release-host-binaries.yml after publishing GitHub Release ${TAG}." -m \
-            'Consumers: `nix flake update d2b` to pick up pre-built binaries.'
-          git push origin "$BRANCH"
-          gh pr create \
-            --base v3 \
-            --head "$BRANCH" \
-            --title "release: prebuilt manifest for v${VERSION}" \
-            --body "Auto-generated after [v${VERSION}](https://github.com/${REPO}/releases/tag/${TAG}) release. Updates \`nix/prebuilt.json\` with SRI hashes for the published binaries." \
-            --label "automation"
