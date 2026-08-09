@@ -5125,6 +5125,12 @@ export function lateFindingAdmission(finding, label = "late finding") {
   };
 }
 
+function publicLateFinding(finding) {
+  return finding?.late === true
+    ? Object.fromEntries(Object.entries(finding).filter(([key]) => key !== "late"))
+    : finding;
+}
+
 export function appendLateFindings(ledger, findings) {
   validateLedger(ledger);
   if (!Array.isArray(findings)) error("late findings must be an array");
@@ -5133,10 +5139,7 @@ export function appendLateFindings(ledger, findings) {
   const admittedSourceIds = new Set();
   let nextId = issues.length + 1;
   for (const finding of findings) {
-    const publicFinding = finding?.late === true
-      ? Object.fromEntries(Object.entries(finding).filter(([key]) => key !== "late"))
-      : finding;
-    const admitted = lateFindingAdmission(publicFinding);
+    const admitted = lateFindingAdmission(publicLateFinding(finding));
     const rawLateText = admitted.raw_text;
     const sourceId =
       admitted.source_id ??
@@ -5608,7 +5611,7 @@ export function validateVerificationResults(selection, results, options = {}) {
     }
     const late = result.late_findings.map((finding, index) =>
       lateFindingAdmission(
-        finding,
+        publicLateFinding(finding),
         `verification result ${seat}.late_findings[${index}]`,
       ),
     );
