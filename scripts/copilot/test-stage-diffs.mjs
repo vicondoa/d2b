@@ -21,7 +21,7 @@ import {
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -83,6 +83,38 @@ function run(cwd, args, options = {}) {
   };
 }
 
+function runAsync(cwd, args, options = {}) {
+  const withEvidence =
+    options.includeEvidence === false ||
+    !finalizedEvidencePath ||
+    args.includes("--evidence")
+      ? args
+      : [...args, "--evidence", finalizedEvidencePath];
+  return new Promise((resolve) => {
+    const child = spawn("bash", [script, ...withEvidence], {
+      cwd,
+      env: {
+        ...process.env,
+        ...(options.env ?? {}),
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (cause) => {
+      resolve({ status: 1, text: `${stdout}${stderr}${cause.message}` });
+    });
+    child.on("close", (status) => {
+      resolve({ status, text: `${stdout}${stderr}` });
+    });
+  });
+}
+
 function git(cwd, ...args) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
   if (result.status !== 0) {
@@ -107,6 +139,24 @@ function retainedBytes(path) {
 
 const repo = mkdtempSync(join(tmpdir(), "d2b-stage-diffs-"));
 try {
+  const stageSource = readFileSync(script, "utf8");
+  const reservationIndex = stageSource.indexOf(
+    'flock --exclusive "$panel_root_reservation_fd"',
+  );
+  const firstQuotaIndex = stageSource.indexOf(
+    "if ! enforce_panel_root_quota",
+  );
+  const completionIndex = stageSource.indexOf(
+    "writeBoundCompletionCreateOrCompare",
+  );
+  check(
+    "one root reservation spans quota accounting and completion publication",
+    reservationIndex !== -1 &&
+      firstQuotaIndex > reservationIndex &&
+      completionIndex > firstQuotaIndex &&
+      !stageSource.includes("removeDirectoryIfIdentityNoFollow"),
+  );
+
   git(repo, "init", "--quiet");
   git(repo, "config", "user.name", "d2b test");
   git(repo, "config", "user.email", "d2b-test@example.invalid");
@@ -240,10 +290,16 @@ try {
     discoveryRequestPath,
   ]);
   check(
-    "discovery staging rejects a cross-candidate request and removes only its owned packet",
+    "discovery staging rejects a cross-candidate request and preserves its owned packet",
     staleDiscoveryRequest.status === 2 &&
       /strict lifecycle validation/.test(staleDiscoveryRequest.text) &&
-      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")),
+      /preserved the incomplete staging directory/.test(
+        staleDiscoveryRequest.text,
+      ) &&
+      existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")) &&
+      !existsSync(
+        join(repo, ".scratch", "panel", "spec001w1-r1", ".complete"),
+      ),
     staleDiscoveryRequest.text,
   );
   rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
@@ -372,6 +428,64 @@ try {
     incompleteQuota.text,
   );
   rmSync(incompletePacket, { recursive: true });
+
+  const concurrentArgs = (round) => [
+    base,
+    base,
+    round,
+    "--lifecycle",
+    "spec001w1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ];
+  const quotaProbeRound = "quota000-r1";
+  const quotaProbe = run(repo, concurrentArgs(quotaProbeRound));
+  const quotaProbeDirectory = join(panelRoot, quotaProbeRound);
+  check(
+    "concurrent quota fixture probe stages successfully",
+    quotaProbe.status === 0,
+    quotaProbe.text,
+  );
+  const quotaProbeBytes = retainedBytes(quotaProbeDirectory);
+  const completionBytes = lstatSync(
+    join(quotaProbeDirectory, ".complete"),
+  ).size;
+  const oneCompletionQuota =
+    2 * (quotaProbeBytes - completionBytes) + completionBytes;
+  rmSync(quotaProbeDirectory, { recursive: true });
+
+  const concurrentRounds = ["quota001-r1", "quota002-r1"];
+  const concurrentResults = await Promise.all(
+    concurrentRounds.map((round) =>
+      runAsync(repo, concurrentArgs(round), {
+        env: {
+          D2B_PANEL_LIFECYCLE_MAX_BYTES: String(oneCompletionQuota),
+        },
+      })),
+  );
+  const concurrentDirectories = concurrentRounds.map((round) =>
+    join(panelRoot, round));
+  const completedConcurrent = concurrentDirectories.filter((directory) =>
+    existsSync(join(directory, ".complete")));
+  check(
+    "concurrent staging serializes quota accounting through completion publication",
+    concurrentResults.filter((result) => result.status === 0).length === 1 &&
+      concurrentResults.filter((result) => result.status !== 0).length === 1 &&
+      completedConcurrent.length === 1 &&
+      retainedBytes(panelRoot) <= oneCompletionQuota &&
+      concurrentResults.some((result) =>
+        /root-wide exact-packet quota/.test(
+          result.text,
+        )),
+    concurrentResults.map((result) => result.text).join("\n---\n"),
+  );
+  for (const directory of concurrentDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 
   const first = run(repo, [
     base,

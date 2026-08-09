@@ -296,24 +296,13 @@ if [ -e "$out" ]; then
 fi
 
 round_directory_owned=false
-round_directory_dev=""
-round_directory_ino=""
 stage_exit() {
   local status="$?"
   if [ "$status" -ne 0 ] &&
      [ "$round_directory_owned" = true ] &&
      [ ! -f "$completion_marker" ]; then
-    if ! node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [directory, dev, ino, helperPath] = process.argv.slice(1);
-const { removeDirectoryIfIdentityNoFollow } =
-  await import(pathToFileURL(helperPath).href);
-removeDirectoryIfIdentityNoFollow(directory, { dev, ino });
-' "$out" "$round_directory_dev" "$round_directory_ino" "$lifecycle_helper"
-    then
-      echo "refused to clean an incomplete staging directory whose pinned identity or contents changed" >&2
-      partial_cleanup_hint
-    fi
+    echo "preserved the incomplete staging directory; automatic pathname cleanup is refused" >&2
+    partial_cleanup_hint
   fi
   exit "$status"
 }
@@ -771,14 +760,13 @@ ensureDirectoryNoFollow(process.argv[1]);
     reuse_existing=true
     return
   fi
-  if ! round_identity="$(node --input-type=module -e '
+  if ! node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const { ensureDirectoryNoFollow } =
   await import(pathToFileURL(process.argv[2]).href);
-const result = ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
-process.stdout.write(`${result.identity.dev}\t${result.identity.ino}`);
+ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
 ' "$out" "$lifecycle_helper"
-  )"; then
+  then
     if [ -f "$completion_marker" ]; then
       reuse_existing=true
       return
@@ -786,7 +774,6 @@ process.stdout.write(`${result.identity.dev}\t${result.identity.ino}`);
     partial_cleanup_hint
     exit 2
   fi
-  IFS=$'\t' read -r round_directory_dev round_directory_ino <<<"$round_identity"
   round_directory_owned=true
 }
 
@@ -796,6 +783,31 @@ const { ensureDirectoryNoFollow } =
   await import(pathToFileURL(process.argv[2]).href);
 ensureDirectoryNoFollow(process.argv[1]);
 ' "$panel_root" "$lifecycle_helper"
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock is required for serialized panel packet root reservation" >&2
+  exit 2
+fi
+# Linux flock locks the open directory description, so one reservation covers
+# every quota calculation, temporary lifetime, and publication in this run.
+if ! exec {panel_root_reservation_fd}<"$panel_root"; then
+  echo "could not open the panel packet root for reservation" >&2
+  exit 2
+fi
+if ! flock --exclusive "$panel_root_reservation_fd"; then
+  echo "could not acquire the panel packet root reservation" >&2
+  exit 2
+fi
+if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [panelRoot, descriptorText, helperPath] = process.argv.slice(1);
+const { verifyDirectoryReservationNoFollow } =
+  await import(pathToFileURL(helperPath).href);
+verifyDirectoryReservationNoFollow(panelRoot, Number(descriptorText));
+' "$panel_root" "$panel_root_reservation_fd" "$lifecycle_helper"
+then
+  echo "panel packet root reservation identity verification failed" >&2
+  exit 2
+fi
 if ! enforce_panel_root_quota >/dev/null; then
   echo "panel packet root quota refused staging before round materialization" >&2
   exit 2

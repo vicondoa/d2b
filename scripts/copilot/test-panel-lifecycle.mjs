@@ -1759,6 +1759,22 @@ process.stdout.write("attacker-controlled timing\\n");
       readFileSync(join(cleanupMoved, "original.txt"), "utf8") ===
       "original\n",
   );
+  const cleanupStable = join(cleanupRoot, "stable");
+  mkdirSync(cleanupStable);
+  writeFileSync(join(cleanupStable, "retained.txt"), "retained\n");
+  const cleanupStableIdentity = lstatSync(cleanupStable, { bigint: true });
+  rejects(
+    "matching-identity cleanup preserves state instead of unlinking replaceable names",
+    () => removeDirectoryIfIdentityNoFollow(cleanupStable, {
+      dev: cleanupStableIdentity.dev.toString(),
+      ino: cleanupStableIdentity.ino.toString(),
+    }),
+    /automatic pathname cleanup is refused/,
+  );
+  check(
+    "refused matching-identity cleanup retains every pathname",
+    readFileSync(join(cleanupStable, "retained.txt"), "utf8") === "retained\n",
+  );
 
   console.log("panel lifecycle: responses and strict acceptance");
   const responseInput = makeLedger();
@@ -2405,11 +2421,13 @@ process.stdout.write("attacker-controlled timing\\n");
   const faultSiblings = readdirSync(dirname(faultDirectory))
     .filter((name) => name.startsWith(`.${basename(faultDirectory)}.stage-`));
   check(
-    "an unavailable atomic primitive fails clearly and cleans its staging state",
+    "an unavailable atomic primitive fails clearly and preserves staging state",
     fault.status === 1 &&
       !existsSync(faultDirectory) &&
       !existsSync(`${faultDirectory}.claim`) &&
-      faultSiblings.length === 0 &&
+      faultSiblings.length === 1 &&
+      readFileSync(join(root, faultSiblings[0], "seat.json"), "utf8") ===
+        "fault\n" &&
       /atomic no-replace directory publication is unavailable.*ENOENT/.test(
         fault.stderr,
       ),
@@ -2426,11 +2444,15 @@ process.stdout.write("attacker-controlled timing\\n");
       .filter((entry) =>
         entry.startsWith(`.${basename(injectedDirectory)}.stage-`));
     check(
-      `renameat2 ${name} fails closed without publishing or leaking staging`,
+      `renameat2 ${name} fails closed and preserves unpublished staging`,
       injected.status === 1 &&
         !existsSync(injectedDirectory) &&
         !existsSync(`${injectedDirectory}.claim`) &&
-        injectedSiblings.length === 0 &&
+        injectedSiblings.length === 1 &&
+        readFileSync(
+          join(root, injectedSiblings[0], "seat.json"),
+          "utf8",
+        ) === "fault\n" &&
         new RegExp(`unavailable.*errno ${errno}`).test(injected.stderr),
       injected.stderr,
     );
@@ -2473,20 +2495,14 @@ process.stdout.write("attacker-controlled timing\\n");
   );
   const replacedFileSiblings = readdirSync(root)
     .filter((name) => name.startsWith(".replaced-file-temporary.json."));
-  const replacedFileOriginal = replacedFileSiblings.find((name) =>
-    name.endsWith("-original"));
-  const replacedFileReplacement = replacedFileSiblings.find((name) =>
-    !name.endsWith("-original"));
   check(
-    "file temporary cleanup refuses both sides of a replaced identity",
+    "file publication exposes no temporary pathname for replacement or cleanup",
     replacedFileResult.status === 1 &&
-      replacedFileOriginal !== undefined &&
-      replacedFileReplacement !== undefined &&
-      JSON.parse(
-        readFileSync(join(root, replacedFileOriginal), "utf8"),
-      ).original === true &&
-      readFileSync(join(root, replacedFileReplacement), "utf8") ===
-        "replacement\n",
+      replacedFileSiblings.length === 0 &&
+      !existsSync(replacedFileTemporary) &&
+      /identity-pinned unnamed file publication failed/.test(
+        replacedFileResult.stderr,
+      ),
     replacedFileResult.stderr,
   );
   const staleDirectory = join(root, "stale-family");
