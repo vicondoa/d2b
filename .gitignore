@@ -25,6 +25,9 @@ result
 result-*
 .direnv/
 
+# Bazel workspace output links
+/bazel-*
+
 # Editor
 *.swp
 *.swo
