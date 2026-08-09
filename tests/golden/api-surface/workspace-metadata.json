@@ -36,15 +36,15 @@
       "crate_name": "d2b_bazel_exec",
       "private_census": {
         "external_crates": 42,
-        "index_items": 1740,
-        "path_items": 3976
+        "index_items": 1748,
+        "path_items": 3983
       },
       "private_hidden_items": 44,
       "private_json_file": "d2b_bazel_exec.json",
       "public_census": {
         "external_crates": 42,
         "index_items": 931,
-        "path_items": 3907
+        "path_items": 3906
       },
       "public_json_file": "d2b_bazel_exec.json"
     },
@@ -52,15 +52,15 @@
       "crate_name": "d2b_bazel_support",
       "private_census": {
         "external_crates": 35,
-        "index_items": 1791,
-        "path_items": 3580
+        "index_items": 1798,
+        "path_items": 3588
       },
       "private_hidden_items": 35,
       "private_json_file": "d2b_bazel_support.json",
       "public_census": {
         "external_crates": 35,
         "index_items": 862,
-        "path_items": 3518
+        "path_items": 3519
       },
       "public_json_file": "d2b_bazel_support.json"
     },
