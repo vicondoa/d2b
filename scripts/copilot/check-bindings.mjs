@@ -1372,7 +1372,7 @@ const observedBindingResidualDocs = [
 ];
 for (const [label, path] of observedBindingResidualDocs) {
   if (!existsSync(path)) continue;
-  const source = readFileSync(path, "utf8").toLowerCase();
+  const source = readFileSync(path, "utf8").toLowerCase().replace(/\s+/g, " ");
   for (const phrase of [
     "does not prove actual execution",
     "catch a lying declaration",

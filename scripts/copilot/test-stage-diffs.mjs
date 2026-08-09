@@ -390,7 +390,7 @@ try {
     writeJson(markerPath, marker);
     chmodSync(markerPath, 0o444);
   };
-  const copyCompletedDiscoveryPacket = (name, relocateSelection = false) => {
+  const copyCompletedDiscoveryPacket = (name, relocateSelection = true) => {
     const packet = join(repo, ".scratch", "panel", name);
     cpSync(firstDir, packet, { recursive: true });
     writeFileSync(join(packet, ".complete"), savedFirstCompletionMarker);
