@@ -302,8 +302,13 @@ try {
       firstCompletion.artifact_bytes["evidence.md"] === evidenceDescriptor.size_bytes &&
       firstCompletion.artifact_sha256["selection.json"] ===
         digest(readFileSync(join(firstDir, "selection.json"))) &&
-      !Object.keys(firstCompletion.artifact_sha256).some((path) =>
-        path.startsWith("agent-definitions/"),
+      firstRoster.every((seat) =>
+        firstCompletion.artifact_sha256[
+          `agent-definitions/panel-${seat}.agent.md`
+        ] === digest(readFileSync(join(agents, `panel-${seat}.agent.md`))) &&
+        firstCompletion.artifact_bytes[
+          `agent-definitions/panel-${seat}.agent.md`
+        ] === readFileSync(join(agents, `panel-${seat}.agent.md`)).length,
       ),
   );
   check(
@@ -329,8 +334,48 @@ try {
       firstRequest.includes("`verified_issue_statuses` or `late_findings`"),
   );
   check(
-    "dispatch prompt points at the current panel definition",
-    firstDispatch.includes(join(repo, ".github", "agents", "panel-<your-seat>.agent.md")),
+    "dispatch prompt points at the bound panel definition snapshot",
+    firstDispatch.includes(
+      join(
+        firstDir,
+        "agent-definitions",
+        "panel-<your-seat>.agent.md",
+      ),
+    ) &&
+      firstRequest.includes(
+        join(
+          firstDir,
+          "agent-definitions",
+          "panel-<your-seat>.agent.md",
+        ),
+      ) &&
+      firstRoster.every((seat) =>
+        readFileSync(
+          join(firstDir, "agent-definitions", `panel-${seat}.agent.md`),
+          "utf8",
+        ) === readFileSync(join(agents, `panel-${seat}.agent.md`), "utf8"),
+      ),
+  );
+
+  const reusedSecondDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      firstTip,
+      "spec001w1-r2",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "a completed discovery packet requires verification for the next round",
+    reusedSecondDiscovery.status === 2 &&
+      /requires a verification selection|must not run a second discovery/.test(
+        reusedSecondDiscovery.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    reusedSecondDiscovery.text,
   );
 
   const savedDiscoveryRequest = readFileSync(
@@ -514,6 +559,28 @@ try {
   console.log("stage-diffs: later review");
   const predecessorMarker = join(firstDir, ".complete");
   const predecessorBytes = readFileSync(predecessorMarker);
+  const restorePredecessorMarker = () => {
+    writeFileSync(predecessorMarker, predecessorBytes);
+    chmodSync(predecessorMarker, 0o444);
+  };
+  const verificationStage = (previousTip = firstTip) =>
+    run(repo, [
+      base,
+      previousTip,
+      "spec001w1-r2",
+      "--selection",
+      currentSelectionPath,
+      "--candidate",
+      currentCandidatePath,
+      "--ledger",
+      stagedLedger,
+      "--responses",
+      stagedResponses,
+      "--self-verification",
+      stagedSelfVerification,
+      "--verification-dir",
+      verificationSourceDir,
+    ]);
   rmSync(predecessorMarker);
   const missingPredecessor = run(repo, [
     base,
@@ -538,7 +605,81 @@ try {
       /missing canonical schema-v2 predecessor packet/.test(missingPredecessor.text),
     missingPredecessor.text,
   );
-  writeFileSync(predecessorMarker, predecessorBytes);
+  restorePredecessorMarker();
+
+  const legacyMarker = readJson(predecessorMarker);
+  legacyMarker.schema_version = 1;
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, legacyMarker);
+  const legacyPredecessor = verificationStage();
+  check(
+    "later staging rejects a legacy completion marker",
+    legacyPredecessor.status === 2 &&
+      /not a canonical schema-v2 completion packet/.test(
+        legacyPredecessor.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    legacyPredecessor.text,
+  );
+  restorePredecessorMarker();
+
+  chmodSync(predecessorMarker, 0o644);
+  writeFileSync(predecessorMarker, "{not-json\n");
+  const corruptPredecessor = verificationStage();
+  check(
+    "later staging rejects a corrupt completion marker",
+    corruptPredecessor.status === 2 &&
+      /invalid completion marker/.test(corruptPredecessor.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    corruptPredecessor.text,
+  );
+  restorePredecessorMarker();
+
+  const omittedArtifactMarker = readJson(predecessorMarker);
+  delete omittedArtifactMarker.artifact_sha256["evidence.md"];
+  delete omittedArtifactMarker.artifact_bytes["evidence.md"];
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, omittedArtifactMarker);
+  const omittedArtifact = verificationStage();
+  check(
+    "later staging rejects an omitted completion artifact entry",
+    omittedArtifact.status === 2 &&
+      /completion artifact set disagrees.*missing/.test(omittedArtifact.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    omittedArtifact.text,
+  );
+  restorePredecessorMarker();
+
+  const extraArtifactMarker = readJson(predecessorMarker);
+  extraArtifactMarker.artifact_sha256["extra.txt"] = "0".repeat(64);
+  extraArtifactMarker.artifact_bytes["extra.txt"] = 0;
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, extraArtifactMarker);
+  const extraArtifact = verificationStage();
+  check(
+    "later staging rejects an extra completion artifact entry",
+    extraArtifact.status === 2 &&
+      /completion artifact set disagrees.*extra/.test(extraArtifact.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    extraArtifact.text,
+  );
+  restorePredecessorMarker();
+
+  const mutatedMarker = readJson(predecessorMarker);
+  mutatedMarker.artifact_sha256["evidence.md"] = "0".repeat(64);
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, mutatedMarker);
+  const mutatedPredecessor = verificationStage();
+  check(
+    "later staging rejects a mutated completion marker binding",
+    mutatedPredecessor.status === 2 &&
+      /post-completion mutation of evidence\.md is refused/.test(
+        mutatedPredecessor.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    mutatedPredecessor.text,
+  );
+  restorePredecessorMarker();
 
   const wrongPreviousTip = run(repo, [
     base,
@@ -617,6 +758,25 @@ try {
       /--verification-dir is required/.test(missingVerificationDirectory.text),
     missingVerificationDirectory.text,
   );
+
+  const removedVerificationSeat = verificationRoster[0];
+  const removedVerificationRequest = join(
+    verificationSourceDir,
+    `${removedVerificationSeat}.json`,
+  );
+  const removedVerificationBytes = readFileSync(removedVerificationRequest);
+  rmSync(removedVerificationRequest);
+  const missingOneVerificationRequest = verificationStage();
+  check(
+    "verification staging rejects exactly one missing selected seat request",
+    missingOneVerificationRequest.status === 2 &&
+      /verification request directory must contain exactly one readable JSON request per selected seat/.test(
+        missingOneVerificationRequest.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    missingOneVerificationRequest.text,
+  );
+  writeFileSync(removedVerificationRequest, removedVerificationBytes);
 
   const badFullSelection = readJson(currentSelectionPath);
   badFullSelection.classification_inputs.changed_paths = ["Makefile"];

@@ -170,6 +170,7 @@ staged_responses_path="$out/responses.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
+staged_agent_definitions_dir="$out/agent-definitions"
 display_out="$out"
 display_completion_marker="$completion_marker"
 display_staged_selection_path="$staged_selection_path"
@@ -180,6 +181,7 @@ display_staged_responses_path="$staged_responses_path"
 display_staged_self_verification_path="$staged_self_verification_path"
 display_staged_approval_path="$staged_approval_path"
 display_staged_verification_dir="$staged_verification_dir"
+display_staged_agent_definitions_dir="$staged_agent_definitions_dir"
 mkdir -p "$display_panel_root"
 panel_root="$display_panel_root"
 out="$panel_root/$round"
@@ -192,14 +194,59 @@ staged_responses_path="$out/responses.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
+staged_agent_definitions_dir="$out/agent-definitions"
+
+canonical_artifact_names() {
+  local artifact_phase="$1"
+  local artifact_roster="$2"
+  printf '%s\n' \
+    "address.json" \
+    "commits.txt" \
+    "current-candidate.json" \
+    "delta.diff" \
+    "dispatch-prompt.txt" \
+    "evidence.md" \
+    "full.diff" \
+    "review-request.md" \
+    "selection.json"
+  if [ "$artifact_phase" = "discovery" ]; then
+    printf '%s\n' "discovery-request.json"
+  elif [ "$artifact_phase" = "verification" ]; then
+    printf '%s\n' \
+      "discovery-ledger.json" \
+      "responses.json" \
+      "self-verification.json"
+  else
+    echo "unknown panel phase for canonical artifact names: $artifact_phase" >&2
+    return 2
+  fi
+  local -a artifact_seats=()
+  local seat
+  IFS=',' read -r -a artifact_seats <<<"$artifact_roster"
+  for seat in "${artifact_seats[@]}"; do
+    [ -n "$seat" ] || {
+      echo "empty panel seat in canonical artifact roster" >&2
+      return 2
+    }
+    printf '%s\n' "agent-definitions/panel-$seat.agent.md"
+    printf '%s\n' "reviewer-notes/$seat.md"
+    if [ "$artifact_phase" = "verification" ]; then
+      printf '%s\n' "verification/$seat.json"
+    fi
+  done
+}
 
 validate_bound_completion() {
   local marker="$1"
-  node --input-type=module - "$marker" <<'NODE'
+  local expected_phase="$2"
+  shift 2
+  node --input-type=module - "$marker" "$expected_phase" "$@" <<'NODE'
 import crypto from "node:crypto";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 const markerPath = process.argv[2];
+const expectedPhase = process.argv[3];
+const expectedNames = process.argv.slice(4).sort();
 let marker;
 try {
   marker = JSON.parse(readFileSync(markerPath, "utf8"));
@@ -246,8 +293,22 @@ if (
   console.error(`${markerPath}: completion artifact maps disagree`);
   process.exit(1);
 }
+const actualNames = Object.keys(digests).sort();
+if (
+  marker.phase !== expectedPhase ||
+  expectedNames.length !== actualNames.length ||
+  expectedNames.some((name, index) => name !== actualNames[index])
+) {
+  const missing = expectedNames.filter((name) => !actualNames.includes(name));
+  const extra = actualNames.filter((name) => !expectedNames.includes(name));
+  console.error(
+    `${markerPath}: completion artifact set disagrees with phase and selected roster; ` +
+    `missing [${missing.join(", ")}], extra [${extra.join(", ")}]`,
+  );
+  process.exit(1);
+}
 const root = path.dirname(markerPath);
-for (const relative of Object.keys(digests).sort()) {
+for (const relative of actualNames) {
   if (
     relative === "" ||
     path.isAbsolute(relative) ||
@@ -288,17 +349,6 @@ process.stdout.write(
 );
 NODE
 }
-
-if [ -e "$out" ]; then
-  if [ ! -f "$completion_marker" ]; then
-    echo "round $round already has an incomplete packet; remove that exact directory before retrying" >&2
-    exit 2
-  fi
-  if ! validate_bound_completion "$completion_marker"; then
-    echo "complete review $round failed canonical completion validation" >&2
-    exit 2
-  fi
-fi
 
 read_address() {
   node --input-type=module - "$1" <<'NODE'
@@ -356,60 +406,7 @@ else
   display_previous_dir="$display_panel_root/$previous_round"
   previous_dir="$display_previous_dir"
   op_previous_dir="$previous_dir"
-  if [ ! -f "$op_previous_dir/.complete" ]; then
-    echo "missing canonical schema-v2 predecessor packet: $display_previous_dir/.complete" >&2
-    echo "later-round staging requires the predecessor completion marker before reading its artifacts" >&2
-    exit 2
-  fi
-  if ! validate_bound_completion "$op_previous_dir/.complete"; then
-    echo "previous review is not a canonical schema-v2 completion packet" >&2
-    exit 2
-  fi
-  previous_address="$op_previous_dir/address.json"
-  if [ ! -f "$previous_address" ]; then
-    echo "missing previous review address: $display_previous_dir/address.json" >&2
-    echo "stage reviews sequentially so the incremental range is derived from recorded evidence" >&2
-    exit 2
-  fi
-  if ! previous_fields="$(read_address "$previous_address")"; then
-    exit 2
-  fi
-  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip _recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
-  if [ "$recorded_round" != "$previous_round" ]; then
-    echo "$display_previous_dir/address.json records round $recorded_round, expected $previous_round" >&2
-    exit 2
-  fi
-  if [ "$recorded_lifecycle" != "$lifecycle" ]; then
-    echo "$display_previous_dir/address.json records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
-    exit 2
-  fi
-  if [ "$prev_sha" != "$recorded_tip" ]; then
-    echo "incremental range does not start at the previous recorded tip" >&2
-    echo "  previous round  $previous_round" >&2
-    echo "  recorded tip    $recorded_tip" >&2
-    echo "  supplied tip    $prev_sha" >&2
-    exit 2
-  fi
-  if [ -z "$recorded_selection" ] ||
-     [ "$recorded_selection" != "$display_previous_dir/selection.json" ] ||
-     [ ! -f "$op_previous_dir/selection.json" ]; then
-    echo "previous review does not record a readable lifecycle selection" >&2
-    exit 2
-  fi
   previous_selection_path="$op_previous_dir/selection.json"
-  IFS=$'\t' read -r actual_recorded_selection_sha _recorded_selection_bytes \
-    <<<"$(secure_digest_size "$previous_selection_path")"
-  if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
-    echo "previous review selection bytes disagree with address.json" >&2
-    exit 2
-  fi
-  previous_roster="$(
-    node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { readSelection } = await import(pathToFileURL(process.argv[2]).href);
-process.stdout.write(readSelection(process.argv[1]).roster.join(","));
-' "$previous_selection_path" "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
-  )"
 fi
 
 if [ ! -f "$selection_path" ]; then
@@ -417,15 +414,13 @@ if [ ! -f "$selection_path" ]; then
   exit 2
 fi
 
-selection_meta="$(
+selection_identity="$(
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, fullRange, deltaRange, helperPath, lifecycle] = process.argv.slice(1);
+const [selectionPath, helperPath, lifecycle] = process.argv.slice(1);
 const {
-  changedPathsFromGitRange,
   readSelection,
   selectionDigest,
-  validateSelectionAgainstTable,
 } = await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
 if (selection.lifecycle_id !== lifecycle) {
@@ -433,46 +428,18 @@ if (selection.lifecycle_id !== lifecycle) {
     `selection lifecycle ${selection.lifecycle_id} disagrees with staging lifecycle ${lifecycle}`,
   );
 }
-validateSelectionAgainstTable(selection);
-const actualFull = changedPathsFromGitRange(fullRange);
-if (selection.phase === "verification") {
-  const actualDelta = changedPathsFromGitRange(deltaRange);
-  const declaredFull = selection.classification_inputs.full_candidate.changed_paths;
-  const declaredDelta = selection.classification_inputs.fix_delta.changed_paths;
-  if (actualFull.join("\u0000") !== declaredFull.join("\u0000")) {
-    throw new Error(
-      `selection full-candidate paths do not match git range ${fullRange}; ` +
-      `declared [${declaredFull.join(", ")}], actual [${actualFull.join(", ")}]`,
-    );
-  }
-  if (actualDelta.join("\u0000") !== declaredDelta.join("\u0000")) {
-    throw new Error(
-      `selection fix-delta paths do not match git range ${deltaRange}; ` +
-      `declared [${declaredDelta.join(", ")}], actual [${actualDelta.join(", ")}]`,
-    );
-  }
-} else if (
-  actualFull.join("\u0000") !==
-  selection.classification_inputs.changed_paths.join("\u0000")
-) {
-  throw new Error(
-    `selection changed paths do not match git range ${fullRange}; ` +
-    `declared [${selection.classification_inputs.changed_paths.join(", ")}], ` +
-    `actual [${actualFull.join(", ")}]`,
-  );
-}
 process.stdout.write([
   selection.phase,
   selectionDigest(selectionPath),
   selection.roster.join(","),
 ].join("\t"));
-' "$selection_path" "$base_sha..$tip" "$prev_sha..$tip" \
+' "$selection_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" "$lifecycle"
 )" || {
-  echo "selection validation or git-range derivation failed" >&2
+  echo "selection validation failed" >&2
   exit 2
 }
-IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_meta"
+IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_identity"
 if [ -z "$candidate_path" ]; then
   echo "--candidate is required so current-candidate.json can be materialized from exact bytes" >&2
   exit 2
@@ -503,6 +470,137 @@ if [ "$phase" = "verification" ]; then
     exit 2
   fi
 fi
+
+if [ "$round_number" -gt 1 ] && [ "$phase" != "verification" ]; then
+  echo "round $round requires a verification selection after the completed discovery packet" >&2
+  echo "subsequent staging must not run a second discovery" >&2
+  exit 2
+fi
+
+if [ "$round_number" -gt 1 ]; then
+  if [ ! -f "$op_previous_dir/.complete" ]; then
+    echo "missing canonical schema-v2 predecessor packet: $display_previous_dir/.complete" >&2
+    echo "later-round staging requires the predecessor completion marker before reading its artifacts" >&2
+    exit 2
+  fi
+  previous_selection_path="$op_previous_dir/selection.json"
+  if [ ! -f "$previous_selection_path" ]; then
+    echo "previous review does not record a readable lifecycle selection" >&2
+    exit 2
+  fi
+  previous_selection_meta="$(
+    node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [selectionPath, lifecycle, helperPath] = process.argv.slice(1);
+const { readSelection } = await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+if (selection.lifecycle_id !== lifecycle) {
+  throw new Error(
+    `previous selection lifecycle ${selection.lifecycle_id} disagrees with staging lifecycle ${lifecycle}`,
+  );
+}
+process.stdout.write([selection.phase, selection.roster.join(",")].join("\t"));
+' "$previous_selection_path" "$lifecycle" \
+      "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  )" || {
+    echo "previous review does not record a readable lifecycle selection" >&2
+    exit 2
+  }
+  IFS=$'\t' read -r previous_phase previous_roster <<<"$previous_selection_meta"
+  previous_canonical_artifacts=()
+  while IFS= read -r artifact_name; do
+    previous_canonical_artifacts+=("$artifact_name")
+  done < <(canonical_artifact_names "$previous_phase" "$previous_roster")
+  if ! validate_bound_completion \
+    "$op_previous_dir/.complete" "$previous_phase" \
+    "${previous_canonical_artifacts[@]}"; then
+    echo "previous review is not a canonical schema-v2 completion packet" >&2
+    exit 2
+  fi
+  previous_address="$op_previous_dir/address.json"
+  if [ ! -f "$previous_address" ]; then
+    echo "missing previous review address: $display_previous_dir/address.json" >&2
+    echo "stage reviews sequentially so the incremental range is derived from recorded evidence" >&2
+    exit 2
+  fi
+  if ! previous_fields="$(read_address "$previous_address")"; then
+    exit 2
+  fi
+  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
+  if [ "$recorded_round" != "$previous_round" ]; then
+    echo "$display_previous_dir/address.json records round $recorded_round, expected $previous_round" >&2
+    exit 2
+  fi
+  if [ "$recorded_lifecycle" != "$lifecycle" ]; then
+    echo "$display_previous_dir/address.json records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
+    exit 2
+  fi
+  if [ "$recorded_phase" != "$previous_phase" ]; then
+    echo "$display_previous_dir/address.json records phase $recorded_phase, expected $previous_phase" >&2
+    exit 2
+  fi
+  if [ "$prev_sha" != "$recorded_tip" ]; then
+    echo "incremental range does not start at the previous recorded tip" >&2
+    echo "  previous round  $previous_round" >&2
+    echo "  recorded tip    $recorded_tip" >&2
+    echo "  supplied tip    $prev_sha" >&2
+    exit 2
+  fi
+  if [ -z "$recorded_selection" ] ||
+     [ "$recorded_selection" != "$display_previous_dir/selection.json" ]; then
+    echo "previous review does not record a readable lifecycle selection" >&2
+    exit 2
+  fi
+  IFS=$'\t' read -r actual_recorded_selection_sha _recorded_selection_bytes \
+    <<<"$(secure_digest_size "$previous_selection_path")"
+  if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
+    echo "previous review selection bytes disagree with address.json" >&2
+    exit 2
+  fi
+fi
+
+if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [selectionPath, fullRange, deltaRange, helperPath] = process.argv.slice(1);
+const {
+  changedPathsFromGitRange,
+  readSelection,
+} = await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+const actualFull = changedPathsFromGitRange(fullRange);
+if (selection.phase === "verification") {
+  const actualDelta = changedPathsFromGitRange(deltaRange);
+  const declaredFull = selection.classification_inputs.full_candidate.changed_paths;
+  const declaredDelta = selection.classification_inputs.fix_delta.changed_paths;
+  if (actualFull.join("\u0000") !== declaredFull.join("\u0000")) {
+    throw new Error(
+      `selection full-candidate paths do not match git range ${fullRange}; ` +
+      `declared [${declaredFull.join(", ")}], actual [${actualFull.join(", ")}]`,
+    );
+  }
+  if (actualDelta.join("\u0000") !== declaredDelta.join("\u0000")) {
+    throw new Error(
+      `selection fix-delta paths do not match git range ${deltaRange}; ` +
+      `declared [${declaredDelta.join(", ")}], actual [${actualDelta.join(", ")}]`,
+    );
+  }
+} else if (
+  actualFull.join("\u0000") !==
+  selection.classification_inputs.changed_paths.join("\u0000")
+) {
+  throw new Error(
+    `selection changed paths do not match git range ${fullRange}; ` +
+    `declared [${selection.classification_inputs.changed_paths.join(", ")}], ` +
+    `actual [${actualFull.join(", ")}]`,
+  );
+}
+' "$selection_path" "$base_sha..$tip" "$prev_sha..$tip" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+then
+  echo "selection validation or git-range derivation failed" >&2
+  exit 2
+fi
+
 IFS=',' read -r -a panel_seats <<<"$selected_roster"
 if [ "${#panel_seats[@]}" -eq 0 ]; then
   echo "no panel seat agents found under $root/.github/agents" >&2
@@ -514,6 +612,23 @@ for seat in "${panel_seats[@]}"; do
     exit 2
   fi
 done
+
+canonical_artifacts=()
+while IFS= read -r artifact_name; do
+  canonical_artifacts+=("$artifact_name")
+done < <(canonical_artifact_names "$phase" "$selected_roster")
+
+if [ -e "$out" ]; then
+  if [ ! -f "$completion_marker" ]; then
+    echo "round $round already has an incomplete packet; remove that exact directory before retrying" >&2
+    exit 2
+  fi
+  if ! validate_bound_completion \
+    "$completion_marker" "$phase" "${canonical_artifacts[@]}"; then
+    echo "complete review $round failed canonical completion validation" >&2
+    exit 2
+  fi
+fi
 
 if [ ! -f "$evidence_path" ] || [ ! -r "$evidence_path" ] ||
    [ ! -s "$evidence_path" ]; then
@@ -711,6 +826,7 @@ if [ "$reuse_existing" = true ]; then
     "$out/evidence.md" \
     "$out/review-request.md" \
     "$out/dispatch-prompt.txt" \
+    "$staged_agent_definitions_dir" \
     "$out/verdicts"; do
     require_reused_path "$required_path" || exit 2
   done
@@ -726,6 +842,7 @@ if [ "$reuse_existing" = true ]; then
     done
   fi
   for seat in "${panel_seats[@]}"; do
+    require_reused_path "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
   done
 fi
@@ -891,6 +1008,15 @@ materialize_exact "$evidence_path" "$out/evidence.md" \
   "finalized validation evidence"
 IFS=$'\t' read -r evidence_sha evidence_bytes \
   <<<"$(secure_digest_size "$out/evidence.md")"
+
+if [ "$reuse_existing" != true ]; then
+  for seat in "${panel_seats[@]}"; do
+    materialize_exact \
+      "$root/.github/agents/panel-$seat.agent.md" \
+      "$staged_agent_definitions_dir/panel-$seat.agent.md" \
+      "panel agent definition for $seat"
+  done
+fi
 
 if [ -n "$discovery_request_path" ]; then
   if ! node --input-type=module -e '
@@ -1250,7 +1376,7 @@ with \`view\`; do not substitute a prose summary for them.
 - Phase: \`$phase\`
 - Lifecycle selection: \`$display_staged_selection_path\` (sha256 \`$selection_sha256\`)
 - Staged current candidate: \`$display_staged_candidate_path\`
-- Panel agent definition: \`$root/.github/agents/panel-<your-seat>.agent.md\`
+- Bound panel agent definition: \`$display_staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
 - Validation evidence and phase deliverable: \`$display_out/evidence.md\`
   (sha256 \`$evidence_sha\`, bound by the completion marker)
 - Seat-specific notes: \`$display_out/reviewer-notes/<your-seat>.md\`
@@ -1329,40 +1455,13 @@ fi
 cat <<MD
 Use this dispatch prompt only when the stage completion marker exists at $display_completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying.
 
-This is the $phase phase. Read and follow the complete review request at $display_out/review-request.md. Use view to read every artifact it names, including the panel agent definition at $root/.github/agents/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
+This is the $phase phase. Read and follow the complete review request at $display_out/review-request.md. Use view to read every artifact it names, including the bound panel agent definition at $display_staged_agent_definitions_dir/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
 
 Required $phase verdict contract:
 
 $verdict_contract
 MD
 } | publish_stdin_no_replace "$out/dispatch-prompt.txt"
-
-canonical_artifacts=(
-  "address.json"
-  "commits.txt"
-  "current-candidate.json"
-  "delta.diff"
-  "dispatch-prompt.txt"
-  "evidence.md"
-  "full.diff"
-  "review-request.md"
-  "selection.json"
-)
-if [ "$phase" = "discovery" ]; then
-  canonical_artifacts+=("discovery-request.json")
-else
-  canonical_artifacts+=(
-    "discovery-ledger.json"
-    "responses.json"
-    "self-verification.json"
-  )
-fi
-for seat in "${panel_seats[@]}"; do
-  canonical_artifacts+=("reviewer-notes/$seat.md")
-  if [ "$phase" = "verification" ]; then
-    canonical_artifacts+=("verification/$seat.json")
-  fi
-done
 
 node --input-type=module - "$out" \
   "${canonical_artifacts[@]}" <<'NODE'
