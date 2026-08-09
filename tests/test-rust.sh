@@ -1006,7 +1006,7 @@ run_fast_lint_gate() {
         packages/d2b-priv-broker/*|packages/d2b-guest-shell-runner/*)
           continue
           ;;
-        *.rs|*/Cargo.toml|*/build.rs)
+        *.rs|*/Cargo.toml)
           ;;
         *)
           continue
