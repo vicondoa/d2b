@@ -73,6 +73,7 @@ packages/d2b/target/
 packages/d2bd/target/
 packages/target/
 packages/xtask/target/
+packages/xtask/tests/fixtures/rust-companions/target/
 proofs/chunked-stdio-conformance/target/
 proofs/redb-resource-store-spike/target/
 proofs/target/

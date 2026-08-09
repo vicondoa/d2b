@@ -3788,7 +3788,7 @@
       "source": "packages/d2b-bazel-exec/src/execute.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/d2b-bazel-exec/src/execute.rs:570:31:helper"
+        "packages/d2b-bazel-exec/src/execute.rs:572:31:helper"
       ],
       "status": "scanned"
     },
@@ -3824,8 +3824,10 @@
     },
     {
       "source": "packages/d2b-bazel-support/src/startup.rs",
-      "spawnSiteCount": 0,
-      "spawnSiteKeys": [],
+      "spawnSiteCount": 1,
+      "spawnSiteKeys": [
+        "packages/d2b-bazel-support/src/startup.rs:148:29:immutable_supervisor_path()?"
+      ],
       "status": "scanned"
     },
     {
@@ -7707,9 +7709,20 @@
       "source": "packages/d2b-bazel-exec/src/execute.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 570,
+        "endLine": 572,
         "startColumn": 31,
-        "startLine": 570
+        "startLine": 572
+      }
+    },
+    {
+      "programExpression": "immutable_supervisor_path()?",
+      "shellInvocation": false,
+      "source": "packages/d2b-bazel-support/src/startup.rs",
+      "span": {
+        "endColumn": 71,
+        "endLine": 148,
+        "startColumn": 29,
+        "startLine": 148
       }
     },
     {

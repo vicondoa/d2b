@@ -25,7 +25,7 @@
       "manifest": "packages/d2b-bazel-exec/Cargo.toml",
       "package": "d2b-bazel-exec",
       "path": "packages/d2b-bazel-exec/src/execute.rs",
-      "sha256": "781243c856584768f9985c6c3be37a13dbe095b135dcaf00cc24eb4596fcbee6",
+      "sha256": "2b8d5425070d475528ddb1d94edde677c70dd76afd26ec7673671220da0c13ca",
       "targetLabels": [
         "//packages/d2b-bazel-exec:d2b-bazel-exec",
         "//packages/d2b-bazel-exec:execute",
@@ -94,7 +94,7 @@
       "manifest": "packages/d2b-bazel-support/Cargo.toml",
       "package": "d2b-bazel-support",
       "path": "packages/d2b-bazel-support/src/startup.rs",
-      "sha256": "5327fb4f40fabcb311b73eab26018ccff2cfbd5835a92be292ee0296c9fc3d7e",
+      "sha256": "caed1985bbafc4fedb2a7e68fa47dc1fa9f1d408469298681860c6a070f54221",
       "targetLabels": [
         "//packages/d2b-bazel-support:d2b-bazel-support",
         "//packages/d2b-bazel-support:startup"
@@ -8945,7 +8945,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/hermeticity.rs",
-      "sha256": "5e078c4af086fa55bad5c4e65ea5abf4105ca8d050ec1cf8d6e87f23458c8e9b",
+      "sha256": "c7a93c2d60c370a103b707320031b7da1ce17173e060be86127611d0dd749e55",
       "targetLabels": [
         "//packages/xtask:bazel_action_network",
         "//packages/xtask:bazel_foundation",
