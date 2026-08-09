@@ -164,14 +164,17 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   later unrelated Zones still open and close. Removing the `Provider/system-core`
   registration or either required `Zone.status.handlers[]` record in turn degrades only that
   Zone; duplicates, a missing/wrong name, and `provider-lifecycle` substitution are rejected.
-- All acceptance evidence names one exact candidate and uses production owners. T604 starts
-  at the emitted operator Nix declaration/bundle, activates on initial startup and public
-  declaration/removal switches without manual daemon restart, observes the exact
-  Provider/config/real-effect/readiness contract for `Volume/acceptance-state`,
-  `Network/acceptance-net`, and `Device/acceptance-tpm`, then proves the pinned
-  state-preserving Device removal without affecting the ready, identity-stable, unrecreated
-  acceptance Volume/Network or unrelated resources. Network implementation remains owned by
-  Wave 4. Guest runtime-effect acceptance
+- All acceptance evidence names one exact candidate and uses production owners. Wave 5 verifies
+  only that the accepted migration and ownership contract assigns the double-opt-in Network
+  implementation and all four Network/Host cases to Wave 6 tasks T336-T355 under T221; it does
+  not claim that implementation or its results. T604 starts only after the double-opt-in
+  implementation and all four Network/Host cases have merged. It starts at the emitted
+  operator Nix declaration/bundle,
+  activates on initial startup and public declaration/removal switches without manual daemon
+  restart, observes the exact Provider/config/real-effect/readiness contract for
+  `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`, then proves
+  the pinned state-preserving Device removal without affecting the ready, identity-stable,
+  unrecreated acceptance Volume/Network or unrelated resources. Guest runtime-effect acceptance
   remains specifically a Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480
   obligation; Guest emission, status, or refusal cannot
   satisfy this partial US1 production-plane checkpoint. Refusals are

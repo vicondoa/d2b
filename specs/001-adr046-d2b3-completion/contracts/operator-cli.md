@@ -175,788 +175,97 @@ The d2b 3.0 clean cutover imports no persisted Version 1 recovery state.
 
 ## Host-generation handoff recovery
 
-This is a planned T595 target-closure helper contract, not behavior available at the
-committed base. The unprivileged
-`d2b-host-generation-deploy --inspect-authorized-handoff [--json]` command reads the sole
-current-source nonterminal intent through the existing public socket. It accepts no intent
-id, generation selector, path, token, or root invocation.
+This is a planned T595/T599 surface, not behavior available merely because this feature
+contract names it. SC-002 protocol authority belongs solely to accepted Version 2
+`docs/specs/ADR-046-validation-and-delivery.md` and its generated
+`docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}` artifacts. The generated
+JSON is machine authority and the generated Markdown is its review view. FR-056 requires that
+Version 2, regenerated manifests, Gate 0, and the generated rows be valid on an ancestor of
+the implementation base before T589 or any downstream consumer proceeds.
 
-Its exact `HostGenerationHandoffStatusV1` schema and five-line human projection are in
-`data-model.md`. It serializes only from that file's closed validated variants; arbitrary
-state/phase/owner/action/successor cross-products refuse. Active source or target recovery
-projects `wait-for-broker-recovery`; a failed existing broker unit projects
-`restart-existing-broker`. Active and failed `transfer-pending` are distinct variants.
-Active rollback projects `wait-for-broker-rollback`; failed rollback projects
-`restart-existing-broker-for-rollback`. A valid `recovery-irreconcilable` state exists only
-when immutable pre-mutation/outcome audit proves the complete prior
-profile/service/pointer/reference tuple and one contiguous rollback. Any missing, duplicate,
-reordered, or mismatched proof member is `invalid-coordinator`, not a recovery variant. No
-state directs daemon repair or a new unit.
+The CLI consumes these stable generated rows rather than copying their protocol:
 
-Human and JSON output contain no intent, generation, pid, uid, store path, unit path,
-executable identity, or free-form remediation. The apply command and broker recovery return
-the same typed projection after a valid conflict, concurrent transition, or terminal handoff.
-The authenticated current-intent pointer selects active and terminal records without mtime
-or caller input. Inspect exits `0` for every valid active or terminal tuple, `2` for root or
-forbidden input, `3` only for an exactly empty coordinator census, and `4` for repairable
-pointer absence, invalid coordinator, or incomplete rollback proof. Repairable absence has
-its own exact `pointer-repair-required` human/JSON projection and action
-`repair-authorized-handoff`; it is never rendered as `not-found`. Invalid coordinator uses
-`preserve-and-escalate-invalid-coordinator`, not the repair command. `data-model.md` pins the
-exact human and JSON error envelopes. Every state-table row, forbidden transition/input, source/target
-active/failed condition, transfer-pending failure, restart, terminal pointer replacement,
-incomplete rollback proof, and redaction case is independently pinned.
-
-The paired mutation command is exactly
-`d2b-host-generation-deploy --repair-authorized-handoff [--json]`. It is unprivileged,
-selector-free, and traverses the same public socket. T595 owns the CLI and T592 owns the
-typed `RepairHostGenerationCurrentIntentV1` broker operation. Only the accepted-socket
-`Admin` capability is admitted; launcher, workload, Zone, unauthenticated, direct-broker,
-and root callers are denied. Intent or generation selectors, path or token input, an extra
-positional argument, and `--force` each exit `2` with zero mutation and the exact
-`repair-without-selectors` human/JSON refusal from `data-model.md`.
-
-Pointer absence is closed. `clean-absence` is an exact empty census, so inspect and repair
-both return the exact exit-`3` not-found envelope without a write.
-`repairable-absence` has exactly one fully valid authenticated active or terminal intent,
-one contiguous sequence, and one complete immutable matrix with only its current pointer
-missing. Every competing, malformed, unauthenticated, orphaned, unknown, or incomplete
-census is `invalid-coordinator`. Under the broker coordinator lock,
-repair durably appends the distinct `coordinator-pointer-repair/pre-mutation` audit member,
-publishes the pointer from a file-synced unnamed inode directly to the final no-replace
-name, syncs the final parent, and durably appends the matching outcome. A conflicting final
-is preserved and exits `4`. Restart before the link sees absence; restart after it accepts
-only absence or the exact complete final; a pre-only audit resumes, and a complete pair plus
-exact pointer is second-run success with zero write. Dispatch, repair audit, backup, and
-restoration records all use the one `HostGenerationImmutablePublicationV1` restart
-classifier from `data-model.md`; every hierarchy-creation/write/file-sync/link/final-reopen/
-parent/ancestor/final-directory-sync boundary and response-loss replay is tested
-independently per record class.
-
-A missing, mismatched, unauthenticated, or noncontiguous immutable member exits `4` and
-reports only its closed member id and failure class with
-`action: restore-immutable-audit-backup`. The binding
-`HostGenerationImmutableAuditBackupOwner` supplies the signed append-only
-`HostGenerationImmutableAuditRestorationV1`. The named external acquisition procedure is
-`host-generation-immutable-audit-backup-acquisition-v1`; it returns one canonical
-current-user mode-`0600` single-link artifact no larger than 131,072 bytes. Submit it only
-with:
-
-```text
-d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]
-```
-
-The unprivileged T595 client opens the path once no-follow and sends only the bounded
-canonical bytes through the existing public socket. T592 owns the shared
-`RestoreHostGenerationImmutableAuditMemberRequestV1` and the closed nested
-`Completed | Refused | Pending | Degraded` response DTO plus the typed broker op.
-`Refused` distinguishes root from every other unauthorized caller. `Pending` carries one
-closed pending-reason variant with its total publication-failure projection; neither
-`Pending` nor `Degraded` exposes the broker-private restoration attempt id. Authorization,
-request-shape, artifact, conflict, retention, publication-degraded, and
-publication-pending are closed variants; this operation never uses a free-form broker
-message fallback.
-Only the consumed public-socket `Admin` capability is authorized. Launcher, workload, Zone,
-`HostShutdown`, root, nonmember, unauthenticated-local, direct-broker, and remote callers
-are denied before coordinator access; a valid signature is integrity only.
-
-The release-sealed client constructs only the exact valid shared request DTO, so a broker
-`invalid-request` response is local client/broker contract skew or corruption rather than
-operator syntax. All nineteen closed classes are projected distinctly by their literal
-`failure-class`:
-`missing-schema-version`, `wrong-schema-version`, `missing-kind`, `wrong-kind`,
-`unknown-field`, `missing-operation-id`, `operation-id-length`,
-`operation-id-digest-mismatch`, `missing-artifact-bytes`, `empty-artifact-bytes`,
-`over-limit-artifact-bytes`, `path-field`, `selector-field`, `uid-field`, `pid-field`,
-`authority-token-field`, `member-override-field`, `failure-override-field`, and
-`free-form-field`. Each exits `4` with exactly:
-
-```text
-host generation handoff audit restoration request rejected
-failure-class: <INVALID_REQUEST_CLASS>
-action: repair-restoration-client-broker-contract
-```
-
-JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-invalid-request","failureClass":"<INVALID_REQUEST_CLASS>","action":"repair-restoration-client-broker-contract"}`.
-There is one real-binary golden per literal class. This is distinct from local parser
-invalid invocation, which remains exit `2` and action `restore-with-one-artifact`.
-
-Only canonical parsing, digesting, size, and signature verification may occur before the
-coordinator lock. Under the lock, the broker fd-relative reopens and identity-revalidates
-the coordinator and backup, rechecks the exact artifact/backup/state binding, and reserves
-capacity immediately before mutation. The broker first durably appends fixed-field
-restoration pre-mutation audit containing only typed domain-separated digests and closed
-enums. Only after that pre record is durable may it publish broker-private non-observable
-preparatory evidence carrying the required bodies, followed by digest/enum-only effective
-audit provenance and a matching fixed outcome. Private evidence alone changes no
-coordinator, audit view, census, or member. A mismatched, unauthenticated, or noncontiguous
-original remains preserved and is superseded only by that complete authenticated chain.
-No restoration body becomes durable before pre-audit.
-
-A process death after pre-audit but before private evidence loses the request frame. That
-pre-only prefix is a blocked pending state, not caller-free recovery: the broker admits no
-later coordinator mutation and cannot publish evidence until the same unprivileged
-public-socket `Admin` resubmits the byte-identical signed artifact. Resubmission repeats
-authorization and every under-lock binding check, reconstructs the same operation and
-private attempt, and then continues at evidence publication. A different artifact or
-binding conflicts and cannot settle the prefix. Once private evidence is durable, restart
-may continue from that durable body without caller input. Fresh-process fault tests pin
-pre-only blocking, identical resubmission, different-artifact conflict, and every
-post-evidence publication boundary.
-
-Settlement is convergent under the same deterministic operation id. Pending renders
-`settlement: restart-settlement-pending`; the operator immediately resubmits the
-byte-identical artifact, and that authorized resubmission drives pre-only or later pending
-settlement. There is no automatic-settlement prerequisite and no restoration status command.
-The closed pending reason carries the exact publication failure class. A pre-only crash has
-no response to replay; its first byte-identical resubmission continues the same attempt and
-returns completed, conflict, or an actual typed publication failure rather than inventing a
-synthetic failure class. Durable degraded renders
-`settlement: repair-required`; the site backup administrator runs
-`host-generation-restoration-storage-repair-v1`, then the operator resubmits that exact
-artifact. The broker resumes the same append-only attempt, emits a fixed repair-resume
-pre-audit event, completes only the missing publication records, and returns restored or
-already-restored. A degraded event remains history but is not terminal current state after
-the repaired settlement. A different artifact or operation binding conflicts rather than
-opening a new attempt. Completed replay, including response loss, returns
-`already-restored` with zero write. The degraded-repaired-restored, restart-after-pending,
-restart-after-degraded, pre-only identical-resubmission, pre-only conflicting-resubmission,
-and response-loss paths each have exact human/JSON goldens and success or refusal tests.
-
-If the real CLI writes the restoration request but the public-socket transport closes
-before one complete typed broker response, including a pre-only broker crash, it exits `4`
-and prints exactly:
-
-```text
-host generation handoff immutable audit restoration response lost
-action: resubmit-same-restoration-artifact
-```
-
-With `--json`, it prints exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-response-lost","action":"resubmit-same-restoration-artifact"}`.
-There is no `failureClass` or `settlement` field because transport loss does not reveal a
-publication class or durable broker prefix. The operator immediately resubmits the
-byte-identical artifact through the same unprivileged local Admin path; no restart wait,
-automatic settlement, or status command is a prerequisite. Dedicated real-binary
-human/JSON goldens pin these bytes and exit.
-
-The command accepts one path and optional `--json`; selector, authority/key/token,
-member/failure override, `--force`, or extra input exits `2`. Root instead exits `4` with
-the distinct `use-unprivileged-local-admin-restoration-session` action. Unauthorized,
-invalid artifact, conflict, retention capacity/admission/degradation, and restoration publication
-pending/degraded exits are `4` with only the fixed actions and closed failure classes in
-`data-model.md`; success exits `0` and directs the operator to rerun
-`--repair-authorized-handoff`.
-
-The additional exit-`4` forms are exact. Root is:
-
-```text
-host generation handoff audit restoration requires unprivileged local Admin
-action: use-unprivileged-local-admin-restoration-session
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-restoration-root-refused","action":"use-unprivileged-local-admin-restoration-session"}`.
-Retention capacity is exactly:
-
-```text
-host generation handoff immutable audit retention capacity unavailable
-failure-class: <CLOSED_RETENTION_CAPACITY_CLASS>
-action: <ACTION_FROM_RETENTION_CAPACITY_TABLE>
-```
-
-Retention degradation is exactly:
-
-```text
-host generation handoff immutable audit retention degraded
-failure-class: <CLOSED_RETENTION_DEGRADED_CLASS>
-action: <ACTION_FROM_RETENTION_TABLE>
-```
-
-Capacity JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-capacity","failureClass":"<CLOSED_RETENTION_CAPACITY_CLASS>","action":"<ACTION_FROM_RETENTION_CAPACITY_TABLE>"}`.
-This audited refusal has zero ledger and restoration mutation but retains its exact capacity
-pre/outcome pair. Standing-reserve exhaustion is the separate no-write pre-audit admission
-form:
-
-```text
-host generation handoff immutable audit capacity admission unavailable
-failure-class: standing-reserve-exhausted
-action: repair-retention-audit-and-reconcile
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-capacity-admission-refused","failureClass":"standing-reserve-exhausted","action":"repair-retention-audit-and-reconcile"}`.
-It carries no capacity attempt digest or generation transition.
-Degradation JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-backup-retention-degraded","failureClass":"<CLOSED_RETENTION_DEGRADED_CLASS>","action":"<ACTION_FROM_RETENTION_TABLE>"}`.
-Restoration publication pending/degraded uses the exact
-human/JSON bytes in `data-model.md` and action `resubmit-same-restoration-artifact` or
-`repair-restoration-storage-and-resubmit`. Every form has a dedicated golden; no generic
-renderer string is accepted.
-
-The private backup capability has no construction, clone/copy/default, conversion,
-serialization, or post-transfer reuse surface. A set is capped at 256 members and
-16,777,216 encoded bytes; the root is capped at 64 retained intents, 4,096 members, and
-268,435,456 bytes. Capacity is reserved before handoff. A current set is unprunable. The replacement transition durably binds one fixed
-`CLOCK_REALTIME+CLOCK_BOOTTIME` age anchor before it becomes effective, and replay never
-resamples it. Same-boot age follows boot time with at most 300 seconds of wall-clock skew;
-unsafe forward discontinuity or a changed-boot continuity gap quarantines age and uses
-`repair-retention-clock-discontinuity`. A replaced set is pruneable from day 30 through the
-hard day-90 deadline. The existing broker runs startup and internal idle-wake catch-up
-without Admin traffic and either performs the audited mandatory prune or fails closed in
-typed degradation. `PruneHostGenerationImmutableAuditBackupsV1` consumes the private-field
-sealed lifetime-bound permit with no clone/copy/default/conversion/serde/accessor surface and
-emits immutable fixed-field pre/outcome audit. Prune/limit/clock/settlement failure returns
-the typed redacted report/action and blocks later mutation.
-
-Reserved continuity-subset refusals are not rendered as generic retention failures.
-`continuity-evidence-record-limit | continuity-evidence-byte-limit` use the exact
-retention-capacity form above, exit `4`, error `audit-backup-retention-capacity`, and
-action `repair-continuity-authoritative-source-contract`.
-`continuity-repair-attempt-limit` is the private trigger-only capacity classification for
-ordered cleanup. It is excluded from `CLOSED_RETENTION_CAPACITY_CLASS` and is never valid as
-a public `failureClass`; its paired internal continuation label
-`resume-oldest-continuity-cleanup` is never valid as a public `action`. On that
-classification, the broker first drives the oldest broker-target compaction, source
-release, and attempt-slice release. If cleanup blocks, the CLI renders that exact broker,
-source-lifecycle, or ledger failure; it never renders the trigger, its internal continuation
-label, a generic limit, or a prune-only action.
-A 257th source live-pair admission uses the same ordered cleanup and exact-blocker rule.
-`source-capacity` below is reserved for an authoritative-source record/byte contract
-violation, not live-slot exhaustion.
-
-Replay-key publication failure exits `4`. Its human form is exactly:
-
-```text
-host generation handoff immutable audit continuity replay key unavailable
-failure-class: <CLOSED_REPLAY_KEY_FAILURE_CLASS>
-action: <ACTION_FROM_REPLAY_KEY_TABLE>
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-replay-key-unavailable","failureClass":"<CLOSED_REPLAY_KEY_FAILURE_CLASS>","action":"<ACTION_FROM_REPLAY_KEY_TABLE>"}`.
-`CLOSED_REPLAY_KEY_FAILURE_CLASS` is exactly `entropy-unavailable | hierarchy | write |
-file-sync | link | reopen | directory-sync | conflict |
-replay-key-missing-after-parent-durable | posture | audit-publication`. Actions are
-`repair-continuity-replay-key-generation` for `entropy-unavailable`,
-`repair-retention-storage-and-reconcile` for the six storage boundaries,
-`preserve-and-escalate-continuity-publication-conflict` for `conflict`, and
-`preserve-and-escalate-audit-integrity-incident` for
-`replay-key-missing-after-parent-durable | posture`, and
-`repair-retention-audit-and-reconcile` for `audit-publication`.
-Replay-key reservation failure uses the existing exact
-`root-publication-record-limit | root-publication-byte-limit` retention-capacity form, or
-the standing-reserve admission form when applicable; it never enters
-`CLOSED_REPLAY_KEY_FAILURE_CLASS`.
-
-Source pin/binding, audited source release, or source-prefix reconciliation failure exits
-`4`. Its human form is exactly:
-
-```text
-host generation handoff immutable audit continuity source lifecycle unavailable
-stage: <CLOSED_SOURCE_LIFECYCLE_STAGE>
-failure-class: <CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS>
-action: <ACTION_FROM_SOURCE_LIFECYCLE_TABLE>
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-source-lifecycle-unavailable","stage":"<CLOSED_SOURCE_LIFECYCLE_STAGE>","failureClass":"<CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS>","action":"<ACTION_FROM_SOURCE_LIFECYCLE_TABLE>"}`.
-`CLOSED_SOURCE_LIFECYCLE_STAGE` is exactly `pin-acquisition | replay-binding |
-source-release | source-prefix-reconciliation`.
-`CLOSED_SOURCE_LIFECYCLE_FAILURE_CLASS` is exactly `source-capacity |
-source-unavailable | source-conflict | hierarchy | write | file-sync | link | reopen |
-unlink | directory-sync | census | conflict | audit-publication |
-recovery-generation-overflow`. `source-capacity` caused
-by evidence count or size maps to `repair-continuity-authoritative-source-contract`;
-`source-unavailable` maps to
-`repair-continuity-authoritative-source`; `source-conflict | conflict` map to
-`preserve-and-escalate-continuity-source-conflict`; the six storage boundaries map to
-`repair-continuity-source-storage-and-reconcile`; and `audit-publication` maps to
-`repair-retention-audit-and-reconcile`. Source-release `unlink` maps to
-`repair-continuity-source-storage-and-reconcile`, and source-release `census` maps to
-`repair-retention-census-and-reconcile`.
-`source-prefix-reconciliation/recovery-generation-overflow` maps to
-`preserve-and-escalate-audit-integrity-incident`; it authorizes no wrap, retry, source
-mutation, pair recycle, or next pre-audit.
-`source-capacity` is emitted only for the authoritative source's exact record/byte contract,
-including refusal of a 141,313-byte combined attempt after acceptance at 141,312 bytes; it
-always maps to `repair-continuity-authoritative-source-contract`. A 257th live pair never
-uses `source-capacity`: it drives ordered broker compaction, source release, and
-attempt-slice release and returns the first exact cleanup blocker from the closed matrices
-below. Human/JSON goldens pin the exact-bound source-contract refusal and every ordered
-cleanup blocker so neither case can fall back to
-`reconcile-immutable-audit-retention`.
-
-Valid stage/class pairs are closed. `pin-acquisition` admits `source-capacity |
-source-unavailable | source-conflict | hierarchy | write | file-sync | link | reopen |
-directory-sync | conflict | audit-publication`; `replay-binding` admits the same set
-without `source-capacity`; and `source-release` admits only `source-unavailable |
-source-conflict | hierarchy | reopen | unlink | directory-sync | census | conflict |
-audit-publication`; `source-prefix-reconciliation` admits only
-`recovery-generation-overflow`. Replay-key `audit-publication` is valid only for fixed outcome-audit
-publication after parent durability. Strict schemas, wire snapshots, constructors,
-deserializers, and human/JSON goldens accept every listed pair and reject every other
-stage/class pair or action substitution. The overflow golden uses `u32::MAX`, exits `4`,
-and carries no intended outcome, terminal failure, next generation, or mutable identifier.
-The pinned Type-3 real-binary case id is exactly
-`source_prefix_reconciliation_recovery_generation_overflow_real_binary`. It feeds the
-closed overflow DTO through the hermetic AF_UNIX public-socket path to
-`d2b-host-generation-deploy`; a renderer unit or direct response construction is
-ineligible. Human mode exits `4` with exactly these newline-terminated bytes:
-
-```text
-host generation handoff immutable audit continuity source lifecycle unavailable
-stage: source-prefix-reconciliation
-failure-class: recovery-generation-overflow
-action: preserve-and-escalate-audit-integrity-incident
-```
-
-JSON mode exits `4` with exactly these bytes and no trailing newline:
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-source-lifecycle-unavailable","stage":"source-prefix-reconciliation","failureClass":"recovery-generation-overflow","action":"preserve-and-escalate-audit-integrity-incident"}`.
-Both real-binary goldens reject `intendedOutcome`, `intended-outcome`, `settlement`,
-`pending`, `successor`, `retry`, `nextGeneration`, `next-generation`, every source or
-repair identifier, and every extra field or line.
-
-Replay-key candidate recycling, broker compaction/recovery, or a resumable
-attempt-capacity release failure exits `4` and never masquerades as a settled continuity
-repair:
-
-```text
-host generation handoff immutable audit continuity cleanup pending
-stage: <CLOSED_CONTINUITY_CLEANUP_STAGE>
-failure-class: <CLOSED_CONTINUITY_CLEANUP_FAILURE_CLASS>
-action: <ACTION_FROM_CONTINUITY_CLEANUP_TABLE>
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-cleanup-pending","stage":"<CLOSED_CONTINUITY_CLEANUP_STAGE>","failureClass":"<CLOSED_CONTINUITY_CLEANUP_FAILURE_CLASS>","action":"<ACTION_FROM_CONTINUITY_CLEANUP_TABLE>"}`.
-Stages are exactly `replay-key-candidate-recycling | broker-compaction |
-capacity-release`. Classes are exactly `head-changed | target-changed | hierarchy | write |
-file-sync | link | reopen | unlink | directory-sync | census | conflict |
-audit-publication`.
-`head-changed | target-changed | conflict` map to
-`preserve-and-escalate-continuity-publication-conflict`;
-`hierarchy | write | file-sync | link | reopen | unlink | directory-sync` to
-`repair-retention-storage-and-reconcile`, `census` to
-`repair-retention-census-and-reconcile`, and `audit-publication` to
-`repair-retention-audit-and-reconcile`. Valid pending pairs are exactly:
-
-| Stage | Admitted classes |
+| Generated identifier | CLI use |
 | --- | --- |
-| `replay-key-candidate-recycling` | `hierarchy | write | file-sync | link | reopen | unlink | directory-sync | census | conflict | audit-publication` |
-| `broker-compaction` | `head-changed | target-changed | hierarchy | write | file-sync | link | reopen | unlink | directory-sync | census | conflict | audit-publication` |
-| `capacity-release` | `census | audit-publication` |
+| `VD2-SC002-RECEIPT` | consume the assigned activation and close-stage evidence references |
+| `VD2-SC002-PUBLICATION` | consume publication, locking, retention, capacity, and crash-recovery decisions without restating them |
+| `VD2-SC002-INCIDENT` | consume incident classification, redaction, and escalation decisions |
+| `VD2-SC002-DISPOSITION` | consume accepted authority and recovery disposition only through its generated owner |
+| `VD2-SC002-RECOVERY` | consume inspectable states, emitted actions, exact invocations, exits, and convergence |
+| `VD2-SC002-SOURCE-FLOOR` | consume the installed source-generation compatibility result |
+| `VD2-SC002-REGISTRIES` | consume independently authored fixture and poison assignments |
+| `VD2-SC002-TRACEABILITY` | bind every consumed identifier to its schema, implementation owner, task, fixture, and enforcing gate |
 
-Candidate-recycler and broker-compaction storage, census, conflict, and audit-publication
-failures after successful unlink carry the original durable mutation intent and resume
-that same operation; pre-unlink candidate-recycler failure likewise keeps the original
-fixed identity pending and retries it after repair rather than publishing a failed outcome
-or successor identity. These are not settled degraded repair results. Strict schemas, wire
-snapshots, constructors, deserializers, and one human and JSON golden for every exact
-stage/class/action triple reject every other pair and every action substitution. For
-capacity release, `census` and `audit-publication` preserve and resume the original
-ledger-safe release prefix after their named repair.
+Missing, duplicate, extra, stale, wrong-owner, non-ancestor, or failing generated rows block
+the surface. The refusal names the remediation: accept Version 2, regenerate its traceability,
+and pass Gate 0. This contract defines no host-generation protocol shape, state machinery, or
+test matrix. None may be inferred from the operator commands or action procedures below.
 
-Compaction-witness integrity is terminal, not cleanup pending. Every
-`ContinuityCompactionWitnessIntegrityIncidentV1` variant exits `4` with exactly:
+### Operator commands
 
-```text
-host generation handoff immutable audit continuity compaction witness integrity incident
-failure-class: <CLOSED_COMPACTION_WITNESS_INTEGRITY_INCIDENT_CLASS>
-action: preserve-and-escalate-audit-integrity-incident
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-compaction-witness-integrity-incident","failureClass":"<CLOSED_COMPACTION_WITNESS_INTEGRITY_INCIDENT_CLASS>","action":"preserve-and-escalate-audit-integrity-incident"}`.
-`CLOSED_COMPACTION_WITNESS_INTEGRITY_INCIDENT_CLASS` is exactly
-`witness-operation-mismatch | witness-selection-mismatch |
-witness-ordinal-mismatch | witness-intent-mismatch | witness-parent-mismatch |
-witness-digest-mismatch | immediate-receipt-missing |
-immediate-receipt-predecessor-mismatch`. The response constructor consumes only the sealed
-incident from `data-model.md`; it derives the failure class and fixed action and accepts no
-caller-supplied class or action.
-
-The shape contains no stage, ordinal, member, operation, selection, intent, parent, digest,
-target, receipt, predecessor, private identifier, source or repair identifier, `pending`,
-`settlement`, `retry`, `successor`, or extra JSON field or human line. Strict schema,
-constructor, serializer, deserializer, and raw-wire tests accept exactly these eight
-classes in this terminal shape. They reject every class in
-`audit-continuity-cleanup-pending`, and the cleanup-pending shape rejects all eight
-terminal classes; neither form may borrow the other's action or fields. A literal
-sixteen-row real-binary golden matrix crosses all eight classes with `human | json`,
-traverses the hermetic AF_UNIX public-socket decoder and production renderer, pins exit
-`4`, exact newline-terminated human bytes and no-trailing-newline JSON bytes, and checks
-every forbidden field above. One row cannot satisfy another, and each
-class/mode/forbidden-field assertion has an independent removal poison.
-
-`ledger-conflict` and the four standing-reserve corruption classes are terminal integrity
-incidents, not pending cleanup. They exit `4` with the distinct human form:
-
-```text
-host generation handoff immutable audit continuity capacity integrity incident
-stage: capacity-release
-failure-class: <CLOSED_CAPACITY_INTEGRITY_INCIDENT_CLASS>
-action: preserve-and-escalate-audit-integrity-incident
-```
-
-Their JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-capacity-integrity-incident","stage":"capacity-release","failureClass":"<CLOSED_CAPACITY_INTEGRITY_INCIDENT_CLASS>","action":"preserve-and-escalate-audit-integrity-incident"}`.
-`CLOSED_CAPACITY_INTEGRITY_INCIDENT_CLASS` is exactly `ledger-conflict |
-standing-reserve-missing | standing-reserve-overdrawn |
-standing-reserve-duplicated | standing-reserve-unaccounted`. This shape contains no
-`pending`, `settlement`, successor, or retry field. It preserves the ledger, keeps the
-charged slice unavailable, and renders no successor release identity or retry command.
-Strict schema and human/JSON goldens independently reject every terminal class in the
-cleanup-pending shape and every resumable class in the integrity-incident shape.
-Source-release failure always uses the source-lifecycle form above, never this cleanup
-class.
-
-The selector-free `host-generation-retention-clock-discontinuity-repair-v1` procedure
-returns only the following continuity-repair forms. It accepts no caller evidence,
-timestamp, boot identity, anchor, deadline, member, digest, path, selector, or force input.
-A repaired result exits `0`. Its human form is exactly two newline-terminated lines:
-
-```text
-host generation handoff immutable audit continuity repaired
-outcome: <REPAIRED_OUTCOME>
-```
-
-`REPAIRED_OUTCOME` is exactly `repaired-before-day-90 |
-repaired-after-mandatory-prune`. JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-continuity-repair","ok":true,"outcome":"<REPAIRED_OUTCOME>"}`.
-
-Decision basis write-ahead publication pending exits `4` before any selected outcome is
-available for public projection. Its human form is exactly:
-
-```text
-host generation handoff immutable audit continuity repair decision basis pending
-publication-stage: decision-basis
-failure-boundary: <CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>
-settlement: decision-basis-pending
-action: <ACTION_FROM_SETTLEMENT_BOUNDARY>
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-basis-pending","publicationStage":"decision-basis","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-basis-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
-This form deliberately has no `intendedOutcome` or terminal `failure`: neither is public
-until the exact private `ContinuityRepairDecisionBasisV1` final and directory chain are
-durable. The private `ContinuityRepairDecisionBasisIntentV1` final and directory chain are
-not the write-ahead decision commit by themselves. Commit requires that exact intent final,
-its complete durable directory chain, and the independent matching
-`ContinuityRepairDecisionBasisIntentCommitWitnessV1` final and directory chain. An
-in-memory candidate or an intent final without that witness is not a selected outcome. At
-intent `FinalLinked`, `FinalReopened`, and `ParentDurable` before `AncestorsDurable`,
-restart accepts an absent or exact final. Absence permits precommit reselection only after
-a complete attempt-local census proves that no basis or later durable descendant survives.
-The lost candidate and incomplete prefix are then discarded, the sealed durable repair
-state is replayed, and selection runs again; the new intent need not be byte-identical to
-the abandoned candidate, and neither candidate is projected as selected. An exact final
-resumes the first missing durability step without reselection. After intent ancestor sync,
-an exact final without a witness may publish only that exact witness and only when no
-consumer survives; both absent may reselect only under the same empty-descendant proof.
-At the three pre-`AncestorsDurable` basis prefixes, restart accepts absence or the exact
-basis and recreates absence byte-identically only from the witness-backed durable intent,
-with no reselection. A recreated parent-durable final repeats parent and ancestor sync; it
-cannot freeze selection early. At `AncestorsDurable` and every downstream durable
-consumer, the intent, witness, basis, and each exact predecessor are required. Missing or
-mismatched witness/predecessor uses the decision-durability integrity form below with zero
-mutation. The only authorized later witness absence is the ordered successor-proved
-reclamation after the targets-compacted receipt; it cannot reopen selection. The closed
-intent and basis boundary set is exactly
-`hierarchy | write | file-sync | link | reopen | directory-sync | conflict |
-audit-publication`; every member has this one legal response shape and exact exit. The
-boundary is derived from either the sealed `Progress` prefix or sealed `Conflict` state.
-Progress prefixes exclude `Conflict`. A `conflict` state preserves its durable predecessor
-plus existing and candidate private digests, publishes no intended outcome, and maps only to
-`preserve-and-escalate-continuity-publication-conflict`.
-
-Loss of a decision-basis intent or decision-basis final after a durable directory boundary,
-or loss/mismatch of the decision-intent witness or its predecessor after consumption, is
-not basis-pending. It exits `4` with exactly:
-
-```text
-host generation handoff immutable audit continuity decision durability integrity incident
-publication-stage: decision-basis
-record: <CLOSED_DECISION_DURABILITY_RECORD>
-durable-boundary: <CLOSED_DECISION_DURABILITY_BOUNDARY>
-failure-class: <CLOSED_DECISION_DURABILITY_FAILURE_CLASS>
-action: preserve-and-escalate-audit-integrity-incident
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-durability-integrity-incident","publicationStage":"decision-basis","record":"<CLOSED_DECISION_DURABILITY_RECORD>","durableBoundary":"<CLOSED_DECISION_DURABILITY_BOUNDARY>","failureClass":"<CLOSED_DECISION_DURABILITY_FAILURE_CLASS>","action":"preserve-and-escalate-audit-integrity-incident"}`.
-The `failureClass` is derived, not a caller string. The only valid
-record/boundary/failure tuples are:
-
-| `record` | `durableBoundary` | `failureClass` |
+| Purpose | Exact invocation | Actor and input boundary |
 | --- | --- | --- |
-| `decision-basis-intent` | `ancestors-durable` | `final-missing-after-durable-boundary` |
-| `decision-basis` | `ancestors-durable` | `final-missing-after-durable-boundary` |
-| `decision-basis-intent-commit-witness` | `consumed-by-durable-successor` | `witness-missing-after-consumption` |
-| `decision-basis-intent-commit-witness` | `consumed-by-durable-successor` | `witness-mismatch-after-consumption` |
-| `decision-basis-intent-commit-witness` | `consumed-by-durable-successor` | `predecessor-mismatch-after-consumption` |
+| Inspect the authorized handoff | `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` | unprivileged local public-socket `Admin`; no selector or positional input |
+| Repair the authorized handoff | `d2b-host-generation-deploy --repair-authorized-handoff [--json]` | unprivileged local public-socket `Admin`; no selector or positional input |
+| Restore one immutable audit backup | `d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]` | unprivileged local public-socket `Admin`; exactly one no-follow artifact path |
 
-`CLOSED_DECISION_DURABILITY_RECORD`, `CLOSED_DECISION_DURABILITY_BOUNDARY`, and
-`CLOSED_DECISION_DURABILITY_FAILURE_CLASS` are derived from this table. Every other
-cross-product refuses. The known domains contain exactly three records, two durable
-boundaries, and four failure classes: the literal 24-tuple Cartesian product partitions
-into these five valid tuples and exactly nineteen invalid known cross-products. A
-read-independent negative fixture lists all nineteen tuples literally rather than deriving
-them by filtering production acceptance. Every row independently fails typed construction,
-strict schema validation, raw-wire shared decoding, and serde deserialization. Each
-row/surface has its own poison, and omission, duplication, acceptance, or substitution by
-an unknown-string negative fails the matrix. Unknown record, boundary, and failure strings
-remain separate negatives and cannot satisfy any of the nineteen known-tuple cases. No
-parent-durable incident variant is wire-valid because
-pre-ancestor absence restarts through the absent-or-exact rules above. The form contains no
-`intendedOutcome`, `intended-outcome`, `failure`, `failureBranch`, `failure-branch`,
-terminal failure class, candidate digest, predecessor, `settlement`, `pending`, `retry`,
-`successor`, source or repair identifier, extra JSON field, or extra human line. It
-authorizes no reconstruction, relink, witness publication, reselection, settlement
-publication, cleanup, or later repair mutation and poisons the attempt.
+These commands traverse the existing public socket and typed broker operations. They never
+run as root, connect directly to the broker, add a daemon repair path, or create a new unit.
+The inspect and repair forms reject intent, generation, path, token, authority, selector,
+extra positional, and `--force` input. The restoration form rejects every additional path,
+selector, override, authority/key/token, extra positional, and `--force` input. The accepted
+`VD2-SC002-RECOVERY` row alone supplies response states, exact human and JSON rendering, exits,
+and convergence. The CLI must not synthesize a replacement status or translate an unknown
+variant into a generic success or repair instruction.
 
-One separately pinned negative uses the literal tuple
-`decision-basis-intent | parent-durable | final-missing-after-durable-boundary`.
-It is outside the two-boundary known domain and therefore does not change the exact
-nineteen invalid known cross-products. Independent
-`decision-durability-parent-durable-negative/<construction|schema|raw-wire|serde>` cases
-refuse typed construction, strict schema validation, shared raw-wire decoding, and serde
-deserialization respectively. Each surface has its own visit and acceptance poison; the
-generic unknown-boundary negative and any one of the nineteen known cross-products cannot
-satisfy it.
+### Public action owners
 
-Decision selection publication pending exits `4` before an intended outcome is publicly
-committed. The repaired human form is exactly:
-
-```text
-host generation handoff immutable audit continuity repair decision selection pending
-intended-outcome: <CLOSED_TERMINAL_OUTCOME>
-publication-stage: decision-selection
-failure-boundary: <CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>
-settlement: decision-selection-pending
-action: <ACTION_FROM_SETTLEMENT_BOUNDARY>
-```
-
-Its repaired JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
-For any degraded `CLOSED_TERMINAL_OUTCOME`, the human form instead has exactly these two
-additional lines immediately after `intended-outcome`:
-
-```text
-failure-branch: <CLOSED_CONTINUITY_FAILURE_BRANCH>
-failure-class: <CLOSED_CONTINUITY_FAILURE_CLASS>
-```
-
-Its degraded JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-decision-selection-pending","intendedOutcome":"<DEGRADED_OUTCOME>","failure":{"branch":"<CLOSED_CONTINUITY_FAILURE_BRANCH>","class":"<CLOSED_CONTINUITY_FAILURE_CLASS>"},"publicationStage":"decision-selection","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"decision-selection-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
-`intendedOutcome` and, for a degraded decision, the exact nested failure come only from
-the sealed durable selected-decision value reopened from the durable basis before
-decision-selection publication. A repaired pending form rejects `failure`; a degraded
-pending form rejects an absent, changed, or cross-branch failure. Neither may select from
-current source observations. The boundary is derived from the incomplete durable prefix
-or sealed conflict state and cannot be supplied independently. `conflict` is not a
-progress prefix; it carries the same durable selected decision plus existing and candidate
-private selection digests and permits no replacement or reselection. A fresh source change
-or foreign selection final preserves that selected outcome/failure and produces only the
-same progress projection or the sealed `conflict` projection.
-
-Settlement preparation incomplete after durable decision selection but before durable
-decision-pre exits `4`. Its human form is exactly:
-
-```text
-host generation handoff immutable audit continuity repair settlement preparation incomplete
-intended-outcome: <CLOSED_TERMINAL_OUTCOME>
-stage: decision-pre-audit
-failure-class: audit-publication
-action: repair-retention-audit-and-reconcile
-```
-
-Its JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-settlement-preparation-incomplete","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","stage":"decision-pre-audit","failureClass":"audit-publication","action":"repair-retention-audit-and-reconcile"}`.
-The intended outcome comes only from the exact durable decision-selection final. Restart
-reclassifies that selection, performs no new repair mutation, and retries decision-pre
-publication before intent or terminal publication.
-
-Pending exact-outcome publication after durable decision-pre exits `4`. Its human form is
-exactly:
-
-```text
-host generation handoff immutable audit continuity repair pending
-intended-outcome: <CLOSED_TERMINAL_OUTCOME>
-publication-stage: <CLOSED_SETTLEMENT_PUBLICATION_STAGE>
-failure-boundary: <CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>
-settlement: exact-terminal-settlement-pending
-action: <ACTION_FROM_SETTLEMENT_BOUNDARY>
-```
-
-`CLOSED_TERMINAL_OUTCOME` is exactly `repaired-before-day-90 |
-repaired-after-mandatory-prune | degraded-before-day-90 |
-degraded-day-90-before-prune | degraded-day-90-after-prune`. JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-pending","intendedOutcome":"<CLOSED_TERMINAL_OUTCOME>","publicationStage":"<CLOSED_SETTLEMENT_PUBLICATION_STAGE>","failureBoundary":"<CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY>","settlement":"exact-terminal-settlement-pending","action":"<ACTION_FROM_SETTLEMENT_BOUNDARY>"}`.
-`CLOSED_SETTLEMENT_PUBLICATION_STAGE` is exactly `outcome-intent | terminal-outcome`.
-`CLOSED_SETTLEMENT_PUBLICATION_BOUNDARY` is exactly `hierarchy | write | file-sync | link |
-reopen | directory-sync | conflict | audit-publication`. The intended outcome is
-reconstructed from broker-private durable decision-pre for the intent stage and from the
-byte-identical durable intent for the terminal stage; it is never changed during
-settlement. Human/JSON goldens cover every stage/boundary pair for all five intended
-outcomes, and fresh-process cases prove the first missing boundary alone is retried.
-`ACTION_FROM_SETTLEMENT_BOUNDARY` is
-`repair-retention-storage-and-reconcile` for `hierarchy | write | file-sync | link |
-reopen | directory-sync`,
-`preserve-and-escalate-continuity-publication-conflict` for `conflict`, and
-`repair-retention-audit-and-reconcile` for `audit-publication`.
-
-A settled degraded result exits `4`. Its human form is exactly:
-
-```text
-host generation handoff immutable audit continuity repair degraded
-outcome: <DEGRADED_OUTCOME>
-failure-branch: <CLOSED_CONTINUITY_FAILURE_BRANCH>
-failure-class: <CLOSED_CONTINUITY_FAILURE_CLASS>
-action: <ACTION_FROM_CONTINUITY_TABLE>
-```
-
-`DEGRADED_OUTCOME` is exactly `degraded-before-day-90 |
-degraded-day-90-before-prune | degraded-day-90-after-prune`.
-`CLOSED_CONTINUITY_FAILURE_BRANCH` is exactly `source | publication | retention`, and its
-class must belong to that branch's closed terminal enum in `data-model.md`; the retention
-branch uses `ContinuityRepairTerminalRetentionFailureClassV1`, not the broader retention
-lifecycle enum.
-Decision selection, settlement preparation, intent publication, and terminal publication
-are disjoint from these enums and are not settled degraded failure classes. JSON is exactly
-`{"schemaVersion":1,"kind":"host-generation-handoff-error","error":"audit-continuity-repair-degraded","outcome":"<DEGRADED_OUTCOME>","failure":{"branch":"<CLOSED_CONTINUITY_FAILURE_BRANCH>","class":"<CLOSED_CONTINUITY_FAILURE_CLASS>"},"action":"<ACTION_FROM_CONTINUITY_TABLE>"}`.
-No continuity form contains a replay handle, attempt, watermark, prune proof, evidence,
-clock, boot identity, path, selector, argv, or free-form value. Real-procedure human/JSON
-goldens pin each repaired variant, every degraded branch/class/action,
-decision-basis pending without an intended outcome, decision-selection pending,
-preparation-incomplete, and both later pending stages for all five intended outcomes.
-Decision-selection pending additionally pins the absence of a failure for each repaired
-outcome and the exact durable branch/class for each degraded outcome.
-Constructor and deserializer negatives reject an intended outcome or terminal failure in
-the basis-pending form, `Complete` in any pending form, and any independently supplied
-boundary that disagrees with its state. Across the four publication-pending types -
-decision basis, decision selection, outcome intent, and terminal outcome - `Conflict` is a
-sealed state variant carrying predecessor, existing digest, and candidate digest, never a
-progress prefix or free failure field; basis pending alone omits `intendedOutcome`, while
-the other three derive it only from their required durable predecessor.
-Decision-selection progress and conflict both carry the same sealed durable selected
-decision, so fresh source/failure changes cannot erase or replace its degraded failure.
-Human/JSON output never renders any of those private digests or predecessor bytes.
-
-Restoration, prune, durable-record, lifecycle, status, capacity, continuity, redaction,
-and shrinkage fixture membership is owned only by generated `VD2-SC002-REGISTRIES` and
-`VD2-SC002-TRACEABILITY` rows. This contract retains the stable owner and action names but
-copies no ids, counts, fixture bodies, or transition matrix. Every assigned fixture remains
-independently authored from production; missing, stale, runtime-derived, skipped, wrong-owner,
-non-ancestor, or failing coverage blocks the corresponding operation.
-
-An
-unaudited extra mutation instead returns the separate
-`preserve-and-escalate-audit-integrity-incident` action and is not restoration-eligible.
-No generic copy, force flag, daemon repair path, or new unit exists.
-
-Public retention rendering is a total mapping over wire-emittable variants.
-`CLOSED_RETENTION_CAPACITY_CLASS` is exactly
-`intent-member-limit | intent-byte-limit | root-intent-limit | root-member-limit |
-root-byte-limit | root-publication-record-limit | root-publication-byte-limit |
-restoration-record-limit | restoration-byte-limit | restoration-attempt-limit |
-continuity-evidence-record-limit | continuity-evidence-byte-limit |
-pending-staging-record-limit | pending-staging-byte-limit`.
-`continuity-repair-attempt-limit` remains a private trigger-only member of the internal
-capacity class and is not a member of that public response set.
-`CLOSED_CAPACITY_ADMISSION_CLASS` is exactly
-`standing-reserve-exhausted`. `CLOSED_RETENTION_DEGRADED_CLASS` is exactly
-`clock-rollback | clock-watermark | epoch-invalid | clock-forward-discontinuity |
-clock-continuity-ambiguous | clock-overflow | unlink | directory-sync | census |
-audit-publication | pending-settlement | standing-reserve-missing |
-standing-reserve-overdrawn | standing-reserve-duplicated |
-standing-reserve-unaccounted`:
-
-| Closed failure class | Exact action |
-| --- | --- |
-| `intent-member-limit`, `intent-byte-limit`, `root-intent-limit`, `root-member-limit`, `root-byte-limit`, `root-publication-record-limit`, `root-publication-byte-limit`, `restoration-record-limit`, `restoration-byte-limit`, `restoration-attempt-limit`, `pending-staging-record-limit`, `pending-staging-byte-limit` | `reconcile-immutable-audit-retention` |
-| `continuity-evidence-record-limit`, `continuity-evidence-byte-limit` | `repair-continuity-authoritative-source-contract` |
-| `standing-reserve-exhausted` | `repair-retention-audit-and-reconcile` |
-| `clock-rollback`, `clock-watermark`, `epoch-invalid`, `clock-forward-discontinuity`, `clock-continuity-ambiguous` | `repair-retention-clock-discontinuity` |
-| `clock-overflow` | `preserve-and-escalate-retention-clock-overflow` |
-| `unlink`, `directory-sync` | `repair-retention-storage-and-reconcile` |
-| `census` | `repair-retention-census-and-reconcile` |
-| `audit-publication`, `pending-settlement` | `repair-retention-audit-and-reconcile` |
-| `standing-reserve-missing`, `standing-reserve-overdrawn`, `standing-reserve-duplicated`, `standing-reserve-unaccounted` | `preserve-and-escalate-audit-integrity-incident` |
-
-The separate internal-only mapping
-`continuity-repair-attempt-limit -> resume-oldest-continuity-cleanup` selects ordered
-cleanup. It is not a public failure/action pair.
-
-Continuity rendering uses this exact total extension; a `retention` branch uses the table
-above:
-
-| Continuity failure branch/class | Exact action |
-| --- | --- |
-| `source/source-unavailable` | `repair-continuity-authoritative-source` |
-| `source/source-conflict` | `preserve-and-escalate-continuity-source-conflict` |
-| `publication/hierarchy`, `publication/write`, `publication/file-sync`, `publication/link`, `publication/reopen`, `publication/directory-sync` | `repair-retention-storage-and-reconcile` |
-| `publication/conflict` | `preserve-and-escalate-continuity-publication-conflict` |
-| `publication/audit-publication` | `repair-retention-audit-and-reconcile` |
-| settlement preparation `decision-pre-audit/audit-publication` | `repair-retention-audit-and-reconcile` |
-| pending `decision-basis|decision-selection|outcome-intent|terminal-outcome` at `hierarchy|write|file-sync|link|reopen|directory-sync` | `repair-retention-storage-and-reconcile` |
-| pending `decision-basis|decision-selection|outcome-intent|terminal-outcome` at `conflict` | `preserve-and-escalate-continuity-publication-conflict` |
-| pending `decision-basis|decision-selection|outcome-intent|terminal-outcome` at `audit-publication` | `repair-retention-audit-and-reconcile` |
-
-Every public action is executable or resolves to one concrete section in the versioned
-operator runbook planned at `docs/how-to/host-generation-recovery-v1.md`. T599 owns that
-public file, its exact section anchors, and the generated closed mapping
-`docs/reference/host-generation-recovery-actions-v1.json`; T220 requires both artifacts,
-link validation, and emitted-action coverage before release. In the table below, a
-`host-generation-*-v1` procedure identifier means the identically named runbook anchor, not
-an unowned external convention. A row that names a CLI form is the exact invocation.
-Missing owner, runbook anchor, generated mapping row, or invocation blocks T599 and T220.
-The table also documents the one internal continuation label in an explicitly non-emittable
-row:
+The following rows define operator resolution for generated public actions. They do not
+define the emitted action enum or map protocol states and failures to actions; accepted
+Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
+`VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` own those decisions.
 
 | Action | Owner and exact procedure |
 | --- | --- |
-| `inspect-without-selectors` | T595 command `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` |
-| `begin-host-generation-deploy` | operator runs the parameterized `host-generation-deploy-bootstrap-v1` procedure in `quickstart.md` |
-| `repair-authorized-handoff` | T595 command `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
-| `repair-without-selectors` | rerun the same T595 repair command without any other argument except optional `--json` |
-| `restore-immutable-audit-backup` | external acquisition procedure above, then T595 `--restore-immutable-audit-backup PATH [--json]` |
-| `restore-with-one-artifact` | rerun the T595 restoration command with exactly one artifact path and optional `--json` |
-| `reacquire-immutable-audit-backup` | disposition-pinned backup authority reruns `host-generation-immutable-audit-backup-acquisition-v1`, then the operator resubmits |
-| `rerun-repair-authorized-handoff` | T595 command `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
-| `use-local-admin-public-socket` | site access administrator runs named external `host-generation-local-admin-session-v1`, then the local Admin reruns submission |
-| `use-unprivileged-local-admin-restoration-session` | site access administrator runs `host-generation-unprivileged-local-admin-restoration-session-v1`; the resulting unprivileged local Admin reruns the same one-artifact command |
-| `reconcile-immutable-audit-retention` | site backup administrator runs `host-generation-immutable-audit-retention-reconciliation-v1`, which can invoke only the typed prune op through the existing public-socket Admin path and sealed coordinator capability |
-| `repair-retention-clock-discontinuity` | site backup administrator repairs the configured authoritative time source, then an unprivileged public-socket `Admin` runs selector-free `host-generation-retention-clock-discontinuity-repair-v1` only as a wake signal; the sealed broker coordinator validates non-caller authoritative continuity evidence, consumes its private repair permit, preserves the original day-90 deadline across reboot or discontinuity, and prunes before completing repair when that deadline has passed |
-| `repair-continuity-replay-key-generation` | site package administrator runs `host-generation-continuity-replay-key-generation-repair-v1`, which restores the release-sealed broker CSPRNG and root posture without supplying, rotating, or replacing a key; broker startup then resumes the exact typed publication prefix |
-| `repair-continuity-authoritative-source` | site backup administrator runs `host-generation-continuity-authoritative-source-repair-v1`, which restores the disposition-pinned source version, authority, and exact replay-by-private-handle contract without accepting evidence from the operator; an unprivileged local public-socket `Admin` then reruns selector-free `host-generation-retention-clock-discontinuity-repair-v1` |
-| `repair-continuity-authoritative-source-contract` | site package administrator runs versioned external procedure `host-generation-continuity-authoritative-source-contract-repair-v1`, reinstalls the release-sealed authoritative-source producer/consumer contract and its evidence record/byte limits, and has the disposition-pinned authority, never the operator, republish the same authoritative fact in canonical bounded form; an unprivileged local public-socket `Admin` then runs exactly `d2b-host-generation-deploy --repair-authorized-handoff [--json]` with no path, digest, selector, force flag, or other argument as the selector-free wake |
-| `resume-oldest-continuity-cleanup` | internal only and non-emittable; broker startup or the existing idle wake resumes the oldest broker-target compaction, source release, and attempt-slice release in order; a block renders the exact owning closed failure and neither this label nor `continuity-repair-attempt-limit` is emitted as a substitute |
-| `repair-continuity-source-storage-and-reconcile` | site backup administrator runs versioned external procedure `host-generation-continuity-source-storage-repair-v1`, restoring only underlying availability of the disposition-pinned source filesystem/provider - mount, space, inode availability, and service reachability - and must not edit, copy, truncate, rename, unlink, recreate, or reconcile the source root or any lifecycle byte; an unprivileged local public-socket `Admin` then runs exactly `d2b-host-generation-deploy --repair-authorized-handoff [--json]` with no path, digest, selector, force flag, or other argument, letting only sealed broker operation `ReconcileHostGenerationImmutableAuditContinuitySourcePrefixV1` publish immutable pre/outcome audit and resume the retained prefix |
-| `preserve-and-escalate-continuity-source-conflict` | site security authority runs `host-generation-continuity-source-conflict-escalation-v1`, preserving the source, coordinator root, and immutable prefix and permitting no replacement, fallback evidence, prune, or retry until an accepted authority disposition names the source repair; after that repair, the site backup administrator and local Admin perform the authoritative-source repair and selector-free wake above |
-| `preserve-and-escalate-continuity-publication-conflict` | site security authority runs `host-generation-continuity-publication-conflict-escalation-v1`, preserving the conflicting final, parent, coordinator root, and immutable prefix and permitting no unlink, replacement, copy, compaction, or retry until an accepted authority disposition resolves the exact publication identity; the site backup administrator then runs `host-generation-retention-storage-repair-v1` and a local Admin reruns the selector-free wake |
-| `preserve-and-escalate-retention-clock-overflow` | site security authority runs `host-generation-retention-clock-overflow-escalation-v1`; no pruning or handoff retry is authorized |
-| `repair-retention-storage-and-reconcile` | site backup administrator runs `host-generation-retention-storage-repair-v1`, then typed reconciliation; it never unlinks directly |
-| `repair-retention-census-and-reconcile` | site backup administrator runs `host-generation-retention-census-repair-v1`, then typed reconciliation; it never edits an immutable census directly |
-| `repair-retention-audit-and-reconcile` | site backup administrator runs `host-generation-retention-audit-repair-v1`, settles the immutable prefix through the broker, then reconciles |
-| `resubmit-same-restoration-artifact` | rerun T595's restoration command with the exact same one artifact; the same unprivileged public-socket `Admin` authorization and byte-identical resubmission drive settlement |
-| `repair-restoration-storage-and-resubmit` | site backup administrator runs `host-generation-restoration-storage-repair-v1`, then the operator resubmits the exact same artifact |
-| `repair-restoration-client-broker-contract` | site package administrator runs `host-generation-restoration-client-broker-contract-repair-v1`, reinstalls one matching release-sealed client/broker generation, then reruns the same one-artifact command |
+| `inspect-without-selectors` | local public-socket `Admin` runs `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` |
+| `begin-host-generation-deploy` | operator runs public runbook procedure `host-generation-deploy-bootstrap-v1` |
+| `repair-authorized-handoff` | local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `repair-without-selectors` | local public-socket `Admin` reruns the repair command with no argument except optional `--json` |
+| `restore-immutable-audit-backup` | disposition-pinned backup authority runs `host-generation-immutable-audit-backup-acquisition-v1`, then the local public-socket `Admin` runs `d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]` |
+| `restore-with-one-artifact` | local public-socket `Admin` reruns the restoration command with exactly the same one artifact path and optional `--json` |
+| `reacquire-immutable-audit-backup` | disposition-pinned backup authority reruns `host-generation-immutable-audit-backup-acquisition-v1`, then the local public-socket `Admin` resubmits |
+| `rerun-repair-authorized-handoff` | local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `use-local-admin-public-socket` | site access administrator runs `host-generation-local-admin-session-v1`, then the resulting local public-socket `Admin` reruns the command |
+| `use-unprivileged-local-admin-restoration-session` | site access administrator runs `host-generation-unprivileged-local-admin-restoration-session-v1`, then the resulting unprivileged local public-socket `Admin` reruns the one-artifact command |
+| `reconcile-immutable-audit-retention` | site backup administrator runs `host-generation-immutable-audit-retention-reconciliation-v1` |
+| `repair-retention-clock-discontinuity` | site backup administrator repairs the configured authoritative time source and runs `host-generation-retention-clock-discontinuity-repair-v1` through an unprivileged local public-socket `Admin` |
+| `repair-continuity-replay-key-generation` | site package administrator runs `host-generation-continuity-replay-key-generation-repair-v1` |
+| `repair-continuity-authoritative-source` | site backup administrator runs `host-generation-continuity-authoritative-source-repair-v1`, then an unprivileged local public-socket `Admin` runs `host-generation-retention-clock-discontinuity-repair-v1` |
+| `repair-continuity-authoritative-source-contract` | site package administrator runs `host-generation-continuity-authoritative-source-contract-repair-v1`, then an unprivileged local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `repair-continuity-source-storage-and-reconcile` | site backup administrator runs `host-generation-continuity-source-storage-repair-v1`, then an unprivileged local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `preserve-and-escalate-continuity-source-conflict` | site security authority runs `host-generation-continuity-source-conflict-escalation-v1` and preserves the named evidence until an accepted disposition authorizes a next step |
+| `preserve-and-escalate-continuity-publication-conflict` | site security authority runs `host-generation-continuity-publication-conflict-escalation-v1` and preserves the named evidence until an accepted disposition authorizes a next step |
+| `preserve-and-escalate-retention-clock-overflow` | site security authority runs `host-generation-retention-clock-overflow-escalation-v1`; no prune or handoff retry is authorized |
+| `repair-retention-storage-and-reconcile` | site backup administrator runs `host-generation-retention-storage-repair-v1` and then its typed reconciliation step |
+| `repair-retention-census-and-reconcile` | site backup administrator runs `host-generation-retention-census-repair-v1` and then its typed reconciliation step |
+| `repair-retention-audit-and-reconcile` | site backup administrator runs `host-generation-retention-audit-repair-v1` and then its typed reconciliation step |
+| `resubmit-same-restoration-artifact` | the same unprivileged local public-socket `Admin` reruns the restoration command with the byte-identical artifact |
+| `repair-restoration-storage-and-resubmit` | site backup administrator runs `host-generation-restoration-storage-repair-v1`, then the operator resubmits the same artifact |
+| `repair-restoration-client-broker-contract` | site package administrator runs `host-generation-restoration-client-broker-contract-repair-v1`, then the operator reruns the one-artifact command |
 | `preserve-and-escalate-invalid-coordinator` | site security authority runs `host-generation-invalid-coordinator-escalation-v1` |
 | `preserve-and-escalate-pointer-conflict` | site security authority runs `host-generation-pointer-conflict-escalation-v1` |
 | `preserve-and-escalate-audit-restoration-conflict` | site security authority runs `host-generation-audit-restoration-conflict-escalation-v1` |
 | `preserve-and-escalate-audit-integrity-incident` | site security authority runs `host-generation-audit-integrity-escalation-v1` |
 
-Each escalation procedure preserves the coordinator and backup set, accepts only the
-matching fixed error plus authenticated forensic evidence, and authorizes no repair, copy,
-replace, delete, retry, or force action.
-Dedicated operator/task goldens pin the complete owner, versioned procedure, and exact
-selector-free wake command for
-`repair-continuity-authoritative-source-contract` and
-`repair-continuity-source-storage-and-reconcile`; a missing owner/procedure, alternate
-command, added selector, or action-token substitution fails independently.
+Each named `host-generation-*-v1` procedure is an identically named anchor in
+`docs/how-to/host-generation-recovery-v1.md`. T599 owns that public runbook and generated
+`docs/reference/host-generation-recovery-actions-v1.json`; T220 verifies links and complete
+agreement with the generated emitted-action assignments. A missing, extra, duplicate,
+unowned, or broken action mapping blocks release. Machine output carries only the generated
+action token, never an argv array, shell fragment, free-form command, Zone, operation ID, or
+artifact path. Escalation procedures preserve the affected evidence and authorize no repair,
+replacement, deletion, retry, or force action unless the accepted disposition explicitly
+permits it.
 
 ## Retirement register
 
@@ -994,6 +303,10 @@ FR-042 explicit retirement list rather than the parity list.
   `changelog.d/cli-operation-recovery.md`. T220 verifies and folds the coordinated
   version/reference/test/schema/release treatment. Missing or Version 1 envelopes
   are never interpreted as Version 2, and arbitrary Version 1 IDs are never silently migrated.
+- Host-generation handoff commands consume only accepted generated `VD2-SC002-*` rows for
+  protocol states, publication, capacity, rendering, exits, and transitions. Every generated
+  public action resolves to exactly one command or named owner and public runbook procedure
+  above; the feature-local CLI contract does not redefine the SC-002 protocol.
 - Zone readiness names `Provider/system-core` and the actual failing
   `Zone.status.handlers[]` record: `system-core-host` or `system-core-user`, with its `phase`
   and `lastReconciledAt`. Exactly one of each is required; duplicate, missing, wrong-name, or
