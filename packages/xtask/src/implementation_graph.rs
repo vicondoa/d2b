@@ -497,7 +497,7 @@ fn build_from(
 
 fn exit_gate(wave: u8) -> String {
     format!(
-        "ADR046-W{wave} exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded"
+        "ADR046-W{wave} exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the request-bound selected-roster panel seal recorded"
     )
 }
 

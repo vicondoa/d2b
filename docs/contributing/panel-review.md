@@ -1,7 +1,9 @@
 # Panel review
 
 Panel sign-off contract: phase gate, Discover-Fix-Verify lifecycle, selected
-roster and focus, and future producer parity.
+roster and focus, and future producer parity. Panel output is feedback
+documentation and delivery-review evidence; it is not a runtime security
+boundary, authorization mechanism, or durability guarantee.
 
 Binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel review":
 a phase closes only on unanimous sign-off, `signoff` is `true` iff
@@ -15,11 +17,13 @@ section 12.3.
 
 ## Phase gate
 
-Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. The
-integrator MUST NOT begin the next phase until every selected reviewer returns
-`signoff: true` (N/N for the selected roster size). The current role domain is
-the thirteen-seat selection table; the lifecycle selection artifact chooses
-the ordered roster and the roster may only widen.
+Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. A
+phase advances only after every selected reviewer returns `signoff: true`
+(N/N for the selected roster size). The current role domain is the
+thirteen-seat selection table; the lifecycle selection artifact chooses the
+ordered roster and the roster may only widen. The constitution permits a
+successor's implementation to start earlier only under the four conditions
+below; that exception never advances the successor's review or delivery gate.
 
 For plan-driven work, a "phase" is usually one wave from the plan's graph
 (`Wave 0`, `Wave 1`, ...). For plans touching fewer than three files, one phase
@@ -29,16 +33,35 @@ For each phase:
 
 1. **Plan review** - panel runs one comprehensive discovery over the plan,
    batches any fixes, and performs scoped verification until N/N sign-off.
-   The integrator may not dispatch implementation subagents until this gate
-   passes.
+   The integrator may not dispatch implementation subagents for this phase
+   until this gate passes.
 2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
 3. **Integration** - integrator merges subagent output.
 4. **Work review** - panel runs one comprehensive discovery over the
    integrated candidate, batches fixes, and performs scoped verification until
    N/N sign-off.
-5. **Advance** - only now may the integrator begin the next phase's
-   plan review.
+5. **Advance** - only now may the integrator begin the next phase's plan
+   review or binding delivery.
+
+### Permitted pipelined implementation
+
+The constitution permits implementation of the successor phase to begin before
+the predecessor's panel returns unanimous sign-off only when **all four**
+conditions hold:
+
+1. At least five of the predecessor's selected-roster reviews have returned.
+2. The predecessor's integration tests pass on its converged tree.
+3. The successor issues no panel request, produces no seal, and merges nothing
+   until the predecessor is sealed at full unanimity with zero recommendations
+   and merged to the integration lineage.
+4. The successor rebases onto the updated integration lineage after that merge
+   and before its own panel runs.
+
+Only implementation start is pipelined. Successor panel request, seal, and
+merge remain blocked until predecessor completion, and any rework caused by a
+predecessor finding is absorbed by the successor rather than used to weaken
+the predecessor's review.
 
 Panel prompts MUST include the validation evidence the integrator already
 ran for the phase (commands and pass/fail results) and MUST instruct
@@ -103,6 +126,8 @@ not a valid current record.
 Any content change invalidates sign-off for that candidate. The lifecycle
 roster remains selected, may widen, and verifies the new candidate without
 running a second discovery.
+Non-content dispositions and evidence updates do not by themselves create a
+new candidate snapshot; only an actual tree-content change does.
 
 Selected panel lanes may use optional full transient communication through the
 `d2b-caveman` contract. An explicit `normal` or `off` request wins. This is a
@@ -154,12 +179,14 @@ selected seat with the full candidate and supplied validation evidence, and
 requires an explicit complete result from every seat. `{ complete: true,
 findings: [] }` is a valid zero-finding result; an absent seat result is not.
 
-Discovery findings are merged into one shared ledger with deterministic `R`
-identifiers and complete source attribution. Implementation receives the full
-ledger and records exactly one supported disposition, justification, changed
-surface, and evidence for every issue. The integrator then reruns selection
-over the full candidate and every fix delta, unions each result with the
-lifecycle roster, and never removes a selected seat.
+All actionable discovery defects enter one shared ledger with deterministic `R`
+identifiers and complete source attribution, including `MINOR` and `NIT`
+observations. Implementation receives the full ledger and records exactly one
+supported disposition, justification, changed surface, and evidence for every
+issue. A lower-severity issue becomes non-blocking history only after that
+processing is complete; it is not omitted. The integrator then reruns
+selection over the full candidate and every fix delta, unions each result with
+the lifecycle roster, and never removes a selected seat.
 
 Verification receives the complete ledger, all responses, validation and
 self-review evidence, the latest delta, full candidate context, and each
@@ -179,6 +206,7 @@ candidate:
 ```bash
 ROUND=.scratch/panel/<round-id>
 NEXT=.scratch/panel/<next-handoff>
+NEXT_SELF_VERIFICATION=.scratch/panel/<next-self-verification>.json
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
@@ -196,8 +224,11 @@ conflicting regeneration, duplicate late sources, candidate or selection
 mismatch, missing prior responses, and malformed verification statuses.
 
 After the command, fill the blank responses with complete implementation
-responses. Then rerun selection with the new fix delta, prepare verification
-from the new ledger and response envelope, and stage the new packet:
+responses. Prepare a **fresh** self-verification artifact for the new
+candidate and fix delta; never reuse `$ROUND/self-verification.json` for the
+continuation. Then rerun selection with the new fix delta, prepare
+verification from the new ledger and response envelope, and stage the new
+packet:
 
 ```bash
 FIX_DELTA=.scratch/panel/<next-fix-delta>.json
@@ -208,7 +239,7 @@ NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
-  "$NEXT/responses.json" "$ROUND/self-verification.json" "$NEXT/verification" \
+  "$NEXT/responses.json" "$NEXT_SELF_VERIFICATION" "$NEXT/verification" \
   --candidate "$CURRENT_CANDIDATE" \
   --prior-selection "$ROUND/selection.json" \
   --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA"
@@ -217,8 +248,9 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <next-round-id> --selection "$NEXT_SELECTION" \
   --candidate "$CURRENT_CANDIDATE" \
   --ledger "$NEXT/discovery-ledger.json" --responses "$NEXT/responses.json" \
-  --self-verification "$ROUND/self-verification.json" \
+  --self-verification "$NEXT_SELF_VERIFICATION" \
   --verification-dir "$NEXT/verification" \
+  --lifecycle <lifecycle-id> \
   --evidence <finalized-evidence.md> \
   --reviewer-notes-dir <finalized-reviewer-notes>
 ```
@@ -245,6 +277,12 @@ The lifecycle selection is the one roster authority:
 same artifact. Current delivery request, record, attestation, and embedded
 seal panel objects carry `panel_format_version: 1`; legacy fixed-ten objects
 omit it. The workspace delivery schema remains version `2`.
+
+For Track A delivery, the lifecycle above is the nonbinding feedback phase.
+After unanimous approval and any content-changing fixes are complete, freeze
+the final candidate, create its snapshot and selection, issue the sole
+candidate-bound `panel-request`, generate records, and run `panel-attest`.
+Never create that request while the lifecycle can still change the tree.
 
 ## Fix passes are scoped to the ledger
 
@@ -383,7 +421,7 @@ already recovered one slice's uncommitted output in this program.
 | `kernel`          | Syscalls, descriptor and lock semantics, signals, mounts, filesystems, races, and kernel-version assumptions. |
 | `build`           | Build graphs, CI scheduling, toolchains, targets, hermeticity, caches, dependencies, packaging, and release artifacts. |
 
-Older commits and [CHANGELOG.md](CHANGELOG.md) entries may reference
+Older commits and [CHANGELOG.md](../../CHANGELOG.md) entries may reference
 the historical ten-seat or six-engineer rosters. The selection-table domain
 above supersedes them for current work. Legacy delivery artifacts remain
 readable under their strict fixed-ten compatibility format, including `rust`.
@@ -404,7 +442,8 @@ equivalent and cannot satisfy the gate.
 
 ## Commit-tag mapping
 
-The tag examples in [Commit conventions](#commit-conventions) use this
+The tag examples in
+[changelog and commit conventions](./changelog-and-commits.md) use this
 mapping, and every commit that comes out of a panel-fix round MUST
 carry the relevant tag:
 

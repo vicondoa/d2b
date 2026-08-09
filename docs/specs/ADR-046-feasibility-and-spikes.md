@@ -93,9 +93,9 @@ of the six classes defined in `docs/specs/README.md`:
    alternative rather than a required capability.
 5. **A spike never substitutes for the panel or for implementation
    validation.** Per D024 this task's initial output is documentation only,
-   and per the parent ADR's review process a ten-role panel runs only against
-   an integrated implementation candidate. Nothing in this document runs, or
-   claims to have run, that panel. Every spike below is additionally
+   and per the parent ADR's review process the request-bound selected-roster
+   panel runs only against an integrated implementation candidate. Nothing in
+   this document runs, or claims to have run, that panel. Every spike below is additionally
    scheduled to be **subsumed and then deleted**: once the named production
    work item exists with its own in-tree conformance/bench test achieving
    equal or stricter coverage, the disposable `proofs/<slug>/` crate is

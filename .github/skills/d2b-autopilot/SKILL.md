@@ -1,6 +1,6 @@
 ---
 name: d2b-autopilot
-description: Run a completed d2b plan end to end, unattended. Executes every wave - implement, validate, panel, fix, commit, PR, merge, seal, memory - and stops only on a mechanical condition. Use once a spec and plan exist and the plan has passed its panel gate.
+description: Run a completed d2b plan end to end, unattended. Executes every wave - implement, validate, feedback, fix, bind, PR, merge, seal, memory - and stops only on a mechanical condition. Use once a spec and plan exist and the plan has passed its panel gate.
 user-invocable: true
 ---
 
@@ -83,7 +83,8 @@ rewrite an existing legacy address.
 
 ## The per-wave loop
 
-Track A runs all steps. Track B runs steps 1 through 6 once, then 7 and 8.
+Track A runs the feedback lifecycle, binding delivery, PR/merge, and seal.
+Track B runs one feedback lifecycle followed by one PR/merge and has no seal.
 
 **1. Plan the slices.** Read the wave tasks and plan's file-ownership map. Give every
 slice disjoint files; serialize slices that would write the same file.
@@ -110,35 +111,49 @@ Two traps to avoid asserting past:
 
 Heavy lanes use public gated targets so the two-slot semaphore is respected.
 
-**4. Discover-Fix-Verify.** `/d2b-panel-round work`: create one lifecycle
-selection, dispatch one comprehensive discovery to its selected read-only
-roster, merge the shared ledger, and hand every issue to implementation with
-batch response and self-verification templates. Reselect over the full
-candidate and every fix delta, unioning the roster without narrowing it.
-Record the reviewed tip and supplied evidence for scoped verification.
+**4. Nonbinding Discover-Fix-Verify.** `/d2b-panel-round work`: create one
+lifecycle selection, dispatch one comprehensive discovery to its selected
+read-only roster, merge the shared ledger, and hand every issue to
+implementation with batch response and self-verification templates. Reselect
+over the full candidate and every fix delta, unioning the roster without
+narrowing it. Record the reviewed tip and supplied evidence for scoped
+verification. This is feedback only: do not create the delivery
+`panel-request`, final records, or attestation while content may still change.
 
-**5. Fix and verify.** If verification returns findings, run the canonical
+**5. Continue fixes and verification.** If verification returns findings, run
+the canonical
 `advance-verification` command against the exact selection, prior ledger,
 prior responses, adapted verification results, and current candidate. Fill
 its blank responses, rerun selection over the new fix delta, prepare
-verification, and stage the new request. Dispatch fix lanes **scoped strictly
+verification, and stage the new feedback packet. Dispatch fix lanes **scoped strictly
 to those findings** as proper task subagents from the exact reviewed
 worktree. A genuine defect found while fixing something else goes to
 `/d2b-memory record`, not this lifecycle. Revalidate and run scoped
 verification again. Any content change invalidates every prior phase sign-off;
-do not reopen comprehensive discovery. Never use a parent-worktree or legacy
-agent definition as a fallback.
+do not reopen comprehensive discovery. A blocked continuation requires a fresh
+self-verification artifact for the new candidate and an explicit lifecycle
+when staging. Never use a parent-worktree or legacy agent definition as a
+fallback.
 
-**6. Advance only on a unanimous panel and green enforcing validation.**
-Otherwise park.
+**6. Freeze and bind the final delivery packet (Track A only).** After the
+feedback lifecycle is unanimously approved and no content-changing fix
+remains, create the final
+snapshot and candidate-bound selection. Then create the sole delivery
+`panel-request`, generate records from that final packet, and run
+`panel-attest`. Never issue the request before the content-changing lifecycle;
+if content changes after a request, stop with an invalid candidate rather than
+creating a second request. A successor wave may do this only after its
+predecessor has completed the required panel, seal, and merge.
 
-**7. PR.** Push the branch and open the PR to `v3`. Record the change,
+**7. PR.** Push the owned feature/integration branch and open the PR to the
+protected integration target (`v3` or `main`, as applicable). Record the change,
 validation evidence, and substantive review outcomes; no AI, tool, or model
 attribution.
 
 **8. Merge.** See below.
 
-**9. Seal.** `/d2b-wave-delivery seal <wave>`. Track A only.
+**9. Seal.** `/d2b-wave-delivery seal <wave>`. Track A only, after the wave's
+items have merged through the PR flow.
 
 **10. Record wave memory**, write the checkpoint, advance.
 

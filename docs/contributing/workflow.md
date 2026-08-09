@@ -11,39 +11,45 @@ The binding one-line rules are in [`../../AGENTS.md`](../../AGENTS.md) under
 
 When agents or humans work on disjoint scopes concurrently, use git worktrees
 instead of branching in place. One worktree per agent isolates context and
-simplifies the final merge.
+simplifies integration into an owned feature/integration branch. A slice
+worktree is based on that owned branch, never directly on protected `main` or
+`v3`.
 
 ```bash
 # From the primary clone, one worktree per concurrent scope:
-git worktree add -b phase-<name> ../d2b-<name> main
+git worktree add -b phase-<name> ../d2b-<name> <owned-feature-or-integration-branch>
 ```
 
 Each agent commits inside its worktree on its `phase-<name>` branch. When scopes
-are disjoint (different files or non-overlapping regions), the integrator uses
-an octopus merge back to `main`:
+are disjoint (different files or non-overlapping regions), the integrator
+integrates them into the owned feature/integration branch:
 
 ```bash
-git checkout main
+git switch <owned-feature-or-integration-branch>
 git merge --no-ff phase-a phase-b phase-c
 ```
 
 If branches touch the same lines, use a sequential merge with conflict
-resolution - octopus requires cleanly disjoint scopes.
+resolution - octopus requires cleanly disjoint scopes. Do not merge a slice
+directly into protected `main` or `v3`; the owned branch lands through the
+required pull request flow.
 
 ## Finish-of-work invariant: merge back into the primary clone
 
 A worktree is a workspace, not a destination. When an agent's scope is done -
-implementation and tests green and panel signed off - it merges the branch into
-`main` in the **primary clone (`projects/d2b`)** before declaring completion.
-Finished side branch work still "awaits integration", which the agent owns.
+implementation and tests green and panel signed off - the integrator merges
+the slice into the owned feature/integration branch in the **primary clone
+(`projects/d2b`)** before declaring the slice integrated. Finished side branch
+work still "awaits integration", which the integrator owns. The owned branch is
+then landed in protected `main` or `v3` only through a pull request.
 
 Concretely, the agent that owns a worktree:
 
 1. Verifies green on the worktree (`cargo test --workspace`, the
    relevant `tests/*.sh` gates, panel signoff for plan-driven work).
-2. From the primary clone (`/home/paydro/projects/d2b`),
-   fast-forwards (or octopus-merges, per the rules above) the
-   worktree's `phase-<name>` branch into `main`.
+2. From the primary clone (`/home/paydro/projects/d2b`), fast-forwards (or
+   octopus-merges, per the rules above) the worktree's `phase-<name>` branch
+   into the owned feature/integration branch.
 3. If there is unrelated dirty WIP in the primary clone (operator
    was editing in place), stash it, do the merge, pop the stash,
    resolve any textual conflicts in a way that preserves both sets
@@ -58,9 +64,9 @@ Only after the merge lands does the agent call `task_complete`.
 ## Stacked PR workflow for large waves
 
 Large realm/control-plane waves that are not file-disjoint by default land
-through a private stacked-PR workflow, not by direct local merges to `main`.
-This is the default for ADR-scale work where one branch defines contracts that
-later branches consume.
+through a private stacked-PR workflow, not by direct local merges to protected
+`main` or `v3`. This is the default for ADR-scale work where one owned
+feature/integration branch defines contracts that later branches consume.
 
 Use this shape:
 
@@ -70,10 +76,12 @@ Use this shape:
    `realm-workloads-w17-wlcontrol`.
 2. Stack only when necessary. A later branch may target an earlier PR branch
    while it consumes new DTOs, schemas, or option contracts. Branches that do
-   not depend on each other target `main` directly.
-3. Open PRs for every slice. Do not merge locally into `main`, and do not push
-   directly to `main`. The integrator merges only through GitHub PR flow after
-   local validation, CI, and required panel/review gates pass.
+   not depend on each other target the owned feature/integration branch.
+3. Open or update PRs for the slices as the stack requires, and integrate their
+   commits into the owned feature/integration branch. Do not merge locally into
+   protected `main` or `v3`, and do not push directly to either protected
+   branch. The owned branch lands only through the required GitHub PR flow
+   after local validation, CI, and panel/review gates pass.
 4. PR bodies must list the change, validation evidence, and any substantive
    panel/review outcomes. Do not include AI/tool/model attribution.
 5. Review and panel agents inspect code, docs, plans, screenshots, and supplied
@@ -175,9 +183,11 @@ Commit before running `static.sh` / the smoke evals. Two reasons:
    is the right one to carry into framework work too.
 
 For plan-driven multi-phase work, green tests are not enough to
-advance the work. See [Panel review](#panel-review): the
-integrator may not dispatch implementation subagents for a phase,
-or begin the next phase, until the relevant panel gate passes.
+advance the work. See [Panel review](./panel-review.md): the
+integrator may not dispatch implementation subagents for a phase before its
+plan gate, or begin the next phase's review or binding delivery, until the
+relevant panel gate passes. A successor's implementation may start earlier
+only under the four pipelining conditions documented there.
 
 ## "Existing code is canon"
 
@@ -199,13 +209,14 @@ behaviour described here, update this file in the same commit.
 
 ## Landing changes (PR workflow)
 
-`main` is protected: changes land via pull requests, not direct
-pushes. Develop on a feature branch (or worktree), validate locally
-against the gates above, open a PR, let CI run, then squash-merge. The
-detailed wave-tag commit convention in
-[Commit conventions](#commit-conventions) applies to in-development
-commits on those feature branches; `main` itself is maintained as a
-by-release history.
+`main` and `v3` are protected: changes land via pull requests, not direct
+pushes. Develop on an owned feature/integration branch (or its worktree),
+validate locally against the gates above, open a PR to the applicable
+protected target, let CI run, then squash-merge. The detailed wave-tag commit
+convention in
+[changelog and commit conventions](./changelog-and-commits.md) applies to
+in-development commits on those feature branches; `v3` remains the clean-break
+integration lineage and `main` remains a by-release history.
 
 PR bodies record the change, validation evidence, and substantive
 review outcomes only. Do **not** tag or list the AI agent, assistant, or

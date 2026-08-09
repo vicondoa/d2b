@@ -59,25 +59,51 @@ Stages, in workflow order: `snapshot`, `validate-import`, `panel-request`,
 
 Read this before planning a wave; it determines the PR shape:
 
+- Track A first runs a **nonbinding** Discover-Fix-Verify lifecycle through
+  unanimous approval. It does not create a delivery `panel-request`, final
+  records, or attestation while content may still change.
+- After that lifecycle is approved, freeze the content and bind the final
+  snapshot and selection. Create the one delivery `panel-request`, generate
+  records, and run `panel-attest` against that same final candidate.
 - `seal` requires **every work item in the current wave** to be merged.
 - The wave exit boundary, covering the panel request, the seal, and merge
   eligibility, requires **every prior wave** to be merged.
 
 Thus wave N+1 cannot open a panel request until wave N merges. Running every
 wave and raising one PR at the end fails at the first seal.
-The per-wave order is:
+The Track A order is:
 
 ```
-implement -> validate -> panel -> fix -> commit -> push -> PR -> CI -> merge -> seal
+implement -> validate -> nonbinding discovery -> fix -> scoped verification
+-> unanimous approval -> final snapshot/selection -> one panel-request
+-> records -> panel-attest -> push -> PR -> CI -> merge -> seal
+-> merge-eligibility
 ```
 
-Track B work has no seal, so it is genuinely one PR for the whole feature.
+Track B work has no seal, so it is one feedback lifecycle followed by one PR.
+The constitution permits a successor wave to begin implementation early only
+under its four pipelining conditions; its panel request, seal, and merge remain
+blocked until the predecessor is complete.
 
 ## Procedure
 
-### 1. Snapshot
+### 1. Nonbinding feedback lifecycle
 
-Bind the wave's base and head commits into one immutable candidate. Downstream
+Run `/d2b-panel-round work` for one comprehensive discovery, one shared
+ledger, batched fixes, and scoped verification. Continue the lifecycle until
+the selected roster approves the current content unanimously. Reselect over
+the full candidate and every fix delta, widening the roster but never
+narrowing it.
+
+This is feedback, not the binding delivery request. Do not create
+`panel-request`, final delivery records, or an attestation before the
+content-changing lifecycle is complete. If a fix changes the tree, continue
+the scoped lifecycle on that candidate.
+
+### 2. Final snapshot and selection binding
+
+After unanimous approval and no further content-changing fix is pending, bind
+the wave's final base and head commits into one immutable candidate. Downstream
 steps use this address. Record the `candidate_id`, `content_id`, and
 `snapshot_sha256` in `.scratch/panel/<round>/current-candidate.json` so the panel
 record helper can join verdicts.
@@ -90,16 +116,16 @@ The one exception is a **history-only rebase**. Review survives when content is
 provably unchanged and matches on content identity rather than the full digest
 triple. Validator evidence uses the opposite rule.
 
-### 2. Panel request and selected lifecycle
+### 3. Sole request and records
 
-`panel-request --selection PATH` requires the candidate-bound lifecycle
-selection and stores its exact ordered roster, provider, model, and reasoning
-effort. Then run `/d2b-panel-round work` against the same candidate: one
-comprehensive discovery, one shared ledger, batch implementation responses and
-self-verification, and scoped verification. The lifecycle roster may widen
-for a fix delta but never narrows.
+Run `panel-request --selection PATH` only after the final snapshot and
+selection exist. It stores the exact ordered roster, provider, model, and
+reasoning effort for that candidate. Generate the final records from the
+candidate-bound lifecycle packet. A pipelined successor waits for predecessor
+completion before this request, even if its implementation and feedback
+lifecycle started early.
 
-### 3. Attest
+### 4. Panel attest
 
 `panel-attest` validates a directory with exactly one strict current record per
 role stored in the request, all bound to the same candidate. It enforces
@@ -111,7 +137,7 @@ artifacts omit it and retain `rust`.
 The panel model is deliberately not the coding model, so a lane cannot both
 author a change and attest to it.
 
-### 4. Seal, then merge eligibility
+### 5. Seal, then merge eligibility
 
 Seal after the wave's items are merged. Then `merge-eligibility` for the exit
 boundary.
