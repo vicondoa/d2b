@@ -24,8 +24,8 @@ and the storage feasibility proof. At program opening, 14 of 545 enumerated work
 preserved in the primary task set. At committed HEAD
 `868469bf9c293cd48fff483717f14cb88c246821`, the authoritative manifest records 68 `Merged`
 and 477 `Planned`. The terminal wave W8 has no work items yet by design: its contents are the
-delivery friction accumulated across the program and are recorded at W7 close, so the
-program's final total exceeds 545.
+delivery friction accumulated across the program and are triaged and recorded only after W7
+is sealed, merged, and cleaned up, so the program's final total exceeds 545.
 
 The decisive gap is that **none of the delivered foundation is reachable by an operator**.
 Every W0/W1 crate is deliberately test-only and unwired from production: the bus
@@ -484,7 +484,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   interval. Journal, segment, and
   export records MUST use domain-separated fixed digests for operation, correlation,
   authoritative subject, Zone, and resource identifiers; raw values MUST remain private and
-  absent from audit output, errors, logs, metrics, spans, and redacted `Debug`. Raw propagated
+  absent from audit output, telemetry, logs, metrics, spans, redacted `Debug`, and unrelated
+  error context. The sole output exception is a direct Version 2 operator CLI/JSON status or
+  recovery response: bounded `zoneRef` and `operationId` values that the same operator
+  supplied or received MAY appear there as required recovery coordinates. Those fields MUST
+  remain confined to that response and MUST NOT become telemetry labels, span attributes,
+  exported audit identities, or unrelated error context. No other raw identity uses this
+  exception. Raw propagated
   trace context MUST remain private; an authoritative row or export may retain only its typed
   domain-separated fixed digest. Audit constructors MUST accept typed fixed digests rather
   than raw identifiers, and encoded records MUST reject bytes beyond the fixed limit. Replay
@@ -516,7 +522,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `ResourcePhase::Degraded`; `ResourceStatus.outcome.code` is
   `StatusCode("committed-pending-audit")` with retryable, safe remediation and no raw sink
   detail; `ResourceStatus.update.state` is `UpdateState::Blocked`; and
-  `ResourceStatus.update.operation_id` is `Some(original_operation_id)`. Existing bounded,
+  `ResourceStatus.update.operation_id` is `Some(original_operation_id)`. That response field
+  and its bounded Version 2 CLI projection are recovery coordinates under the sole direct
+  operator-response exception above, not telemetry or audit identity. Existing bounded,
   redacted condition, outcome, and update fields carry only the semantic status and
   instructions to retry with the same ID or inspect status. They MUST NOT expose a subject,
   mutation payload, raw sink error, or a claim that the commit was undone. The affected Zone
@@ -602,11 +610,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   T589 MUST implement one hermetic closed-profile validator
   used by panel-request/panel-attest, seal, and merge-eligibility, with negative tests for missing, extra,
   duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
-  MUST require all seven records to bind F and F's tree. Before F is final, T220 MUST run the
-  nonbinding `/d2b-panel-round plan` phase surface over each integrated provisional candidate.
-  Findings scope a fix round through T220 and require validation plus a delta/full-context
-  phase-panel rerun; that loop may iterate and issues no binding delivery request. Only a
-  unanimous phase-panel result may freeze final F for T600-T602. Wave 5's retained
+  MUST require all seven records to bind F and F's tree. Before F is final, T220 MUST create
+  exactly one nonbinding `/d2b-panel-round plan` lifecycle with one stable discovery ledger.
+  For each integrated provisional candidate and each fix, it MUST rerun deterministic
+  selection against the current candidate, preserve that lifecycle and ledger, and allow the
+  selected roster only to widen. The first selected roster performs the lifecycle's sole
+  comprehensive discovery. Every provisional candidate and fix then receives scoped
+  verification with the full stable ledger, responses, self-verification, fix delta, and full
+  candidate. T220 MUST NOT rerun comprehensive discovery or create a successor lifecycle.
+  Only unanimous scoped verification may freeze final F for T600-T602. This loop issues no
+  binding delivery request. Wave 5's retained
   `panel-request.json` has already consumed its sole binding request. T219 performs no binding
   action and remains non-authorizing until the external delivery-contract/tooling owner has
   landed its contract and validator and that validator imports exactly one
@@ -856,7 +869,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   gate; see FR-057.
 - **FR-048**: A wave's implementation MAY begin before its predecessor's panel completes,
   provided at least five of the predecessor's selected-roster reviews have returned and the
-  predecessor's integration tests pass on its converged tree.
+  predecessor's integration tests pass on its converged tree. This permission does not apply
+  to W8 triage or entry: T557 and T558 wait until W7 is sealed, merged, and cleaned up.
 - **FR-049**: A wave that started under FR-048 MUST NOT issue a panel request, produce a seal,
   or merge until its predecessor is sealed at N/N unanimity for its selected roster with zero recommendations and
   merged to the integration lineage. It MUST then rebase onto the updated integration lineage
@@ -873,7 +887,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   nonblocking history and MUST keep admitted late BLOCKER and MAJOR findings blocking.
   There is no round-count threshold and no later transition from blocking to nonblocking.
 - **FR-053**: The program MUST maintain the friction log as a continuous planning input,
-  review it at every wave close, and feed it to the terminal wave's triage. The legacy
+  review it at every wave close, and feed it to the terminal wave's triage only after W7 is
+  sealed, merged, and cleaned up so the triage includes actual close and cleanup friction. The legacy
   deferred-findings register is historical compatibility data and MUST NOT receive current
   lifecycle findings. Neither register may contain panel transcripts, validation command
   output, or attestation payloads.
@@ -990,6 +1005,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   *delivered* early and its evidence is never *accepted* early; it does not mean implementation
   must wait. Once FR-036's external prerequisite is satisfied, this matches the delivery
   contract's ordinary pipelined-start conditions restated in FR-048 through FR-050.
+  W8 is the explicit exception: its T557 triage and T558 entry MUST wait for W7 seal, merge,
+  and cleanup, then use the updated `v3` lineage.
 - **FR-044**: Every wave's work MUST land through pull requests opened against the
   integration lineage and merged only after that wave's gates pass: validation evidence
   imported for the exact snapshot, unanimous panel sign-off, a seal, and an eligible
@@ -1004,8 +1021,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Before F8 freezes, the release binary/package versions and flake package versions MUST
   equal the changelog's d2b 3.0.0 version, and F8 MUST contain either a matching complete
   prebuilt manifest or the existing explicit source-fallback manifest shape. T573 MUST first
-  prove merged `v3` is byte-identical to sealed F8 and that this release state is correct;
-  only its exact-commit manual publication dispatch may create the immutable tag and release.
+  resolve the current merged `v3` HEAD, prove its tree is byte-identical to the sealed F8
+  tree, and bind publication to that merged HEAD commit and release state. It MUST NOT require
+  the merged commit OID to equal the sealed feature-tip commit OID; a squash or merge commit
+  is eligible only when its tree equals the sealed F8 tree. Only the manual publication
+  dispatch for that merged `v3` HEAD may create the immutable tag and release.
   A post-tag manifest commit or pull request MUST NOT be treated as repairing the tag.
 - **FR-046**: Where the specification set's prose and the generated implementation graph or
   work-item manifest disagree on wave assignment, destination paths, or work-item identity,
@@ -1332,9 +1352,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   based on proven identity in 100 percent of tested attempts.
 - **SC-010**: No secret, credential, command output, raw host path, or personally
   identifying value, and no raw Zone, resource, operation, correlation, or trace identity,
-  appears in telemetry, audit, logs, or error output across the full redaction test matrix.
-  Metrics and OTEL resources carry no identity dimension; correlation fields use only their
-  typed domain-separated fixed digest.
+  appears in telemetry, audit, logs, or unrelated error output across the full redaction
+  test matrix. Metrics and OTEL resources carry no identity dimension; correlation fields
+  use only their typed domain-separated fixed digest. Direct Version 2 operator CLI/JSON
+  status and recovery responses may return only the bounded `zoneRef` and `operationId`
+  recovery coordinates supplied or received by that operator, and tests prove those fields
+  do not propagate into telemetry, spans, exported audit, or unrelated errors.
 
 #### Wave 5 production completion
 
@@ -1374,7 +1397,7 @@ carries the object verbatim rather than copying selected fields into the task ro
   record never makes its ID reusable. Restart replay produces zero missing records and zero duplicate
   logical exports by fixed operation digest plus mutation ordinal. Raw operation,
   correlation, subject, Zone, resource, and trace canaries occur zero times in audit/export/
-  error/log/metric/span/Debug output; constructors accept only typed fixed digests and
+  internal-error/log/metric/span/Debug output; constructors accept only typed fixed digests and
   oversize records refuse. Configured segment limits and post-export journal retention hold,
   early journal prune refuses, and any prune or file/directory-sync failure produces typed
   degraded health. The typed `InspectOperation` path returns the same durable pending/final
@@ -1438,8 +1461,8 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-019**: Every work item in the specification set is recorded as merged. The initial
   545-item census was 14 merged and 531 planned; the current manifest census at the receipt
   HEAD is 68 merged and 477 planned. Release also includes every item recorded for the
-  terminal wave at W7 close. The count is read from the manifest at release time and is not
-  fixed at 545.
+  terminal wave after W7 is sealed, merged, and cleaned up. The count is read from the
+  manifest at release time and is not fixed at 545.
 - **SC-020**: Every wave from W2 through W8 carries a seal bound to its exact snapshot, with
   unanimous selected-roster panel sign-off and zero outstanding recommendations. W0 and W1 carry a
   written delivered-without-seal historical record, not a substitute seal or constitutional
@@ -1452,8 +1475,9 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-022**: Manual hardware, live-host, and cloud validation tiers have each been executed
   at least once against the final candidate with recorded external evidence, on the
   operator's daily-driver host carrying the real device set.
-- **SC-023**: d2b 3.0 is tagged and published from the `v3` lineage with all six release-gate
-  conditions satisfied against the final candidate snapshot.
+- **SC-023**: d2b 3.0 is tagged and published from the current merged `v3` HEAD whose tree
+  equals the sealed F8 tree, with all six release-gate conditions satisfied against the final
+  candidate snapshot.
 - **SC-024**: 100 percent of identified desktop companions that consume d2b's public
   operator contracts have a compatible version verified against the release candidate on a
   live host before 3.0 is tagged, so an operator's desktop is not degraded by adopting 3.0.
@@ -1466,6 +1490,7 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-027**: Every current wave seals at N/N unanimity for its selected roster and merges strictly after its predecessor
   did, in 100 percent of waves. Zero waves issue a panel request while their predecessor is
   unsealed, and zero waves panel against a snapshot that predates their post-merge rebase.
+  W8 begins neither triage nor entry until W7 seal, merge, and cleanup are complete.
 - **SC-028**: Every current lifecycle completes one comprehensive discovery, one stable
   shared ledger, batched fixes and self-verification, and scoped verification. Zero findings
   become nonblocking because of a round count: pre-existing late MINOR and NIT observations
@@ -1504,6 +1529,8 @@ carries the object verbatim rather than copying selected fields into the task ro
 - Delivery proceeds in the specified wave order W2 through W8. Sealing and merging are
   strictly ordered and no partial-wave advance is permitted, but implementation start is
   pipelined; the entry-evidence versus exit-evidence distinction is stated in FR-057. The
+  W8 terminal-friction wave is the one entry exception: its triage and plan gate wait for W7
+  seal, merge, and cleanup so they operate on actual observed friction.
   program terminates at the release of d2b 3.0, not at feature completeness: the release
   gate is evaluated against the final wave's snapshot, because gating earlier would release
   a candidate that a later wave still modifies.

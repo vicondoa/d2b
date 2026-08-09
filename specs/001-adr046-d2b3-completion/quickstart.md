@@ -78,7 +78,10 @@ For `adr046w5`, the exact implementation and close chain is
 T220 -> F -> {T600,T601} -> T602 -> T219`.
 T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
 `SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
-remaining content change before F. T219 remains an external-disposition gate because Wave 5
+remaining content change before F through exactly one nonbinding lifecycle and one stable
+discovery ledger. Every provisional candidate or fix reruns deterministic widen-only
+selection and scoped verification; comprehensive discovery runs once and is never rerun.
+T219 remains an external-disposition gate because Wave 5
 already consumed its binding request; it performs no binding action. Until the
 external delivery-contract/tooling owner lands the contract and typed validator for
 `Wave5RetainedRequestDispositionV1`, and that validator imports one record bound to the
@@ -132,9 +135,12 @@ Never invoke an internal `heavy-lane-*` target directly - it fails closed by des
 
 **`adr046w5` exception:** this subsection's `/d2b-panel-round work` instruction is forbidden
 for this wave because its binding request is already consumed. Its only panel work is T220's
-repeatable, nonbinding `/d2b-panel-round plan` phase review. Those rounds create no delivery
-request, reservation, attestation, or seal. After T220 freezes F, run T600, T601, and T602,
-then stop for T219's accepted external disposition. Do not fall through to section 5.
+one nonbinding `/d2b-panel-round plan` lifecycle with one stable discovery ledger. For every
+provisional candidate or fix, rerun deterministic selection, widen but never reduce the
+roster, and run scoped verification with the ledger and full candidate. Run comprehensive
+discovery exactly once. These iterations create no delivery request, reservation,
+attestation, or seal. After T220 freezes F, run T600, T601, and T602, then stop for T219's
+accepted external disposition. Do not fall through to section 5.
 
 Before any panel lane is dispatched, run both gates against **this wave scope**:
 
@@ -158,8 +164,10 @@ There is no separate dotted verification or review command.
 
 Clear every actionable content finding, at any severity, including constitution conflicts, before the
 binding panel request on an ordinary unconsumed wave. For `adr046w5`, a defect found here
-returns to T220, reruns its nonbinding plan round, freezes a replacement F, reruns T600-T602,
-and stops again for the external disposition; no binding panel is invoked.
+returns to T220, preserves its lifecycle and stable discovery ledger, reruns deterministic
+widen-only selection and scoped verification without comprehensive discovery, freezes a
+replacement F, reruns T600-T602, and stops again for the external disposition; no binding
+panel is invoked.
 
 ### 5. Snapshot, validate, panel, seal
 
@@ -304,7 +312,9 @@ Any content change before the binding panel request invalidates validation evide
 re-snapshot, and rerun before requesting the panel. For `adr046w5`, the retained historical request already consumed the binding surface. F and
 its evidence identity do not receive a request, and no candidate receives another one through
 this feature. T220 may replace provisional candidates only during nonbinding
-pre-request phase convergence. After T602, stop until an accepted external disposition
+pre-request phase convergence within its one lifecycle and stable discovery ledger, with
+deterministic widen-only reselection and scoped verification but no repeated comprehensive
+discovery. After T602, stop until an accepted external disposition
 preserves the consumed request and authorizes a specific non-request close action; never
 silently re-attest changed content, waive findings, or infer successor admission. Any
 authorized integration-lineage merge preserves F's tree.
@@ -921,6 +931,10 @@ decision, so the attestation gate is the actual safety net, not a formality.
 
 ## Release validation (W8)
 
+Do not triage or enter W8 until T556 has completed W7 seal, merge, ordered worktree/branch/
+target/Nix-store cleanup, and the residue audit. T557 derives the terminal work set only from
+that complete observed friction, and T558 starts from the resulting updated `v3` HEAD.
+
 All six release-gate conditions, evaluated against the **final** candidate:
 
 1. The five closing specs Accepted with evidence imported
@@ -943,11 +957,12 @@ Plus this program's own additions:
 # weezterm is excluded by a recorded negative surface-consumption determination
 ```
 
-After T561 merges without publishing, T573 must compare merged `v3` commit and tree with the
-sealed F8 identities before dispatching publication for that exact commit. The workflow
-repeats version, manifest/fallback, artifact-name, embedded-version, and hash checks before
-creating the tag. A push to `v3`, a mismatched identity, or a post-tag manifest PR cannot
-publish or repair the immutable tag.
+After T561 merges without publishing, T573 resolves the current merged `v3` HEAD and proves
+its tree equals the sealed F8 tree. It does not require the merged commit OID to equal the
+sealed feature-tip commit OID. Publication binds to and builds from that merged `v3` HEAD;
+the workflow repeats the merged-HEAD/sealed-tree, version, manifest/fallback, artifact-name,
+embedded-version, and hash checks before tagging that HEAD. A push to `v3`, a mismatched
+tree, or a post-tag manifest PR cannot publish or repair the immutable tag.
 
 **Expected**: every companion works and T573 passes, or the release holds (FR-039, SC-024).
 

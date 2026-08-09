@@ -244,7 +244,8 @@ which is a worse failure than referencing the authoritative bytes. Instead:
 
 **Completeness reconciles**: the initial 545-item census was 14 `Merged` and 531 `Planned`.
 At the receipt HEAD it is 68 `Merged` and 477 `Planned`, splitting
-8/6/19/4/31/146/258/73 across W0-W7 with W8 recorded at W7 close. The graph moved
+8/6/19/4/31/146/258/73 across W0-W7 with W8 recorded only after W7 seal, merge, and cleanup.
+The graph moved
 `ADR046-process-002` from W4 to W6 and leaves it `Planned`; T039 follows that state and wave
 without renumbering. Every item carries a non-empty `removalProof`, so FR-023's per-path
 proof obligation is already itemized rather than needing to be invented.
@@ -318,18 +319,22 @@ applies without modification.
 | W5 (`adr046w5` delivery address) | 7 | 146 + 15 local completion/evidence tasks + T603 | 12 manifest groups + the serialized completion graph | FR-036 and T072 gate T603's exclusive-editor reconciliation. Before T220 may freeze F, an accepted Network contract/work-item amendment must replace every current-facing sole Network-opt-in path with the double-opt-in contract, default both inputs false, and regenerate the settled T336-T355 W6 ownership plus four-case obligations without moving them before T221. The retained binding request remains externally dispositioned only. |
 | W6 | 27 manifest dossiers | 258 manifest items + T604 operator acceptance | 5 families; T604 is a later file-disjoint acceptance slice after T336-T355 merge | FR-036 first; T221 selected-roster plan lifecycle before W6 implementation. T336-T355 own the double-opt-in Network production path and four-case matrix. T604 remains W6 acceptance-only, consumes that merged implementation, and emits `operator-nix-activation-cleanup` only for F6; T479 requires that result plus `Provider/runtime-cloud-hypervisor` Guest acceptance, and T480 revalidates both before close. |
 | W7 | 5 | 73 | 5 parallel | FR-036 external constitution amendment first; T481 plan panel before implementation; T555 work panel after convergence |
-| W8 | 0 | determined by T557 at W7 close | friction closure | FR-036 external constitution amendment first; T558 plan panel after triage and before implementation; T565 work panel after convergence |
+| W8 | 0 | determined by T557 after W7 seal, merge, and cleanup | friction closure | FR-036 external constitution amendment first; no pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
 #### W8 release freeze and publication
 
 The release DAG is:
 
 ```text
-T557 + T558 -> T559 -> T571 -> {T562,T568,T570,T572}
+T556 -> T557 -> T558 -> T559 -> T571
+  -> {T562,T568,T570,T572}
   -> T566 release-state commit -> T560 freeze F8
   -> {T563,T564,T567,T569} -> T565 -> T561 merge-only
-  -> T573 identity/prepublication check -> exact-F8 tag and publication
+  -> T573 identity/prepublication check -> merged-v3-HEAD tag and publication
 ```
+
+T556 completion includes W7 seal, merge, ordered cleanup, and the residue audit. T557 and
+T558 cannot start from a partial W7 close.
 
 T566 is the sole pre-freeze release-state writer after W8 convergence. It owns
 `.github/workflows/release-host-binaries.yml`, `nix/prebuilt.json`, `flake.nix`, the six
@@ -344,17 +349,18 @@ object, which
 `nix/prebuilt.nix` already interprets as source build. A matching complete prebuilt manifest
 would also satisfy the contract, but a stale 1.4.1 manifest cannot. T560 verifies those exact
 bytes, version parity, and that the publication workflow has no push trigger. The workflow is
-manual-only, accepts the expected sealed commit/tree and version, and places every build,
-tag, and release job behind its prepublication identity job. It does not create a post-tag
-manifest repair pull request.
+manual-only, accepts the expected sealed tree, the merged `v3` HEAD commit selected at
+dispatch, and the version, and places every build, tag, and release job behind its
+prepublication identity job. It does not create a post-tag manifest repair pull request.
 
-T561 can therefore merge F8 to `v3` without publishing. T573 first proves merged `v3` has
-the exact sealed F8 commit and tree, the tag is absent, versions are 3.0.0, and source fallback
-is still explicit. It then dispatches publication for that exact commit. The workflow
-repeats those checks, builds artifacts from that checkout, verifies artifact names, embedded
-versions, and hashes, and creates the tag and release only after they pass. Any mismatch
-publishes nothing; fixing content requires a new pre-freeze candidate rather than repairing
-an immutable tag.
+T561 can therefore merge F8 to `v3` without publishing. T573 resolves the current merged
+`v3` HEAD, proves its tree equals the sealed F8 tree, and verifies the tag is absent, versions
+are 3.0.0, and source fallback is still explicit. It does not require that merged HEAD commit
+OID to equal the sealed feature-tip OID. It dispatches publication for the merged `v3` HEAD
+commit and sealed tree. The workflow repeats those checks, builds artifacts from that merged
+HEAD checkout, verifies artifact names, embedded versions, and hashes, and creates the tag
+and release only after they pass. Any mismatch publishes nothing; fixing content requires a
+new pre-freeze candidate rather than repairing an immutable tag.
 
 #### W2-W6 host-continuity close gate
 
@@ -552,7 +558,11 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    domain-separated digests for operation, correlation, subject, Zone, resource, replay
    binding, and any retained trace correlation; no constructor accepts their raw string
    equivalents. Raw values stay only in bounded private operation/replay state with redacted
-   `Debug`, and raw trace context is excluded from authoritative rows and exports. The
+   `Debug`, and raw trace context is excluded from authoritative rows and exports. The sole
+   output exception is a direct Version 2 operator CLI/JSON status or recovery response,
+   which may return bounded `zoneRef` and `operationId` values supplied or received by that
+   operator as recovery coordinates. Those fields never become telemetry labels, span
+   attributes, exported audit identities, or unrelated error context. The
    unprivileged Zone runtime owns the drain state machine, but every root-owned filesystem
    effect crosses one typed broker op carrying only fixed-digest records and bounded rotation
    policy. The root broker is the sole `SegmentWriter` owner and holds the root-owned segment
@@ -777,7 +787,7 @@ fixtures, transitions, implementation owners, and gates.
 | Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/{resource_runtime.rs,lib.rs}`, `packages/d2b/src/{lib.rs,dispatch.rs,host_generation.rs}`, `packages/d2b/Cargo.toml`, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, `flake.nix`, `examples/{minimal,graphics-workstation,multi-env,with-entra-id,with-observability}/{configuration.nix,flake.nix}`, `templates/default/{configuration.nix,flake.nix}`, and the owned Nix/VM tests. It adds host-generation commands beneath the sole public `d2b` binary; no standalone executable or alias is emitted. T599 is the later serialized owner of `packages/d2b/src/dispatch.rs` and may only reconcile that frozen namespace with the remaining CLI. T595 composes the production Zone runtime and unprivileged opaque-intent deployment path, while the existing broker service owns privileged continuation. Source-floor schemas, fixtures, poison registries, and transitions come only from T595-assigned generated `VD2-SC002-*` rows. The focused Nix tests pin audit defaults/bounds/placement and valid/boundary/missing `hostGenerationRebuildRef` evaluation. No new unit, daemon rollback owner, caller-selected privileged executable, or feature-local registry is permitted. |
 | External Network contract migration and settled W6 ownership | external contract/work-item amendment; no feature implementation owner | The accepted amendment must set `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`, default both inputs false, and remove every current-facing sole Network-opt-in path before T220. It must regenerate T336-T355 as authoritative W6 owners under T221 for the production adapter, net-VM path, and all four Network/Host production cases. Existing code keeps `NetworkEffectPort` in `d2b-provider-network-local::controller` and lacks the production adapter; that implementation gap remains W6 work rather than a reason to move the rows into Wave 5. |
 | File-disjoint Wave 5 acceptance and docs | T596-T599 | T596-T599 start after T595. T599 owns the CLI contract, public recovery runbook, generated action mapping, and client-side operation-ID response-loss proof. T604 is not in this Wave 5 fan-out. |
-| Integrator convergence and freeze | T220 | Merges every Wave 5 slice and generated artifact, verifies accepted Version 2 and generated Wave 5 `VD2-SC002-*` traceability, folds exactly twelve fragments, requires the T599 runbook/action map, and runs integration, CI, and drift. It rejects F unless the accepted double-opt-in Network migration removes every current-facing sole-opt-in path and the regenerated manifest retains T336-T355 plus all four cases as W6 work under T221. It does not require or claim that W6 implementation. T604 remains W6 acceptance-only and is not part of the Wave 5 exact-seven profile. Each provisional candidate uses one current selected-roster lifecycle; every selected seat must approve before F. |
+| Integrator convergence and freeze | T220 | Merges every Wave 5 slice and generated artifact, verifies accepted Version 2 and generated Wave 5 `VD2-SC002-*` traceability, folds exactly twelve fragments, requires the T599 runbook/action map, and runs integration, CI, and drift. It rejects F unless the accepted double-opt-in Network migration removes every current-facing sole-opt-in path and the regenerated manifest retains T336-T355 plus all four cases as W6 work under T221. It does not require or claim that W6 implementation. T604 remains W6 acceptance-only and is not part of the Wave 5 exact-seven profile. T220 creates exactly one current selected-roster lifecycle and one stable discovery ledger. For every provisional candidate or fix it reruns deterministic selection, permits only roster widening, and runs scoped verification against that ledger and the full candidate; comprehensive discovery runs exactly once. Every selected seat must approve before F. |
 | Frozen-candidate evidence | T600-T601 | Read-only evidence lanes run against F. They write delivery evidence only, not repository files, and emit the exact seven closed validation identifiers assigned below. They may run together subject to the heavy-gate limit. |
 | Mechanical evidence convergence | T602 | Revalidates exactly one T072 historical/current remedial disposition without requiring or changing T072's checkbox, then verifies dependency closure, resume identities, clean F, T220's unanimous final phase-panel receipt, and the exact evidence-identifier multiset. T219 is blocked until it passes. |
 | External disposition and conditional close | T219 | Revalidates the T072 disposition, T603 phase-plan chain, and T220 final nonbinding phase-plan receipt, but those process rounds do not replace or dispose the retained Wave 5 binding delivery request. T219 first requires the external owner to land the delivery-contract/tooling change and validator, then imports exactly one valid `Wave5RetainedRequestDispositionV1` bound to the byte-preserved request and exact F. Before that import, T219 authorizes no request, attestation, seal, merge-target registration, merge eligibility, or merge. `remain-blocked` stays blocked; `abandon-without-merge` is terminal and cannot advance; `recover-panel-without-new-request` permits only the external recovery-attestation surface, still requiring the complete unanimous selected-roster exact-F lifecycle from the current thirteen-seat role domain, with selection allowed only to widen over fix deltas, before seal or merge. The record creates no second request and supplies no panel result or constitutional waiver. F and `adr046w5` delivery history stay immutable. |
@@ -924,11 +934,11 @@ second validator.
 | --- | --- | --- | --- |
 | `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial; one accepted-socket evidence object shared by adapter, descriptor, bus Unix transport, and session seam; T592's typed broker `OpenPeerPidfdFromAcceptedSocket` operation transfers only the accepted socket and returned pidfd with `SCM_RIGHTS`; both receive paths set `MSG_CMSG_CLOEXEC`, reject truncation, own every received fd immediately, require exactly one expected fd, and close all received fds on count/type/index/decode/later-validation errors; descriptor-count and exec-leak matrices cover success, missing, extra, malformed, truncated, and post-receive failure; a safe dependency satisfies the exact contract or exact-optlen validation, immediate ownership of any returned fd, and failure closure live only in the approved broker `sys.rs` FFI quarantine with narrow allowances and immediate per-block `SAFETY:` comments; no repository-authored unsafe outside that quarantine; injected short-result fd-count, unsupported/malformed/missing-CLOEXEC/leak/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; the sole enforcing pidfd policy runner is `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, whose poison suite rejects the `nix` 0.31.3 `PeerPidfd` wrapper, a new project FFI crate, and local syscall/raw-fd fallback; no caller-supplied verifier/credential constructor or re-export; private registrar issuance; and a fresh restart peer pidfd |
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
-| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; required-Zone durable operation inspection; same-Zone replay-binding denials; concurrent same-ID operations in different Zones; UUIDv7 response-loss/restart/expiry/post-prune refusal; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; identity-free metrics/OTEL resources; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention plus fixed 30-day operation retention/prune health; and raw identifier/trace/path/handle-canary absence |
+| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; required-Zone durable operation inspection; same-Zone replay-binding denials; concurrent same-ID operations in different Zones; UUIDv7 response-loss/restart/expiry/post-prune refusal; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; identity-free metrics/OTEL resources; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention plus fixed 30-day operation retention/prune health; and raw identifier/trace/path/handle-canary absence from audit, telemetry, internal errors, logs, metrics, spans, and `Debug` |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
-| `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; sole-public-binary packaging and host-generation subcommands; exact UUIDv7 ID, required Zone, cross-Zone reuse, expiry, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
+| `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; sole-public-binary packaging and host-generation subcommands; exact UUIDv7 ID, required Zone, cross-Zone reuse, expiry, exits, mandatory envelope fields, DTO/schema, bounded direct-operator `zoneRef`/`operationId` recovery coordinates with no propagation to telemetry, spans, exported audit, or unrelated errors, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
 
 The four T600 identifiers and three T601 identifiers are exclusive. Their required content is
 the table above plus the accepted generated Wave 5 traceability rows; no free-form validation
@@ -945,12 +955,15 @@ blocks close.
 
 The T603 edit is authorized only by one clean-base selected-roster lifecycle, the exclusive editor batch receipt, and the dedicated checkbox-only commit. Fresh analysis and a new selected-roster lifecycle on the changed snapshot gate T589. No validator source, scratch receipt, digest chain, sidecar, or custom resume protocol exists.
 
-At wave close, T220 converges all content and iterates the nonbinding
-`/d2b-panel-round plan` phase surface over provisional integrated candidates. A finding routes
-only its scoped fixes through T220, validation, and a delta/full-context phase-panel rerun.
-Only unanimous phase convergence freezes final F before exact-candidate evidence. These
-phase-plan rounds create no delivery candidate request, no `panel-request.json`, and no
-wave-scoped binding reservation; they cannot replace or dispose a
+At wave close, T220 converges all content and opens exactly one nonbinding
+`/d2b-panel-round plan` lifecycle with one stable discovery ledger. It reruns deterministic
+selection for every provisional integrated candidate and fix, permits only roster widening,
+and sends the selected roster through scoped verification with the stable ledger, responses,
+self-verification, fix delta, and full candidate. Comprehensive discovery runs exactly once
+for the lifecycle and is never rerun for a replacement candidate or fix. Only unanimous
+scoped verification freezes final F before exact-candidate evidence. These phase-plan
+iterations create no delivery candidate request, no `panel-request.json`, and no wave-scoped
+binding reservation; they cannot replace or dispose a
 `/d2b-panel-round work` delivery request. T220 never invokes a binding delivery request.
 
 Wave 5 already retains such a delivery request from the pre-amendment candidate. That request
@@ -986,7 +999,7 @@ immutable.
 | Historical feature artifacts copied SC-002 and source-floor schemas, registries, fixtures, transitions, and changing counts. | Accepted Version 2 `ADR-046-validation-and-delivery` plus generated `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows are the sole authority. | Retain only those stable identifiers and generated ownership pointers in this feature. T589, T592, T595, T600, T604, T220, and T479 consume only their assigned rows. Missing, stale, wrong-owner, non-ancestor, or failing generated rows block with remediation to accept Version 2, regenerate traceability, and pass Gate 0. |
 | `ADR-046-provider-device-tpm` section 11.2 names the finalizer `device-tpm/cleanup`. | Committed `packages/d2b-provider-device-tpm/src/lib.rs` and `packages/d2b-contracts/src/v3/device.rs` both expose `device-tpm.d2bus.org/state-preserved`. | Existing code is canon. The exact T604 fixture uses `device-tpm.d2bus.org/state-preserved` while retaining the dossier's stop/wait/delete-process/delete-flush/retain-Volume/clear sequencing. Correcting the upstream dossier is external to this feature-only batch. |
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI, while T072 omitted Wave 5's contemporaneous plan-panel predicate. | The committed constitution permits no artifact-local waiver for these gaps, and existing Wave 5 implementation does not prove its historical entry gate. | FR-036 now makes a separate accepted Principle VI constitution amendment that expressly dispositions the W2-W5 plan-panel gap an external prerequisite for every implementation, resume, fix, close, merge, and advance path. T072 requires the exact retained Wave 5 plan-panel receipt to check; no current receipt is claimed, and current remediation remains evidence only. |
-| Feature-local Wave 5 recovery prose allowed repeated binding requests. | Current panels use the candidate-bound lifecycle selection artifact and require every selected seat from the current thirteen-seat role domain; selection may only widen over fix deltas. Wave 5 already retains one legacy fixed-ten `panel-request.json`, and content invalidation does not erase its historical bytes. | T220 uses repeatable selected-roster nonbinding plan lifecycles for convergence and creates no request. T219 may reach close only through accepted external disposition of the retained request and a current selected-roster recovery lifecycle bound to exact F. No current lifecycle may drop selected seats or reinterpret the legacy record as current selection authority. |
+| Feature-local Wave 5 recovery prose allowed repeated binding requests. | Current panels use the candidate-bound lifecycle selection artifact and require every selected seat from the current thirteen-seat role domain; selection may only widen over fix deltas. Wave 5 already retains one legacy fixed-ten `panel-request.json`, and content invalidation does not erase its historical bytes. | T220 uses exactly one selected-roster nonbinding plan lifecycle and one stable discovery ledger for convergence and creates no request. Every provisional candidate or fix reruns deterministic widen-only selection and scoped verification; comprehensive discovery is never rerun. T219 may reach close only through accepted external disposition of the retained request and a current selected-roster recovery lifecycle bound to exact F. No current lifecycle may drop selected seats or reinterpret the legacy record as current selection authority. |
 Historical R22-R30 SC-002 and source-floor protocol copies are superseded by the stable
 `VD2-SC002-*` identifiers and generated ownership bijection above. Dated findings remain
 historical evidence only; this active plan carries no field list, count, registry, fixture, or

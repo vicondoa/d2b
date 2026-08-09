@@ -107,10 +107,14 @@ next: run d2b op inspect with the operation ID shown above
 Pending inspection uses the same first two lines and the static final line
 `next: wait for audit export or rerun d2b op inspect`. Both a pending mutation and pending
 inspection emit the JSON field shape below; only `command` and the closed remediation action
-differ. Human guidance is not copied into JSON. `zoneRef` and `operationId` are bounded status
-fields, never executable text. `resourceStatus` is the exact bounded CLI recovery projection
-shown here; the complete canonical `ResourceStatus` remains in the protobuf response, and no
-other status fields are added to this CLI envelope:
+differ. Human guidance is not copied into JSON. Direct Version 2 operator CLI/JSON status and
+recovery responses are the sole raw-identity output exception: `zoneRef` and `operationId`
+are bounded recovery coordinates supplied, generated, or received by that operator, never
+executable text. They remain confined to the direct response and MUST NOT become telemetry
+labels, span attributes, exported audit identities, or unrelated error context.
+`resourceStatus` is the exact bounded CLI recovery projection shown here; the complete
+canonical `ResourceStatus` remains in the protobuf response, and no other status fields are
+added to this CLI envelope:
 
 ```json
 {
@@ -190,7 +194,11 @@ The closed remediation-action set is `inspect-operation`, `wait-for-audit-export
 `retry-identical-operation`, `start-new-operation`, and `verify-operation-context`. No action
 object accepts arguments, argv, shell text, Zone, or operation ID. IDs appear only in bounded
 `operationId` and `resourceStatus.update.operationId` fields; Zone appears only in bounded
-`zoneRef`.
+`zoneRef`. An envelope that omits `operationId`, such as the deliberately indistinguishable
+not-found response, MUST NOT add it as unrelated context. Every success or error envelope
+MUST keep the exact field set specified for its case above, and tests MUST prove the
+permitted recovery coordinates are not copied into telemetry, spans, exported audit, or
+unrelated errors.
 
 Version 1 consumers must require `schemaVersion` and upgrade before using recovery. A missing
 version or `schemaVersion: 1` retains the old 0/1/2 behavior and MUST NOT be interpreted as
@@ -326,7 +334,10 @@ FR-042 explicit retirement list rather than the parity list.
   never call pending state success, rollback, or safe to repeat with a new ID, expose no
   mutation payload or raw sink error, and contain no Zone/ID-bearing argv, command vector,
   shell fragment, or free-form JSON remediation. Human output carries only the exact static
-  identifier-free guidance above; JSON retains the closed action enum.
+  identifier-free guidance above; JSON retains the closed action enum. The bounded Version 2
+  `zoneRef` and `operationId` recovery coordinates stay confined to direct operator responses
+  and occur zero times in telemetry labels, spans, exported audit identities, or unrelated
+  error context.
 - T599 bumps the accepted CLI specification to Version 2 and owns migration guidance,
   DTO/schema, contract tests, references, and
   `changelog.d/cli-operation-recovery.md`. T220 verifies and folds the coordinated

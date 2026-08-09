@@ -196,7 +196,11 @@ merge-target registration, merge eligibility, and merge.
     `outcome.code = StatusCode("committed-pending-audit")`,
     `update.state = UpdateState::Blocked`, and
     `update.operation_id = Some(original_operation_id)`. Existing condition, outcome, and
-    update detail stays bounded and redacted. Additive protobuf `PendingAuditStatus` carries
+    update detail stays bounded and redacted. Direct Version 2 operator CLI/JSON status and
+    recovery responses may return only bounded `zoneRef` and `operationId` values supplied or
+    received by that operator as recovery coordinates. They never become telemetry labels,
+    spans, exported audit identities, or unrelated error context. Additive protobuf
+    `PendingAuditStatus` carries
     the composite on every mutation response, including delete. Keep the Zone unpublished,
     require exact subject/Zone/request/target/verb/revision/idempotency replay binding, and
     make same-ID retry observe rather than reapply the mutation. Audit/export identifiers are
@@ -237,7 +241,10 @@ merge-target registration, merge eligibility, and merge.
     same Wave 5 PR. C1 changes no desired Zone field or JSON schema version. Implementation
     remains pending.
 14. **Exact-candidate evidence and close are closed.** T220 converges every repository change
-    before freezing F. T600 owns exactly `production-session-watch`,
+    before freezing F through exactly one nonbinding lifecycle and one stable discovery
+    ledger. Every provisional candidate or fix reruns deterministic widen-only selection and
+    scoped verification; comprehensive discovery runs once and is never rerun. T600 owns
+    exactly `production-session-watch`,
     `effect-replay-cleanup`, `audit-drain-replay`, and `system-core-handler-contract`;
     T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
