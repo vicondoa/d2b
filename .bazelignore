@@ -8,7 +8,6 @@ labs/wlattach/target/
 nixos-modules/host-activation-helper/target/
 packages/d2b-api-surface/target/
 packages/d2b-bazel-exec/target/
-packages/d2b-bazel-runner/target/
 packages/d2b-bazel-support/target/
 packages/d2b-bus/target/
 packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims/target/
@@ -65,7 +64,6 @@ packages/d2b-resource-store/target/
 packages/d2b-session-unix/target/
 packages/d2b-session/target/
 packages/d2b-sk-frontend/target/
-packages/d2b-test-locator/target/
 packages/d2b-unsafe-local-helper/target/
 packages/d2b-userd/target/
 packages/d2b-wayland-proxy/target/

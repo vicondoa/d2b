@@ -11,6 +11,8 @@ let
     (flakeRoot + "/tests/golden/bazel-toolchain.json"));
   supervisor = builtins.fromJSON (builtins.readFile
     (flakeRoot + "/tests/golden/bazel-exec-supervisor.json"));
+  nativeManifest = builtins.fromJSON (builtins.readFile
+    (flakeRoot + "/tests/golden/native-policy-check-manifest.json"));
   policyPath = flakeRoot
     + "/packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool";
   policyArtifact = builtins.fromJSON (builtins.readFile
@@ -21,180 +23,28 @@ let
   all = text: needles: builtins.all (needle: has text needle) needles;
   replace = text: old: new: builtins.replaceStrings [ old ] [ new ] text;
   hash = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-  contexts = [
-    "x86_64-linux/x86_64-unknown-linux-gnu/broker-production"
-    "x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool"
-    "aarch64-linux/aarch64-unknown-linux-gnu/broker-production"
-    "aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool"
-  ];
-  checks = [
-    "broker-production-dependency-policy"
-    "guest-shell-runner-static-dependency-policy"
-    "broker-production-package-policy"
-    "guest-real-libshpool-package-policy"
-    "broker-host-artifact-contract"
-    "guest-static-elf"
-  ];
+  contexts = map (context: context.policyInput) nativeManifest.contexts;
+  checks = nativeManifest.nativeChecks;
+  policyArtifactShapeOk =
+    (import (flakeRoot + "/nixos-modules/policy-artifact-validator.nix") { inherit lib; })
+      .policyArtifactShapeOk;
   get = name: value:
     if builtins.isAttrs value && builtins.hasAttr name value
     then builtins.getAttr name value
     else null;
-  stringSet = values:
-    builtins.listToAttrs (map (value: {
-      name = value;
-      value = true;
-    }) values);
-  unique = values:
-    builtins.isList values
-    && builtins.all builtins.isString values
-    && builtins.length values
-      == builtins.length (builtins.attrNames (stringSet values));
-  identityKey = value:
-    let
-      source = get "source" value;
-    in
-    if builtins.isAttrs value
-      && builtins.isString (get "name" value)
-      && builtins.isString (get "version" value)
-      && (source == null || builtins.isString source)
-    then
-      "${get "name" value}|${get "version" value}|${if source == null then "" else source}"
-    else null;
-  identityKeys = values:
-    if builtins.isList values then map identityKey values else [ ];
-  exactSet = left: right:
-    builtins.isList left
-    && builtins.isList right
-    && unique left
-    && unique right
-    && builtins.attrNames (stringSet left)
-      == builtins.attrNames (stringSet right);
-  packageForId = packages: id:
-    lib.findFirst (package: get "id" package == id) null packages;
-  nodeForId = nodes: id:
-    lib.findFirst (node: get "id" node == id) null nodes;
-  edgeKind = kind:
-    let value = get "kind" kind;
-    in if value == null then "normal" else value;
-  edgeKey = edge:
-    if builtins.isString (get "pkg" edge)
-      && builtins.isString (get "name" edge)
-      && builtins.isList (get "dep_kinds" edge)
-    then "${get "pkg" edge}|${get "name" edge}|${builtins.toJSON (get "dep_kinds" edge)}"
-    else null;
-  nodeEdgesClosed = node: packageIds: packages:
-    let
-      dependencies = get "dependencies" node;
-      details = get "deps" node;
-      detailIds =
-        if builtins.isList details then map (detail: get "pkg" detail) details else [ ];
-      detailKeys =
-        if builtins.isList details then map edgeKey details else [ ];
-    in
-    builtins.isList dependencies
-    && builtins.all builtins.isString dependencies
-    && unique dependencies
-    && builtins.all (id: builtins.elem id packageIds) dependencies
-    && builtins.isList details
-    && unique detailIds
-    && builtins.all (detail:
-      let
-        target = packageForId packages (get "pkg" detail);
-        kinds = get "dep_kinds" detail;
-      in
-      builtins.isAttrs detail
-      && builtins.isString (get "pkg" detail)
-      && builtins.elem (get "pkg" detail) packageIds
-      && builtins.isAttrs target
-      && builtins.isString (get "name" detail)
-      && get "name" detail != ""
-      && builtins.isList kinds
-      && builtins.length kinds > 0
-      && builtins.all (kind:
-        builtins.isAttrs kind
-        && builtins.elem (edgeKind kind) [ "normal" "build" "dev" ])
-        kinds)
-      details
-    && builtins.all (key: key != null) detailKeys
-    && unique detailKeys
-    && exactSet dependencies detailIds;
-  reachable = nodes: root:
-    let
-      nodeIndex = builtins.listToAttrs (map (node: {
-        name = node.id;
-        value = node;
-      }) nodes);
-      closure = builtins.genericClosure {
-        startSet = [ { key = root; } ];
-        operator = item:
-          let node = builtins.getAttr item.key nodeIndex;
-          in map (id: { key = id; }) node.dependencies;
-      };
-    in
-    map (item: item.key) closure;
   policyValid = artifact: lock:
-    let
-      packages = get "packages" artifact;
-      identities = get "identities" artifact;
-      nodes = if builtins.isAttrs (get "resolve" artifact)
-        then get "nodes" artifact.resolve
-        else null;
-      packageIds =
-        if builtins.isList packages then map (package: get "id" package) packages else [ ];
-      nodeIds =
-        if builtins.isList nodes then map (node: get "id" node) nodes else [ ];
-      roots =
-        if builtins.isList packages
-        then lib.filter (package: get "name" package == "d2b-guest-shell-runner") packages
-        else [ ];
-      rootId = if builtins.isAttrs (get "resolve" artifact)
-        then get "root" artifact.resolve
-        else null;
-      lockPackages = get "package" lock;
-      lockIdentities =
-        if builtins.isList lockPackages
-        then map (package: {
-          name = get "name" package;
-          version = get "version" package;
-          source = get "source" package;
-        }) lockPackages
-        else [ ];
-      lockKeys = identityKeys lockIdentities;
-      rootNode =
-        if builtins.isList nodes
-        then lib.findFirst (node: node.id == rootId) null nodes
-        else null;
-      graphIdentities = identityKeys packages;
-      expectedFeatures = [ "real-libshpool" ];
-    in
-    builtins.isAttrs artifact
-    && artifact.system == "x86_64-linux"
-    && artifact.target == "x86_64-unknown-linux-musl"
-    && artifact.package == "d2b-guest-shell-runner"
-    && artifact.root == "d2b-guest-shell-runner"
-    && artifact.variant == "policy"
-    && artifact.edgeKinds == "normal,build,dev"
-    && artifact.defaultFeatures == false
-    && artifact.features == expectedFeatures
-    && builtins.isList identities
-    && builtins.length identities > 0
-    && builtins.all (value: identityKey value != null) identities
-    && exactSet (identityKeys identities) graphIdentities
-    && builtins.isList packages
-    && builtins.length packages > 0
-    && unique packageIds
-    && builtins.isList nodes
-    && builtins.length nodes > 0
-    && unique nodeIds
-    && exactSet packageIds nodeIds
-    && builtins.length roots == 1
-    && rootId == (builtins.head roots).id
-    && builtins.isAttrs rootNode
-    && builtins.all (node: nodeEdgesClosed node packageIds packages) nodes
-    && exactSet packageIds (reachable nodes rootId)
-    && builtins.isList lockPackages
-    && builtins.length lockPackages > 0
-    && exactSet graphIdentities lockKeys;
+    policyArtifactShapeOk {
+      inherit artifact lock;
+      expected = {
+        system = "x86_64-linux";
+        target = "x86_64-unknown-linux-musl";
+        package = "d2b-guest-shell-runner";
+        features = [ "real-libshpool" ];
+        defaultFeatures = false;
+      };
+      variant = "policy";
+      expectedEdgeKinds = "normal,build,dev";
+    };
   replaceRootNode = artifact: transform:
     artifact // {
       resolve = artifact.resolve // {
@@ -329,11 +179,9 @@ in
   };
 
   "bazel-package-policy/four-native-contexts" = {
-    expr = builtins.all
-      (context: has rustGate context)
-      contexts
-      && has flake "x86_64-linux"
-      && has flake "aarch64-linux"
+    expr = builtins.length contexts == 4
+      && has rustGate "native-policy-check-manifest.json"
+      && has flake "native-policy-check-manifest.json"
       && has flake "packages/policy-inputs";
     expected = true;
   };

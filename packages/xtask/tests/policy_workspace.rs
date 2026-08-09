@@ -290,6 +290,7 @@ fn discovered_package_manifests() -> Vec<(String, String)> {
             rel.starts_with("packages/")
                 && rel.ends_with("/Cargo.toml")
                 && rel != "packages/Cargo.toml"
+                && repo_root().join(rel).is_file()
         })
         .map(|rel| {
             let content = std::fs::read_to_string(repo_root().join(&rel)).unwrap_or_else(|error| {
@@ -1137,14 +1138,9 @@ fn unified_workspace_policy_rejects_mutated_governed_inputs() {
 }
 
 #[test]
-fn bazel_prep_crates_are_registered_with_dependency_leaf_ownership() {
+fn retained_bazel_dependency_leaves_have_no_refusal_only_scaffolding() {
     let workspace = read_repo_file("packages/Cargo.toml");
-    for package in [
-        "d2b-bazel-support",
-        "d2b-bazel-exec",
-        "d2b-bazel-runner",
-        "d2b-test-locator",
-    ] {
+    for package in ["d2b-bazel-support", "d2b-bazel-exec"] {
         assert!(workspace.contains(&format!("\"{package}\"")));
         assert!(
             repo_root()
@@ -1156,14 +1152,14 @@ fn bazel_prep_crates_are_registered_with_dependency_leaf_ownership() {
     }
     let support = read_repo_file("packages/d2b-bazel-support/Cargo.toml");
     let execution = read_repo_file("packages/d2b-bazel-exec/Cargo.toml");
-    let runner = read_repo_file("packages/d2b-bazel-runner/Cargo.toml");
-    let locator = read_repo_file("packages/d2b-test-locator/Cargo.toml");
     assert!(!support.contains("d2b-bazel-exec"));
     assert!(execution.contains("d2b-bazel-support"));
     assert!(execution.contains("command-fds"));
     assert!(execution.contains("version = \"=0.29.0\""));
-    assert!(runner.contains("d2b-test-locator"));
-    assert!(locator.contains("d2b-bazel-exec"));
+    assert!(!workspace.contains("d2b-bazel-runner"));
+    assert!(!workspace.contains("d2b-test-locator"));
+    assert!(!repo_root().join("packages/d2b-bazel-runner").exists());
+    assert!(!repo_root().join("packages/d2b-test-locator").exists());
 }
 
 #[test]

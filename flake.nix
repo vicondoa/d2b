@@ -26,6 +26,8 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      nativePolicyCheckManifest =
+        builtins.fromJSON (builtins.readFile ./tests/golden/native-policy-check-manifest.json);
       rustToolchainFile = ./packages/rust-toolchain.toml;
       rustToolchainManifestHash =
         "sha256-OATSZm98Es5kIFuqaba+UvkQtFsVgJEBMmS+t6od5/U=";
@@ -972,6 +974,9 @@
           if builtins.isAttrs value && builtins.hasAttr name value
           then builtins.getAttr name value
           else null;
+        sharedPolicyArtifactShapeOk =
+          (import ./nixos-modules/policy-artifact-validator.nix { inherit lib; })
+            .policyArtifactShapeOk;
         uniqueList = values:
           builtins.isList values
           && builtins.length values == builtins.length (lib.unique values);
@@ -1065,181 +1070,7 @@
           lockDependenciesClosed lock
           && validIdentityKeys lockKeys
           && exactSet identityKeysExpected lockKeys;
-        packageForId = packages: id:
-          lib.findFirst
-            (package: getField "id" package == id)
-            null
-            packages;
-        nodeForId = nodes: id:
-          lib.findFirst
-            (node: getField "id" node == id)
-            null
-            nodes;
-        edgeKind = kind:
-          let value = getField "kind" kind;
-          in if value == null then "normal" else value;
-        edgeKey = edge:
-          let
-            package = getField "pkg" edge;
-            name = getField "name" edge;
-            kinds = getField "dep_kinds" edge;
-          in
-          if builtins.isString package
-            && builtins.isString name
-            && builtins.isList kinds
-          then "${package}|${name}|${builtins.toJSON kinds}"
-          else null;
-        resolveNodeEdgesClosed = { node, nodeIds, packages, allowedKinds }:
-          let
-            dependencies = getField "dependencies" node;
-            dependenciesOk =
-              builtins.isList dependencies
-              && builtins.all builtins.isString dependencies
-              && uniqueList dependencies
-              && builtins.all (id: builtins.elem id nodeIds) dependencies;
-            details = getField "deps" node;
-            detailIds =
-              if builtins.isList details
-              then map (detail: getField "pkg" detail) details
-              else [ ];
-            detailKeys =
-              if builtins.isList details
-              then map edgeKey details
-              else [ ];
-            detailsOk =
-              builtins.isList details
-              && builtins.all (detail:
-                let
-                  packageId = getField "pkg" detail;
-                  packageName = getField "name" detail;
-                  kinds = getField "dep_kinds" detail;
-                  target = getField "target" detail;
-                  targetPackage = packageForId packages packageId;
-                in
-                builtins.isAttrs detail
-                && builtins.isString packageId
-                && builtins.elem packageId nodeIds
-                && builtins.isString packageName
-                && builtins.isAttrs targetPackage
-                && packageName != ""
-                && (target == null || builtins.isString target)
-                && builtins.isList kinds
-                && builtins.length kinds > 0
-                && builtins.all (kind:
-                  builtins.isAttrs kind
-                  && (getField "kind" kind == null
-                    || builtins.isString (getField "kind" kind))
-                  && ((getField "target" kind) == null
-                    || builtins.isString (getField "target" kind))
-                  && builtins.elem (edgeKind kind) allowedKinds)
-                  kinds)
-                details
-              && builtins.all (key: key != null) detailKeys
-              && uniqueList detailKeys
-              && uniqueList detailIds
-              && exactSet dependencies detailIds;
-          in
-          dependenciesOk && detailsOk;
-        reachableNodeIds = nodes: seen: frontier:
-          if frontier == [ ] then
-            seen
-          else
-            let
-              fresh = lib.filter (id: !(builtins.elem id seen)) frontier;
-              next = lib.concatMap (id:
-                let node = nodeForId nodes id;
-                in if node == null
-                then [ ]
-                else getField "dependencies" node)
-                fresh;
-            in
-            reachableNodeIds nodes (lib.unique (seen ++ fresh)) next;
-        policyArtifactShapeOk =
-          { artifact
-          , lock
-          , expected
-          , variant
-          , expectedEdgeKinds
-          }:
-          let
-            packages = getField "packages" artifact;
-            identities = getField "identities" artifact;
-            resolve = getField "resolve" artifact;
-            nodes = if builtins.isAttrs resolve
-              then getField "nodes" resolve
-              else null;
-            packageIds =
-              if builtins.isList packages
-              then map (package: getField "id" package) packages
-              else [ ];
-            nodeIds =
-              if builtins.isList nodes
-              then map (node: getField "id" node) nodes
-              else [ ];
-            rootPackages =
-              if builtins.isList packages
-              then lib.filter
-                (package: getField "name" package == expected.package)
-                packages
-              else [ ];
-            resolveRoot = if builtins.isAttrs resolve
-              then getField "root" resolve
-              else null;
-            rootNodes =
-              if builtins.isList nodes
-              then lib.filter (node: getField "id" node == resolveRoot) nodes
-              else [ ];
-            rootPackageId =
-              if builtins.length rootPackages == 1
-              then getField "id" (builtins.head rootPackages)
-              else null;
-            graphOk =
-              builtins.isAttrs resolve
-              && builtins.isList packages
-              && builtins.length packages > 0
-              && builtins.all (package:
-                builtins.isAttrs package
-                && identityKey package != null
-                && builtins.isString (getField "id" package)
-                && getField "id" package != "")
-                packages
-              && uniqueList packageIds
-              && builtins.isList nodes
-              && builtins.length nodes > 0
-              && builtins.all (node:
-                builtins.isAttrs node
-                && builtins.isString (getField "id" node)
-                && getField "id" node != "")
-                nodes
-              && uniqueList nodeIds
-              && exactSet packageIds nodeIds
-              && builtins.all (node:
-                resolveNodeEdgesClosed {
-                  inherit node nodeIds packages;
-                  allowedKinds = lib.splitString "," expectedEdgeKinds;
-                })
-                nodes
-              && builtins.isString resolveRoot
-              && builtins.elem resolveRoot nodeIds
-              && builtins.length rootPackages == 1
-              && builtins.length rootNodes == 1
-              && rootPackageId == resolveRoot
-              && exactSet nodeIds (reachableNodeIds nodes [ ] [ resolveRoot ]);
-          in
-          builtins.isAttrs artifact
-          && getField "system" artifact == expected.system
-          && getField "target" artifact == expected.target
-          && getField "package" artifact == expected.package
-          && getField "root" artifact == expected.package
-          && getField "variant" artifact == variant
-          && getField "edgeKinds" artifact == expectedEdgeKinds
-          && getField "defaultFeatures" artifact == false
-          && exactList expected.features (getField "features" artifact)
-          && builtins.isString (getField "sourceCensusSha256" artifact)
-          && hexDigest (getField "sourceCensusSha256" artifact)
-          && identitiesEqual identities packages
-          && graphOk
-          && lockMatches lock packages;
+        policyArtifactShapeOk = sharedPolicyArtifactShapeOk;
         productionArtifactShapeOk =
           { artifact
           , lock
@@ -1266,38 +1097,9 @@
           && builtins.all (key: builtins.elem key policyIdentityKeys)
               identityKeysValue
           && lockMatches lock identities;
-        policyContexts = [
-          {
-            system = "x86_64-linux";
-            target = "x86_64-unknown-linux-gnu";
-            context = "broker-production";
-            package = "d2b-priv-broker";
-            features = [ ];
-          }
-          {
-            system = "x86_64-linux";
-            target = "x86_64-unknown-linux-musl";
-            context = "guest-real-libshpool";
-            package = "d2b-guest-shell-runner";
-            features = [ "real-libshpool" ];
-          }
-          {
-            system = "aarch64-linux";
-            target = "aarch64-unknown-linux-gnu";
-            context = "broker-production";
-            package = "d2b-priv-broker";
-            features = [ ];
-          }
-          {
-            system = "aarch64-linux";
-            target = "aarch64-unknown-linux-musl";
-            context = "guest-real-libshpool";
-            package = "d2b-guest-shell-runner";
-            features = [ "real-libshpool" ];
-          }
-        ];
+        policyContexts = nativePolicyCheckManifest.contexts;
         policyContextRoot = context:
-          ./. + "/packages/policy-inputs/${context.system}/${context.target}/${context.context}";
+          ./. + "/${context.policyInput}";
         readPolicyContext = context:
           let root = policyContextRoot context;
           in {

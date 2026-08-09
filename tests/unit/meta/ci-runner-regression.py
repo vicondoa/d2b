@@ -28,15 +28,12 @@ MAKEFILE = ROOT / "Makefile"
 RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
 NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
+NATIVE_POLICY_MANIFEST = ROOT / "tests" / "golden" / "native-policy-check-manifest.json"
 
-AARCH64_NATIVE_CHECKS = (
-    "broker-production-dependency-policy",
-    "guest-shell-runner-static-dependency-policy",
-    "broker-production-package-policy",
-    "guest-real-libshpool-package-policy",
-    "broker-host-artifact-contract",
-    "guest-static-elf",
-)
+with NATIVE_POLICY_MANIFEST.open(encoding="utf-8") as _native_manifest_file:
+    AARCH64_NATIVE_CHECKS = tuple(
+        json.load(_native_manifest_file)["nativeChecks"]
+    )
 
 POLICY_INDEPENDENT_BINARIES = (
     "policy_dash_gate",
@@ -1386,8 +1383,8 @@ printf '%s\n' "$sanitized_line"
         classes = (
             ROOT / "tests" / "tools" / "flake-check-classes.sh"
         ).read_text(encoding="utf-8")
-        for check in (*AARCH64_NATIVE_CHECKS, "video-binary-contract"):
-            self.assertIn(check, classes)
+        self.assertIn("native-policy-check-manifest.json", classes)
+        self.assertIn("video-binary-contract", classes)
         self.assertIn(
             'd2b_flake_check_is_realized "$D2B_FLAKE_CHECK"',
             (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"),

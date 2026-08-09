@@ -398,14 +398,37 @@ Recurring enforcement stays in existing Layer-1 jobs:
 - `make test-flake` owns realization. `D2B_FLAKE_REALIZED_CHECKS` adds
   `broker-production-dependency-policy`, `guest-shell-runner-static-dependency-policy`,
   `broker-production-package-policy`, `guest-real-libshpool-package-policy`, and
-  `guest-static-elf`, retaining `video-binary-contract`. X86 shards build those
-  five checks on a native x86_64 runner. Existing job `test-flake-aarch64`
-  retains its id and context, moves to public `ubuntu-24.04-arm`, and runs the
-  same target for the five aarch64 checks; no top-level job is added. Neither
-  lane passes a foreign `--system` or configures a remote builder.
+  `broker-host-artifact-contract`, and `guest-static-elf`, retaining
+  `video-binary-contract`. X86 shards build those six checks on a native
+  x86_64 runner. Existing job `test-flake-aarch64` retains its id and context,
+  moves to public `ubuntu-24.04-arm`, and runs the same target for the six
+  aarch64 checks; no top-level job is added. Neither lane passes a foreign
+  `--system` or configures a remote builder.
 
 Implementation pins it as `flake-aarch64-realized` at 60 minutes in `tests/layer1-jobs.json`, regenerates the workflow and realized class, and makes
 `make flake-matrix-pin` regenerate both system inventories. Either stale pin fails drift, making aarch64 wiring and execution recurrent evidence.
+
+### Amendment: six native checks
+
+This ADR adopts the six-check native inventory already required by the
+amendment to ADR 0052. For each native system, the enforcing realization set
+is exactly:
+
+```text
+broker-production-dependency-policy
+guest-shell-runner-static-dependency-policy
+broker-production-package-policy
+guest-real-libshpool-package-policy
+broker-host-artifact-contract
+guest-static-elf
+```
+
+The two policy-input contexts for each architecture, the two native artifact
+contracts, and the six-check inventory are one committed manifest. The flake,
+shell gates, CI generation, xtask, and Bazel inventory either consume that
+manifest or fail closed when their inventory differs. `video-binary-contract`
+remains a separate realized check and is not part of the six native
+architecture-specific checks.
 
 ### Seeded refusal matrix
 

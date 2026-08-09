@@ -1009,18 +1009,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-bazel-runner"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-bazel-exec",
- "d2b-bazel-support",
- "d2b-test-locator",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "d2b-bazel-support"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1621,14 +1609,6 @@ dependencies = [
  "libc",
  "tokio",
  "tokio-vsock",
-]
-
-[[package]]
-name = "d2b-test-locator"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-bazel-exec",
- "d2b-bazel-support",
 ]
 
 [[package]]

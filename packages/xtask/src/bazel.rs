@@ -1,11 +1,11 @@
-#![allow(dead_code)]
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
     fs,
     io::Write,
+    os::fd::AsFd,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -35,6 +35,8 @@ const NIGHTLY_TOOLCHAIN: &str = "nightly-2026-02-16";
 const GENERATOR_METADATA_TARGET: &str = "x86_64-unknown-linux-gnu";
 const PREVIEW_ROOT: &str = ".scratch/bazel/generated-preview";
 const OUTPUT_MANIFEST_PATH: &str = "bazel/generated/output-manifest.json";
+const NATIVE_POLICY_CHECK_MANIFEST: &str =
+    include_str!("../../../tests/golden/native-policy-check-manifest.json");
 const BAZEL_EXECUTABLE_DIAGNOSTIC: &str = "\
 D2B-BZL-EXECUTABLE: the repository-pinned Bazel executable is unavailable.
 From the repository root, run: nix develop
@@ -76,6 +78,8 @@ D2B-BZL-RETIRED-HUB: the requested Bazel dependency hub is retired.
 From the repository root, run: nix develop
 Then run from packages/: cargo xtask bazel-repin --hub product.";
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn retired_hub_remediation(hub: &str) -> Option<(&'static str, Vec<String>, &'static str)> {
     RETIRED_HUB_MESSAGES
         .iter()
@@ -95,6 +99,8 @@ pub fn retired_hub_remediation(hub: &str) -> Option<(&'static str, Vec<String>, 
         })
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn validate_retired_hub_remediation(argv: &[String], cwd: &str) -> Result<(), Box<dyn Error>> {
     if cwd != "packages/"
         || argv
@@ -124,6 +130,10 @@ pub trait BazelExecutor {
         command_args: &[String],
         environment: &[(&str, &str)],
     ) -> Result<std::process::ExitStatus, Box<dyn Error>>;
+
+    fn diagnostic(&self) -> Option<&str> {
+        None
+    }
 }
 
 pub fn adr0054_drift_message(code: &str) -> Option<&'static str> {
@@ -208,10 +218,22 @@ Rerun the exact refused command from the closed contributor-command set.",
     })
 }
 
-struct ProcessExecutor;
+struct ProcessExecutor {
+    diagnostic: Option<String>,
+}
 
 const EXPLICIT_BAZEL_ENVIRONMENT: &[&str] = &[
-    "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "JAVA_HOME",
 ];
 
 impl BazelExecutor for ProcessExecutor {
@@ -230,8 +252,8 @@ impl BazelExecutor for ProcessExecutor {
             .args(command_args)
             .env_clear()
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for name in EXPLICIT_BAZEL_ENVIRONMENT {
             if let Some(value) = env::var_os(name) {
                 command.env(name, value);
@@ -240,10 +262,67 @@ impl BazelExecutor for ProcessExecutor {
         for (name, value) in environment {
             command.env(name, value);
         }
-        command
-            .status()
-            .map_err(|_| BAZEL_EXECUTABLE_DIAGNOSTIC.into())
+        let output = command
+            .output()
+            .map_err(|_| -> Box<dyn Error> { BAZEL_EXECUTABLE_DIAGNOSTIC.into() })?;
+        self.diagnostic = Some(bounded_child_diagnostic(&output.stderr));
+        Ok(output.status)
     }
+
+    fn diagnostic(&self) -> Option<&str> {
+        self.diagnostic.as_deref()
+    }
+}
+
+const MAX_CHILD_DIAGNOSTIC_BYTES: usize = 768;
+
+pub(crate) fn bounded_child_diagnostic(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut rendered = String::new();
+    for token in text.split_whitespace() {
+        let token =
+            if token.starts_with('/') || token.contains("/nix/store/") || token.contains("file://")
+            {
+                "<path>"
+            } else {
+                token
+            };
+        if !rendered.is_empty() {
+            rendered.push(' ');
+        }
+        rendered.push_str(token);
+        if rendered.len() >= MAX_CHILD_DIAGNOSTIC_BYTES {
+            rendered.truncate(MAX_CHILD_DIAGNOSTIC_BYTES);
+            rendered.push_str("...[truncated]");
+            break;
+        }
+    }
+    if rendered.is_empty() {
+        "<no child diagnostic>".to_owned()
+    } else {
+        rendered
+    }
+}
+
+fn command_label(command_args: &[String]) -> String {
+    if command_args.is_empty() {
+        "bazel <unknown>".to_owned()
+    } else {
+        format!("bazel {}", command_args.join(" "))
+    }
+}
+
+fn command_failure_message(
+    hub: &str,
+    command_args: &[String],
+    status: &str,
+    diagnostic: Option<&str>,
+) -> String {
+    format!(
+        "D2B-BZL-COMMAND: hub={hub} command={} status={status} diagnostic={}",
+        command_label(command_args),
+        diagnostic.unwrap_or("<no child diagnostic>")
+    )
 }
 
 pub(crate) fn parse_gen_bazel(args: &[String]) -> Result<GenBazelMode, Box<dyn Error>> {
@@ -304,20 +383,12 @@ fn write_bazel_preview(
         if !metadata.file_type().is_dir() {
             return Err("D2B-BZLDRIFT-GENERATOR: Bazel preview root is not a directory.".into());
         }
-        fs::remove_dir_all(&preview_root)
-            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not clear the Bazel preview root.")?;
+        remove_anchored_directory(&preview_root)?;
     }
-    fs::create_dir_all(&preview_root)
-        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create the Bazel preview root.")?;
+    let _ = ensure_bazel_directory(&preview_root)?;
     for (relative, contents) in rendered {
         let path = preview_root.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(
-                |_| "D2B-BZLDRIFT-GENERATOR: could not create a Bazel preview directory.",
-            )?;
-        }
-        fs::write(path, contents)
-            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not write the Bazel preview.")?;
+        atomic_write_file(&path, contents)?;
     }
     validate_committed_output_census(&preview_root, rendered)?;
     Ok(rendered
@@ -331,6 +402,7 @@ fn install_bazel_outputs(
     rendered: &BTreeMap<String, String>,
 ) -> Result<(), Box<dyn Error>> {
     let generated_root = root.join("bazel/generated");
+    let generated_fd = ensure_bazel_directory(&generated_root)?;
     if let Ok(metadata) = fs::symlink_metadata(&generated_root) {
         if !metadata.file_type().is_dir() {
             return Err(
@@ -351,9 +423,6 @@ fn install_bazel_outputs(
                 return Err("D2B-BZLDRIFT-GENERATOR: a Bazel output is not a regular file.".into());
             }
         }
-    } else {
-        fs::create_dir_all(&generated_root)
-            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create bazel/generated.")?;
     }
 
     let bazelignore = root.join(".bazelignore");
@@ -381,10 +450,32 @@ fn install_bazel_outputs(
                 .ok_or("D2B-BZLDRIFT-GENERATOR: Bazel output path is not UTF-8.")?
         );
         if !expected.contains(&relative) {
-            fs::remove_file(entry.path())
-                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not remove a stale Bazel output.")?;
+            let name = entry
+                .file_name()
+                .to_str()
+                .ok_or("D2B-BZLDRIFT-GENERATOR: Bazel output path is not UTF-8.")?
+                .to_owned();
+            let stat = rustix::fs::statat(
+                generated_fd.as_fd(),
+                name.as_str(),
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect a stale Bazel output.")?;
+            if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Symlink {
+                return Err(
+                    "D2B-BZLDRIFT-GENERATOR: refusing a symlinked stale Bazel output.".into(),
+                );
+            }
+            rustix::fs::unlinkat(
+                generated_fd.as_fd(),
+                name.as_str(),
+                rustix::fs::AtFlags::empty(),
+            )
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not remove a stale Bazel output.")?;
         }
     }
+    rustix::fs::fsync(generated_fd.as_fd())
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not sync Bazel outputs.")?;
     validate_committed_output_census(root, rendered)
 }
 
@@ -392,39 +483,279 @@ fn atomic_write_file(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> 
     let parent = path
         .parent()
         .ok_or("D2B-BZLDRIFT-GENERATOR: generated output has no parent directory.")?;
-    fs::create_dir_all(parent)
-        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create an output directory.")?;
+    let parent_fd = ensure_bazel_directory(parent)?;
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or("D2B-BZLDRIFT-GENERATOR: generated output path is not UTF-8.")?;
+    if let Ok(stat) = rustix::fs::statat(
+        parent_fd.as_fd(),
+        file_name,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) && rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Symlink
+    {
+        return Err("D2B-BZLDRIFT-GENERATOR: generated output is a symlink.".into());
+    }
     for attempt in 0..100_u32 {
-        let temporary = parent.join(format!(
-            ".{file_name}.d2b-install-{}-{attempt}",
-            std::process::id()
-        ));
-        let mut file = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+        let temporary = format!(".{file_name}.d2b-install-{}-{attempt}", std::process::id());
+        let descriptor = match rustix::fs::openat(
+            parent_fd.as_fd(),
+            temporary.as_str(),
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_bits_truncate(0o600),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::EXIST) => continue,
             Err(_) => {
                 return Err("D2B-BZLDRIFT-GENERATOR: could not create an atomic output.".into());
             }
         };
+        let mut file = fs::File::from(descriptor);
         if file.write_all(contents.as_bytes()).is_err() || file.sync_all().is_err() {
-            let _ = fs::remove_file(&temporary);
+            let _ = rustix::fs::unlinkat(
+                parent_fd.as_fd(),
+                temporary.as_str(),
+                rustix::fs::AtFlags::empty(),
+            );
             return Err("D2B-BZLDRIFT-GENERATOR: could not write an atomic output.".into());
         }
-        if fs::rename(&temporary, path).is_err() {
-            let _ = fs::remove_file(&temporary);
+        drop(file);
+        if rustix::fs::renameat(
+            parent_fd.as_fd(),
+            temporary.as_str(),
+            parent_fd.as_fd(),
+            file_name,
+        )
+        .is_err()
+        {
+            let _ = rustix::fs::unlinkat(
+                parent_fd.as_fd(),
+                temporary.as_str(),
+                rustix::fs::AtFlags::empty(),
+            );
             return Err("D2B-BZLDRIFT-GENERATOR: could not install an output.".into());
         }
+        rustix::fs::fsync(parent_fd.as_fd())
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not sync an output directory.")?;
         return Ok(());
     }
     Err("D2B-BZLDRIFT-GENERATOR: could not reserve an atomic output.".into())
+}
+
+pub(crate) fn ensure_bazel_directory(path: &Path) -> Result<std::fs::File, Box<dyn Error>> {
+    let mut current = std::fs::File::from(
+        rustix::fs::open(
+            "/",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: filesystem root is not anchored.")?,
+    );
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    };
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            if matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            ) {
+                continue;
+            }
+            return Err("D2B-BZLDRIFT-GENERATOR: output path contains traversal.".into());
+        };
+        let name = name
+            .to_str()
+            .ok_or("D2B-BZLDRIFT-GENERATOR: output path is not UTF-8.")?;
+        let child = match rustix::fs::openat(
+            current.as_fd(),
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(child) => child,
+            Err(rustix::io::Errno::NOENT) => {
+                rustix::fs::mkdirat(
+                    current.as_fd(),
+                    name,
+                    rustix::fs::Mode::from_bits_truncate(0o755),
+                )
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not create an output directory.")?;
+                rustix::fs::fsync(current.as_fd())
+                    .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not sync an output directory.")?;
+                rustix::fs::openat(
+                    current.as_fd(),
+                    name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: created output directory changed.")?
+            }
+            Err(_) => {
+                return Err("D2B-BZLDRIFT-GENERATOR: output path is not a safe directory.".into());
+            }
+        };
+        let named =
+            rustix::fs::statat(current.as_fd(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: output directory identity is unavailable.")?;
+        let pinned = rustix::fs::fstat(&child)
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: output directory cannot be statted.")?;
+        if named.st_dev != pinned.st_dev || named.st_ino != pinned.st_ino {
+            return Err("D2B-BZLDRIFT-GENERATOR: output directory changed identity.".into());
+        }
+        current = std::fs::File::from(child);
+    }
+    Ok(current)
+}
+
+fn reject_symlink_components(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut current = if path.is_absolute() {
+        PathBuf::from("/")
+    } else {
+        env::current_dir()?
+    };
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("D2B-BZLDRIFT-GENERATOR: output path contains a symlink.".into());
+            }
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(
+                    "D2B-BZLDRIFT-GENERATOR: output path component is not a directory.".into(),
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => {
+                return Err("D2B-BZLDRIFT-GENERATOR: output path cannot be inspected.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_directory_identity(
+    path: &Path,
+    descriptor: impl std::os::fd::AsFd,
+) -> Result<(), Box<dyn Error>> {
+    let named = fs::symlink_metadata(path)
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: output parent changed identity.")?;
+    let pinned = rustix::fs::fstat(descriptor.as_fd())
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: output parent cannot be statted.")?;
+    if named.dev() != pinned.st_dev || named.ino() != pinned.st_ino {
+        return Err("D2B-BZLDRIFT-GENERATOR: output parent changed identity.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_anchored_directory(path: &Path) -> Result<(), Box<dyn Error>> {
+    let parent = path
+        .parent()
+        .ok_or("D2B-BZLDRIFT-GENERATOR: anchored directory has no parent.")?;
+    reject_symlink_components(parent)?;
+    let parent_fd = rustix::fs::openat2(
+        rustix::fs::CWD,
+        parent,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| "D2B-BZLDRIFT-GENERATOR: directory parent is not anchored.")?;
+    verify_directory_identity(parent, parent_fd.as_fd())?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("D2B-BZLDRIFT-GENERATOR: directory name is not UTF-8.")?;
+    let target = rustix::fs::openat(
+        parent_fd.as_fd(),
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| "D2B-BZLDRIFT-GENERATOR: directory target is not safely anchored.")?;
+    remove_anchored_children(target.as_fd())?;
+    rustix::fs::unlinkat(parent_fd.as_fd(), name, rustix::fs::AtFlags::REMOVEDIR)
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not remove anchored directory.")?;
+    rustix::fs::fsync(parent_fd.as_fd())
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not sync removed directory.")?;
+    Ok(())
+}
+
+fn remove_anchored_children(parent: impl std::os::fd::AsFd) -> Result<(), Box<dyn Error>> {
+    let directory = rustix::fs::Dir::read_from(parent.as_fd())
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not enumerate anchored directory.")?;
+    let names = directory
+        .map(|entry| {
+            let entry =
+                entry.map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not read directory entry.")?;
+            entry
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: directory entry is not UTF-8.")
+        })
+        .filter(|entry| !matches!(entry, Ok(name) if name == "." || name == ".."))
+        .collect::<Result<Vec<_>, _>>()?;
+    for name in names {
+        let stat = rustix::fs::statat(
+            parent.as_fd(),
+            name.as_str(),
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not inspect directory entry.")?;
+        let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+        if file_type == rustix::fs::FileType::Symlink {
+            return Err("D2B-BZLDRIFT-GENERATOR: refusing a symlinked directory entry.".into());
+        }
+        if file_type == rustix::fs::FileType::Directory {
+            let child = rustix::fs::openat(
+                parent.as_fd(),
+                name.as_str(),
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: child directory is not anchored.")?;
+            remove_anchored_children(child.as_fd())?;
+            rustix::fs::unlinkat(
+                parent.as_fd(),
+                name.as_str(),
+                rustix::fs::AtFlags::REMOVEDIR,
+            )
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not remove child directory.")?;
+        } else {
+            rustix::fs::unlinkat(parent.as_fd(), name.as_str(), rustix::fs::AtFlags::empty())
+                .map_err(|_| "D2B-BZLDRIFT-GENERATOR: could not remove child output.")?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_repin(args: &[String]) -> Result<&str, Box<dyn Error>> {
@@ -449,14 +780,6 @@ pub(crate) fn parse_repin(args: &[String]) -> Result<&str, Box<dyn Error>> {
     }
 }
 
-pub(crate) fn bazel_repin(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-    let hub = parse_repin(args)?;
-    reject_ambient_repin("bazel-repin", Some(hub))?;
-    let root = repo_root()?;
-    let mut executor = ProcessExecutor;
-    bazel_repin_with_executor(&root, hub, &mut executor)
-}
-
 pub fn bazel_repin_with_executor(
     root: &Path,
     hub: &str,
@@ -474,12 +797,14 @@ pub fn bazel_repin_with_executor(
     let before = mutation_snapshot(root)?;
     let options = startup_options(root);
     let command = options.repin_command_args(!root.join("MODULE.bazel.lock").is_file());
-    let status = executor.run(
-        root,
-        &options.startup_args(),
-        &command,
-        &[("CARGO_BAZEL_REPIN", "1"), ("CARGO_BAZEL_REPIN_ONLY", hub)],
-    )?;
+    let status = executor
+        .run(
+            root,
+            &options.startup_args(),
+            &command,
+            &[("CARGO_BAZEL_REPIN", "1"), ("CARGO_BAZEL_REPIN_ONLY", hub)],
+        )
+        .map_err(|_| command_failure_message(hub, &command, "not-started", None))?;
     let after = mutation_snapshot(root)?;
     let lock = format!("bazel/cargo/{hub}.lock");
     let outside = changed_outside(&before, &after, Some(&lock));
@@ -487,14 +812,13 @@ pub fn bazel_repin_with_executor(
         return Err(unexpected_mutation_message(&outside).into());
     }
     if !status.success() {
-        let code = if hub == "product" {
-            "D2B-BZLDRIFT-PRODUCT-HUB"
-        } else {
-            "D2B-BZLDRIFT-WALKER-HUB"
-        };
-        return Err(adr0054_drift_message(code)
-            .expect("hub diagnostic is closed")
-            .into());
+        return Err(command_failure_message(
+            hub,
+            &command,
+            &status_text(&status),
+            executor.diagnostic(),
+        )
+        .into());
     }
     Ok(if before.get(&lock) != after.get(&lock) {
         vec![PathBuf::from(lock)]
@@ -509,7 +833,7 @@ pub(crate) fn bazel_module_refresh(args: &[String]) -> Result<Vec<PathBuf>, Box<
     }
     reject_ambient_repin("bazel-module-refresh", None)?;
     let root = repo_root()?;
-    let mut executor = ProcessExecutor;
+    let mut executor = ProcessExecutor { diagnostic: None };
     bazel_module_refresh_with_executor(&root, &mut executor)
 }
 
@@ -520,21 +844,23 @@ pub fn bazel_module_refresh_with_executor(
     reject_ambient_repin("bazel-module-refresh", None)?;
     let before = mutation_snapshot(root)?;
     let options = startup_options(root);
-    let status = executor.run(
-        root,
-        &options.startup_args(),
-        &options.module_refresh_command_args(),
-        &[],
-    )?;
+    let command = options.module_refresh_command_args();
+    let status = executor
+        .run(root, &options.startup_args(), &command, &[])
+        .map_err(|_| command_failure_message("module", &command, "not-started", None))?;
     let after = mutation_snapshot(root)?;
     let outside = changed_outside(&before, &after, Some("MODULE.bazel.lock"));
     if !outside.is_empty() {
         return Err(unexpected_mutation_message(&outside).into());
     }
     if !status.success() {
-        return Err(adr0054_drift_message("D2B-BZLDRIFT-MODULE")
-            .expect("module diagnostic is closed")
-            .into());
+        return Err(command_failure_message(
+            "module",
+            &command,
+            &status_text(&status),
+            executor.diagnostic(),
+        )
+        .into());
     }
     Ok(
         if before.get("MODULE.bazel.lock") != after.get("MODULE.bazel.lock") {
@@ -643,18 +969,14 @@ fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
         .ok_or_else(|| "cannot locate repository root".into())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct GeneratedBuild {
-    path: String,
-    content: String,
-}
-
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Census {
     executed: Vec<String>,
     out_of_census: Vec<(String, String)>,
 }
 
+#[cfg(test)]
 impl Census {
     fn new(mut executed: Vec<String>, mut out_of_census: Vec<(String, String)>) -> Self {
         executed.sort();
@@ -780,17 +1102,23 @@ struct ManifestInfo {
     package_dir: String,
     package_name: String,
     lib_doctest: Option<bool>,
+    lib: Option<TargetInfo>,
     tests: Vec<TargetInfo>,
     bins: Vec<TargetInfo>,
     benches: Vec<TargetInfo>,
+    examples: Vec<TargetInfo>,
+    default_features: Vec<String>,
+    feature_dependencies: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TargetInfo {
     name: String,
     path: String,
-    harness: bool,
-    required_features: bool,
+    kind: String,
+    harness: Option<bool>,
+    doctest: Option<bool>,
+    required_features: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -802,6 +1130,7 @@ struct DependencyInfo {
     dev: Vec<String>,
     optional: BTreeSet<String>,
     proc_macro: BTreeSet<String>,
+    target_conditions: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -819,6 +1148,14 @@ struct TargetRow {
     direct_product_deps: Vec<String>,
     cfgs: Vec<String>,
     features: Vec<String>,
+    target_name: String,
+    target_kind: String,
+    target_path: String,
+    harness: Option<bool>,
+    doctest: Option<bool>,
+    required_features: Vec<String>,
+    default_features: bool,
+    dependency_conditions: BTreeMap<String, String>,
     closure_configured_targets: Vec<String>,
     closure_external_identities: Vec<String>,
 }
@@ -853,6 +1190,14 @@ const POLICY_TARGET_CONTEXTS: &[PolicyTargetContext] = &[
         &[],
     ),
     (
+        "guest-real-libshpool",
+        "d2b-guest-shell-runner",
+        "x86_64-linux",
+        "x86_64-unknown-linux-musl",
+        "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
+        &["real-libshpool"],
+    ),
+    (
         "broker-production",
         "d2b-priv-broker",
         "aarch64-linux",
@@ -863,20 +1208,69 @@ const POLICY_TARGET_CONTEXTS: &[PolicyTargetContext] = &[
     (
         "guest-real-libshpool",
         "d2b-guest-shell-runner",
-        "x86_64-linux",
-        "x86_64-unknown-linux-musl",
-        "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
-        &["real-libshpool"],
-    ),
-    (
-        "guest-real-libshpool",
-        "d2b-guest-shell-runner",
         "aarch64-linux",
         "aarch64-unknown-linux-musl",
         "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool",
         &["real-libshpool"],
     ),
 ];
+
+fn validate_native_policy_check_manifest() -> Result<(), Box<dyn Error>> {
+    let manifest: Value = serde_json::from_str(NATIVE_POLICY_CHECK_MANIFEST)
+        .map_err(|_| "native policy/check manifest is not valid JSON")?;
+    if manifest.get("schemaVersion") != Some(&json!(1)) {
+        return Err("native policy/check manifest schema version is unsupported".into());
+    }
+    let contexts = manifest
+        .get("contexts")
+        .and_then(Value::as_array)
+        .ok_or("native policy/check manifest contexts are missing")?;
+    if contexts.len() != POLICY_TARGET_CONTEXTS.len() {
+        return Err("native policy/check manifest context census is not exact".into());
+    }
+    for (record, (name, package, system, target, policy_input, features)) in
+        contexts.iter().zip(POLICY_TARGET_CONTEXTS)
+    {
+        let id = format!("{system}/{target}/{name}");
+        let expected_features = features
+            .iter()
+            .map(|feature| Value::String((*feature).to_owned()))
+            .collect::<Vec<_>>();
+        if record.get("id").and_then(Value::as_str) != Some(id.as_str())
+            || record.get("system").and_then(Value::as_str) != Some(*system)
+            || record.get("target").and_then(Value::as_str) != Some(*target)
+            || record.get("context").and_then(Value::as_str) != Some(*name)
+            || record.get("package").and_then(Value::as_str) != Some(*package)
+            || record.get("policyInput").and_then(Value::as_str) != Some(*policy_input)
+            || record.get("features") != Some(&Value::Array(expected_features))
+            || record.get("defaultFeatures") != Some(&Value::Bool(false))
+            || record.get("productionEdgeKinds").and_then(Value::as_str) != Some("normal,build")
+            || record.get("policyEdgeKinds").and_then(Value::as_str) != Some("normal,build,dev")
+        {
+            return Err("native policy/check manifest context differs from xtask".into());
+        }
+    }
+    let checks = manifest
+        .get("nativeChecks")
+        .and_then(Value::as_array)
+        .ok_or("native policy/check manifest checks are missing")?;
+    let expected = [
+        "broker-production-dependency-policy",
+        "guest-shell-runner-static-dependency-policy",
+        "broker-production-package-policy",
+        "guest-real-libshpool-package-policy",
+        "broker-host-artifact-contract",
+        "guest-static-elf",
+    ];
+    let actual = checks
+        .iter()
+        .map(|check| check.as_str().ok_or("native check name is not a string"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if actual != expected {
+        return Err("native policy/check manifest check census differs from xtask".into());
+    }
+    Ok(())
+}
 
 fn ordered_object(fields: impl IntoIterator<Item = (String, Value)>) -> Value {
     let fields = fields.into_iter().collect::<BTreeMap<_, _>>();
@@ -1027,6 +1421,9 @@ fn validate_rendered_outputs(outputs: &BTreeMap<String, String>) -> Result<(), B
             "actionKinds",
             "coverageTargets",
             "hubs",
+            "nativeChecks",
+            "nativePolicyCheckManifest",
+            "nativePolicyContextIds",
             "schemaVersion",
             "targets",
         ],
@@ -1280,6 +1677,35 @@ fn target_row_value(row: &TargetRow) -> Value {
         ("cfgs".to_owned(), json_string_array(&row.cfgs)),
         ("features".to_owned(), json_string_array(&row.features)),
         (
+            "target".to_owned(),
+            ordered_object([
+                ("name".to_owned(), Value::String(row.target_name.clone())),
+                ("kind".to_owned(), Value::String(row.target_kind.clone())),
+                ("path".to_owned(), Value::String(row.target_path.clone())),
+                (
+                    "harness".to_owned(),
+                    row.harness.map_or(Value::Null, Value::Bool),
+                ),
+                (
+                    "doctest".to_owned(),
+                    row.doctest.map_or(Value::Null, Value::Bool),
+                ),
+                (
+                    "requiredFeatures".to_owned(),
+                    json_string_array(&row.required_features),
+                ),
+                ("defaultFeatures".to_owned(), json!(row.default_features)),
+                (
+                    "dependencyConditions".to_owned(),
+                    ordered_object(
+                        row.dependency_conditions.iter().map(|(name, condition)| {
+                            (name.clone(), Value::String(condition.clone()))
+                        }),
+                    ),
+                ),
+            ]),
+        ),
+        (
             "closureCensus".to_owned(),
             ordered_object([
                 (
@@ -1296,6 +1722,7 @@ fn target_row_value(row: &TargetRow) -> Value {
 }
 
 fn configured_targets_json(rows: &[TargetRow]) -> Result<String, Box<dyn Error>> {
+    validate_native_policy_check_manifest()?;
     let mut rows = rows.to_vec();
     rows.sort_by(|left, right| left.label.cmp(&right.label));
     if rows.windows(2).any(|pair| pair[0].label == pair[1].label) {
@@ -1311,26 +1738,54 @@ fn configured_targets_json(rows: &[TargetRow]) -> Result<String, Box<dyn Error>>
         .map(|target| (*target).to_owned())
         .collect::<Vec<_>>();
     coverage_targets.sort();
-    let value = ordered_object([
-        ("schemaVersion".to_owned(), json!(1)),
-        (
-            "hubs".to_owned(),
-            json_array(
-                ["product", "walker"]
-                    .into_iter()
-                    .map(|hub| Value::String(hub.to_owned())),
+    let value =
+        ordered_object([
+            ("schemaVersion".to_owned(), json!(1)),
+            (
+                "hubs".to_owned(),
+                json_array(
+                    ["product", "walker"]
+                        .into_iter()
+                        .map(|hub| Value::String(hub.to_owned())),
+                ),
             ),
-        ),
-        (
-            "targets".to_owned(),
-            json_array(rows.iter().map(target_row_value)),
-        ),
-        (
-            "coverageTargets".to_owned(),
-            json_string_array(&coverage_targets),
-        ),
-        ("actionKinds".to_owned(), json_string_array(&action_kinds)),
-    ]);
+            (
+                "targets".to_owned(),
+                json_array(rows.iter().map(target_row_value)),
+            ),
+            (
+                "coverageTargets".to_owned(),
+                json_string_array(&coverage_targets),
+            ),
+            ("actionKinds".to_owned(), json_string_array(&action_kinds)),
+            (
+                "nativePolicyCheckManifest".to_owned(),
+                Value::String("tests/golden/native-policy-check-manifest.json".to_owned()),
+            ),
+            (
+                "nativePolicyContextIds".to_owned(),
+                json_array(POLICY_TARGET_CONTEXTS.iter().map(
+                    |(context, _, system, target, _, _)| {
+                        Value::String(format!("{system}/{target}/{context}"))
+                    },
+                )),
+            ),
+            (
+                "nativeChecks".to_owned(),
+                json_array(
+                    [
+                        "broker-production-dependency-policy",
+                        "guest-shell-runner-static-dependency-policy",
+                        "broker-production-package-policy",
+                        "guest-real-libshpool-package-policy",
+                        "broker-host-artifact-contract",
+                        "guest-static-elf",
+                    ]
+                    .into_iter()
+                    .map(|check| Value::String(check.to_owned())),
+                ),
+            ),
+        ]);
     Ok(pretty_json(&value))
 }
 
@@ -1426,16 +1881,65 @@ fn starlark_value(value: &Value, indent: usize) -> String {
     }
 }
 
+fn active_features(manifest: &ManifestInfo, requested: &[String]) -> BTreeSet<String> {
+    let mut active = requested.iter().cloned().collect::<BTreeSet<_>>();
+    let mut pending = active.iter().cloned().collect::<Vec<_>>();
+    while let Some(feature) = pending.pop() {
+        let Some(values) = manifest.feature_dependencies.get(&feature) else {
+            continue;
+        };
+        for value in values {
+            active.insert(value.clone());
+            let name = value
+                .strip_prefix("dep:")
+                .unwrap_or(value)
+                .split_once('/')
+                .map_or(value.as_str(), |(name, _)| name);
+            if manifest.feature_dependencies.contains_key(name) && active.insert(name.to_owned()) {
+                pending.push(name.to_owned());
+            }
+        }
+    }
+    active
+}
+
+fn effective_dependency_names(
+    manifest: &ManifestInfo,
+    package: &DependencyInfo,
+    requested_features: &[String],
+    include_dev: bool,
+) -> Vec<String> {
+    let active = active_features(manifest, requested_features);
+    let mut names = package.normal.clone();
+    if include_dev {
+        names.extend(package.dev.iter().cloned());
+    }
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .filter(|name| {
+            !package.optional.contains(name)
+                || active.contains(name)
+                || active.contains(&format!("dep:{name}"))
+        })
+        .collect()
+}
+
 fn direct_dependency_sets(
+    manifest: &ManifestInfo,
     package: &DependencyInfo,
     dependencies: &BTreeMap<String, DependencyInfo>,
-) -> (Vec<String>, Vec<String>) {
+    requested_features: &[String],
+    include_dev: bool,
+) -> (Vec<String>, Vec<String>, BTreeMap<String, String>) {
     let mut first_party = Vec::new();
     let mut product = Vec::new();
-    for name in &package.normal {
+    let mut conditions = BTreeMap::new();
+    for name in effective_dependency_names(manifest, package, requested_features, include_dev) {
         if let Some(local) = dependencies
             .values()
-            .find(|candidate| candidate.package_name == *name && candidate.hub == "product")
+            .find(|candidate| candidate.package_name == name && candidate.hub == "product")
         {
             first_party.push(format!("//{}:{}", local.package_dir, local.package_name));
         } else if package.hub == "product" {
@@ -1443,12 +1947,15 @@ fn direct_dependency_sets(
         } else {
             product.push(format!("@walker//:{}", name));
         }
+        if let Some(condition) = package.target_conditions.get(&name) {
+            conditions.insert(name, condition.clone());
+        }
     }
     first_party.sort();
     first_party.dedup();
     product.sort();
     product.dedup();
-    (first_party, product)
+    (first_party, product, conditions)
 }
 
 fn target_cfgs(system: &str, cargo_target: &str) -> Vec<String> {
@@ -1467,7 +1974,7 @@ fn target_cfgs(system: &str, cargo_target: &str) -> Vec<String> {
 }
 
 fn configured_target_rows(
-    root: &Path,
+    _root: &Path,
     manifests: &[ManifestInfo],
     dependencies: &BTreeMap<String, DependencyInfo>,
 ) -> Result<Vec<TargetRow>, Box<dyn Error>> {
@@ -1476,35 +1983,60 @@ fn configured_target_rows(
         let package = dependencies
             .get(&manifest.relative)
             .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
-        let source_files = package_source_paths(root, &manifest.package_dir)?;
-        let (direct_first_party_deps, direct_product_deps) =
-            direct_dependency_sets(package, dependencies);
-        let kind = if source_files
-            .iter()
-            .any(|path| path == &format!("{}/src/lib.rs", manifest.package_dir))
-        {
-            "rust_library"
-        } else {
-            "rust_binary"
-        };
-        let label = format!("//{}:{}", manifest.package_dir, manifest.package_name);
-        rows.push(TargetRow {
-            label: label.clone(),
-            package: manifest.package_name.clone(),
-            manifest: manifest.relative.clone(),
-            kind: kind.to_owned(),
-            cargo_context: "main".to_owned(),
-            system: None,
-            cargo_target: None,
-            policy_input: None,
-            source_files: source_files.clone(),
-            direct_first_party_deps: direct_first_party_deps.clone(),
-            direct_product_deps: direct_product_deps.clone(),
-            cfgs: Vec::new(),
-            features: Vec::new(),
-            closure_configured_targets: vec![label],
-            closure_external_identities: direct_product_deps.clone(),
-        });
+        let package_sources = package_source_paths(_root, &manifest.package_dir)?;
+        let mut targets = Vec::new();
+        if let Some(target) = &manifest.lib {
+            targets.push(target.clone());
+        }
+        targets.extend(manifest.bins.iter().cloned());
+        targets.extend(manifest.tests.iter().cloned());
+        targets.extend(manifest.benches.iter().cloned());
+        targets.extend(manifest.examples.iter().cloned());
+        if targets.is_empty() {
+            return Err(format!(
+                "Cargo package has no discoverable targets: {}",
+                manifest.package_name
+            )
+            .into());
+        }
+        for target in targets {
+            let requested_features = manifest.default_features.clone();
+            let include_dev = matches!(target.kind.as_str(), "test" | "bench");
+            let (direct_first_party_deps, direct_product_deps, dependency_conditions) =
+                direct_dependency_sets(
+                    manifest,
+                    package,
+                    dependencies,
+                    &requested_features,
+                    include_dev,
+                );
+            let label = target_label(manifest, &target);
+            rows.push(TargetRow {
+                label: label.clone(),
+                package: manifest.package_name.clone(),
+                manifest: manifest.relative.clone(),
+                kind: bazel_target_kind(&target.kind).to_owned(),
+                cargo_context: "main-default".to_owned(),
+                system: None,
+                cargo_target: None,
+                policy_input: None,
+                source_files: package_sources.clone(),
+                direct_first_party_deps,
+                direct_product_deps: direct_product_deps.clone(),
+                cfgs: Vec::new(),
+                features: requested_features,
+                target_name: target.name,
+                target_kind: target.kind,
+                target_path: target.path,
+                harness: target.harness,
+                doctest: target.doctest,
+                required_features: target.required_features,
+                default_features: true,
+                dependency_conditions,
+                closure_configured_targets: vec![label],
+                closure_external_identities: direct_product_deps,
+            });
+        }
     }
 
     for (context, package_name, system, cargo_target, policy_input, features) in
@@ -1517,42 +2049,145 @@ fn configured_target_rows(
         let package = dependencies
             .get(&manifest.relative)
             .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
-        let source_files = package_source_paths(root, &manifest.package_dir)?;
-        let (direct_first_party_deps, direct_product_deps) =
-            direct_dependency_sets(package, dependencies);
+        let selected_target = manifest
+            .bins
+            .iter()
+            .find(|target| target.name == *package_name)
+            .or_else(|| manifest.bins.first())
+            .or(manifest.lib.as_ref())
+            .ok_or_else(|| format!("package-policy target is missing: {package_name}"))?;
+        let requested_features = features
+            .iter()
+            .map(|feature| (*feature).to_owned())
+            .collect::<Vec<_>>();
+        let (direct_first_party_deps, direct_product_deps, dependency_conditions) =
+            direct_dependency_sets(manifest, package, dependencies, &requested_features, true);
         let system_suffix = system.strip_suffix("-linux").unwrap_or(system);
         let label = format!(
             "//{}:{}-{}-{}",
             manifest.package_dir, manifest.package_name, context, system_suffix
         );
-        let mut requested_features = features
-            .iter()
-            .map(|feature| (*feature).to_owned())
-            .collect::<Vec<_>>();
-        requested_features.sort();
         rows.push(TargetRow {
             label: label.clone(),
             package: manifest.package_name.clone(),
             manifest: manifest.relative.clone(),
-            kind: "rust_test".to_owned(),
+            kind: bazel_target_kind(&selected_target.kind).to_owned(),
             cargo_context: format!("{context}-{system_suffix}"),
             system: Some((*system).to_owned()),
             cargo_target: Some((*cargo_target).to_owned()),
             policy_input: Some((*policy_input).to_owned()),
-            source_files,
+            source_files: package_source_paths(_root, &manifest.package_dir)?,
             direct_first_party_deps,
             direct_product_deps: direct_product_deps.clone(),
             cfgs: target_cfgs(system, cargo_target),
             features: requested_features,
+            target_name: selected_target.name.clone(),
+            target_kind: selected_target.kind.clone(),
+            target_path: selected_target.path.clone(),
+            harness: selected_target.harness,
+            doctest: selected_target.doctest,
+            required_features: features
+                .iter()
+                .map(|feature| (*feature).to_owned())
+                .collect(),
+            default_features: false,
+            dependency_conditions,
             closure_configured_targets: vec![label],
             closure_external_identities: direct_product_deps,
         });
     }
+    normalize_first_party_labels(&mut rows, manifests);
+    complete_target_closures(&mut rows);
     rows.sort_by(|left, right| left.label.cmp(&right.label));
     if rows.windows(2).any(|pair| pair[0].label == pair[1].label) {
         return Err("configured target definitions contain duplicate labels".into());
     }
     Ok(rows)
+}
+
+fn bazel_target_kind(kind: &str) -> &'static str {
+    match kind {
+        "lib" => "rust_library",
+        "bin" | "example" => "rust_binary",
+        "test" | "bench" => "rust_test",
+        _ => "rust_binary",
+    }
+}
+
+fn target_label(manifest: &ManifestInfo, target: &TargetInfo) -> String {
+    let name = if target.kind == "bin" && target.name == manifest.package_name {
+        format!("{}-bin", target.name)
+    } else {
+        target.name.clone()
+    };
+    format!("//{}:{}", manifest.package_dir, name)
+}
+
+fn normalize_first_party_labels(rows: &mut [TargetRow], manifests: &[ManifestInfo]) {
+    let primary = manifests
+        .iter()
+        .filter_map(|manifest| {
+            let target = manifest
+                .lib
+                .as_ref()
+                .or_else(|| manifest.bins.first())
+                .map(|target| target_label(manifest, target))?;
+            Some((manifest.package_name.clone(), target))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for row in rows {
+        for dependency in &mut row.direct_first_party_deps {
+            let Some(package_name) = dependency.rsplit_once(':').map(|(_, name)| name) else {
+                continue;
+            };
+            if let Some(label) = primary.get(package_name) {
+                *dependency = label.clone();
+            }
+        }
+        row.direct_first_party_deps.sort();
+        row.direct_first_party_deps.dedup();
+    }
+}
+
+fn complete_target_closures(rows: &mut [TargetRow]) {
+    for _ in 0..rows.len().saturating_add(1) {
+        let previous = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.label.clone(),
+                    (
+                        row.closure_configured_targets.clone(),
+                        row.closure_external_identities.clone(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut changed = false;
+        for row in rows.iter_mut() {
+            let mut configured = BTreeSet::from([row.label.clone()]);
+            let mut external = row
+                .closure_external_identities
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for dependency in &row.direct_first_party_deps {
+                if let Some((child_configured, child_external)) = previous.get(dependency) {
+                    configured.extend(child_configured.iter().cloned());
+                    external.extend(child_external.iter().cloned());
+                }
+            }
+            let configured = configured.into_iter().collect::<Vec<_>>();
+            let external = external.into_iter().collect::<Vec<_>>();
+            changed |= row.closure_configured_targets != configured
+                || row.closure_external_identities != external;
+            row.closure_configured_targets = configured;
+            row.closure_external_identities = external;
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 fn package_source_paths(root: &Path, package_dir: &str) -> Result<Vec<String>, Box<dyn Error>> {
@@ -2000,6 +2635,7 @@ fn action_network_policy_json(hermeticity: &str) -> Result<String, Box<dyn Error
 }
 
 fn generate_model(root: &Path) -> Result<GeneratedModel, Box<dyn Error>> {
+    validate_native_policy_check_manifest()?;
     validate_generator_inputs(root)?;
     let manifests = discover_manifests(root)?;
     if manifests.is_empty() {
@@ -2118,6 +2754,7 @@ fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box
             let mut normal = BTreeSet::new();
             let mut dev = BTreeSet::new();
             let mut optional = BTreeSet::new();
+            let mut target_conditions = BTreeMap::new();
             if let Some(dependencies) = package.get("dependencies").and_then(Value::as_array) {
                 for dependency in dependencies {
                     let Some(name) = dependency.get("name").and_then(Value::as_str) else {
@@ -2134,6 +2771,9 @@ fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box
                         .unwrap_or(false)
                     {
                         optional.insert(name.to_owned());
+                    }
+                    if let Some(target) = dependency.get("target").and_then(Value::as_str) {
+                        target_conditions.insert(name.to_owned(), target.to_owned());
                     }
                 }
             }
@@ -2158,6 +2798,7 @@ fn dependency_graph(root: &Path) -> Result<BTreeMap<String, DependencyInfo>, Box
                     dev: dev.into_iter().collect(),
                     optional,
                     proc_macro,
+                    target_conditions,
                 },
             );
         }
@@ -2433,12 +3074,24 @@ fn parse_manifest(relative: &str, text: &str, root: &Path) -> Result<ManifestInf
         .iter()
         .find(|(name, _)| name == "[lib]")
         .map(|(_, block)| value_bool(block, "doctest").unwrap_or(true));
-    let mut tests = target_sections(&sections, "[[test]]");
     let package_dir = Path::new(relative)
         .parent()
         .ok_or("Cargo package manifest has no parent")?
         .to_string_lossy()
         .into_owned();
+    let lib = if root.join(&package_dir).join("src/lib.rs").is_file() {
+        Some(TargetInfo {
+            name: package_name.clone(),
+            path: "src/lib.rs".to_owned(),
+            kind: "lib".to_owned(),
+            harness: None,
+            doctest: lib_doctest,
+            required_features: Vec::new(),
+        })
+    } else {
+        None
+    };
+    let mut tests = target_sections(&sections, "[[test]]");
     let explicit_tests = tests
         .iter()
         .map(|target| target.path.clone())
@@ -2448,14 +3101,63 @@ fn parse_manifest(relative: &str, text: &str, root: &Path) -> Result<ManifestInf
             tests.push(target);
         }
     }
+    let mut bins = target_sections(&sections, "[[bin]]");
+    let explicit_bin_paths = bins
+        .iter()
+        .map(|target| target.path.clone())
+        .collect::<BTreeSet<_>>();
+    if root.join(&package_dir).join("src/main.rs").is_file()
+        && !explicit_bin_paths.contains("src/main.rs")
+    {
+        bins.push(TargetInfo {
+            name: package_name.clone(),
+            path: "src/main.rs".to_owned(),
+            kind: "bin".to_owned(),
+            harness: None,
+            doctest: Some(false),
+            required_features: Vec::new(),
+        });
+    }
+    for target in implicit_bin_targets(root, &package_dir)? {
+        if !explicit_bin_paths.contains(&target.path) {
+            bins.push(target);
+        }
+    }
+    let benches = {
+        let mut targets = target_sections(&sections, "[[bench]]");
+        let explicit = targets
+            .iter()
+            .map(|target| target.path.clone())
+            .collect::<BTreeSet<_>>();
+        for target in implicit_bench_targets(root, &package_dir)? {
+            if !explicit.contains(&target.path) {
+                targets.push(target);
+            }
+        }
+        targets
+    };
+    let examples = implicit_example_targets(root, &package_dir)?;
+    let feature_dependencies = sections
+        .iter()
+        .find(|(name, _)| name == "[features]")
+        .map(|(_, block)| feature_map(block))
+        .unwrap_or_default();
+    let default_features = feature_dependencies
+        .get("default")
+        .cloned()
+        .unwrap_or_default();
     Ok(ManifestInfo {
         relative: relative.to_owned(),
         package_dir,
         package_name,
         lib_doctest,
+        lib,
         tests,
-        bins: target_sections(&sections, "[[bin]]"),
-        benches: target_sections(&sections, "[[bench]]"),
+        bins,
+        benches,
+        examples,
+        default_features,
+        feature_dependencies,
     })
 }
 
@@ -2481,8 +3183,10 @@ fn implicit_test_targets(
         targets.push(TargetInfo {
             name,
             path: format!("tests/{}.rs", stem),
-            harness: true,
-            required_features: false,
+            kind: "test".to_owned(),
+            harness: Some(true),
+            doctest: Some(false),
+            required_features: Vec::new(),
         });
     }
     targets.sort_by(|left, right| left.name.cmp(&right.name));
@@ -2504,606 +3208,87 @@ fn target_sections(sections: &[(String, String)], target_kind: &str) -> Vec<Targ
             Some(TargetInfo {
                 name,
                 path,
-                harness: value_bool(block, "harness").unwrap_or(true),
-                required_features: block.contains("required-features"),
+                kind: target_kind
+                    .trim_matches(|character| character == '[' || character == ']')
+                    .trim_start_matches("[]")
+                    .to_owned(),
+                harness: Some(value_bool(block, "harness").unwrap_or(true)),
+                doctest: None,
+                required_features: value_strings(block, "required-features"),
             })
         })
         .collect()
 }
 
-fn render_build(
-    manifest: &ManifestInfo,
-    root: &Path,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-) -> Result<GeneratedBuild, Box<dyn Error>> {
-    if manifest.relative == "packages/d2b-priv-broker/Cargo.toml" {
-        return render_broker_build(manifest, root, dependencies);
-    }
-    if manifest.relative == "packages/d2b-guest-shell-runner/Cargo.toml" {
-        return render_guest_build(manifest, root, dependencies);
-    }
-
-    let build_path = format!("{}/BUILD.bazel", manifest.package_dir);
-    let mut source_files = Vec::new();
-    let source_root = root.join(&manifest.package_dir);
-    collect_rs_files(&source_root, &source_root, &mut source_files)?;
-    source_files.sort();
-    let package = dependencies
-        .get(&manifest.relative)
-        .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
-    let deps = dependency_labels(package, dependencies, &[]);
-    let proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], false);
-    let mut content = String::from("# Generated by cargo xtask gen-bazel. Do not edit.\n");
-    content.push_str("package(default_visibility = [\"//visibility:public\"])\n\n");
-    content.push_str("load(\"@rules_rust//rust:defs.bzl\", \"rust_library\", \"rust_test\")\n\n");
-    content.push_str("rust_library(\n");
-    content.push_str(&format!(
-        "    name = {},\n",
-        bazel_string(&manifest.package_name)
-    ));
-    content.push_str(&format!(
-        "    crate_name = {},\n",
-        bazel_string(&rust_crate_name(&manifest.package_name))
-    ));
-    content.push_str("    edition = \"2024\",\n");
-    content.push_str("    srcs = [\n");
-    for source in source_files {
-        content.push_str("        ");
-        content.push_str(&bazel_string(&source));
-        content.push_str(",\n");
-    }
-
-    content.push_str("    ],\n");
-    append_deps(&mut content, &deps);
-    append_proc_macro_deps(&mut content, &proc_macro_deps);
-    content.push_str(")\n");
-    for target in &manifest.bins {
-        let target_name = if target.name == manifest.package_name {
-            format!("{}-bin", target.name)
-        } else {
-            target.name.clone()
-        };
-        content.push_str("\nrust_test(\n");
-        content.push_str(&format!("    name = {},\n", bazel_string(&target_name)));
-        content.push_str("    edition = \"2024\",\n");
-        content.push_str(&format!("    srcs = [{}],\n", bazel_string(&target.path)));
-        append_deps(&mut content, &[format!(":{}", manifest.package_name)]);
-        content.push_str(")\n");
-    }
-    for target in &manifest.tests {
-        content.push_str("\nrust_test(\n");
-        content.push_str(&format!("    name = {},\n", bazel_string(&target.name)));
-        content.push_str("    edition = \"2024\",\n");
-        content.push_str(&format!("    srcs = [{}],\n", bazel_string(&target.path)));
-        append_deps(&mut content, &[format!(":{}", manifest.package_name)]);
-        content.push_str(")\n");
-    }
-    if manifest.package_name == "d2b-core" {
-        append_context_library(
-            &mut content,
-            &manifest.package_name,
-            "d2b-core-test-support",
-            "test-support",
-            &source_files_for_package(root, &manifest.package_dir, true)?,
-            &deps,
-            &proc_macro_deps,
-        );
-    }
-    if manifest.package_name == "d2b-host" {
-        append_context_library(
-            &mut content,
-            &manifest.package_name,
-            "d2b-host-fake-backends",
-            "fake-backends",
-            &source_files_for_package(root, &manifest.package_dir, true)?,
-            &deps,
-            &proc_macro_deps,
-        );
-    }
-    Ok(GeneratedBuild {
-        path: build_path,
-        content,
-    })
+fn implicit_bin_targets(root: &Path, package_dir: &str) -> Result<Vec<TargetInfo>, Box<dyn Error>> {
+    implicit_file_targets(root, package_dir, "src/bin", "bin")
 }
 
-fn render_broker_build(
-    manifest: &ManifestInfo,
-    root: &Path,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-) -> Result<GeneratedBuild, Box<dyn Error>> {
-    let package = dependencies
-        .get(&manifest.relative)
-        .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
-    let sources = source_files_for_package(root, &manifest.package_dir, false)?;
-    let normal_deps = dependency_labels(package, dependencies, &[]);
-    let normal_proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], false);
-    let mut content = build_header();
-    append_context_library(
-        &mut content,
-        &manifest.package_name,
-        "d2b-priv-broker-lib",
-        "",
-        &sources,
-        &normal_deps,
-        &normal_proc_macro_deps,
-    );
-    append_binary(
-        &mut content,
-        "d2b-priv-broker",
-        "d2b-priv-broker",
-        "src/main.rs",
-        &std::iter::once(":d2b-priv-broker-lib".to_owned())
-            .chain(normal_deps.iter().cloned())
-            .collect::<Vec<_>>(),
-        &[],
-    );
-
-    let contexts = [
-        ("", "d2b-priv-broker-default-lib", "tests", "tests"),
-        (
-            "layer1-bootstrap",
-            "d2b-priv-broker-layer1-lib",
-            "tests_layer1",
-            "tests_layer1",
-        ),
-        (
-            "fake-backends",
-            "d2b-priv-broker-fakebackends-lib",
-            "tests_fakebackends",
-            "tests_fakebackends",
-        ),
-    ];
-    let test_targets = manifest
-        .tests
-        .iter()
-        .map(|target| target.name.clone())
-        .collect::<Vec<_>>();
-    for (feature, library, suite, _suite_alias) in contexts {
-        let local_overrides = if feature == "fake-backends" {
-            &[("d2b-host", "d2b-host-fake-backends")][..]
-        } else {
-            &[][..]
-        };
-        let context_deps = dependency_labels(package, dependencies, local_overrides);
-        let context_proc_macro_deps =
-            proc_macro_dependency_labels(package, dependencies, local_overrides, false);
-        let test_overrides = local_overrides;
-        let test_deps = test_dependency_labels(package, dependencies, test_overrides);
-        let test_proc_macro_deps =
-            proc_macro_dependency_labels(package, dependencies, test_overrides, false);
-        append_context_library(
-            &mut content,
-            &manifest.package_name,
-            library,
-            feature,
-            &sources,
-            &context_deps,
-            &context_proc_macro_deps,
-        );
-        for target in &manifest.tests {
-            let target_name = if feature.is_empty() {
-                format!("{}_default", target.name)
-            } else {
-                format!("{}_{}", target.name, feature.replace('-', "_"))
-            };
-            append_test(
-                &mut content,
-                &target_name,
-                library,
-                &target.path,
-                feature,
-                &test_deps,
-                &test_proc_macro_deps,
-                Some(("d2b-priv-broker", "CARGO_BIN_EXE_d2b-priv-broker")),
-            );
-        }
-        content.push_str("\ntest_suite(\n");
-        content.push_str(&format!("    name = {},\n", bazel_string(suite)));
-        content.push_str("    tests = [\n");
-        for target in &test_targets {
-            content.push_str("        ");
-            let target_name = if feature.is_empty() {
-                format!("{}_default", target)
-            } else {
-                format!("{}_{}", target, feature.replace('-', "_"))
-            };
-            content.push_str(&bazel_string(&format!(":{}", target_name)));
-            content.push_str(",\n");
-        }
-        content.push_str("    ],\n)\n");
-    }
-
-    Ok(GeneratedBuild {
-        path: format!("{}/BUILD.bazel", manifest.package_dir),
-        content,
-    })
-}
-
-fn render_guest_build(
-    manifest: &ManifestInfo,
-    root: &Path,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-) -> Result<GeneratedBuild, Box<dyn Error>> {
-    let package = dependencies
-        .get(&manifest.relative)
-        .ok_or_else(|| format!("missing dependency graph entry for {}", manifest.relative))?;
-    let sources = source_files_for_package(root, &manifest.package_dir, false)?;
-    let default_deps = dependency_labels(package, dependencies, &[]);
-    let default_proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], false);
-    let real_deps =
-        dependency_labels_for_names(&package.normal, package, dependencies, &[], true, false);
-    let real_proc_macro_deps = proc_macro_dependency_labels(package, dependencies, &[], true);
-    let mut content = build_header();
-    append_context_library(
-        &mut content,
-        &manifest.package_name,
-        "d2b-guest-shell-runner-lib",
-        "",
-        &sources,
-        &default_deps,
-        &default_proc_macro_deps,
-    );
-    append_binary(
-        &mut content,
-        "d2b-guest-shell-runner",
-        "d2b-guest-shell-runner",
-        "src/main.rs",
-        &std::iter::once(":d2b-guest-shell-runner-lib".to_owned())
-            .chain(default_deps.iter().cloned())
-            .collect::<Vec<_>>(),
-        &[],
-    );
-    append_context_library(
-        &mut content,
-        &manifest.package_name,
-        "d2b-guest-shell-runner-real-libshpool-lib",
-        "real-libshpool",
-        &sources,
-        &real_deps,
-        &real_proc_macro_deps,
-    );
-    append_binary(
-        &mut content,
-        "d2b-guest-shell-runner-real-libshpool",
-        "d2b-guest-shell-runner",
-        "src/main.rs",
-        &std::iter::once(":d2b-guest-shell-runner-real-libshpool-lib".to_owned())
-            .chain(real_deps.iter().cloned())
-            .collect::<Vec<_>>(),
-        &["real-libshpool".to_owned()],
-    );
-    for target in &manifest.tests {
-        append_test(
-            &mut content,
-            &target.name,
-            "d2b-guest-shell-runner-real-libshpool-lib",
-            &target.path,
-            "real-libshpool",
-            &test_dependency_labels_with_optional(package, dependencies, &[], true),
-            &real_proc_macro_deps,
-            Some((
-                "d2b-guest-shell-runner-real-libshpool",
-                "CARGO_BIN_EXE_d2b-guest-shell-runner",
-            )),
-        );
-    }
-    content.push_str("\ntest_suite(\n");
-    content.push_str("    name = \"tests\",\n");
-    content.push_str("    tests = [\n");
-    for target in &manifest.tests {
-        content.push_str("        ");
-        content.push_str(&bazel_string(&format!(":{}", target.name)));
-        content.push_str(",\n");
-    }
-    content.push_str("    ],\n)\n");
-    Ok(GeneratedBuild {
-        path: format!("{}/BUILD.bazel", manifest.package_dir),
-        content,
-    })
-}
-
-fn build_header() -> String {
-    String::from(
-        "# Generated by cargo xtask gen-bazel. Do not edit.\n\
-         package(default_visibility = [\"//visibility:public\"])\n\n\
-         load(\"@rules_rust//rust:defs.bzl\", \"rust_binary\", \"rust_library\", \"rust_test\")\n",
-    )
-}
-
-fn rust_crate_name(package_name: &str) -> String {
-    package_name.replace('-', "_")
-}
-
-fn source_files_for_package(
+fn implicit_bench_targets(
     root: &Path,
     package_dir: &str,
-    include_main: bool,
-) -> Result<Vec<String>, Box<dyn Error>> {
-    let package_root = root.join(package_dir);
-    let source_root = package_root.join("src");
-    let mut source_files = Vec::new();
-    collect_rs_files(&source_root, &source_root, &mut source_files)?;
-    source_files
-        .retain(|source| (include_main || source != "main.rs") && !source.starts_with("bin/"));
-    source_files.sort();
-    Ok(source_files
-        .into_iter()
-        .map(|source| format!("src/{source}"))
-        .collect())
+) -> Result<Vec<TargetInfo>, Box<dyn Error>> {
+    implicit_file_targets(root, package_dir, "benches", "bench")
 }
 
-fn dependency_labels(
-    package: &DependencyInfo,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-    local_overrides: &[(&str, &str)],
-) -> Vec<String> {
-    dependency_labels_for_names(
-        &package.normal,
-        package,
-        dependencies,
-        local_overrides,
-        false,
-        false,
-    )
-}
-
-fn test_dependency_labels(
-    package: &DependencyInfo,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-    local_overrides: &[(&str, &str)],
-) -> Vec<String> {
-    test_dependency_labels_with_optional(package, dependencies, local_overrides, false)
-}
-
-fn test_dependency_labels_with_optional(
-    package: &DependencyInfo,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-    local_overrides: &[(&str, &str)],
-    include_optional: bool,
-) -> Vec<String> {
-    let mut names = package.normal.clone();
-    names.extend(package.dev.iter().cloned());
-    names.sort();
-    names.dedup();
-    dependency_labels_for_names(
-        &names,
-        package,
-        dependencies,
-        local_overrides,
-        include_optional,
-        false,
-    )
-}
-
-fn dependency_labels_for_names(
-    names: &[String],
-    package: &DependencyInfo,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-    local_overrides: &[(&str, &str)],
-    include_optional: bool,
-    include_proc_macro: bool,
-) -> Vec<String> {
-    let mut labels = names
-        .iter()
-        .filter_map(|dependency| {
-            if !include_optional && package.optional.contains(dependency) {
-                return None;
-            }
-            if !include_proc_macro && package.proc_macro.contains(dependency) {
-                return None;
-            }
-            if let Some((_, target)) = local_overrides.iter().find(|(name, _)| *name == dependency)
-                && let Some(local) = dependencies
-                    .values()
-                    .find(|candidate| candidate.package_name == *dependency)
-            {
-                return Some(format!("//{}:{}", local.package_dir, target));
-            }
-            if let Some(local) = dependencies
-                .values()
-                .find(|candidate| candidate.package_name == *dependency)
-            {
-                return Some(format!("//{}:{}", local.package_dir, local.package_name));
-            }
-            Some(format!("@{}//:{}", package.hub, dependency))
-        })
-        .collect::<Vec<_>>();
-    labels.sort();
-    labels.dedup();
-    labels
-}
-
-fn proc_macro_dependency_labels(
-    package: &DependencyInfo,
-    dependencies: &BTreeMap<String, DependencyInfo>,
-    local_overrides: &[(&str, &str)],
-    include_optional: bool,
-) -> Vec<String> {
-    let names = package.proc_macro.iter().cloned().collect::<Vec<_>>();
-    dependency_labels_for_names(
-        &names,
-        package,
-        dependencies,
-        local_overrides,
-        include_optional,
-        true,
-    )
-}
-
-fn append_deps(content: &mut String, deps: &[String]) {
-    content.push_str("    deps = [\n");
-    for dep in deps {
-        content.push_str("        ");
-        content.push_str(&bazel_string(dep));
-        content.push_str(",\n");
-    }
-    content.push_str("    ],\n");
-}
-
-fn append_proc_macro_deps(content: &mut String, deps: &[String]) {
-    if deps.is_empty() {
-        return;
-    }
-    content.push_str("    proc_macro_deps = [\n");
-    for dep in deps {
-        content.push_str("        ");
-        content.push_str(&bazel_string(dep));
-        content.push_str(",\n");
-    }
-    content.push_str("    ],\n");
-}
-
-fn append_context_library(
-    content: &mut String,
-    package_name: &str,
-    target_name: &str,
-    feature: &str,
-    sources: &[String],
-    deps: &[String],
-    proc_macro_deps: &[String],
-) {
-    content.push_str("\nrust_library(\n");
-    content.push_str(&format!("    name = {},\n", bazel_string(target_name)));
-    content.push_str(&format!(
-        "    crate_name = {},\n",
-        bazel_string(&rust_crate_name(package_name))
-    ));
-    content.push_str("    edition = \"2024\",\n");
-    if !feature.is_empty() {
-        content.push_str(&format!(
-            "    crate_features = [{}],\n",
-            bazel_string(feature)
-        ));
-    }
-    content.push_str("    srcs = [\n");
-    for source in sources {
-        content.push_str("        ");
-        content.push_str(&bazel_string(source));
-        content.push_str(",\n");
-    }
-    content.push_str("    ],\n");
-    append_deps(content, deps);
-    append_proc_macro_deps(content, proc_macro_deps);
-    content.push_str(")\n");
-}
-
-fn append_binary(
-    content: &mut String,
-    target_name: &str,
-    package_name: &str,
-    source: &str,
-    deps: &[String],
-    features: &[String],
-) {
-    content.push_str("\nrust_binary(\n");
-    content.push_str(&format!("    name = {},\n", bazel_string(target_name)));
-    content.push_str(&format!(
-        "    crate_name = {},\n",
-        bazel_string(&rust_crate_name(package_name))
-    ));
-    content.push_str("    edition = \"2024\",\n");
-    if !features.is_empty() {
-        content.push_str("    crate_features = [\n");
-        for feature in features {
-            content.push_str("        ");
-            content.push_str(&bazel_string(feature));
-            content.push_str(",\n");
-        }
-        content.push_str("    ],\n");
-    }
-    content.push_str(&format!("    srcs = [{}],\n", bazel_string(source)));
-    append_deps(content, deps);
-    content.push_str(")\n");
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_test(
-    content: &mut String,
-    target_name: &str,
-    library: &str,
-    source: &str,
-    feature: &str,
-    deps: &[String],
-    proc_macro_deps: &[String],
-    binary_provider: Option<(&str, &str)>,
-) {
-    content.push_str("\nrust_test(\n");
-    content.push_str(&format!("    name = {},\n", bazel_string(target_name)));
-    content.push_str("    edition = \"2024\",\n");
-    if !feature.is_empty() {
-        content.push_str(&format!(
-            "    crate_features = [{}],\n",
-            bazel_string(feature)
-        ));
-    }
-    if let Some((binary_provider, binary_env)) = binary_provider {
-        content.push_str("    env_inherit = [\"PATH\"],\n");
-        content.push_str(&format!(
-            "    env = {{\"{binary_env}\": \"$(rootpath :{binary_provider})\"}},\n"
-        ));
-        content.push_str(&format!(
-            "    rustc_env = {{\"{binary_env}\": \"$(rootpath :{binary_provider})\"}},\n"
-        ));
-    }
-    content.push_str(&format!("    srcs = [{}],\n", bazel_string(source)));
-    let mut all_deps = vec![format!(":{library}")];
-    all_deps.extend(deps.iter().cloned());
-    if let Some((binary_provider, _)) = binary_provider {
-        all_deps.push(format!(":{binary_provider}"));
-    }
-    append_deps(content, &all_deps);
-    append_proc_macro_deps(content, proc_macro_deps);
-    content.push_str(")\n");
-}
-
-fn collect_rs_files(
+fn implicit_example_targets(
     root: &Path,
-    current: &Path,
-    output: &mut Vec<String>,
-) -> Result<(), Box<dyn Error>> {
-    if !current.exists() {
-        return Ok(());
+    package_dir: &str,
+) -> Result<Vec<TargetInfo>, Box<dyn Error>> {
+    implicit_file_targets(root, package_dir, "examples", "example")
+}
+
+fn implicit_file_targets(
+    root: &Path,
+    package_dir: &str,
+    relative_dir: &str,
+    kind: &str,
+) -> Result<Vec<TargetInfo>, Box<dyn Error>> {
+    let directory = root.join(package_dir).join(relative_dir);
+    if !directory.is_dir() {
+        return Ok(Vec::new());
     }
-    for entry in fs::read_dir(current)? {
+    let mut targets = Vec::new();
+    for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_rs_files(root, &path, output)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-            output.push(
-                path.strip_prefix(root)
-                    .map_err(|_| "source path escaped Cargo package root")?
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
+        if !entry.file_type()?.is_file() || path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
         }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        targets.push(TargetInfo {
+            name: stem.to_owned(),
+            path: format!("{relative_dir}/{stem}.rs"),
+            kind: kind.to_owned(),
+            harness: Some(true),
+            doctest: Some(false),
+            required_features: Vec::new(),
+        });
     }
-    Ok(())
+    targets.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(targets)
 }
 
-fn governed_source_inventory(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
-    let tracked = tracked_paths(root)?;
-    let mut sources = tracked
-        .into_iter()
-        .filter(|path| {
-            path.starts_with("packages/")
-                && path.ends_with(".rs")
-                && !Path::new(path).components().any(|component| {
-                    matches!(
-                        component,
-                        std::path::Component::Normal(value)
-                            if matches!(value.to_str(), Some("target" | "tests" | "fixtures" | ".git"))
-                    )
-                })
+fn feature_map(block: &str) -> BTreeMap<String, Vec<String>> {
+    block
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.trim().split_once('=')?;
+            Some((name.trim().to_owned(), quoted_values(value)))
         })
-        .collect::<Vec<_>>();
-    sources.sort();
-    sources.dedup();
-    if sources.is_empty() {
-        return Err("governed Rust source inventory is empty".into());
-    }
-    Ok(sources)
+        .collect()
+}
+
+fn value_strings(block: &str, key: &str) -> Vec<String> {
+    block
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.trim().split_once('=')?;
+            (name.trim() == key).then(|| quoted_values(value))
+        })
+        .unwrap_or_default()
 }
 
 fn bazelignore_entries(
@@ -3368,20 +3553,6 @@ fn collect_files_without_git(
         }
     }
     Ok(())
-}
-
-fn tracked_digests(root: &Path) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn Error>> {
-    let mut digests = BTreeMap::new();
-    for relative in tracked_paths(root)? {
-        match fs::read(root.join(&relative)) {
-            Ok(bytes) => {
-                digests.insert(relative, Sha256::digest(bytes).into());
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(digests)
 }
 
 fn mutation_snapshot(root: &Path) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn Error>> {
@@ -3670,5 +3841,41 @@ harness = false
             validate_committed_output_census(&root, &expected).is_err(),
             "absent output root must fail closed"
         );
+    }
+
+    #[test]
+    fn child_command_diagnostics_are_bounded_redacted_and_hub_specific() {
+        let diagnostic = bounded_child_diagnostic(
+            b"fatal: /home/operator/private /nix/store/secret\nsecond-line",
+        );
+        assert!(!diagnostic.contains("/home/operator"));
+        assert!(!diagnostic.contains("/nix/store"));
+        assert!(diagnostic.contains("<path>"));
+        assert!(
+            command_failure_message(
+                "product",
+                &["mod".into(), "deps".into()],
+                "36",
+                Some(&diagnostic)
+            )
+            .contains("hub=product command=bazel mod deps status=36")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_output_refuses_symlinked_parent_and_anchored_cleanup() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("d2b-bazel-anchored-output-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let real = root.join("real");
+        fs::create_dir_all(&real).expect("real output");
+        let link = root.join("link");
+        symlink(&real, &link).expect("output symlink");
+        assert!(atomic_write_file(&link.join("output"), "unsafe").is_err());
+        assert!(remove_anchored_directory(&link).is_err());
+        fs::remove_dir_all(&root).expect("cleanup");
     }
 }

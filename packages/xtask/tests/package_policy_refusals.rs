@@ -1,4 +1,5 @@
 #[path = "../src/package_policy.rs"]
+#[allow(dead_code)]
 mod package_policy;
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
@@ -805,6 +806,6 @@ fn selected_metadata_normalizes_paths_rejects_unknown_absolute_paths_and_is_dete
             &context,
             root,
         ),
-        Err(package_policy::PolicyError::UnrecognizedAbsolutePath(_))
+        Err(package_policy::PolicyError::UnrecognizedAbsolutePath)
     ));
 }

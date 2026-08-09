@@ -145,14 +145,14 @@ else
   fail "wiring: aarch64 job must realize checks with nix build --no-link" || true
   rc=1
 fi
-for check in \
-  broker-production-dependency-policy \
-  guest-shell-runner-static-dependency-policy \
-  broker-production-package-policy \
-  guest-real-libshpool-package-policy \
-  broker-host-artifact-contract \
-  guest-static-elf
-do
+mapfile -t native_checks < <(
+  jq -er '.nativeChecks[]' "$ROOT/tests/golden/native-policy-check-manifest.json"
+)
+if [ "${#native_checks[@]}" -ne 6 ]; then
+  fail "wiring: native policy/check manifest must name exactly six checks" || true
+  rc=1
+fi
+for check in "${native_checks[@]}"; do
   if grep -qF ".#checks.aarch64-linux.$check" <<<"$aarch64_block"; then
     ok "wiring: aarch64 realizes $check"
   else

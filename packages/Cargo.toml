@@ -58,8 +58,6 @@ members = [
     "d2b-guest-shell-runner",
     "d2b-bazel-support",
     "d2b-bazel-exec",
-    "d2b-bazel-runner",
-    "d2b-test-locator",
     "xtask",
 ]
 

@@ -1,10 +1,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
-    fs::{self, OpenOptions},
-    io::Write,
+    env, fs,
+    io::{Read, Write},
     os::{
-        fd::AsRawFd,
+        fd::{AsFd, AsRawFd},
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::{Path, PathBuf},
@@ -494,7 +493,7 @@ fn bazel_repin_with_fresh_executor(
     if let Some(output) = fresh_hub_bootstrap(&root, hub, fresh_executor)? {
         return Ok(output);
     }
-    let mut executor = ExecutableBazelExecutor;
+    let mut executor = ExecutableBazelExecutor { diagnostic: None };
     bazel::bazel_repin_with_executor(&root, hub, &mut executor)
 }
 
@@ -589,8 +588,7 @@ fn fresh_hub_bootstrap(
     }
     validate_fresh_directories(root, hub)?;
     let scratch = root.join(".scratch/bazel");
-    fs::create_dir_all(&scratch)
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap scratch space"))?;
+    ensure_fresh_directory(&scratch, hub)?;
     let guard_path = scratch.join("fresh-bootstrap.guard");
     let guard = acquire_fresh_bootstrap_guard(&guard_path)
         .map_err(|reason| fresh_bootstrap_error(hub, reason))?;
@@ -600,7 +598,9 @@ fn fresh_hub_bootstrap(
     let workspace = scratch.join("fresh-bootstrap-workspace");
     match fs::symlink_metadata(&workspace) {
         Ok(metadata) if metadata.file_type().is_dir() => {
-            fs::remove_dir_all(&workspace)
+            anchor_fresh_directory(&workspace)
+                .map_err(|_| fresh_bootstrap_error(hub, "bootstrap workspace changed identity"))?;
+            bazel::remove_anchored_directory(&workspace)
                 .map_err(|_| fresh_bootstrap_error(hub, "cannot reclaim bootstrap workspace"))?;
         }
         Ok(_) => {
@@ -617,10 +617,9 @@ fn fresh_hub_bootstrap(
             ));
         }
     }
-    fs::create_dir_all(&workspace)
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot create bootstrap workspace"))?;
+    ensure_fresh_directory(&workspace, hub)?;
     let generated = fresh_bootstrap_in_workspace(root, &workspace, hub, executor);
-    let cleanup = fs::remove_dir_all(&workspace);
+    let cleanup = bazel::remove_anchored_directory(&workspace);
     let after_child = fresh_content_snapshot(root)
         .map_err(|_| fresh_bootstrap_error(hub, "cannot inspect repository state"))?;
     if fresh_content_changed_outside_selected(&before, &after_child, hub) {
@@ -656,25 +655,45 @@ fn validate_fresh_directories(root: &Path, hub: &str) -> Result<(), Box<dyn std:
         ("bazel", false),
         ("bazel/cargo", false),
     ] {
-        match fs::symlink_metadata(root.join(relative)) {
-            Ok(metadata) if metadata.file_type().is_dir() => {}
-            Ok(_) => {
-                return Err(fresh_bootstrap_error(
-                    hub,
-                    "bootstrap directory is not a directory",
-                ));
-            }
-            Err(error) if optional && error.kind() == std::io::ErrorKind::NotFound => {
-                continue;
-            }
-            Err(_) => {
-                return Err(fresh_bootstrap_error(
-                    hub,
-                    "bootstrap directory cannot be inspected",
-                ));
-            }
+        let path = root.join(relative);
+        if optional
+            && matches!(
+                fs::symlink_metadata(&path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            )
+        {
+            continue;
         }
+        anchor_fresh_directory(&path).map_err(|reason| fresh_bootstrap_error(hub, reason))?;
     }
+    Ok(())
+}
+
+fn anchor_fresh_directory(path: &Path) -> Result<std::fs::File, &'static str> {
+    let descriptor = rustix::fs::openat2(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| "bootstrap directory is not a safe anchored directory")?;
+    let file = std::fs::File::from(descriptor);
+    let named = fs::symlink_metadata(path).map_err(|_| "bootstrap directory changed identity")?;
+    let pinned =
+        rustix::fs::fstat(file.as_fd()).map_err(|_| "bootstrap directory cannot be statted")?;
+    if named.dev() != pinned.st_dev || named.ino() != pinned.st_ino {
+        return Err("bootstrap directory changed identity");
+    }
+    Ok(file)
+}
+
+fn ensure_fresh_directory(path: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
+    bazel::ensure_bazel_directory(path)
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot create a safely anchored directory"))?;
     Ok(())
 }
 
@@ -751,8 +770,14 @@ fn fresh_bootstrap_in_workspace(
     if !status.success() {
         return Err(fresh_bootstrap_error(hub, "pinned Bazel bootstrap failed"));
     }
-    match fs::symlink_metadata(workspace.join("MODULE.bazel.lock")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    let workspace_fd = anchor_fresh_directory(workspace)
+        .map_err(|_| fresh_bootstrap_error(hub, "bootstrap workspace changed identity"))?;
+    match rustix::fs::statat(
+        workspace_fd.as_fd(),
+        "MODULE.bazel.lock",
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Err(rustix::io::Errno::NOENT) => {}
         Ok(_) => {
             return Err(fresh_bootstrap_error(
                 hub,
@@ -766,15 +791,36 @@ fn fresh_bootstrap_in_workspace(
             ));
         }
     }
-    let lockfile = workspace.join(format!("bazel/cargo/{hub}.lock"));
-    match fs::symlink_metadata(&lockfile) {
-        Ok(metadata) if metadata.file_type().is_file() => fs::read(&lockfile)
-            .map_err(|_| fresh_bootstrap_error(hub, "selected lock cannot be read")),
+    let cargo_fd = std::fs::File::from(
+        rustix::fs::openat(
+            workspace_fd.as_fd(),
+            "bazel/cargo",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|_| fresh_bootstrap_error(hub, "bootstrap Cargo output directory is unsafe"))?,
+    );
+    let lock_name = format!("{hub}.lock");
+    match rustix::fs::statat(
+        cargo_fd.as_fd(),
+        lock_name.as_str(),
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(stat)
+            if rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                == rustix::fs::FileType::RegularFile =>
+        {
+            read_anchored_file(&cargo_fd, lock_name.as_str())
+                .map_err(|_| fresh_bootstrap_error(hub, "selected lock cannot be read"))
+        }
         Ok(_) => Err(fresh_bootstrap_error(
             hub,
             "selected lock output is not a regular file",
         )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(fresh_bootstrap_error(
+        Err(rustix::io::Errno::NOENT) => Err(fresh_bootstrap_error(
             hub,
             "selected lock was not generated",
         )),
@@ -791,12 +837,29 @@ fn install_fresh_lock(
     bytes: &[u8],
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let destination = root.join(format!("bazel/cargo/{hub}.lock"));
-    match fs::symlink_metadata(&destination) {
-        Ok(metadata) if metadata.file_type().is_file() => {
-            let existing = fs::read(&destination)
+    let parent = destination
+        .parent()
+        .ok_or_else(|| fresh_bootstrap_error(hub, "selected lock has no parent"))?;
+    let parent_fd =
+        anchor_fresh_directory(parent).map_err(|reason| fresh_bootstrap_error(hub, reason))?;
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| fresh_bootstrap_error(hub, "selected lock has an invalid name"))?;
+    match rustix::fs::statat(
+        parent_fd.as_fd(),
+        name,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(stat)
+            if rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                == rustix::fs::FileType::RegularFile =>
+        {
+            let existing = read_anchored_file(&parent_fd, name)
                 .map_err(|_| fresh_bootstrap_error(hub, "cannot read selected lock"))?;
             if existing == bytes {
-                sync_lock_directory(&destination, hub)?;
+                rustix::fs::fsync(parent_fd.as_fd())
+                    .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
                 return Ok(Vec::new());
             }
         }
@@ -806,7 +869,7 @@ fn install_fresh_lock(
                 "selected lock path became occupied during bootstrap",
             ));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(rustix::io::Errno::NOENT) => {}
         Err(_) => {
             return Err(fresh_bootstrap_error(
                 hub,
@@ -814,15 +877,27 @@ fn install_fresh_lock(
             ));
         }
     }
-    let temporary = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap"));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot stage selected lock"))?;
+    let temporary = format!(".{hub}.lock.bootstrap");
+    let descriptor = rustix::fs::openat(
+        parent_fd.as_fd(),
+        temporary.as_str(),
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )
+    .map_err(|_| fresh_bootstrap_error(hub, "cannot stage selected lock"))?;
+    let mut file = std::fs::File::from(descriptor);
     if file.write_all(bytes).is_err() || file.sync_all().is_err() {
-        let cleanup = fs::remove_file(&temporary);
-        if cleanup.is_err() {
+        if rustix::fs::unlinkat(
+            parent_fd.as_fd(),
+            temporary.as_str(),
+            rustix::fs::AtFlags::empty(),
+        )
+        .is_err()
+        {
             return Err(fresh_bootstrap_error(
                 hub,
                 "selected lock staging cleanup failed",
@@ -830,9 +905,22 @@ fn install_fresh_lock(
         }
         return Err(fresh_bootstrap_error(hub, "cannot persist selected lock"));
     }
-    if fs::rename(&temporary, &destination).is_err() {
-        let cleanup = fs::remove_file(&temporary);
-        if cleanup.is_err() {
+    drop(file);
+    if rustix::fs::renameat(
+        parent_fd.as_fd(),
+        temporary.as_str(),
+        parent_fd.as_fd(),
+        name,
+    )
+    .is_err()
+    {
+        if rustix::fs::unlinkat(
+            parent_fd.as_fd(),
+            temporary.as_str(),
+            rustix::fs::AtFlags::empty(),
+        )
+        .is_err()
+        {
             return Err(fresh_bootstrap_error(
                 hub,
                 "selected lock staging cleanup failed",
@@ -840,31 +928,54 @@ fn install_fresh_lock(
         }
         return Err(fresh_bootstrap_error(hub, "cannot install selected lock"));
     }
-    sync_lock_directory(&destination, hub)?;
+    rustix::fs::fsync(parent_fd.as_fd())
+        .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
     Ok(vec![PathBuf::from(format!("bazel/cargo/{hub}.lock"))])
 }
 
-fn sync_lock_directory(destination: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let directory = OpenOptions::new()
-        .read(true)
-        .open(destination.parent().expect("lock has a parent"))
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot open lock directory for sync"))?;
-    directory
-        .sync_all()
-        .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
-    Ok(())
+fn read_anchored_file(parent: &std::fs::File, name: &str) -> std::io::Result<Vec<u8>> {
+    let descriptor = rustix::fs::openat(
+        parent.as_fd(),
+        name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let mut file = std::fs::File::from(descriptor);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn reclaim_fresh_staging(root: &Path, hub: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let staging = root.join(format!("bazel/cargo/.{hub}.lock.bootstrap"));
-    match fs::symlink_metadata(&staging) {
-        Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(&staging)
-            .map_err(|_| fresh_bootstrap_error(hub, "stale lock staging cannot be reclaimed")),
+    let parent = root.join("bazel/cargo");
+    let parent_fd =
+        anchor_fresh_directory(&parent).map_err(|reason| fresh_bootstrap_error(hub, reason))?;
+    let name = format!(".{hub}.lock.bootstrap");
+    match rustix::fs::statat(
+        parent_fd.as_fd(),
+        name.as_str(),
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(stat)
+            if rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                == rustix::fs::FileType::RegularFile =>
+        {
+            rustix::fs::unlinkat(
+                parent_fd.as_fd(),
+                name.as_str(),
+                rustix::fs::AtFlags::empty(),
+            )
+            .map_err(|_| fresh_bootstrap_error(hub, "stale lock staging cannot be reclaimed"))?;
+            rustix::fs::fsync(parent_fd.as_fd())
+                .map_err(|_| fresh_bootstrap_error(hub, "cannot sync lock directory"))?;
+            Ok(())
+        }
         Ok(_) => Err(fresh_bootstrap_error(
             hub,
             "stale lock staging is not a regular file",
         )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(rustix::io::Errno::NOENT) => Ok(()),
         Err(_) => Err(fresh_bootstrap_error(
             hub,
             "stale lock staging cannot be inspected",
@@ -880,13 +991,42 @@ fn fresh_bootstrap_error(hub: &str, reason: &str) -> Box<dyn std::error::Error> 
 }
 
 fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, &'static str> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map_err(|_| "cannot open fresh bootstrap guard")?;
+    let parent = path.parent().ok_or("fresh bootstrap guard has no parent")?;
+    let parent_fd = rustix::fs::openat2(
+        rustix::fs::CWD,
+        parent,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| "cannot anchor fresh bootstrap guard parent")?;
+    let named = fs::symlink_metadata(parent).map_err(|_| "cannot inspect guard parent")?;
+    let pinned = rustix::fs::fstat(parent_fd.as_fd()).map_err(|_| "cannot stat guard parent")?;
+    if named.dev() != pinned.st_dev || named.ino() != pinned.st_ino {
+        return Err("fresh bootstrap guard parent changed identity");
+    }
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("fresh bootstrap guard has an invalid name")?;
+    let descriptor = rustix::fs::openat(
+        parent_fd.as_fd(),
+        name,
+        rustix::fs::OFlags::RDWR
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )
+    .map_err(|_| "cannot open fresh bootstrap guard")?;
+    let file = std::fs::File::from(descriptor);
+    let guard_stat = rustix::fs::fstat(file.as_fd()).map_err(|_| "cannot stat guard")?;
+    if guard_stat.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Err("fresh bootstrap guard is not a regular file");
+    }
     let lock = libc::flock {
         l_type: libc::F_WRLCK as libc::c_short,
         l_whence: libc::SEEK_SET as libc::c_short,
@@ -918,7 +1058,7 @@ fn fresh_content_snapshot(
         } else if metadata.file_type().is_file() {
             FreshEntry::File {
                 mode: metadata.mode() & 0o7777,
-                digest: Sha256::digest(fs::read(absolute)?).into(),
+                digest: Sha256::digest(read_fresh_leaf(root, &path)?).into(),
             }
         } else {
             FreshEntry::Directory(metadata.mode() & 0o7777)
@@ -940,6 +1080,8 @@ fn collect_fresh_files(
     current: &Path,
     paths: &mut Vec<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    anchor_fresh_directory(current)
+        .map_err(|_| "bootstrap audit encountered an unanchored directory")?;
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -961,6 +1103,17 @@ fn collect_fresh_files(
     }
     paths.sort();
     Ok(())
+}
+
+fn read_fresh_leaf(root: &Path, relative: &Path) -> std::io::Result<Vec<u8>> {
+    let parent = root.join(relative.parent().unwrap_or_else(|| Path::new("")));
+    let directory = anchor_fresh_directory(&parent)
+        .map_err(|_| std::io::Error::other("unanchored bootstrap file parent"))?;
+    let name = relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| std::io::Error::other("invalid bootstrap file name"))?;
+    read_anchored_file(&directory, name)
 }
 
 fn fresh_content_changed_outside_selected(
@@ -985,7 +1138,10 @@ fn prepare_fresh_workspace(
     workspace: &Path,
     hub: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    fs::create_dir_all(workspace.join("bazel/cargo"))?;
+    anchor_fresh_directory(root)
+        .map_err(|_| fresh_bootstrap_error(hub, "repository root is not safely anchored"))?;
+    bazel::ensure_bazel_directory(&workspace.join("bazel/cargo"))
+        .map_err(|_| fresh_bootstrap_error(hub, "bootstrap output directory is not anchored"))?;
     for name in [".bazelrc", ".bazelversion", "BUILD.bazel", "MODULE.bazel"] {
         fs::copy(root.join(name), workspace.join(name))?;
     }
@@ -1041,7 +1197,8 @@ fn prepare_fresh_workspace(
 }
 
 fn copy_tree_without_build_outputs(source: &Path, destination: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(destination)?;
+    bazel::ensure_bazel_directory(destination)
+        .map_err(|_| std::io::Error::other("cannot anchor bootstrap copy destination"))?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -1071,7 +1228,9 @@ fn is_fresh_ignored_directory(name: &std::ffi::OsStr) -> bool {
             .is_some_and(|name| name.starts_with("target-"))
 }
 
-struct ExecutableBazelExecutor;
+struct ExecutableBazelExecutor {
+    diagnostic: Option<String>,
+}
 
 impl bazel::BazelExecutor for ExecutableBazelExecutor {
     fn run(
@@ -1088,14 +1247,22 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
             .args(startup_args)
             .args(command_args)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for (name, value) in environment {
             command.env(name, value);
         }
-        command
-            .status()
-            .map_err(|error| format!("could not start the Bazel child: {error}").into())
+        let output = command
+            .output()
+            .map_err(|_| -> Box<dyn std::error::Error> {
+                "could not start the Bazel child".into()
+            })?;
+        self.diagnostic = Some(bazel::bounded_child_diagnostic(&output.stderr));
+        Ok(output.status)
+    }
+
+    fn diagnostic(&self) -> Option<&str> {
+        self.diagnostic.as_deref()
     }
 }
 
@@ -1367,14 +1534,10 @@ where
 {
     match task() {
         Ok(files) => {
-            println!("{} processed {} file(s)", label, files.len());
-            for path in files {
-                let display = repo_root()
-                    .ok()
-                    .and_then(|root| path.strip_prefix(root).ok())
-                    .unwrap_or(&path);
-                println!("{} path: {}", label, display.display());
-            }
+            // Keep the long-standing one-line stdout contract.  Consumers
+            // use this line as a completion record; returned paths remain
+            // available to callers inside the generator API.
+            println!("{} generated {} file(s)", label, files.len());
             std::process::ExitCode::SUCCESS
         }
         Err(err) => {
@@ -2564,6 +2727,43 @@ mod fresh_bootstrap_tests {
         assert_eq!(executor.calls, 0);
         drop(guard);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_bootstrap_refuses_replaceable_guard_parents_and_guard_leaves() {
+        use std::os::unix::fs::symlink;
+
+        let root = bootstrap_fixture();
+        let redirected = create_exclusive_temp_dir("xtask-fresh-redirect").expect("redirect");
+        let _ = fs::remove_dir_all(root.join(".scratch"));
+        symlink(&redirected, root.join(".scratch")).expect("scratch symlink");
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: None,
+        };
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert_eq!(executor.calls, 0);
+        fs::remove_dir_all(&root).expect("cleanup root");
+        fs::remove_dir_all(redirected).expect("cleanup redirect");
+
+        let root = bootstrap_fixture();
+        fs::create_dir_all(root.join(".scratch/bazel")).expect("scratch");
+        let guard = root.join(".scratch/bazel/fresh-bootstrap.guard");
+        let redirected = create_exclusive_temp_dir("xtask-guard-redirect").expect("redirect");
+        let target = redirected.join("guard");
+        fs::write(&target, b"guard").expect("guard target");
+        symlink(&target, &guard).expect("guard symlink");
+        let mut executor = FakeFreshExecutor {
+            fail: false,
+            calls: 0,
+            mutate_root: None,
+        };
+        assert!(fresh_hub_bootstrap(&root, "product", &mut executor).is_err());
+        assert_eq!(executor.calls, 0);
+        fs::remove_dir_all(&root).expect("cleanup root");
+        fs::remove_dir_all(redirected).expect("cleanup redirect");
     }
 
     #[test]

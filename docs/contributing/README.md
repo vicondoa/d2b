@@ -15,6 +15,7 @@ disagrees with committed, passing code, code wins.
 | [panel-review.md](./panel-review.md) | Phase gate, Discover-Fix-Verify lifecycle, selected-roster focus, shared worktree destructive-git rule, and swarm and unattended-run harness notes. |
 | [changelog-and-commits.md](./changelog-and-commits.md) | Changelog fragments, auto-release, version cut lifecycle, process-marker ratchet, and commit trailing-tag grammar. |
 | [gates-and-lints.md](./gates-and-lints.md) | The heavy-lane semaphore, spec-literal allowlist, and D116 negative-example marker. |
+| [bazel-and-policy.md](./bazel-and-policy.md) | Cargo/Bazel authorities, regeneration order, native policy contexts, six-check inventory, and pinned RustSec validation. |
 | [critical-subsystems.md](./critical-subsystems.md) | Invariants for every AGENTS.md critical index subsystem, plus cgroup naming and ownership-marker conventions. |
 | [copilot-agents.md](./copilot-agents.md) | Copilot agents and skills, role agents, panel seats, autopilot and memory skills, model-binding, wave identifiers, and spec-kit coexistence. |
 | [architecture.md](./architecture.md) | Eval-time naming, sibling flake boundaries, daemon-supervised VM lifecycle, and per-VM behavior. |

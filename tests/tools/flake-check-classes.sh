@@ -18,9 +18,17 @@
 # dispatched to the realized job but instantiated by the driver would report a
 # green realized check that never built anything.
 
-# Checks whose shard must realize the derivation. Keep this list minimal: each
-# entry costs a full build on every PR.
-D2B_FLAKE_REALIZED_CHECKS="broker-production-dependency-policy guest-shell-runner-static-dependency-policy broker-production-package-policy guest-real-libshpool-package-policy broker-host-artifact-contract guest-static-elf video-binary-contract"
+# Checks whose shard must realize the derivation. The six native names come
+# from the committed manifest; the video contract is a separate realized
+# check and is intentionally outside that manifest.
+D2B_NATIVE_POLICY_CHECK_MANIFEST="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/tests/golden/native-policy-check-manifest.json"
+if ! command -v jq >/dev/null 2>&1 \
+  || ! D2B_NATIVE_POLICY_CHECKS="$(jq -er '.nativeChecks | join(" ")' \
+    "$D2B_NATIVE_POLICY_CHECK_MANIFEST")"; then
+  printf '%s\n' "native policy/check manifest could not be read" >&2
+  return 1 2>/dev/null || exit 1
+fi
+D2B_FLAKE_REALIZED_CHECKS="$D2B_NATIVE_POLICY_CHECKS video-binary-contract"
 
 d2b_flake_check_is_realized() {
   local candidate=$1 name

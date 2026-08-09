@@ -1,5 +1,5 @@
 {
-  "checksum": "bb43424e2a4343f46ad1d335c13a8908a58e201743975d4be84d6ad1003a27bf",
+  "checksum": "99d1cbf7cd804d805fca8c7d5280ac873daa4046bce2e5148d00c3051ffbe28e",
   "crates": {
     "adler2 2.0.1": {
       "name": "adler2",
@@ -5568,56 +5568,6 @@
       ],
       "license_file": null
     },
-    "d2b-bazel-runner 0.0.0-bootstrap": {
-      "name": "d2b-bazel-runner",
-      "version": "0.0.0-bootstrap",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "d2b_bazel_runner",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "d2b_bazel_runner",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "serde 1.0.229",
-              "target": "serde"
-            },
-            {
-              "id": "serde_json 1.0.151",
-              "target": "serde_json"
-            },
-            {
-              "id": "thiserror 2.0.19",
-              "target": "thiserror"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2024",
-        "version": "0.0.0-bootstrap"
-      },
-      "license": "Apache-2.0",
-      "license_ids": [
-        "Apache-2.0"
-      ],
-      "license_file": null
-    },
     "d2b-bazel-support 0.0.0-bootstrap": {
       "name": "d2b-bazel-support",
       "version": "0.0.0-bootstrap",
@@ -8471,39 +8421,6 @@
           ],
           "selects": {}
         },
-        "edition": "2024",
-        "version": "0.0.0-bootstrap"
-      },
-      "license": "Apache-2.0",
-      "license_ids": [
-        "Apache-2.0"
-      ],
-      "license_file": null
-    },
-    "d2b-test-locator 0.0.0-bootstrap": {
-      "name": "d2b-test-locator",
-      "version": "0.0.0-bootstrap",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "d2b_test_locator",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "d2b_test_locator",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
         "edition": "2024",
         "version": "0.0.0-bootstrap"
       },
@@ -38646,7 +38563,6 @@
     "d2b 0.0.0-bootstrap": "d2b",
     "d2b-api-surface 0.1.0": "d2b-api-surface",
     "d2b-bazel-exec 0.0.0-bootstrap": "d2b-bazel-exec",
-    "d2b-bazel-runner 0.0.0-bootstrap": "d2b-bazel-runner",
     "d2b-bazel-support 0.0.0-bootstrap": "d2b-bazel-support",
     "d2b-bus 0.0.0-bootstrap": "d2b-bus",
     "d2b-clipd 0.0.0-bootstrap": "d2b-clipd",
@@ -38696,7 +38612,6 @@
     "d2b-session 0.0.0-bootstrap": "d2b-session",
     "d2b-session-unix 0.0.0-bootstrap": "d2b-session-unix",
     "d2b-sk-frontend 0.0.0-bootstrap": "d2b-sk-frontend",
-    "d2b-test-locator 0.0.0-bootstrap": "d2b-test-locator",
     "d2b-unsafe-local-helper 0.0.0-bootstrap": "d2b-unsafe-local-helper",
     "d2b-userd 0.0.0-bootstrap": "d2b-userd",
     "d2b-wayland-proxy 0.1.0": "d2b-wayland-proxy",

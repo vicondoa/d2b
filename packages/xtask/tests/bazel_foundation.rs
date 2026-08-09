@@ -1,10 +1,12 @@
 #[path = "../src/bazel.rs"]
+#[allow(dead_code)]
 mod bazel;
 #[path = "../src/bazel_yanked.rs"]
 mod bazel_yanked;
 #[path = "../src/hermeticity.rs"]
 mod hermeticity;
 #[path = "../src/package_policy.rs"]
+#[allow(dead_code)]
 mod package_policy;
 
 use std::{fs, path::PathBuf};
@@ -308,4 +310,93 @@ fn generator_metadata_is_offline_and_linux_target_filtered() {
     assert!(source.contains("GENERATOR_METADATA_TARGET"));
     assert!(source.contains("if *hub == \"walker\""));
     assert!(source.contains("command.arg(\"--no-deps\")"));
+}
+
+#[test]
+fn generated_model_preserves_representative_cargo_target_topology() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    bazel::gen_bazel(&[]).expect("generator preview");
+    let configured: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            root.join(".scratch/bazel/generated-preview/bazel/generated/configured-targets.json"),
+        )
+        .expect("configured target inventory"),
+    )
+    .expect("configured target JSON");
+    let targets = configured["targets"].as_array().expect("target array");
+    assert!(
+        targets.len() > 300,
+        "every Cargo target should be enumerated"
+    );
+
+    let find = |package: &str, name: &str, kind: &str| {
+        targets
+            .iter()
+            .find(|row| {
+                row["package"] == package
+                    && row["target"]["name"] == name
+                    && row["target"]["kind"] == kind
+            })
+            .unwrap_or_else(|| panic!("missing {package} {kind} target {name}"))
+    };
+    let d2b_library = find("d2b", "d2b", "lib");
+    let d2b_binary = find("d2b", "d2b", "bin");
+    assert_eq!(d2b_library["kind"], "rust_library");
+    assert_eq!(d2b_binary["kind"], "rust_binary");
+    assert_eq!(d2b_binary["target"]["path"], "src/main.rs");
+    assert_eq!(d2b_binary["target"]["harness"], serde_json::Value::Null);
+    assert_eq!(find("d2bd", "d2bd", "bin")["kind"], "rust_binary");
+
+    let fuzz = find("d2b-core", "d2b-core-fuzz-bundle", "test");
+    assert_eq!(fuzz["target"]["harness"], false);
+    assert_eq!(
+        fuzz["target"]["requiredFeatures"],
+        serde_json::json!(["fuzz"])
+    );
+    let core_library = find("d2b-core", "d2b-core", "lib");
+    assert!(
+        !core_library["directProductDeps"]
+            .as_array()
+            .expect("external dependencies")
+            .iter()
+            .any(|dependency| dependency == "@product//:bolero"),
+        "disabled optional bolero must not enter the default closure"
+    );
+
+    let guest_policy = targets
+        .iter()
+        .find(|row| {
+            row["package"] == "d2b-guest-shell-runner"
+                && row["system"] == "x86_64-linux"
+                && row["cargoContext"] == "guest-real-libshpool-x86_64"
+        })
+        .expect("guest policy context");
+    assert_eq!(guest_policy["target"]["defaultFeatures"], false);
+    assert_eq!(
+        guest_policy["target"]["requiredFeatures"],
+        serde_json::json!(["real-libshpool"])
+    );
+    assert_eq!(
+        guest_policy["cfgs"],
+        serde_json::json!([
+            "target_arch=\"x86_64\"",
+            "target_env=\"musl\"",
+            "target_os=\"linux\""
+        ])
+    );
+    assert_eq!(
+        configured["nativeChecks"],
+        serde_json::json!([
+            "broker-production-dependency-policy",
+            "guest-shell-runner-static-dependency-policy",
+            "broker-production-package-policy",
+            "guest-real-libshpool-package-policy",
+            "broker-host-artifact-contract",
+            "guest-static-elf"
+        ])
+    );
 }

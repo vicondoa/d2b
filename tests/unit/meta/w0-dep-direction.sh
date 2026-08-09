@@ -92,14 +92,12 @@ is_first_party_name() {
   is_member "$1"
 }
 
-# These crates form the complete build-tooling dependency spine. A missing
-# member must not become a silent skip, and an edge outside this exact map
-# would let a consumer reach around the selected lower-level boundary.
+# These crates are the retained build-tooling dependency spine. The
+# refusal-only runner and locator placeholders were removed rather than
+# becoming another authority boundary.
 REQUIRED_CRATES=(
   d2b-bazel-support
   d2b-bazel-exec
-  d2b-test-locator
-  d2b-bazel-runner
 )
 for required in "${REQUIRED_CRATES[@]}"; do
   if ! is_member "$required"; then
@@ -160,12 +158,6 @@ expected_build_tooling_edges() {
       ;;
     d2b-bazel-exec)
       printf '%s\n' d2b-bazel-support
-      ;;
-    d2b-test-locator)
-      printf '%s\n' d2b-bazel-exec d2b-bazel-support
-      ;;
-    d2b-bazel-runner)
-      printf '%s\n' d2b-bazel-exec d2b-bazel-support d2b-test-locator
       ;;
     *)
       return 2

@@ -1142,14 +1142,22 @@ rust_surface_start rust-deny-main
 cargo_deny_check "main product-workspace stream" "$manifest" "$deny_config"
 rust_surface_success rust-deny-main
 
-broker_policy_contexts=(
-  "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-gnu/broker-production"
-  "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-gnu/broker-production"
-)
-guest_policy_contexts=(
-  "packages/policy-inputs/x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool"
-  "packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool"
-)
+native_policy_manifest="$ROOT/tests/golden/native-policy-check-manifest.json"
+test -s "$native_policy_manifest" || fail "native policy/check manifest is missing"
+broker_policy_context_text=$(
+  jq -er '.contexts[] | select(.context == "broker-production") | .policyInput' \
+    "$native_policy_manifest"
+) || fail "native broker policy contexts could not be read"
+guest_policy_context_text=$(
+  jq -er '.contexts[] | select(.context == "guest-real-libshpool") | .policyInput' \
+    "$native_policy_manifest"
+) || fail "native guest policy contexts could not be read"
+mapfile -t broker_policy_contexts <<<"$broker_policy_context_text"
+mapfile -t guest_policy_contexts <<<"$guest_policy_context_text"
+if [ "${#broker_policy_contexts[@]}" -ne 2 ] \
+  || [ "${#guest_policy_contexts[@]}" -ne 2 ]; then
+  fail "native policy/check manifest context census is not exact"
+fi
 
 rust_surface_start rust-deny-broker
 for policy_context in "${broker_policy_contexts[@]}"; do

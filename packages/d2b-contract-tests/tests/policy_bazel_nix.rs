@@ -20,6 +20,7 @@ const BASELINES: &str = "tests/golden/bazel-rust-artifact-baselines.json";
 const TOOLCHAIN_GOLDEN: &str = "tests/golden/bazel-toolchain.json";
 const SUPERVISOR_GOLDEN: &str = "tests/golden/bazel-exec-supervisor.json";
 const SUPERVISOR_SOURCE: &str = "tests/tools/d2b-bazel-exec-supervisor/supervisor.c";
+const NATIVE_MANIFEST: &str = "tests/golden/native-policy-check-manifest.json";
 
 const WL_PROXY_HASH: &str = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
 
@@ -148,15 +149,14 @@ fn all_four_selected_contexts_and_six_native_checks_are_bound() {
     let flake = read_repo_file(FLAKE);
     let package_policy = read_repo_file("packages/xtask/src/package_policy.rs");
     let test_rust = read_repo_file("tests/test-rust.sh");
+    let manifest = json(NATIVE_MANIFEST);
 
-    for path in [
-        "x86_64-linux/x86_64-unknown-linux-gnu/broker-production",
-        "x86_64-linux/x86_64-unknown-linux-musl/guest-real-libshpool",
-        "aarch64-linux/aarch64-unknown-linux-gnu/broker-production",
-        "aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool",
-    ] {
+    for context in manifest["contexts"].as_array().expect("native contexts") {
+        let path = context["policyInput"]
+            .as_str()
+            .expect("native context policy input");
         assert!(
-            package_policy.contains(path.split('/').next().unwrap()),
+            package_policy.contains(&context["system"].as_str().unwrap()),
             "selected system missing from generator contract: {path}"
         );
     }
@@ -173,21 +173,17 @@ fn all_four_selected_contexts_and_six_native_checks_are_bound() {
         ]
     ));
 
-    for check in [
-        "broker-production-dependency-policy",
-        "guest-shell-runner-static-dependency-policy",
-        "broker-production-package-policy",
-        "guest-real-libshpool-package-policy",
-        "broker-host-artifact-contract",
-        "guest-static-elf",
-    ] {
+    for check in manifest["nativeChecks"]
+        .as_array()
+        .expect("native checks")
+        .iter()
+        .map(|check| check.as_str().expect("native check name"))
+    {
         assert!(flake.contains(check), "native flake check missing: {check}");
-    }
-    for path in ["broker-production", "guest-real-libshpool"] {
-        assert!(test_rust.contains(path), "Cargo gate input missing: {path}");
     }
     assert!(test_rust.contains("policy_metadata_path"));
     assert!(test_rust.contains("policy_lock_path"));
+    assert!(test_rust.contains(NATIVE_MANIFEST));
 }
 
 #[test]

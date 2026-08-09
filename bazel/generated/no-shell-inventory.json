@@ -16,15 +16,6 @@
       "path": "packages/d2b-bazel-exec/src/provider.rs"
     },
     {
-      "path": "packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs"
-    },
-    {
-      "path": "packages/d2b-bazel-runner/src/exec_handle.rs"
-    },
-    {
-      "path": "packages/d2b-bazel-runner/src/lib.rs"
-    },
-    {
       "path": "packages/d2b-bazel-support/src/fsops.rs"
     },
     {
@@ -1529,12 +1520,6 @@
     },
     {
       "path": "packages/d2b-sk-frontend/src/vsock.rs"
-    },
-    {
-      "path": "packages/d2b-test-locator/src/lib.rs"
-    },
-    {
-      "path": "packages/d2b-test-locator/src/mode.rs"
     },
     {
       "path": "packages/d2b-unsafe-local-helper/src/environment.rs"
@@ -1917,15 +1902,6 @@
       "path": "packages/d2b-bazel-exec/src/provider.rs"
     },
     {
-      "path": "packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs"
-    },
-    {
-      "path": "packages/d2b-bazel-runner/src/exec_handle.rs"
-    },
-    {
-      "path": "packages/d2b-bazel-runner/src/lib.rs"
-    },
-    {
       "path": "packages/d2b-bazel-support/src/fsops.rs"
     },
     {
@@ -3430,12 +3406,6 @@
     },
     {
       "path": "packages/d2b-sk-frontend/src/vsock.rs"
-    },
-    {
-      "path": "packages/d2b-test-locator/src/lib.rs"
-    },
-    {
-      "path": "packages/d2b-test-locator/src/mode.rs"
     },
     {
       "path": "packages/d2b-unsafe-local-helper/src/environment.rs"
@@ -3830,24 +3800,6 @@
     },
     {
       "source": "packages/d2b-bazel-exec/src/provider.rs",
-      "spawnSiteCount": 0,
-      "spawnSiteKeys": [],
-      "status": "scanned"
-    },
-    {
-      "source": "packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs",
-      "spawnSiteCount": 0,
-      "spawnSiteKeys": [],
-      "status": "scanned"
-    },
-    {
-      "source": "packages/d2b-bazel-runner/src/exec_handle.rs",
-      "spawnSiteCount": 0,
-      "spawnSiteKeys": [],
-      "status": "scanned"
-    },
-    {
-      "source": "packages/d2b-bazel-runner/src/lib.rs",
       "spawnSiteCount": 0,
       "spawnSiteKeys": [],
       "status": "scanned"
@@ -6957,18 +6909,6 @@
       "status": "scanned"
     },
     {
-      "source": "packages/d2b-test-locator/src/lib.rs",
-      "spawnSiteCount": 0,
-      "spawnSiteKeys": [],
-      "status": "scanned"
-    },
-    {
-      "source": "packages/d2b-test-locator/src/mode.rs",
-      "spawnSiteCount": 0,
-      "spawnSiteKeys": [],
-      "status": "scanned"
-    },
-    {
       "source": "packages/d2b-unsafe-local-helper/src/environment.rs",
       "spawnSiteCount": 0,
       "spawnSiteKeys": [],
@@ -7555,9 +7495,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "spawnSiteCount": 3,
       "spawnSiteKeys": [
-        "packages/xtask/src/bazel.rs:2046:27:\"cargo\"",
-        "packages/xtask/src/bazel.rs:226:27:executable",
-        "packages/xtask/src/bazel.rs:3325:18:\"git\""
+        "packages/xtask/src/bazel.rs:248:27:executable",
+        "packages/xtask/src/bazel.rs:2682:27:\"cargo\"",
+        "packages/xtask/src/bazel.rs:3510:18:\"git\""
       ],
       "status": "scanned"
     },
@@ -7701,10 +7641,10 @@
       "source": "packages/xtask/src/main.rs",
       "spawnSiteCount": 4,
       "spawnSiteKeys": [
-        "packages/xtask/src/main.rs:1085:27:executable",
-        "packages/xtask/src/main.rs:2414:27:\"false\"",
-        "packages/xtask/src/main.rs:2423:16:\"true\"",
-        "packages/xtask/src/main.rs:711:27:&self.executable"
+        "packages/xtask/src/main.rs:1244:27:executable",
+        "packages/xtask/src/main.rs:2577:27:\"false\"",
+        "packages/xtask/src/main.rs:2586:16:\"true\"",
+        "packages/xtask/src/main.rs:730:27:&self.executable"
       ],
       "status": "scanned"
     },
@@ -7712,7 +7652,7 @@
       "source": "packages/xtask/src/package_policy.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/xtask/src/package_policy.rs:67:27:args.first() .ok_or_else(|| PolicyError::Io(\"cargo\".to_owned(), \"empty command\".to_owned()))?,"
+        "packages/xtask/src/package_policy.rs:126:27:args.first() .ok_or_else(|| PolicyError::Io(\"cargo\".to_owned(), \"empty command\".to_owned()))?,"
       ],
       "status": "scanned"
     },
@@ -8818,25 +8758,25 @@
       }
     },
     {
-      "programExpression": "\"cargo\"",
-      "shellInvocation": false,
-      "source": "packages/xtask/src/bazel.rs",
-      "span": {
-        "endColumn": 48,
-        "endLine": 2046,
-        "startColumn": 27,
-        "startLine": 2046
-      }
-    },
-    {
       "programExpression": "executable",
       "shellInvocation": false,
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 226,
+        "endLine": 248,
         "startColumn": 27,
-        "startLine": 226
+        "startLine": 248
+      }
+    },
+    {
+      "programExpression": "\"cargo\"",
+      "shellInvocation": false,
+      "source": "packages/xtask/src/bazel.rs",
+      "span": {
+        "endColumn": 48,
+        "endLine": 2682,
+        "startColumn": 27,
+        "startLine": 2682
       }
     },
     {
@@ -8845,9 +8785,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 37,
-        "endLine": 3325,
+        "endLine": 3510,
         "startColumn": 18,
-        "startLine": 3325
+        "startLine": 3510
       }
     },
     {
@@ -8977,9 +8917,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 1085,
+        "endLine": 1244,
         "startColumn": 27,
-        "startLine": 1085
+        "startLine": 1244
       }
     },
     {
@@ -8988,9 +8928,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2414,
+        "endLine": 2577,
         "startColumn": 27,
-        "startLine": 2414
+        "startLine": 2577
       }
     },
     {
@@ -8999,9 +8939,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 36,
-        "endLine": 2423,
+        "endLine": 2586,
         "startColumn": 16,
-        "startLine": 2423
+        "startLine": 2586
       }
     },
     {
@@ -9010,9 +8950,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 57,
-        "endLine": 711,
+        "endLine": 730,
         "startColumn": 27,
-        "startLine": 711
+        "startLine": 730
       }
     },
     {
@@ -9021,9 +8961,9 @@
       "source": "packages/xtask/src/package_policy.rs",
       "span": {
         "endColumn": 10,
-        "endLine": 70,
+        "endLine": 129,
         "startColumn": 27,
-        "startLine": 67
+        "startLine": 126
       }
     }
   ]

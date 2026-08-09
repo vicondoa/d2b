@@ -23,6 +23,17 @@
   package selectors, explicit gate target directories, and an enforcing native
   arm lane that realizes six checks and runs the supply-chain gate on one
   stable commit.
+- Added one committed native policy/check manifest shared by the Rust, Nix,
+  shell, CI, and Bazel inventories, and made policy mutation coverage call the
+  production artifact validator.
+- Generated Bazel inventories now enumerate Cargo libraries, binaries, tests,
+  benches, examples, required features, harness shape, target conditions, and
+  effective dependency closures. Removed the unused runner, locator, and
+  per-package BUILD renderer scaffolding.
+- Preserved the existing one-line xtask generator stdout contract, while
+  making command failures bounded and redacted. Schema and generated-output
+  writers now support safe external output directories and reject symlinked
+  parents and tracked targets.
 
 ### Security
 

@@ -117,8 +117,7 @@ cargo test --locked --manifest-path packages/Cargo.toml \
   --package d2b-guest-shell-runner --no-default-features --features real-libshpool
 cargo deny --metadata-path packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/metadata.json \
   check --config packages/d2b-guest-shell-runner/deny.toml
-cargo audit --file packages/policy-inputs/aarch64-linux/aarch64-unknown-linux-musl/guest-real-libshpool/policy/Cargo.lock \
-  --no-fetch --ignore RUSTSEC-2024-0384
+make test-rust-supply-chain
 ```
 
 The selected broker and guest policy inputs are generated for GNU and musl

@@ -45,12 +45,7 @@ pub(crate) fn gen_schemas_with_args(args: &[String]) -> Result<Vec<PathBuf>, Box
     let output_dir = match explicit_output.as_ref() {
         Some(path) => {
             let path = resolve_output_dir(path.to_owned())?;
-            let scratch = repo_root.join(".scratch");
-            if path.strip_prefix(&scratch).is_err() {
-                return Err(
-                    "D2B-SCHEMA-OUTPUT: explicit schema output must be under .scratch/.".into(),
-                );
-            }
+            validate_explicit_output_dir(&path, repo_root)?;
             path
         }
         None => repo_root.join(AUTHORITATIVE_SCHEMA_ROOT),
@@ -77,6 +72,14 @@ fn parse_gen_schemas_args(args: &[String]) -> Result<Option<PathBuf>, Box<dyn Er
 }
 
 fn resolve_output_dir(path: PathBuf) -> Result<PathBuf, Box<dyn Error>> {
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) {
+        return Err("D2B-SCHEMA-OUTPUT: output path contains traversal components.".into());
+    }
     if path.is_absolute() {
         Ok(path)
     } else {
@@ -84,12 +87,66 @@ fn resolve_output_dir(path: PathBuf) -> Result<PathBuf, Box<dyn Error>> {
     }
 }
 
+fn validate_explicit_output_dir(output_dir: &Path, repo_root: &Path) -> Result<(), Box<dyn Error>> {
+    let repo_root = fs::canonicalize(repo_root)
+        .map_err(|_| "D2B-SCHEMA-OUTPUT: repository root cannot be anchored.")?;
+    let scratch = repo_root.join(".scratch");
+    if output_dir.starts_with(&repo_root) && !output_dir.starts_with(&scratch) {
+        return Err(
+            "D2B-SCHEMA-OUTPUT: explicit output cannot target a tracked repository location."
+                .into(),
+        );
+    }
+    if output_dir == Path::new("/") {
+        return Err("D2B-SCHEMA-OUTPUT: filesystem root is not a schema output.".into());
+    }
+    validate_no_symlink_components(output_dir)
+}
+
+fn validate_no_symlink_components(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut current = if path.is_absolute() {
+        PathBuf::from("/")
+    } else {
+        env::current_dir()?
+    };
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(
+                    "D2B-SCHEMA-OUTPUT: a schema output path component is a symlink.".into(),
+                );
+            }
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(
+                    "D2B-SCHEMA-OUTPUT: a schema output path component is not a directory.".into(),
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => {
+                return Err("D2B-SCHEMA-OUTPUT: schema output path cannot be inspected.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ensure_output_directory(output_dir: &Path) -> Result<(), Box<dyn Error>> {
+    validate_no_symlink_components(output_dir)?;
     if output_dir.exists() && !output_dir.is_dir() {
         return Err("D2B-SCHEMA-OUTPUT: schema output directory is not a directory.".into());
     }
     fs::create_dir_all(output_dir)
         .map_err(|_| "D2B-SCHEMA-OUTPUT: could not create the schema output directory.")?;
+    let metadata = fs::symlink_metadata(output_dir)
+        .map_err(|_| "D2B-SCHEMA-OUTPUT: schema output directory cannot be inspected.")?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err("D2B-SCHEMA-OUTPUT: schema output directory is unsafe.".into());
+    }
     Ok(())
 }
 
@@ -440,7 +497,56 @@ mod tests {
             output_file.to_str().expect("temporary path is UTF-8"),
         ]))
         .expect_err("a regular file cannot be a schema output directory");
-        assert!(error.to_string().contains("output directory"));
+        assert!(error.to_string().contains("schema output"));
+    }
+
+    #[test]
+    fn gen_schemas_out_dir_accepts_external_declared_output_and_refuses_tracked_paths() {
+        let external =
+            std::env::temp_dir().join(format!("d2b-xtask-schema-external-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&external);
+        fs::create_dir(&external).expect("external output parent");
+        let output = external.join("declared");
+        let emitted = gen_schemas_with_args(&args(&[
+            "--out-dir",
+            output.to_str().expect("temporary path is UTF-8"),
+        ]))
+        .expect("external declared output");
+        assert!(!emitted.is_empty());
+        assert!(emitted.iter().all(|path| path.starts_with(&output)));
+        fs::remove_dir_all(&external).expect("remove external output");
+
+        let repository_schema = super::super::repo_root()
+            .expect("repository root")
+            .join("docs/reference/schemas/v2");
+        let error = gen_schemas_with_args(&args(&[
+            "--out-dir",
+            repository_schema
+                .to_str()
+                .expect("repository path is UTF-8"),
+        ]))
+        .expect_err("tracked schema root must be refused");
+        assert!(error.to_string().contains("tracked repository"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gen_schemas_out_dir_refuses_replaceable_parent_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new("symlink-parent");
+        let real = temp.path().join("real");
+        fs::create_dir(&real).expect("real output parent");
+        let link = temp.path().join("link");
+        symlink(&real, &link).expect("parent symlink");
+        let error = gen_schemas_with_args(&args(&[
+            "--out-dir",
+            link.join("declared")
+                .to_str()
+                .expect("symlink path is UTF-8"),
+        ]))
+        .expect_err("symlinked parent must be refused");
+        assert!(error.to_string().contains("symlink"));
     }
 
     #[test]

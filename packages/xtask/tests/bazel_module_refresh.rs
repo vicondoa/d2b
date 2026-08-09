@@ -1,4 +1,5 @@
 #[path = "../src/bazel.rs"]
+#[allow(dead_code)]
 mod bazel;
 #[path = "../src/hermeticity.rs"]
 mod hermeticity;

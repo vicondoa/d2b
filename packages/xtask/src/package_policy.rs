@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! The package-policy input boundary used by the Bazel migration.
 //!
 //! This module deliberately keeps Cargo's three views separate.  Metadata
@@ -15,8 +13,10 @@ use std::{
     error::Error,
     ffi::OsStr,
     fmt, fs,
-    io::Write,
+    io::{Read, Write},
     ops::Range,
+    os::fd::AsFd,
+    os::unix::fs::MetadataExt,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -24,9 +24,10 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-pub const PRODUCT_MANIFEST: &str = "packages/Cargo.toml";
 pub const PRODUCT_LOCK: &str = "packages/Cargo.lock";
 pub const POLICY_PREVIEW_ROOT: &str = ".scratch/bazel/policy-inputs";
+const NATIVE_POLICY_CHECK_MANIFEST: &str =
+    include_str!("../../../tests/golden/native-policy-check-manifest.json");
 pub const POLICY_DRIFT_REMEDIATION: &str = "\
 D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
 From the repository root, run: nix develop
@@ -62,6 +63,64 @@ pub trait CargoExecutor {
 
 struct ProcessCargoExecutor;
 
+const MAX_CHILD_DIAGNOSTIC_BYTES: usize = 768;
+
+fn cargo_command_label(args: &[String]) -> String {
+    let Some(command) = args.get(1) else {
+        return "cargo <unknown> (hub=product)".to_owned();
+    };
+    let package = args
+        .windows(2)
+        .find(|pair| pair[0] == "-p" || pair[0] == "--package")
+        .map(|pair| pair[1].as_str())
+        .unwrap_or("<workspace>");
+    let target = args
+        .windows(2)
+        .find(|pair| pair[0] == "--target")
+        .map(|pair| pair[1].as_str())
+        .unwrap_or("<native>");
+    format!("cargo {command} package={package} target={target} hub=product")
+}
+
+fn bounded_redacted_diagnostic(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut rendered = String::new();
+    for token in text.split_whitespace() {
+        let token = if token.starts_with('/')
+            || token.contains("/nix/store/")
+            || token.contains("file://")
+            || (token.contains('/')
+                && !token.starts_with("http://")
+                && !token.starts_with("https://")
+                && !token.starts_with("registry+")
+                && !token.starts_with("git+"))
+        {
+            "<path>"
+        } else {
+            token
+        };
+        if !rendered.is_empty() {
+            rendered.push(' ');
+        }
+        rendered.push_str(token);
+        if rendered.len() >= MAX_CHILD_DIAGNOSTIC_BYTES {
+            rendered.truncate(MAX_CHILD_DIAGNOSTIC_BYTES);
+            rendered.push_str("...[truncated]");
+            break;
+        }
+    }
+
+    if rendered.is_empty() {
+        "<no child diagnostic>".to_owned()
+    } else {
+        rendered
+    }
+}
+
+fn redacted_policy_text(value: &str) -> String {
+    bounded_redacted_diagnostic(value.as_bytes())
+}
+
 impl CargoExecutor for ProcessCargoExecutor {
     fn run(&mut self, root: &Path, args: &[String]) -> Result<String, PolicyError> {
         let mut command = Command::new(
@@ -75,18 +134,23 @@ impl CargoExecutor for ProcessCargoExecutor {
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
             .stdout(Stdio::piped());
-        let output = command.output().map_err(|error| {
-            let _ = error;
+        let command_label = cargo_command_label(args);
+        let output = command.output().map_err(|_| {
             PolicyError::Io(
                 "cargo".to_owned(),
                 "locked offline Cargo command could not start".to_owned(),
             )
         })?;
         if !output.status.success() {
-            return Err(PolicyError::Io(
-                "cargo".to_owned(),
-                "locked offline Cargo command failed".to_owned(),
-            ));
+            return Err(PolicyError::CommandFailed {
+                command: command_label,
+                status: output
+                    .status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_owned()),
+                diagnostic: bounded_redacted_diagnostic(&output.stderr),
+            });
         }
         String::from_utf8(output.stdout).map_err(|error| {
             let _ = error;
@@ -105,8 +169,6 @@ pub enum PolicyContext {
 }
 
 impl PolicyContext {
-    pub const ALL: [Self; 2] = [Self::BrokerProduction, Self::GuestProduction];
-
     pub const fn package(self) -> &'static str {
         match self {
             Self::BrokerProduction => "d2b-priv-broker",
@@ -132,6 +194,14 @@ impl PolicyContext {
         match self {
             Self::BrokerProduction => "broker-production",
             Self::GuestProduction => "guest-real-libshpool",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "broker-production" => Some(Self::BrokerProduction),
+            "guest-real-libshpool" => Some(Self::GuestProduction),
+            _ => None,
         }
     }
 }
@@ -195,14 +265,88 @@ pub fn native_target(system: &str, context: PolicyContext) -> Result<String, Pol
 }
 
 pub fn policy_contexts() -> Result<Vec<SelectedContext>, PolicyError> {
-    ["x86_64-linux", "aarch64-linux"]
-        .into_iter()
-        .flat_map(|system| {
-            PolicyContext::ALL
-                .into_iter()
-                .map(move |context| SelectedContext::for_system(system, context))
-        })
-        .collect()
+    let manifest: Value = serde_json::from_str(NATIVE_POLICY_CHECK_MANIFEST)
+        .map_err(|_| PolicyError::ContextManifestInvalid)?;
+    if manifest.get("schemaVersion") != Some(&json!(1)) {
+        return Err(PolicyError::ContextManifestInvalid);
+    }
+    let contexts = manifest
+        .get("contexts")
+        .and_then(Value::as_array)
+        .ok_or(PolicyError::ContextManifestInvalid)?;
+    let mut selected = Vec::with_capacity(contexts.len());
+    let mut ids = BTreeSet::new();
+    for record in contexts {
+        let system = record
+            .get("system")
+            .and_then(Value::as_str)
+            .ok_or(PolicyError::ContextManifestInvalid)?;
+        let target = record
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or(PolicyError::ContextManifestInvalid)?;
+        let name = record
+            .get("context")
+            .and_then(Value::as_str)
+            .ok_or(PolicyError::ContextManifestInvalid)?;
+        let context = PolicyContext::from_name(name).ok_or(PolicyError::ContextManifestInvalid)?;
+        let id = record
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(PolicyError::ContextManifestInvalid)?;
+        let expected_policy_input = format!("packages/policy-inputs/{system}/{target}/{name}");
+        if !ids.insert(id.to_owned())
+            || id != format!("{system}/{target}/{name}")
+            || record.get("package").and_then(Value::as_str) != Some(context.package())
+            || record.get("policyInput").and_then(Value::as_str)
+                != Some(expected_policy_input.as_str())
+            || record.get("defaultFeatures") != Some(&Value::Bool(false))
+            || record.get("productionEdgeKinds").and_then(Value::as_str) != Some("normal,build")
+            || record.get("policyEdgeKinds").and_then(Value::as_str) != Some("normal,build,dev")
+        {
+            return Err(PolicyError::ContextManifestInvalid);
+        }
+        let features = record
+            .get("features")
+            .and_then(Value::as_array)
+            .ok_or(PolicyError::ContextManifestInvalid)?
+            .iter()
+            .map(|feature| {
+                feature
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or(PolicyError::ContextManifestInvalid)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected = SelectedContext::for_system(system, context)?;
+        if expected.target != target || expected.features != features {
+            return Err(PolicyError::ContextManifestInvalid);
+        }
+        selected.push(expected);
+    }
+    if selected.len() != 4 {
+        return Err(PolicyError::ContextManifestInvalid);
+    }
+    let checks = manifest
+        .get("nativeChecks")
+        .and_then(Value::as_array)
+        .ok_or(PolicyError::ContextManifestInvalid)?;
+    let expected_checks = [
+        "broker-production-dependency-policy",
+        "guest-shell-runner-static-dependency-policy",
+        "broker-production-package-policy",
+        "guest-real-libshpool-package-policy",
+        "broker-host-artifact-contract",
+        "guest-static-elf",
+    ];
+    let actual_checks = checks
+        .iter()
+        .map(|check| check.as_str().ok_or(PolicyError::ContextManifestInvalid))
+        .collect::<Result<Vec<_>, _>>()?;
+    if actual_checks != expected_checks {
+        return Err(PolicyError::ContextManifestInvalid);
+    }
+    Ok(selected)
 }
 
 pub fn metadata_command(target: &str) -> Vec<String> {
@@ -254,6 +398,7 @@ pub fn policy_tree_command(context: &SelectedContext) -> Vec<String> {
     cargo_tree_command(context, context.policy_edges())
 }
 
+#[cfg(test)]
 pub fn validate_tree_command(args: &[String]) -> Result<(), PolicyError> {
     let edges = value_after(args, "--edges")
         .ok_or_else(|| PolicyError::UnpinnedTreeArgument("--edges".to_owned()))?;
@@ -263,6 +408,7 @@ pub fn validate_tree_command(args: &[String]) -> Result<(), PolicyError> {
     validate_tree_command_for(args, edges)
 }
 
+#[cfg(test)]
 pub fn validate_tree_command_for(args: &[String], expected_edges: &str) -> Result<(), PolicyError> {
     let required = [
         "--locked",
@@ -300,6 +446,7 @@ pub fn validate_tree_command_for(args: &[String], expected_edges: &str) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
 fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2)
         .find(|pair| pair[0] == flag)
@@ -795,7 +942,7 @@ fn normalize_absolute_path(value: &str, workspace_root: &Path) -> Result<String,
         .components()
         .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
     {
-        return Err(PolicyError::UnrecognizedAbsolutePath(value.to_owned()));
+        return Err(PolicyError::UnrecognizedAbsolutePath);
     }
     if let Ok(relative) = path.strip_prefix(workspace_root) {
         return Ok(canonical_workspace_path(relative));
@@ -815,7 +962,7 @@ fn normalize_absolute_path(value: &str, workspace_root: &Path) -> Result<String,
     if value.starts_with("/cargo/registry") || value.starts_with("/cargo/git") {
         return Ok(value.to_owned());
     }
-    Err(PolicyError::UnrecognizedAbsolutePath(value.to_owned()))
+    Err(PolicyError::UnrecognizedAbsolutePath)
 }
 
 fn canonical_workspace_path(relative: &Path) -> String {
@@ -1437,6 +1584,8 @@ pub fn selected_context_oracle(
     })
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn validate_candidate_edge_join(
     metadata: &MetadataView,
     selected: &BTreeSet<PackageIdentity>,
@@ -1486,6 +1635,8 @@ fn validate_candidate_edge_join_with_root(
     Ok(())
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_selected_context(
     context: &SelectedContext,
     metadata_json: &str,
@@ -1560,6 +1711,8 @@ fn selected_graph(
     })
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn feature_union_refusal(
     selected_rows: &[TreeRow],
     workspace_feature_union: &BTreeSet<String>,
@@ -1916,10 +2069,7 @@ pub fn check_policy_outputs(
         return Err(POLICY_DRIFT_REMEDIATION.into());
     }
     let final_root = root.join("packages/policy-inputs");
-    let metadata = fs::symlink_metadata(&final_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
-    if !metadata.file_type().is_dir() {
-        return Err(POLICY_DRIFT_REMEDIATION.into());
-    }
+    anchor_policy_directory(&final_root)?;
 
     let actual = policy_file_census(&final_root)?;
     let expected_paths = expected
@@ -1947,8 +2097,7 @@ pub fn check_policy_outputs(
         let relative = Path::new(relative)
             .strip_prefix("packages/policy-inputs")
             .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
-        let path = final_root.join(relative);
-        let actual = fs::read_to_string(&path).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        let actual = read_policy_leaf(&final_root, relative)?;
         if actual != *contents {
             return Err(POLICY_DRIFT_REMEDIATION.into());
         }
@@ -1965,17 +2114,15 @@ fn write_policy_preview(
         if !metadata.file_type().is_dir() {
             return Err(POLICY_DRIFT_REMEDIATION.into());
         }
-        fs::remove_dir_all(&preview_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        anchor_policy_directory(&preview_root)?;
+        remove_policy_extras(&preview_root, &BTreeSet::new())?;
     }
-    fs::create_dir_all(&preview_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    ensure_policy_directory(&preview_root)?;
 
     for (relative, contents) in outputs {
         let relative = policy_preview_relative(relative)?;
         let path = preview_root.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
-        }
-        fs::write(&path, contents).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        atomic_policy_write(&path, contents)?;
     }
 
     let actual = policy_file_census(&preview_root)?;
@@ -2008,7 +2155,7 @@ fn install_policy_outputs(
         }
         policy_file_census(&final_root)?;
     } else {
-        fs::create_dir_all(&final_root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        ensure_policy_directory(&final_root)?;
     }
 
     for (relative, contents) in outputs {
@@ -2037,21 +2184,129 @@ fn policy_preview_relative(relative: &str) -> Result<PathBuf, Box<dyn Error>> {
         .map_err(|_| POLICY_DRIFT_REMEDIATION.into())
 }
 
-fn policy_file_census(root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
-    let metadata = fs::symlink_metadata(root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
-    if !metadata.file_type().is_dir() {
+fn anchor_policy_directory(path: &Path) -> Result<std::fs::File, Box<dyn Error>> {
+    reject_policy_symlink_components(path)?;
+    let descriptor = rustix::fs::openat2(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    let file = std::fs::File::from(descriptor);
+    let named = fs::symlink_metadata(path).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    let pinned = rustix::fs::fstat(file.as_fd()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    if named.dev() != pinned.st_dev || named.ino() != pinned.st_ino {
         return Err(POLICY_DRIFT_REMEDIATION.into());
     }
+    Ok(file)
+}
+
+fn ensure_policy_directory(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut current = std::fs::File::from(
+        rustix::fs::open(
+            "/",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|_| POLICY_DRIFT_REMEDIATION)?,
+    );
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    };
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            if matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            ) {
+                continue;
+            }
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        };
+        let name = name.to_str().ok_or(POLICY_DRIFT_REMEDIATION)?;
+        let child = match rustix::fs::openat(
+            current.as_fd(),
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(child) => child,
+            Err(rustix::io::Errno::NOENT) => {
+                rustix::fs::mkdirat(
+                    current.as_fd(),
+                    name,
+                    rustix::fs::Mode::from_bits_truncate(0o755),
+                )
+                .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+                rustix::fs::fsync(current.as_fd()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+                rustix::fs::openat(
+                    current.as_fd(),
+                    name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(|_| POLICY_DRIFT_REMEDIATION)?
+            }
+            Err(_) => return Err(POLICY_DRIFT_REMEDIATION.into()),
+        };
+        let named =
+            rustix::fs::statat(current.as_fd(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        let pinned = rustix::fs::fstat(&child).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        if named.st_dev != pinned.st_dev || named.st_ino != pinned.st_ino {
+            return Err(POLICY_DRIFT_REMEDIATION.into());
+        }
+        current = std::fs::File::from(child);
+    }
+    Ok(())
+}
+
+fn read_policy_leaf(root: &Path, relative: &Path) -> Result<String, Box<dyn Error>> {
+    let parent = root.join(relative.parent().unwrap_or_else(|| Path::new("")));
+    let directory = anchor_policy_directory(&parent)?;
+    let name = relative
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or(POLICY_DRIFT_REMEDIATION)?;
+    let descriptor = rustix::fs::openat(
+        directory.as_fd(),
+        name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    let mut file = std::fs::File::from(descriptor);
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    Ok(contents)
+}
+
+fn policy_file_census(root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
+    let _ = anchor_policy_directory(root)?;
     let mut files = BTreeSet::new();
     collect_policy_entries(root, root, &mut files)?;
     Ok(files)
 }
 
 fn policy_directory_census(root: &Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
-    let metadata = fs::symlink_metadata(root).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
-    if !metadata.file_type().is_dir() {
-        return Err(POLICY_DRIFT_REMEDIATION.into());
-    }
+    let _ = anchor_policy_directory(root)?;
     let mut directories = BTreeSet::new();
     collect_policy_directories(root, root, &mut directories)?;
     Ok(directories)
@@ -2062,6 +2317,7 @@ fn collect_policy_directories(
     current: &Path,
     directories: &mut BTreeSet<String>,
 ) -> Result<(), Box<dyn Error>> {
+    let _ = anchor_policy_directory(current)?;
     for entry in fs::read_dir(current).map_err(|_| POLICY_DRIFT_REMEDIATION)? {
         let entry = entry.map_err(|_| POLICY_DRIFT_REMEDIATION)?;
         let file_type = entry.file_type().map_err(|_| POLICY_DRIFT_REMEDIATION)?;
@@ -2101,6 +2357,7 @@ fn collect_policy_entries(
     current: &Path,
     files: &mut BTreeSet<String>,
 ) -> Result<(), Box<dyn Error>> {
+    let _ = anchor_policy_directory(current)?;
     for entry in fs::read_dir(current).map_err(|_| POLICY_DRIFT_REMEDIATION)? {
         let entry = entry.map_err(|_| POLICY_DRIFT_REMEDIATION)?;
         let file_type = entry.file_type().map_err(|_| POLICY_DRIFT_REMEDIATION)?;
@@ -2157,7 +2414,16 @@ fn policy_directory_drift(
 fn remove_policy_extras(root: &Path, expected: &BTreeSet<String>) -> Result<(), Box<dyn Error>> {
     let actual = policy_file_census(root)?;
     for relative in actual.difference(expected) {
-        fs::remove_file(root.join(relative)).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        let relative = Path::new(relative);
+        let parent = root.join(relative.parent().unwrap_or_else(|| Path::new("")));
+        let directory = anchor_policy_directory(&parent)?;
+        let name = relative
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or(POLICY_DRIFT_REMEDIATION)?;
+        rustix::fs::unlinkat(directory.as_fd(), name, rustix::fs::AtFlags::empty())
+            .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+        rustix::fs::fsync(directory.as_fd()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
     }
     let expected_directories = policy_directory_set(expected);
     remove_policy_extra_directories(root, root, &expected_directories)?;
@@ -2169,6 +2435,7 @@ fn remove_policy_extra_directories(
     current: &Path,
     expected: &BTreeSet<String>,
 ) -> Result<(), Box<dyn Error>> {
+    let _ = anchor_policy_directory(current)?;
     let entries = fs::read_dir(current)
         .map_err(|_| POLICY_DRIFT_REMEDIATION)?
         .collect::<Result<Vec<_>, _>>()
@@ -2191,7 +2458,21 @@ fn remove_policy_extra_directories(
                 .next()
                 .is_none()
         {
-            fs::remove_dir(entry.path()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+            let entry_path = entry.path();
+            let parent = entry_path.parent().ok_or(POLICY_DRIFT_REMEDIATION)?;
+            let directory = anchor_policy_directory(parent)?;
+            let name = entry_path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .ok_or(POLICY_DRIFT_REMEDIATION)?
+                .to_owned();
+            rustix::fs::unlinkat(
+                directory.as_fd(),
+                name.as_str(),
+                rustix::fs::AtFlags::REMOVEDIR,
+            )
+            .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+            rustix::fs::fsync(directory.as_fd()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
         }
     }
     Ok(())
@@ -2199,7 +2480,23 @@ fn remove_policy_extra_directories(
 
 fn atomic_policy_write(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
     let parent = path.parent().ok_or(POLICY_DRIFT_REMEDIATION)?;
-    fs::create_dir_all(parent).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    ensure_policy_directory(parent)?;
+    let parent_fd = rustix::fs::openat2(
+        rustix::fs::CWD,
+        parent,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    let named = fs::symlink_metadata(parent).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    let pinned = rustix::fs::fstat(parent_fd.as_fd()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
+    if named.dev() != pinned.st_dev || named.ino() != pinned.st_ino {
+        return Err(POLICY_DRIFT_REMEDIATION.into());
+    }
     if let Ok(metadata) = fs::symlink_metadata(path)
         && !metadata.file_type().is_file()
     {
@@ -2210,32 +2507,80 @@ fn atomic_policy_write(path: &Path, contents: &str) -> Result<(), Box<dyn Error>
         .and_then(OsStr::to_str)
         .ok_or(POLICY_DRIFT_REMEDIATION)?;
     for attempt in 0..100_u32 {
-        let temporary = parent.join(format!(
-            ".{file_name}.d2b-install-{}-{attempt}",
-            std::process::id()
-        ));
-        let mut file = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+        let temporary = format!(".{file_name}.d2b-install-{}-{attempt}", std::process::id());
+        let descriptor = match rustix::fs::openat(
+            parent_fd.as_fd(),
+            temporary.as_str(),
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_bits_truncate(0o600),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::EXIST) => continue,
             Err(_) => return Err(POLICY_DRIFT_REMEDIATION.into()),
         };
+        let mut file = fs::File::from(descriptor);
         if file.write_all(contents.as_bytes()).is_err() || file.sync_all().is_err() {
-            let _ = fs::remove_file(&temporary);
+            let _ = rustix::fs::unlinkat(
+                parent_fd.as_fd(),
+                temporary.as_str(),
+                rustix::fs::AtFlags::empty(),
+            );
             return Err(POLICY_DRIFT_REMEDIATION.into());
         }
-        if fs::rename(&temporary, path).is_err() {
-            let _ = fs::remove_file(&temporary);
+        drop(file);
+        if rustix::fs::renameat(
+            parent_fd.as_fd(),
+            temporary.as_str(),
+            parent_fd.as_fd(),
+            file_name,
+        )
+        .is_err()
+        {
+            let _ = rustix::fs::unlinkat(
+                parent_fd.as_fd(),
+                temporary.as_str(),
+                rustix::fs::AtFlags::empty(),
+            );
             return Err(POLICY_DRIFT_REMEDIATION.into());
         }
+        rustix::fs::fsync(parent_fd.as_fd()).map_err(|_| POLICY_DRIFT_REMEDIATION)?;
         return Ok(());
     }
     Err(POLICY_DRIFT_REMEDIATION.into())
 }
 
+fn reject_policy_symlink_components(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut current = if path.is_absolute() {
+        PathBuf::from("/")
+    } else {
+        env::current_dir()?
+    };
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(POLICY_DRIFT_REMEDIATION.into());
+            }
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(POLICY_DRIFT_REMEDIATION.into());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return Err(POLICY_DRIFT_REMEDIATION.into()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn package_policy_drift_message() -> &'static str {
     POLICY_DRIFT_REMEDIATION
 }
@@ -2260,9 +2605,11 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum PolicyError {
     WrongSystem(String),
+    ContextManifestInvalid,
     ContextMismatch,
     UnpinnedTreeArgument(String),
     UnpinnedTreeFormat,
@@ -2275,7 +2622,7 @@ pub enum PolicyError {
     SelectedPackageExtra(String),
     DanglingResolveEdge(String),
     MetadataRootMismatch(String),
-    UnrecognizedAbsolutePath(String),
+    UnrecognizedAbsolutePath,
     MalformedLock(String),
     EmptyLock,
     EmptySelectedLock,
@@ -2297,13 +2644,76 @@ pub enum PolicyError {
     FeatureUnionLeak(String),
     CandidateEdgeMissing(String),
     Io(String, String),
+    CommandFailed {
+        command: String,
+        status: String,
+        diagnostic: String,
+    },
     Serialization(String),
+}
+
+impl fmt::Debug for PolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl PolicyError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::WrongSystem(_) => "D2B-POLICY-WRONG-SYSTEM",
+            Self::ContextManifestInvalid => "D2B-POLICY-CONTEXT-MANIFEST",
+            Self::ContextMismatch => "D2B-POLICY-CONTEXT-MISMATCH",
+            Self::UnpinnedTreeArgument(_) => "D2B-POLICY-UNPINNED-TREE-ARGUMENT",
+            Self::UnpinnedTreeFormat => "D2B-POLICY-UNPINNED-TREE-FORMAT",
+            Self::InvalidEdgeKinds(_) => "D2B-POLICY-INVALID-EDGE-KINDS",
+            Self::MalformedMetadata(_) => "D2B-POLICY-MALFORMED-METADATA",
+            Self::MetadataPackagesMissing => "D2B-POLICY-METADATA-PACKAGES",
+            Self::IdentityMismatch(_) => "D2B-POLICY-IDENTITY-MISMATCH",
+            Self::DuplicateLockPackage(_) => "D2B-POLICY-DUPLICATE-LOCK-PACKAGE",
+            Self::SelectedPackageMissing(_) => "D2B-POLICY-SELECTED-PACKAGE-MISSING",
+            Self::SelectedPackageExtra(_) => "D2B-POLICY-SELECTED-PACKAGE-EXTRA",
+            Self::DanglingResolveEdge(_) => "D2B-POLICY-DANGLING-EDGE",
+            Self::MetadataRootMismatch(_) => "D2B-POLICY-METADATA-ROOT",
+            Self::UnrecognizedAbsolutePath => "D2B-POLICY-ABSOLUTE-PATH",
+            Self::MalformedLock(_) => "D2B-POLICY-MALFORMED-LOCK",
+            Self::EmptyLock => "D2B-POLICY-EMPTY-LOCK",
+            Self::EmptySelectedLock => "D2B-POLICY-EMPTY-SELECTED-LOCK",
+            Self::MalformedLockDependency(_) => "D2B-POLICY-MALFORMED-LOCK-DEPENDENCY",
+            Self::UnresolvableLockDependency(_) => "D2B-POLICY-UNRESOLVABLE-LOCK-DEPENDENCY",
+            Self::AmbiguousLockDependency(_) => "D2B-POLICY-AMBIGUOUS-LOCK-DEPENDENCY",
+            Self::EmptySourceCensus => "D2B-POLICY-EMPTY-SOURCE-CENSUS",
+            Self::MetadataLockMismatch(_) => "D2B-POLICY-METADATA-LOCK-MISMATCH",
+            Self::ExtraSource(_) => "D2B-POLICY-EXTRA-SOURCE",
+            Self::ChecksumMissing(_) => "D2B-POLICY-CHECKSUM-MISSING",
+            Self::SourceMissing(_) => "D2B-POLICY-SOURCE-MISSING",
+            Self::GitArchivePinMissing(_) => "D2B-POLICY-GIT-ARCHIVE-PIN",
+            Self::MalformedTree => "D2B-POLICY-MALFORMED-TREE",
+            Self::EmptyTree => "D2B-POLICY-EMPTY-TREE",
+            Self::RootCount(_) => "D2B-POLICY-ROOT-COUNT",
+            Self::WrongRoot(_) => "D2B-POLICY-WRONG-ROOT",
+            Self::TreeIdentityMismatch(_) => "D2B-POLICY-TREE-IDENTITY",
+            Self::PolicyClosureShrank => "D2B-POLICY-CLOSURE-SHRANK",
+            Self::FeatureUnionLeak(_) => "D2B-POLICY-FEATURE-UNION",
+            Self::CandidateEdgeMissing(_) => "D2B-POLICY-CANDIDATE-EDGE",
+            Self::Io(_, _) => "D2B-POLICY-IO",
+            Self::CommandFailed { .. } => "D2B-POLICY-COMMAND",
+            Self::Serialization(_) => "D2B-POLICY-SERIALIZATION",
+        }
+    }
 }
 
 impl fmt::Display for PolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongSystem(system) => write!(formatter, "wrong native system: {system}"),
+            Self::WrongSystem(system) => write!(
+                formatter,
+                "wrong native system: {}",
+                redacted_policy_text(system)
+            ),
+            Self::ContextManifestInvalid => {
+                formatter.write_str("native policy/check manifest is invalid")
+            }
             Self::ContextMismatch => {
                 formatter.write_str("selected Cargo context does not match its closed selector")
             }
@@ -2316,13 +2726,21 @@ impl fmt::Display for PolicyError {
                 write!(formatter, "cargo tree edge kinds are not pinned: {edges}")
             }
             Self::MalformedMetadata(message) => {
-                write!(formatter, "malformed Cargo metadata: {message}")
+                write!(
+                    formatter,
+                    "malformed Cargo metadata: {}",
+                    redacted_policy_text(message)
+                )
             }
             Self::MetadataPackagesMissing => {
                 formatter.write_str("Cargo metadata has no packages array")
             }
             Self::IdentityMismatch(message) => {
-                write!(formatter, "metadata identity mismatch: {message}")
+                write!(
+                    formatter,
+                    "metadata identity mismatch: {}",
+                    redacted_policy_text(message)
+                )
             }
             Self::DuplicateLockPackage(identity) => {
                 write!(formatter, "Cargo.lock repeats package identity: {identity}")
@@ -2348,15 +2766,13 @@ impl fmt::Display for PolicyError {
             Self::MetadataRootMismatch(root) => {
                 write!(
                     formatter,
-                    "Cargo metadata resolve root is not selected: {root}"
+                    "Cargo metadata resolve root is not selected: {}",
+                    redacted_policy_text(root)
                 )
             }
-            Self::UnrecognizedAbsolutePath(path) => {
-                write!(
-                    formatter,
-                    "Cargo metadata contains an unrecognized absolute path: {path}"
-                )
-            }
+            Self::UnrecognizedAbsolutePath => formatter.write_str(
+                "Cargo metadata contains an unrecognized absolute path (path class rejected)",
+            ),
             Self::MalformedLock(message) => write!(formatter, "malformed Cargo.lock: {message}"),
             Self::EmptyLock => formatter.write_str("Cargo.lock has no package records"),
             Self::EmptySelectedLock => {
@@ -2390,7 +2806,8 @@ impl fmt::Display for PolicyError {
             }
             Self::SourceMissing(message) => write!(
                 formatter,
-                "selected source is missing or unreadable: {message}"
+                "selected source is missing or unreadable: {}",
+                redacted_policy_text(message)
             ),
             Self::GitArchivePinMissing(message) => {
                 write!(formatter, "committed git archive pin is missing: {message}")
@@ -2416,11 +2833,30 @@ impl fmt::Display for PolicyError {
                 )
             }
             Self::Io(path, message) => {
-                write!(formatter, "package-policy input {path} failed: {message}")
+                let _ = message;
+                write!(
+                    formatter,
+                    "package-policy input {} failed",
+                    redacted_policy_text(path)
+                )
+            }
+            Self::CommandFailed {
+                command,
+                status,
+                diagnostic,
+            } => {
+                write!(
+                    formatter,
+                    "package-policy command {} failed with status {}: {}",
+                    redacted_policy_text(command),
+                    redacted_policy_text(status),
+                    redacted_policy_text(diagnostic)
+                )
             }
             Self::Serialization(message) => write!(
                 formatter,
-                "cannot serialize package-policy input: {message}"
+                "cannot serialize package-policy input: {}",
+                redacted_policy_text(message)
             ),
         }
     }
@@ -2516,5 +2952,27 @@ mod tests {
             &BTreeSet::new(),
         );
         assert!(matches!(result, Err(PolicyError::FeatureUnionLeak(_))));
+    }
+
+    #[test]
+    fn policy_error_renderings_redact_rejected_paths_and_child_output() {
+        let error = PolicyError::UnrecognizedAbsolutePath;
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(!display.contains("/"));
+        assert!(!debug.contains("/"));
+
+        let command = PolicyError::CommandFailed {
+            command: "cargo metadata package=d2b target=x86_64 hub=product".to_owned(),
+            status: "36".to_owned(),
+            diagnostic: bounded_redacted_diagnostic(
+                b"failure at /home/operator/private and /nix/store/secret",
+            ),
+        };
+        let rendered = command.to_string();
+        assert!(!rendered.contains("/home/operator"));
+        assert!(!rendered.contains("/nix/store"));
+        assert!(rendered.contains("<path>"));
+        assert_eq!(format!("{command:?}"), "D2B-POLICY-COMMAND");
     }
 }

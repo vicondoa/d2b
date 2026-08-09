@@ -18,6 +18,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "tests" / "layer1-jobs.json"
+NATIVE_POLICY_MANIFEST = ROOT / "tests" / "golden" / "native-policy-check-manifest.json"
 TEMPLATE = ROOT / "tests" / "ci" / "layer1-workflow.template.yml"
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-l1-static-fast.yml"
 SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
@@ -175,14 +176,35 @@ MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
 # text - see MATRIX_CHECK_SCOPE above for the same hazard.
 REALIZED_CACHE_DIR = "${{ runner.temp }}/d2b-realized-cache"
 AARCH64_NATIVE_SYSTEM = "aarch64-linux"
-AARCH64_NATIVE_CHECKS = (
-    "broker-production-dependency-policy",
-    "guest-shell-runner-static-dependency-policy",
-    "broker-production-package-policy",
-    "guest-real-libshpool-package-policy",
-    "broker-host-artifact-contract",
-    "guest-static-elf",
-)
+
+
+def load_native_policy_manifest() -> dict[str, Any]:
+    try:
+        with NATIVE_POLICY_MANIFEST.open(encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{NATIVE_POLICY_MANIFEST}: cannot read manifest: {exc}") from exc
+    if manifest.get("schemaVersion") != 1:
+        raise SystemExit(
+            f"{NATIVE_POLICY_MANIFEST}: unsupported schemaVersion "
+            f"{manifest.get('schemaVersion')!r}"
+        )
+    contexts = manifest.get("contexts")
+    checks = manifest.get("nativeChecks")
+    if not isinstance(contexts, list) or len(contexts) != 4:
+        raise SystemExit(f"{NATIVE_POLICY_MANIFEST}: expected exactly four contexts")
+    if not isinstance(checks, list) or len(checks) != 6 or not all(
+        isinstance(check, str) and check for check in checks
+    ):
+        raise SystemExit(f"{NATIVE_POLICY_MANIFEST}: expected exactly six native checks")
+    ids = [context.get("id") for context in contexts if isinstance(context, dict)]
+    if len(ids) != 4 or len(set(ids)) != 4:
+        raise SystemExit(f"{NATIVE_POLICY_MANIFEST}: context ids are not unique")
+    return manifest
+
+
+NATIVE_POLICY_MANIFEST_VALUE = load_native_policy_manifest()
+AARCH64_NATIVE_CHECKS = tuple(NATIVE_POLICY_MANIFEST_VALUE["nativeChecks"])
 
 
 def nix_cache_hash_files(job: dict[str, Any]) -> str:

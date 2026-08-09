@@ -364,13 +364,12 @@ mod native_patched_bazel {
             "pinned Bazel policy is installed beside the executable"
         );
         let install_root = scratch.join("user/install");
-        let sandbox = fs::read_dir(&install_root)
+        fs::read_dir(&install_root)
             .expect("Bazel install root")
             .filter_map(Result::ok)
             .map(|entry| entry.path().join("linux-sandbox"))
             .find(|candidate| candidate.is_file())
-            .expect("patched Bazel linux-sandbox");
-        sandbox
+            .expect("patched Bazel linux-sandbox")
     }
 
     fn create_fifo(path: &Path) -> (File, File) {

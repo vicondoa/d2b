@@ -109,16 +109,12 @@ implementation details unless a target or `tests/AGENTS.md` says otherwise.
 `nix develop` provides the toolchain every gate expects. Gate scripts bootstrap
 a private toolchain when missing, so a dev shell skips that setup.
 
-The unified product workspace is `packages/Cargo.toml` with root lock
-`packages/Cargo.lock`; broker and guest are members. `packages/Cargo.guest.lock`
-is generated input only. The no-bash AST walker at
-`tests/tools/no-bash-ast-walker` is separate, with its own lock and hub.
-
-CI runs eight Rust leaf jobs - API, main workspace, broker, guest
-shell runner, no-bash AST, schema, inventory, and supply chain - behind the
-required `test-rust` rollup. `make test-rust` remains the aggregate; use
-`make test-rust-<leaf>` to rerun one CI leaf. See
-[gates and lints](./docs/contributing/gates-and-lints.md).
+The unified Cargo/Bazel workspace, policy-context manifest, regeneration
+sequence, and native-check inventory are documented in
+[Bazel and policy workflows](./docs/contributing/bazel-and-policy.md).
+The no-bash AST walker remains a separate workspace and hub; `make test-rust`
+is still the aggregate over the eight Rust leaf jobs. See
+[gates and lints](./docs/contributing/gates-and-lints.md) for coverage.
 
 ```bash
 make check        # PR-equivalent Layer-1 gate; runs tests/layer1-jobs.json

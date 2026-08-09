@@ -16,7 +16,7 @@
   "outputs": [
     {
       "path": ".bazelignore",
-      "sha256": "f993431fffc12bedd16cae4dc13aabe42c1d280d654560edb90aac016fd8f99a"
+      "sha256": "36240702a77cba50a71db1786af8142e46f982ef2ca6497780ec6c7748f5c2aa"
     },
     {
       "path": "bazel/generated/BUILD.bazel",
@@ -28,7 +28,7 @@
     },
     {
       "path": "bazel/generated/configured-targets.json",
-      "sha256": "8c086489a3b02dab2c9a0dfcdecb66c601ab02f871b3470ecdbdc678e555e350"
+      "sha256": "5c8273cc147faf5994191c169e4808c4ba605cc5e61b9985ba75ec252d1dedfa"
     },
     {
       "path": "bazel/generated/evidence-sink-policy.json",
@@ -36,19 +36,19 @@
     },
     {
       "path": "bazel/generated/no-shell-inventory.json",
-      "sha256": "e534f37f677caea7bce82a2b483b8f7a8b37d848850fa6fd12e3ff02e22bddb1"
+      "sha256": "be432d9a7c387e202e908a71cc9d779a211e449cba09e49fa41a1e00bc82ec12"
     },
     {
       "path": "bazel/generated/package-policy-targets.bzl",
-      "sha256": "248297e2dda201e7eb235812d083e9defa71653ff2a55d14909e74525c551e50"
+      "sha256": "70dd49c53cbd739b95d450a7ea24eec7a1fc0d5b365773daaead55f63afff797"
     },
     {
       "path": "bazel/generated/product-targets.bzl",
-      "sha256": "91c323efe43ab37f740af986dda825abf76f9da7d031e6d4a8f663b26da73dd5"
+      "sha256": "d4c7856c94d90d4855bbd3cc9e7babe60f473d57d943e25edaae9b8a6339f797"
     },
     {
       "path": "bazel/generated/source-census.json",
-      "sha256": "fff03ea88cf397f2a4d249e702fa0c72227519b6de8d6e5b880d96248f081dd0"
+      "sha256": "704b18e49b4d73973c9b04e51a4df79fa2bf54fb7850773b71f9c6c743582e6d"
     }
   ],
   "schemaVersion": 1,
