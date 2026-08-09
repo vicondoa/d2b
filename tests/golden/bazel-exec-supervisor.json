@@ -123,10 +123,10 @@
       "staticElfSha256": "53afc1781ecab27a20e6423f5b43d51ab5fa5860a1bee9d709118d48a398bc82"
     },
     "aarch64-linux": {
-      "derivationSha256": "ae0c080e279fec4bdfe06b86f9a2aaecf0c68fea927e0bdcb83433939e129ed4",
-      "narSha256": "801b635a33fa714d28784db3df068c398fa2b7e667e26367960d90d8b45b81c5",
-      "executableSha256": "2257f62d0fdf9a439170941cb185603b905f725ebf897b796b4520c258c1b956",
-      "staticElfSha256": "b21a6fff8ba5024f16c50a06e4ce3696d72655fdf98cff19e7440d79f984da0e",
+      "derivationSha256": "b30d5e15d8bc36bd2a3ebbeb0cb5f011952bb616e4cb26413885b8f521cb3566",
+      "narSha256": "8efa6c3ee6bb454c066f63dc19462172a4c7b0558aa7976388696758f61e61cc",
+      "executableSha256": "87462d01cc2e49bf5306adaa5bb8e98fa9df34f004a46958143d6a5b97f9b762",
+      "staticElfSha256": "0c5478fa6a24cdf827313b0ef6041641e9208dbd9f92d5bf7890a7124b2cc944",
       "staticCompilerSha256": "fc38d9ad97da19240f822ace24e129d5bda32efafe8816ec39507a0e1204acce",
       "staticLibcSha256": "b71a1a5655a43e8e3277466e82a894e8031aca2f5ae379724d920afbf4af65b8",
       "staticHeadersSha256": "0c33fe629c5e1bdfa393b802b6d78eb555c0c6bfe13b68eec24724765eeb7d1d"
