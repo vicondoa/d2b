@@ -2671,48 +2671,137 @@ fn r55_documents() -> R55Documents {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum R55RequirementKind {
+    Raw,
+    Normalized,
+    Ordered,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct R55Requirement {
+    kind: R55RequirementKind,
+    file: &'static str,
+    requirement: &'static str,
+    needles: Vec<String>,
+}
+
+impl R55Requirement {
+    fn single(
+        kind: R55RequirementKind,
+        file: &'static str,
+        needle: &str,
+        requirement: &'static str,
+    ) -> Self {
+        Self {
+            kind,
+            file,
+            requirement,
+            needles: vec![needle.to_string()],
+        }
+    }
+
+    fn ordered(file: &'static str, needles: &[&str], requirement: &'static str) -> Self {
+        Self {
+            kind: R55RequirementKind::Ordered,
+            file,
+            requirement,
+            needles: needles.iter().map(|needle| (*needle).to_string()).collect(),
+        }
+    }
+
+    fn render_missing(&self, missing: &str) -> String {
+        match self.kind {
+            R55RequirementKind::Raw => format!(
+                "{}: R55 {} is missing required text {:?}",
+                self.file, self.requirement, missing
+            ),
+            R55RequirementKind::Normalized => format!(
+                "{}: R55 {} is missing normalized text {:?}",
+                self.file, self.requirement, missing
+            ),
+            R55RequirementKind::Ordered => format!(
+                "{}: R55 {} is missing ordered step {:?}",
+                self.file, self.requirement, missing
+            ),
+        }
+    }
+}
+
+#[derive(Default)]
+struct R55Validation {
+    findings: Vec<String>,
+    requirements: std::collections::BTreeSet<R55Requirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct R55ExpectedDiagnostic {
+    requirement: R55Requirement,
+    missing: String,
+}
+
+impl R55ExpectedDiagnostic {
+    fn render(&self) -> String {
+        self.requirement.render_missing(&self.missing)
+    }
+}
+
+struct R55ExpectedSet {
+    diagnostics: Vec<R55ExpectedDiagnostic>,
+}
+
 fn r55_require_raw(
-    findings: &mut Vec<String>,
-    file: &str,
+    validation: &mut R55Validation,
+    file: &'static str,
     content: &str,
     needle: &str,
-    requirement: &str,
+    requirement: &'static str,
 ) {
+    let requirement_spec =
+        R55Requirement::single(R55RequirementKind::Raw, file, needle, requirement);
+    validation.requirements.insert(requirement_spec);
     if !content.contains(needle) {
-        findings.push(format!(
-            "{file}: R55 {requirement} is missing required text {needle:?}"
-        ));
+        validation.findings.push(
+            R55Requirement::single(R55RequirementKind::Raw, file, needle, requirement)
+                .render_missing(needle),
+        );
     }
 }
 
 fn r55_require_normalized(
-    findings: &mut Vec<String>,
-    file: &str,
+    validation: &mut R55Validation,
+    file: &'static str,
     content: &str,
     needle: &str,
-    requirement: &str,
+    requirement: &'static str,
 ) {
+    let requirement_spec =
+        R55Requirement::single(R55RequirementKind::Normalized, file, needle, requirement);
+    validation.requirements.insert(requirement_spec);
     let normalized = normalized_whitespace(content);
     if !normalized.contains(needle) {
-        findings.push(format!(
-            "{file}: R55 {requirement} is missing normalized text {needle:?}"
-        ));
+        validation.findings.push(
+            R55Requirement::single(R55RequirementKind::Normalized, file, needle, requirement)
+                .render_missing(needle),
+        );
     }
 }
 
 fn r55_require_order(
-    findings: &mut Vec<String>,
-    file: &str,
+    validation: &mut R55Validation,
+    file: &'static str,
     content: &str,
     needles: &[&str],
-    requirement: &str,
+    requirement: &'static str,
 ) {
+    let requirement_spec = R55Requirement::ordered(file, needles, requirement);
+    validation.requirements.insert(requirement_spec.clone());
     let mut cursor = 0;
     for needle in needles {
         let Some(relative) = content[cursor..].find(needle) else {
-            findings.push(format!(
-                "{file}: R55 {requirement} is missing ordered step {needle:?}"
-            ));
+            validation
+                .findings
+                .push(requirement_spec.render_missing(needle));
             return;
         };
         cursor += relative + needle.len();
@@ -2720,14 +2809,14 @@ fn r55_require_order(
 }
 
 fn r55_require_normalized_order(
-    findings: &mut Vec<String>,
-    file: &str,
+    validation: &mut R55Validation,
+    file: &'static str,
     content: &str,
     needles: &[&str],
-    requirement: &str,
+    requirement: &'static str,
 ) {
     let normalized = normalized_whitespace(content);
-    r55_require_order(findings, file, &normalized, needles, requirement);
+    r55_require_order(validation, file, &normalized, needles, requirement);
 }
 
 fn r55_mutate_once(
@@ -2749,13 +2838,141 @@ fn r55_mutate_once(
     mutated
 }
 
-fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
+fn r55_mutate_all(
+    documents: &R55Documents,
+    path: &str,
+    needle: &str,
+    replacement: &str,
+) -> R55Documents {
+    let mut mutated = documents.clone();
+    let content = mutated
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("R55 mutation path is not loaded: {path}"));
+    let count = content.matches(needle).count();
+    assert!(
+        count > 1,
+        "R55 all-site mutation must identify duplicate planted fixture sites: \
+         {needle:?} in {path} (found {count})"
+    );
+    *content = content.replace(needle, replacement);
+    mutated
+}
+
+fn r55_mutate_forms(documents: &R55Documents, path: &str, edits: &[(&str, &str)]) -> R55Documents {
+    let mut mutated = documents.clone();
+    let content = mutated
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("R55 mutation path is not loaded: {path}"));
+    for (needle, replacement) in edits {
+        let count = content.matches(needle).count();
+        assert!(
+            count > 0,
+            "R55 form mutation must identify a planted fixture site: \
+             {needle:?} in {path}"
+        );
+        *content = content.replace(needle, replacement);
+    }
+    mutated
+}
+
+enum R55MutationEdit {
+    Once {
+        needle: &'static str,
+        replacement: &'static str,
+    },
+    All {
+        needle: &'static str,
+        replacement: &'static str,
+    },
+    Forms {
+        edits: &'static [(&'static str, &'static str)],
+    },
+}
+
+struct R55Mutation {
+    name: &'static str,
+    path: &'static str,
+    edit: R55MutationEdit,
+    expected: R55ExpectedSet,
+}
+
+const R55_PLAN_TREE_FORMS: &[(&str, &str)] = &[
+    (
+        "actual\nmerge-group integration tree",
+        "observed\nmerge-group candidate tree",
+    ),
+    (
+        "actual merge-group integration tree",
+        "observed merge-group candidate tree",
+    ),
+];
+
+const R55_QUEUE_ORDER_SWAP: &[(&str, &str)] = &[(
+    r#"  test -n "$MERGE_GROUP_TREE_CHECK" ||
+    fail "v3 uses a merge queue; set MERGE_GROUP_TREE_CHECK to its required snapshot-bound integration-tree check"
+  jq -e --arg context "$MERGE_GROUP_TREE_CHECK" '
+    any(.[];
+      .type == "required_status_checks" and
+      .parameters.strict_required_status_checks_policy == true and
+      any(.parameters.required_status_checks[]?;
+        .context == $context
+      )
+    )
+  ' <<<"$BRANCH_RULES" >/dev/null ||
+    fail "the merge queue check is not required by effective strict v3 protection"
+"#,
+    r#"  jq -e --arg context "$MERGE_GROUP_TREE_CHECK" '
+    any(.[];
+      .type == "required_status_checks" and
+      .parameters.strict_required_status_checks_policy == true and
+      any(.parameters.required_status_checks[]?;
+        .context == $context
+      )
+    )
+  ' <<<"$BRANCH_RULES" >/dev/null ||
+    fail "the merge queue check is not required by effective strict v3 protection"
+  test -n "$MERGE_GROUP_TREE_CHECK" ||
+    fail "v3 uses a merge queue; set MERGE_GROUP_TREE_CHECK to its required snapshot-bound integration-tree check"
+"#,
+)];
+
+fn r55_expected(
+    kind: R55RequirementKind,
+    file: &'static str,
+    needle: &str,
+    requirement: &'static str,
+) -> R55ExpectedSet {
+    r55_expected_many(vec![R55ExpectedDiagnostic {
+        requirement: R55Requirement::single(kind, file, needle, requirement),
+        missing: needle.to_string(),
+    }])
+}
+
+fn r55_expected_many(diagnostics: Vec<R55ExpectedDiagnostic>) -> R55ExpectedSet {
+    R55ExpectedSet { diagnostics }
+}
+
+fn r55_expected_order(
+    file: &'static str,
+    needles: &[&str],
+    requirement: &'static str,
+    missing: &str,
+) -> R55ExpectedSet {
+    r55_expected_many(vec![R55ExpectedDiagnostic {
+        requirement: R55Requirement::ordered(file, needles, requirement),
+        missing: missing.to_string(),
+    }])
+}
+
+fn validate_r55_contract_with_inventory(
+    documents: &R55Documents,
+) -> (Vec<String>, std::collections::BTreeSet<R55Requirement>) {
     let quickstart = documents
         .get(R55_QUICKSTART)
         .expect("R55 quickstart must be loaded");
     let plan = documents.get(R55_PLAN).expect("R55 plan must be loaded");
     let tasks = documents.get(R55_TASKS).expect("R55 tasks must be loaded");
-    let mut findings = Vec::new();
+    let mut findings = R55Validation::default();
 
     // Every active feature artifact must retain the default server-side
     // refusal, not merely a statement that a base is checked somewhere.
@@ -3027,7 +3244,11 @@ fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
         "post-merge tree comparison must follow the preventive pre-merge guard",
     );
 
-    findings
+    (findings.findings, findings.requirements)
+}
+
+fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
+    validate_r55_contract_with_inventory(documents).0
 }
 
 #[test]
@@ -3044,97 +3265,685 @@ fn r55_expected_base_merge_contract_matches_the_active_feature_artifacts() {
 #[test]
 fn r55_mutation_fixtures_reject_each_removed_merge_guard() {
     let documents = r55_documents();
-    let baseline = validate_r55_contract(&documents);
+    let (baseline, requirements) = validate_r55_contract_with_inventory(&documents);
     assert!(
         baseline.is_empty(),
         "R55 mutation fixtures require a clean baseline:\n{}",
         baseline.join("\n")
     );
 
-    // Each mutation is a source-level negative fixture. The table intentionally
-    // removes one exact clause at a time, including the queue integration-tree
-    // mismatch and base-movement restart obligations.
-    let mutations = [
-        (
-            "strict up-to-date policy",
-            R55_QUICKSTART,
-            "    .type == \"required_status_checks\" and\n    .parameters.strict_required_status_checks_policy == true and",
-            "    .type == \"required_status_checks\" and",
-            "default strict guard",
-        ),
-        (
-            "nonempty required-check set",
-            R55_QUICKSTART,
-            r#"((.parameters.required_status_checks // []) | length) > 0"#,
-            "",
-            "nonempty required-check enforcement",
-        ),
-        (
-            "required merge-group integration-tree check",
-            R55_QUICKSTART,
-            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
-            "",
-            "merge-group check must be configured",
-        ),
-        (
-            "integration-tree snapshot binding",
-            R55_QUICKSTART,
-            "| .integration_tree_oid",
-            "",
-            "snapshot must expose integration_tree_oid",
-        ),
-        (
-            "integration-tree mismatch refusal",
-            R55_TASKS,
-            "refuses a mismatch",
-            "permits a mismatch",
-            "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
-        ),
-        (
-            "BASE_OID before snapshot",
-            R55_QUICKSTART,
-            "  .baseRefName == $base_ref and\n  .baseRefOid == $base_oid and\n  .headRefName == $head_ref and",
-            "  .baseRefName == $base_ref and\n  .headRefName == $head_ref and",
-            "exact BASE_OID check before snapshot",
-        ),
-        (
-            "BASE_OID after required checks",
-            R55_QUICKSTART,
-            r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
-            "",
-            "exact BASE_OID check after required checks",
-        ),
-        (
-            "BASE_OID immediately before merge",
-            R55_QUICKSTART,
-            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
-            "",
-            "exact BASE_OID check immediately before merge",
-        ),
-        (
-            "base-movement restart",
-            R55_TASKS,
-            "and required checks in the existing Track A order",
-            "and required checks",
-            "task base movement restart",
-        ),
-        (
-            "post-merge comparison classification",
-            R55_QUICKSTART,
-            "The post-merge tree comparison is defense in depth, not the guard.",
-            "The post-merge tree comparison is the guard.",
-            "post-merge comparison is not the preventive guard",
-        ),
+    // Each row mutates one independently enforced requirement. The expected
+    // value is the complete diagnostic descriptor, not a substring: a mutation
+    // that trips a second branch is therefore a coverage failure. The
+    // all-site edits are intentional where one artifact repeats the same
+    // requirement; changing only one copy would leave that requirement valid.
+    let mutations = vec![
+        R55Mutation {
+            name: "quickstart strict required-check prose",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "nonempty set of required status checks for strict up-to-date enforcement",
+                replacement: "required set of required status checks for strict up-to-date enforcement",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "nonempty set of required status checks for strict up-to-date enforcement",
+                "default strict required-check policy",
+            ),
+        },
+        R55Mutation {
+            name: "plan strict required-check prose",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "nonempty set of required status checks with strict up-to-date\n",
+                replacement: "required set of required status checks with strict up-to-date\n",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "nonempty set of required status checks with strict up-to-date enforcement",
+                "plan strict required-check policy",
+            ),
+        },
+        R55Mutation {
+            name: "tasks strict required-check prose",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "nonempty required-check set with strict\nup-to-date enforcement",
+                replacement: "required-check set with strict\nup-to-date enforcement",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "nonempty required-check set with strict up-to-date enforcement",
+                "task strict required-check policy",
+            ),
+        },
+        R55Mutation {
+            name: "branch-rule query",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"BRANCH_RULES="$(gh api"#,
+                replacement: r#"BRANCH_RULES="$(gh endpoint"#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Normalized,
+                        R55_QUICKSTART,
+                        r#"BRANCH_RULES="$(gh api"#,
+                        "server-side branch-rule query",
+                    ),
+                    missing: r#"BRANCH_RULES="$(gh api"#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"BRANCH_RULES="$(gh api"#,
+                            r#"MERGE_MODE="direct""#,
+                            ".parameters.strict_required_status_checks_policy == true",
+                            r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "default strict guard must run before the optional merge-queue branch and snapshot",
+                    ),
+                    missing: r#"BRANCH_RULES="$(gh api"#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "required-status rule selection",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::All {
+                needle: r#".type == "required_status_checks""#,
+                replacement: r#".type != "required_status_checks""#,
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                r#".type == "required_status_checks""#,
+                "required status-check rule selection",
+            ),
+        },
+        R55Mutation {
+            name: "strict branch-rule enforcement",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::All {
+                needle: ".parameters.strict_required_status_checks_policy == true",
+                replacement: ".parameters.strict_required_status_checks_policy == false",
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        ".parameters.strict_required_status_checks_policy == true",
+                        "strict up-to-date enforcement",
+                    ),
+                    missing: ".parameters.strict_required_status_checks_policy == true".to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"BRANCH_RULES="$(gh api"#,
+                            r#"MERGE_MODE="direct""#,
+                            ".parameters.strict_required_status_checks_policy == true",
+                            r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "default strict guard must run before the optional merge-queue branch and snapshot",
+                    ),
+                    missing: ".parameters.strict_required_status_checks_policy == true".to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "nonempty branch-rule checks",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"((.parameters.required_status_checks // []) | length) > 0"#,
+                replacement: r#"((.parameters.required_status_checks // []) | length) >= 0"#,
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                r#"((.parameters.required_status_checks // []) | length) > 0"#,
+                "nonempty required-check enforcement",
+            ),
+        },
+        R55Mutation {
+            name: "server-side default prose",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "This requirement\napplies whether or not a merge queue is enabled",
+                replacement: "This requirement\napplies only when a merge queue is enabled",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "This requirement applies whether or not a merge queue is enabled",
+                "server-side guard as the default, not a queue-only substitute",
+            ),
+        },
+        R55Mutation {
+            name: "strict guard ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"BRANCH_RULES="$(gh api \
+  "repos/$GITHUB_REPOSITORY/rules/branches/$TARGET_BRANCH")"
+MERGE_MODE="direct""#,
+                replacement: r#"MERGE_MODE="direct"
+BRANCH_RULES="$(gh api \
+  "repos/$GITHUB_REPOSITORY/rules/branches/$TARGET_BRANCH")""#,
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"BRANCH_RULES="$(gh api"#,
+                    r#"MERGE_MODE="direct""#,
+                    ".parameters.strict_required_status_checks_policy == true",
+                    r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+                    "SNAPSHOT_RESULT=",
+                ],
+                "default strict guard must run before the optional merge-queue branch and snapshot",
+                r#"MERGE_MODE="direct""#,
+            ),
+        },
+        R55Mutation {
+            name: "merge-group required-check context prose",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group`",
+                replacement: "MERGE_GROUP_TREE_CHECK names an optional check triggered for merge_group",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group`",
+                "required merge-group check",
+            ),
+        },
+        R55Mutation {
+            name: "merge-group check nonempty configuration",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                replacement: r#"test -z "$MERGE_GROUP_TREE_CHECK""#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                        "merge-group check must be configured",
+                    ),
+                    missing: r#"test -n "$MERGE_GROUP_TREE_CHECK""#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                            ".context == $context",
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "required merge-group check must be established before snapshot binding",
+                    ),
+                    missing: r#"test -n "$MERGE_GROUP_TREE_CHECK""#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "merge-group check branch-protection requirement",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "any(.parameters.required_status_checks[]?;",
+                replacement: "all(.parameters.required_status_checks[]?;",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                "any(.parameters.required_status_checks[]?;",
+                "merge-group check must be required by branch protection",
+            ),
+        },
+        R55Mutation {
+            name: "merge-group context binding",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: ".context == $context",
+                replacement: ".context != $context",
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        ".context == $context",
+                        "merge-group check must bind the configured required context",
+                    ),
+                    missing: ".context == $context".to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                            ".context == $context",
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "required merge-group check must be established before snapshot binding",
+                    ),
+                    missing: ".context == $context".to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "merge-group check ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Forms {
+                edits: R55_QUEUE_ORDER_SWAP,
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                    ".context == $context",
+                    "SNAPSHOT_RESULT=",
+                ],
+                "required merge-group check must be established before snapshot binding",
+                ".context == $context",
+            ),
+        },
+        R55Mutation {
+            name: "snapshot integration-tree projection",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "| .integration_tree_oid",
+                replacement: "| .integration_tree_digest",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                "| .integration_tree_oid",
+                "snapshot must expose integration_tree_oid",
+            ),
+        },
+        R55Mutation {
+            name: "quickstart merge-group integration-tree subject",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "actual merge-group integration tree",
+                replacement: "actual merge-group candidate tree",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            ),
+        },
+        R55Mutation {
+            name: "plan merge-group integration-tree subject",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Forms {
+                edits: R55_PLAN_TREE_FORMS,
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            ),
+        },
+        R55Mutation {
+            name: "tasks merge-group integration-tree subject",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "actual merge-group integration tree",
+                replacement: "actual merge-group candidate tree",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            ),
+        },
+        R55Mutation {
+            name: "quickstart merge-group tree mismatch ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "refuses a mismatch",
+                replacement: "permits a mismatch",
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+                "refuses a mismatch",
+            ),
+        },
+        R55Mutation {
+            name: "plan merge-group tree mismatch ordering",
+            path: R55_PLAN,
+            edit: R55MutationEdit::All {
+                needle: "refuses a mismatch",
+                replacement: "permits a mismatch",
+            },
+            expected: r55_expected_order(
+                R55_PLAN,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+                "refuses a mismatch",
+            ),
+        },
+        R55Mutation {
+            name: "tasks merge-group tree mismatch ordering",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "refuses a mismatch",
+                replacement: "permits a mismatch",
+            },
+            expected: r55_expected_order(
+                R55_TASKS,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+                "refuses a mismatch",
+            ),
+        },
+        R55Mutation {
+            name: "BASE_OID capture",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                replacement: r#"BASE_OID="$TARGET_BRANCH""#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                        "BASE_OID capture",
+                    ),
+                    missing: r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                            r#"PR_IDENTITY="$(gh pr view"#,
+                            r#"--arg base_oid "$BASE_OID""#,
+                            ".baseRefOid == $base_oid",
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "exact BASE_OID check before snapshot",
+                    ),
+                    missing: r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "BASE_OID before-snapshot checkpoint",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::All {
+                needle: "  .baseRefOid == $base_oid and\n",
+                replacement: "  .baseRefOid != $base_oid and\n",
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                    r#"PR_IDENTITY="$(gh pr view"#,
+                    r#"--arg base_oid "$BASE_OID""#,
+                    ".baseRefOid == $base_oid",
+                    "SNAPSHOT_RESULT=",
+                ],
+                "exact BASE_OID check before snapshot",
+                ".baseRefOid == $base_oid",
+            ),
+        },
+        R55Mutation {
+            name: "BASE_OID after-required-checks checkpoint",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+                replacement: r#"test "$CURRENT_BASE_OID" != "$BASE_OID""#,
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"gh pr checks "$PR_NUMBER" --required --watch"#,
+                    r#"REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)""#,
+                    r#"jq -e 'length > 0 and all(.state == "SUCCESS")'"#,
+                    r#"CURRENT_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)""#,
+                    r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+                    "EVIDENCE_GITHUB_CI_RESULT=",
+                ],
+                "exact BASE_OID check after required checks",
+                r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+            ),
+        },
+        R55Mutation {
+            name: "BASE_OID immediately-before-merge checkpoint",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                replacement: r#"test "$IMMEDIATE_BASE_OID" != "$BASE_OID""#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            "IMMEDIATE_BASE_OID=",
+                            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                            "gh pr merge",
+                        ],
+                        "exact BASE_OID check immediately before merge",
+                    ),
+                    missing: r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            "IMMEDIATE_BASE_OID=",
+                            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                            "gh pr merge",
+                            "MERGE_COMMIT=",
+                            "${MERGE_COMMIT}^{tree}",
+                        ],
+                        "post-merge tree comparison must follow the preventive pre-merge guard",
+                    ),
+                    missing: r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "quickstart base-movement restart",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "branch and restarts validation, selected-roster verification, snapshot creation, and\ncandidate binding, then reruns the required checks in the same Track A order",
+                replacement: "branch and restarts validation, selected-roster verification, snapshot creation, and\ncandidate review, then reruns the required checks in the same Track A order",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "branch and restarts validation, selected-roster verification, snapshot creation, and candidate binding, then reruns the required checks in the same Track A order",
+                "base movement restart",
+            ),
+        },
+        R55Mutation {
+            name: "plan base-movement restart",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "base move requires the operator to update the integration branch and\nrestart validation, selected-roster verification, snapshot creation, binding, and required\nchecks in Track A order",
+                replacement: "base move requires the operator to update the integration branch and\nrestart validation, selected-roster verification, snapshot review, binding, and required\nchecks in Track A order",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "base move requires the operator to update the integration branch and restart validation, selected-roster verification, snapshot creation, binding, and required checks in Track A order",
+                "plan base movement restart",
+            ),
+        },
+        R55Mutation {
+            name: "tasks base-movement restart",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "On any base change, the operator updates the integration\nbranch and restarts validation, selected-roster verification, snapshot creation, binding,\nand required checks in the existing Track A order",
+                replacement: "On any base change, the operator updates the integration\nbranch and restarts validation, selected-roster verification, snapshot review, binding,\nand required checks in the existing Track A order",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "On any base change, the operator updates the integration branch and restarts validation, selected-roster verification, snapshot creation, binding, and required checks in the existing Track A order",
+                "task base movement restart",
+            ),
+        },
+        R55Mutation {
+            name: "quickstart post-merge classification",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "post-merge tree comparison is defense in depth, not the guard",
+                replacement: "post-merge tree comparison is the guard",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "post-merge tree comparison is defense in depth, not the guard",
+                "post-merge comparison is not the preventive guard",
+            ),
+        },
+        R55Mutation {
+            name: "plan post-merge classification",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "post-merge tree comparison is defense in depth only",
+                replacement: "post-merge tree comparison is the guard",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "post-merge tree comparison is defense in depth only",
+                "plan post-merge comparison is not the preventive guard",
+            ),
+        },
+        R55Mutation {
+            name: "tasks post-merge classification",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "A head-only match and a post-merge\ntree comparison are insufficient",
+                replacement: "A head-only match and a post-merge\ntree comparison are sufficient",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "A head-only match and a post-merge tree comparison are insufficient",
+                "task post-merge comparison is not the preventive guard",
+            ),
+        },
+        R55Mutation {
+            name: "plan post-merge substitution prohibition",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "No post-merge check substitutes",
+                replacement: "A post-merge check substitutes",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "No post-merge check substitutes",
+                "post-merge check cannot substitute",
+            ),
+        },
+        R55Mutation {
+            name: "post-merge tree comparison ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "MERGE_COMMIT=",
+                replacement: "MERGE_COMMIT_BEFORE=",
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    "IMMEDIATE_BASE_OID=",
+                    r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                    "gh pr merge",
+                    "MERGE_COMMIT=",
+                    "${MERGE_COMMIT}^{tree}",
+                ],
+                "post-merge tree comparison must follow the preventive pre-merge guard",
+                "MERGE_COMMIT=",
+            ),
+        },
     ];
 
-    for (name, path, needle, replacement, expected_finding) in mutations {
-        let mutated = r55_mutate_once(&documents, path, needle, replacement);
-        let findings = validate_r55_contract(&mutated);
-        assert!(
-            findings
+    let mutation_requirements: std::collections::BTreeSet<_> = mutations
+        .iter()
+        .flat_map(|mutation| {
+            mutation
+                .expected
+                .diagnostics
                 .iter()
-                .any(|finding| finding.contains(expected_finding)),
-            "{name} mutation must be rejected with {expected_finding:?}; findings:\n{}",
+                .map(|expected| expected.requirement.clone())
+        })
+        .collect();
+    assert_eq!(
+        requirements.len(),
+        mutation_requirements.len(),
+        "R55 mutation table must cover each validation requirement exactly once in the \
+         expected-diagnostic inventory"
+    );
+    assert_eq!(
+        mutation_requirements, requirements,
+        "R55 mutation table is out of sync with validate_r55_contract; every validation \
+         requirement needs one exact mutation (missing/extra entries are shown)"
+    );
+
+    for mutation in &mutations {
+        let mutated = match &mutation.edit {
+            R55MutationEdit::Once {
+                needle,
+                replacement,
+            } => r55_mutate_once(&documents, mutation.path, needle, replacement),
+            R55MutationEdit::All {
+                needle,
+                replacement,
+            } => r55_mutate_all(&documents, mutation.path, needle, replacement),
+            R55MutationEdit::Forms { edits } => r55_mutate_forms(&documents, mutation.path, edits),
+        };
+        let findings = validate_r55_contract(&mutated);
+        let expected: Vec<_> = mutation
+            .expected
+            .diagnostics
+            .iter()
+            .map(R55ExpectedDiagnostic::render)
+            .collect();
+        assert_eq!(
+            findings,
+            expected.clone(),
+            "{} mutation must yield exactly {expected:?}; findings:\n{}",
+            mutation.name,
             findings.join("\n")
         );
     }
