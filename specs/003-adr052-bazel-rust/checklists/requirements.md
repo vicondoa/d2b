@@ -39,6 +39,17 @@
   real-libshpool selection.
 - [x] Generic main Clippy and tests have the exact ADR 0054 exclusion sets.
 - [x] Broker contexts retain serial execution and distinct target dirs.
+- [x] API fingerprint and changed-scope package selection derive manifest paths
+  and Cargo package names from locked offline root-workspace membership, with
+  explicit independent-workspace and generated `packages/policy-inputs`
+  classifications and an unknown-entry refusal.
+- [x] A closed task-owned census covers every supported Cargo build call site
+  affected by workspace consolidation across static, performance, hardware,
+  distro, release, generic, broker, guest, and Nix paths, with locked exact
+  generic or dedicated selectors and no premature runtime behavior change.
+- [x] Release CI installs and activates `packages/rust-toolchain.toml` before
+  rust-cache, asserts both `rustc` and `cargo` versions, and uses the exact
+  locked six-row release matrix.
 - [x] All three Bazel broker suites require `tags = ["exclusive"]`, no overlap
   with any test, a tag-removal mutation, and twenty runs per context.
 - [x] Broker and guest remain dedicated Nix derivations.

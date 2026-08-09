@@ -18,6 +18,50 @@ input, or a first-party target source.
 No synthetic splice manifest, generated standalone product workspace, or
 forwarding lock may be created.
 
+## Authoritative workspace membership and path classification
+
+Product crate discovery runs exactly:
+
+```text
+cargo metadata --locked --offline --no-deps --format-version 1 \
+  --manifest-path packages/Cargo.toml
+```
+
+The authoritative product set is the metadata `workspace_members` set joined
+to `packages[].id`. Each joined row supplies the canonical repository-relative
+`manifest_path` and Cargo package `name`. A missing member row, duplicate ID,
+duplicate manifest, duplicate package name, non-file manifest, symlink,
+manifest outside `packages/`, or empty set refuses. A top-level directory name
+is never a package selector.
+
+After T006, broker and guest are ordinary joined product rows. The API input
+fingerprint enumerates the joined member manifests and their governed
+`build.rs` and `src/**/*.rs` inputs; it neither scans arbitrary top-level
+directories nor excludes broker or guest by path name. Changed-scope Clippy
+maps a changed product path through the joined manifest roots and uses the
+joined package name for `-p`. A root manifest, root lock, pinned toolchain, or
+root Cargo configuration change selects the exact generic and dedicated
+contexts defined below. Deleted paths are attributed to their containing
+joined manifest root rather than parsed as a directory name.
+
+Paths below `packages/` have this closed classification:
+
+| Class | Exact roots or entries | Selection |
+| --- | --- | --- |
+| Product member | Rows joined from root metadata `workspace_members` | Use the joined manifest path and package name. |
+| Independent workspace | `packages/d2b-wlproxy-spike/`, `packages/d2b-core/fuzz/`, `packages/d2b-bus/tests/ui/public-api-mutations/`, `packages/d2b-controller-toolkit/tests/ui/external-seals/`, `packages/d2b-resource-api/tests/ui/external-seals/` | Never emit a root-workspace `-p` selector. Their owning standalone or compile-fixture gate remains unchanged. The deepest matching independent root wins over a containing product root. |
+| Generated non-crate | `packages/policy-inputs/` | Never require `Cargo.toml`, enter the API fingerprint, or emit a Cargo selector. Drift and package-policy checks own it. |
+| Workspace administration | `packages/Cargo.toml`, `packages/Cargo.lock`, `packages/Cargo.guest.lock`, `packages/deny.toml`, `packages/rust-toolchain.toml`, `packages/.cargo/`, `packages/.config/` | Select the exact root-wide contexts assigned to that input; these are not crates. |
+| Ignored output | `packages/target/` and the declared gate-owned target directories | Never enter source discovery or changed-scope selection. |
+
+`tests/tools/no-bash-ast-walker/` remains the separate walker authority from
+the table above. An entry below `packages/` that is neither a joined product
+path nor in the closed classification refuses instead of being guessed,
+ignored, or converted into `-p <directory>`. Fixtures cover an independent
+workspace, the generated policy-input tree, an unknown directory, broker and
+guest membership after T006, and a package whose directory and Cargo package
+name differ.
+
 ## Selected Cargo contexts
 
 Run after entering `nix develop` at repository root and `cd packages`.
@@ -64,6 +108,82 @@ packages/d2b-priv-broker/target-fakebackends
 Guest dependency-resolving commands and companions use
 `packages/d2b-guest-shell-runner/target`. The gate sets each directory through
 an explicit `CARGO_TARGET_DIR`; none is a Cargo workspace root.
+
+## Closed Cargo build call-site census
+
+This is the exact set of supported Cargo build call sites whose resolution
+shape changes when T006 consolidates broker and guest. Every direct Cargo
+command carries `--locked`. Nix `buildRustPackage` rows are locked by their
+declared `cargoLock` and are tested against the equivalent frozen build argv.
+No row may rely on the current directory, an implicit package, an implicit
+bin, or a workspace-wide feature union.
+
+The exact reusable selections are:
+
+```text
+generic product:
+  --locked --manifest-path packages/Cargo.toml --workspace
+  --exclude d2b-priv-broker --exclude d2b-guest-shell-runner
+
+broker production:
+  --locked --manifest-path packages/Cargo.toml
+  --package d2b-priv-broker --bin d2b-priv-broker
+  --no-default-features
+
+broker layer1:
+  --locked --manifest-path packages/Cargo.toml
+  --package d2b-priv-broker --bin d2b-priv-broker
+  --no-default-features --features layer1-bootstrap
+
+guest real-libshpool:
+  --locked --manifest-path packages/Cargo.toml
+  --package d2b-guest-shell-runner --bin d2b-guest-shell-runner
+  --no-default-features --features real-libshpool
+```
+
+An exact product package build adds literal
+`--package <package> --bin <bin>` to the root manifest and `--locked`.
+Ordinary product rows retain their declared default features and add no
+feature. The broker and guest rows above are the only dedicated feature
+shapes. The generic selector has exactly the two exclusions above.
+
+| Class | Call site | Exact post-T006 selection | Test task | Implementation task |
+| --- | --- | --- | --- | --- |
+| Rust fixture helper | `tests/test-rust.sh` CLI-contract daemon build | Product package `d2bd`, bin `d2bd`, declared defaults, no extra feature | T012 | T013 |
+| Static prebuild | `tests/static.sh` product prebuild | Product packages/bins `d2b/d2b`, `d2bd/d2bd`, and `xtask/xtask`; no workspace selector | T012 | T013 |
+| Static broker prebuild | `tests/static.sh` broker prebuild | Broker layer1 | T012 | T013 |
+| CLI lazy builds | `tests/cli-rust-native-common.sh` | Separate product package/bin rows for `d2b/d2b` and `d2bd/d2bd` | T012 | T013 |
+| Stub smoke | `tests/tools/stub-no-socket.sh` | Separate product package/bin rows for `d2b/d2b` and `d2bd/d2bd` | T012 | T013 |
+| Drift helper | `tests/unit/gates/drift-check.sh` | Product package `xtask`, bin `xtask` | T012 | T013 |
+| Heavy-gate helper | `tests/tools/heavy-gate-reexec.sh` | Product package `xtask`, bin `xtask` | T012 | T013 |
+| Performance | `tests/unit/gates/performance-budgets.sh` | Broker production | T012 | T013 |
+| Hardware | `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh` | Generic product, then broker production | T012 | T013 |
+| Distro | `tests/integration/distro-matrix/ubuntu-2404-tier1.sh` | Release-profile generic product, then release-profile broker production | T012 | T013 |
+| Nix generic build | `flake.nix` `rust-build` | Frozen generic product | T018 | T019 |
+| Nix generic test build | `flake.nix` `rust-tests` build phase | Frozen generic product; its test selector keeps the separate exact contract-test exclusion | T018 | T019 |
+| Nix generic Clippy build | `flake.nix` `rust-clippy` | Frozen generic product for the build hook and exact generic product exclusions for Clippy | T018 | T019 |
+| Nix broker | `nixos-modules/host-broker.nix` | Frozen broker production from the root source and root lock | T018 | T019 |
+| Nix guest | `flake.nix` `guestShellRunnerStatic` | Frozen guest real-libshpool from the root source and root lock | T018 | T019 |
+| Release | `.github/workflows/release-host-binaries.yml` | The six exact release rows below | T021 | T023 |
+
+T012's regression owns the exact non-release shell path set above and fails on
+a missing or extra call site, so a new direct `cargo build` under supported
+tests cannot bypass classification. T018 independently enforces the Nix rows,
+and T021 owns the release-workflow census and ordering. Selector tests plant
+unlocked, implicit package/bin, wrong manifest, generic-includes-broker,
+generic-includes-guest, default-feature, missing-feature, and extra-feature
+variants.
+
+The already package-selected product builders in `flake.nix`,
+`nixos-modules/host-daemon.nix`, `nixos-modules/host-activation.nix`,
+`nixos-modules/resource-compiler.nix`,
+`nixos-modules/unsafe-local-helper.nix`, `nixos-modules/processes-json.nix`,
+and `nixos-modules/store.nix` retain their root-lock package selections.
+Their resolution authority does not change, so T019 verifies them unchanged
+instead of broadening this correction into runtime packaging behavior.
+Proofs, labs, examples, documentation snippets, generated evidence, and
+standalone workspaces outside the product and walker authorities are outside
+this migration census and keep their own manifests and locks.
 
 ## Exact selected-context oracle
 
@@ -835,15 +955,39 @@ before and after the refresh, not by reading a diff summary.
 coverage/query goldens are integrator-generated only. Slices may create scratch
 previews but never commit those outputs.
 
-The spec003w0 release workflow uses `packages/Cargo.toml`, `--locked`, explicit
-package/bin/default-feature selectors, and copies every product binary from
-`packages/target/release`. Its Rust cache declares `packages -> target` as the
-only workspace mapping plus the explicit broker and guest gate target
+The spec003w0 release build step is ordered exactly:
+
+1. checkout;
+2. read the channel from `packages/rust-toolchain.toml`, install it, activate
+   it for later workflow steps, and assert both `rustc --version` and
+   `cargo --version` report that channel;
+3. initialize `Swatinem/rust-cache`;
+4. install non-Rust host dependencies;
+5. run the six locked release builds.
+
+The cache action may not run before toolchain activation or version
+assertions. The workflow uses `packages/Cargo.toml`, copies every product
+binary from `packages/target/release`, and declares `packages -> target` as
+the only workspace mapping plus the explicit broker and guest gate target
 directories. `tests/unit/gates/flake-check-matrix-sync.sh` and
 `tests/unit/gates/ci-rust-cache-sync.sh` are updated to enforce the new shape;
 neither is deleted or retired.
 
-The broker release command and copy source are exact:
+The exact release matrix is:
+
+| Package | Bin | Default features | Features |
+| --- | --- | --- | --- |
+| `d2bd` | `d2bd` | declared defaults | none |
+| `d2b` | `d2b` | declared defaults | none |
+| `d2b-wayland-proxy` | `d2b-wayland-proxy` | declared defaults | none |
+| `d2b-unsafe-local-helper` | `d2b-unsafe-local-helper` | declared defaults | none |
+| `d2b-host` | `d2b-activation-helper` | declared defaults | none |
+| `d2b-priv-broker` | `d2b-priv-broker` | disabled | none |
+
+Each row expands to `cargo build --release --locked --manifest-path
+packages/Cargo.toml --package <package> --bin <bin>`. The broker row alone
+adds `--no-default-features`; no row adds a feature. The broker command and
+copy source are therefore exact:
 
 ```text
 cargo build --release --locked --manifest-path packages/Cargo.toml \
@@ -915,6 +1059,21 @@ module-lock-refreshed-before-hub
 untouched-hub-input-changed
 pinned-inventory-lock-mutation
 pinned-inventory-nested-lock-input
+workspace-member-missing
+workspace-manifest-duplicate
+independent-workspace-root-selection
+generated-non-crate-selection
+unclassified-package-root
+directory-package-name-substitution
+cargo-build-callsite-missing
+cargo-build-callsite-extra
+cargo-build-unlocked
+cargo-build-implicit-package-bin
+release-cache-before-toolchain
+release-ambient-toolchain
+release-rustc-version-mismatch
+release-cargo-version-mismatch
+release-selector-drift
 ```
 
 Each plant must fail at its own predicate and exact diagnostic. Reaching a

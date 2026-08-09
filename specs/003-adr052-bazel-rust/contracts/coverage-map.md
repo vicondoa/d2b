@@ -28,6 +28,25 @@ rust-audit-guest
 
 Fixture-backed IDs do not appear.
 
+## Foundation migration coverage
+
+Workspace consolidation does not add an execution-manifest ID or a
+`tests/golden/bazel-rust-coverage.json` row. Before any Bazel carrier is
+generated, spec003w0 covers these supporting selection surfaces:
+
+| Surface | Contract authority | Test task | Implementation task | Mechanical evidence |
+| --- | --- | --- | --- | --- |
+| Product crate and package selection | `workspace-and-tool-pinning.md` authoritative workspace membership and path classification | T012 | T013 | Locked offline root metadata fixture joins `workspace_members` to manifest path and package name; independent-workspace, generated `packages/policy-inputs`, mismatched directory/package name, and unknown-entry plants. |
+| Supported shell Cargo builds | `workspace-and-tool-pinning.md` closed Cargo build call-site census | T012 | T013 | Exact path census plus locked package/bin/default-feature/feature or generic-exclusion mutations in `tests/unit/meta/ci-runner-regression.py`. |
+| Generic and dedicated Nix builds | The Nix rows of the same census | T018 | T019 | `bazel-package-policy.nix` and `policy_bazel_nix.rs` assert frozen root-lock generic exclusions and dedicated broker/guest selections while unchanged package-selected runtime builders remain unchanged. |
+| Release build and cache identity | The release order and six-row matrix in the same contract | T021 | T023 | Retained fail-closed workflow gates and CI regression fixtures reject ambient or late toolchain activation, wrong `rustc`/`cargo` version assertions, cache-before-toolchain, unlocked builds, and selector drift. |
+| API and Bazel generated snapshots | Joined product membership after T006 | T027 | T027 | `make api-surface-pin`, `gen-bazel --check`, the API checker, and clean-diff assertions consume the corrected member set. |
+
+This table is exact. It supplements the eighteen execution surfaces rather
+than claiming that a build helper is a new test carrier. T012, T018, and T021
+must all be green before T027 can commit membership-derived API and Bazel
+outputs.
+
 ## Required row
 
 Each row contains:
@@ -342,6 +361,9 @@ their current surface semantics and forward to these exact carrier subsets:
 | Query result is current | `test-drift` |
 | Exact census, topology, native target, cfg, feature, and fragment list | Coverage test |
 | Hub and lock containment | Selected-context query checks |
+| API and changed-scope crate selection comes only from authoritative product membership | Locked offline metadata join plus independent-workspace, generated non-crate, directory/package-name mismatch, and unknown-entry fixtures |
+| Every T006-affected supported Cargo build call site is classified and exact | Closed path census plus locked selector mutations split across T012/T013, T018/T019, and T021/T023 |
+| Release cache identity uses the pinned compiler | Workflow-order regression proves toolchain install, activation, and `rustc`/`cargo` assertions precede rust-cache |
 | Generated BUILD and policy output current | `test-drift` |
 | Broker suite keeps `tags = ["exclusive"]` and cannot overlap any test | Coverage test plus scheduling mutation |
 | Every governed Bazel Rust action is no-network; mandatory socket tests remain exact same-commit Cargo compatibility carriers; every fetch is outside governed actions and pinned/offline | Exact Nix Bazel source/patch/policy/output identity and startup probe, configured-target plus `aquery` action-kind and strategy inventories, patch-removal/filter-load/setup-before-payload plants, inherited socket/ring/SQPOLL/fixed-socket plants, all eight syscall plants, external-egress/live-index plants, compatibility census, and `test-policy` |
@@ -373,7 +395,15 @@ claimed carriers; absent labels; unclaimed Rust tests; missing topology or
 census; stale query or BUILD output; missing fragment; empty scan or companion
 sets; mismatched configured native target dependencies, cfgs, or features;
 wrong product or walker containment; cross-context edges; unrelated
-first-party siblings; any first-party target represented as an external
+first-party siblings; a top-level-directory-derived package selector, a
+product member missing from the metadata join, an independent workspace
+selected through the product root, a generated policy-input directory treated
+as a crate, an unknown package-root entry, a missing or extra supported Cargo
+build call site, an unlocked or implicit package/bin build, a generic build
+that includes broker or guest, a dedicated build with the wrong
+default-feature or feature set, release cache initialization before pinned
+toolchain activation and version assertions, a release compiler or Cargo
+version mismatch; any first-party target represented as an external
 generated crate; a broker tag removal or overlap; a missing/wrong patched
 Bazel output, source/patch/policy/output/capability mismatch, failed startup
 probe, patch removal, stable/nightly/build-script/setup/doctest action-kind
