@@ -167,20 +167,103 @@ This procedure applies only to a wave whose binding request has not been consume
 `adr046w5` MUST NOT execute any command in this subsection.
 
 ```bash
-X="cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave"
-SELECTION="<candidate-bound lifecycle selection path>"
+set -eu
 
-$X snapshot --program ADR046 --wave W2 --repo d2b=$PWD \
-    --base d2b=<base-oid> --pull-request d2b=<number>:<head-ref>
-$X validate-import   # import local/host validator results for this exact snapshot
-$X panel-request --selection "$SELECTION"
-                     # stores the exact lifecycle-selected roster and profiles
-$X panel-attest      # validates one current versioned record per selected role
-                     # against the selection, candidate, model, and effort
-$X seal              # requires every selected lifecycle seat unanimous + every wave item Merged
-$X merge-target --seal <state>/W2/<candidate>/seal.json --target ./merge-target.json --repo d2b=$PWD
-$X merge-eligibility
+CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
+REPOSITORY="github.com/owner/repository"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
+BASE_OID="$(git merge-base v3 HEAD)"
+HEAD_REF="$(git symbolic-ref --short HEAD)"
+PR_NUMBER="$(gh pr view --json number --jq .number)"
+PROGRAM="ADR046"
+WAVE="W2"
+
+: "${SELECTION:?set SELECTION to the candidate-bound lifecycle selection JSON}"
+: "${RECORDS_DIR:?set RECORDS_DIR to the exact selected-roster record directory}"
+: "${MERGE_TARGET_INPUT:?set MERGE_TARGET_INPUT to the current merge-target JSON}"
+
+artifact_ref() {
+  jq -er 'select(.status == "ok") | .artifact'
+}
+
+X=(cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave)
+
+SNAPSHOT_RESULT="$("${X[@]}" snapshot \
+  --program "$PROGRAM" \
+  --wave "$WAVE" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --base "$REPOSITORY=$BASE_OID" \
+  --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF" \
+  --state-dir "$STATE_DIR")"
+SNAPSHOT="$(printf '%s\n' "$SNAPSHOT_RESULT" | artifact_ref)"
+
+EVIDENCE_GITHUB_CI_RESULT="$("${X[@]}" validate-import \
+  --snapshot "$SNAPSHOT" \
+  --validation required-github-ci \
+  --result passed \
+  --lane github-ci \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+EVIDENCE_GITHUB_CI="$(printf '%s\n' "$EVIDENCE_GITHUB_CI_RESULT" | artifact_ref)"
+
+EVIDENCE_LOCAL_HOST_RESULT="$("${X[@]}" validate-import \
+  --snapshot "$SNAPSHOT" \
+  --validation required-local-host \
+  --result passed \
+  --lane local-host \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+EVIDENCE_LOCAL_HOST="$(printf '%s\n' "$EVIDENCE_LOCAL_HOST_RESULT" | artifact_ref)"
+
+PANEL_REQUEST_RESULT="$("${X[@]}" panel-request \
+  --snapshot "$SNAPSHOT" \
+  --selection "$SELECTION" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+PANEL_REQUEST="$(printf '%s\n' "$PANEL_REQUEST_RESULT" | artifact_ref)"
+
+PANEL_ATTEST_RESULT="$("${X[@]}" panel-attest \
+  --snapshot "$SNAPSHOT" \
+  --records "$RECORDS_DIR" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+PANEL_RECORDS="$(printf '%s\n' "$PANEL_ATTEST_RESULT" | artifact_ref)"
+
+SEAL_RESULT="$("${X[@]}" seal \
+  --snapshot "$SNAPSHOT" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+SEAL="$(printf '%s\n' "$SEAL_RESULT" | artifact_ref)"
+
+MERGE_TARGET_RESULT="$("${X[@]}" merge-target \
+  --seal "$SEAL" \
+  --target "$MERGE_TARGET_INPUT" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+MERGE_TARGET="$(printf '%s\n' "$MERGE_TARGET_RESULT" | artifact_ref)"
+
+MERGE_ELIGIBILITY_RESULT="$("${X[@]}" merge-eligibility \
+  --seal "$SEAL" \
+  --target "$MERGE_TARGET" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+MERGE_ELIGIBILITY="$(printf '%s\n' "$MERGE_ELIGIBILITY_RESULT" | artifact_ref)"
+
+printf '%s\n' \
+  "$SNAPSHOT" \
+  "$EVIDENCE_GITHUB_CI" \
+  "$EVIDENCE_LOCAL_HOST" \
+  "$PANEL_REQUEST" \
+  "$PANEL_RECORDS" \
+  "$SEAL" \
+  "$MERGE_TARGET" \
+  "$MERGE_ELIGIBILITY"
 ```
+
+`validate-import` writes candidate-addressed evidence artifacts; later `seal` discovers them
+through `--snapshot`, so the delivery CLI has no separate `--evidence` option. Every stage
+above still captures its emitted artifact reference and repeats the same valid repository
+mapping.
 
 `history-proof` is **not** a separate subcommand; it runs inside `merge-eligibility`.
 
@@ -371,24 +454,25 @@ case "$D2B_DEPLOY_OUT" in
     fail 'target deployment store object resolution returned more than one path'
     ;;
 esac
-D2B_DEPLOY_EXE="${D2B_DEPLOY_OUT}/bin/d2b-host-generation-deploy"
-[ -x "$D2B_DEPLOY_EXE" ] ||
-  fail 'target deployment store object has no deployment executable'
-D2B_APPLY_EXE="$(readlink -e \
-  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
-  fail 'installed broker-managed apply executable cannot be resolved'
-case "$D2B_APPLY_EXE" in
-  /nix/store/*/bin/d2b-host-generation-deploy) ;;
-  *) fail 'installed broker-managed apply executable is not an immutable store object' ;;
+D2B_TARGET_CLI="${D2B_DEPLOY_OUT}/bin/d2b"
+[ -x "$D2B_TARGET_CLI" ] ||
+  fail 'target deployment store object has no d2b executable'
+D2B_INSTALLED_CLI="$(readlink -e \
+  /run/current-system/sw/bin/d2b 2>/dev/null)" ||
+  fail 'installed broker-managed d2b executable cannot be resolved'
+case "$D2B_INSTALLED_CLI" in
+  /nix/store/*/bin/d2b) ;;
+  *) fail 'installed broker-managed d2b executable is not an immutable store object' ;;
 esac
 
-"$D2B_DEPLOY_EXE" --authorize-handoff ||
+"$D2B_TARGET_CLI" host-generation authorize-handoff ||
   fail 'public-socket administrator authorization failed'
-sudo -- "$D2B_APPLY_EXE" --apply-authorized-handoff ||
+sudo -- "$D2B_INSTALLED_CLI" host-generation apply-authorized-handoff ||
   fail 'authorized host generation handoff failed'
 ```
 
-`--apply-authorized-handoff` intentionally has no intent selector and no authority token.
+`d2b host-generation apply-authorized-handoff` intentionally has no intent selector and no
+authority token.
 Every authorization/apply pair in this quickstart relies on one durable nonterminal intent
 per source generation. Authorization takes the broker coordinator lock and refuses while an
 authorized, claimed, mutating, recovery-pending, or transfer-pending intent exists. Apply
@@ -404,7 +488,7 @@ with no pending intent refuses and never reapplies.
 Inspect the sole current-source handoff without an intent selector:
 
 ```bash
-"$D2B_DEPLOY_EXE" --inspect-authorized-handoff
+"$D2B_TARGET_CLI" host-generation inspect-authorized-handoff
 ```
 
 The planned human result is the exact five-line
@@ -436,7 +520,7 @@ complete matrix with only its pointer absent is `repairable-absence`; inspect ex
 selector-free unprivileged repair command:
 
 ```bash
-"$D2B_DEPLOY_EXE" --repair-authorized-handoff
+"$D2B_TARGET_CLI" host-generation repair-authorized-handoff
 ```
 
 It uses the existing public socket and broker coordinator. It may durably repair only a
@@ -469,7 +553,7 @@ mismatched, exit `4` identifies its bounded closed member and failure class with
 2. Submit that artifact through the existing public socket as an unprivileged local Admin:
 
    ```bash
-   "$D2B_DEPLOY_EXE" --restore-immutable-audit-backup "$RESTORATION_ARTIFACT"
+   "$D2B_TARGET_CLI" host-generation restore-immutable-audit-backup "$RESTORATION_ARTIFACT"
    ```
 
    The command accepts exactly one path and optional `--json`; it opens the file once
@@ -537,8 +621,9 @@ plus the exact `source-handoff-v1` catalogue fingerprint, and the installed sour
 consumes it into one durably sealed nonfabricable handoff capability bound to the staged
 intent. Bare protocol 4 or a source-peer fingerprint mismatch refuses.
 It creates and retains the GC root and immutable identity for the exact target store object,
-and separately pins the canonical identity and digest of `D2B_APPLY_EXE` from the installed
-source generation. The caller-flake `D2B_DEPLOY_EXE` is executed only while unprivileged.
+and separately pins the canonical identity and digest of `D2B_INSTALLED_CLI` from the
+installed source generation. The caller-flake `D2B_TARGET_CLI` is executed only while
+unprivileged.
 The privileged command receives no flake URI, installable, reference path, target executable,
 command, or argv to reevaluate; it can only ask the broker to resume the exact pinned intent.
 Substituting either store executable, replacing the GC root, changing an installed symlink
@@ -579,19 +664,17 @@ fail() { printf '%s\n' "$1" >&2; exit 2; }
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
-D2B_APPLY_EXE="$(readlink -e \
-  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
-  fail 'installed deployment executable cannot be resolved'
-case "$D2B_APPLY_EXE" in
-  /nix/store/*/bin/d2b-host-generation-deploy) ;;
-  *) fail 'installed deployment executable is not an immutable store object' ;;
+D2B_INSTALLED_CLI="$(readlink -e \
+  /run/current-system/sw/bin/d2b 2>/dev/null)" ||
+  fail 'installed d2b executable cannot be resolved'
+case "$D2B_INSTALLED_CLI" in
+  /nix/store/*/bin/d2b) ;;
+  *) fail 'installed d2b executable is not an immutable store object' ;;
 esac
-"$D2B_APPLY_EXE" \
-  --from-reference /etc/d2b/host-generation-rebuild-ref \
-  --authorize-handoff ||
+"$D2B_INSTALLED_CLI" host-generation authorize-handoff \
+  --from-reference /etc/d2b/host-generation-rebuild-ref ||
   fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
-sudo -- "$D2B_APPLY_EXE" \
-  --apply-authorized-handoff ||
+sudo -- "$D2B_INSTALLED_CLI" host-generation apply-authorized-handoff ||
   fail 'authorized stable-reference handoff failed'
 
 # Every exact acceptance resource must reach its owned effect and ready state
@@ -723,12 +806,12 @@ esac
   fail 'D2B_ROLLBACK_CONFIGURATION exceeds 64 bytes'
 [ "$(id -u)" -ne 0 ] ||
   fail 'run authorization as the unprivileged d2b administrator, not root'
-D2B_APPLY_EXE="$(readlink -e \
-  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
-  fail 'installed broker-managed apply executable cannot be resolved'
-case "$D2B_APPLY_EXE" in
-  /nix/store/*/bin/d2b-host-generation-deploy) ;;
-  *) fail 'installed broker-managed apply executable is not an immutable store object' ;;
+D2B_INSTALLED_CLI="$(readlink -e \
+  /run/current-system/sw/bin/d2b 2>/dev/null)" ||
+  fail 'installed broker-managed d2b executable cannot be resolved'
+case "$D2B_INSTALLED_CLI" in
+  /nix/store/*/bin/d2b) ;;
+  *) fail 'installed broker-managed d2b executable is not an immutable store object' ;;
 esac
 
 D2B_ROLLBACK_REF="${D2B_ROLLBACK_FLAKE_REF}#${D2B_ROLLBACK_CONFIGURATION}"
@@ -758,13 +841,13 @@ case "$D2B_ROLLBACK_OUT" in
     fail 'prior deployment store object resolution returned more than one path'
     ;;
 esac
-D2B_ROLLBACK_EXE="${D2B_ROLLBACK_OUT}/bin/d2b-host-generation-deploy"
-[ -x "$D2B_ROLLBACK_EXE" ] ||
-  fail 'prior deployment store object has no deployment executable'
+D2B_ROLLBACK_CLI="${D2B_ROLLBACK_OUT}/bin/d2b"
+[ -x "$D2B_ROLLBACK_CLI" ] ||
+  fail 'prior deployment store object has no d2b executable'
 
-"$D2B_ROLLBACK_EXE" --authorize-handoff ||
+"$D2B_ROLLBACK_CLI" host-generation authorize-handoff ||
   fail 'public-socket rollback authorization failed'
-sudo -- "$D2B_APPLY_EXE" --apply-authorized-handoff ||
+sudo -- "$D2B_INSTALLED_CLI" host-generation apply-authorized-handoff ||
   fail 'authorized rollback handoff failed'
 ```
 
@@ -795,19 +878,17 @@ fail() { printf '%s\n' "$1" >&2; exit 2; }
   printf '%s\n' 'run authorization as the unprivileged d2b administrator, not root' >&2
   exit 2
 }
-D2B_APPLY_EXE="$(readlink -e \
-  /run/current-system/sw/bin/d2b-host-generation-deploy 2>/dev/null)" ||
-  fail 'installed deployment executable cannot be resolved'
-case "$D2B_APPLY_EXE" in
-  /nix/store/*/bin/d2b-host-generation-deploy) ;;
-  *) fail 'installed deployment executable is not an immutable store object' ;;
+D2B_INSTALLED_CLI="$(readlink -e \
+  /run/current-system/sw/bin/d2b 2>/dev/null)" ||
+  fail 'installed d2b executable cannot be resolved'
+case "$D2B_INSTALLED_CLI" in
+  /nix/store/*/bin/d2b) ;;
+  *) fail 'installed d2b executable is not an immutable store object' ;;
 esac
-"$D2B_APPLY_EXE" \
-  --from-reference /etc/d2b/host-generation-rebuild-ref \
-  --authorize-handoff ||
+"$D2B_INSTALLED_CLI" host-generation authorize-handoff \
+  --from-reference /etc/d2b/host-generation-rebuild-ref ||
   fail 'stable reference validation or public-socket authorization failed; no privileged command was run'
-sudo -- "$D2B_APPLY_EXE" \
-  --apply-authorized-handoff ||
+sudo -- "$D2B_INSTALLED_CLI" host-generation apply-authorized-handoff ||
   fail 'authorized stable-reference handoff failed'
 d2b resource list          # retired in dependency-safe order, cleanup visible, others intact
 
@@ -847,8 +928,11 @@ All six release-gate conditions, evaluated against the **final** candidate:
 3. The complete test matrix including manual hardware, live-host, and cloud tiers with
    recorded external evidence, plus the reset and cutover scenarios
 4. Unanimous selected-roster panel, seal, and merge-eligibility on the W8 snapshot
-5. A new `CHANGELOG.md` version header, summarized by version, with every wave and finding
-   marker stripped
+5. A new `CHANGELOG.md` 3.0.0 version header, matching release-binary and flake package
+   versions, with every wave and finding marker stripped; F8 contains either a complete
+   matching prebuilt manifest or explicit `version: null`/`system: "x86_64-linux"`/
+   empty-binaries source fallback,
+   and the publication workflow is manual-only
 6. Every prior wave's cleanup performed - no dangling worktrees or branches
 
 Plus this program's own additions:
@@ -859,7 +943,13 @@ Plus this program's own additions:
 # weezterm is excluded by a recorded negative surface-consumption determination
 ```
 
-**Expected**: every companion works, or the release holds (FR-039, SC-024).
+After T561 merges without publishing, T573 must compare merged `v3` commit and tree with the
+sealed F8 identities before dispatching publication for that exact commit. The workflow
+repeats version, manifest/fallback, artifact-name, embedded-version, and hash checks before
+creating the tag. A push to `v3`, a mismatched identity, or a post-tag manifest PR cannot
+publish or repair the immutable tag.
+
+**Expected**: every companion works and T573 passes, or the release holds (FR-039, SC-024).
 
 ---
 

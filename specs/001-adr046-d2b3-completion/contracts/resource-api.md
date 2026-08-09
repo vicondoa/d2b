@@ -46,7 +46,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-8 | Install and recover policy under `ZoneResourceRuntime`: consume one private-issuer, compiler/API-sealed, non-fabricable one-shot `PolicyBootstrapRead` for the first exact-revision envelope snapshot, then use authenticated Resource API reads/updates only; keep both stores policy-neutral | FR-067, FR-073 | W5 |
 | RA-9 | Register the production controller endpoint and admit its watch through ResourceService, ZoneBus, the production store, and controller fan-in | FR-068, FR-069 | W5 |
 | RA-10 | Persist every committed effect and cleanup intent before dispatch, replay/adopt it after restart, and complete cleanup only for the same UID and exact nonzero revision | FR-068, SC-031 | W5 |
-| RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, expose a typed durable `InspectOperation` method, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
+| RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, and expose typed durable `InspectOperation` keyed only by required `(Zone, operation_id)`. Permit the same opaque ID in different Zones, create no host-global index, require exact same-Zone replay binding, and reject malformed/future/expired UUIDv7 IDs before observation or mutation so pruning never makes an old ID new | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
 | RA-14 | Bind amended-plan reconciliation to one clean-base analysis and current selected-roster lifecycle, one `/d2b-spec-edit` batch that changes exactly T073-T218 plus T603 when every row is satisfied, one dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589. The editor receipt and Git history are the sole authority; T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Before T220 freezes F, install the hermetic exact-seven Wave 5 evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require those seven identifiers before T219 evaluates the accepted external disposition. `operator-nix-activation-cleanup` remains T604-owned W6 evidence imported only by T479. | FR-072, SC-034 | W5 |
@@ -120,9 +120,14 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   outcome, and update fields remain bounded and redacted. Every mutation response carries the
   composite, when pending, in additive protobuf `PendingAuditStatus`; `DeleteResponse` is not
   an exception. The ResourceService fingerprint changes, while Resource JSON versioning does
-  not. Same-ID observation/resumption first matches the original authoritative subject, Zone,
-  semantic request, target, verb, expected revision, and idempotency binding; mismatch denies,
-  and an exact retry never reapplies the mutation.
+  not.   Same-ID observation/resumption requires an explicit Zone and first matches the original
+  authoritative subject, semantic request, target, verb, expected revision, and idempotency
+  binding within that Zone; mismatch denies, and an exact retry never reapplies the mutation.
+  The same opaque ID in another Zone is an independent key. UUIDv7 issuance time plus the
+  fixed 30-day operation recovery retention bounds status retention. Malformed, future,
+  expired, overflowed, or
+  clock-discontinuous IDs deny before lookup or mutation; no host-global index exists and a
+  pruned ID never becomes reusable.
 - **Mutable revisions are not identity constants.** Store/Zone UUIDs are immutable open
   checks. Policy, configuration, and controller revisions are recovered values.
 
@@ -152,10 +157,13 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - Audit evidence proves the immutable authoritative row commits with each mutation and segment
   file/directory durability plus export completion precede ordinary success. Export-pending
   returns only the exact
-  protobuf-represented `ResourceStatus` composite above; same-ID retries with matching replay
-  bindings apply once and converge on one final result, cross-subject/Zone/request/restart
-  mismatches deny, different-ID retries retain normal revision/conflict behavior, status
-  remains visible across restart, multi-mutation replay yields one export per fixed digest
+  protobuf-represented `ResourceStatus`   composite above; same-ID retries with matching same-Zone replay
+  bindings apply once and converge on one final result, cross-subject/request/restart
+  mismatches deny, different-ID retries retain normal revision/conflict behavior, and
+  concurrent reuse of the same ID in two Zones creates two independent operations. Required
+  Zone inspection, response loss, restart, UUIDv7 expiry, clock discontinuity, and
+  post-prune reuse refusal are covered. Status remains visible across restart until expiry,
+  and multi-mutation replay yields one export per fixed digest
   plus ordinal, raw identifier/trace canaries never escape, fixed-digest and record-size
   constructor seals hold, configured segment and post-export journal retention limits hold,
   and prune/sync failure degrades health. `InspectOperation` traverses the typed durable

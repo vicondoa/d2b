@@ -38,13 +38,22 @@ owns migration guidance, DTO/schema and contract tests, reference and release tr
 that fragment. The implementation
 MUST NOT ship this surface under the accepted Version 1 contract.
 
-The replay handle is an exact 16-byte operation ID rendered as lowercase 32-hex. Every
+The replay handle is an exact 16-byte UUIDv7-layout operation ID rendered as lowercase
+32-hex without separators. It remains opaque to operators. Every
 generic and typed `create`, `update-spec`, and `delete` command accepts
 `--operation-id <OPAQUE_ID>`. If the flag is omitted, the CLI generates the ID client-side
 before opening the daemon transport and retains it through request encoding and response
 handling. Supplying the flag uses that value for both operation identity and idempotency
 binding; there is no separate public idempotency flag. The daemon never chooses the public
 ID, so loss of a response cannot lose the only inspection handle.
+
+Operation identity is exactly `(Zone, operation_id)`. The same ID is explicitly permitted as
+an independent operation in different Zones; no host-global reservation or lookup exists.
+UUIDv7 issuance time plus the fixed 30-day operation recovery retention defines checked
+`expiresAt`.
+Malformed, future, expired, overflowed, or clock-discontinuous IDs are denied before
+observation or mutation. Once expired, an operation record may be pruned, but the old ID
+always returns `operation-expired` and can never become a new mutation.
 
 The exact generic retry forms are:
 
@@ -62,9 +71,11 @@ Changing any binding while reusing the ID exits `76` with a typed
 The sole status command remains the accepted command:
 
 ```text
-d2b op inspect --operation-id <OPAQUE_ID> [--zone <ZONE>] [--watch] [--deadline <DURATION> | --no-deadline] [--human | --json]
+d2b --zone <ZONE> op inspect --operation-id <OPAQUE_ID> [--watch] [--deadline <DURATION> | --no-deadline] [--human | --json]
 ```
 
+Zone is required. A selector-free or empty-Zone inspection is invalid invocation exit `2`;
+the CLI never scans Zones or resolves ambiguity through a host-global index.
 `--watch` waits only for export completion or the request deadline; it never reapplies the
 mutation. It traverses the typed store, ResourceService, method-catalogue/router, daemon/client,
 and CLI path owned by T589, T592, T593, T595, and T599; an in-memory or CLI-synthesized status
@@ -79,7 +90,7 @@ closed:
 | `0` | Ordinary or stored final success | Stored final result returned |
 | `75` | Mutation committed; authoritative audit export remains pending | Operation remains committed-pending-audit |
 | `76` | Operation ID exists but replay binding differs | Not emitted |
-| `2` | Invalid ID or invocation | Invalid, unknown, or replay-binding-denied ID, rendered identically |
+| `2` | Invalid, expired ID or invocation | Invalid, expired, unknown, or replay-binding-denied ID |
 | `1` | Other typed authorization, transport, or Resource API failure | Other typed authorization, transport, or Resource API failure |
 
 Human pending mutation output is exactly three newline-terminated lines, with no payload,
@@ -157,10 +168,23 @@ The `retry-identical-operation` action means retry the same semantic mutation; a
 cannot do so starts a new mutation without reusing the ID. No rendered command is part of the
 machine contract, and human guidance never renders flags, arguments, Zone, operation ID, or
 shell text.
-An inspection under the wrong subject/Zone binding is deliberately indistinguishable from an
-unknown ID: both exit `2`, human mode prints `operation not found` followed by
+An inspection under the wrong subject, or in a selected Zone with no matching operation, is
+deliberately indistinguishable from an unknown ID: both exit `2`, human mode prints
+`operation not found` followed by
 `next: verify the operation ID, Zone, and authorization context`, and JSON is exactly
 `{"ok":false,"zoneRef":"Zone/<ZONE>","schemaVersion":2,"kind":"operation-not-found","message":"operation not found","remediation":{"action":"verify-operation-context"}}`.
+
+An intrinsically expired UUIDv7 ID is safe to distinguish because no retained operation is
+observed. Mutation and inspection both exit `2`, perform no lookup outside the selected Zone
+and no mutation, and use this exact human form:
+
+```text
+operation expired
+next: start a new operation with a newly generated operation ID
+```
+
+JSON is exactly
+`{"ok":false,"zoneRef":"Zone/<ZONE>","schemaVersion":2,"kind":"operation-expired","operationId":"<OPAQUE_ID>","remediation":{"action":"start-new-operation"}}`.
 
 The closed remediation-action set is `inspect-operation`, `wait-for-audit-export`,
 `retry-identical-operation`, `start-new-operation`, and `verify-operation-context`. No action
@@ -205,11 +229,13 @@ test matrix. None may be inferred from the operator commands or action procedure
 
 | Purpose | Exact invocation | Actor and input boundary |
 | --- | --- | --- |
-| Inspect the authorized handoff | `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` | unprivileged local public-socket `Admin`; no selector or positional input |
-| Repair the authorized handoff | `d2b-host-generation-deploy --repair-authorized-handoff [--json]` | unprivileged local public-socket `Admin`; no selector or positional input |
-| Restore one immutable audit backup | `d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]` | unprivileged local public-socket `Admin`; exactly one no-follow artifact path |
+| Inspect the authorized handoff | `d2b host-generation inspect-authorized-handoff [--json]` | unprivileged local public-socket `Admin`; no selector or positional input |
+| Repair the authorized handoff | `d2b host-generation repair-authorized-handoff [--json]` | unprivileged local public-socket `Admin`; no selector or positional input |
+| Restore one immutable audit backup | `d2b host-generation restore-immutable-audit-backup PATH [--json]` | unprivileged local public-socket `Admin`; exactly one no-follow artifact path |
 
-These commands traverse the existing public socket and typed broker operations. They never
+These are subcommands of the sole public `d2b` binary. No
+`d2b-host-generation-deploy` executable, alias, wrapper, or compatibility command is
+published. The commands traverse the existing public socket and typed broker operations. They never
 run as root, connect directly to the broker, add a daemon repair path, or create a new unit.
 The inspect and repair forms reject intent, generation, path, token, authority, selector,
 extra positional, and `--force` input. The restoration form rejects every additional path,
@@ -227,22 +253,22 @@ Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
 
 | Action | Owner and exact procedure |
 | --- | --- |
-| `inspect-without-selectors` | local public-socket `Admin` runs `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` |
+| `inspect-without-selectors` | local public-socket `Admin` runs `d2b host-generation inspect-authorized-handoff [--json]` |
 | `begin-host-generation-deploy` | operator runs public runbook procedure `host-generation-deploy-bootstrap-v1` |
-| `repair-authorized-handoff` | local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `repair-authorized-handoff` | local public-socket `Admin` runs `d2b host-generation repair-authorized-handoff [--json]` |
 | `repair-without-selectors` | local public-socket `Admin` reruns the repair command with no argument except optional `--json` |
-| `restore-immutable-audit-backup` | disposition-pinned backup authority runs `host-generation-immutable-audit-backup-acquisition-v1`, then the local public-socket `Admin` runs `d2b-host-generation-deploy --restore-immutable-audit-backup PATH [--json]` |
+| `restore-immutable-audit-backup` | disposition-pinned backup authority runs `host-generation-immutable-audit-backup-acquisition-v1`, then the local public-socket `Admin` runs `d2b host-generation restore-immutable-audit-backup PATH [--json]` |
 | `restore-with-one-artifact` | local public-socket `Admin` reruns the restoration command with exactly the same one artifact path and optional `--json` |
 | `reacquire-immutable-audit-backup` | disposition-pinned backup authority reruns `host-generation-immutable-audit-backup-acquisition-v1`, then the local public-socket `Admin` resubmits |
-| `rerun-repair-authorized-handoff` | local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `rerun-repair-authorized-handoff` | local public-socket `Admin` runs `d2b host-generation repair-authorized-handoff [--json]` |
 | `use-local-admin-public-socket` | site access administrator runs `host-generation-local-admin-session-v1`, then the resulting local public-socket `Admin` reruns the command |
 | `use-unprivileged-local-admin-restoration-session` | site access administrator runs `host-generation-unprivileged-local-admin-restoration-session-v1`, then the resulting unprivileged local public-socket `Admin` reruns the one-artifact command |
 | `reconcile-immutable-audit-retention` | site backup administrator runs `host-generation-immutable-audit-retention-reconciliation-v1` |
 | `repair-retention-clock-discontinuity` | site backup administrator repairs the configured authoritative time source and runs `host-generation-retention-clock-discontinuity-repair-v1` through an unprivileged local public-socket `Admin` |
 | `repair-continuity-replay-key-generation` | site package administrator runs `host-generation-continuity-replay-key-generation-repair-v1` |
 | `repair-continuity-authoritative-source` | site backup administrator runs `host-generation-continuity-authoritative-source-repair-v1`, then an unprivileged local public-socket `Admin` runs `host-generation-retention-clock-discontinuity-repair-v1` |
-| `repair-continuity-authoritative-source-contract` | site package administrator runs `host-generation-continuity-authoritative-source-contract-repair-v1`, then an unprivileged local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
-| `repair-continuity-source-storage-and-reconcile` | site backup administrator runs `host-generation-continuity-source-storage-repair-v1`, then an unprivileged local public-socket `Admin` runs `d2b-host-generation-deploy --repair-authorized-handoff [--json]` |
+| `repair-continuity-authoritative-source-contract` | site package administrator runs `host-generation-continuity-authoritative-source-contract-repair-v1`, then an unprivileged local public-socket `Admin` runs `d2b host-generation repair-authorized-handoff [--json]` |
+| `repair-continuity-source-storage-and-reconcile` | site backup administrator runs `host-generation-continuity-source-storage-repair-v1`, then an unprivileged local public-socket `Admin` runs `d2b host-generation repair-authorized-handoff [--json]` |
 | `preserve-and-escalate-continuity-source-conflict` | site security authority runs `host-generation-continuity-source-conflict-escalation-v1` and preserves the named evidence until an accepted disposition authorizes a next step |
 | `preserve-and-escalate-continuity-publication-conflict` | site security authority runs `host-generation-continuity-publication-conflict-escalation-v1` and preserves the named evidence until an accepted disposition authorizes a next step |
 | `preserve-and-escalate-retention-clock-overflow` | site security authority runs `host-generation-retention-clock-overflow-escalation-v1`; no prune or handoff retry is authorized |
@@ -290,9 +316,12 @@ FR-042 explicit retirement list rather than the parity list.
 - A committed mutation whose authoritative audit is pending is displayed as degraded
   `committed-pending-audit` with exactly the Version 2 command, flags, exits, mandatory
   `zoneRef`/`schemaVersion`, DTO schema, ID format, closed remediation actions, and human/JSON
-  forms above. A mutation replay mismatch exits `76`; inspection under the wrong subject/Zone
-  binding exits `2` with the same form as an unknown ID. Neither exposes the original
-  operation. `op inspect` accepts and tests `--deadline` and `--no-deadline`, rejects their
+  forms above. A mutation replay mismatch exits `76`; inspection requires Zone, and a wrong
+  subject/Zone binding exits `2` with the same form as an unknown ID. The same ID may commit
+  independently in two Zones. UUIDv7 issuance and per-Zone retention tests prove that
+  expired/pruned IDs return `operation-expired` and cannot become new mutations. Neither
+  wrong-binding case exposes the original operation. `op inspect` accepts and tests
+  `--deadline` and `--no-deadline`, rejects their
   simultaneous use, and preserves cancellation in no-deadline mode. Human and machine output
   never call pending state success, rollback, or safe to repeat with a new ID, expose no
   mutation payload or raw sink error, and contain no Zone/ID-bearing argv, command vector,
@@ -307,6 +336,9 @@ FR-042 explicit retirement list rather than the parity list.
   protocol states, publication, capacity, rendering, exits, and transitions. Every generated
   public action resolves to exactly one command or named owner and public runbook procedure
   above; the feature-local CLI contract does not redefine the SC-002 protocol.
+- `d2b --help`, host-generation subcommand help, packaging, completions, and policy tests
+  expose only the `d2b` binary. The retired standalone executable name occurs in no emitted
+  command, package output, runbook invocation, or compatibility alias.
 - Zone readiness names `Provider/system-core` and the actual failing
   `Zone.status.handlers[]` record: `system-core-host` or `system-core-user`, with its `phase`
   and `lastReconciledAt`. Exactly one of each is required; duplicate, missing, wrong-name, or

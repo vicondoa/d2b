@@ -839,8 +839,11 @@ The completion boundary is:
   StatusCode("committed-pending-audit")`, `ResourceStatus.update.state =
   UpdateState::Blocked`, and `ResourceStatus.update.operation_id =
   Some(original_operation_id)`, carried by additive protobuf `PendingAuditStatus` on every
-  mutation response including delete, with bounded redacted detail, fixed identifier digests,
-  exact replay-binding, and same-ID no-reapply/eventual-final-result behavior;
+  mutation response including delete, with bounded redacted detail, typed domain-separated
+  identifier digests and no raw identity in audit or telemetry, exact same-Zone
+  replay-binding, required-Zone inspection, independent same-ID operations across Zones,
+  UUIDv7 bounded expiry/post-prune refusal, and same-Zone same-ID
+  no-reapply/eventual-final-result behavior;
 - one aggregate readiness projection containing exactly the
   `d2b-core-controller`-owned `Provider/system-core` registration plus an actual
   `Zone.status.handlers[]` list with exactly one `system-core-host` record and one
@@ -999,7 +1002,9 @@ Run this against `tasks.md` before implementation starts.
       free-to-start, while the full `tasks.md` census has 99 `[P]` tasks of 605 total
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
-- [x] The 14 `file-overlap-order` edges are recorded as explicit ordering constraints
+- [x] The 14 manifest `file-overlap-order` edges are recorded as explicit ordering
+      constraints; local completion handoffs additionally serialize `T591 -> T592` for
+      `transaction.rs` and `T595 -> T599` for `packages/d2b/src/dispatch.rs`
 - [x] The approved W5 completion graph has one integrator-prep commit; parallel T590, T591,
       and T594 starts; the serialized `T591 -> T592 -> T593 -> T605` chain; one serial daemon
       composition owner; four disjoint acceptance/docs slices T596-T599; and T220
@@ -1019,7 +1024,7 @@ Run this against `tasks.md` before implementation starts.
       reconciles downstream consumers, and T220 reconciles generated manifests and full drift
       before F. The same Wave 5 PR carries the coordinated result. No implementation or
       delivery result is claimed
-- [x] T600 and T601 have disjoint ownership of the closed eight-identifier FR-072 evidence
+- [x] T600 and T601 have disjoint ownership of the closed seven-identifier FR-072 evidence
       set, and T602 compares the exact lane/identifier multiset before T219
 - [ ] No task contradicts a decision in the register (checked per task at implementation time,
       per FR-047)

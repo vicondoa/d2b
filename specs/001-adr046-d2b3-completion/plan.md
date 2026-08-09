@@ -320,6 +320,42 @@ applies without modification.
 | W7 | 5 | 73 | 5 parallel | FR-036 external constitution amendment first; T481 plan panel before implementation; T555 work panel after convergence |
 | W8 | 0 | determined by T557 at W7 close | friction closure | FR-036 external constitution amendment first; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
+#### W8 release freeze and publication
+
+The release DAG is:
+
+```text
+T557 + T558 -> T559 -> T571 -> {T562,T568,T570,T572}
+  -> T566 release-state commit -> T560 freeze F8
+  -> {T563,T564,T567,T569} -> T565 -> T561 merge-only
+  -> T573 identity/prepublication check -> exact-F8 tag and publication
+```
+
+T566 is the sole pre-freeze release-state writer after W8 convergence. It owns
+`.github/workflows/release-host-binaries.yml`, `nix/prebuilt.json`, `flake.nix`, the six
+release-binary Cargo manifests and affected lockfiles, and `CHANGELOG.md` for this serial
+stage. The six release binaries are `d2b`, `d2bd`, `d2b-wayland-proxy`,
+`d2b-unsafe-local-helper`, `d2b-activation-helper`, and `d2b-priv-broker`. Their package and
+flake versions must equal the 3.0.0 changelog version before F8 freezes.
+
+This plan chooses the existing explicit source fallback for the first 3.0 tag:
+`nix/prebuilt.json` has `version: null`, `system: "x86_64-linux"`, and an empty `binaries`
+object, which
+`nix/prebuilt.nix` already interprets as source build. A matching complete prebuilt manifest
+would also satisfy the contract, but a stale 1.4.1 manifest cannot. T560 verifies those exact
+bytes, version parity, and that the publication workflow has no push trigger. The workflow is
+manual-only, accepts the expected sealed commit/tree and version, and places every build,
+tag, and release job behind its prepublication identity job. It does not create a post-tag
+manifest repair pull request.
+
+T561 can therefore merge F8 to `v3` without publishing. T573 first proves merged `v3` has
+the exact sealed F8 commit and tree, the tag is absent, versions are 3.0.0, and source fallback
+is still explicit. It then dispatches publication for that exact commit. The workflow
+repeats those checks, builds artifacts from that checkout, verifies artifact names, embedded
+versions, and hashes, and creates the tag and release only after they pass. Any mismatch
+publishes nothing; fixing content requires a new pre-freeze candidate rather than repairing
+an immutable tag.
+
 #### W2-W6 host-continuity close gate
 
 FR-075 is a requirement, not an assumption. The converged exact candidate for each of W2
@@ -545,7 +581,13 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    different ID follows normal revision/conflict semantics. A typed `InspectOperation`
    ResourceService request/response carries this lookup through the store, generated protobuf
    and ttrpc bindings, method catalogue, authorization/router, daemon client, and CLI; no
-   in-memory-only or CLI-local status path is eligible. Restart deduplicates by fixed operation
+   in-memory-only or CLI-local status path is eligible. Operation identity is exactly
+   `(Zone, operation_id)`: inspection requires the Zone, the same opaque ID may be used
+   concurrently in different Zones, and no host-global index exists. The 16 bytes use UUIDv7
+   layout and lowercase 32-hex rendering. Checked issuance time plus the fixed 30-day
+   operation recovery retention defines `expiresAt`; the per-Zone durable retention clock never moves
+   backwards. Malformed, future, expired, overflowed, or clock-discontinuous IDs deny before
+   observation or mutation, and pruning cannot make an old ID reusable. Restart deduplicates by fixed operation
    digest plus mutation ordinal and produces one logical exported record. The one
    configuration carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the
    required top-level `audit` object in that Zone's `resource-bundle.json`, outside every
@@ -567,6 +609,12 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    digests or opaque handles. Present trace context becomes only its typed domain-separated
    digest, absence stays absent, and malformed input is denied before mutation; another
    digest class is never fabricated or relabelled as trace correlation.
+   Metrics and OTEL resource attributes carry no raw or digested Zone, resource, operation,
+   correlation, or trace identity. Logs and spans carry a typed digest only where correlation
+   is required by the accepted contract. T182-T205 remain blocked until accepted
+   `ADR-046-telemetry-audit-and-support` and its generated work items are versioned to remove
+   raw identity fields and assign the redaction/cardinality matrix. The existing audit and
+   telemetry owners perform the hashing; no secrets service or new runtime boundary is added.
 6. One readiness projection is computed from store recovery, policy match, authenticated
    session/router admission, controller registration, watch admission, audit catch-up,
    mandatory controller health, and the `d2b-core-controller`-owned
@@ -608,7 +656,7 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    the durable prefix and audit, closes transient fds, and emits no raw peer identity.
    Missing, stale, runtime-derived, skipped, wrong-owner, non-ancestor, or failing generated
    coverage blocks evidence acceptance.
-   Because `--apply-authorized-handoff` carries neither an intent selector nor an authority
+   Because `d2b host-generation apply-authorized-handoff` carries neither an intent selector nor an authority
    token, the source broker keeps exactly zero or one durable nonterminal handoff intent per
    source generation. Authorization and apply selection share the coordinator's exclusive
    lock. Authorization refuses while any authorized, claimed, mutating, recovery-pending, or
@@ -620,7 +668,7 @@ checkpoint, and commit-tag instruction for this graph uses qualified lowercase `
    from the same pinned apply object after the old peer is proven dead. Terminal intents are
    never selected or replayed by a later command.
    T595's unprivileged selector-free
-   `d2b-host-generation-deploy --inspect-authorized-handoff [--json]` exposes the exact
+   `d2b host-generation inspect-authorized-handoff [--json]` exposes the exact
    `HostGenerationHandoffStatusV1` projection from `data-model.md`. Every
    `recovery-pending` row names whether the live apply peer, source broker, or target broker
    owns progress, one closed wait/restart-existing-broker action, and the exact allowed
@@ -720,12 +768,13 @@ fixtures, transitions, implementation owners, and gates.
 | Stage | Task(s) | Ownership and concurrency |
 | --- | --- | --- |
 | External Version 2 delivery-contract amendment | no feature task | Before T589, the external owner accepts Version 2 of `ADR-046-validation-and-delivery` and generates `ADR-046-validation-and-delivery-traceability.{json,md}`. The generated bijection must own `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`, mapping each to exact schemas, fixtures, implementation owners, tasks, and gates. Required approvals, manifest regeneration, Gate 0, and ancestor checks remain mandatory. No feature task authors or substitutes for that contract. |
+| External telemetry authority amendment | no feature task | Before any open T182-T205 dispatch or T603 completion accounting, the accepted `ADR-046-telemetry-audit-and-support` owner versions the spec and regenerates its work-item rows. Raw Zone/resource/operation/correlation/trace fields are removed; typed domain-separated digest classes, identity-free metrics/OTEL resources, and redaction/cardinality/no-relabel tests are assigned. T205 owns the complete policy matrix, T598 owns production audit-path canaries, T600 imports exact-F evidence, and T220 verifies ancestry and drift. No feature task creates a secrets service or runtime boundary. |
 | External source-floor prerequisite | no feature task | The accepted external compatibility disposition must name and deliver the producer/installer and typed import/validation owners for `SourceGenerationCompatibilityFloorV1`. T589 and T592 consume only the generated `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows. Missing, stale, non-ancestor, or failing rows block dispatch. This row owns no feature, source, test, Nix, normative, or changelog file and makes no implementation claim. |
 | External retained-request disposition | no feature task | The external delivery-contract/tooling owner must land the contract and typed validator for `Wave5RetainedRequestDispositionV1`. T219 may consume its validated output only after F freezes. This row owns no repository file in this feature and cannot supply panel sign-off. |
 | Feature-editor reconciliation | T603 | After the accepted FR-036 predecessor and one valid T072 disposition, run analysis and one current selected-roster plan lifecycle at clean base A. If all T073-T218 obligations are satisfied, one `/d2b-spec-edit` batch checks exactly those 146 rows plus T603 and the integrator creates dedicated checkbox-only commit C. The editor receipt and C are the sole authority. T603 owns no source, changelog fragment, scratch receipt, digest chain, or sidecar. Fresh analysis and a new selected-roster lifecycle bound to clean C are required before T589. |
-| Integrator prep | T589 | Depends on T603 plus accepted Version 2 and the installed source-floor disposition. Owns the shared registrar, policy-bootstrap, operation-status, audit hook, exact-seven evidence validator, and only implementation/schema/fixture/API rows assigned to T589 by generated `VD2-SC002-*` traceability. It verifies but does not produce the external source floor. No feature-local SC-002 or source-floor copy is authority. |
-| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start from T589. T592 follows T591 and solely owns `packages/d2b-resource-store-redb/src/{lib.rs,actor.rs,audit.rs,migration.rs,backup.rs,tests.rs,transaction.rs}`, `packages/d2b-audit/src/{lib.rs,sink.rs,record_types.rs,segment.rs,export.rs}`, `packages/d2b-contracts/src/{lib.rs,broker_wire.rs}`, `packages/d2b-core/src/{privileges.rs,privileges_w3.rs}`, `packages/d2b-priv-broker/src/{bootstrap.rs,lib.rs,main.rs,protocol.rs,runtime.rs,live_handlers.rs,sys.rs,audit.rs,ops/mod.rs,ops/audit_op.rs}`, `packages/d2bd/src/{lib.rs,daemon_version.rs}`, `nixos-modules/{resources.nix,resources-bundle.nix,privileges-json.nix}`, and both Cargo lockfiles; its generated Version 2 rows own their exact schema/fixture/snapshot paths. T593 follows T592 and consumes its peer-pidfd operation; T605 follows T593 for shared API snapshots. T592 consumes source-floor and SC-002 inputs only through generated `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows. T605 owns the Zone enum correction and paired normative/test/reference/API artifacts. |
-| Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/{resource_runtime.rs,lib.rs}`, the deployment binary and Cargo owners, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, and the owned Nix/VM tests. It composes the production Zone runtime and unprivileged opaque-intent deployment path, while the existing broker service owns privileged continuation. Source-floor schemas, fixtures, poison registries, and transitions come only from T595-assigned generated `VD2-SC002-*` rows. No new unit, daemon rollback owner, caller-selected privileged executable, or feature-local registry is permitted. |
+| Integrator prep | T589 | Depends on T603 plus accepted Version 2, the telemetry authority amendment, and the installed source-floor disposition. Owns the shared registrar, policy-bootstrap, `(Zone, operation_id)` status/expiry contract, audit hook, exact-seven evidence validator, and only implementation/schema/fixture/API rows assigned to T589 by generated `VD2-SC002-*` traceability. It verifies but does not produce the external source floor. No feature-local SC-002 or source-floor copy is authority. |
+| Serialized implementation | T590-T594, T605 | T590, T591, and T594 start from T589. T592 follows T591 and solely owns `packages/d2b-resource-store-redb/src/{lib.rs,actor.rs,audit.rs,migration.rs,backup.rs,tests.rs,transaction.rs}`, `packages/d2b-audit/src/{lib.rs,sink.rs,record_types.rs,segment.rs,export.rs}`, `packages/d2b-contracts/src/{lib.rs,broker_wire.rs}`, `packages/d2b-core/src/{privileges.rs,privileges_w3.rs}`, `packages/d2b-priv-broker/src/{bootstrap.rs,lib.rs,main.rs,protocol.rs,runtime.rs,live_handlers.rs,sys.rs,audit.rs,ops/mod.rs,ops/audit_op.rs}`, `packages/d2bd/src/{lib.rs,daemon_version.rs}`, `nixos-modules/{options-zones.nix,resources.nix,resources-bundle.nix,privileges-json.nix}`, `tests/unit/nix/cases/zone-audit.nix`, and both Cargo lockfiles; its generated Version 2 rows own their exact schema/fixture/snapshot paths. T220 regenerates the nix-unit inventory pins. T593 follows T592 and consumes its peer-pidfd operation; T605 follows T593 for shared API snapshots. T592 consumes source-floor and SC-002 inputs only through generated `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows. T605 owns the Zone enum correction and paired normative/test/reference/API artifacts. |
+| Serial daemon composition | T595 | Sole writer after T592 for `d2bd/src/{resource_runtime.rs,lib.rs}`, `packages/d2b/src/{lib.rs,dispatch.rs,host_generation.rs}`, `packages/d2b/Cargo.toml`, `nixos-modules/{bundle-zones,host-daemon,host-broker,options-site}.nix`, `flake.nix`, `examples/{minimal,graphics-workstation,multi-env,with-entra-id,with-observability}/{configuration.nix,flake.nix}`, `templates/default/{configuration.nix,flake.nix}`, and the owned Nix/VM tests. It adds host-generation commands beneath the sole public `d2b` binary; no standalone executable or alias is emitted. T599 is the later serialized owner of `packages/d2b/src/dispatch.rs` and may only reconcile that frozen namespace with the remaining CLI. T595 composes the production Zone runtime and unprivileged opaque-intent deployment path, while the existing broker service owns privileged continuation. Source-floor schemas, fixtures, poison registries, and transitions come only from T595-assigned generated `VD2-SC002-*` rows. The focused Nix tests pin audit defaults/bounds/placement and valid/boundary/missing `hostGenerationRebuildRef` evaluation. No new unit, daemon rollback owner, caller-selected privileged executable, or feature-local registry is permitted. |
 | External Network contract migration and settled W6 ownership | external contract/work-item amendment; no feature implementation owner | The accepted amendment must set `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`, default both inputs false, and remove every current-facing sole Network-opt-in path before T220. It must regenerate T336-T355 as authoritative W6 owners under T221 for the production adapter, net-VM path, and all four Network/Host production cases. Existing code keeps `NetworkEffectPort` in `d2b-provider-network-local::controller` and lacks the production adapter; that implementation gap remains W6 work rather than a reason to move the rows into Wave 5. |
 | File-disjoint Wave 5 acceptance and docs | T596-T599 | T596-T599 start after T595. T599 owns the CLI contract, public recovery runbook, generated action mapping, and client-side operation-ID response-loss proof. T604 is not in this Wave 5 fan-out. |
 | Integrator convergence and freeze | T220 | Merges every Wave 5 slice and generated artifact, verifies accepted Version 2 and generated Wave 5 `VD2-SC002-*` traceability, folds exactly twelve fragments, requires the T599 runbook/action map, and runs integration, CI, and drift. It rejects F unless the accepted double-opt-in Network migration removes every current-facing sole-opt-in path and the regenerated manifest retains T336-T355 plus all four cases as W6 work under T221. It does not require or claim that W6 implementation. T604 remains W6 acceptance-only and is not part of the Wave 5 exact-seven profile. Each provisional candidate uses one current selected-roster lifecycle; every selected seat must approve before F. |
@@ -739,8 +788,10 @@ T603 remains the sole in-feature direct prerequisite of T589, but it is an edito
 
 T589 may touch files later owned by a serialized successor because its purpose is to
 establish the contracts those successors implement. No two parallel tasks own the same file.
-Cargo workspace membership, generated spec manifests, flake outputs, shared changelog, and
-feature artifacts remain integrator-only.
+Cargo workspace membership, generated spec manifests, shared changelog, and feature artifacts
+remain integrator-only. `flake.nix` is an explicitly serialized exception: T595 owns only its
+required-option fixture updates in W5 and T566 owns release-version/source-fallback updates in
+W8. Neither is parallel with another flake writer.
 
 Every source-writing completion slice has disjoint, exact fragment ownership:
 
@@ -873,11 +924,11 @@ second validator.
 | --- | --- | --- | --- |
 | `production-session-watch` | T600 | `github-ci` | Same-Zone request/watch through the production session/router plus cross-Zone and self-named subject denial; one accepted-socket evidence object shared by adapter, descriptor, bus Unix transport, and session seam; T592's typed broker `OpenPeerPidfdFromAcceptedSocket` operation transfers only the accepted socket and returned pidfd with `SCM_RIGHTS`; both receive paths set `MSG_CMSG_CLOEXEC`, reject truncation, own every received fd immediately, require exactly one expected fd, and close all received fds on count/type/index/decode/later-validation errors; descriptor-count and exec-leak matrices cover success, missing, extra, malformed, truncated, and post-receive failure; a safe dependency satisfies the exact contract or exact-optlen validation, immediate ownership of any returned fd, and failure closure live only in the approved broker `sys.rs` FFI quarantine with narrow allowances and immediate per-block `SAFETY:` comments; no repository-authored unsafe outside that quarantine; injected short-result fd-count, unsupported/malformed/missing-CLOEXEC/leak/dead/numeric-only/reuse/credential/generation/cgroup/ambiguity refusals; the sole enforcing pidfd policy runner is `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, whose poison suite rejects the `nix` 0.31.3 `PeerPidfd` wrapper, a new project FFI crate, and local syscall/raw-fd fallback; no caller-supplied verifier/credential constructor or re-export; private registrar issuance; and a fresh restart peer pidfd |
 | `effect-replay-cleanup` | T600 | `github-ci` | Every generation/effect-ledger crash window, replay/adoption, and stale/zero/wrong-UID/ambiguous cleanup refusal |
-| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; durable operation inspection; replay-binding denials; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention and prune health; and raw identifier/trace/path/handle-canary absence |
+| `audit-drain-replay` | T600 | `github-ci` | Transactional authoritative rows; fd-anchored file/directory-durable export and restart replay; digest-plus-ordinal deduplication; required-Zone durable operation inspection; same-Zone replay-binding denials; concurrent same-ID operations in different Zones; UUIDv7 response-loss/restart/expiry/post-prune refusal; fixed-digest/record limits; valid-present/absent/malformed trace behavior with typed correlation and no fabrication/relabel; identity-free metrics/OTEL resources; typed `StoreSyncRequest`/`StoreSyncResponse` producers, consumers, schema and snapshots; fixed redacted `Debug` for every migrated producer, both StoreSync wire DTOs, broker-drain DTO, SegmentWriter/sink/export/directory/opaque-handle owner; post-export journal retention plus fixed 30-day operation retention/prune health; and raw identifier/trace/path/handle-canary absence |
 | `system-core-handler-contract` | T600 | `github-ci` | T605 enum/list/API/reference/schema proof, T595 emission, T599 consumer agreement, exact live handler readiness, non-substitution, and multi-Zone isolation |
 | `resource-plane-rss-owner-fanin` | T601 | `local-host` | Whole-process RSS at 10,000 resources/100 authenticated watches with no baseline subtraction and store, policy, ResourceService, controller endpoint/fan-in, and audit journal/export owner counts exactly one; the system-core registration/list belongs only to `system-core-handler-contract` |
 | `wave5-removal-proofs` | T601 | `github-ci` | Every manifest-label W5 removal predicate rerun against F |
-| `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; exact ID, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
+| `cli-reference-conformance` | T601 | `github-ci` | Emitted CLI/help/JSON/wire behavior; accepted Version 2 amendment and Version 1 migration guidance; sole-public-binary packaging and host-generation subcommands; exact UUIDv7 ID, required Zone, cross-Zone reuse, expiry, exits, mandatory envelope fields, DTO/schema, retained `op inspect --deadline`/`--no-deadline` plus mutual-exclusion/cancellation coverage, identifier-free static human guidance, closed JSON remediation actions, and all T599 reference comparisons |
 
 The four T600 identifiers and three T601 identifiers are exclusive. Their required content is
 the table above plus the accepted generated Wave 5 traceability rows; no free-form validation

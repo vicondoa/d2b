@@ -489,10 +489,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   domain-separated fixed digest. Audit constructors MUST accept typed fixed digests rather
   than raw identifiers, and encoded records MUST reject bytes beyond the fixed limit. Replay
   after restart MUST be idempotent by fixed operation digest and mutation ordinal.
+  Metrics and OTEL resource attributes MUST carry no Zone, resource, operation, correlation,
+  or trace identity, raw or digested. Logs and spans MAY carry a typed fixed digest only when
+  their accepted contract requires correlation, and MUST use a distinct domain-separated
+  digest type for each identity class. A digest type MUST NOT be relabelled as another class.
+  Before T182-T205 may dispatch, the accepted
+  `ADR-046-telemetry-audit-and-support` specification and generated work-item manifests MUST
+  be versioned and amended to remove every raw identity field and attribute and to assign the
+  corresponding redaction/cardinality tests. This uses the existing audit and telemetry
+  owners; it creates no secrets service or runtime boundary.
   `audit.retentionDays`, default 30 and range 1 through 3650, MUST govern segments and
-  export-completed journal rows; `audit.maxRecordsPerSegment`, default 65536 and range 1
-  through 1000000, and `audit.maxSegmentBytes`, default 67108864 and range 1048576 through
-  1073741824, MUST be enforced at startup and rotation. Prune, limit, file-sync, or
+  export-completed journal rows;
+  `audit.maxRecordsPerSegment`, default 65536 and range 1 through 1000000, and
+  `audit.maxSegmentBytes`, default 67108864 and range 1048576 through 1073741824, MUST be
+  enforced at startup and rotation. Prune, limit, file-sync, or
   directory-sync failure MUST produce typed degraded health and block publication. The
   unprivileged Zone runtime MUST own drain sequencing but route every root-owned filesystem
   effect through one typed broker op carrying only fixed-digest bounded records. The root
@@ -513,11 +523,22 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   MUST remain unpublished and degraded until export completes. Before same-ID status or
   resumption, the implementation MUST match a persisted replay-binding digest over the
   registrar-derived subject, Zone, canonical semantic request, target, verb, exact expected
-  revision, operation ID, and idempotency data. Cross-subject, cross-Zone, altered-request,
-  target, verb, revision, idempotency, or restart mismatch MUST be denied and audited without
-  observation or reapplication. An exact retry returns the same pending state while export is
+  revision, operation ID, and idempotency data. Mutation identity is exactly
+  `(Zone, operation_id)`: inspection MUST name the Zone, the same opaque operation ID MAY be
+  used concurrently in different Zones, and no host-global operation-ID reservation or index
+  may be introduced. Cross-subject or altered-request, target, verb, revision, idempotency,
+  or restart mismatch within that Zone MUST be denied and audited without observation or
+  reapplication. An exact same-Zone retry returns the same pending state while export is
   incomplete and its one stored final result after recovery. A different operation ID follows
-  ordinary expected-revision and conflict semantics. Every mutation response, including
+  ordinary expected-revision and conflict semantics.
+  The 16-byte ID MUST use UUIDv7 byte layout and remain externally opaque, rendered as
+  lowercase 32-hex without separators. Its embedded issuance time plus the fixed 30-day
+  operation recovery retention defines checked `expiresAt`; operation state MAY be pruned only at that
+  boundary. The existing durable per-Zone retention clock MUST never move backwards. A
+  future, malformed, expired, or clock-discontinuous ID MUST fail closed as
+  `operation-expired` or invalid before mutation or inspection and MUST NOT become a new
+  mutation after its prior state is pruned.
+  Every mutation response, including
   `DeleteResponse` and batch ordinals, MUST represent the composite with the additive bounded
   protobuf `PendingAuditStatus`; ordinary success omits it. This changes the ResourceService
   schema fingerprint but not Resource JSON `apiVersion` or `schemaVersion`, and
@@ -979,7 +1000,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Wave merges are integration events, not releases, and MUST NOT be tagged or published as
   consumable versions. This does not forbid publishing the replacement *contracts* that
   companions adapt against; FR-061 defines the contract/artifact boundary and is the
-  resolution of the apparent conflict with FR-039.
+  resolution of the apparent conflict with FR-039. A push or merge to `v3` MUST NOT publish.
+  Before F8 freezes, the release binary/package versions and flake package versions MUST
+  equal the changelog's d2b 3.0.0 version, and F8 MUST contain either a matching complete
+  prebuilt manifest or the existing explicit source-fallback manifest shape. T573 MUST first
+  prove merged `v3` is byte-identical to sealed F8 and that this release state is correct;
+  only its exact-commit manual publication dispatch may create the immutable tag and release.
+  A post-tag manifest commit or pull request MUST NOT be treated as repairing the tag.
 - **FR-046**: Where the specification set's prose and the generated implementation graph or
   work-item manifest disagree on wave assignment, destination paths, or work-item identity,
   the **generated manifests are authoritative**. Any such drift MUST be recorded and raised
@@ -1304,8 +1331,10 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-009**: No component obtains access by naming its own identity; every admission is
   based on proven identity in 100 percent of tested attempts.
 - **SC-010**: No secret, credential, command output, raw host path, or personally
-  identifying value appears in telemetry, audit, logs, or error output across the full
-  redaction test matrix.
+  identifying value, and no raw Zone, resource, operation, correlation, or trace identity,
+  appears in telemetry, audit, logs, or error output across the full redaction test matrix.
+  Metrics and OTEL resources carry no identity dimension; correlation fields use only their
+  typed domain-separated fixed digest.
 
 #### Wave 5 production completion
 
@@ -1336,9 +1365,13 @@ carries the object verbatim rather than copying selected fields into the task ro
   condition, outcome, and update fields expose only safe same-ID retry/status remediation.
   It leaves the Zone unpublished and degraded and never reports rollback. Same-ID retries
   with an exact replay-binding match apply the mutation zero additional times and converge on
-  one final result; cross-subject, cross-Zone, altered-request/target/verb/revision/
-  idempotency, and restart mismatches are denied and audited; a different-ID retry obeys
-  revision/conflict rules. Restart replay produces zero missing records and zero duplicate
+  one final result; cross-subject and altered-request/target/verb/revision/idempotency and
+  restart mismatches within the selected Zone are denied and audited; the same ID in a
+  different Zone is an independent operation, and a different-ID retry obeys
+  revision/conflict rules. Inspection always names the Zone. UUIDv7 issuance time and the
+  fixed 30-day operation recovery retention bound recovery records; malformed, future, expired, and
+  clock-discontinuous IDs are denied before observation or mutation, and pruning an expired
+  record never makes its ID reusable. Restart replay produces zero missing records and zero duplicate
   logical exports by fixed operation digest plus mutation ordinal. Raw operation,
   correlation, subject, Zone, resource, and trace canaries occur zero times in audit/export/
   error/log/metric/span/Debug output; constructors accept only typed fixed digests and

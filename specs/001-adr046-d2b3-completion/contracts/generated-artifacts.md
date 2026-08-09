@@ -55,6 +55,9 @@ artifact and requires a clean `git diff`, fail-closed.
   4/2 has not published. The entrypoint builds and verifies the complete target closure,
   stages one immutable transition identity, and submits only an opaque request. It cannot
   publish a profile, control a service, mutate 3/1 bootstrap state, or initiate rollback.
+  That output contains the ordinary `bin/d2b` binary and invokes only its
+  `host-generation` subcommands. It MUST NOT publish a
+  `d2b-host-generation-deploy` binary, wrapper, alias, or completion entry.
   The target-closure entrypoint is executed only while unprivileged. Before any privileged
   invocation, the operator must pass the existing
   public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
@@ -112,11 +115,13 @@ artifact and requires a clean `git diff`, fail-closed.
   file and parent-directory sync, fixed-digest audit fields, and the same operation for repair.
 - Runtime version refusal is identifier-free and carries only closed action
   `rebuild-host-generation`; it contains no command or argv. Reference documentation gives
-  parameterized paths: an unprivileged validated target-closure `--authorize-handoff`
-  invocation followed by `--apply-authorized-handoff` on the separately pinned installed
+  parameterized paths: an unprivileged validated target-closure
+  `d2b host-generation authorize-handoff` invocation followed by
+  `d2b host-generation apply-authorized-handoff` on the separately pinned installed
   object for a 3/1 host where the stable reference is absent; an installed
-  `d2b-host-generation-deploy --from-reference ... --authorize-handoff` invocation followed
-  by the same pinned installed object's reference-free `--apply-authorized-handoff` only after
+  `d2b host-generation authorize-handoff --from-reference ...` invocation followed
+  by the same pinned installed object's reference-free
+  `d2b host-generation apply-authorized-handoff` only after
   broker publication; and the equivalent unprivileged prior-target authorization followed by
   installed-object apply for rollback. Every preflight validates
   grammar and bounds and stops before public-socket

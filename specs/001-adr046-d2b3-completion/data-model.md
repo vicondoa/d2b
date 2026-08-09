@@ -127,6 +127,26 @@ Rules acceptance tests must enforce:
 Owning specs: `ADR-046-resource-reconciliation`, `ADR-046-core-controllers`,
 `ADR-046-provider-state`.
 
+### 4a. Mutation operation identity and expiry
+
+Mutation recovery is Zone-scoped:
+
+| Element | Representation | Rule |
+| --- | --- | --- |
+| operation key | `(ZoneUid, OperationId)` | The selected Zone is mandatory for mutation, retry, and inspection. No host-global operation-ID index or reservation exists. |
+| `OperationId` | 16 UUIDv7-layout bytes, rendered as lowercase 32-hex without separators | Opaque to callers. The same bytes are valid as independent operation identities in different Zones. |
+| replay binding | typed fixed digest over the registrar-derived subject, Zone, semantic request, target, verb, expected revision, operation ID, and idempotency data | A mismatch within the selected Zone is non-observing and never reapplies. |
+| `expiresAt` | checked UUIDv7 issuance time plus the fixed 30-day operation recovery retention | The active or final operation record may be pruned only at this boundary. |
+| expired lookup | typed `operation-expired` refusal derived from UUIDv7 time and the durable per-Zone clock | Inspection and mutation both deny. No post-expiry tombstone or host-global index is required, and pruning never turns the old ID into a fresh mutation. |
+
+The per-Zone durable retention clock is monotonic across restart. A malformed, future,
+expired, overflowed, or clock-discontinuous ID is denied before observation or mutation.
+Concurrent use of one ID in two Zones may commit once in each Zone; same-Zone response loss
+and restart return the original pending or final result without another mutation.
+
+Owning specs: `ADR-046-resource-store-redb`, `ADR-046-cli-and-operations`,
+`ADR-046-telemetry-audit-and-support`.
+
 ---
 
 ## 5. Access and authorization
@@ -194,6 +214,8 @@ Owning spec: `ADR-046-validation-and-delivery`.
 | Cross-Zone ordinary reference refused | FR-009 | resource API authorization |
 | Caller-supplied subject refused | FR-008 | Zone registrar, compile-time seal |
 | No secret, path, or PII in telemetry or audit | FR-018 | redaction policy lints |
+| Mutation identity is `(Zone, operation_id)` and old IDs fail closed after bounded expiry | FR-070 | store/CLI restart, cross-Zone concurrency, response-loss, and expiry tests |
+| Raw Zone/resource/operation/correlation/trace identity is absent from telemetry and audit | FR-070 | typed-digest, redaction, cardinality, and no-relabel tests |
 | Generated artifact matches source | FR-031 | `make test-drift`, fail-closed |
 | Capability with promised successor reaches parity | FR-041 | per-path removal proof + parity check |
 | Capability without successor is listed and justified | FR-042 | explicit retirement list + release notes |
