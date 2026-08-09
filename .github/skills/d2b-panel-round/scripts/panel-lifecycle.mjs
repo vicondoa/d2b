@@ -478,7 +478,7 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
       renameSync(temporary, directory);
       return { path: directory, created: true };
     } catch (cause) {
-      if (cause.code !== "EEXIST") throw cause;
+      if (cause.code !== "EEXIST" && cause.code !== "ENOTEMPTY") throw cause;
       return compareExistingDirectory(directory, expected, expectedNames);
     }
   } finally {
@@ -4017,16 +4017,16 @@ export function advanceVerification(input, options = {}) {
 
 export function writeAdvanceVerification(outputDir, input, options = {}) {
   const advanced = advanceVerification(input, options);
-  const publication = writeDirectoryCreateOrCompare(outputDir, [
-    {
-      name: "discovery-ledger.json",
-      bytes: stableStringify(advanced.ledger),
-    },
-    {
-      name: "responses.json",
-      bytes: stableStringify(advanced.responses),
-    },
-  ]);
+  const publication = {
+    ledger: writeCreateOrCompare(
+      join(outputDir, "discovery-ledger.json"),
+      advanced.ledger,
+    ),
+    responses: writeCreateOrCompare(
+      join(outputDir, "responses.json"),
+      advanced.responses,
+    ),
+  };
   return {
     ...advanced,
     publication,
