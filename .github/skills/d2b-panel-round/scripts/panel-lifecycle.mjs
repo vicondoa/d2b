@@ -6492,7 +6492,9 @@ async function main(argv) {
         current_candidate: readJson(candidatePath, "current candidate"),
       });
       console.log(
-        `wrote next ledger and blank response envelope to ${outputDir}`,
+        `wrote next ledger and partial response envelope to ${outputDir}; ` +
+        `carried [${result.carried_issue_ids.join(", ")}], ` +
+        `reset [${result.reset_issue_ids.join(", ")}]`,
       );
       return;
     }

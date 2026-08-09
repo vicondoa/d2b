@@ -264,8 +264,9 @@ per-file create-or-compare. It publishes those files independently. A retry
 compares every existing file byte-for-byte
 and creates only missing files; conflicting bytes fail. It appends admitted
 late findings with contiguous `R` identifiers and preserved source identity.
-Copy the blank response template to a distinct completed-response file, fill
-every response there, and publish the finalized handoff marker last:
+Copy the partial response template to a distinct completed-response file,
+preserve every carried non-null response unchanged, fill only reset or newly
+added null responses there, and publish the finalized handoff marker last:
 
 ```bash
 cp "$NEXT/responses.json" "$NEXT/responses-completed.json"

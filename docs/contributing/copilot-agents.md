@@ -402,8 +402,9 @@ compares every existing file byte-for-byte
 and creates only missing files; conflicting bytes fail. It appends admitted
 late findings and refuses duplicate sources, missing responses, candidate or
 selection mismatches, malformed statuses, and conflicting output. Copy the
-blank response template to a distinct completed-response file, fill every
-response there, and finalize the handoff:
+partial response template to a distinct completed-response file, preserve
+every carried non-null response unchanged, fill only reset or newly added null
+responses there, and finalize the handoff:
 
 ```bash
 cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
