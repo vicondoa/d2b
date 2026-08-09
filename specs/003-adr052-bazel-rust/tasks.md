@@ -159,8 +159,11 @@ to the same file are explicitly sequential.
   `.scratch/spec003w0-parked-evidence/`; prove none is an ancestor of the base.
 - [ ] T003 [owner: integrator] [files: none] [depends: T002] Run the amended
   read-only plan-structure validator self-tests and positive plan check, then
-  run the Track A plan panel over every artifact in this directory and require
-  ten signoffs with empty recommendations.
+  run the Track A plan panel over every artifact in this directory using every
+  trigger and the applicable floor from the versioned selection table. Dispatch
+  exactly the roster and per-seat profiles recorded by the lifecycle selection
+  and require unanimous signoff with empty recommendations from every selected
+  seat.
 
 ## spec003w0 product workspace and foundation
 
@@ -797,9 +800,12 @@ to the same file are explicitly sequential.
 - [ ] T031 [owner: integrator] [files: none] [depends: T030] Obtain native x86
   and arm results on one stable PR head; require arm six-check realization and
   `make test-rust-supply-chain` plus renderer coverage.
-- [ ] T032 [owner: integrator] [files: none] [depends: T031] Run the ten-seat
-  integrated-diff panel; any content fix invalidates affected validation and
-  panel records.
+- [ ] T032 [owner: integrator] [files: none] [depends: T031] Run the
+  selected-roster integrated-diff panel using exactly the roster and per-seat
+  profiles recorded by the lifecycle selection. Across fix verification, rerun
+  selection over the full candidate and every fix delta and only widen the
+  lifecycle roster. Any content fix invalidates affected validation and panel
+  records.
 - [ ] T033 [owner: integrator] [files: none] [depends: T032] Seal
   `spec003w0`, merge to protected `v3`, record the merged SHA, collect garbage,
   and remove finished worktrees.

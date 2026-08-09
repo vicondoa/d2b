@@ -461,8 +461,10 @@
   row and realized artifact, and complete/degraded evidence variants cannot
   contradict their common classification.
 - [x] Required repository validation commands and artifact scans pass.
-- [ ] Ten-role Track A plan panel returns unanimous signoff with empty
-  recommendations.
+- [ ] Selected-roster Track A plan panel applies the versioned selection
+  table's floor and triggers, dispatches exactly the lifecycle selection's
+  roster and per-seat profiles, and returns unanimous signoff with empty
+  recommendations from every selected seat.
 
 ## Readiness
 

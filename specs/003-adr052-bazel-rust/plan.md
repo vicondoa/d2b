@@ -394,7 +394,16 @@ own the same file.
 
 ## Global Delivery Rules
 
-- Run a unanimous ten-role Track A plan panel before each implementation wave.
+- Before each implementation wave, run a Track A plan panel using the
+  authoritative lifecycle selection. Apply every trigger and the applicable
+  floor from `.github/skills/d2b-panel-round/selection-table.json`, dispatch
+  exactly the ordered roster and per-seat profiles recorded by the selection,
+  and require unanimous signoff with empty recommendations from every selected
+  seat.
+- For fix verification, rerun selection over the full current candidate and
+  every fix delta, union each result into the lifecycle roster, never remove a
+  selected seat, and dispatch exactly the roster and profiles in the resulting
+  selection.
 - Reviewers inspect supplied validation and do not rerun gates.
 - Land an integrator prep commit before parallel scopes where shared contracts
   are needed.
@@ -1002,7 +1011,8 @@ All must be true:
   0038 unchanged;
 - every mutating check above leaves the candidate clean;
 - Cargo remains the required `test-rust` executor;
-- the ten-role integrated-diff panel signs off;
+- the selected-roster integrated-diff panel has unanimous signoff with empty
+  recommendations from every seat in its lifecycle selection;
 - the PR is sealed as `spec003w0` and merged.
 
 ## spec003w1 - Complete Bazel Coverage Carriers
@@ -1665,7 +1675,8 @@ and derived validator result in
 spec003w7 qualification and code preparation may proceed before spec003w6.
 Its shared binding-doc and `post-promotion.json` task waits for merged
 spec003w6, rebases onto it, reruns the entire validation, and receives a new
-ten-seat panel verdict before merge.
+unanimous panel verdict from every seat in the widened lifecycle selection
+before merge.
 
 ### Mechanical done condition
 
