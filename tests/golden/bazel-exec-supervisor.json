@@ -10,7 +10,7 @@
     "path": "tests/tools/d2b-bazel-exec-supervisor/supervisor.c",
     "sha256": "0c3bd0d5283530beb75eec3f0eefd1908326f800779a7ad2be8d55e53c992608",
     "plantPath": "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c",
-    "plantSha256": "e0e1936105b3b70f6f6923c4e0b60a0c4ebc71a9ebae092149eed3981935106e"
+    "plantSha256": "c2bf2434b52cb309254d7489bdf0c9a13d5e91eff8873528186a48c4fa45f837"
   },
   "expression": {
     "path": "pkgs/d2b-bazel-exec-supervisor/default.nix",
