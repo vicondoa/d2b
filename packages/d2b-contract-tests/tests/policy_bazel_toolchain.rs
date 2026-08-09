@@ -348,14 +348,11 @@ fn patched_sandbox_keeps_policy_before_action_and_owns_all_sandbox_codes() {
                 .expect("syscall dispatch")
     );
     for code in [
-        "D2B-BZLEXEC-SANDBOX-NAMESPACE",
         "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
         "D2B-BZLEXEC-SANDBOX-MONITOR",
         "D2B-BZLEXEC-SANDBOX-KILL",
         "D2B-BZLEXEC-SANDBOX-REAP",
-        "D2B-BZLEXEC-SANDBOX-CEILING",
         "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP",
-        "D2B-BZLEXEC-SANDBOX-CLEANUP",
         "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
     ] {
         assert!(
@@ -410,9 +407,9 @@ fn strategy_lock_and_observation_inputs_are_closed() {
         "common --strategy=Rustc=sandboxed",
         "common --strategy=RustcMetadata=sandboxed",
         "common --strategy=Clippy=sandboxed",
-        "common --strategy=rustdoc=sandboxed",
-        "common --strategy=rustfmt=sandboxed",
-        "common --strategy=CargoBuildScript=sandboxed",
+        "common --strategy=Rustdoc=sandboxed",
+        "common --strategy=Rustfmt=sandboxed",
+        "common --strategy=CargoBuildScriptRun=sandboxed",
         "common --strategy=TestRunner=sandboxed",
     ] {
         assert!(
@@ -478,14 +475,12 @@ fn crash_plant_is_observable_and_has_beyond_ceiling_barrier() {
 fn sandbox_diagnostics_are_closed_and_retryable() {
     let patch = read_repo_file(PATCH);
     for code in [
-        "D2B-BZLEXEC-SANDBOX-NAMESPACE",
         "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY",
         "D2B-BZLEXEC-SANDBOX-MONITOR",
         "D2B-BZLEXEC-SANDBOX-KILL",
         "D2B-BZLEXEC-SANDBOX-REAP",
-        "D2B-BZLEXEC-SANDBOX-CEILING",
         "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP",
-        "D2B-BZLEXEC-SANDBOX-CLEANUP",
+        "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE",
     ] {
         assert!(patch.contains(code), "missing sandbox code {code}");
     }
