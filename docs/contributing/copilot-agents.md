@@ -396,7 +396,7 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 ```
 
 The command publishes only the immutable `NEXT/discovery-ledger.json` and
-blank `NEXT/responses.json` independently with create-or-compare semantics.
+partial `NEXT/responses.json` independently with create-or-compare semantics.
 It publishes those files independently. A retry after a partial publication
 compares every existing file byte-for-byte
 and creates only missing files; conflicting bytes fail. It appends admitted

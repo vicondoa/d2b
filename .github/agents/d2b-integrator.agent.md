@@ -146,7 +146,7 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
-Never edit `$NEXT/responses.json`, the immutable blank/partial template, and
+Never edit `$NEXT/responses.json`, the immutable partial template, and
 never edit the prior immutable ledger or hand-copy its findings. The
 discovery-to-first-verification transition is the sole marker-free exception.
 

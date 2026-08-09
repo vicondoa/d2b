@@ -359,6 +359,20 @@ const CASES = [
     expectText: "still promises atomic ledger/response publication",
   },
   {
+    name: "blank carried response guidance is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => text.replace(
+          "partial `NEXT/responses.json`",
+          "blank `NEXT/responses.json`",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "carried response envelope as blank",
+  },
+  {
     name: "unsupported continuation lifecycle flag is rejected",
     mutate: (dir) =>
       mutateFile(

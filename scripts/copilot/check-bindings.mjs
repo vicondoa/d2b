@@ -1315,9 +1315,15 @@ for (const [label, path] of panelContinuationDocs) {
     "schema-version `4`",
     "independently",
     "all three files before",
+    "partial `next/responses.json`",
   ]) {
     if (!normalizedSource.includes(phrase.toLowerCase())) {
       fail(`${label}: continuation documentation is missing required text: ${phrase}`);
+    }
+    if (/\bblank(?:\/partial)?\b[^\n]{0,80}(?:response|responses\.json)/i.test(source)) {
+      fail(
+        `${label}: continuation documentation still describes the carried response envelope as blank`,
+      );
     }
   }
   if (/atomic (?:directory|ledger\/response|handoff)/i.test(source)) {

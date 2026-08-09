@@ -259,7 +259,7 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 `advance-verification` validates the exact selection digest, lifecycle,
 candidate, roster, prior ledger, response envelope, and adapted verification
 bindings before publishing only the immutable
-`NEXT/discovery-ledger.json` and blank `NEXT/responses.json` by independent
+`NEXT/discovery-ledger.json` and partial `NEXT/responses.json` by independent
 per-file create-or-compare. It publishes those files independently. A retry
 compares every existing file byte-for-byte
 and creates only missing files; conflicting bytes fail. It appends admitted

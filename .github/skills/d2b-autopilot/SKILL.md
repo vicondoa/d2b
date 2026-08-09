@@ -127,7 +127,7 @@ verification. This is feedback only: do not create the delivery
 
 **5. Continue fixes and verification.** If verification returns findings, run
 the exact continuation sequence below. The advance command publishes the
-immutable ledger and blank/partial response template; copy that template to a
+immutable ledger and partial response template; copy that template to a
 distinct completed-response file and fill only the copy:
 
 ```bash
@@ -166,7 +166,7 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
-Never edit `$NEXT/responses.json`; it remains the immutable blank/partial
+Never edit `$NEXT/responses.json`; it remains the immutable partial
 template. A verification whose prior selection is discovery is the one
 marker-free exception. Dispatch fix lanes **scoped strictly to those findings**
 as proper task subagents from the exact reviewed worktree. A genuine defect
