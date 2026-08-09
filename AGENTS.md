@@ -109,11 +109,12 @@ implementation details unless a target or `tests/AGENTS.md` says otherwise.
 `nix develop` provides the toolchain every gate expects. Gate scripts bootstrap
 a private toolchain when missing, so a dev shell skips that setup.
 
-The unified Cargo/Bazel workspace, policy-context manifest, regeneration
-sequence, and native-check inventory are documented in
+The unified product workspace is rooted at `packages/Cargo.toml` and
+`packages/Cargo.lock`; the separate walker remains under
+`tests/tools/no-bash-ast-walker`. The Cargo/Bazel workspace,
+policy-context manifest, regeneration sequence, and native-check inventory are documented in
 [Bazel and policy workflows](./docs/contributing/bazel-and-policy.md).
-The no-bash AST walker remains a separate workspace and hub; `make test-rust`
-is still the aggregate over the eight Rust leaf jobs. See
+`make test-rust` is still the aggregate over the eight Rust leaf jobs. See
 [gates and lints](./docs/contributing/gates-and-lints.md) for coverage.
 
 ```bash
