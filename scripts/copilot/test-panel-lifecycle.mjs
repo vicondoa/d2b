@@ -2594,6 +2594,10 @@ try {
       join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", ".github", "skills", "d2b-panel-round", "selection-table.json"),
       join(cliRoot, ".github", "skills", "d2b-panel-round", "selection-table.json"),
     );
+    cpSync(
+      join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", ".github", "skills", "d2b-panel-round", "dispatch-policy.json"),
+      join(cliRoot, ".github", "skills", "d2b-panel-round", "dispatch-policy.json"),
+    );
     mkdirSync(join(cliRoot, ".github", "agents"), { recursive: true });
     for (const seat of [
       "software", "test", "product", "docs", "security", "observability",
