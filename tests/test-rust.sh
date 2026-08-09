@@ -923,8 +923,8 @@ run_fast_lint_gate() {
       fail "jq is required to derive changed main workspace package scope"
       exit 1
     }
-    if ! workspace_metadata=$(cargo metadata --format-version 1 --no-deps \
-        --locked --manifest-path "$manifest"); then
+    if ! workspace_metadata=$(cargo metadata --locked --offline --no-deps \
+        --format-version 1 --manifest-path "$manifest"); then
       fail "cargo metadata failed while deriving changed main workspace package scope"
       exit 1
     fi

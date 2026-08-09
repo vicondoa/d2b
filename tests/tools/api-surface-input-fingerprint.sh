@@ -56,7 +56,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 metadata=
-if ! metadata=$(cargo metadata --format-version 1 --no-deps \
+if ! metadata=$(cargo metadata --locked --offline --no-deps --format-version 1 \
     --manifest-path "$workspace_manifest"); then
   printf '%s\n' "api-surface workspace metadata enumeration failed" >&2
   exit 1
@@ -98,6 +98,7 @@ if [ "$workspace_root_real" != "$package_root_real" ]; then
   exit 1
 fi
 
+declare -A workspace_member_roots=()
 member_rows=$(
   printf '%s' "$metadata" | jq -r '
     . as $metadata
@@ -143,6 +144,7 @@ while IFS=$'\t' read -r package_name manifest_path; do
       exit 1
       ;;
   esac
+  workspace_member_roots["$crate_dir_real"]=1
   crate_count=$((crate_count + 1))
   inputs+=("${manifest_real#"$ROOT/"}")
   if [ -e "$crate_dir/build.rs" ] || [ -L "$crate_dir/build.rs" ]; then
@@ -188,6 +190,60 @@ if [ "$crate_count" -eq 0 ]; then
 fi
 
 enumeration_file=$(mktemp "${TMPDIR:-/tmp}/d2b-api-surface-inputs.XXXXXX")
+if ! find "$package_root" -mindepth 1 -maxdepth 1 -print0 \
+    | sort -z >"$enumeration_file"; then
+  printf '%s\n' "api-surface package enumeration failed" >&2
+  exit 1
+fi
+while IFS= read -r -d '' package_entry; do
+  entry_name=${package_entry##*/}
+  entry_real=$(readlink -f -- "$package_entry") || {
+    printf '%s\n' \
+      "api-surface package entry could not be resolved: packages/$entry_name" >&2
+    exit 1
+  }
+  member_entry=0
+  for member_root in "${!workspace_member_roots[@]}"; do
+    case "$entry_real" in
+      "$member_root"|"$member_root"/*)
+        member_entry=1
+        break
+        ;;
+    esac
+  done
+  [ "$member_entry" -eq 1 ] && continue
+
+  case "$entry_name" in
+    Cargo.guest.lock|Cargo.lock|Cargo.toml|deny.toml|rust-toolchain.toml)
+      if [ ! -f "$package_entry" ] || [ -L "$package_entry" ]; then
+        printf '%s\n' \
+          "api-surface package entry has an unexpected type: packages/$entry_name" >&2
+        exit 1
+      fi
+      continue
+      ;;
+    .cargo|.config|policy-inputs|target)
+      if [ ! -d "$package_entry" ] || [ -L "$package_entry" ]; then
+        printf '%s\n' \
+          "api-surface package entry has an unexpected type: packages/$entry_name" >&2
+        exit 1
+      fi
+      continue
+      ;;
+  esac
+
+  if [ -d "$package_entry" ] && [ ! -L "$package_entry" ] \
+    && [ -f "$package_entry/Cargo.toml" ] \
+    && [ ! -L "$package_entry/Cargo.toml" ] \
+    && grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
+      "$package_entry/Cargo.toml"; then
+    continue
+  fi
+  printf '%s\n' \
+    "api-surface package entry is not a workspace member or classified generated/independent directory: packages/$entry_name" >&2
+  exit 1
+done <"$enumeration_file"
+
 if ! printf '%s\0' "${inputs[@]}" | sort -zu >"$enumeration_file"; then
   printf '%s\n' "api-surface input ordering failed" >&2
   exit 1

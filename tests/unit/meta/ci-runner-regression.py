@@ -352,7 +352,8 @@ class CiRunnerRegressionTests(unittest.TestCase):
         tree = self.scratch / "api-fingerprint-tree"
         fixture_files = {
             "packages/Cargo.toml": (
-                '[workspace]\nmembers = ["example"]\nresolver = "2"\n'
+                '[workspace]\nmembers = ["example", "d2b-api-surface"]\n'
+                'resolver = "2"\n'
             ),
             "packages/Cargo.lock": "# fixture lock\n",
             "packages/.cargo/config.toml": "[build]\n",
@@ -361,6 +362,9 @@ class CiRunnerRegressionTests(unittest.TestCase):
             ),
             "packages/d2b-api-surface/rust-toolchain.toml": (
                 '[toolchain]\nchannel = "nightly-test"\n'
+            ),
+            "packages/d2b-api-surface/Cargo.toml": (
+                '[package]\nname = "d2b-api-surface"\nversion = "0.0.0"\n'
             ),
             "packages/example/Cargo.toml": (
                 '[package]\nname = "example"\nversion = "0.0.0"\n'
@@ -381,11 +385,15 @@ class CiRunnerRegressionTests(unittest.TestCase):
             "#!/usr/bin/env sh\n"
             'if [ "${1:-}" = metadata ]; then\n'
             "  printf '{\"workspace_root\":\"%s/packages\","
-            "\"workspace_members\":[\"path+file://%s/packages/example#0.0.0\"],"
+            "\"workspace_members\":[\"path+file://%s/packages/example#0.0.0\","
+            "\"path+file://%s/packages/d2b-api-surface#0.0.0\"],"
             "\"packages\":[{\"id\":\"path+file://%s/packages/example#0.0.0\","
             "\"name\":\"example\","
-            "\"manifest_path\":\"%s/packages/example/Cargo.toml\"}]}\\n' "
-            '"$ROOT" "$ROOT" "$ROOT" "$ROOT"\n'
+            "\"manifest_path\":\"%s/packages/example/Cargo.toml\"},"
+            "{\"id\":\"path+file://%s/packages/d2b-api-surface#0.0.0\","
+            "\"name\":\"d2b-api-surface\","
+            "\"manifest_path\":\"%s/packages/d2b-api-surface/Cargo.toml\"}]}\\n' "
+            '"$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT"\n'
             "  exit 0\n"
             "fi\n"
             "exit 91\n",
@@ -658,10 +666,20 @@ set -euo pipefail
             producer_failure.stderr,
         )
 
+        generated_entry = tree / "packages/policy-inputs"
+        generated_entry.mkdir()
+        generated = self.run_api_fingerprint(tree, "--check")
+        self.assertEqual(generated.returncode, 0, msg=generated.stderr)
+        generated_entry.rmdir()
+
         unexpected_entry = tree / "packages/unexpected-entry"
         os.mkfifo(unexpected_entry)
-        special_entry = self.run_api_fingerprint(tree, "--check")
-        self.assertEqual(special_entry.returncode, 0, msg=special_entry.stderr)
+        unknown_entry = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(unknown_entry.returncode, 0)
+        self.assertIn(
+            "api-surface package entry is not a workspace member",
+            unknown_entry.stderr,
+        )
         unexpected_entry.unlink()
 
         source_link = tree / "packages/example/src/linked.rs"
@@ -2023,7 +2041,10 @@ wait
         self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
         self.assertIn("--document-hidden-items", api_driver)
         self.assertIn("--document-private-items", api_driver)
-        self.assertIn("cargo \"+$pin\" metadata --format-version 1 --no-deps --locked", api_driver)
+        self.assertIn(
+            'cargo "+$pin" metadata --locked --offline --no-deps --format-version 1',
+            api_driver,
+        )
         self.assertIn("workspace_doc_args+=(--package \"$package_name\")", api_driver)
         self.assertIn('"${workspace_doc_args[@]}" --lib --no-deps', api_driver)
         self.assertIn(

@@ -49,7 +49,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 workspace_metadata=$(
   cd "$ROOT/packages"
-  cargo "+$pin" metadata --format-version 1 --no-deps --locked
+  cargo "+$pin" metadata --locked --offline --no-deps --format-version 1
 ) || {
   fail "api-surface workspace metadata discovery failed"
   exit 1
