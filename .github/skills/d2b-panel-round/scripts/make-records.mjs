@@ -217,7 +217,7 @@ function readCompletionBoundArtifacts(roundDir) {
   ].sort();
   if (
     marker.artifact_kind !== "d2b-panel/stage-completion" ||
-    marker.schema_version !== 3 ||
+    marker.schema_version !== 4 ||
     marker.complete !== true ||
     marker.phase !== "verification" ||
     Object.keys(marker).sort().join("\0") !== expectedKeys.join("\0")

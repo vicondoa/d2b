@@ -308,7 +308,7 @@ try {
   );
   check(
     "completion binds canonical evidence with size and digest",
-    firstCompletion.schema_version === 3 &&
+    firstCompletion.schema_version === 4 &&
       firstCompletion.artifact_sha256["evidence.md"] === evidenceDescriptor.sha256 &&
       firstCompletion.artifact_bytes["evidence.md"] === evidenceDescriptor.size_bytes &&
       firstCompletion.artifact_sha256["selection.json"] ===
@@ -689,9 +689,9 @@ try {
   const schema2Predecessor = verificationStage();
   const schema2OutputDir = join(repo, ".scratch", "panel", "spec001w1-r2");
   check(
-    "schema-2 predecessor exact old set upgrades to a schema-3 packet",
+    "schema-2 predecessor exact old set upgrades to a schema-4 packet",
     schema2Predecessor.status === 0 &&
-      readJson(join(schema2OutputDir, ".complete")).schema_version === 3 &&
+      readJson(join(schema2OutputDir, ".complete")).schema_version === 4 &&
       existsSync(join(schema2OutputDir, "dispatch-binding.json")),
     schema2Predecessor.text,
   );

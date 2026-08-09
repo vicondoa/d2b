@@ -300,7 +300,7 @@ const exactKeys = [
 ].sort();
 if (
   marker.artifact_kind !== "d2b-panel/stage-completion" ||
-  ![2, 3].includes(marker.schema_version) ||
+  ![2, 3, 4].includes(marker.schema_version) ||
   marker.complete !== true ||
   !marker.artifact_sha256 ||
   !marker.artifact_bytes ||
@@ -328,10 +328,12 @@ const compatibleExpectedNames = marker.schema_version === 2
         !name.startsWith("agent-definitions/") &&
         name !== "dispatch-binding.json",
     )
-  : expectedNames;
+  : marker.schema_version === 3
+    ? expectedNames.filter((name) => name !== "dispatch-binding.json")
+    : expectedNames;
 if (
   marker.phase !== expectedPhase ||
-  ![2, 3].includes(marker.schema_version) ||
+  ![2, 3, 4].includes(marker.schema_version) ||
   compatibleExpectedNames.length !== actualNames.length ||
   compatibleExpectedNames.some((name, index) => name !== actualNames[index])
 ) {
@@ -429,7 +431,7 @@ if (
   typeof marker !== "object" ||
   Array.isArray(marker) ||
   marker.artifact_kind !== "d2b-panel/stage-completion" ||
-  ![2, 3].includes(marker.schema_version) ||
+  ![2, 3, 4].includes(marker.schema_version) ||
   marker.complete !== true
 ) {
   console.error(
@@ -541,7 +543,7 @@ for (const name of packets) {
     !Array.isArray(marker) &&
     marker.complete === true &&
     marker.artifact_kind === "d2b-panel/stage-completion" &&
-    [2, 3].includes(marker.schema_version) &&
+    [2, 3, 4].includes(marker.schema_version) &&
     marker.lifecycle_id === lifecycle &&
     marker.phase === "discovery"
   ) {
@@ -1088,8 +1090,11 @@ if [ "$reuse_existing" = true ]; then
     "$out/verdicts"; do
     require_reused_path "$required_path" || exit 2
   done
-  if [ "$existing_completion_schema" = "3" ]; then
+  if [ "$existing_completion_schema" = "4" ]; then
     require_reused_path "$staged_dispatch_binding_path" || exit 2
+  fi
+  if [ "$existing_completion_schema" = "3" ] || \
+     [ "$existing_completion_schema" = "4" ]; then
     require_reused_path "$staged_agent_definitions_dir" || exit 2
   fi
   if [ "$phase" = "discovery" ]; then
@@ -1104,7 +1109,8 @@ if [ "$reuse_existing" = true ]; then
     done
   fi
   for seat in "${panel_seats[@]}"; do
-    if [ "$existing_completion_schema" = "3" ]; then
+    if [ "$existing_completion_schema" = "3" ] || \
+       [ "$existing_completion_schema" = "4" ]; then
       require_reused_path "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
     fi
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
@@ -1376,7 +1382,7 @@ validateSelectionCandidate(
 ' "$staged_selection_path" "$staged_candidate_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
-if [ "$reuse_existing" != true ] || [ "$existing_completion_schema" = "3" ]; then
+if [ "$reuse_existing" != true ] || [ "$existing_completion_schema" = "4" ]; then
   if ! stage_dispatch_binding "$staged_dispatch_binding_path"; then
     echo "could not materialize the roster-projected dispatch binding" >&2
     exit 2
@@ -1849,9 +1855,10 @@ import { chmodSync } from "node:fs";
 const [root, schema, ...relativePaths] = process.argv.slice(2);
 for (const relative of relativePaths) {
   if (
-    schema === "2" &&
-    (relative === "dispatch-binding.json" ||
-      relative.startsWith("agent-definitions/"))
+    (schema === "2" &&
+      (relative === "dispatch-binding.json" ||
+        relative.startsWith("agent-definitions/"))) ||
+    (schema === "3" && relative === "dispatch-binding.json")
   ) {
     continue;
   }
@@ -1859,7 +1866,9 @@ for (const relative of relativePaths) {
 }
 NODE
 
-if [ "$reuse_existing" = true ] && [ "$existing_completion_schema" = "2" ]; then
+if [ "$reuse_existing" = true ] && \
+   { [ "$existing_completion_schema" = "2" ] || \
+     [ "$existing_completion_schema" = "3" ]; }; then
   :
 elif ! node --input-type=module -e '
 import { createHash } from "node:crypto";
@@ -1877,7 +1886,7 @@ for (const relative of artifactPaths) {
 }
 process.stdout.write(stableStringify({
   artifact_kind: "d2b-panel/stage-completion",
-  schema_version: 3,
+  schema_version: 4,
   complete: true,
   round,
   lifecycle_id: lifecycle,
