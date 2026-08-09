@@ -323,7 +323,10 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <ro
   --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
-Verification staging supplies the complete canonical handoff:
+Discovery-to-first-verification staging is marker-free because its previous
+selection is discovery. A later verification whose previous selection is
+verification must consume the finalized continuation handoff and the distinct
+completed-response file:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
@@ -331,7 +334,8 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <ro
   --candidate <current-candidate.json> \
   --evidence <finalized-evidence.md> \
   --reviewer-notes-dir <finalized-reviewer-notes> \
-  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --ledger <discovery-ledger.json> --responses <responses-completed.json> \
+  --handoff <handoff.json> \
   --self-verification <self-verification.json> \
   --verification-dir <verification-requests>
 ```
@@ -355,6 +359,9 @@ request, not the supplied request bytes, is the canonical evidence-bound
 request. Discovery staging requires a readable `--discovery-request`;
 verification staging requires a readable complete per-seat
 `--verification-dir`, which is staged under `verification/`.
+When the predecessor selection is verification, staging requires
+`--handoff` and validates it against the exact supplied ledger and
+completed-response bytes before publishing packet artifacts.
 
 The `.complete` marker byte-binds every reviewer-visible canonical artifact,
 including the finalized evidence and reviewer notes. Once it exists, the round
@@ -418,7 +425,7 @@ handoff. Do not hand-copy findings or responses.
 
 The continuation verification command must pass
 `--handoff "$NEXT/handoff.json"`; discovery-first verification remains
-possible without that flag when no advanced handoff exists.
+marker-free without that flag.
 
 ```bash
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \

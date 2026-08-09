@@ -1755,6 +1755,11 @@ try {
     ),
   );
   check(
+    "discovery-to-first-verification remains marker-free",
+    !Object.hasOwn(verificationInput, "handoff") &&
+      verificationInput.requests.every((request) => !Object.hasOwn(request, "handoff")),
+  );
+  check(
     "strict verification request validation binds every staged input",
     validateVerificationRequest(verificationInput.requests[0], {
       selection: verificationSelection.selection,
@@ -2233,12 +2238,14 @@ try {
     advanced.responses.responses.map((response) => [response.issue_id, response]),
   );
   check(
-    "advance publishes a blank response template for every issue",
-    [...advancedResponseById.values()].every(
-      (response) => response.disposition === null,
-    ) &&
-      advanced.carried_issue_ids.length === 0 &&
-      advanced.reset_issue_ids.join(",") === "R1,R2,R3,R4,R5",
+    "advance carries passing responses and resets nonpassing and late issues",
+    advanced.carried_issue_ids.join(",") === "R1,R3,R4" &&
+      advanced.reset_issue_ids.join(",") === "R2,R5" &&
+      advancedResponseById.get("R1").disposition === "Fixed" &&
+      advancedResponseById.get("R2").disposition === null &&
+    advancedResponseById.get("R3").disposition === "Deferred" &&
+    advancedResponseById.get("R4").disposition === "Withdrawn" &&
+      advancedResponseById.get("R5").disposition === null,
   );
   const advanceOutput = join(root, "advance-handoff");
   const publishedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
@@ -2348,6 +2355,34 @@ try {
           responses_bytes: completedResponseBytes,
       }).marker.artifact_kind === advanceHandoff.artifact_kind,
   );
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const bomLedgerBytes = Buffer.concat([
+    bom,
+    Buffer.from(stableStringify(advanced.ledger)),
+  ]);
+  const bomCompletedResponseBytes = Buffer.concat([
+    bom,
+    completedResponseBytes,
+  ]);
+  const bomHandoff = finalizeHandoff({
+    discovery_ledger: advanced.ledger,
+    discovery_ledger_bytes: bomLedgerBytes,
+    completed_responses: completedResponses,
+    completed_responses_bytes: bomCompletedResponseBytes,
+  }).handoff;
+  check(
+    "BOM-prefixed JSON parses separately while handoff binds original raw bytes",
+    bomHandoff.ledger_sha256 === sha256(bomLedgerBytes) &&
+      bomHandoff.ledger_bytes === bomLedgerBytes.length &&
+      bomHandoff.responses_sha256 === sha256(bomCompletedResponseBytes) &&
+      bomHandoff.responses_bytes === bomCompletedResponseBytes.length &&
+      validateAdvanceVerificationHandoff(bomHandoff, {
+        ledger: advanced.ledger,
+        responses: completedResponses,
+        ledger_bytes: bomLedgerBytes,
+        responses_bytes: bomCompletedResponseBytes,
+      }).marker.responses_sha256 === bomHandoff.responses_sha256,
+  );
   const repeatedFinalize = writeFinalizeHandoff(finalizedHandoffPath, {
     discovery_ledger: advanced.ledger,
     discovery_ledger_bytes: advanceLedgerBytes,
@@ -2375,6 +2410,14 @@ try {
       responses: completedResponses,
       ledger_bytes: advanceLedgerBytes,
       responses_bytes: staleResponseBytes,
+    }),
+    /does not match the continuation handoff marker/,
+  );
+  rejects(
+    "a finalized handoff rejects raw-byte mutation with the same parsed response",
+    () => validateAdvanceVerificationHandoff(advanceHandoff, {
+      ledger_bytes: advanceLedgerBytes,
+      responses_bytes: Buffer.concat([completedResponseBytes, Buffer.from(" ")]),
     }),
     /does not match the continuation handoff marker/,
   );
@@ -2506,6 +2549,9 @@ try {
         },
       },
       latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+      handoff: advanceHandoff,
+      discovery_ledger_bytes: advanceLedgerBytes,
+      responses_bytes: completedResponseBytes,
     }),
     /fields.*verified_issue_statuses|exactly/,
   );
@@ -2526,8 +2572,27 @@ try {
         },
       },
       latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+      handoff: advanceHandoff,
+      discovery_ledger_bytes: advanceLedgerBytes,
+      responses_bytes: completedResponseBytes,
     }),
     /prior-ledger prefix|cover each issue|missing/,
+  );
+  rejects(
+    "verification preparation requires a handoff after a verification prior selection",
+    () => prepareVerification({
+      selection: nextSelection.selection,
+      ledger: advanced.ledger,
+      responses: completedResponses,
+      self_verification: selfVerification,
+      current_candidate: nextCandidate,
+      prior_selection: verificationSelection.selection,
+      prior_verdicts: nextPriorVerdicts,
+      latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+      discovery_ledger_bytes: advanceLedgerBytes,
+      responses_bytes: completedResponseBytes,
+    }),
+    /requires --handoff/,
   );
   const nextPreparation = prepareVerification({
     selection: nextSelection.selection,
@@ -2564,6 +2629,14 @@ try {
     justification: "The continued issue is fixed.",
     evidence: "focused continuation test",
   }));
+  const prefixLedgerBytes = Buffer.from(stableStringify(prefixLedger));
+  const prefixResponseBytes = Buffer.from(stableStringify(prefixResponses));
+  const prefixHandoff = finalizeHandoff({
+    discovery_ledger: prefixLedger,
+    discovery_ledger_bytes: prefixLedgerBytes,
+    completed_responses: prefixResponses,
+    completed_responses_bytes: prefixResponseBytes,
+  }).handoff;
   const priorVerificationWithIntermediatePrefix = Object.fromEntries(
     verificationSelection.selection.roster.map((seat) => [
       seat,
@@ -2590,6 +2663,9 @@ try {
       prior_selection: verificationSelection.selection,
       prior_verdicts: priorVerificationWithIntermediatePrefix,
       latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+      handoff: prefixHandoff,
+      discovery_ledger_bytes: prefixLedgerBytes,
+      responses_bytes: prefixResponseBytes,
     }).requests.length === nextSelection.selection.roster.length,
   );
   const nonContiguousPrefixStatuses = Object.fromEntries(
@@ -2617,6 +2693,9 @@ try {
         ]),
       ),
       latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+      handoff: prefixHandoff,
+      discovery_ledger_bytes: prefixLedgerBytes,
+      responses_bytes: prefixResponseBytes,
     }),
     /prior-ledger prefix|cover each issue|missing|extra/,
   );
@@ -3320,6 +3399,7 @@ try {
             join(cliVerificationReviewerNotes, `${seat}.md`),
             "utf8",
           )) &&
+        !existsSync(join(cliRound, "handoff.json")) &&
         existsSync(join(cliRound, ".complete")),
       `${stagedVerification.stdout}${stagedVerification.stderr}`,
     );
@@ -3535,6 +3615,36 @@ try {
           "discovery-ledger.json,handoff.json,responses-completed.json,responses.json",
       `${finalizeHandoffResult.stdout}${finalizeHandoffResult.stderr}`,
     );
+    const bomCliLedgerPath = join(cliRoot, "bom-ledger.json");
+    const bomCliResponsesPath = join(cliRoot, "bom-responses.json");
+    const bomCliLedgerBytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      readFileSync(join(cliAdvanceDirectory, "discovery-ledger.json")),
+    ]);
+    const bomCliResponseBytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      readFileSync(cliCompletedResponsesPath),
+    ]);
+    writeFileSync(bomCliLedgerPath, bomCliLedgerBytes);
+    writeFileSync(bomCliResponsesPath, bomCliResponseBytes);
+    const bomCliHandoffPath = join(cliRoot, "bom-handoff.json");
+    const bomFinalizeResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "finalize-handoff",
+      bomCliLedgerPath,
+      bomCliResponsesPath,
+      bomCliHandoffPath,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    const bomCliHandoff = JSON.parse(readFileSync(bomCliHandoffPath, "utf8"));
+    check(
+      "CLI preserves BOM-prefixed ledger and response raw bytes",
+      bomFinalizeResult.status === 0 &&
+        bomCliHandoff.ledger_sha256 === sha256(bomCliLedgerBytes) &&
+        bomCliHandoff.ledger_bytes === bomCliLedgerBytes.length &&
+        bomCliHandoff.responses_sha256 === sha256(bomCliResponseBytes) &&
+        bomCliHandoff.responses_bytes === bomCliResponseBytes.length,
+      `${bomFinalizeResult.stdout}${bomFinalizeResult.stderr}`,
+    );
     const blankFinalizeResult = spawnSync("node", [
       LIFECYCLE_CLI,
       "finalize-handoff",
@@ -3594,6 +3704,36 @@ try {
       continuationVerificationResult.status === 0 &&
         existsSync(join(continuationVerificationRequests, "software.json")),
       `${continuationVerificationResult.stdout}${continuationVerificationResult.stderr}`,
+    );
+    const followOnOmissionDir = join(
+      cliRoot,
+      "follow-on-verification-without-handoff",
+    );
+    const followOnOmissionResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "verification",
+      join(cliRound, "selection.json"),
+      join(cliAdvanceDirectory, "discovery-ledger.json"),
+      cliCompletedResponsesPath,
+      cliSelf,
+      followOnOmissionDir,
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+      "--prior-selection",
+      join(cliRound, "selection.json"),
+      "--prior-verdicts",
+      join(cliRound, "verdicts"),
+      "--delta",
+      cliDelta,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "verification CLI rejects omitted handoff after a verification prior selection",
+      followOnOmissionResult.status !== 0 &&
+        /requires --handoff/.test(
+          `${followOnOmissionResult.stdout}${followOnOmissionResult.stderr}`,
+        ) &&
+        !existsSync(join(followOnOmissionDir, "software.json")),
+      `${followOnOmissionResult.stdout}${followOnOmissionResult.stderr}`,
     );
     const savedCompletedResponsesBytes = readFileSync(
       cliCompletedResponsesPath,

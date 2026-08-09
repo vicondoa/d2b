@@ -529,6 +529,7 @@ import {
   opendirSync,
   readFileSync,
 } from "node:fs";
+import { TextDecoder } from "node:util";
 import { pathToFileURL } from "node:url";
 
 const panelRoot = process.argv[2];
@@ -641,13 +642,31 @@ const canonicalContentDirectories = new Set([
   "verdicts",
 ]);
 
+const continuationCoreFiles = new Set([
+  "handoff.json",
+  "discovery-ledger.json",
+  "responses.json",
+  "responses-completed.json",
+]);
+const continuationRetainedFiles = new Set([
+  "candidate.json",
+  "current-candidate.json",
+  "delta.json",
+  "fix-delta.json",
+  "actual-delta.json",
+  "self-verification.json",
+  "evidence.md",
+  "validation-evidence.md",
+]);
+const continuationRetainedDirectories = new Set(["verification"]);
+
 const relevantTopLevelNames = new Set([
   ".complete",
   ...canonicalFileNames,
   ...canonicalContentDirectories,
-  "handoff.json",
-  "discovery-ledger.json",
-  "responses.json",
+  ...continuationCoreFiles,
+  ...continuationRetainedFiles,
+  ...continuationRetainedDirectories,
 ]);
 
 const entryKind = (directory, entry) => {
@@ -663,7 +682,9 @@ const entryKind = (directory, entry) => {
 const scanTopLevel = (directory) => {
   const result = {
     total: 0,
+    entries: [],
     complete: false,
+    completeRegular: false,
     handoff: false,
     ledger: false,
     responses: false,
@@ -685,8 +706,10 @@ const scanTopLevel = (directory) => {
       }
       const kind = entryKind(directory, entry);
       const regular = kind === "file";
+      result.entries.push({ name: entry.name, kind });
       if (entry.name === ".complete") {
         result.complete = true;
+        result.completeRegular = regular;
       } else if (entry.name === "handoff.json") {
         result.handoff = true;
         result.handoffRegular = regular;
@@ -932,6 +955,63 @@ async function validateCompletedPacket(packet, markerPath) {
     allowedSets.some((names) => sameNames(names, actualNames)),
     `completion artifact set is invalid for schema_version ${marker.schema_version}`,
   );
+  const diskArtifactNames = [];
+  const walkPacket = (directory, prefix = "") => {
+    const packetEntries = opendirSync(directory);
+    try {
+      let entry;
+      while ((entry = packetEntries.readSync()) !== null) {
+        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (relative === ".complete") continue;
+        if (diskArtifactNames.length >= MAX_DIRECTORY_ENTRIES) {
+          throw new Error("completion packet has too many directory entries");
+        }
+        let directoryEntry = entry.isDirectory();
+        if (!directoryEntry && !entry.isFile()) {
+          const stat = lstatSync(path.join(directory, entry.name));
+          directoryEntry = stat.isDirectory();
+        }
+        if (directoryEntry) {
+          diskArtifactNames.push(relative);
+          walkPacket(path.join(directory, entry.name), relative);
+        } else {
+          diskArtifactNames.push(relative);
+        }
+      }
+    } finally {
+      try {
+        packetEntries.closeSync();
+      } catch (cause) {
+        if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+      }
+    }
+  };
+  walkPacket(packet);
+  diskArtifactNames.sort();
+  const postCompletionTopLevelNames = new Set([
+    "approval.json",
+    "discovery-results.json",
+    "metrics.json",
+    "observed.json",
+    "records",
+    "verification-results.json",
+    "verdicts",
+  ]);
+  const unboundPacketNames = diskArtifactNames.filter(
+    (name) => {
+      const isBoundArtifact =
+        actualNames.includes(name) ||
+        actualNames.some((artifact) => artifact.startsWith(`${name}/`));
+      return (
+        !isBoundArtifact &&
+        !postCompletionTopLevelNames.has(name.split("/")[0])
+      );
+    },
+  );
+  assert(
+    unboundPacketNames.length === 0,
+    "completion packet contains an unbound packet remnant",
+  );
 
   const selectionBytes = artifacts.get("selection.json");
   const selectionActualDigest = crypto
@@ -1031,8 +1111,10 @@ async function validateCompletedPacket(packet, markerPath) {
 }
 
 async function readContinuationHandoff(packet) {
-  const { validateAdvanceVerificationHandoff } =
+  const { validateAdvanceVerificationHandoff, validateResponseHandoff } =
     await import(pathToFileURL(lifecycleHelper).href);
+  const decodeJson = (bytes) =>
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   try {
     const markerBytes = readBounded(
       path.join(packet, "handoff.json"),
@@ -1057,22 +1139,15 @@ async function readContinuationHandoff(packet) {
           MAX_BOUND_ARTIFACT_BYTES,
         )
       : undefined;
-    const marker = JSON.parse(markerBytes.toString("utf8"));
+    const marker = decodeJson(markerBytes);
     validateAdvanceVerificationHandoff(marker, {
       ledger_bytes: ledgerBytes,
       responses_bytes: responsesBytes,
     });
     if (blankResponseBytes !== undefined) {
-      const { createResponseTemplate } =
-        await import(pathToFileURL(lifecycleHelper).href);
-      const ledger = JSON.parse(ledgerBytes.toString("utf8"));
-      const blankResponses = JSON.parse(blankResponseBytes.toString("utf8"));
-      if (
-        JSON.stringify(blankResponses) !==
-        JSON.stringify(createResponseTemplate(ledger))
-      ) {
-        failScan("invalid-handoff", 1);
-      }
+      const ledger = decodeJson(ledgerBytes);
+      const blankResponses = decodeJson(blankResponseBytes);
+      validateResponseHandoff(ledger, blankResponses);
     }
     return marker;
   } catch {
@@ -1110,6 +1185,9 @@ try {
       const state = scanTopLevel(packet);
 
       if (state.complete) {
+        if (state.total === 1 && state.completeRegular) {
+          continue;
+        }
         const markerPath = path.join(packet, ".complete");
         let markerStat;
         try {
@@ -1144,11 +1222,31 @@ try {
         state.handoffRegular &&
         state.ledgerRegular &&
         state.completedResponsesRegular &&
-        ((state.total === 3 && !state.responses) ||
-          (state.total === 4 &&
-            state.responses &&
-            state.responsesRegular));
+        (!state.responses || state.responsesRegular);
       if (completeHandoff) {
+        const allowedContinuationNames = new Set([
+          ...continuationCoreFiles,
+          ...continuationRetainedFiles,
+          ...continuationRetainedDirectories,
+        ]);
+        const unexpectedContinuationEntries = state.entries.filter(
+          ({ name }) => !allowedContinuationNames.has(name),
+        );
+        const invalidContinuationEntryKinds = state.entries.filter(
+          ({ name, kind }) =>
+            (continuationRetainedDirectories.has(name) && kind !== "directory") ||
+            (continuationRetainedFiles.has(name) && kind !== "file"),
+        );
+        if (
+          unexpectedContinuationEntries.length > 0 ||
+          invalidContinuationEntryKinds.length > 0
+        ) {
+          failScan(
+            "damaged-handoff",
+            unexpectedContinuationEntries.length +
+              invalidContinuationEntryKinds.length,
+          );
+        }
         const marker = await readContinuationHandoff(packet);
         if (marker.lifecycle_id === lifecycle) {
           failScan("same-lifecycle-handoff", 1);
@@ -1269,6 +1367,7 @@ previous_dir=""
 display_previous_dir=""
 op_previous_dir=""
 previous_selection_path=""
+previous_phase=""
 if [ "$round_number" -eq 1 ]; then
   if [ "$prev_sha" != "$base_sha" ]; then
     echo "round 1 must use the branch base as <prev-tip>" >&2
@@ -1468,6 +1567,13 @@ NODE
     echo "previous review selection bytes disagree with address.json" >&2
     exit 2
   fi
+fi
+
+if [ "$phase" = "verification" ] &&
+   [ "$previous_phase" = "verification" ] &&
+   [ -z "$handoff_path" ]; then
+  echo "verification staging requires --handoff when the previous selection phase is verification" >&2
+  exit 2
 fi
 
 if ! node --input-type=module -e '

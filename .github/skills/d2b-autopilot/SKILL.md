@@ -126,19 +126,56 @@ verification. This is feedback only: do not create the delivery
 `panel-request`, final records, or attestation while content may still change.
 
 **5. Continue fixes and verification.** If verification returns findings, run
-the canonical
-`advance-verification` command against the exact selection, prior ledger,
-prior responses, adapted verification results, and current candidate. Fill
-its blank responses, rerun selection over the new fix delta, prepare
-verification, and stage the new feedback packet. Dispatch fix lanes **scoped strictly
-to those findings** as proper task subagents from the exact reviewed
-worktree. A genuine defect found while fixing something else goes to
-`/d2b-memory record`, not this lifecycle. Revalidate and run scoped
-verification again. Any content change invalidates every prior phase sign-off;
-do not reopen comprehensive discovery. A blocked continuation requires a fresh
-self-verification artifact for the new candidate and an explicit lifecycle
-when staging. Never use a parent-worktree or legacy agent definition as a
-fallback.
+the exact continuation sequence below. The advance command publishes the
+immutable ledger and blank/partial response template; copy that template to a
+distinct completed-response file and fill only the copy:
+
+```bash
+ROUND=.scratch/panel/<round>
+NEXT=.scratch/panel/<next-handoff>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+FIX_DELTA=.scratch/panel/<next-fix-delta>.json
+CURRENT_CANDIDATE=.scratch/panel/<next-current-candidate>.json
+NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select "$CURRENT_CANDIDATE" <lifecycle-id> --phase verification \
+  --previous-selection "$ROUND/selection.json" --fix-delta "$FIX_DELTA")
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/self-verification.json" \
+  "$NEXT/verification" --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> --selection "$NEXT_SELECTION" \
+  --candidate "$CURRENT_CANDIDATE" --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
+  --self-verification "$NEXT/self-verification.json" \
+  --verification-dir "$NEXT/verification" --lifecycle <lifecycle-id> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
+
+Never edit `$NEXT/responses.json`; it remains the immutable blank/partial
+template. A verification whose prior selection is discovery is the one
+marker-free exception. Dispatch fix lanes **scoped strictly to those findings**
+as proper task subagents from the exact reviewed worktree. A genuine defect
+found while fixing something else goes to `/d2b-memory record`, not this
+lifecycle. Revalidate and run scoped verification again. Any content change
+invalidates every prior phase sign-off; do not reopen comprehensive discovery.
+A blocked continuation requires a fresh self-verification artifact for the new
+candidate and an explicit lifecycle when staging. Never use a parent-worktree
+or legacy agent definition as a fallback.
 
 **6. Freeze and bind the final delivery packet (Track A only).** After the
 feedback lifecycle is unanimously approved and no content-changing fix

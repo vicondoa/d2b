@@ -262,6 +262,10 @@ exact ledger and completed-response bytes, but it is not an atomic transaction
 or a security proof. Never edit `NEXT/responses.json`, the ledger, or the
 completed responses after finalization. The finalized continuation requires all three files before
 use: the ledger, completed responses, and `handoff.json`.
+When the prior selection phase is verification, both verification preparation
+and staging require `--handoff` and validate it against the exact supplied
+ledger and completed-response raw bytes. The discovery-to-first-verification
+transition remains marker-free and may omit the flag.
 Prepare a **fresh** self-verification artifact for the new
 candidate and fix delta; never reuse `$ROUND/self-verification.json` for the
 continuation. Then rerun selection with the new fix delta, prepare
@@ -295,6 +299,15 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   --evidence <finalized-evidence.md> \
   --reviewer-notes-dir <finalized-reviewer-notes>
 ```
+
+The discovery scratch scan validates `handoff.json`, the bound
+`discovery-ledger.json`, and `responses-completed.json`. After finalization it
+permits the retained continuation outputs `verification/`,
+`self-verification.json`, `candidate.json`, `current-candidate.json`,
+`delta.json`, `fix-delta.json`, `actual-delta.json`, `evidence.md`, and
+`validation-evidence.md`. Staged-packet anchors such as `selection.json`,
+`address.json`, and `full.diff` are rejected; an unrelated lifecycle handoff
+is still ignored.
 
 Metrics remain final-only and may refuse blocked verification. Do not run
 metrics until the new verification is passing.

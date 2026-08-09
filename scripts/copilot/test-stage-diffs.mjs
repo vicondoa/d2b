@@ -489,12 +489,9 @@ try {
     ),
   );
   check(
-    "a marker-only packet fails closed",
-    markerOnlyDiscovery.status === 2 &&
-      /category=invalid-completion-packet count=1/.test(
-        markerOnlyDiscovery.text,
-      ) &&
-      !existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
+    "a marker-only packet is ignored as non-authoritative scratch",
+    markerOnlyDiscovery.status === 0 &&
+      existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
     markerOnlyDiscovery.text,
   );
   rmSync(alternateDiscoveryDir, { recursive: true, force: true });
@@ -502,6 +499,42 @@ try {
     recursive: true,
     force: true,
   });
+  const markerWithRemnantDir = join(
+    repo,
+    ".scratch",
+    "panel",
+    "marker-with-remnant",
+  );
+  mkdirSync(markerWithRemnantDir, { recursive: true });
+  writeFileSync(
+    join(markerWithRemnantDir, ".complete"),
+    savedFirstCompletionMarker,
+  );
+  chmodSync(join(markerWithRemnantDir, ".complete"), 0o444);
+  writeFileSync(join(markerWithRemnantDir, "responses.json"), "{}\n");
+  const markerWithRemnantDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "markerremnant-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "a marker plus any packet remnant remains fail-closed",
+    markerWithRemnantDiscovery.status === 2 &&
+      /category=invalid-completion-packet count=1/.test(
+        markerWithRemnantDiscovery.text,
+      ) &&
+      !existsSync(
+        join(repo, ".scratch", "panel", "markerremnant-r1", ".complete"),
+      ),
+    markerWithRemnantDiscovery.text,
+  );
+  rmSync(markerWithRemnantDir, { recursive: true, force: true });
   const validDiscoveryDir = copyCompletedDiscoveryPacket(
     "valid-prefix-r1",
     true,
@@ -1236,6 +1269,52 @@ try {
       ),
     unrelatedHandoff.text,
   );
+  const retainedContinuationOutputs = runRealHandoffDiscovery(
+    "retained-continuation-outputs",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => {
+      mkdirSync(join(packet, "verification"), { recursive: true });
+      writeFileSync(
+        join(packet, "verification", "software.json"),
+        "{}\n",
+      );
+      writeFileSync(join(packet, "self-verification.json"), "{}\n");
+      writeFileSync(join(packet, "candidate.json"), "{}\n");
+      writeFileSync(join(packet, "fix-delta.json"), "{}\n");
+      writeFileSync(join(packet, "evidence.md"), "post-finalization evidence\n");
+    },
+  );
+  check(
+    "discovery scan permits documented retained continuation outputs",
+    retainedContinuationOutputs.status === 0,
+    retainedContinuationOutputs.text,
+  );
+  const stagedContinuationAnchors = runRealHandoffDiscovery(
+    "staged-continuation-anchors",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => {
+      writeFileSync(join(packet, "selection.json"), "{}\n");
+      writeFileSync(join(packet, "address.json"), "{}\n");
+      writeFileSync(join(packet, "full.diff"), "staged anchor\n");
+    },
+  );
+  check(
+    "discovery scan rejects staged-packet anchors in a retained handoff",
+    stagedContinuationAnchors.status === 2 &&
+      /category=damaged-handoff count=3/.test(
+        stagedContinuationAnchors.text,
+      ) &&
+      !stagedContinuationAnchors.text.includes(
+        "staged-continuation-anchors",
+      ),
+    stagedContinuationAnchors.text,
+  );
 
   const discoveryPacketBackup = join(repo, "discovery-packet-backup");
   cpSync(firstDir, discoveryPacketBackup, { recursive: true });
@@ -1501,6 +1580,56 @@ try {
     missingPredecessor.text,
   );
   restorePredecessorMarker();
+
+  const firstVerificationWithoutHandoff = run(repo, [
+    base,
+    firstTip,
+    "spec001w1-r2",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    continuationLedgerPath,
+    "--responses",
+    continuationCompletedResponsesPath,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    continuationVerificationDir,
+  ]);
+  const firstVerificationPacket = join(
+    repo,
+    ".scratch",
+    "panel",
+    "spec001w1-r2",
+  );
+  check(
+    "discovery-to-first-verification staging remains marker-free",
+    firstVerificationWithoutHandoff.status === 0 &&
+      !existsSync(join(firstVerificationPacket, "handoff.json")) &&
+      existsSync(join(firstVerificationPacket, ".complete")),
+    firstVerificationWithoutHandoff.text,
+  );
+  rmSync(firstVerificationPacket, { recursive: true, force: true });
+
+  const originalContinuationHandoffBytes = readFileSync(continuationHandoffPath);
+  const invalidContinuationHandoff = readJson(continuationHandoffPath);
+  invalidContinuationHandoff.responses_sha256 = "f".repeat(64);
+  chmodSync(continuationHandoffPath, 0o644);
+  writeJson(continuationHandoffPath, invalidContinuationHandoff);
+  const invalidHandoffStage = verificationStage();
+  check(
+    "verification staging validates handoff-bound bytes before publication",
+    invalidHandoffStage.status === 2 &&
+      /does not bind the exact ledger and completed responses/.test(
+        invalidHandoffStage.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
+    invalidHandoffStage.text,
+  );
+  writeFileSync(continuationHandoffPath, originalContinuationHandoffBytes);
+  chmodSync(continuationHandoffPath, 0o444);
 
   const schema2Marker = readJson(predecessorMarker);
   for (const seat of firstRoster) {
@@ -1887,6 +2016,33 @@ try {
       readFileSync(join(secondDir, "verification", `${seat}.json`), "utf8") ===
         readFileSync(join(continuationVerificationDir, `${seat}.json`), "utf8"),
     ),
+  );
+
+  const followOnWithoutHandoff = run(repo, [
+    base,
+    secondTip,
+    "spec001w1-r3",
+    "--selection",
+    currentSelectionPath,
+    "--candidate",
+    currentCandidatePath,
+    "--ledger",
+    continuationLedgerPath,
+    "--responses",
+    continuationCompletedResponsesPath,
+    "--self-verification",
+    stagedSelfVerification,
+    "--verification-dir",
+    continuationVerificationDir,
+  ]);
+  check(
+    "verification staging requires --handoff after a verification predecessor",
+    followOnWithoutHandoff.status === 2 &&
+      /requires --handoff when the previous selection phase is verification/.test(
+        followOnWithoutHandoff.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r3", ".complete")),
+    followOnWithoutHandoff.text,
   );
 
   rmSync(join(secondDir, ".complete"));

@@ -115,7 +115,10 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
-For verification staging, supply the complete canonical handoff instead:
+Discovery-to-first-verification staging is marker-free because its previous
+selection is discovery. For every later verification whose previous selection
+is verification, supply the finalized continuation handoff and the distinct
+completed-response file:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
@@ -124,7 +127,9 @@ bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   --candidate <current-candidate.json> \
   --evidence <finalized-evidence.md> \
   --reviewer-notes-dir <finalized-reviewer-notes> \
-  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --ledger <discovery-ledger.json> \
+  --responses <responses-completed.json> \
+  --handoff <handoff.json> \
   --self-verification <self-verification.json> \
   --verification-dir <verification-requests>
 ```
@@ -175,7 +180,18 @@ other entries. Omitting the notes argument uses the generated defaults.
 Discovery staging additionally requires a readable `--discovery-request`
 artifact. Verification staging requires a readable complete per-seat
 `--verification-dir`; it also requires the ledger, response, and
-self-verification artifacts above.
+self-verification artifacts above. When the predecessor selection is
+verification, `--handoff` is mandatory and staging validates that marker
+against the exact supplied ledger and completed-response bytes before
+publishing any packet artifact.
+Discovery scanning validates a retained finalized handoff against
+`handoff.json`, `discovery-ledger.json`, and `responses-completed.json`.
+It permits `verification/`, `self-verification.json`, candidate/delta/evidence
+outputs (`candidate.json`, `current-candidate.json`, `delta.json`,
+`fix-delta.json`, `actual-delta.json`, `evidence.md`, and
+`validation-evidence.md`) while rejecting staged-packet anchors such as
+`selection.json`, `address.json`, and `full.diff`. A handoff from another
+lifecycle remains unrelated scratch and is ignored.
 
 All canonical artifacts, evidence, reviewer notes, and verification requests
 are materialized before the round's `.complete` marker is published. That

@@ -320,7 +320,7 @@ function readJsonWithBytes(path, label = path) {
   try {
     const bytes = readFileNoFollow(path, { label });
     const text = artifactText(bytes, label);
-    return { value: JSON.parse(text), bytes: text };
+    return { value: JSON.parse(text), bytes };
   } catch (cause) {
     if (cause.code === "ENOENT") {
       error(`missing ${label} at ${path}`);
@@ -2207,7 +2207,10 @@ export function createVerificationResultArtifact(input, options = {}) {
     "adapted verification selection",
   );
   const ledgerBytes = input.ledger_bytes ?? input.discovery_ledger_bytes;
-  if (typeof ledgerBytes !== "string" || ledgerBytes.length === 0) {
+  if (
+    (typeof ledgerBytes !== "string" && !Buffer.isBuffer(ledgerBytes)) ||
+    ledgerBytes.length === 0
+  ) {
     error("adapted verification requires the exact immutable discovery ledger bytes");
   }
   const ledger = input.ledger ?? input.discovery_ledger;
@@ -2274,7 +2277,11 @@ export function validateVerificationResultArtifact(
   const ledger = options.ledger;
   if (!ledger) error("adapted verification validation requires the immutable discovery ledger");
   validateLedger(ledger, { table, selection });
-  if (typeof options.ledger_bytes !== "string" || options.ledger_bytes.length === 0) {
+  if (
+    (typeof options.ledger_bytes !== "string" &&
+      !Buffer.isBuffer(options.ledger_bytes)) ||
+    options.ledger_bytes.length === 0
+  ) {
     error("adapted verification validation requires exact ledger bytes");
   }
   validateExactJsonBytes(
@@ -3794,7 +3801,7 @@ export function appendLateFindings(ledger, findings) {
   };
 }
 
-function validateResponseHandoff(ledger, envelope) {
+export function validateResponseHandoff(ledger, envelope) {
   validateResponseEnvelope(ledger, envelope);
   if (!Array.isArray(envelope.responses)) {
     error("next implementation response envelope responses must be an array");
@@ -3886,9 +3893,9 @@ function artifactByteLength(bytes, label) {
 
 function artifactText(bytes, label) {
   artifactByteLength(bytes, label);
-  if (typeof bytes === "string") return bytes;
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const raw = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
+    return new TextDecoder("utf-8", { fatal: true }).decode(raw);
   } catch (cause) {
     error(`${label} bytes are not valid UTF-8: ${cause.message}`);
   }
@@ -4161,7 +4168,7 @@ export function advanceVerification(input, options = {}) {
     responses,
     "advance-verification responses",
   );
-  validateResponses(ledger, responses);
+  const priorResponses = validateResponses(ledger, responses);
   validateResponseEnvelope(ledger, responses);
 
   const verificationResults =
@@ -4214,12 +4221,41 @@ export function advanceVerification(input, options = {}) {
   });
   validateLedger(nextLedger);
 
-  // The next response envelope is deliberately a blank template. Completed
-  // responses are a separate operator-owned artifact and are finalized before
-  // any continuation consumer accepts the handoff marker.
+  const priorByIssue = new Map(
+    priorResponses.map((response) => [response.issue_id, response]),
+  );
+  const statusByIssue = new Map(
+    ledger.issues.map((issue) => [
+      issue.id,
+      verification.every((result) =>
+        PASSING_VERIFICATION_STATUSES.has(
+          statusName(result.verified_issue_statuses[issue.id]),
+        )),
+    ]),
+  );
+  const priorIssueIds = new Set(ledger.issues.map((issue) => issue.id));
   const carriedIssueIds = [];
-  const resetIssueIds = nextLedger.issues.map((issue) => issue.id);
-  const nextResponses = createResponseTemplate(nextLedger);
+  const resetIssueIds = [];
+  const template = createResponseTemplate(nextLedger);
+  const blankByIssue = new Map(
+    template.responses.map((response) => [response.issue_id, response]),
+  );
+  template.responses = nextLedger.issues.map((issue) => {
+    if (
+      priorIssueIds.has(issue.id) &&
+      statusByIssue.get(issue.id) === true
+    ) {
+      const response = priorByIssue.get(issue.id);
+      if (!response) {
+        error(`advance-verification has no prior response for ${issue.id}`);
+      }
+      carriedIssueIds.push(issue.id);
+      return response;
+    }
+    resetIssueIds.push(issue.id);
+    return blankByIssue.get(issue.id);
+  });
+  const nextResponses = sortedObject(template);
   validateResponseHandoff(nextLedger, nextResponses);
   return {
     ledger: nextLedger,
@@ -4621,6 +4657,11 @@ export function prepareVerification(input, options = {}) {
     input.handoff ??
     input.continuation_handoff ??
     input.continuationHandoff;
+  if (priorSelection.phase === "verification" && handoff === undefined) {
+    error(
+      "verification preparation requires --handoff when prior selection phase is verification",
+    );
+  }
   if (handoff !== undefined) {
     const ledgerBytes =
       input.discovery_ledger_bytes ??
@@ -5025,18 +5066,18 @@ export function createApprovalArtifact(input, options = {}) {
   const responseBytes = input.responses_bytes ?? input.response_bytes;
   const verificationResultsBytes =
     input.verification_results_bytes ?? input.verification_bytes;
-  if (typeof ledgerBytes !== "string" || ledgerBytes.length === 0) {
-    error("approval requires the exact immutable discovery ledger bytes");
-  }
-  if (typeof responseBytes !== "string" || responseBytes.length === 0) {
-    error("approval requires the exact implementation response bytes");
-  }
-  if (
-    typeof verificationResultsBytes !== "string" ||
-    verificationResultsBytes.length === 0
-  ) {
-    error("approval requires the exact adapted verification-result bytes");
-  }
+  artifactByteLength(
+    ledgerBytes,
+    "approval requires the exact immutable discovery ledger bytes",
+  );
+  artifactByteLength(
+    responseBytes,
+    "approval requires the exact implementation response bytes",
+  );
+  artifactByteLength(
+    verificationResultsBytes,
+    "approval requires the exact adapted verification-result bytes",
+  );
   const selection = input.current_selection ?? input.selection;
   const ledger = input.discovery_ledger ?? input.ledger;
   const responses = input.responses;
@@ -5188,18 +5229,18 @@ export function createMetricsArtifact(input, options = {}) {
   const ledgerBytes = input.ledger_bytes;
   const responseBytes = input.responses_bytes;
   const verificationResultsBytes = input.verification_results_bytes;
-  if (typeof ledgerBytes !== "string" || ledgerBytes.length === 0) {
-    error("final metrics require exact immutable discovery ledger bytes");
-  }
-  if (typeof responseBytes !== "string" || responseBytes.length === 0) {
-    error("final metrics require exact implementation response bytes");
-  }
-  if (
-    typeof verificationResultsBytes !== "string" ||
-    verificationResultsBytes.length === 0
-  ) {
-    error("final metrics require exact adapted verification-result bytes");
-  }
+  artifactByteLength(
+    ledgerBytes,
+    "final metrics require exact immutable discovery ledger bytes",
+  );
+  artifactByteLength(
+    responseBytes,
+    "final metrics require exact implementation response bytes",
+  );
+  artifactByteLength(
+    verificationResultsBytes,
+    "final metrics require exact adapted verification-result bytes",
+  );
   const table = options.table ?? input.table;
   validateSelection(selection, table);
   const selectionBytes = exactSelectionBytes(
