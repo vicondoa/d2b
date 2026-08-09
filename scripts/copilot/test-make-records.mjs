@@ -118,6 +118,20 @@ function buildRound(mutate) {
       profiles: Object.fromEntries(ROLES.map((role) => [role, role === "software" ? ["rust"] : []])),
       roster: ROLES,
     },
+    dispatchBinding: {
+      artifact_kind: "d2b-panel/dispatch-binding",
+      schema_version: 1,
+      lifecycle_id: "spec001w1",
+      phase: "verification",
+      roster: ROLES,
+      bindings: Object.fromEntries(ROLES.map((role) => [role, {
+        agent_type: `panel-${role}`,
+        model: "gpt-5.6-sol",
+        reasoning_effort: "xhigh",
+        context_tier: "default",
+        communication: "caveman-full-optional",
+      }])),
+    },
     ledger: {
       artifact_kind: "d2b-panel/issue-ledger",
       schema_version: 1,
@@ -141,6 +155,7 @@ function buildRound(mutate) {
         reasoning_effort: "xhigh",
         agent_type: `panel-${r}`,
         context_tier: "default",
+        communication: "caveman-full-optional",
         agent_definition_sha256: agentDefinitionDigests[r],
         run_id: `run-${i}`,
         receipt_locator: `github-copilot://receipt/${i}`,
@@ -210,6 +225,7 @@ function buildRound(mutate) {
   writeFileSync(join(dir, "address.json"), stableStringify(state.address));
   writeFileSync(join(dir, "current-candidate.json"), stableStringify(state.candidate));
   writeFileSync(join(dir, "selection.json"), finalSelectionBytes);
+  writeFileSync(join(dir, "dispatch-binding.json"), stableStringify(state.dispatchBinding));
   writeFileSync(join(dir, "discovery-ledger.json"), finalLedgerBytes);
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
   writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
@@ -224,6 +240,7 @@ function buildRound(mutate) {
     "address.json",
     "current-candidate.json",
     "selection.json",
+    "dispatch-binding.json",
     "discovery-ledger.json",
     "responses.json",
   ]) {
@@ -505,7 +522,7 @@ console.log("make-records: legacy Gemini is rejected by current records");
     const r = run(dir);
     check(
       "a current record round rejects the legacy Gemini binding",
-      r.code !== 0 && /current records|policy accepts only/.test(`${r.out}${r.err}`),
+      r.code !== 0 && /current records|policy accepts only|dispatch policy/.test(`${r.out}${r.err}`),
       `${r.err}`,
     );
   } finally {
@@ -530,7 +547,7 @@ rejects(
     s.observed.agentic.model = "gemini-3.1-pro-preview";
     s.observed.agentic.reasoning_effort = "xhigh";
   },
-  /legacy|compatibility pair|xhigh/i,
+  /gemini|policy pins|dispatch policy/i,
 );
 rejects(
   "a seat with no observed binding cannot be attested",
@@ -558,14 +575,29 @@ rejects(
   /context_tier/i,
 );
 rejects(
+  "a missing communication mode is not defaulted",
+  (s) => { delete s.observed.product.communication; },
+  /communication/i,
+);
+rejects(
   "a non-default context tier is rejected",
   (s) => { s.observed.product.context_tier = "long_context"; },
   /context_tier.*default/i,
 );
 rejects(
+  "an observed communication mode must match policy",
+  (s) => { s.observed.product.communication = "normal"; },
+  /communication|policy pins/i,
+);
+rejects(
   "an observed agent definition digest must match the staged packet",
   (s) => { s.observed.agentic.agent_definition_sha256 = "0".repeat(64); },
   /agent definition digest|agent_definition_sha256/i,
+);
+rejects(
+  "a tampered dispatch binding is refused",
+  (s) => { s.dispatchBinding.bindings.agentic.model = "claude-opus-5"; },
+  /dispatch-binding|dispatch policy/i,
 );
 {
   const dir = buildRound();

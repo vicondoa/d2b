@@ -53,6 +53,12 @@ Observed binding records carry `agent_type`, `model`, `reasoning_effort`, and
 `context_tier` as ordinary process metadata. They do not attest agent
 definition bytes or claim harness authority.
 
+One machine readable dispatch policy supplies every seat's agent type, model,
+reasoning effort, context tier, and communication. Staging projects only the
+selected roster from that policy into the packet, and the completion marker
+binds that projection beside the selected agent definitions.
+The table below is the operator readable projection of those same bindings.
+
 The current pool has seven mandatory seats. Code and operative configuration
 have a floor of ten; documentation-only candidates have a floor of eight.
 Every matching optional trigger is selected even when the floor is already
@@ -171,6 +177,8 @@ round's canonical schema-version 2 `.complete` packet and validates each
 bound artifact's recorded size and digest before reading the predecessor
 address, selection, or verdicts. Legacy packets are handled only by the
 explicit legacy-import path; they are not predecessors for current staging.
+Discovery is exactly once by lifecycle identity: completed discovery packets
+are checked before discovery staging even when their round labels differ.
 
 Both `review-request.md` and `dispatch-prompt.txt` name the selected panel
 agent definition and carry the active phase's authoritative verdict contract.
@@ -495,10 +503,13 @@ Current candidate selection is unioned into the imported roster, including
 ## Dispatch and verdict
 
 Dispatch only the seats in the current selection artifact through proper task
-subagents using the table's `agent_type`. Never substitute a different agent
+subagents using the policy's `agent_type`. Never substitute a different agent
 type or spawn a nested `copilot` CLI reviewer. The model, effort, context tier,
 and communication mode are dispatch metadata; they are not reviewer-authored
-claims or a cryptographic provenance boundary.
+claims or a cryptographic provenance boundary. Observed same user process
+metadata is compared with the completion bound policy and the staged agent
+definition digest for the seat. It is correlation evidence, not
+authentication.
 
 Panel agents are read-only and must inspect staged evidence rather than run validation. The
 exact discovery reviewer schema and recommendation schema are defined above.

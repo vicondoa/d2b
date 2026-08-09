@@ -210,9 +210,9 @@ so re-verify on every CLI upgrade.
 
 ### What follows from that
 
-**Dispatch parameters are the binding.** They live in the committed skill
-tables, which is why those tables are the configuration rather than
-documentation of it.
+**Dispatch parameters are the binding.** They live in the committed dispatch
+policy and its skill table projection, which is why those surfaces are
+configuration rather than documentation of it.
 
 **Nothing modifies the operator's settings.** Per-lane binding was measured
 sufficient with no `subagents` block in either scope.
@@ -230,7 +230,7 @@ the model default while a record attests `xhigh`. That produces a
 plausible-looking artifact rather than an error, which is the worst shape a
 failure can take on an attestation gate. Three layers defend it:
 
-1. the dispatch tables, which make it rarely happen;
+1. the dispatch policy and its table projection, which make it rarely happen;
 2. `scripts/copilot/check-bindings.mjs`, which rejects a mispinned or illegal
    effort before a run;
 3. the record helper, which takes the **observed** effort as input and fails
@@ -253,6 +253,12 @@ immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by
 fails closed. Legacy imported records remain readable through their explicit
 legacy path; that compatibility does not weaken current workspace-schema
 records.
+
+The panel dispatch policy is one machine readable source for every seat's
+agent type, model, reasoning effort, context tier, and communication. Staging
+places the selected projection in the completion bound packet, and record
+generation compares observed same user process metadata with that projection.
+These values are process evidence and correlation data, not authentication.
 
 New panel work uses `gpt-5.6-sol` at `xhigh`. Existing
 `gemini-3.1-pro-preview` records at `high` remain readable as one exact

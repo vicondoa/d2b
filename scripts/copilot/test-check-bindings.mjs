@@ -119,6 +119,7 @@ const OPTIONAL_INPUTS = [
 ];
 
 const SELECTION_TABLE = ".github/skills/d2b-panel-round/selection-table.json";
+const DISPATCH_POLICY = ".github/skills/d2b-panel-round/dispatch-policy.json";
 const CURRENT_PANEL_SEATS = [
   "agentic", "build", "docs", "kernel", "networking", "nixos",
   "observability", "product", "reliability", "security", "simplicity",
@@ -271,6 +272,33 @@ const CASES = [
     name: "baseline: an unmutated fixture passes",
     mutate: () => {},
     expectExit: 0,
+  },
+  {
+    name: "dispatch policy agent type drift is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, DISPATCH_POLICY, (policy) => {
+        policy.seats.software.agent_type = "panel-test";
+      }),
+    expectExit: 1,
+    expectText: "dispatch-policy.json seat software agent_type",
+  },
+  {
+    name: "dispatch policy missing communication is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, DISPATCH_POLICY, (policy) => {
+        delete policy.seats.security.communication;
+      }),
+    expectExit: 1,
+    expectText: "dispatch-policy.json seat security must contain",
+  },
+  {
+    name: "dispatch policy seat omission is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, DISPATCH_POLICY, (policy) => {
+        delete policy.seats.build;
+      }),
+    expectExit: 1,
+    expectText: "must contain exactly one binding for every current",
   },
   {
     name: "modified admitted Caveman blob is rejected",

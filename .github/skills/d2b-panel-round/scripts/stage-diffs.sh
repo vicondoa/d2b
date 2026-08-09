@@ -153,6 +153,7 @@ done
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 lifecycle_helper="$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+dispatch_policy_path="$root/.github/skills/d2b-panel-round/dispatch-policy.json"
 
 tip="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse "$base")"
@@ -164,6 +165,7 @@ out="$panel_root/$round"
 completion_marker="$out/.complete"
 staged_selection_path="$out/selection.json"
 staged_candidate_path="$out/current-candidate.json"
+staged_dispatch_binding_path="$out/dispatch-binding.json"
 staged_discovery_request_path="$out/discovery-request.json"
 staged_ledger_path="$out/discovery-ledger.json"
 staged_responses_path="$out/responses.json"
@@ -175,6 +177,7 @@ display_out="$out"
 display_completion_marker="$completion_marker"
 display_staged_selection_path="$staged_selection_path"
 display_staged_candidate_path="$staged_candidate_path"
+display_staged_dispatch_binding_path="$staged_dispatch_binding_path"
 display_staged_discovery_request_path="$staged_discovery_request_path"
 display_staged_ledger_path="$staged_ledger_path"
 display_staged_responses_path="$staged_responses_path"
@@ -188,6 +191,7 @@ out="$panel_root/$round"
 completion_marker="$out/.complete"
 staged_selection_path="$out/selection.json"
 staged_candidate_path="$out/current-candidate.json"
+staged_dispatch_binding_path="$out/dispatch-binding.json"
 staged_discovery_request_path="$out/discovery-request.json"
 staged_ledger_path="$out/discovery-ledger.json"
 staged_responses_path="$out/responses.json"
@@ -204,6 +208,7 @@ canonical_artifact_names() {
     "commits.txt" \
     "current-candidate.json" \
     "delta.diff" \
+    "dispatch-binding.json" \
     "dispatch-prompt.txt" \
     "evidence.md" \
     "full.diff" \
@@ -243,13 +248,36 @@ validate_bound_completion() {
   node --input-type=module - "$marker" "$expected_phase" "$@" <<'NODE'
 import crypto from "node:crypto";
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 const markerPath = process.argv[2];
 const expectedPhase = process.argv[3];
 const expectedNames = process.argv.slice(4).sort();
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_BOUND_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
+const readBounded = (file, label, maximum) => {
+  const stat = statSync(file);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a regular file`);
+  }
+  if (stat.size > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  const bytes = readFileSync(file);
+  if (bytes.length > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  return bytes;
+};
 let marker;
 try {
-  marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  marker = JSON.parse(
+    readBounded(
+      markerPath,
+      "completion marker",
+      MAX_COMPLETION_MARKER_BYTES,
+    ).toString("utf8"),
+  );
 } catch (error) {
   console.error(`${markerPath}: invalid completion marker: ${error.message}`);
   process.exit(1);
@@ -295,7 +323,11 @@ if (
 }
 const actualNames = Object.keys(digests).sort();
 const compatibleExpectedNames = marker.schema_version === 2
-  ? expectedNames.filter((name) => !name.startsWith("agent-definitions/"))
+  ? expectedNames.filter(
+      (name) =>
+        !name.startsWith("agent-definitions/") &&
+        name !== "dispatch-binding.json",
+    )
   : expectedNames;
 if (
   marker.phase !== expectedPhase ||
@@ -319,14 +351,24 @@ for (const relative of actualNames) {
     relative.split("/").includes("..") ||
     !/^[0-9a-f]{64}$/.test(digests[relative]) ||
     !Number.isSafeInteger(sizes[relative]) ||
-    sizes[relative] < 0
+    sizes[relative] < 0 ||
+    sizes[relative] >
+      (relative.startsWith("agent-definitions/")
+        ? MAX_AGENT_DEFINITION_BYTES
+        : MAX_BOUND_ARTIFACT_BYTES)
   ) {
     console.error(`${markerPath}: invalid bound artifact entry ${relative}`);
     process.exit(1);
   }
   let bytes;
   try {
-    bytes = readFileSync(path.join(root, relative));
+    bytes = readBounded(
+      path.join(root, relative),
+      `bound artifact ${relative}`,
+      relative.startsWith("agent-definitions/")
+        ? MAX_AGENT_DEFINITION_BYTES
+        : MAX_BOUND_ARTIFACT_BYTES,
+    );
   } catch (error) {
     console.error(`${markerPath}: bound artifact ${relative} is unavailable: ${error.message}`);
     process.exit(1);
@@ -343,11 +385,190 @@ for (const relative of actualNames) {
 NODE
 }
 
+validate_bound_selection_entry() {
+  local marker="$1"
+  local selection="$2"
+  node --input-type=module - "$marker" "$selection" <<'NODE'
+import crypto from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+
+const markerPath = process.argv[2];
+const selectionPath = process.argv[3];
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_SELECTION_BYTES = 64 * 1024 * 1024;
+const readBounded = (path, label, maximum) => {
+  const stat = statSync(path);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a regular file`);
+  }
+  if (stat.size > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  return bytes;
+};
+
+let marker;
+try {
+  marker = JSON.parse(
+    readBounded(
+      markerPath,
+      "completion marker",
+      MAX_COMPLETION_MARKER_BYTES,
+    ).toString("utf8"),
+  );
+} catch (error) {
+  console.error(`${markerPath}: invalid completion marker: ${error.message}`);
+  process.exit(1);
+}
+if (
+  !marker ||
+  typeof marker !== "object" ||
+  Array.isArray(marker) ||
+  marker.artifact_kind !== "d2b-panel/stage-completion" ||
+  ![2, 3].includes(marker.schema_version) ||
+  marker.complete !== true
+) {
+  console.error(
+    `${markerPath}: completion marker is not a supported canonical byte-bound marker`,
+  );
+  process.exit(1);
+}
+const digest = marker.artifact_sha256?.["selection.json"];
+const size = marker.artifact_bytes?.["selection.json"];
+if (
+  typeof digest !== "string" ||
+  !/^[0-9a-f]{64}$/u.test(digest) ||
+  !Number.isSafeInteger(size) ||
+  size < 0 ||
+  size > MAX_SELECTION_BYTES
+) {
+  console.error(
+    `${markerPath}: completion marker does not carry a valid selection.json binding`,
+  );
+  process.exit(1);
+}
+let bytes;
+try {
+  bytes = readBounded(selectionPath, "bound selection.json", MAX_SELECTION_BYTES);
+} catch (error) {
+  console.error(
+    `${markerPath}: bound selection.json is unavailable: ${error.message}`,
+  );
+  process.exit(1);
+}
+const actual = crypto.createHash("sha256").update(bytes).digest("hex");
+if (actual !== digest || bytes.length !== size) {
+  console.error(
+    `${markerPath}: bound selection.json has a different size or digest`,
+  );
+  process.exit(1);
+}
+NODE
+}
+
+reject_completed_discovery_packet() {
+  local panel_root="$1"
+  local current_out="$2"
+  local lifecycle_id="$3"
+  node --input-type=module - "$panel_root" "$current_out" "$lifecycle_id" <<'NODE'
+import path from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+
+const panelRoot = process.argv[2];
+const currentOut = path.resolve(process.argv[3]);
+const lifecycle = process.argv[4];
+const MAX_DIRECTORY_ENTRIES = 4096;
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+if (!existsSync(panelRoot)) process.exit(0);
+const rootStat = lstatSync(panelRoot);
+if (!rootStat.isDirectory()) {
+  console.error(`${panelRoot}: panel scratch root is not a directory`);
+  process.exit(1);
+}
+const packets = readdirSync(panelRoot).sort();
+if (packets.length > MAX_DIRECTORY_ENTRIES) {
+  console.error(
+    `${panelRoot}: panel scratch root has more than ${MAX_DIRECTORY_ENTRIES} entries`,
+  );
+  process.exit(1);
+}
+for (const name of packets) {
+  const packet = path.join(panelRoot, name);
+  if (path.resolve(packet) === currentOut) continue;
+  let packetStat;
+  try {
+    packetStat = lstatSync(packet);
+  } catch (error) {
+    if (error.code === "ENOENT") continue;
+    throw error;
+  }
+  if (!packetStat.isDirectory()) continue;
+  const markerPath = path.join(packet, ".complete");
+  let markerStat;
+  try {
+    markerStat = statSync(markerPath);
+  } catch (error) {
+    if (error.code === "ENOENT") continue;
+    throw error;
+  }
+  if (!markerStat.isFile()) continue;
+  if (markerStat.size > MAX_COMPLETION_MARKER_BYTES) {
+    console.error(
+      `${markerPath}: completion marker exceeds ${MAX_COMPLETION_MARKER_BYTES} bytes`,
+    );
+    process.exit(1);
+  }
+  const bytes = readFileSync(markerPath);
+  if (bytes.length > MAX_COMPLETION_MARKER_BYTES) {
+    console.error(
+      `${markerPath}: completion marker exceeds ${MAX_COMPLETION_MARKER_BYTES} bytes`,
+    );
+    process.exit(1);
+  }
+  let marker;
+  try {
+    marker = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    continue;
+  }
+  if (
+    marker &&
+    typeof marker === "object" &&
+    !Array.isArray(marker) &&
+    marker.complete === true &&
+    marker.artifact_kind === "d2b-panel/stage-completion" &&
+    [2, 3].includes(marker.schema_version) &&
+    marker.lifecycle_id === lifecycle &&
+    marker.phase === "discovery"
+  ) {
+    console.error(
+      `lifecycle "${lifecycle}" already has a completed discovery packet at ${packet}; ` +
+        "discovery is exactly once by lifecycle identity, independent of round prefix",
+    );
+    process.exit(1);
+  }
+}
+NODE
+}
+
 secure_digest_size() {
   node --input-type=module - "$1" <<'NODE'
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
-const bytes = readFileSync(process.argv[2]);
+import { readFileSync, statSync } from "node:fs";
+const path = process.argv[2];
+const maximum = 64 * 1024 * 1024;
+const stat = statSync(path);
+if (!stat.isFile() || stat.size > maximum) {
+  throw new Error(`${path}: digest input is not a bounded regular file`);
+}
+const bytes = readFileSync(path);
+if (bytes.length > maximum) {
+  throw new Error(`${path}: digest input is oversized`);
+}
 process.stdout.write(
   `${crypto.createHash("sha256").update(bytes).digest("hex")}\t${bytes.length}`,
 );
@@ -356,11 +577,18 @@ NODE
 
 read_address() {
   node --input-type=module - "$1" <<'NODE'
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 const path = process.argv[2];
 let value;
 try {
-  value = JSON.parse(readFileSync(path, "utf8"));
+  const maximum = 1024 * 1024;
+  const stat = statSync(path);
+  if (!stat.isFile() || stat.size > maximum) {
+    throw new Error(`address.json is not a bounded regular file`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maximum) throw new Error("address.json is oversized");
+  value = JSON.parse(bytes.toString("utf8"));
 } catch (error) {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
@@ -481,6 +709,14 @@ if [ "$round_number" -gt 1 ] && [ "$phase" != "verification" ]; then
   exit 2
 fi
 
+if [ "$phase" = "discovery" ]; then
+  if ! reject_completed_discovery_packet \
+    "$display_panel_root" "$out" "$lifecycle"; then
+    echo "discovery staging requires exactly one completed packet for this lifecycle" >&2
+    exit 2
+  fi
+fi
+
 if [ "$round_number" -gt 1 ]; then
   if [ ! -f "$op_previous_dir/.complete" ]; then
     echo "missing canonical predecessor packet: $display_previous_dir/.complete" >&2
@@ -488,8 +724,9 @@ if [ "$round_number" -gt 1 ]; then
     exit 2
   fi
   previous_selection_path="$op_previous_dir/selection.json"
-  if [ ! -f "$previous_selection_path" ]; then
-    echo "previous review does not record a readable lifecycle selection" >&2
+  if ! validate_bound_selection_entry \
+    "$op_previous_dir/.complete" "$previous_selection_path"; then
+    echo "previous review is not a supported canonical completion packet" >&2
     exit 2
   fi
   previous_selection_meta="$(
@@ -622,7 +859,10 @@ while IFS= read -r artifact_name; do
   canonical_artifacts+=("$artifact_name")
 done < <(canonical_artifact_names "$phase" "$selected_roster")
 
+reuse_existing=false
+existing_completion_schema=""
 if [ -e "$out" ]; then
+  reuse_existing=true
   if [ ! -f "$completion_marker" ]; then
     echo "round $round already has an incomplete packet; remove that exact directory before retrying" >&2
     exit 2
@@ -632,6 +872,24 @@ if [ -e "$out" ]; then
     echo "complete review $round failed canonical completion validation" >&2
     exit 2
   fi
+  existing_completion_schema="$(
+    node --input-type=module - "$completion_marker" <<'NODE'
+import { readFileSync, statSync } from "node:fs";
+const path = process.argv[2];
+const maximum = 256 * 1024;
+const stat = statSync(path);
+if (!stat.isFile() || stat.size > maximum) {
+  throw new Error("completion marker is not a bounded regular file");
+}
+const bytes = readFileSync(path);
+if (bytes.length > maximum) throw new Error("completion marker is oversized");
+const marker = JSON.parse(bytes.toString("utf8"));
+process.stdout.write(String(marker.schema_version));
+NODE
+  )" || {
+    echo "complete review $round has an unreadable completion marker" >&2
+    exit 2
+  }
 fi
 
 if [ ! -f "$evidence_path" ] || [ ! -r "$evidence_path" ] ||
@@ -804,10 +1062,7 @@ if [ -d "$out/verdicts" ] &&
   exit 2
 fi
 
-reuse_existing=false
-if [ -e "$out" ]; then
-  reuse_existing=true
-else
+if [ "$reuse_existing" != true ]; then
   mkdir -p "$out/verdicts" "$out/reviewer-notes"
 fi
 
@@ -830,10 +1085,13 @@ if [ "$reuse_existing" = true ]; then
     "$out/evidence.md" \
     "$out/review-request.md" \
     "$out/dispatch-prompt.txt" \
-    "$staged_agent_definitions_dir" \
     "$out/verdicts"; do
     require_reused_path "$required_path" || exit 2
   done
+  if [ "$existing_completion_schema" = "3" ]; then
+    require_reused_path "$staged_dispatch_binding_path" || exit 2
+    require_reused_path "$staged_agent_definitions_dir" || exit 2
+  fi
   if [ "$phase" = "discovery" ]; then
     require_reused_path "$staged_discovery_request_path" || exit 2
   else
@@ -846,7 +1104,9 @@ if [ "$reuse_existing" = true ]; then
     done
   fi
   for seat in "${panel_seats[@]}"; do
-    require_reused_path "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
+    if [ "$existing_completion_schema" = "3" ]; then
+      require_reused_path "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
+    fi
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
   done
 fi
@@ -958,6 +1218,114 @@ try {
 ' "$source" "$destination" "$selected"
 }
 
+stage_dispatch_binding() {
+  local destination="$1"
+  node --input-type=module - \
+    "$dispatch_policy_path" "$lifecycle" "$phase" "$selected_roster" \
+    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE' |
+import { readFileSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const [
+  policyPath,
+  lifecycle,
+  phase,
+  rosterText,
+  helperPath,
+] = process.argv.slice(2);
+const MAX_POLICY_BYTES = 1024 * 1024;
+const readBounded = (path, label) => {
+  const stat = statSync(path);
+  if (!stat.isFile()) throw new Error(`${label} is not a regular file`);
+  if (stat.size > MAX_POLICY_BYTES) {
+    throw new Error(`${label} exceeds ${MAX_POLICY_BYTES} bytes`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > MAX_POLICY_BYTES) {
+    throw new Error(`${label} exceeds ${MAX_POLICY_BYTES} bytes`);
+  }
+  return bytes;
+};
+const policy = JSON.parse(
+  readBounded(policyPath, "dispatch policy").toString("utf8"),
+);
+const { readSelectionTable, stableStringify } =
+  await import(pathToFileURL(helperPath).href);
+const table = readSelectionTable();
+const allSeats = [...table.mandatory_seats, ...table.optional_seats];
+const exactKeys = (value, expected, label) => {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join("\0") !== [...expected].sort().join("\0")
+  ) {
+    throw new Error(`${label} has an unexpected shape`);
+  }
+};
+exactKeys(policy, ["artifact_kind", "schema_version", "seats"], "dispatch policy");
+if (
+  policy.artifact_kind !== "d2b-panel/dispatch-policy" ||
+  policy.schema_version !== 1
+) {
+  throw new Error("dispatch policy has an unsupported artifact kind or schema");
+}
+exactKeys(policy.seats, allSeats, "dispatch policy seats");
+const bindingKeys = [
+  "agent_type",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+];
+for (const seat of allSeats) {
+  const binding = policy.seats[seat];
+  exactKeys(binding, bindingKeys, `dispatch policy seat ${seat}`);
+  for (const key of bindingKeys) {
+    if (typeof binding[key] !== "string" || binding[key].trim() === "") {
+      throw new Error(`dispatch policy seat ${seat} has no ${key}`);
+    }
+  }
+  if (binding.agent_type !== `panel-${seat}`) {
+    throw new Error(
+      `dispatch policy seat ${seat} agent_type must be panel-${seat}`,
+    );
+  }
+  if (
+    binding.model !== "gpt-5.6-sol" ||
+    binding.reasoning_effort !== "xhigh" ||
+    binding.context_tier !== "default" ||
+    binding.communication !== "caveman-full-optional"
+  ) {
+    throw new Error(
+      `dispatch policy seat ${seat} disagrees with the current panel binding`,
+    );
+  }
+}
+const roster = rosterText.split(",").filter(Boolean);
+if (
+  roster.length === 0 ||
+  new Set(roster).size !== roster.length ||
+  roster.some((seat) => !allSeats.includes(seat))
+) {
+  throw new Error("selected roster cannot be projected into dispatch binding");
+}
+process.stdout.write(
+  stableStringify({
+    artifact_kind: "d2b-panel/dispatch-binding",
+    schema_version: 1,
+    lifecycle_id: lifecycle,
+    phase,
+    roster,
+    bindings: Object.fromEntries(
+      roster.map((seat) => [seat, policy.seats[seat]]),
+    ),
+  }),
+);
+NODE
+    publish_stdin_no_replace "$destination"
+}
+
 stage() {
   local dest="$1"
   shift
@@ -1007,6 +1375,13 @@ validateSelectionCandidate(
 );
 ' "$staged_selection_path" "$staged_candidate_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+
+if [ "$reuse_existing" != true ] || [ "$existing_completion_schema" = "3" ]; then
+  if ! stage_dispatch_binding "$staged_dispatch_binding_path"; then
+    echo "could not materialize the roster-projected dispatch binding" >&2
+    exit 2
+  fi
+fi
 
 materialize_exact "$evidence_path" "$out/evidence.md" \
   "finalized validation evidence"
@@ -1380,6 +1755,7 @@ with \`view\`; do not substitute a prose summary for them.
 - Phase: \`$phase\`
 - Lifecycle selection: \`$display_staged_selection_path\` (sha256 \`$selection_sha256\`)
 - Staged current candidate: \`$display_staged_candidate_path\`
+- Roster-projected dispatch binding: \`$display_staged_dispatch_binding_path\`
 - Bound panel agent definition: \`$display_staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
 - Validation evidence and phase deliverable: \`$display_out/evidence.md\`
   (sha256 \`$evidence_sha\`, bound by the completion marker)
@@ -1467,16 +1843,25 @@ $verdict_contract
 MD
 } | publish_stdin_no_replace "$out/dispatch-prompt.txt"
 
-node --input-type=module - "$out" \
+node --input-type=module - "$out" "$existing_completion_schema" \
   "${canonical_artifacts[@]}" <<'NODE'
 import { chmodSync } from "node:fs";
-const [root, ...relativePaths] = process.argv.slice(2);
+const [root, schema, ...relativePaths] = process.argv.slice(2);
 for (const relative of relativePaths) {
+  if (
+    schema === "2" &&
+    (relative === "dispatch-binding.json" ||
+      relative.startsWith("agent-definitions/"))
+  ) {
+    continue;
+  }
   chmodSync(`${root}/${relative}`, 0o444);
 }
 NODE
 
-if ! node --input-type=module -e '
+if [ "$reuse_existing" = true ] && [ "$existing_completion_schema" = "2" ]; then
+  :
+elif ! node --input-type=module -e '
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";

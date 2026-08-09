@@ -116,6 +116,13 @@ adds required `verified_issue_statuses` and `late_findings`. Keeping the
 schemas distinct lets first discovery bootstrap the ledger before issue
 statuses exist.
 
+One machine readable dispatch policy is the source for every seat's agent
+type, model, reasoning effort, context tier, and communication. Staging
+projects the selected roster into the packet and binds that projection along
+with the agent definitions. Observed same user process metadata is compared
+with the bound policy and definition digest for correlation; it does not
+authenticate a run.
+
 The observed `agent_type` and `agent_definition_sha256` value are checked
 against the completion-bound selection and definition bytes when records are
 generated.
@@ -127,6 +134,8 @@ definition ran.
 Any content change invalidates sign-off for that candidate. The lifecycle
 roster remains selected, may widen, and verifies the new candidate without
 running a second discovery.
+Discovery staging also rejects any completed discovery packet with the same
+lifecycle identity, regardless of its round label.
 Non-content dispositions and evidence updates do not by themselves create a
 new candidate snapshot; only an actual tree-content change does.
 

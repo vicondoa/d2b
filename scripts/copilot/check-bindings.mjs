@@ -31,6 +31,7 @@ const agentsDir = join(root, ".github", "agents");
 const skillsDir = join(root, ".github", "skills");
 const adrSkill = join(skillsDir, "d2b-adr", "SKILL.md");
 const selectionTableJson = join(root, ".github", "skills", "d2b-panel-round", "selection-table.json");
+const dispatchPolicyJson = join(root, ".github", "skills", "d2b-panel-round", "dispatch-policy.json");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
 const tier0DashGate = join(root, "tests", "tools", "tier0-first-pass.sh");
 const dashPolicyTest = join(root, "packages", "d2b-contract-tests", "tests", "policy_dash_gate.rs");
@@ -294,6 +295,101 @@ function readSelectionPolicy() {
   };
 }
 
+const DISPATCH_POLICY_KEYS = [
+  "agent_type",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+];
+
+function readDispatchPolicy(selectionPolicy) {
+  if (!existsSync(dispatchPolicyJson)) {
+    fail(
+      `${dispatchPolicyJson} does not exist. The selected panel seats must use ` +
+      `one committed machine-readable dispatch policy.`,
+    );
+    return null;
+  }
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(dispatchPolicyJson, "utf8"));
+  } catch (e) {
+    fail(`${dispatchPolicyJson} is not valid JSON: ${e.message}.`);
+    return null;
+  }
+  if (
+    !policy ||
+    typeof policy !== "object" ||
+    Array.isArray(policy) ||
+    Object.keys(policy).sort().join("\0") !==
+      ["artifact_kind", "schema_version", "seats"].sort().join("\0")
+  ) {
+    fail(`${dispatchPolicyJson} must contain exactly its policy envelope fields.`);
+    return null;
+  }
+  if (
+    policy.artifact_kind !== "d2b-panel/dispatch-policy" ||
+    policy.schema_version !== 1
+  ) {
+    fail(`${dispatchPolicyJson} must declare dispatch-policy schema version 1.`);
+  }
+  const expectedSeats = selectionPolicy?.roles ?? [];
+  const actualSeats =
+    policy.seats &&
+    typeof policy.seats === "object" &&
+    !Array.isArray(policy.seats)
+      ? Object.keys(policy.seats)
+      : [];
+  if (actualSeats.sort().join(",") !== [...expectedSeats].sort().join(",")) {
+    fail(
+      `${dispatchPolicyJson} must contain exactly one binding for every current ` +
+      `selection-table seat; expected [${expectedSeats.join(", ")}], found ` +
+      `[${actualSeats.join(", ")}].`,
+    );
+  }
+  for (const seat of expectedSeats) {
+    const binding = policy.seats?.[seat];
+    if (
+      !binding ||
+      typeof binding !== "object" ||
+      Array.isArray(binding) ||
+      Object.keys(binding).sort().join("\0") !==
+        [...DISPATCH_POLICY_KEYS].sort().join("\0")
+    ) {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} must contain exactly ` +
+        `${DISPATCH_POLICY_KEYS.join(", ")}.`,
+      );
+      continue;
+    }
+    for (const key of DISPATCH_POLICY_KEYS) {
+      if (typeof binding[key] !== "string" || binding[key].trim() === "") {
+        fail(`${dispatchPolicyJson} seat ${seat} has no non-blank ${key}.`);
+      }
+    }
+    if (binding.agent_type !== `panel-${seat}`) {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} agent_type must be exactly ` +
+        `"panel-${seat}".`,
+      );
+    }
+    if (binding.context_tier !== "default") {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} context_tier must be exactly ` +
+        `"default".`,
+      );
+    }
+    if (binding.communication !== "caveman-full-optional") {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} communication must be exactly ` +
+        `"caveman-full-optional".`,
+      );
+    }
+  }
+  return policy;
+}
+
 function parseFrontmatter(text, label) {
   if (!text.startsWith("---\n")) {
     fail(`${label}: no YAML frontmatter. Begin the file with a "---" line, the name, description, model and tools keys, and a closing "---".`);
@@ -546,9 +642,17 @@ if (existsSync(skillsDir)) {
       if (!line.trim().startsWith("|")) continue;
       const cells = line.split("|").slice(1, -1).map((c) => c.trim().replace(/^`|`$/g, ""));
       if (cells.length < 5) continue;
-      const [, agent, model, effort, tier] = cells;
+      const [, agent, model, effort, tier, communication] = cells;
       if (!agents.has(agent)) continue;
-      rows.push({ skill, agent, model, effort, tier, line: line.trim() });
+      rows.push({
+        skill,
+        agent,
+        model,
+        effort,
+        tier,
+        communication,
+        line: line.trim(),
+      });
     }
   }
 }
@@ -567,6 +671,7 @@ for (const name of agents.keys()) {
 
 const policy = readPolicy();
 const selectionPolicy = readSelectionPolicy();
+const dispatchPolicy = readDispatchPolicy(selectionPolicy);
 
 for (const r of rows) {
   const a = agents.get(r.agent);
@@ -599,6 +704,30 @@ for (const r of rows) {
       `${r.skill}/SKILL.md: context_tier "${r.tier}" is not valid for "${r.model}" ` +
       `(valid: ${caps.tiers.join(", ")}). Change the row to one of those tiers.`,
     );
+  }
+  if (r.agent.startsWith("panel-") && dispatchPolicy) {
+    const seat = r.agent.slice("panel-".length);
+    const binding = dispatchPolicy.seats?.[seat];
+    if (!binding) {
+      fail(
+        `${r.skill}/SKILL.md: row for "${r.agent}" has no dispatch-policy seat binding.`,
+      );
+    } else {
+      for (const [field, value] of [
+        ["agent_type", r.agent],
+        ["model", r.model],
+        ["reasoning_effort", r.effort],
+        ["context_tier", r.tier],
+        ["communication", r.communication],
+      ]) {
+        if (value !== binding[field]) {
+          fail(
+            `${r.skill}/SKILL.md: row for "${r.agent}" ${field} "${value}" ` +
+            `disagrees with dispatch policy "${binding[field]}".`,
+          );
+        }
+      }
+    }
   }
   if (policy && r.agent.startsWith("panel-")) {
     if (policy.model && r.model !== policy.model) {
@@ -1028,7 +1157,9 @@ if (!existsSync(initOptionsJson)) {
       if (!src.includes('validateSelection(selectionArtifact.value)') ||
           !src.includes('selectionArtifact.text') ||
           !src.includes('selection.roster') ||
-          !src.includes("panel_format_version")) {
+          !src.includes("panel_format_version") ||
+          !src.includes("dispatch-binding.json") ||
+          !src.includes("validateDispatchBinding")) {
         // The last marker is checked below as a spelling guard. It is kept
         // separate so a future refactor cannot accidentally remove the
         // selected-roster handoff while leaving the import in place.

@@ -109,8 +109,11 @@ After unanimous approval and no further content-changing fix is pending, bind
 the wave's final base and head commits into one immutable candidate. Downstream
 steps use this address. Record the `candidate_id`, `content_id`, and
 `snapshot_sha256` in `.scratch/panel/<round>/current-candidate.json` so the panel
-record helper can join verdicts. The candidate-bound selection also carries the
+record helper can join verdicts. The candidate-bound selection is paired with the
 exact selected process binding, including `context_tier`.
+The staged packet carries the selected policy projection and its definition
+digest as process evidence; observed same user metadata is checked against
+those bytes before records are published.
 
 A content change after snapshot invalidates every wave record and requires a new
 snapshot. This is mechanism, not policy: no override, force flag, or partial

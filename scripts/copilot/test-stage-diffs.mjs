@@ -44,6 +44,13 @@ const selectionTable = join(
   "d2b-panel-round",
   "selection-table.json",
 );
+const dispatchPolicy = join(
+  root,
+  ".github",
+  "skills",
+  "d2b-panel-round",
+  "dispatch-policy.json",
+);
 const allSeats = [
   "software",
   "test",
@@ -160,6 +167,10 @@ try {
   cpSync(
     selectionTable,
     join(repo, ".github", "skills", "d2b-panel-round", "selection-table.json"),
+  );
+  cpSync(
+    dispatchPolicy,
+    join(repo, ".github", "skills", "d2b-panel-round", "dispatch-policy.json"),
   );
   for (const seat of allSeats) {
     writeFileSync(join(agents, `panel-${seat}.agent.md`), `name: ${seat}\n`);
@@ -302,6 +313,8 @@ try {
       firstCompletion.artifact_bytes["evidence.md"] === evidenceDescriptor.size_bytes &&
       firstCompletion.artifact_sha256["selection.json"] ===
         digest(readFileSync(join(firstDir, "selection.json"))) &&
+      firstCompletion.artifact_sha256["dispatch-binding.json"] ===
+        digest(readFileSync(join(firstDir, "dispatch-binding.json"))) &&
       firstRoster.every((seat) =>
         firstCompletion.artifact_sha256[
           `agent-definitions/panel-${seat}.agent.md`
@@ -310,6 +323,14 @@ try {
           `agent-definitions/panel-${seat}.agent.md`
         ] === readFileSync(join(agents, `panel-${seat}.agent.md`)).length,
       ),
+  );
+  check(
+    "dispatch binding is projected for exactly the selected roster",
+    readJson(join(firstDir, "dispatch-binding.json")).roster.join(",") ===
+      firstRoster.join(",") &&
+      Object.keys(readJson(join(firstDir, "dispatch-binding.json")).bindings)
+        .sort()
+        .join(",") === firstRoster.slice().sort().join(","),
   );
   check(
     "generated discovery request binds finalized evidence",
@@ -356,6 +377,37 @@ try {
         ) === readFileSync(join(agents, `panel-${seat}.agent.md`), "utf8"),
       ),
   );
+
+  const alternateDiscoveryDir = join(
+    repo,
+    ".scratch",
+    "panel",
+    "alternate-prefix-r1",
+  );
+  mkdirSync(alternateDiscoveryDir, { recursive: true });
+  cpSync(
+    join(firstDir, ".complete"),
+    join(alternateDiscoveryDir, ".complete"),
+  );
+  const alternatePrefixDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "otherprefix-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "a completed discovery under another round prefix is still rejected",
+    alternatePrefixDiscovery.status === 2 &&
+      /exactly once by lifecycle identity/.test(alternatePrefixDiscovery.text) &&
+      !existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
+    alternatePrefixDiscovery.text,
+  );
+  rmSync(alternateDiscoveryDir, { recursive: true, force: true });
 
   const reusedSecondDiscovery = run(
     repo,
@@ -559,6 +611,17 @@ try {
   console.log("stage-diffs: later review");
   const predecessorMarker = join(firstDir, ".complete");
   const predecessorBytes = readFileSync(predecessorMarker);
+  const predecessorDispatchBinding = readFileSync(
+    join(firstDir, "dispatch-binding.json"),
+  );
+  const predecessorDefinitions = Object.fromEntries(
+    firstRoster.map((seat) => [
+      seat,
+      readFileSync(
+        join(firstDir, "agent-definitions", `panel-${seat}.agent.md`),
+      ),
+    ]),
+  );
   const restorePredecessorMarker = () => {
     writeFileSync(predecessorMarker, predecessorBytes);
     chmodSync(predecessorMarker, 0o444);
@@ -605,6 +668,45 @@ try {
       /missing canonical predecessor packet/.test(missingPredecessor.text),
     missingPredecessor.text,
   );
+  restorePredecessorMarker();
+
+  const schema2Marker = readJson(predecessorMarker);
+  for (const seat of firstRoster) {
+    delete schema2Marker.artifact_sha256[
+      `agent-definitions/panel-${seat}.agent.md`
+    ];
+    delete schema2Marker.artifact_bytes[
+      `agent-definitions/panel-${seat}.agent.md`
+    ];
+  }
+  delete schema2Marker.artifact_sha256["dispatch-binding.json"];
+  delete schema2Marker.artifact_bytes["dispatch-binding.json"];
+  schema2Marker.schema_version = 2;
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, schema2Marker);
+  rmSync(join(firstDir, "dispatch-binding.json"));
+  rmSync(join(firstDir, "agent-definitions"), { recursive: true, force: true });
+  const schema2Predecessor = verificationStage();
+  const schema2OutputDir = join(repo, ".scratch", "panel", "spec001w1-r2");
+  check(
+    "schema-2 predecessor exact old set upgrades to a schema-3 packet",
+    schema2Predecessor.status === 0 &&
+      readJson(join(schema2OutputDir, ".complete")).schema_version === 3 &&
+      existsSync(join(schema2OutputDir, "dispatch-binding.json")),
+    schema2Predecessor.text,
+  );
+  rmSync(schema2OutputDir, { recursive: true, force: true });
+  writeFileSync(
+    join(firstDir, "dispatch-binding.json"),
+    predecessorDispatchBinding,
+  );
+  mkdirSync(join(firstDir, "agent-definitions"), { recursive: true });
+  for (const [seat, bytes] of Object.entries(predecessorDefinitions)) {
+    writeFileSync(
+      join(firstDir, "agent-definitions", `panel-${seat}.agent.md`),
+      bytes,
+    );
+  }
   restorePredecessorMarker();
 
   const legacyMarker = readJson(predecessorMarker);

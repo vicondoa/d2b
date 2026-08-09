@@ -138,6 +138,13 @@ const {
 } = parsedArguments;
 
 function readLimitedBytes(path, label, maxBytes) {
+  const stat = statSync(path);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a regular file`);
+  }
+  if (stat.size > maxBytes) {
+    throw new Error(`${label} exceeds ${maxBytes} bytes`);
+  }
   const bytes = readFileSync(path);
   if (bytes.length > maxBytes) {
     throw new Error(`${label} exceeds ${maxBytes} bytes`);
@@ -275,6 +282,91 @@ function canonicalRoundPath(roundDir, supplied, name) {
   return expected;
 }
 
+const DISPATCH_BINDING_KEYS = [
+  "agent_type",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+];
+
+function validateDispatchBinding(value, selection) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join("\0") !==
+      ["artifact_kind", "bindings", "lifecycle_id", "phase", "roster", "schema_version"]
+        .sort()
+        .join("\0")
+  ) {
+    throw new Error("dispatch-binding.json has an unexpected shape");
+  }
+  if (
+    value.artifact_kind !== "d2b-panel/dispatch-binding" ||
+    value.schema_version !== 1 ||
+    value.lifecycle_id !== selection.lifecycle_id ||
+    value.phase !== selection.phase
+  ) {
+    throw new Error(
+      "dispatch-binding.json does not bind the current lifecycle and phase",
+    );
+  }
+  if (
+    !Array.isArray(value.roster) ||
+    value.roster.join("\0") !== selection.roster.join("\0")
+  ) {
+    throw new Error(
+      "dispatch-binding.json roster does not exactly match the lifecycle selection",
+    );
+  }
+  if (
+    !value.bindings ||
+    typeof value.bindings !== "object" ||
+    Array.isArray(value.bindings) ||
+    Object.keys(value.bindings).sort().join("\0") !==
+      [...selection.roster].sort().join("\0")
+  ) {
+    throw new Error(
+      "dispatch-binding.json bindings do not exactly match the selected roster",
+    );
+  }
+  for (const seat of selection.roster) {
+    const binding = value.bindings[seat];
+    if (
+      !binding ||
+      typeof binding !== "object" ||
+      Array.isArray(binding) ||
+      Object.keys(binding).sort().join("\0") !==
+        DISPATCH_BINDING_KEYS.slice().sort().join("\0")
+    ) {
+      throw new Error(`dispatch-binding.json binding for ${seat} has an unexpected shape`);
+    }
+    for (const key of DISPATCH_BINDING_KEYS) {
+      if (typeof binding[key] !== "string" || binding[key].trim() === "") {
+        throw new Error(`dispatch-binding.json binding for ${seat} has no ${key}`);
+      }
+    }
+    if (binding.agent_type !== `panel-${seat}`) {
+      throw new Error(
+        `dispatch-binding.json binding for ${seat} has the wrong agent_type`,
+      );
+    }
+    if (
+      binding.model !== MODEL_POLICY ||
+      binding.reasoning_effort !== EFFORT_POLICY ||
+      binding.context_tier !== "default" ||
+      binding.communication !== "caveman-full-optional"
+    ) {
+      throw new Error(
+        `dispatch-binding.json binding for ${seat} disagrees with the current ` +
+        "panel dispatch policy",
+      );
+    }
+  }
+  return value.bindings;
+}
+
 const roundDir = resolve(dir);
 let boundArtifacts;
 try {
@@ -322,6 +414,10 @@ const boundJson = (relativePath, label) => {
 const addressArtifact = boundJson("address.json", "round address");
 const candidateArtifact = boundJson("current-candidate.json", "current candidate address");
 const selectionArtifact = boundJson("selection.json", "lifecycle selection");
+const dispatchBindingArtifact = boundJson(
+  "dispatch-binding.json",
+  "roster-projected dispatch binding",
+);
 const discoveryLedgerArtifact = boundJson(
   "discovery-ledger.json",
   "immutable discovery ledger",
@@ -348,6 +444,7 @@ const responsesBytes = responsesArtifact.text;
 const verificationResults = verificationResultsArtifact.value;
 const verificationResultsBytes = verificationResultsArtifact.text;
 let selection = null;
+let dispatchBindings = null;
 if (selectionArtifact.value !== null) {
   try {
     selection = validateSelection(selectionArtifact.value);
@@ -366,6 +463,16 @@ if (
     "immutable panel completion marker does not bind the current verification " +
     "lifecycle and selection",
   );
+}
+if (selection && dispatchBindingArtifact.value !== null) {
+  try {
+    dispatchBindings = validateDispatchBinding(
+      dispatchBindingArtifact.value,
+      selection,
+    );
+  } catch (cause) {
+    fail(`invalid roster-projected dispatch binding: ${cause.message}`);
+  }
 }
 
 if (errors.length) {
@@ -683,6 +790,7 @@ for (const role of roster) {
     "reasoning_effort",
     "context_tier",
     "agent_type",
+    "communication",
     "agent_definition_sha256",
     "run_id",
     "receipt_locator",
@@ -694,18 +802,15 @@ for (const role of roster) {
       fail(`observed.json ${role}: ${key} is required`);
     }
   }
-  const expectedAgentType = `panel-${role}`;
-  if (observedBinding.agent_type !== expectedAgentType) {
-    fail(
-      `observed.json ${role}: agent_type "${observedBinding.agent_type}" does not ` +
-      `match the selected binding "${expectedAgentType}"`,
-    );
-  }
-  if (observedBinding.context_tier !== "default") {
-    fail(
-      `observed.json ${role}: context_tier must be exactly "default"; ` +
-      `found "${observedBinding.context_tier}"`,
-    );
+  const expectedBinding = dispatchBindings[role];
+  for (const key of DISPATCH_BINDING_KEYS) {
+    if (observedBinding[key] !== expectedBinding[key]) {
+      fail(
+        `observed.json ${role}: ${key} "${observedBinding[key]}" does not ` +
+        `match the selected binding from the completion-bound dispatch policy; ` +
+        `policy pins "${expectedBinding[key]}"`,
+      );
+    }
   }
   if (
     typeof observedBinding.agent_definition_sha256 === "string" &&
@@ -722,16 +827,6 @@ for (const role of roster) {
     fail(
       `observed.json ${role}: agent definition digest does not match the immutable ` +
       `staged agent-definitions/panel-${role}.agent.md digest`,
-    );
-  }
-  const currentBinding =
-    observedBinding.model === MODEL_POLICY &&
-    observedBinding.reasoning_effort === EFFORT_POLICY;
-  if (!currentBinding) {
-    fail(
-      `observed.json ${role}: lane ran on "${observedBinding.model}" at effort ` +
-      `"${observedBinding.reasoning_effort}", but policy accepts only ` +
-      `"${MODEL_POLICY}"/"${EFFORT_POLICY}" for current records`,
     );
   }
   const provider = observedBinding.provider;
