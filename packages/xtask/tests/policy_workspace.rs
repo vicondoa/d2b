@@ -8,6 +8,7 @@ const CONTRACTS_CRATE: &str = "d2b-contracts";
 const PRODUCT_CONTEXT_PACKAGES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
 const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 const RUST_DRIVER: &str = "tests/test-rust.sh";
+const RUST_COMPANION_FIXTURE: &str = "packages/xtask/tests/fixtures/rust-companions/Cargo.toml";
 const RUST_DAG_LEAVES: &[&str] = &[
     "test-rust-leaf-api-surface",
     "test-rust-leaf-main-workspace",
@@ -290,6 +291,7 @@ fn discovered_package_manifests() -> Vec<(String, String)> {
             rel.starts_with("packages/")
                 && rel.ends_with("/Cargo.toml")
                 && rel != "packages/Cargo.toml"
+                && !rel.starts_with("packages/xtask/tests/fixtures/")
                 && repo_root().join(rel).is_file()
         })
         .map(|rel| {
@@ -311,18 +313,31 @@ fn quoted_key(block: &str, key: &str) -> Option<String> {
     })
 }
 
+fn manifest_declares_harness_false(manifest: &str, target: &str) -> bool {
+    let matching_blocks = manifest
+        .split("[[test]]")
+        .skip(1)
+        .map(|block| block.split("[[").next().unwrap_or(block))
+        .filter(|block| quoted_key(block, "name").as_deref() == Some(target))
+        .collect::<Vec<_>>();
+    matching_blocks.len() == 1
+        && matching_blocks[0]
+            .lines()
+            .any(|line| line.trim() == "harness = false")
+}
+
 fn discovered_harness_false_targets(manifests: &[(String, String)]) -> Vec<String> {
     let mut targets = Vec::new();
     for (rel, content) in manifests {
         for block in content.split("[[test]]").skip(1) {
             let block = block.split("[[").next().unwrap_or(block);
-            if !block.lines().any(|line| line.trim() == "harness = false") {
-                continue;
+            if let Some(name) = quoted_key(block, "name") {
+                if manifest_declares_harness_false(content, &name) {
+                    targets.push(format!("{rel}:{name}"));
+                }
+            } else if block.lines().any(|line| line.trim() == "harness = false") {
+                panic!("harness=false test target in {rel} is missing its name");
             }
-            let name = quoted_key(block, "name").unwrap_or_else(|| {
-                panic!("harness=false test target in {rel} is missing its name")
-            });
-            targets.push(format!("{rel}:{name}"));
         }
     }
     targets.sort();
@@ -451,6 +466,7 @@ fn empty_harness_discovery_guard_present(driver: &str) -> bool {
 
 fn rust_companion_violations(driver: &str, harness_targets: &[String]) -> Vec<String> {
     let mut violations = Vec::new();
+    let executable_driver = non_comment_lines(driver).join("\n");
     if harness_targets.is_empty() {
         violations.push("harness=false discovery returned no governed targets".to_owned());
     }
@@ -459,12 +475,16 @@ fn rust_companion_violations(driver: &str, harness_targets: &[String]) -> Vec<St
     }
     for required in [
         "cargo nextest list",
+        "cargo metadata",
+        ".manifest_path",
         "kind == \"test\"",
         "testcases | length",
+        "manifest_declares_harness_false",
+        "does not declare harness = false",
         "cargo test",
         "--test",
     ] {
-        if !driver.contains(required) {
+        if !executable_driver.contains(required) {
             violations.push(format!(
                 "harness=false discovery is missing required input `{required}`"
             ));
@@ -481,6 +501,53 @@ fn rust_companion_violations(driver: &str, harness_targets: &[String]) -> Vec<St
         violations.push("harness=false binaries must not receive libtest arguments".to_owned());
     }
     violations
+}
+
+fn shell_function(source: &str, name: &str) -> String {
+    let marker = format!("{name}() {{\n");
+    let start = source
+        .find(&marker)
+        .unwrap_or_else(|| panic!("shell function {name} is missing"));
+    let function = &source[start..];
+    let end = function
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("shell function {name} has no closing brace"));
+    function[..end + 3].to_owned()
+}
+
+fn companion_discovery_script(driver: &str) -> String {
+    let mut script = String::from(
+        r#"set -euo pipefail
+fail() {
+  printf '%s\n' "$*" >&2
+}
+cargo() {
+  case "$1:${2:-}" in
+    nextest:list) printf '%s' "$D2B_TEST_NEXTEST_LISTING" ;;
+    metadata:*) printf '%s' "$D2B_TEST_CARGO_METADATA" ;;
+    *) return 97 ;;
+  esac
+}
+"#,
+    );
+    script.push_str(&shell_function(driver, "manifest_declares_harness_false"));
+    script.push_str(&shell_function(driver, "nextest_unrunnable_targets"));
+    script.push_str("nextest_unrunnable_targets \"$1\"\n");
+    script
+}
+
+fn zero_case_listing(target: &str) -> String {
+    serde_json::json!({
+        "rust-suites": {
+            "fixture-suite": {
+                "kind": "test",
+                "testcases": {},
+                "package-name": "rust-companion-classification-fixture",
+                "binary-name": target
+            }
+        }
+    })
+    .to_string()
 }
 
 fn ordered_contains(source: &str, needles: &[&str]) -> bool {
@@ -771,7 +838,13 @@ fn rust_companion_policy_rejects_mutated_or_empty_discovery_fixtures() {
 run_companions() {
   cargo test --doc
   listing=$(cargo nextest list --message-format json)
+  metadata=$(cargo metadata --format-version 1)
   jq -r '.["rust-suites"][] | select(.kind == "test") | select((.testcases | length) == 0)'
+  package_manifest=$(printf '%s' "$metadata" | jq -r '.packages[0].manifest_path')
+  if ! manifest_declares_harness_false "$package_manifest" "$bin"; then
+    fail "zero-case target does not declare harness = false"
+    return 1
+  fi
   cargo test --test smoke
   targets="discovered"
   if [ -z "$targets" ]; then
@@ -788,6 +861,11 @@ run_companions() {
     for (needle, label) in [
         ("cargo test --doc", "doctest"),
         ("cargo nextest list", "harness discovery"),
+        ("cargo metadata", "manifest discovery"),
+        (
+            "manifest_declares_harness_false",
+            "manifest-declaration classification",
+        ),
         (
             r#"if [ -z "$targets" ]; then
     fail "empty harness-free discovery"
@@ -813,6 +891,61 @@ run_companions() {
             .iter()
             .any(|violation| violation.contains("libtest arguments")),
         "passing libtest arguments to a harness-free binary must be rejected"
+    );
+}
+
+#[test]
+fn rust_companion_classifier_rejects_disabled_default_harness_zero_case() {
+    let driver = read_repo_file(RUST_DRIVER);
+    let script = companion_discovery_script(&driver);
+    let fixture = repo_root().join(RUST_COMPANION_FIXTURE);
+    let metadata = serde_json::json!({
+        "packages": [{
+            "name": "rust-companion-classification-fixture",
+            "manifest_path": fixture
+        }]
+    })
+    .to_string();
+
+    let positive = Command::new("bash")
+        .args(["-c", &script, "companion-discovery-fixture"])
+        .arg(&fixture)
+        .env(
+            "D2B_TEST_NEXTEST_LISTING",
+            zero_case_listing("explicit-harness-false"),
+        )
+        .env("D2B_TEST_CARGO_METADATA", &metadata)
+        .output()
+        .expect("run positive companion discovery fixture");
+    assert!(
+        positive.status.success(),
+        "explicit harness=false fixture must classify as a companion: {}",
+        String::from_utf8_lossy(&positive.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&positive.stdout).trim(),
+        "rust-companion-classification-fixture\texplicit-harness-false"
+    );
+
+    let negative = Command::new("bash")
+        .args(["-c", &script, "companion-discovery-fixture"])
+        .arg(&fixture)
+        .env(
+            "D2B_TEST_NEXTEST_LISTING",
+            zero_case_listing("disabled-default-harness"),
+        )
+        .env("D2B_TEST_CARGO_METADATA", metadata)
+        .output()
+        .expect("run negative companion discovery fixture");
+    assert!(
+        !negative.status.success(),
+        "a disabled default-harness zero-case target must fail classification"
+    );
+    let stderr = String::from_utf8_lossy(&negative.stderr);
+    assert!(
+        stderr.contains("disabled-default-harness")
+            && stderr.contains("does not declare harness = false"),
+        "negative fixture failure must identify the default-harness target: {stderr}"
     );
 }
 

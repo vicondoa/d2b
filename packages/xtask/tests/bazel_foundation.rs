@@ -56,7 +56,9 @@ fn module_declares_exactly_the_two_accepted_hubs() {
             error.to_string(),
             "D2B-BZL-RETIRED-HUB: the requested Bazel dependency hub is retired.\n\
 From the repository root, run: nix develop\n\
-Then run from packages/: cargo xtask bazel-repin --hub product."
+Then run from packages/: cargo xtask bazel-repin --hub product.\n\
+Supplied hub: main"
+                .replace("main", retired)
         );
         let (_, argv, cwd) = bazel::retired_hub_remediation(retired).expect("remediation");
         bazel::validate_retired_hub_remediation(&argv, cwd).expect("closed remediation");
@@ -108,6 +110,11 @@ fn adr0054_drift_table_is_closed_and_redacted() {
         assert!(!message.contains("/home/"));
         assert!(!message.contains("private"));
         assert!(!message.contains("$!"));
+    }
+    for code in ["D2B-BZLDRIFT-GENERATOR", "D2B-BZLDRIFT-PACKAGE-POLICY"] {
+        let message = bazel::adr0054_drift_message(code).expect("generator remediation");
+        assert!(message.contains("git status --short --untracked-files=all"));
+        assert!(!message.contains("paths returned by the install command"));
     }
     assert!(bazel::adr0054_drift_message("D2B-UNKNOWN").is_none());
 }
@@ -357,7 +364,32 @@ fn generated_model_preserves_representative_cargo_target_topology() {
         fuzz["target"]["requiredFeatures"],
         serde_json::json!(["fuzz"])
     );
+    assert_eq!(fuzz["features"], serde_json::json!(["fuzz"]));
+    assert!(
+        fuzz["directProductDeps"]
+            .as_array()
+            .expect("fuzz external dependencies")
+            .iter()
+            .any(|dependency| dependency == "@product//:bolero"),
+        "required fuzz feature must activate optional bolero"
+    );
+    assert!(
+        fuzz["closureCensus"]["externalIdentities"]
+            .as_array()
+            .expect("fuzz closure")
+            .iter()
+            .any(|dependency| dependency == "@product//:bolero"),
+        "required fuzz feature must enter the exact target closure"
+    );
     let core_library = find("d2b-core", "d2b-core", "lib");
+    assert!(
+        !core_library["features"]
+            .as_array()
+            .expect("library features")
+            .iter()
+            .any(|feature| feature == "fuzz"),
+        "target-only fuzz feature must not enter the default library context"
+    );
     assert!(
         !core_library["directProductDeps"]
             .as_array()
@@ -365,6 +397,14 @@ fn generated_model_preserves_representative_cargo_target_topology() {
             .iter()
             .any(|dependency| dependency == "@product//:bolero"),
         "disabled optional bolero must not enter the default closure"
+    );
+    assert!(
+        !core_library["closureCensus"]["externalIdentities"]
+            .as_array()
+            .expect("library closure")
+            .iter()
+            .any(|dependency| dependency == "@product//:bolero"),
+        "disabled optional bolero must not enter the default library closure"
     );
 
     let guest_policy = targets

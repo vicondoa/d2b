@@ -42,6 +42,7 @@ D2B-BZL-EXECUTABLE: the repository-pinned Bazel executable is unavailable.
 From the repository root, run: nix develop
 Then run from packages/: cargo xtask gen-bazel --check
 If the command still fails, verify the pinned Bazel tool in the development shell.";
+const MAX_SELECTOR_DIAGNOSTIC_BYTES: usize = 64;
 
 const APPROVED_OUTPUT_PATHS: &[&str] = &[
     ".bazelignore",
@@ -77,6 +78,33 @@ const RETIRED_HUB_MESSAGE: &str = "\
 D2B-BZL-RETIRED-HUB: the requested Bazel dependency hub is retired.
 From the repository root, run: nix develop
 Then run from packages/: cargo xtask bazel-repin --hub product.";
+
+fn bounded_redacted_selector(value: &str) -> String {
+    if value.is_empty() {
+        return "<empty>".to_owned();
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return "<redacted>".to_owned();
+    }
+    if value.len() <= MAX_SELECTOR_DIAGNOSTIC_BYTES {
+        return value.to_owned();
+    }
+    format!("{}...[truncated]", &value[..MAX_SELECTOR_DIAGNOSTIC_BYTES])
+}
+
+fn hub_selection_error(hub: &str, retired: bool) -> String {
+    let supplied = bounded_redacted_selector(hub);
+    if retired {
+        format!("{RETIRED_HUB_MESSAGE}\nSupplied hub: {supplied}")
+    } else {
+        format!(
+            "D2B-BZL-INVALID-HUB: supplied hub {supplied}; select one of the repository's product or walker hubs."
+        )
+    }
+}
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -178,14 +206,14 @@ D2B-BZLDRIFT-GENERATOR: generated Bazel output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
 Review the scratch preview, then run cargo xtask gen-bazel --install.
-Review and commit the exact repository-relative generated paths returned by the install command.
+Run git status --short --untracked-files=all and review and commit only the generator-owned paths listed in bazel/generated/output-manifest.json.
 Rerun cargo xtask gen-bazel --check, then rerun the failed command.",
         "D2B-BZLDRIFT-PACKAGE-POLICY" => "\
 D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
 Review the scratch preview, then run cargo xtask gen-package-policy-inputs --install.
-Review and commit the exact repository-relative generated paths returned by the install command.
+Run git status --short --untracked-files=all and review and commit only changes below packages/policy-inputs/.
 Rerun cargo xtask gen-package-policy-inputs --check, then rerun the failed command.",
         "D2B-BZL-METADATA" => "\
 D2B-BZL-METADATA: pinned offline Cargo metadata could not be generated.
@@ -280,19 +308,21 @@ pub(crate) fn bounded_child_diagnostic(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let mut rendered = String::new();
     for token in text.split_whitespace() {
-        let token =
-            if token.starts_with('/') || token.contains("/nix/store/") || token.contains("file://")
-            {
-                "<path>"
-            } else {
-                token
-            };
+        let token = if token.contains('/') || token.contains('\\') {
+            "<path>"
+        } else {
+            token
+        };
         if !rendered.is_empty() {
             rendered.push(' ');
         }
         rendered.push_str(token);
         if rendered.len() >= MAX_CHILD_DIAGNOSTIC_BYTES {
-            rendered.truncate(MAX_CHILD_DIAGNOSTIC_BYTES);
+            let mut boundary = MAX_CHILD_DIAGNOSTIC_BYTES;
+            while !rendered.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            rendered.truncate(boundary);
             rendered.push_str("...[truncated]");
             break;
         }
@@ -318,10 +348,13 @@ fn command_failure_message(
     status: &str,
     diagnostic: Option<&str>,
 ) -> String {
+    let hub = bounded_redacted_selector(hub);
+    let diagnostic =
+        bounded_child_diagnostic(diagnostic.unwrap_or("<no child diagnostic>").as_bytes());
     format!(
         "D2B-BZL-COMMAND: hub={hub} command={} status={status} diagnostic={}",
         command_label(command_args),
-        diagnostic.unwrap_or("<no child diagnostic>")
+        diagnostic
     )
 }
 
@@ -561,7 +594,9 @@ pub(crate) fn ensure_bazel_directory(path: &Path) -> Result<std::fs::File, Box<d
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        env::current_dir()?.join(path)
+        env::current_dir()
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: current directory is unavailable.")?
+            .join(path)
     };
     for component in path.components() {
         let std::path::Component::Normal(name) = component else {
@@ -627,7 +662,8 @@ fn reject_symlink_components(path: &Path) -> Result<(), Box<dyn Error>> {
     let mut current = if path.is_absolute() {
         PathBuf::from("/")
     } else {
-        env::current_dir()?
+        env::current_dir()
+            .map_err(|_| "D2B-BZLDRIFT-GENERATOR: current directory is unavailable.")?
     };
     for component in path.components() {
         let std::path::Component::Normal(name) = component else {
@@ -766,16 +802,9 @@ pub(crate) fn parse_repin(args: &[String]) -> Result<&str, Box<dyn Error>> {
         [flag, hub]
             if flag == "--hub" && RETIRED_HUB_MESSAGES.iter().any(|(name, _)| name == hub) =>
         {
-            Err(RETIRED_HUB_MESSAGES
-                .iter()
-                .find(|(name, _)| name == hub)
-                .map(|(_, message)| *message)
-                .unwrap_or("retired Bazel hub")
-                .into())
+            Err(hub_selection_error(hub, true).into())
         }
-        [flag, _hub] if flag == "--hub" => Err(
-            "D2B-BZL-INVALID-HUB: select one of the repository's product or walker hubs.".into(),
-        ),
+        [flag, hub] if flag == "--hub" => Err(hub_selection_error(hub, false).into()),
         _ => Err("usage: bazel-repin --hub <name>".into()),
     }
 }
@@ -786,12 +815,10 @@ pub fn bazel_repin_with_executor(
     executor: &mut dyn BazelExecutor,
 ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     if !HUBS.iter().any(|(name, _, _)| *name == hub) {
-        if let Some((_, message)) = RETIRED_HUB_MESSAGES.iter().find(|(name, _)| *name == hub) {
-            return Err((*message).into());
+        if RETIRED_HUB_MESSAGES.iter().any(|(name, _)| *name == hub) {
+            return Err(hub_selection_error(hub, true).into());
         }
-        return Err(
-            "D2B-BZL-INVALID-HUB: select one of the repository's product or walker hubs.".into(),
-        );
+        return Err(hub_selection_error(hub, false).into());
     }
     reject_ambient_repin("bazel-repin", Some(hub))?;
     let before = mutation_snapshot(root)?;
@@ -804,7 +831,9 @@ pub fn bazel_repin_with_executor(
             &command,
             &[("CARGO_BAZEL_REPIN", "1"), ("CARGO_BAZEL_REPIN_ONLY", hub)],
         )
-        .map_err(|_| command_failure_message(hub, &command, "not-started", None))?;
+        .map_err(|error| {
+            command_failure_message(hub, &command, "not-started", Some(&error.to_string()))
+        })?;
     let after = mutation_snapshot(root)?;
     let lock = format!("bazel/cargo/{hub}.lock");
     let outside = changed_outside(&before, &after, Some(&lock));
@@ -847,7 +876,9 @@ pub fn bazel_module_refresh_with_executor(
     let command = options.module_refresh_command_args();
     let status = executor
         .run(root, &options.startup_args(), &command, &[])
-        .map_err(|_| command_failure_message("module", &command, "not-started", None))?;
+        .map_err(|error| {
+            command_failure_message("module", &command, "not-started", Some(&error.to_string()))
+        })?;
     let after = mutation_snapshot(root)?;
     let outside = changed_outside(&before, &after, Some("MODULE.bazel.lock"));
     if !outside.is_empty() {
@@ -926,7 +957,7 @@ fn startup_options(root: &Path) -> StartupOptions {
     }
 }
 
-fn bazel_executable() -> Result<PathBuf, Box<dyn Error>> {
+pub(crate) fn bazel_executable() -> Result<PathBuf, Box<dyn Error>> {
     let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
     let executable = PathBuf::from(executable);
     if executable.is_absolute() {
@@ -937,6 +968,10 @@ fn bazel_executable() -> Result<PathBuf, Box<dyn Error>> {
         .map(|directory| directory.join(&executable))
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| BAZEL_EXECUTABLE_DIAGNOSTIC.into())
+}
+
+pub(crate) const fn bazel_executable_diagnostic() -> &'static str {
+    BAZEL_EXECUTABLE_DIAGNOSTIC
 }
 
 fn absolute_root(root: &Path) -> PathBuf {
@@ -1023,7 +1058,7 @@ impl GeneratedModel {
         hermeticity::validate_action_network_inventory(
             &hermeticity::complete_action_network_inventory(),
         )
-        .map_err(|error| format!("action-network inventory is invalid: {error}"))?;
+        .map_err(|_| "action-network inventory is invalid")?;
         for (name, contents) in [
             ("action-network-policy.json", &self.action_network_policy),
             ("configured-targets.json", &self.configured_targets),
@@ -1032,7 +1067,7 @@ impl GeneratedModel {
             ("source-census.json", &self.source_census),
         ] {
             let value: Value = serde_json::from_str(contents)
-                .map_err(|error| format!("generated {name} is not valid JSON: {error}"))?;
+                .map_err(|_| format!("generated {name} is not valid JSON"))?;
             if !value.is_object() {
                 return Err(format!("generated {name} must be a JSON object").into());
             }
@@ -1363,11 +1398,7 @@ fn validate_rendered_outputs(outputs: &BTreeMap<String, String>) -> Result<(), B
         .collect::<BTreeSet<_>>();
     let actual = outputs.keys().cloned().collect::<BTreeSet<_>>();
     if actual != expected {
-        return Err(format!(
-            "generated output census differs: expected {:?}, found {:?}",
-            expected, actual
-        )
-        .into());
+        return Err("generated output census differs from the closed ownership contract".into());
     }
     if outputs.values().any(String::is_empty) {
         return Err("generated output census contains an empty output".into());
@@ -1470,25 +1501,22 @@ fn validate_json_schema(
     contents: &str,
     expected_keys: &[&str],
 ) -> Result<(), Box<dyn Error>> {
-    let value: Value = serde_json::from_str(contents)
-        .map_err(|error| format!("{name} is not valid JSON: {error}"))?;
+    let value: Value =
+        serde_json::from_str(contents).map_err(|_| format!("{name} is not valid JSON"))?;
     let object = value
         .as_object()
         .ok_or_else(|| format!("{name} must be a JSON object"))?;
     let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
     let expected = expected_keys.iter().copied().collect::<BTreeSet<_>>();
     if actual != expected {
-        return Err(format!(
-            "{name} schema is not closed: expected {:?}, found {:?}",
-            expected, actual
-        )
-        .into());
+        return Err(format!("{name} schema differs from the closed generator contract").into());
     }
     Ok(())
 }
 
 fn validate_output_manifest(outputs: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
-    let value: Value = serde_json::from_str(&outputs[OUTPUT_MANIFEST_PATH])?;
+    let value: Value = serde_json::from_str(&outputs[OUTPUT_MANIFEST_PATH])
+        .map_err(|_| "output manifest is not valid JSON")?;
     let object = value
         .as_object()
         .ok_or("output manifest is not an object")?;
@@ -1903,6 +1931,16 @@ fn active_features(manifest: &ManifestInfo, requested: &[String]) -> BTreeSet<St
     active
 }
 
+fn effective_target_features(base: &[String], required: &[String]) -> Vec<String> {
+    let mut effective = base.to_vec();
+    for feature in required {
+        if !effective.contains(feature) {
+            effective.push(feature.clone());
+        }
+    }
+    effective
+}
+
 fn effective_dependency_names(
     manifest: &ManifestInfo,
     package: &DependencyInfo,
@@ -2000,7 +2038,8 @@ fn configured_target_rows(
             .into());
         }
         for target in targets {
-            let requested_features = manifest.default_features.clone();
+            let requested_features =
+                effective_target_features(&manifest.default_features, &target.required_features);
             let include_dev = matches!(target.kind.as_str(), "test" | "bench");
             let (direct_first_party_deps, direct_product_deps, dependency_conditions) =
                 direct_dependency_sets(
@@ -2060,6 +2099,9 @@ fn configured_target_rows(
             .iter()
             .map(|feature| (*feature).to_owned())
             .collect::<Vec<_>>();
+        let requested_features =
+            effective_target_features(&requested_features, &selected_target.required_features);
+        let required_features = requested_features.clone();
         let (direct_first_party_deps, direct_product_deps, dependency_conditions) =
             direct_dependency_sets(manifest, package, dependencies, &requested_features, true);
         let system_suffix = system.strip_suffix("-linux").unwrap_or(system);
@@ -2086,10 +2128,7 @@ fn configured_target_rows(
             target_path: selected_target.path.clone(),
             harness: selected_target.harness,
             doctest: selected_target.doctest,
-            required_features: features
-                .iter()
-                .map(|feature| (*feature).to_owned())
-                .collect(),
+            required_features,
             default_features: false,
             dependency_conditions,
             closure_configured_targets: vec![label],
@@ -2254,7 +2293,10 @@ fn source_census_json(
             ),
             (
                 "sha256".to_owned(),
-                Value::String(sha256_hex(&fs::read(root.join(path))?)),
+                Value::String(sha256_hex(
+                    &fs::read(root.join(path))
+                        .map_err(|_| format!("source census entry is unreadable: {path}"))?,
+                )),
             ),
             ("targetLabels".to_owned(), json_string_array(&target_labels)),
         ]));
@@ -2273,7 +2315,7 @@ fn no_shell_inventory_json(root: &Path, source_paths: &[String]) -> Result<Strin
     let mut scan_results = Vec::new();
     for source in source_paths {
         let contents = fs::read_to_string(root.join(source))
-            .map_err(|error| format!("no-shell-inventory-missing-entry: {source}: {error}"))?;
+            .map_err(|_| format!("no-shell-inventory-missing-entry: {source}"))?;
         let sites = scan_spawn_sites(source, &contents)?;
         if sites.iter().any(|site| site.shell_invocation) {
             return Err("no-shell-inventory-planted-shell".into());
@@ -2622,10 +2664,11 @@ fn evidence_sink_policy_json() -> String {
 fn action_network_policy_json(hermeticity: &str) -> Result<String, Box<dyn Error>> {
     let inventory = hermeticity::complete_action_network_inventory();
     hermeticity::validate_action_network_inventory(&inventory)
-        .map_err(|error| format!("action-network inventory is invalid: {error}"))?;
-    let hermeticity: Value = serde_json::from_str(hermeticity)
-        .map_err(|error| format!("hermeticity inventory is not valid JSON: {error}"))?;
-    let mut policy = serde_json::to_value(inventory)?;
+        .map_err(|_| "action-network inventory is invalid")?;
+    let hermeticity: Value =
+        serde_json::from_str(hermeticity).map_err(|_| "hermeticity inventory is not valid JSON")?;
+    let mut policy = serde_json::to_value(inventory)
+        .map_err(|_| "action-network inventory could not be serialized")?;
     let object = policy
         .as_object_mut()
         .ok_or("action-network inventory did not serialize as an object")?;
@@ -2818,10 +2861,8 @@ fn hermeticity_artifact(root: &Path) -> Result<String, Box<dyn Error>> {
             let document = if text.trim().is_empty() {
                 Value::Object(serde_json::Map::new())
             } else {
-                serde_json::from_str(&text).map_err(|error| {
-                    format!(
-                        "cannot parse Bazel-side lock for hermeticity inventory {name}: {error}"
-                    )
+                serde_json::from_str(&text).map_err(|_| {
+                    format!("Bazel-side lock for hermeticity inventory {name} is not valid JSON")
                 })?
             };
             let crates = document
@@ -2893,7 +2934,7 @@ fn hermeticity_artifact(root: &Path) -> Result<String, Box<dyn Error>> {
             .collect(),
     };
     let artifact = hermeticity::generated_artifact(&input)
-        .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
+        .map_err(|_| "hermeticity inventory generation failed")?;
     Ok(artifact.contents)
 }
 
@@ -2945,9 +2986,9 @@ fn validate_generator_inputs(root: &Path) -> Result<(), Box<dyn Error>> {
         let manifest_path = root.join(manifest);
         let lock_path = root.join(lock);
         let manifest_text = fs::read_to_string(&manifest_path)
-            .map_err(|error| format!("cannot read Cargo metadata root {manifest}: {error}"))?;
-        let lock_text = fs::read_to_string(&lock_path)
-            .map_err(|error| format!("cannot read Cargo lock {lock}: {error}"))?;
+            .map_err(|_| format!("cannot read Cargo metadata root {manifest}"))?;
+        let lock_text =
+            fs::read_to_string(&lock_path).map_err(|_| format!("cannot read Cargo lock {lock}"))?;
         let package_names = package_names(root, manifest, &manifest_text);
         let lock_packages = lock_packages(&lock_text);
         if lock_packages.is_empty() {
@@ -3011,8 +3052,10 @@ fn validate_generator_inputs(root: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 fn validate_toolchains(root: &Path) -> Result<(), Box<dyn Error>> {
-    let stable = fs::read_to_string(root.join("packages/rust-toolchain.toml"))?;
-    let nightly = fs::read_to_string(root.join("packages/d2b-api-surface/rust-toolchain.toml"))?;
+    let stable = fs::read_to_string(root.join("packages/rust-toolchain.toml"))
+        .map_err(|_| "stable Rust toolchain file is unreadable")?;
+    let nightly = fs::read_to_string(root.join("packages/d2b-api-surface/rust-toolchain.toml"))
+        .map_err(|_| "nightly Rust toolchain file is unreadable")?;
     let stable_channel = channel(&stable).ok_or("stable Rust toolchain channel is missing")?;
     let nightly_channel = channel(&nightly).ok_or("nightly Rust toolchain channel is missing")?;
     if stable_channel != STABLE_TOOLCHAIN {
@@ -3042,7 +3085,8 @@ fn discover_manifests(root: &Path) -> Result<Vec<ManifestInfo>, Box<dyn Error>> 
     let mut paths = BTreeSet::new();
     for (_, manifest, _) in HUBS {
         let relative = Path::new(manifest);
-        let text = fs::read_to_string(root.join(relative))?;
+        let text = fs::read_to_string(root.join(relative))
+            .map_err(|_| format!("Cargo manifest is unreadable: {manifest}"))?;
         if package_name(&text).is_some() {
             paths.insert(relative.to_string_lossy().into_owned());
             continue;
@@ -3060,7 +3104,8 @@ fn discover_manifests(root: &Path) -> Result<Vec<ManifestInfo>, Box<dyn Error>> 
     paths
         .into_iter()
         .map(|relative| {
-            let text = fs::read_to_string(root.join(&relative))?;
+            let text = fs::read_to_string(root.join(&relative))
+                .map_err(|_| format!("Cargo package manifest is unreadable: {relative}"))?;
             parse_manifest(&relative, &text, root)
         })
         .collect()
@@ -3170,10 +3215,15 @@ fn implicit_test_targets(
         return Ok(Vec::new());
     }
     let mut targets = Vec::new();
-    for entry in fs::read_dir(tests_dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(tests_dir).map_err(|_| "Cargo test target directory is unreadable")? {
+        let entry = entry.map_err(|_| "Cargo test target entry is unreadable")?;
         let path = entry.path();
-        if !entry.file_type()?.is_file() || path.extension().is_none_or(|ext| ext != "rs") {
+        if !entry
+            .file_type()
+            .map_err(|_| "Cargo test target type is unavailable")?
+            .is_file()
+            || path.extension().is_none_or(|ext| ext != "rs")
+        {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
@@ -3249,10 +3299,17 @@ fn implicit_file_targets(
         return Ok(Vec::new());
     }
     let mut targets = Vec::new();
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
+    for entry in
+        fs::read_dir(directory).map_err(|_| "implicit Cargo target directory is unreadable")?
+    {
+        let entry = entry.map_err(|_| "implicit Cargo target entry is unreadable")?;
         let path = entry.path();
-        if !entry.file_type()?.is_file() || path.extension().is_none_or(|ext| ext != "rs") {
+        if !entry
+            .file_type()
+            .map_err(|_| "implicit Cargo target type is unavailable")?
+            .is_file()
+            || path.extension().is_none_or(|ext| ext != "rs")
+        {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
@@ -3330,10 +3387,12 @@ fn collect_named_files(
     if !root.is_dir() {
         return Ok(());
     }
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in fs::read_dir(root).map_err(|_| "Cargo manifest census directory is unreadable")? {
+        let entry = entry.map_err(|_| "Cargo manifest census entry is unreadable")?;
         let path = entry.path();
-        let file_type = entry.file_type()?;
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "Cargo manifest census entry type is unavailable")?;
         if file_type.is_dir()
             && !matches!(
                 entry.file_name().to_str(),
@@ -3512,7 +3571,7 @@ fn tracked_paths(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
         .arg(root)
         .args(["ls-files", "-z"])
         .output()
-        .map_err(|error| format!("could not enumerate tracked files: {error}"))?;
+        .map_err(|_| "could not start the tracked-file census")?;
     if !output.status.success() {
         let mut files = Vec::new();
         collect_files_without_git(root, root, &mut files)?;
@@ -3534,16 +3593,19 @@ fn collect_files_without_git(
     current: &Path,
     output: &mut Vec<String>,
 ) -> Result<(), Box<dyn Error>> {
-    for entry in fs::read_dir(current)? {
-        let entry = entry?;
+    for entry in fs::read_dir(current).map_err(|_| "fallback file census is unreadable")? {
+        let entry = entry.map_err(|_| "fallback file census entry is unreadable")?;
         let name = entry.file_name();
         if matches!(name.to_str(), Some(".git" | ".scratch" | "target")) {
             continue;
         }
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "fallback file census entry type is unavailable")?;
+        if file_type.is_dir() {
             collect_files_without_git(root, &path, output)?;
-        } else if entry.file_type()?.is_file() {
+        } else if file_type.is_file() {
             output.push(
                 path.strip_prefix(root)
                     .map_err(|_| "fallback tracked path escaped root")?
@@ -3561,7 +3623,8 @@ fn mutation_snapshot(root: &Path) -> Result<BTreeMap<String, [u8; 32]>, Box<dyn 
     paths.sort();
     let mut digests = BTreeMap::new();
     for relative in paths {
-        let bytes = fs::read(root.join(&relative))?;
+        let bytes =
+            fs::read(root.join(&relative)).map_err(|_| "mutation snapshot entry is unreadable")?;
         digests.insert(relative, Sha256::digest(bytes).into());
     }
     Ok(digests)
@@ -3611,6 +3674,33 @@ mod tests {
                 "unexpectedly accepted hub {hub:?}"
             );
         }
+    }
+
+    #[test]
+    fn rejected_hubs_are_bounded_and_redacted_in_diagnostics() {
+        let retired = parse_repin(&["--hub".into(), "main".into()])
+            .expect_err("retired hub")
+            .to_string();
+        assert!(retired.contains("D2B-BZL-RETIRED-HUB"));
+        assert!(retired.contains("Supplied hub: main"));
+
+        let invalid = parse_repin(&["--hub".into(), "workspace".into()])
+            .expect_err("invalid hub")
+            .to_string();
+        assert!(invalid.contains("supplied hub workspace"));
+
+        let sensitive = parse_repin(&["--hub".into(), "/home/operator/private".into()])
+            .expect_err("sensitive hub")
+            .to_string();
+        assert!(sensitive.contains("supplied hub <redacted>"));
+        assert!(!sensitive.contains("/home/operator"));
+
+        let long = "a".repeat(MAX_SELECTOR_DIAGNOSTIC_BYTES + 40);
+        let bounded = parse_repin(&["--hub".into(), long.clone()])
+            .expect_err("long hub")
+            .to_string();
+        assert!(bounded.contains("...[truncated]"));
+        assert!(!bounded.contains(&long));
     }
 
     #[test]
@@ -3768,6 +3858,76 @@ harness = false
     }
 
     #[test]
+    fn target_required_features_select_only_that_targets_optional_dependencies() {
+        let manifest = ManifestInfo {
+            relative: "packages/sample/Cargo.toml".to_owned(),
+            package_dir: "packages/sample".to_owned(),
+            package_name: "sample".to_owned(),
+            lib_doctest: Some(true),
+            lib: None,
+            tests: Vec::new(),
+            bins: Vec::new(),
+            benches: Vec::new(),
+            examples: Vec::new(),
+            default_features: Vec::new(),
+            feature_dependencies: BTreeMap::from([(
+                "fuzz".to_owned(),
+                vec!["dep:bolero".to_owned()],
+            )]),
+        };
+        let package = DependencyInfo {
+            package_name: "sample".to_owned(),
+            package_dir: "packages/sample".to_owned(),
+            hub: "product".to_owned(),
+            normal: vec!["bolero".to_owned()],
+            dev: Vec::new(),
+            optional: BTreeSet::from(["bolero".to_owned()]),
+            proc_macro: BTreeSet::new(),
+            target_conditions: BTreeMap::new(),
+        };
+        let dependencies = BTreeMap::new();
+        let library_features = effective_target_features(&manifest.default_features, &[]);
+        let (_, library_external, _) =
+            direct_dependency_sets(&manifest, &package, &dependencies, &library_features, false);
+        assert!(library_external.is_empty());
+
+        let fuzz_features =
+            effective_target_features(&manifest.default_features, &["fuzz".to_owned()]);
+        let (_, fuzz_external, _) =
+            direct_dependency_sets(&manifest, &package, &dependencies, &fuzz_features, false);
+        assert_eq!(fuzz_features, vec!["fuzz"]);
+        assert_eq!(fuzz_external, vec!["@product//:bolero"]);
+    }
+
+    #[test]
+    fn parser_and_schema_errors_do_not_emit_raw_diagnostics() {
+        let malformed = validate_json_schema(
+            "configured-targets.json",
+            r#"{"private":"/home/operator/private""#,
+            &["schemaVersion"],
+        )
+        .expect_err("malformed JSON")
+        .to_string();
+        assert_eq!(malformed, "configured-targets.json is not valid JSON");
+        assert!(!malformed.contains("/home/operator"));
+        assert!(!malformed.contains("column"));
+
+        let wrong_schema = validate_json_schema(
+            "configured-targets.json",
+            r#"{"private":"/home/operator/private"}"#,
+            &["schemaVersion"],
+        )
+        .expect_err("wrong schema")
+        .to_string();
+        assert_eq!(
+            wrong_schema,
+            "configured-targets.json schema differs from the closed generator contract"
+        );
+        assert!(!wrong_schema.contains("private"));
+        assert!(!wrong_schema.contains('{'));
+    }
+
+    #[test]
     fn stale_side_lock_digest_is_detectable_without_rewriting_inputs() {
         let expected = sha256_hex(b"cargo-lock");
         assert_eq!(
@@ -3846,7 +4006,7 @@ harness = false
     #[test]
     fn child_command_diagnostics_are_bounded_redacted_and_hub_specific() {
         let diagnostic = bounded_child_diagnostic(
-            b"fatal: /home/operator/private /nix/store/secret\nsecond-line",
+            b"fatal: path=/home/operator/private /nix/store/secret\nsecond-line",
         );
         assert!(!diagnostic.contains("/home/operator"));
         assert!(!diagnostic.contains("/nix/store"));
@@ -3860,6 +4020,9 @@ harness = false
             )
             .contains("hub=product command=bazel mod deps status=36")
         );
+        let unicode = "x".repeat(MAX_CHILD_DIAGNOSTIC_BYTES - 1) + "\u{00e9}";
+        let bounded = bounded_child_diagnostic(unicode.as_bytes());
+        assert!(bounded.ends_with("...[truncated]"));
     }
 
     #[cfg(unix)]

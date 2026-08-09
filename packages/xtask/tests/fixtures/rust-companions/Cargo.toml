@@ -1,0 +1,19 @@
+[package]
+name = "rust-companion-classification-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+disabled = []
+
+[[test]]
+name = "explicit-harness-false"
+path = "explicit_harness_false.rs"
+harness = false
+
+[[test]]
+name = "disabled-default-harness"
+path = "disabled_default_harness.rs"
+required-features = ["disabled"]

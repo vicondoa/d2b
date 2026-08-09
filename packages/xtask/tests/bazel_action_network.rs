@@ -52,7 +52,7 @@ fn rendered_action_network_inventory_is_deterministic_json() {
 fn observed_configured_aquery_and_effective_strategy_sets_reconcile() {
     let configured = serde_json::json!({
         "actionKinds": hermeticity::GOVERNED_ACTION_KINDS,
-        "cqueryTargets": ["//bazel/evidence:action-probes"],
+        "cqueryTargets": hermeticity::RULES_RUST_EVIDENCE_LABELS,
         "coverageTargets": hermeticity::CONFIGURED_COVERAGE_TARGETS,
     })
     .to_string();
@@ -85,7 +85,7 @@ fn observed_configured_aquery_and_effective_strategy_sets_reconcile() {
 fn observed_strategy_mutation_refuses_local_fallback() {
     let configured = serde_json::json!({
         "actionKinds": hermeticity::GOVERNED_ACTION_KINDS,
-        "cqueryTargets": ["//bazel/evidence:action-probes"],
+        "cqueryTargets": hermeticity::RULES_RUST_EVIDENCE_LABELS,
         "coverageTargets": hermeticity::CONFIGURED_COVERAGE_TARGETS,
     })
     .to_string();
@@ -135,14 +135,28 @@ fn inherited_descriptor_diagnostics_are_typed() {
     let patch =
         std::fs::read_to_string(root.join("pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch"))
             .expect("sandbox patch");
-    for code in [
-        "D2B-BZLNET-PREFLIGHT",
-        "D2B-BZLNET-INHERITED-SOCKET",
-        "D2B-BZLNET-INHERITED-RING",
-        "D2BFailInheritedDescriptorPreflight",
+    for (code, outcome) in [
+        (
+            "kD2BPreflightFailure",
+            "outcome=descriptor-census-failed action=refused",
+        ),
+        (
+            "kD2BInheritedSocketFailure",
+            "outcome=inherited-socket action=refused",
+        ),
+        (
+            "kD2BInheritedRingFailure",
+            "outcome=inherited-io-uring action=refused",
+        ),
     ] {
-        assert!(patch.contains(code), "missing typed descriptor code {code}");
+        assert!(patch.contains(code), "missing descriptor code {code}");
+        assert!(
+            patch.contains(outcome),
+            "missing descriptor outcome {outcome}"
+        );
     }
+    assert!(!patch.contains("D2BPrintSandboxDiagnostic(kD2BInheritedSocketFailure)"));
+    assert!(!patch.contains("D2BPrintSandboxDiagnostic(kD2BInheritedRingFailure)"));
     let policy: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(root.join("pkgs/bazel-8.6.0-seccomp/seccomp-policy.json"))
             .expect("seccomp policy"),
@@ -173,6 +187,9 @@ fn bazel_wrapper_anchors_rc_and_environment_policy() {
         "--noworkspace_rc",
         "--bazelrc=",
         "--unset BAZELRC",
+        "--unset BAZEL_OPTS",
+        "--unset BAZEL_WRAPPER",
+        "nativeExecutable",
         "--incompatible_strict_action_env",
     ] {
         assert!(
@@ -189,6 +206,10 @@ fn bazel_wrapper_anchors_rc_and_environment_policy() {
         "--test_env",
         "--remote_executor",
         "--spawn_strategy",
+        "--invocation_policy",
+        "--flagfile",
+        "--noenable_bzlmod",
+        "--enable_workspace",
     ] {
         assert!(
             wrapper.contains(forbidden),
@@ -197,6 +218,43 @@ fn bazel_wrapper_anchors_rc_and_environment_policy() {
     }
     assert!(!bazelrc.contains("--action_env="));
     assert!(!bazelrc.contains("--test_env="));
+    assert!(wrapper.contains("--unset BAZEL_INTERNAL_INVOCATION_POLICY"));
+}
+
+#[test]
+fn evidence_uses_real_rules_rust_rules_and_persists_names_only() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    let build =
+        std::fs::read_to_string(root.join("bazel/evidence/BUILD.bazel")).expect("evidence BUILD");
+    let environment = std::fs::read_to_string(root.join("bazel/evidence/environment_probe.c"))
+        .expect("environment probe");
+    for rule in [
+        "cargo_build_script(",
+        "rust_binary(",
+        "rust_clippy(",
+        "rust_doc(",
+        "rust_doc_test(",
+        "rust_library(",
+        "rust_test(",
+        "rust_unpretty(",
+        "rustfmt_test(",
+    ] {
+        assert!(
+            build.contains(rule),
+            "missing genuine rules_rust rule {rule}"
+        );
+    }
+    assert!(!build.contains("d2b_action_probe"));
+    assert!(
+        !root
+            .join("bazel/evidence/action-network-observation.json")
+            .exists()
+    );
+    assert!(environment.contains("environment-names-only-v1"));
+    assert!(!environment.contains("fputs(*entry"));
 }
 
 #[test]
@@ -236,7 +294,9 @@ fn cargo_bazel_selects_checksum_pinned_native_architectures() {
 
 #[cfg(unix)]
 mod native_patched_bazel {
+    use super::hermeticity;
     use std::{
+        collections::{BTreeMap, BTreeSet},
         env,
         fs::{self, File, OpenOptions},
         io::{self, Read, Write},
@@ -246,6 +306,8 @@ mod native_patched_bazel {
         thread,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
+
+    const SECRET_NAME: &str = "D2B_PLANTED_ACTION_SECRET";
 
     use nix::{
         sys::{
@@ -290,67 +352,177 @@ mod native_patched_bazel {
         scratch
     }
 
-    fn configure_environment(command: &mut Command) {
+    fn configure_environment(command: &mut Command, secret: &str) {
         command.env_clear();
         for name in ["PATH", "JAVA_HOME", "TMPDIR"] {
             if let Some(value) = env::var_os(name) {
                 command.env(name, value);
             }
         }
+        command.env(SECRET_NAME, secret);
     }
 
-    fn bazel_arguments(scratch: &Path, label: &str) -> Vec<String> {
-        vec![
+    fn channel_root(scratch: &Path, channel: &str) -> PathBuf {
+        scratch.join(channel)
+    }
+
+    fn bazel_arguments(
+        scratch: &Path,
+        channel: &str,
+        command: &str,
+        execution_log: Option<&Path>,
+    ) -> Vec<String> {
+        let channel_root = channel_root(scratch, channel);
+        let mut arguments = vec![
             "--batch".to_owned(),
-            format!("--output_user_root={}", scratch.join("user").display()),
-            format!("--output_base={}", scratch.join("base").display()),
-            "build".to_owned(),
-            "--noenable_bzlmod".to_owned(),
-            "--enable_workspace".to_owned(),
+            format!("--output_user_root={}", channel_root.join("user").display()),
+            format!("--output_base={}", channel_root.join("base").display()),
+            command.to_owned(),
+            "--enable_bzlmod".to_owned(),
+            "--noenable_workspace".to_owned(),
+            format!("--@rules_rust//rust/toolchain/channel={channel}"),
+            "--@rules_rust//rust/settings:pipelined_compilation=true".to_owned(),
             format!("--sandbox_writable_path={}", scratch.display()),
-            format!(
+        ];
+        if channel == "nightly" {
+            arguments.push(
+                "--@rules_rust//rust/settings:experimental_compile_rustdoc_tests=true".to_owned(),
+            );
+        }
+        if let Some(execution_log) = execution_log {
+            arguments.push(format!(
                 "--execution_log_json_file={}",
-                scratch.join("execution-log.json").display()
-            ),
-            label.to_owned(),
-        ]
+                execution_log.display()
+            ));
+        }
+        arguments
     }
 
     fn run_bazel(
         bazel: &Path,
         root: &Path,
         scratch: &Path,
-        label: &str,
+        channel: &str,
+        command_name: &str,
+        labels: &[&str],
+        execution_log: Option<&Path>,
         defines: &[(&str, &str)],
+        secret: &str,
     ) -> Output {
         let mut command = Command::new(bazel);
         command.current_dir(root);
-        configure_environment(&mut command);
-        let mut arguments = bazel_arguments(scratch, label);
-        let label = arguments.pop().expect("Bazel label");
+        configure_environment(&mut command, secret);
+        let mut arguments = bazel_arguments(scratch, channel, command_name, execution_log);
         for (name, value) in defines {
             arguments.push(format!("--define={name}={value}"));
         }
         command.args(arguments);
-        command.arg(label);
+        command.args(labels);
         command.output().expect("run pinned Bazel action")
     }
 
-    fn run_cquery(bazel: &Path, root: &Path, scratch: &Path, expression: &str) -> Output {
+    fn run_query(
+        bazel: &Path,
+        root: &Path,
+        scratch: &Path,
+        channel: &str,
+        kind: &str,
+        output: &str,
+        expression: &str,
+        secret: &str,
+    ) -> Output {
+        let mut arguments = bazel_arguments(scratch, channel, kind, None);
+        arguments.push(format!("--output={output}"));
+        arguments.push(expression.to_owned());
         let mut command = Command::new(bazel);
         command.current_dir(root);
-        configure_environment(&mut command);
+        configure_environment(&mut command, secret);
+        command.args(arguments);
+        command.output().expect("run pinned Bazel query")
+    }
+
+    fn run_bzlmod_repository_query(
+        bazel: &Path,
+        root: &Path,
+        scratch: &Path,
+        expression: &str,
+        secret: &str,
+    ) -> Output {
+        let stable_root = channel_root(scratch, "stable");
+        let mut command = Command::new(bazel);
+        command.current_dir(root);
+        configure_environment(&mut command, secret);
         command.args([
             "--batch".to_owned(),
-            format!("--output_user_root={}", scratch.join("user").display()),
-            format!("--output_base={}", scratch.join("base").display()),
-            "cquery".to_owned(),
-            "--noenable_bzlmod".to_owned(),
-            "--enable_workspace".to_owned(),
+            format!("--output_user_root={}", stable_root.join("user").display()),
+            format!("--output_base={}", stable_root.join("base").display()),
+            "query".to_owned(),
+            "--enable_bzlmod".to_owned(),
+            "--noenable_workspace".to_owned(),
             "--output=label".to_owned(),
             expression.to_owned(),
         ]);
-        command.output().expect("run pinned Bazel cquery")
+        command.output().expect("run Bzlmod repository query")
+    }
+
+    fn assert_secret_absent(secret: &str, label: &str, bytes: &[u8]) {
+        assert!(
+            !String::from_utf8_lossy(bytes).contains(secret),
+            "{label} persisted the planted secret"
+        );
+    }
+
+    fn configured_labels(output: &Output) -> BTreeSet<String> {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter(|label| label.starts_with("//bazel/evidence:"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn normalized_aquery_actions(channel: &str, output: &Output) -> BTreeSet<String> {
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("aquery JSON");
+        value
+            .get("actions")
+            .and_then(serde_json::Value::as_array)
+            .expect("aquery actions")
+            .iter()
+            .filter_map(|action| action.get("mnemonic").and_then(serde_json::Value::as_str))
+            .filter_map(|mnemonic| hermeticity::normalize_rules_rust_mnemonic(channel, mnemonic))
+            .collect()
+    }
+
+    fn normalized_execution_actions(
+        channel: &str,
+        paths: &[&Path],
+        secret: &str,
+    ) -> BTreeMap<String, String> {
+        let mut actions = BTreeMap::new();
+        for path in paths {
+            let contents = fs::read_to_string(path).expect("execution log");
+            assert!(!contents.contains(secret), "execution log persisted secret");
+            for entry in
+                serde_json::Deserializer::from_str(&contents).into_iter::<serde_json::Value>()
+            {
+                let entry = entry.expect("execution-log JSON record");
+                let Some(mnemonic) = entry.get("mnemonic").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(action) = hermeticity::normalize_rules_rust_mnemonic(channel, mnemonic)
+                else {
+                    continue;
+                };
+                let runner = entry
+                    .get("runner")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("governed execution runner");
+                assert_eq!(runner, "linux-sandbox", "{action} escaped linux-sandbox");
+                actions.insert(action, runner.to_owned());
+            }
+        }
+        actions
     }
 
     fn patched_linux_sandbox(scratch: &Path, bazel: &Path) -> PathBuf {
@@ -363,7 +535,7 @@ mod native_patched_bazel {
             installed_policy.is_file(),
             "pinned Bazel policy is installed beside the executable"
         );
-        let install_root = scratch.join("user/install");
+        let install_root = scratch.join("stable/user/install");
         fs::read_dir(&install_root)
             .expect("Bazel install root")
             .filter_map(Result::ok)
@@ -430,6 +602,7 @@ mod native_patched_bazel {
         scratch: &Path,
         stage: &str,
         index: usize,
+        secret: &str,
     ) -> Output {
         let stage_root = scratch.join(format!("stage-{index}-{stage}"));
         fs::create_dir_all(&stage_root).expect("native stage root");
@@ -447,14 +620,12 @@ mod native_patched_bazel {
         ];
         let mut command = Command::new(bazel);
         command.current_dir(root);
-        configure_environment(&mut command);
-        command.args(bazel_arguments(
-            scratch,
-            "//bazel/evidence:crash-plant-action",
-        ));
+        configure_environment(&mut command, secret);
+        command.args(bazel_arguments(scratch, "stable", "build", None));
         for (name, value) in defines {
             command.arg(format!("--define={name}={value}"));
         }
+        command.arg("//bazel/evidence:crash-plant-action");
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let child = command.spawn().expect("spawn native crash plant Bazel");
         wait_for_marker(&mut liveness_reader, Duration::from_secs(10));
@@ -474,99 +645,429 @@ mod native_patched_bazel {
         output
     }
 
+    fn run_beyond_ceiling_direct(
+        linux_sandbox: &Path,
+        crash_plant: &Path,
+        policy: &Path,
+        scratch: &Path,
+        secret: &str,
+    ) -> Output {
+        let stage_root = scratch.join("stage-direct-beyond-ceiling");
+        fs::create_dir_all(&stage_root).expect("direct beyond-ceiling root");
+        let liveness_path = stage_root.join("liveness.fifo");
+        let barrier_path = stage_root.join("barrier.fifo");
+        let (mut liveness_reader, liveness_writer) = create_fifo(&liveness_path);
+        drop(liveness_writer);
+        let (_barrier_reader, mut barrier_writer) = create_fifo(&barrier_path);
+
+        let mut command = Command::new(linux_sandbox);
+        command.current_dir(scratch);
+        configure_environment(&mut command, secret);
+        command.env("D2B_BAZEL_SECCOMP_POLICY", policy);
+        command.env("D2B_BAZEL_STRATEGY_LOCK", "d2b-bazel-sandbox-v1");
+        command.args([
+            "-W",
+            scratch.to_str().expect("UTF-8 native sandbox root"),
+            "-w",
+            scratch.to_str().expect("UTF-8 native sandbox root"),
+            "-M",
+            "/nix/store",
+            "-m",
+            "/nix/store",
+            "--",
+        ]);
+        command.arg(crash_plant);
+        command.args([
+            "--stage",
+            "beyond-ceiling",
+            "--liveness-path",
+            liveness_path.to_str().expect("UTF-8 liveness path"),
+            "--barrier-path",
+            barrier_path.to_str().expect("UTF-8 barrier path"),
+        ]);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .expect("spawn direct beyond-ceiling sandbox");
+        wait_for_marker(&mut liveness_reader, Duration::from_secs(10));
+        kill(Pid::from_raw(child.id() as i32), Signal::SIGUSR1)
+            .expect("mark direct sandbox teardown abnormal");
+        thread::sleep(Duration::from_millis(10_500));
+        assert!(
+            child
+                .try_wait()
+                .expect("observe original monitor")
+                .is_none(),
+            "original monitor exited before consuming-reap release"
+        );
+        barrier_writer
+            .write_all(b"release")
+            .expect("release direct beyond-ceiling barrier");
+        let output = child
+            .wait_with_output()
+            .expect("wait for original direct sandbox monitor");
+        wait_for_close(&mut liveness_reader, Duration::from_secs(15));
+        output
+    }
+
     #[test]
     #[ignore = "requires a native patched Bazel and Linux namespace support"]
     fn native_bazel_runs_network_descriptor_and_cleanup_plants() {
         let root = repository_root();
         let scratch = scratch_root(&root);
         let bazel = bazel_executable();
+        let expected_system =
+            env::var("D2B_BAZEL_NATIVE_SYSTEM").expect("native CI system contract");
+        let actual_system = match env::consts::ARCH {
+            "x86_64" => "x86_64-linux",
+            "aarch64" => "aarch64-linux",
+            architecture => panic!("unsupported native Bazel architecture {architecture}"),
+        };
+        assert_eq!(
+            expected_system, actual_system,
+            "native Bazel plants cannot run through a foreign system"
+        );
+        let secret = format!(
+            "d2b-native-secret-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("secret clock")
+                .as_nanos()
+        );
+
+        for bypass in [
+            "--invocation_policy=/dev/null",
+            "--flagfile=/dev/null",
+            "--noenable_bzlmod",
+            "--enable_workspace",
+        ] {
+            let mut command = Command::new(&bazel);
+            command.current_dir(&root);
+            configure_environment(&mut command, &secret);
+            command.args(["--batch", bypass, "help"]);
+            let output = command.output().expect("run wrapper bypass refusal");
+            assert_eq!(output.status.code(), Some(64), "{bypass} was not refused");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("D2B-BZLNET-STRATEGY"),
+                "{bypass} omitted typed refusal"
+            );
+            assert_secret_absent(&secret, "wrapper refusal stdout", &output.stdout);
+            assert_secret_absent(&secret, "wrapper refusal stderr", &output.stderr);
+        }
+        let mut internal_policy = Command::new(&bazel);
+        internal_policy.current_dir(&root);
+        configure_environment(&mut internal_policy, &secret);
+        internal_policy.env("BAZEL_INTERNAL_INVOCATION_POLICY", &secret);
+        internal_policy.args(["--batch", "help"]);
+        let internal_output = internal_policy
+            .output()
+            .expect("run internal invocation-policy neutralization");
+        assert!(
+            internal_output.status.success(),
+            "internal invocation-policy environment was not neutralized"
+        );
+        assert_secret_absent(
+            &secret,
+            "internal invocation-policy stdout",
+            &internal_output.stdout,
+        );
+        assert_secret_absent(
+            &secret,
+            "internal invocation-policy stderr",
+            &internal_output.stderr,
+        );
 
         let network = run_bazel(
             &bazel,
             &root,
             &scratch,
-            "//bazel/evidence:network-plant-action",
+            "stable",
+            "build",
+            &["//bazel/evidence:network-plant-action"],
+            None,
             &[],
+            &secret,
         );
-        assert!(network.status.success(), "network denial plant failed");
-
-        let probes = run_bazel(
-            &bazel,
-            &root,
-            &scratch,
-            "//bazel/evidence:action-probes",
-            &[],
-        );
-        assert!(probes.status.success(), "effective strategy probes failed");
-        let query = run_cquery(
-            &bazel,
-            &root,
-            &scratch,
-            "deps(//bazel/evidence:action-probes, 1)",
-        );
-        assert!(query.status.success(), "configured-target cquery failed");
-        let query_output = String::from_utf8_lossy(&query.stdout);
-        for label in [
-            "//bazel/evidence:stable-rustc",
-            "//bazel/evidence:nightly-rustc",
-        ] {
-            assert!(
-                query_output.contains(label),
-                "cquery omitted governed target"
-            );
-        }
-        let execution_log =
-            fs::read_to_string(scratch.join("execution-log.json")).expect("read aquery evidence");
         assert!(
-            execution_log.contains("\"runner\": \"linux-sandbox\""),
-            "effective execution did not use linux-sandbox"
+            network.status.success(),
+            "network denial plant failed: {}",
+            String::from_utf8_lossy(&network.stderr)
         );
-        for mnemonic in ["StableRustc", "NightlyRustc", "StableTest", "NightlyTest"] {
+        assert_secret_absent(&secret, "network stdout", &network.stdout);
+        assert_secret_absent(&secret, "network stderr", &network.stderr);
+
+        for (repository, expected) in [
+            (
+                "@cargo_bazel_pinned//:cargo-bazel",
+                "@cargo_bazel_pinned//:cargo-bazel",
+            ),
+            ("@product//:all", "@product//"),
+        ] {
+            let query = run_bzlmod_repository_query(&bazel, &root, &scratch, repository, &secret);
             assert!(
-                execution_log.contains(&format!("\"mnemonic\": \"{mnemonic}\"")),
-                "aquery execution evidence omitted action"
+                query.status.success(),
+                "Bzlmod query for {repository} failed: {}",
+                String::from_utf8_lossy(&query.stderr)
             );
+            assert!(
+                String::from_utf8_lossy(&query.stdout).contains(expected),
+                "Bzlmod query for {repository} did not exercise its repository"
+            );
+            assert_secret_absent(&secret, "Bzlmod query stdout", &query.stdout);
+            assert_secret_absent(&secret, "Bzlmod query stderr", &query.stderr);
         }
+
+        let labels_expression =
+            format!("set({})", hermeticity::RULES_RUST_EVIDENCE_LABELS.join(" "));
+        let stable_aquery_expression = concat!(
+            "deps(set(",
+            "//bazel/evidence:rules-rust-evidence-build ",
+            "//bazel/evidence:evidence-test ",
+            "//bazel/evidence:evidence-doctest ",
+            "//bazel/evidence:evidence-rustfmt))"
+        );
+        let nightly_aquery_expression = concat!(
+            "deps(set(",
+            "//bazel/evidence:rules-rust-evidence-nightly-build ",
+            "//bazel/evidence:evidence-test ",
+            "//bazel/evidence:evidence-doctest ",
+            "//bazel/evidence:evidence-rustfmt))"
+        );
+        let mut observed_actions = BTreeSet::new();
+        let mut observed_execution = BTreeMap::new();
+        let mut observed_labels = BTreeSet::new();
+
+        for (channel, build_target, aquery_expression) in [
+            (
+                "stable",
+                "//bazel/evidence:rules-rust-evidence-build",
+                stable_aquery_expression,
+            ),
+            (
+                "nightly",
+                "//bazel/evidence:rules-rust-evidence-nightly-build",
+                nightly_aquery_expression,
+            ),
+        ] {
+            let cquery = run_query(
+                &bazel,
+                &root,
+                &scratch,
+                channel,
+                "cquery",
+                "label",
+                &labels_expression,
+                &secret,
+            );
+            assert!(
+                cquery.status.success(),
+                "{channel} cquery failed: {}",
+                String::from_utf8_lossy(&cquery.stderr)
+            );
+            assert_secret_absent(&secret, "cquery stdout", &cquery.stdout);
+            assert_secret_absent(&secret, "cquery stderr", &cquery.stderr);
+            let labels = configured_labels(&cquery);
+            let expected_labels = hermeticity::RULES_RUST_EVIDENCE_LABELS
+                .iter()
+                .map(|label| (*label).to_owned())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(labels, expected_labels, "{channel} cquery target drift");
+            observed_labels.extend(labels);
+
+            let aquery = run_query(
+                &bazel,
+                &root,
+                &scratch,
+                channel,
+                "aquery",
+                "jsonproto",
+                aquery_expression,
+                &secret,
+            );
+            assert!(
+                aquery.status.success(),
+                "{channel} aquery failed: {}",
+                String::from_utf8_lossy(&aquery.stderr)
+            );
+            assert_secret_absent(&secret, "aquery stdout", &aquery.stdout);
+            assert_secret_absent(&secret, "aquery stderr", &aquery.stderr);
+            observed_actions.extend(normalized_aquery_actions(channel, &aquery));
+
+            let metadata_log = scratch.join(format!("{channel}-metadata-execution.json"));
+            let metadata = run_bazel(
+                &bazel,
+                &root,
+                &scratch,
+                channel,
+                "build",
+                &[
+                    "--output_groups=build_metadata",
+                    "//bazel/evidence:evidence-library",
+                ],
+                Some(&metadata_log),
+                &[],
+                &secret,
+            );
+            assert!(
+                metadata.status.success(),
+                "{channel} RustcMetadata build failed: {}",
+                String::from_utf8_lossy(&metadata.stderr)
+            );
+            assert_secret_absent(&secret, "metadata stdout", &metadata.stdout);
+            assert_secret_absent(&secret, "metadata stderr", &metadata.stderr);
+
+            let rustdoc_zip_log = scratch.join(format!("{channel}-rustdoc-zip-execution.json"));
+            let rustdoc_zip = run_bazel(
+                &bazel,
+                &root,
+                &scratch,
+                channel,
+                "build",
+                &[
+                    "--output_groups=rustdoc_zip",
+                    "//bazel/evidence:evidence-doc",
+                ],
+                Some(&rustdoc_zip_log),
+                &[],
+                &secret,
+            );
+            assert!(
+                rustdoc_zip.status.success(),
+                "{channel} RustdocZip build failed: {}",
+                String::from_utf8_lossy(&rustdoc_zip.stderr)
+            );
+            assert_secret_absent(&secret, "rustdoc zip stdout", &rustdoc_zip.stdout);
+            assert_secret_absent(&secret, "rustdoc zip stderr", &rustdoc_zip.stderr);
+
+            let build_log = scratch.join(format!("{channel}-build-execution.json"));
+            let build = run_bazel(
+                &bazel,
+                &root,
+                &scratch,
+                channel,
+                "build",
+                &[build_target],
+                Some(&build_log),
+                &[],
+                &secret,
+            );
+            assert!(
+                build.status.success(),
+                "{channel} rules_rust build failed: {}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+            assert_secret_absent(&secret, "rules_rust build stdout", &build.stdout);
+            assert_secret_absent(&secret, "rules_rust build stderr", &build.stderr);
+
+            let test_log = scratch.join(format!("{channel}-test-execution.json"));
+            let tests = run_bazel(
+                &bazel,
+                &root,
+                &scratch,
+                channel,
+                "test",
+                &[
+                    "//bazel/evidence:evidence-test",
+                    "//bazel/evidence:evidence-doctest",
+                    "//bazel/evidence:evidence-rustfmt",
+                ],
+                Some(&test_log),
+                &[],
+                &secret,
+            );
+            assert!(
+                tests.status.success(),
+                "{channel} rules_rust tests failed: {}",
+                String::from_utf8_lossy(&tests.stderr)
+            );
+            assert_secret_absent(&secret, "rules_rust test stdout", &tests.stdout);
+            assert_secret_absent(&secret, "rules_rust test stderr", &tests.stderr);
+            observed_execution.extend(normalized_execution_actions(
+                channel,
+                &[
+                    metadata_log.as_path(),
+                    rustdoc_zip_log.as_path(),
+                    build_log.as_path(),
+                    test_log.as_path(),
+                ],
+                &secret,
+            ));
+        }
+
+        let expected_actions = hermeticity::GOVERNED_ACTION_KINDS
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(observed_actions, expected_actions, "aquery action drift");
+        assert_eq!(
+            observed_execution.keys().cloned().collect::<BTreeSet<_>>(),
+            expected_actions,
+            "execution action drift"
+        );
+        let observation = hermeticity::ActionNetworkObservation {
+            configured_targets: observed_actions.clone(),
+            coverage_targets: hermeticity::CONFIGURED_COVERAGE_TARGETS
+                .iter()
+                .map(|target| (*target).to_owned())
+                .collect(),
+            aquery_actions: observed_actions,
+            effective_strategies: observed_execution,
+            fallback_strategies: BTreeSet::new(),
+            cquery_targets: observed_labels,
+            action_environment: BTreeSet::new(),
+            test_environment: BTreeSet::new(),
+        };
+        let inventory =
+            hermeticity::complete_action_network_inventory_from_observation(&observation);
+        hermeticity::validate_observed_action_network(&inventory, &observation)
+            .expect("runtime cquery/aquery/execution evidence must reconcile exactly");
 
         let environment = run_bazel(
             &bazel,
             &root,
             &scratch,
-            "//bazel/evidence:environment-probe-action",
+            "stable",
+            "build",
+            &["//bazel/evidence:environment-probe-action"],
+            None,
             &[],
+            &secret,
         );
         assert!(
             environment.status.success(),
             "action environment probe failed"
         );
-        let environment_output = root.join("bazel-bin/bazel/evidence/environment-probe-action.txt");
-        let environment_names = fs::read_to_string(environment_output)
-            .expect("read action environment evidence")
-            .lines()
-            .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_owned()))
-            .collect::<std::collections::BTreeSet<_>>();
+        assert_secret_absent(&secret, "environment stdout", &environment.stdout);
+        assert_secret_absent(&secret, "environment stderr", &environment.stderr);
+        let environment_output = root.join("bazel-bin/bazel/evidence/environment-action.txt");
+        let environment_contents =
+            fs::read_to_string(environment_output).expect("read action environment evidence");
+        assert!(!environment_contents.contains(&secret));
+        assert!(!environment_contents.contains(SECRET_NAME));
+        assert!(!environment_contents.contains('='));
+        let mut lines = environment_contents.lines();
+        assert_eq!(lines.next(), Some("environment-names-only-v1"));
+        let environment_names = lines.map(str::to_owned).collect::<Vec<_>>();
+        assert!(!environment_names.is_empty());
         assert!(
-            environment_names.iter().all(|name| {
-                matches!(
-                    name.as_str(),
-                    "BASH_ENV"
-                        | "PATH"
-                        | "PWD"
-                        | "TMPDIR"
-                        | "ZERO_AR_DATE"
-                        | "__ETC_PROFILE_DONE"
-                        | "__ETC_PROFILE_SOURCED"
-                )
-            }),
-            "action environment contains an ambient variable"
+            environment_names.windows(2).all(|pair| pair[0] <= pair[1]),
+            "environment names are not deterministic"
         );
 
         let launcher = run_bazel(
             &bazel,
             &root,
             &scratch,
-            "//bazel/evidence:inherited-fd-launcher",
+            "stable",
+            "build",
+            &[
+                "//bazel/evidence:inherited-fd-launcher",
+                "//bazel/evidence:sandbox-crash-plant",
+            ],
+            None,
             &[],
+            &secret,
         );
         assert!(
             launcher.status.success(),
@@ -579,10 +1080,10 @@ mod native_patched_bazel {
             .and_then(Path::parent)
             .expect("pinned Bazel store root")
             .join("share/d2b/bazel/seccomp-policy.json");
-        for mode in ["socket", "ring"] {
+        for mode in ["socket", "ring", "ring-sqpoll", "ring-registered-socket"] {
             let mut command = Command::new(&launcher_path);
             command.current_dir(&root);
-            configure_environment(&mut command);
+            configure_environment(&mut command, &secret);
             command.env("D2B_BAZEL_SECCOMP_POLICY", &policy);
             command.env("D2B_BAZEL_STRATEGY_LOCK", "d2b-bazel-sandbox-v1");
             command.arg(mode);
@@ -597,7 +1098,7 @@ mod native_patched_bazel {
                 "-m",
                 "/nix/store",
                 "--",
-                "/run/current-system/sw/bin/true",
+                "/bin/true",
             ]);
             let output = command.output().expect("run inherited descriptor plant");
             assert!(
@@ -605,15 +1106,22 @@ mod native_patched_bazel {
                 "inherited descriptor plant passed"
             );
             let expected = if mode == "socket" {
-                "D2B-BZLNET-INHERITED-SOCKET"
+                "D2B-BZLNET-INHERITED-SOCKET outcome=inherited-socket action=refused"
             } else {
-                "D2B-BZLNET-INHERITED-RING"
+                "D2B-BZLNET-INHERITED-RING outcome=inherited-io-uring action=refused"
             };
             let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                stderr.contains(expected),
-                "missing inherited descriptor code"
+            let typed_records = stderr
+                .lines()
+                .filter(|line| line.starts_with("D2B-BZLNET-"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                typed_records,
+                vec![expected],
+                "{mode} did not emit one exact descriptor record"
             );
+            assert_secret_absent(&secret, "descriptor stdout", &output.stdout);
+            assert_secret_absent(&secret, "descriptor stderr", &output.stderr);
         }
 
         for (index, stage) in [
@@ -624,17 +1132,46 @@ mod native_patched_bazel {
             "during-grace",
             "direct-descendant",
             "double-fork-descendant",
-            "beyond-ceiling",
         ]
         .into_iter()
         .enumerate()
         {
-            let output = run_crash_stage(&bazel, &root, &scratch, stage, index);
+            let output = run_crash_stage(&bazel, &root, &scratch, stage, index, &secret);
+            assert_secret_absent(&secret, "cleanup stdout", &output.stdout);
+            assert_secret_absent(&secret, "cleanup stderr", &output.stderr);
             if stage == "fd-audit" {
                 assert!(output.status.success(), "fd audit plant failed");
             } else {
                 assert!(!output.status.success(), "crash plant unexpectedly passed");
             }
         }
+
+        let crash_plant = root.join("bazel-bin/bazel/evidence/sandbox-crash-plant");
+        let beyond =
+            run_beyond_ceiling_direct(&linux_sandbox, &crash_plant, &policy, &scratch, &secret);
+        assert!(
+            !beyond.status.success(),
+            "quarantined action became successful"
+        );
+        assert_secret_absent(&secret, "quarantine stdout", &beyond.stdout);
+        assert_secret_absent(&secret, "quarantine stderr", &beyond.stderr);
+        let stderr = String::from_utf8_lossy(&beyond.stderr);
+        let pending = "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP state=pending-kernel-cleanup quarantine=entered-and-held owner=original-monitor wait-owner=original-monitor result=failed reuse=denied action=no-success-no-reuse runbook=docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine";
+        let release = "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE cleanup=complete-after-quarantine quarantine=entered-and-released-after-consuming-reap owner=original-monitor wait=consuming result=failed";
+        assert_eq!(
+            stderr.lines().filter(|line| *line == pending).count(),
+            1,
+            "pending record drift: {stderr}"
+        );
+        assert_eq!(
+            stderr.lines().filter(|line| *line == release).count(),
+            1,
+            "release record drift: {stderr}"
+        );
+        assert!(
+            stderr.find(pending).expect("pending quarantine record")
+                < stderr.find(release).expect("consuming-reap release"),
+            "quarantine released before consuming reap"
+        );
     }
 }

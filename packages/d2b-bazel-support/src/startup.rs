@@ -1,4 +1,16 @@
-use std::{fmt, io};
+use std::{
+    fmt, io,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{Mutex, OnceLock},
+    thread,
+    time::{Duration, Instant},
+};
+
+const IMMUTABLE_SUPERVISOR_PATH: Option<&str> = option_env!("D2B_BAZEL_EXEC_SUPERVISOR");
+const STARTUP_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+static PENDING_PROBE_CHILDREN: OnceLock<Mutex<Vec<Child>>> = OnceLock::new();
+static PROBE_REAPER: OnceLock<()> = OnceLock::new();
 
 /// Native systems admitted by the immutable execution toolchain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,28 +89,93 @@ pub trait StartupProbe {
     fn run(&self) -> io::Result<()>;
 }
 
-/// The process-local part of the ptrace admission check.
+/// The runtime ptrace and sandbox-policy admission check.
 ///
 /// Kernel and Yama values are supplied separately in [`StartupRequirements`].
-/// This probe verifies that the running Linux process exposes the proc status
-/// needed by the ptrace handoff and is not already being traced by another
-/// process.  It deliberately emits no proc path or kernel text.
+/// The immutable supervisor runs a bounded parent-child ptrace round trip and
+/// then requires the pinned sandbox filter to return its fixed denial for a
+/// forbidden request. It deliberately returns no probe output or path.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RuntimeStartupProbe;
+
+fn immutable_supervisor_path() -> io::Result<PathBuf> {
+    let value = IMMUTABLE_SUPERVISOR_PATH
+        .ok_or_else(|| io::Error::other("immutable startup probe is unavailable"))?;
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || !value.starts_with("/nix/store/")
+        || path
+            .file_name()
+            .is_none_or(|name| name != "d2b-bazel-exec-supervisor")
+    {
+        return Err(io::Error::other("immutable startup probe is unavailable"));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn reap_probe_children() {
+    let mut children = PENDING_PROBE_CHILDREN
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    children.retain_mut(|child| !matches!(child.try_wait(), Ok(Some(_))));
+}
+
+fn retain_probe_child(child: Child) {
+    {
+        let mut children = PENDING_PROBE_CHILDREN
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        children.push(child);
+    }
+    PROBE_REAPER.get_or_init(|| {
+        let _ = thread::Builder::new()
+            .name("d2b-bazel-startup-reaper".to_owned())
+            .spawn(|| {
+                loop {
+                    reap_probe_children();
+                    thread::sleep(Duration::from_millis(10));
+                }
+            });
+    });
+}
 
 impl StartupProbe for RuntimeStartupProbe {
     fn run(&self) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
-            let status = std::fs::read_to_string("/proc/self/status")?;
-            let tracer = status
-                .lines()
-                .find_map(|line| line.strip_prefix("TracerPid:"))
-                .ok_or_else(|| io::Error::other("ptrace status is unavailable"))?;
-            if tracer.trim() != "0" {
-                return Err(io::Error::other("process is already traced"));
+            let mut child = Command::new(immutable_supervisor_path()?)
+                .arg("--d2b-startup-probe")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|_| io::Error::other("startup probe spawn failed"))?;
+            let deadline = Instant::now() + STARTUP_PROBE_TIMEOUT;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) if status.success() => return Ok(()),
+                    Ok(Some(status)) if status.code() == Some(13) => {
+                        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+                    }
+                    Ok(Some(_)) => {
+                        return Err(io::Error::other("ptrace startup probe refused"));
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok(None) => {
+                        let _ = child.kill();
+                        retain_probe_child(child);
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
+                    }
+                    Err(_) => {
+                        retain_probe_child(child);
+                        return Err(io::Error::other("ptrace startup probe wait failed"));
+                    }
+                }
             }
-            Ok(())
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -129,8 +206,12 @@ pub fn validate_startup(
             code: StartupCode::YamaRefused,
         });
     }
-    probe.run().map_err(|_| StartupError {
-        code: StartupCode::ProbeFailed,
+    probe.run().map_err(|error| StartupError {
+        code: if error.kind() == io::ErrorKind::PermissionDenied {
+            StartupCode::SandboxPolicyDrift
+        } else {
+            StartupCode::ProbeFailed
+        },
     })?;
     if !requirements.sandbox_policy_ok {
         return Err(StartupError {

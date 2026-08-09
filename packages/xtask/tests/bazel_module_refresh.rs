@@ -17,6 +17,7 @@ struct Executor {
     unrelated: bool,
     write_product: bool,
     write_walker: bool,
+    startup_error: Option<&'static str>,
 }
 
 impl bazel::BazelExecutor for Executor {
@@ -36,6 +37,9 @@ impl bazel::BazelExecutor for Executor {
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
                 .collect(),
         ));
+        if let Some(error) = self.startup_error {
+            return Err(error.into());
+        }
         if self.write_lock {
             fs::write(root.join("MODULE.bazel.lock"), b"module-lock-v1\n")?;
         }
@@ -75,6 +79,7 @@ fn refresh_is_no_argument_absolute_and_lock_only() {
         unrelated: false,
         write_product: false,
         write_walker: false,
+        startup_error: None,
     };
     let first =
         bazel::bazel_module_refresh_with_executor(&root, &mut executor).expect("first refresh");
@@ -119,6 +124,7 @@ fn refresh_refuses_unrelated_mutation() {
         unrelated: true,
         write_product: false,
         write_walker: false,
+        startup_error: None,
     };
     let error = bazel::bazel_module_refresh_with_executor(&root, &mut executor)
         .expect_err("unrelated mutation must refuse");
@@ -137,6 +143,7 @@ fn fresh_repin_uses_bzlmod_extension_sync_and_selected_output_isolation() {
             unrelated: false,
             write_product: hub == "product",
             write_walker: hub == "walker",
+            startup_error: None,
         };
         let output =
             bazel::bazel_repin_with_executor(&root, hub, &mut executor).expect("fresh repin");
@@ -180,6 +187,7 @@ fn repin_after_module_refresh_uses_global_lockfile_policy() {
         unrelated: false,
         write_product: false,
         write_walker: true,
+        startup_error: None,
     };
     bazel::bazel_repin_with_executor(&root, "walker", &mut executor)
         .expect("repin after module refresh");
@@ -206,9 +214,44 @@ fn repin_rejects_an_unselected_hub_lock() {
         unrelated: false,
         write_product: true,
         write_walker: false,
+        startup_error: None,
     };
     let error = bazel::bazel_repin_with_executor(&root, "walker", &mut executor)
         .expect_err("unselected hub lock must refuse");
     assert!(error.to_string().contains("bazel/cargo/product.lock"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn startup_failures_preserve_actionable_closed_diagnostics() {
+    let root = temp_root("startup");
+    let mut missing_path = Executor {
+        calls: Vec::new(),
+        write_lock: false,
+        unrelated: false,
+        write_product: false,
+        write_walker: false,
+        startup_error: Some(bazel::bazel_executable_diagnostic()),
+    };
+    let error = bazel::bazel_module_refresh_with_executor(&root, &mut missing_path)
+        .expect_err("missing Bazel executable")
+        .to_string();
+    assert!(error.contains("status=not-started"));
+    assert!(error.contains("D2B-BZL-EXECUTABLE"));
+    assert!(error.contains("nix develop"));
+
+    let mut failed_spawn = Executor {
+        calls: Vec::new(),
+        write_lock: false,
+        unrelated: false,
+        write_product: false,
+        write_walker: false,
+        startup_error: Some("spawn failed at /home/operator/private"),
+    };
+    let error = bazel::bazel_module_refresh_with_executor(&root, &mut failed_spawn)
+        .expect_err("failed spawn")
+        .to_string();
+    assert!(error.contains("spawn failed at <path>"));
+    assert!(!error.contains("/home/operator"));
     let _ = fs::remove_dir_all(root);
 }

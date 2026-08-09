@@ -11,12 +11,10 @@ use serde::{Deserialize, Serialize};
 
 const INVENTORY_SCHEMA_VERSION: u32 = 1;
 
-/// The only host values that a build action may inherit.
+/// The only host names the generator may explicitly forward into actions.
 ///
-/// Both values are supplied by the execution sandbox rather than by the
-/// contributor's shell. In particular, HOME, PWD, and tool-selection
-/// variables are deliberately absent: tools belong in the declared
-/// toolchain/data annotations.
+/// Toolchain- and rule-declared variables are separate action inputs. Ambient
+/// values such as HOME and tool selectors are deliberately absent.
 const ACTION_ENV_ALLOWLIST: &[&str] = &[
     "BASH_ENV",
     "PATH",
@@ -521,7 +519,7 @@ pub const BAZEL_SOURCE_SHA256: &str =
 pub const BAZEL_ARCHIVE_SHA256: &str =
     "13a84586429b6084b13bd5040d78deda58d523012151e71e7d4be0c63dd831f9";
 pub const BAZEL_PATCH_SHA256: &str =
-    "c6a81500fef9aa0744ab5c554e2add98b149268a8546aa583af11e3c070f31e9";
+    "8bdef8f9c14a8ccbbc2c94ecfa3a956fb2582e93f42a95e8d99e77757ef0eb98";
 pub const BAZEL_POLICY_SHA256: &str =
     "fb657bb56bd5c14f4a6a8f83ac0d3f54067cddce1ecb384e49bff41d8d2d8edc";
 
@@ -529,27 +527,34 @@ pub const GOVERNED_ACTION_KINDS: &[&str] = &[
     "stable:Rustc",
     "stable:RustcMetadata",
     "stable:Clippy",
-    "stable:rustdoc",
-    "stable:rustdoc-test-compile",
-    "stable:rustdoc-test-run",
-    "stable:rustfmt",
-    "stable:unpretty",
-    "stable:CargoBuildScript",
-    "stable:repository",
-    "stable:setup",
-    "stable:test",
+    "stable:Rustdoc",
+    "stable:RustdocTestWriter",
+    "stable:RustdocZip",
+    "stable:Rustfmt",
+    "stable:CargoBuildScriptRun",
+    "stable:TestRunner",
     "nightly:Rustc",
     "nightly:RustcMetadata",
     "nightly:Clippy",
-    "nightly:rustdoc",
-    "nightly:rustdoc-test-compile",
-    "nightly:rustdoc-test-run",
-    "nightly:rustfmt",
-    "nightly:unpretty",
-    "nightly:CargoBuildScript",
-    "nightly:repository",
-    "nightly:setup",
-    "nightly:test",
+    "nightly:Rustdoc",
+    "nightly:RustdocTestCompile",
+    "nightly:RustdocZip",
+    "nightly:Rustfmt",
+    "nightly:RustUnpretty",
+    "nightly:CargoBuildScriptRun",
+    "nightly:TestRunner",
+];
+
+pub const RULES_RUST_EVIDENCE_LABELS: &[&str] = &[
+    "//bazel/evidence:evidence-binary",
+    "//bazel/evidence:evidence-build-script",
+    "//bazel/evidence:evidence-clippy",
+    "//bazel/evidence:evidence-doc",
+    "//bazel/evidence:evidence-doctest",
+    "//bazel/evidence:evidence-library",
+    "//bazel/evidence:evidence-rustfmt",
+    "//bazel/evidence:evidence-test",
+    "//bazel/evidence:evidence-unpretty",
 ];
 
 pub const SOCKET_PLANTS: &[&str] = &[
@@ -780,6 +785,27 @@ pub(crate) struct ActionNetworkObservation {
     pub test_environment: BTreeSet<String>,
 }
 
+pub(crate) fn normalize_rules_rust_mnemonic(channel: &str, mnemonic: &str) -> Option<String> {
+    let normalized = if mnemonic.starts_with("RustUnpretty") {
+        "RustUnpretty"
+    } else {
+        match mnemonic {
+            "CargoBuildScriptRun"
+            | "Clippy"
+            | "Rustc"
+            | "RustcMetadata"
+            | "Rustdoc"
+            | "RustdocTestCompile"
+            | "RustdocTestWriter"
+            | "RustdocZip"
+            | "Rustfmt"
+            | "TestRunner" => mnemonic,
+            _ => return None,
+        }
+    };
+    Some(format!("{channel}:{normalized}"))
+}
+
 impl ActionNetworkObservation {
     pub(crate) fn from_files(
         configured_targets: &Path,
@@ -921,12 +947,32 @@ fn collect_strategy_observations(
 }
 
 pub fn complete_action_network_inventory() -> ActionNetworkInventory {
-    let evidence = include_str!("../../../bazel/evidence/action-network-observation.json");
-    let observation = ActionNetworkObservation::from_json(evidence, evidence, evidence)
-        .expect("pinned Bazel observation must be valid JSON");
+    let action_kinds = GOVERNED_ACTION_KINDS
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<BTreeSet<_>>();
+    let observation = ActionNetworkObservation {
+        configured_targets: action_kinds.clone(),
+        coverage_targets: CONFIGURED_COVERAGE_TARGETS
+            .iter()
+            .map(|target| (*target).to_owned())
+            .collect(),
+        aquery_actions: action_kinds.clone(),
+        effective_strategies: action_kinds
+            .iter()
+            .map(|kind| (kind.clone(), SANDBOX_RUNNER.to_owned()))
+            .collect(),
+        fallback_strategies: BTreeSet::new(),
+        cquery_targets: RULES_RUST_EVIDENCE_LABELS
+            .iter()
+            .map(|target| (*target).to_owned())
+            .collect(),
+        action_environment: BTreeSet::new(),
+        test_environment: BTreeSet::new(),
+    };
     let inventory = complete_action_network_inventory_from_observation(&observation);
     validate_observed_action_network(&inventory, &observation)
-        .expect("pinned Bazel observation must reconcile");
+        .expect("canonical action-network policy must reconcile");
     inventory
 }
 
@@ -989,12 +1035,29 @@ pub(crate) fn validate_observed_action_network(
     observation: &ActionNetworkObservation,
 ) -> Result<(), ActionNetworkError> {
     validate_action_network_inventory(inventory)?;
-    if inventory
-        .configured_targets
+    let expected_action_kinds = GOVERNED_ACTION_KINDS
         .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        != observation.configured_targets
+        .map(|kind| (*kind).to_owned())
+        .collect::<BTreeSet<_>>();
+    let expected_cquery_targets = RULES_RUST_EVIDENCE_LABELS
+        .iter()
+        .map(|target| (*target).to_owned())
+        .collect::<BTreeSet<_>>();
+    if observation.configured_targets != expected_action_kinds
+        || observation.aquery_actions != expected_action_kinds
+        || observation
+            .effective_strategies
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != expected_action_kinds
+        || observation.cquery_targets != expected_cquery_targets
+        || inventory
+            .configured_targets
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != observation.configured_targets
         || inventory
             .coverage_targets
             .iter()
@@ -1014,7 +1077,6 @@ pub(crate) fn validate_observed_action_network(
             .cloned()
             .collect::<BTreeSet<_>>()
             != observation.fallback_strategies
-        || observation.cquery_targets.is_empty()
         || !observation.test_environment.is_empty()
         || observation
             .action_environment

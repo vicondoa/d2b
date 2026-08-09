@@ -7644,6 +7644,7 @@ PRODUCT_TARGETS = [
                 "//packages/d2b-realm-core:d2b-realm-core",
             ],
             "externalIdentities": [
+                "@product//:bolero",
                 "@product//:nix",
                 "@product//:regex",
                 "@product//:rustix",
@@ -7659,6 +7660,7 @@ PRODUCT_TARGETS = [
             "//packages/d2b-realm-core:d2b-realm-core",
         ],
         "directProductDeps": [
+            "@product//:bolero",
             "@product//:nix",
             "@product//:regex",
             "@product//:rustix",
@@ -7669,7 +7671,9 @@ PRODUCT_TARGETS = [
             "@product//:sha2",
             "@product//:tempfile",
         ],
-        "features": [],
+        "features": [
+            "fuzz",
+        ],
         "kind": "rust_test",
         "label": "//packages/d2b-core:d2b-core-fuzz-bundle",
         "manifest": "packages/d2b-core/Cargo.toml",
@@ -7734,6 +7738,7 @@ PRODUCT_TARGETS = [
                 "//packages/d2b-realm-core:d2b-realm-core",
             ],
             "externalIdentities": [
+                "@product//:bolero",
                 "@product//:nix",
                 "@product//:regex",
                 "@product//:rustix",
@@ -7749,6 +7754,7 @@ PRODUCT_TARGETS = [
             "//packages/d2b-realm-core:d2b-realm-core",
         ],
         "directProductDeps": [
+            "@product//:bolero",
             "@product//:nix",
             "@product//:regex",
             "@product//:rustix",
@@ -7759,7 +7765,9 @@ PRODUCT_TARGETS = [
             "@product//:sha2",
             "@product//:tempfile",
         ],
-        "features": [],
+        "features": [
+            "fuzz",
+        ],
         "kind": "rust_test",
         "label": "//packages/d2b-core:d2b-core-fuzz-host",
         "manifest": "packages/d2b-core/Cargo.toml",
@@ -7824,6 +7832,7 @@ PRODUCT_TARGETS = [
                 "//packages/d2b-realm-core:d2b-realm-core",
             ],
             "externalIdentities": [
+                "@product//:bolero",
                 "@product//:nix",
                 "@product//:regex",
                 "@product//:rustix",
@@ -7839,6 +7848,7 @@ PRODUCT_TARGETS = [
             "//packages/d2b-realm-core:d2b-realm-core",
         ],
         "directProductDeps": [
+            "@product//:bolero",
             "@product//:nix",
             "@product//:regex",
             "@product//:rustix",
@@ -7849,7 +7859,9 @@ PRODUCT_TARGETS = [
             "@product//:sha2",
             "@product//:tempfile",
         ],
-        "features": [],
+        "features": [
+            "fuzz",
+        ],
         "kind": "rust_test",
         "label": "//packages/d2b-core:d2b-core-fuzz-manifest",
         "manifest": "packages/d2b-core/Cargo.toml",
@@ -7914,6 +7926,7 @@ PRODUCT_TARGETS = [
                 "//packages/d2b-realm-core:d2b-realm-core",
             ],
             "externalIdentities": [
+                "@product//:bolero",
                 "@product//:nix",
                 "@product//:regex",
                 "@product//:rustix",
@@ -7929,6 +7942,7 @@ PRODUCT_TARGETS = [
             "//packages/d2b-realm-core:d2b-realm-core",
         ],
         "directProductDeps": [
+            "@product//:bolero",
             "@product//:nix",
             "@product//:regex",
             "@product//:rustix",
@@ -7939,7 +7953,9 @@ PRODUCT_TARGETS = [
             "@product//:sha2",
             "@product//:tempfile",
         ],
-        "features": [],
+        "features": [
+            "fuzz",
+        ],
         "kind": "rust_test",
         "label": "//packages/d2b-core:d2b-core-fuzz-privileges",
         "manifest": "packages/d2b-core/Cargo.toml",

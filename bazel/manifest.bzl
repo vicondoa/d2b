@@ -1,16 +1,9 @@
-"""Graph bindings for generated Bazel target inventories."""
+"""Graph binding for targets that produce live Bazel evidence."""
 
-def d2b_generated_target_manifest(name, product_targets, package_policy_targets):
-    """Consume both generated target surfaces as one reachable graph node."""
+def d2b_evidence_manifest(name, targets):
+    """Make the real evidence targets reachable without metadata-only tags."""
 
     native.filegroup(
         name = name,
-        srcs = [
-            "//bazel/generated:package-policy-targets.bzl",
-            "//bazel/generated:product-targets.bzl",
-        ],
-        tags = [
-            "d2b-product-target-count-{}".format(len(product_targets)),
-            "d2b-package-policy-target-count-{}".format(len(package_policy_targets)),
-        ],
+        srcs = targets,
     )

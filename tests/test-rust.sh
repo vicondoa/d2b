@@ -385,9 +385,10 @@ assert_pinned_rust_toolchain
 #     filters them out (see packages/.config/nextest.toml). `cargo test` runs
 #     them, so they need an explicit invocation to stay gated.
 #
-# Both companions are wired per selected workspace stream, and the
-# harness=false set is DISCOVERED from cargo metadata rather than hard-coded,
-# so a newly added harness=false target cannot silently drop out of the gate.
+# Both companions are wired per selected workspace stream. Zero-case candidates
+# come from nextest and are checked against their package manifests, located
+# through cargo metadata, so only an explicit harness=false target is classified
+# as a companion and a newly added target cannot silently drop out of the gate.
 require_nextest() {
   if cargo nextest --version >/dev/null 2>&1; then
     return 0
@@ -402,23 +403,76 @@ require_nextest() {
   exit 1
 }
 
+# Return success only when the named [[test]] target occurs exactly once and
+# explicitly declares harness = false in its Cargo manifest. A default harness
+# is not equivalent: cfg or feature selection can also produce a zero-case
+# nextest suite, and treating that as a companion would turn disabled coverage
+# into a passing gate.
+manifest_declares_harness_false() {
+  local manifest_path="$1" target_name="$2"
+  awk -v wanted="$target_name" '
+    function finish_test() {
+      if (in_test && name == wanted) {
+        matches += 1
+        if (harness_false) {
+          declarations += 1
+        }
+      }
+    }
+    /^[[:space:]]*\[\[test\]\][[:space:]]*(#.*)?$/ {
+      finish_test()
+      in_test = 1
+      name = ""
+      harness_false = 0
+      next
+    }
+    /^[[:space:]]*\[/ {
+      finish_test()
+      in_test = 0
+      name = ""
+      harness_false = 0
+      next
+    }
+    in_test && /^[[:space:]]*name[[:space:]]*=/ {
+      value = $0
+      sub(/^[[:space:]]*name[[:space:]]*=[[:space:]]*/, "", value)
+      sub(/[[:space:]]*#.*$/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      quote = substr(value, 1, 1)
+      if ((quote == "\"" || quote == sprintf("%c", 39)) &&
+          substr(value, length(value), 1) == quote) {
+        name = substr(value, 2, length(value) - 2)
+      }
+      next
+    }
+    in_test && /^[[:space:]]*harness[[:space:]]*=[[:space:]]*false([[:space:]]*(#.*)?)?$/ {
+      harness_false = 1
+    }
+    END {
+      finish_test()
+      exit !(matches == 1 && declarations == 1)
+    }
+  ' "$manifest_path"
+}
+
 # Emit the harness=false test targets of a selected workspace stream as
 # "<package>\t<binary>" rows, for execution with a plain `cargo test --test`.
 #
 # Such a target exposes no libtest interface, so cargo-nextest builds it but
-# reports zero test cases and never runs it. Selecting on kind == "test" is what
-# separates it from an ordinary binary crate that simply contains no unit tests:
-# nextest reports zero cases for those too, but they are kind "bin" and `cargo
-# test --test <name>` would not address them.
+# reports zero test cases and never runs it. Nextest's zero-case result is only a
+# candidate signal: every candidate must also match an explicit harness=false
+# declaration in the package manifest.
 #
 # Deriving this set rather than pinning it means a newly added harness=false
 # target cannot silently drop out of the gate.
 nextest_unrunnable_targets() {
-  local listing
+  local manifest_path="$1"
+  shift
+  local listing metadata
   # No stderr suppression and an explicit status check: this discovers a gate
   # surface, so a listing that errors must fail the gate rather than silently
   # yield an empty set and let the companion report "0 harness=false binaries".
-  if ! listing=$(cargo nextest list "$@" --message-format json); then
+  if ! listing=$(cargo nextest list --manifest-path "$manifest_path" "$@" --message-format json); then
     fail "cargo nextest list failed while discovering harness=false targets"
     return 1
   fi
@@ -435,14 +489,80 @@ nextest_unrunnable_targets() {
     fail "cargo nextest list JSON did not match the expected suite shape; refusing to infer an empty harness=false set"
     return 1
   fi
-  printf '%s' "$listing" | jq -r '
+
+  local -a metadata_guards=()
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --locked|--offline|--frozen) metadata_guards+=("$arg") ;;
+    esac
+  done
+  if ! metadata=$(cargo metadata --manifest-path "$manifest_path" \
+      --format-version 1 --no-deps "${metadata_guards[@]}"); then
+    fail "cargo metadata failed while locating manifests for harness=false candidates"
+    return 1
+  fi
+  if ! printf '%s' "$metadata" | jq -e '
+        .packages
+        | type == "array" and length > 0
+          and all(.[];
+            (.name | type == "string")
+            and (.manifest_path | type == "string"))
+      ' >/dev/null; then
+    fail "cargo metadata JSON did not provide package manifest paths; refusing to classify harness=false targets"
+    return 1
+  fi
+
+  local candidates
+  candidates=$(printf '%s' "$listing" | jq -r '
         ."rust-suites"
         | to_entries[]
         | .value
         | select(.kind == "test")
         | select((.testcases | length) == 0)
         | "\(.["package-name"])\t\(.["binary-name"])"
-      '
+      ') || {
+    fail "could not read zero-case test candidates from cargo nextest list JSON"
+    return 1
+  }
+
+  local package_name binary_name package_manifest manifest_count
+  while IFS=$'\t' read -r package_name binary_name; do
+    [ -n "$binary_name" ] || continue
+    manifest_count=$(printf '%s' "$metadata" | jq -r --arg package "$package_name" '
+      [.packages[]
+        | select(.name == $package)
+        | .manifest_path]
+      | unique
+      | length
+    ') || {
+      fail "could not map zero-case target $package_name:$binary_name to its Cargo manifest"
+      return 1
+    }
+    if [ "$manifest_count" -ne 1 ]; then
+      fail "zero-case test target $package_name:$binary_name mapped to $manifest_count Cargo manifests; refusing harness=false classification"
+      return 1
+    fi
+    package_manifest=$(printf '%s' "$metadata" | jq -r --arg package "$package_name" '
+      [.packages[]
+        | select(.name == $package)
+        | .manifest_path]
+      | unique
+      | .[0]
+    ') || {
+      fail "could not read the Cargo manifest path for zero-case target $package_name:$binary_name"
+      return 1
+    }
+    if [ ! -f "$package_manifest" ]; then
+      fail "Cargo manifest for zero-case test target $package_name:$binary_name is missing"
+      return 1
+    fi
+    if ! manifest_declares_harness_false "$package_manifest" "$binary_name"; then
+      fail "zero-case test target $package_name:$binary_name does not declare harness = false in its Cargo manifest; refusing companion classification"
+      return 1
+    fi
+    printf '%s\t%s\n' "$package_name" "$binary_name"
+  done <<<"$candidates"
 }
 
 # Run the surfaces cargo-nextest cannot: doctests, then any harness=false
@@ -458,7 +578,7 @@ run_nextest_companions() {
   # `set -e`, so discovering through `done < <(...)` would let a failed listing
   # look like an empty one.
   local targets
-  targets=$(nextest_unrunnable_targets --manifest-path "$manifest_path" "$@") || {
+  targets=$(nextest_unrunnable_targets "$manifest_path" "$@") || {
     fail "$label: could not discover harness=false targets"
     exit 1
   }

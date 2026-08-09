@@ -1,53 +1,19 @@
 package(default_visibility = ["//visibility:public"])
 
 load(
-    ":action_probe.bzl",
-    "d2b_action_probe",
-    "d2b_environment_probe",
+    "@rules_rust//cargo:defs.bzl",
+    "cargo_build_script",
 )
-
-exports_files([
-    "action-network-observation.json",
-])
-
-_ACTION_PROBES = [
-    ("stable-cargo-build-script", "StableCargoBuildScript"),
-    ("stable-clippy", "StableClippy"),
-    ("stable-rustc", "StableRustc"),
-    ("stable-rustc-metadata", "StableRustcMetadata"),
-    ("stable-repository", "StableRepository"),
-    ("stable-rustdoc", "StableRustdoc"),
-    ("stable-rustdoc-test-compile", "StableRustdocTestCompile"),
-    ("stable-rustdoc-test-run", "StableRustdocTestRun"),
-    ("stable-rustfmt", "StableRustfmt"),
-    ("stable-setup", "StableSetup"),
-    ("stable-test", "StableTest"),
-    ("stable-unpretty", "StableUnpretty"),
-    ("nightly-cargo-build-script", "NightlyCargoBuildScript"),
-    ("nightly-clippy", "NightlyClippy"),
-    ("nightly-rustc", "NightlyRustc"),
-    ("nightly-rustc-metadata", "NightlyRustcMetadata"),
-    ("nightly-repository", "NightlyRepository"),
-    ("nightly-rustdoc", "NightlyRustdoc"),
-    ("nightly-rustdoc-test-compile", "NightlyRustdocTestCompile"),
-    ("nightly-rustdoc-test-run", "NightlyRustdocTestRun"),
-    ("nightly-rustfmt", "NightlyRustfmt"),
-    ("nightly-setup", "NightlySetup"),
-    ("nightly-test", "NightlyTest"),
-    ("nightly-unpretty", "NightlyUnpretty"),
-]
-
-[
-    d2b_action_probe(
-        name = name,
-        mnemonic = mnemonic,
-    )
-    for name, mnemonic in _ACTION_PROBES
-]
-
-filegroup(
-    name = "action-probes",
-    srcs = [":" + name for name, _ in _ACTION_PROBES],
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_binary",
+    "rust_clippy",
+    "rust_doc",
+    "rust_doc_test",
+    "rust_library",
+    "rust_test",
+    "rust_unpretty",
+    "rustfmt_test",
 )
 
 cc_binary(
@@ -63,6 +29,13 @@ cc_binary(
 cc_binary(
     name = "environment-probe",
     srcs = ["environment_probe.c"],
+)
+
+genrule(
+    name = "environment-probe-action",
+    outs = ["environment-action.txt"],
+    cmd = "$(location :environment-probe) $@",
+    tools = [":environment-probe"],
 )
 
 cc_binary(
@@ -84,12 +57,83 @@ genrule(
     cmd = "$(location :sandbox-crash-plant) --stage $(D2B_STAGE) --liveness-path $(D2B_LIVENESS_PATH) --barrier-path $(D2B_BARRIER_PATH) > $@",
 )
 
-genrule(
-    name = "environment-action",
-    outs = ["environment-action.txt"],
-    cmd = "env > $@",
+cargo_build_script(
+    name = "evidence-build-script",
+    srcs = ["evidence_build.rs"],
+    crate_name = "d2b_evidence_build",
+    edition = "2021",
 )
 
-d2b_environment_probe(
-    name = "environment-probe-action",
+rust_library(
+    name = "evidence-library",
+    srcs = ["evidence_lib.rs"],
+    crate_name = "d2b_rules_rust_evidence",
+    deps = [":evidence-build-script"],
+    edition = "2021",
+)
+
+rust_binary(
+    name = "evidence-binary",
+    srcs = ["evidence_main.rs"],
+    crate_name = "d2b_rules_rust_evidence_bin",
+    deps = [":evidence-library"],
+    edition = "2021",
+)
+
+rust_test(
+    name = "evidence-test",
+    crate = ":evidence-library",
+)
+
+rust_doc(
+    name = "evidence-doc",
+    crate = ":evidence-library",
+)
+
+rust_doc_test(
+    name = "evidence-doctest",
+    crate = ":evidence-library",
+)
+
+rust_clippy(
+    name = "evidence-clippy",
+    deps = [":evidence-binary", ":evidence-library"],
+)
+
+rustfmt_test(
+    name = "evidence-rustfmt",
+    targets = [":evidence-binary", ":evidence-library"],
+)
+
+rust_unpretty(
+    name = "evidence-unpretty",
+    deps = [":evidence-library"],
+    mode = "expanded",
+)
+
+filegroup(
+    name = "rules-rust-evidence-build",
+    srcs = [
+        ":evidence-binary",
+        ":evidence-build-script",
+        ":evidence-clippy",
+        ":evidence-doc",
+    ],
+)
+
+filegroup(
+    name = "rules-rust-evidence-nightly-build",
+    srcs = [
+        ":rules-rust-evidence-build",
+        ":evidence-unpretty",
+    ],
+)
+
+test_suite(
+    name = "rules-rust-evidence-tests",
+    tests = [
+        ":evidence-doctest",
+        ":evidence-rustfmt",
+        ":evidence-test",
+    ],
 )

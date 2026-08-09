@@ -176,6 +176,7 @@ MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
 # text - see MATRIX_CHECK_SCOPE above for the same hazard.
 REALIZED_CACHE_DIR = "${{ runner.temp }}/d2b-realized-cache"
 AARCH64_NATIVE_SYSTEM = "aarch64-linux"
+X86_NATIVE_SYSTEM = "x86_64-linux"
 
 
 def load_native_policy_manifest() -> dict[str, Any]:
@@ -191,6 +192,7 @@ def load_native_policy_manifest() -> dict[str, Any]:
         )
     contexts = manifest.get("contexts")
     checks = manifest.get("nativeChecks")
+    bazel_plant = manifest.get("bazelNativePlant")
     if not isinstance(contexts, list) or len(contexts) != 4:
         raise SystemExit(f"{NATIVE_POLICY_MANIFEST}: expected exactly four contexts")
     if not isinstance(checks, list) or len(checks) != 6 or not all(
@@ -200,11 +202,30 @@ def load_native_policy_manifest() -> dict[str, Any]:
     ids = [context.get("id") for context in contexts if isinstance(context, dict)]
     if len(ids) != 4 or len(set(ids)) != 4:
         raise SystemExit(f"{NATIVE_POLICY_MANIFEST}: context ids are not unique")
+    expected_plant = {
+        "testName": (
+            "native_patched_bazel::"
+            "native_bazel_runs_network_descriptor_and_cleanup_plants"
+        ),
+        "systems": [X86_NATIVE_SYSTEM, AARCH64_NATIVE_SYSTEM],
+        "requiredEvidence": [
+            "bzlmod",
+            "cargo-bazel",
+            "cquery",
+            "aquery",
+            "execution-log",
+        ],
+    }
+    if bazel_plant != expected_plant:
+        raise SystemExit(
+            f"{NATIVE_POLICY_MANIFEST}: Bazel native plant contract is incomplete"
+        )
     return manifest
 
 
 NATIVE_POLICY_MANIFEST_VALUE = load_native_policy_manifest()
 AARCH64_NATIVE_CHECKS = tuple(NATIVE_POLICY_MANIFEST_VALUE["nativeChecks"])
+BAZEL_NATIVE_PLANT = NATIVE_POLICY_MANIFEST_VALUE["bazelNativePlant"]
 
 
 def nix_cache_hash_files(job: dict[str, Any]) -> str:
@@ -756,7 +777,74 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
           fi"""
 
 
+def validate_bazel_native_job(job: dict[str, Any], system: str) -> None:
+    expected_runner = (
+        "ubuntu-24.04-arm" if system == AARCH64_NATIVE_SYSTEM else "ubuntu-latest"
+    )
+    if (
+        job.get("nativeBazelPlant") is not True
+        or job.get("nativeSystem") != system
+        or job.get("runsOn") != expected_runner
+        or job.get("timeoutMinutes") != 60
+        or job.get("enforcement") == "advisory"
+        or system not in BAZEL_NATIVE_PLANT["systems"]
+    ):
+        raise SystemExit(
+            f"{MANIFEST}: {job.get('ciJobId', '<unknown>')} has an invalid "
+            f"native patched-Bazel contract for {system}"
+        )
+
+
+def bazel_native_plant_step(system: str, stable_head: bool = False) -> str:
+    if system not in (X86_NATIVE_SYSTEM, AARCH64_NATIVE_SYSTEM):
+        raise SystemExit(f"{MANIFEST}: unsupported Bazel native system {system!r}")
+    test_name = BAZEL_NATIVE_PLANT["testName"]
+    head_guard = (
+        '\n          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"'
+        if stable_head
+        else ""
+    )
+    head_env = (
+        "\n        env:\n"
+        "          D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}"
+        if stable_head
+        else ""
+    )
+    return f"""      - name: Run native {system} patched-Bazel verification plants{head_env}
+        run: |
+          set -euo pipefail{head_guard}
+          bazel_out=$(nix build --no-link --print-out-paths \\
+            '.#packages.{system}."bazel-8.6.0-seccomp"')
+          java_home=$(nix-store -q --references "$bazel_out" \\
+            | awk '/-openjdk-headless-[0-9]/ {{ print }}')
+          test -n "$java_home"
+          test "$(printf '%s\\n' "$java_home" | wc -l)" -eq 1
+          test -x "$bazel_out/bin/bazel"
+          test -x "$java_home/bin/java"
+          export D2B_BAZEL_NATIVE_BIN="$bazel_out/bin/bazel"
+          export D2B_BAZEL_NATIVE_SYSTEM={system}
+          export JAVA_HOME="$java_home"
+          nix develop --command cargo test --locked \\
+            --manifest-path packages/Cargo.toml \\
+            --package xtask --test bazel_action_network \\
+            '{test_name}' -- --ignored --exact"""
+
+
+def bazel_native_job(job: dict[str, Any]) -> str:
+    validate_bazel_native_job(job, X86_NATIVE_SYSTEM)
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job)}
+{bazel_native_plant_step(X86_NATIVE_SYSTEM)}"""
+
+
 def validate_aarch64_job(job: dict[str, Any]) -> None:
+    validate_bazel_native_job(job, AARCH64_NATIVE_SYSTEM)
     if job.get("runsOn") != "ubuntu-24.04-arm":
         raise SystemExit(
             f"{MANIFEST}: test-flake-aarch64 requires the native ubuntu-24.04-arm runner"
@@ -826,6 +914,7 @@ def flake_aarch64_native_job(job: dict[str, Any]) -> str:
           test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
           nix build --no-link \\
 {checks}
+{bazel_native_plant_step(AARCH64_NATIVE_SYSTEM, stable_head=True)}
       - name: Run native aarch64 supply-chain gate
         env:
           D2B_STABLE_HEAD: ${{{{ steps.stable-head.outputs.commit }}}}
@@ -927,6 +1016,7 @@ RENDERERS = {
     "flake-x86-realized": flake_x86_realized_job,
     "flake-x86-outputs": flake_x86_outputs_job,
     "flake-x86-rollup": flake_x86_rollup_job,
+    "bazel-native": bazel_native_job,
     "flake-aarch64-native": flake_aarch64_native_job,
 }
 

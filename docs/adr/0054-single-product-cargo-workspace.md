@@ -506,6 +506,7 @@ nix build --no-link \
   .#checks.x86_64-linux.guest-shell-runner-static-dependency-policy \
   .#checks.x86_64-linux.broker-production-package-policy \
   .#checks.x86_64-linux.guest-real-libshpool-package-policy \
+  .#checks.x86_64-linux.broker-host-artifact-contract \
   .#checks.x86_64-linux.guest-static-elf \
   .#checks.x86_64-linux.rust-deny \
   .#checks.x86_64-linux.rust-audit
@@ -522,6 +523,7 @@ nix build --no-link \
   .#checks.aarch64-linux.guest-shell-runner-static-dependency-policy \
   .#checks.aarch64-linux.broker-production-package-policy \
   .#checks.aarch64-linux.guest-real-libshpool-package-policy \
+  .#checks.aarch64-linux.broker-host-artifact-contract \
   .#checks.aarch64-linux.guest-static-elf \
   .#checks.aarch64-linux.rust-deny \
   .#checks.aarch64-linux.rust-audit

@@ -33,7 +33,7 @@ D2B-BZLDRIFT-PACKAGE-POLICY: package-policy output is stale.
 From the repository root, run: nix develop
 Then run: cd packages
 Review the scratch preview, then run cargo xtask gen-package-policy-inputs --install.
-Review and commit the exact repository-relative generated paths returned by the install command.
+Run git status --short --untracked-files=all and review and commit only changes below packages/policy-inputs/.
 Rerun cargo xtask gen-package-policy-inputs --check, then rerun the failed command.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

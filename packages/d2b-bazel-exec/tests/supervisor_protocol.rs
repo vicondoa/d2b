@@ -545,6 +545,26 @@ static void interrupt_without_restart(int signal_number) {
   (void)signal_number;
 }
 
+static int close_high_descriptor_mode(void) {
+  struct rlimit limit;
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_cur <= 129) return 86;
+  int source = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  int error_writer = open("/dev/null", O_WRONLY | O_CLOEXEC);
+  if (source < 0 || error_writer < 0) return 85;
+  int high = fcntl(source, F_DUPFD_CLOEXEC, 128);
+  close(source);
+  if (high < 128) return 84;
+  struct rlimit lowered = limit;
+  lowered.rlim_cur = 64;
+  if (setrlimit(RLIMIT_NOFILE, &lowered) != 0) return 83;
+  int result = d2b_close_inherited_descriptors(error_writer);
+  errno = 0;
+  int high_closed = fcntl(high, F_GETFD) == -1 && errno == EBADF;
+  printf("%d\n", result == 0 && high_closed);
+  close(error_writer);
+  return 0;
+}
+
 static int decode_mode(const char *mode, unsigned char child_code) {
   int pipe_flags = strcmp(mode, "eintr") == 0 ? 0 : O_NONBLOCK;
   int descriptors[2];
@@ -622,6 +642,9 @@ static int decode_mode(const char *mode, unsigned char child_code) {
 
 int main(int argc, char **argv) {
   if (argc < 2) return 87;
+  if (strcmp(argv[1], "close-high-descriptor") == 0) {
+    return close_high_descriptor_mode();
+  }
   unsigned char child_code = argc > 2 ? (unsigned char)strtoul(argv[2], NULL, 10)
                                       : D2B_CHILD_EXECVEAT;
   return decode_mode(argv[1], child_code);
@@ -652,6 +675,22 @@ fn decoder_observation(mode: &str, child_code: u8) -> (i32, bool, String) {
         fields[1].parse::<u8>().expect("pending flag") != 0,
         fields[2].clone(),
     )
+}
+
+fn high_descriptor_closed_after_lowering_soft_limit() -> bool {
+    let output = Command::new(&real_binaries().decoder)
+        .arg("close-high-descriptor")
+        .output()
+        .expect("descriptor closure harness");
+    assert!(
+        output.status.success(),
+        "descriptor closure harness failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("descriptor closure output")
+        .trim()
+        == "1"
 }
 
 enum StatusEvent {
@@ -798,6 +837,31 @@ fn real_c_exec_error_transport_covers_deadline_and_closed_mapping() {
 }
 
 #[test]
+fn real_c_startup_probe_is_bounded_and_requires_the_fixed_policy_denial() {
+    let started = Instant::now();
+    let status = Command::new(&real_binaries().supervisor)
+        .arg("--d2b-startup-probe")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("real startup probe");
+    assert!(
+        matches!(status.code(), Some(0 | 13)),
+        "startup probe must either observe the policy or refuse it"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "startup probe exceeded its bound"
+    );
+}
+
+#[test]
+fn real_c_descriptor_closure_ignores_a_lowered_soft_limit() {
+    assert!(high_descriptor_closed_after_lowering_soft_limit());
+}
+
+#[test]
 fn real_c_supervisor_closes_signalfd_and_preserves_order_on_fast_exit() {
     let binaries = real_binaries();
     let (mut child, reader, error_reader) =
@@ -816,6 +880,101 @@ fn real_c_supervisor_closes_signalfd_and_preserves_order_on_fast_exit() {
         ]
         .concat()
     );
+}
+
+#[test]
+fn real_c_target_dies_when_its_supervisor_dies() {
+    let binaries = real_binaries();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let liveness_dir = std::env::temp_dir().join(format!("d2b-helper-death-{suffix}"));
+    fs::create_dir(&liveness_dir).expect("liveness directory");
+    let liveness_path = liveness_dir.join("target.fifo");
+    mkfifo(&liveness_path, Mode::S_IRUSR | Mode::S_IWUSR).expect("liveness FIFO");
+    let liveness_fd = rustix::fs::open(
+        &liveness_path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .expect("liveness reader");
+    let liveness_text = liveness_path.to_str().expect("UTF-8 liveness path");
+    let (mut child, reader, _error_reader) = spawn_real_supervisor(
+        &binaries.plant,
+        &[
+            "plant",
+            "--stage",
+            "during-grace",
+            "--hold-liveness-fd",
+            "--liveness-path",
+            liveness_text,
+        ],
+    );
+    let receiver = status_events(reader);
+    match receiver
+        .recv_timeout(Duration::from_secs(3))
+        .expect("EXECUTED status deadline")
+    {
+        StatusEvent::Executed => {}
+        StatusEvent::Complete(_) => panic!("target ended before EXECUTED"),
+    }
+
+    let target_pid_path = format!("/proc/{0}/task/{0}/children", child.id());
+    let target_pid = fs::read_to_string(target_pid_path)
+        .expect("supervisor child identity")
+        .split_whitespace()
+        .next()
+        .expect("supervised target identity")
+        .parse::<i32>()
+        .expect("numeric target identity");
+    let mut liveness = File::from(liveness_fd);
+    let liveness_deadline = Instant::now() + Duration::from_secs(3);
+    let mut marker = [0_u8; 1];
+    loop {
+        match liveness.read(&mut marker) {
+            Ok(1) => break,
+            Ok(_) if Instant::now() < liveness_deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && Instant::now() < liveness_deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            result => panic!("target liveness marker unavailable: {result:?}"),
+        }
+    }
+
+    signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        signal::Signal::SIGKILL,
+    )
+    .expect("kill planted supervisor");
+    let _ = child.wait().expect("supervisor wait");
+
+    let death_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match liveness.read(&mut marker) {
+            Ok(0) => break,
+            Ok(_) if Instant::now() < death_deadline => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && Instant::now() < death_deadline => {}
+            _ => {
+                let _ = signal::kill(
+                    nix::unistd::Pid::from_raw(-target_pid),
+                    signal::Signal::SIGKILL,
+                );
+                panic!("target survived supervisor death");
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    fs::remove_file(&liveness_path).expect("remove liveness FIFO");
+    fs::remove_dir(&liveness_dir).expect("remove liveness directory");
 }
 
 #[test]

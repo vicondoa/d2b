@@ -56,7 +56,11 @@ Bazel files, policy locks, or module locks.
 
 The xtask CLI keeps its existing one-line stdout completion contract,
 `<command> generated <count> file(s)`. Returned path lists are an internal
-generator result and are not additional stdout records.
+generator result and are not additional stdout records. After installation,
+use `git status --short --untracked-files=all` for the changed-path census.
+For `gen-bazel`, compare that census with
+`bazel/generated/output-manifest.json`; package-policy output is confined
+below `packages/policy-inputs/`.
 
 ## Native policy and check matrix
 

@@ -1,4 +1,6 @@
 # Module resolution is part of the committed build input.
+common --enable_bzlmod
+common --noenable_workspace
 common --lockfile_mode=error
 common --check_direct_dependencies=error
 common --incompatible_strict_action_env
@@ -11,10 +13,12 @@ common --strategy=SymlinkTree=sandboxed
 common --strategy=Rustc=sandboxed
 common --strategy=RustcMetadata=sandboxed
 common --strategy=Clippy=sandboxed
-common --strategy=rustdoc=sandboxed
-common --strategy=rustfmt=sandboxed
-common --strategy=unpretty=sandboxed
-common --strategy=CargoBuildScript=sandboxed
+common --strategy=Rustdoc=sandboxed
+common --strategy=RustdocTestCompile=sandboxed
+common --strategy=RustdocTestWriter=sandboxed
+common --strategy=Rustfmt=sandboxed
+common --strategy=RustUnpretty=sandboxed
+common --strategy=CargoBuildScriptRun=sandboxed
 common --strategy=TestRunner=sandboxed
 
 # Keep ordinary local output concise without changing the server identity.

@@ -20,9 +20,8 @@ use d2b_bazel_support::startup::{
     StartupRequirements, validate_startup,
 };
 use nix::{
-    poll::{PollFd, PollFlags, poll},
-    sys::signal::{SigSet, Signal, kill},
-    unistd::Pid,
+    poll::{PollFd, PollFlags, PollTimeout, poll},
+    sys::signal::{SigSet, Signal},
 };
 
 use crate::provider::VerifiedExecutable;
@@ -36,7 +35,6 @@ const PRIVATE_HELPER_ERROR_FD: i32 = 10;
 pub const SUPERVISOR_ENVIRONMENT: &str = "D2B_BAZEL_EXEC_SUPERVISOR";
 const IMMUTABLE_SUPERVISOR_PATH: Option<&str> = option_env!("D2B_BAZEL_EXEC_SUPERVISOR");
 const STATUS_PHASE_TIMEOUT: Duration = Duration::from_secs(10);
-const RECEIPT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub const STATUS_BUFFER_CAPACITY: usize = 27;
 pub const STATUS_MAGIC: [u8; 4] = *b"D2BS";
@@ -359,6 +357,10 @@ impl Default for LaunchCoordinator {
 }
 
 static PROCESS_LAUNCH_COORDINATOR: OnceLock<LaunchCoordinator> = OnceLock::new();
+#[cfg(unix)]
+static PENDING_CLEANUP_CHILDREN: OnceLock<Mutex<Vec<Child>>> = OnceLock::new();
+#[cfg(unix)]
+static CLEANUP_REAPER: OnceLock<()> = OnceLock::new();
 
 fn process_launch_coordinator() -> &'static LaunchCoordinator {
     PROCESS_LAUNCH_COORDINATOR.get_or_init(LaunchCoordinator::new)
@@ -629,7 +631,10 @@ enum InternalSpawnReceipt {
         helper_error_reader: File,
     },
     #[cfg(test)]
-    Test { helper_started: bool },
+    Test {
+        helper_started: bool,
+        cleanup_observer: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    },
 }
 
 impl InternalSpawnReceipt {
@@ -637,16 +642,20 @@ impl InternalSpawnReceipt {
         match self {
             #[cfg(unix)]
             Self::Child {
-                mut child,
+                child,
                 status_reader,
                 helper_error_reader,
             } => {
                 drop(status_reader);
                 drop(helper_error_reader);
-                cleanup_child(&mut child);
+                retain_cleanup_child(child);
             }
             #[cfg(test)]
-            Self::Test { .. } => {}
+            Self::Test {
+                cleanup_observer, ..
+            } => {
+                cleanup_observer.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     }
 
@@ -661,14 +670,14 @@ impl InternalSpawnReceipt {
                 let terminal = match read_status(status_reader, helper_error_reader) {
                     Ok(terminal) => terminal,
                     Err(error) => {
-                        cleanup_child(&mut child);
+                        retain_cleanup_child(child);
                         return Err(HandoffError::Protocol(error));
                     }
                 };
-                let status = match child.wait() {
-                    Ok(status) => status,
-                    Err(_) => {
-                        cleanup_child(&mut child);
+                let status = match wait_child_bounded(&mut child, STATUS_PHASE_TIMEOUT) {
+                    Ok(Some(status)) => status,
+                    Ok(None) | Err(_) => {
+                        retain_cleanup_child(child);
                         return Err(HandoffError::Wait);
                     }
                 };
@@ -682,7 +691,7 @@ impl InternalSpawnReceipt {
                 })
             }
             #[cfg(test)]
-            Self::Test { helper_started } => Ok(ExecutionResult {
+            Self::Test { helper_started, .. } => Ok(ExecutionResult {
                 helper_started,
                 terminal: TerminalStatus::Exited(0),
             }),
@@ -691,22 +700,51 @@ impl InternalSpawnReceipt {
 }
 
 #[cfg(unix)]
-fn cleanup_child(child: &mut Child) {
-    let pid = Pid::from_raw(child.id() as i32);
-    let _ = kill(pid, Signal::SIGTERM);
-    let deadline = Instant::now() + RECEIPT_CLEANUP_TIMEOUT;
+fn wait_child_bounded(child: &mut Child, timeout: Duration) -> io::Result<Option<ExitStatus>> {
+    let deadline = Instant::now() + timeout;
     loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) => break,
-            Err(_) => break,
+        match child.try_wait()? {
+            Some(status) => return Ok(Some(status)),
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            None => return Ok(None),
         }
     }
-    let _ = kill(pid, Signal::SIGKILL);
-    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn pending_cleanup_children() -> &'static Mutex<Vec<Child>> {
+    PENDING_CLEANUP_CHILDREN.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(unix)]
+fn reap_cleanup_children() {
+    let mut children = pending_cleanup_children()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    children.retain_mut(|child| !matches!(child.try_wait(), Ok(Some(_))));
+}
+
+#[cfg(unix)]
+fn retain_cleanup_child(mut child: Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    {
+        let mut children = pending_cleanup_children()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        children.push(child);
+    }
+    CLEANUP_REAPER.get_or_init(|| {
+        let _ = thread::Builder::new()
+            .name("d2b-bazel-exec-reaper".to_owned())
+            .spawn(|| {
+                loop {
+                    reap_cleanup_children();
+                    thread::sleep(Duration::from_millis(10));
+                }
+            });
+    });
 }
 
 #[cfg(unix)]
@@ -714,29 +752,78 @@ fn phase_timeout(state: ProtocolState) -> ProtocolError {
     match state {
         ProtocolState::Start => ProtocolError::ReadyTimeout,
         ProtocolState::Ready => ProtocolError::ExecutedTimeout,
-        ProtocolState::Executed => ProtocolError::TerminalTimeout,
-        ProtocolState::Terminal => ProtocolError::StatusRead,
+        ProtocolState::Executed | ProtocolState::Terminal => ProtocolError::TerminalTimeout,
     }
 }
 
 #[cfg(unix)]
-fn remaining_poll_timeout(deadline: Instant) -> u16 {
+fn deadline_for_phase(state: ProtocolState, timeout: Duration) -> Option<Instant> {
+    match state {
+        ProtocolState::Start | ProtocolState::Ready | ProtocolState::Terminal => {
+            Some(Instant::now() + timeout)
+        }
+        ProtocolState::Executed => None,
+    }
+}
+
+#[cfg(unix)]
+fn nearest_deadline(
+    phase: Option<Instant>,
+    status_fragment: Option<Instant>,
+    helper_fragment: Option<Instant>,
+) -> Option<Instant> {
+    [phase, status_fragment, helper_fragment]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+#[cfg(unix)]
+fn expired_protocol_error(
+    state: ProtocolState,
+    phase: Option<Instant>,
+    status_fragment: Option<Instant>,
+    helper_fragment: Option<Instant>,
+) -> ProtocolError {
+    let now = Instant::now();
+    if helper_fragment.is_some_and(|deadline| deadline <= now) {
+        ProtocolError::ExecErrorHeldOpen
+    } else if status_fragment.is_some_and(|deadline| deadline <= now)
+        || phase.is_some_and(|deadline| deadline <= now)
+    {
+        phase_timeout(state)
+    } else {
+        ProtocolError::StatusRead
+    }
+}
+
+#[cfg(unix)]
+fn remaining_poll_timeout(deadline: Option<Instant>) -> PollTimeout {
+    let Some(deadline) = deadline else {
+        return PollTimeout::NONE;
+    };
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return 0;
+        return PollTimeout::ZERO;
     }
-    u16::try_from(remaining.as_millis().min(u16::MAX as u128)).unwrap_or(u16::MAX)
+    PollTimeout::from(
+        u16::try_from(remaining.as_millis().min(u16::MAX as u128)).unwrap_or(u16::MAX),
+    )
 }
 
 #[cfg(unix)]
-fn read_helper_error(
-    reader: &mut File,
+fn read_helper_error<R: Read>(
+    reader: &mut R,
     bytes: &mut Vec<u8>,
-) -> Result<(Option<HelperStage>, bool), ProtocolError> {
+) -> Result<(Option<HelperStage>, bool, bool), ProtocolError> {
     let mut buffer = [0_u8; EXEC_ERROR_RECORD_SIZE + 1];
     match reader.read(&mut buffer) {
-        Ok(0) if bytes.is_empty() => Ok((None, true)),
-        Ok(0) => Err(decode_helper_error(bytes, true).expect_err("partial helper record")),
+        Ok(0) if bytes.is_empty() => Ok((None, true, false)),
+        Ok(0) => match decode_helper_error(bytes, true) {
+            Ok(Some(stage)) => Ok((Some(stage), true, false)),
+            Ok(None) => Err(ProtocolError::EmptyExecErrorEof),
+            Err(error) => Err(error),
+        },
         Ok(length) => {
             bytes.extend_from_slice(&buffer[..length]);
             if bytes.len() > EXEC_ERROR_RECORD_SIZE {
@@ -745,26 +832,37 @@ fn read_helper_error(
             if bytes.len() == EXEC_ERROR_RECORD_SIZE {
                 let stage =
                     decode_helper_error(bytes, true)?.ok_or(ProtocolError::EmptyExecErrorEof)?;
-                return Ok((Some(stage), false));
+                return Ok((Some(stage), false, false));
             }
-            Ok((None, false))
+            Ok((None, false, true))
         }
-        Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok((None, false)),
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok((None, false, false)),
         Err(_) => Err(ProtocolError::StatusRead),
     }
 }
 
 #[cfg(unix)]
 fn read_status(
+    status_reader: File,
+    helper_error_reader: File,
+) -> Result<TerminalStatus, ProtocolError> {
+    read_status_with_timeout(status_reader, helper_error_reader, STATUS_PHASE_TIMEOUT)
+}
+
+#[cfg(unix)]
+fn read_status_with_timeout(
     mut status_reader: File,
     mut helper_error_reader: File,
+    timeout: Duration,
 ) -> Result<TerminalStatus, ProtocolError> {
     let mut protocol = ProtocolReader::new();
     let mut buffer = [0_u8; STATUS_BUFFER_CAPACITY];
     let mut helper_error = Vec::with_capacity(EXEC_ERROR_RECORD_SIZE);
     let mut helper_closed = false;
     let mut phase = protocol.state();
-    let mut deadline = Instant::now() + STATUS_PHASE_TIMEOUT;
+    let mut phase_deadline = deadline_for_phase(phase, timeout);
+    let mut status_fragment_deadline = None;
+    let mut helper_fragment_deadline = None;
     loop {
         let mut poll_fds = vec![PollFd::new(
             status_reader.as_fd(),
@@ -776,13 +874,34 @@ fn read_status(
                 PollFlags::POLLIN | PollFlags::POLLHUP,
             ));
         }
+        let deadline = nearest_deadline(
+            phase_deadline,
+            status_fragment_deadline,
+            helper_fragment_deadline,
+        );
+        if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
+            return Err(expired_protocol_error(
+                protocol.state(),
+                phase_deadline,
+                status_fragment_deadline,
+                helper_fragment_deadline,
+            ));
+        }
         let poll_result = match poll(&mut poll_fds, remaining_poll_timeout(deadline)) {
             Ok(value) => value,
             Err(nix::errno::Errno::EINTR) => continue,
             Err(_) => return Err(ProtocolError::StatusRead),
         };
         if poll_result == 0 {
-            return Err(phase_timeout(protocol.state()));
+            if deadline.is_some_and(|deadline| deadline > Instant::now()) {
+                continue;
+            }
+            return Err(expired_protocol_error(
+                protocol.state(),
+                phase_deadline,
+                status_fragment_deadline,
+                helper_fragment_deadline,
+            ));
         }
         let status_events = poll_fds[0].revents().unwrap_or(PollFlags::empty());
         let helper_events = poll_fds
@@ -791,30 +910,54 @@ fn read_status(
             .unwrap_or(PollFlags::empty());
         drop(poll_fds);
 
-        if !helper_closed && helper_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP) {
-            let (stage, closed) = read_helper_error(&mut helper_error_reader, &mut helper_error)?;
-            helper_closed |= closed;
-            if let Some(stage) = stage {
-                return Err(ProtocolError::HelperStage(stage));
-            }
-        }
-
         if status_events.intersects(PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Err(ProtocolError::StatusRead);
         }
+        let mut status_eof = false;
         if status_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP) {
             match status_reader.read(&mut buffer) {
-                Ok(0) => return protocol.eof(),
+                Ok(0) => status_eof = true,
                 Ok(length) => {
                     protocol.feed(&buffer[..length])?;
+                    if protocol.decoder.buffered_len() == 0 {
+                        status_fragment_deadline = None;
+                    } else if status_fragment_deadline.is_none() {
+                        status_fragment_deadline = Some(Instant::now() + timeout);
+                    }
                     if protocol.state() != phase {
                         phase = protocol.state();
-                        deadline = Instant::now() + STATUS_PHASE_TIMEOUT;
+                        phase_deadline = deadline_for_phase(phase, timeout);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(_) => return Err(ProtocolError::StatusRead),
             }
+        }
+
+        if !helper_closed && helper_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP) {
+            let (stage, closed, partial) =
+                read_helper_error(&mut helper_error_reader, &mut helper_error)?;
+            helper_closed |= closed;
+            if partial && helper_fragment_deadline.is_none() {
+                helper_fragment_deadline = Some(Instant::now() + timeout);
+            }
+            if closed {
+                helper_fragment_deadline = None;
+                if protocol.state() == ProtocolState::Start
+                    || protocol.state() == ProtocolState::Ready
+                {
+                    return Err(ProtocolError::HelperBeforeExecuted);
+                }
+            }
+            if let Some(stage) = stage {
+                return Err(ProtocolError::HelperStage(stage));
+            }
+        }
+        if status_eof {
+            if !helper_error.is_empty() {
+                return Err(ProtocolError::ExecErrorHeldOpen);
+            }
+            return protocol.eof();
         }
     }
 }
@@ -1530,8 +1673,14 @@ mod tests {
         KernelVersion, NativeSystem, ProbeResult, StartupCode, StartupRequirements,
     };
     use std::{
+        collections::VecDeque,
         fs::File,
-        sync::{Arc, Mutex},
+        io::{self, Read, Write},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1560,6 +1709,7 @@ mod tests {
         spawn: Result<SpawnReceipt, BackendError>,
         spawn_count: Arc<Mutex<usize>>,
         plan_seen: Arc<Mutex<bool>>,
+        cleanup_observer: Arc<AtomicUsize>,
     }
 
     impl FakeBackend {
@@ -1572,6 +1722,7 @@ mod tests {
                 spawn: Ok(SpawnReceipt::started()),
                 spawn_count: Arc::new(Mutex::new(0)),
                 plan_seen: Arc::new(Mutex::new(false)),
+                cleanup_observer: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -1582,6 +1733,10 @@ mod tests {
         fn spawn_count(&self) -> usize {
             *self.spawn_count.lock().expect("spawn count")
         }
+
+        fn cleanup_count(&self) -> usize {
+            self.cleanup_observer.load(Ordering::SeqCst)
+        }
     }
 
     trait ExecutionBackend {
@@ -1589,6 +1744,8 @@ mod tests {
         fn block_managed(&self) -> Result<(), BackendError>;
         fn restore_mask(&self, snapshot: MaskSnapshot) -> Result<(), BackendError>;
         fn spawn(&self, plan: LaunchPlan) -> Result<SpawnReceipt, BackendError>;
+
+        fn cleanup_observer(&self) -> Arc<AtomicUsize>;
     }
 
     impl ExecutionBackend for FakeBackend {
@@ -1612,6 +1769,10 @@ mod tests {
             *self.spawn_count.lock().expect("spawn count") += 1;
             *self.plan_seen.lock().expect("plan") = plan.preserves_standard_streams();
             self.spawn
+        }
+
+        fn cleanup_observer(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.cleanup_observer)
         }
     }
 
@@ -1642,6 +1803,7 @@ mod tests {
             let receipt = self.0.spawn(public_plan)?;
             Ok(super::InternalSpawnReceipt::Test {
                 helper_started: receipt.helper_started,
+                cleanup_observer: self.0.cleanup_observer(),
             })
         }
     }
@@ -1711,6 +1873,171 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn status_pipes() -> (File, File, File, File) {
+        let (status_reader, status_writer) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("status pipe");
+        let (helper_reader, helper_writer) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("helper pipe");
+        (
+            File::from(status_reader),
+            File::from(status_writer),
+            File::from(helper_reader),
+            File::from(helper_writer),
+        )
+    }
+
+    #[cfg(unix)]
+    enum ScriptedRead {
+        Bytes(Vec<u8>),
+        Interrupted,
+        Eof,
+    }
+
+    #[cfg(unix)]
+    struct ScriptedReader {
+        reads: VecDeque<ScriptedRead>,
+    }
+
+    #[cfg(unix)]
+    impl Read for ScriptedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            match self.reads.pop_front().expect("scripted read") {
+                ScriptedRead::Bytes(bytes) => {
+                    buffer[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                ScriptedRead::Interrupted => Err(io::ErrorKind::Interrupted.into()),
+                ScriptedRead::Eof => Ok(0),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_error_reads_preserve_interruption_partial_and_closed_boundaries() {
+        let record = b"D2BE\x01\x02\x00\x0c".to_vec();
+        let mut reader = ScriptedReader {
+            reads: VecDeque::from([
+                ScriptedRead::Interrupted,
+                ScriptedRead::Bytes(record.clone()),
+            ]),
+        };
+        let mut bytes = Vec::new();
+        assert_eq!(
+            super::read_helper_error(&mut reader, &mut bytes),
+            Ok((None, false, false))
+        );
+        let (stage, closed, partial) =
+            super::read_helper_error(&mut reader, &mut bytes).expect("complete helper record");
+        assert_eq!(
+            stage.expect("typed helper stage").code(),
+            "D2B-BZLEXEC-HELPER-PTRACE-OPTIONS"
+        );
+        assert!(!closed);
+        assert!(!partial);
+
+        let mut reader = ScriptedReader {
+            reads: VecDeque::from([ScriptedRead::Bytes(record[..3].to_vec()), ScriptedRead::Eof]),
+        };
+        let mut bytes = Vec::new();
+        assert_eq!(
+            super::read_helper_error(&mut reader, &mut bytes),
+            Ok((None, false, true))
+        );
+        assert_eq!(
+            super::read_helper_error(&mut reader, &mut bytes),
+            Err(super::ProtocolError::ExecErrorPartial)
+        );
+
+        let mut reader = ScriptedReader {
+            reads: VecDeque::from([ScriptedRead::Eof]),
+        };
+        assert_eq!(
+            super::read_helper_error(&mut reader, &mut Vec::new()),
+            Ok((None, true, false))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ready_and_executed_handoffs_timeout_but_executed_runtime_does_not() {
+        let timeout = Duration::from_millis(30);
+        let (status_reader, status_writer, helper_reader, helper_writer) = status_pipes();
+        assert_eq!(
+            super::read_status_with_timeout(status_reader, helper_reader, timeout),
+            Err(super::ProtocolError::ReadyTimeout)
+        );
+        drop(status_writer);
+        drop(helper_writer);
+
+        let (status_reader, mut status_writer, helper_reader, helper_writer) = status_pipes();
+        status_writer
+            .write_all(&super::encode_status(super::StatusFrame::Ready))
+            .expect("READY frame");
+        assert_eq!(
+            super::read_status_with_timeout(status_reader, helper_reader, timeout),
+            Err(super::ProtocolError::ExecutedTimeout)
+        );
+        drop(status_writer);
+        drop(helper_writer);
+
+        let (status_reader, mut status_writer, helper_reader, helper_writer) = status_pipes();
+        let writer = std::thread::spawn(move || {
+            status_writer
+                .write_all(
+                    &[
+                        super::encode_status(super::StatusFrame::Ready),
+                        super::encode_status(super::StatusFrame::Executed),
+                    ]
+                    .concat(),
+                )
+                .expect("handoff frames");
+            std::thread::sleep(timeout * 3);
+            status_writer
+                .write_all(&super::encode_status(super::StatusFrame::Exited(0)))
+                .expect("terminal frame");
+            drop(status_writer);
+            drop(helper_writer);
+        });
+        assert_eq!(
+            super::read_status_with_timeout(status_reader, helper_reader, timeout),
+            Ok(super::TerminalStatus::Exited(0))
+        );
+        writer.join().expect("status writer");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interleaved_helper_failure_and_empty_close_are_typed() {
+        let timeout = Duration::from_millis(100);
+        let (status_reader, mut status_writer, helper_reader, mut helper_writer) = status_pipes();
+        let writer = std::thread::spawn(move || {
+            status_writer
+                .write_all(&super::encode_status(super::StatusFrame::Ready))
+                .expect("READY frame");
+            helper_writer
+                .write_all(b"D2B")
+                .expect("partial helper record");
+            status_writer
+                .write_all(&super::encode_status(super::StatusFrame::Executed))
+                .expect("EXECUTED frame");
+            drop(helper_writer);
+        });
+        assert_eq!(
+            super::read_status_with_timeout(status_reader, helper_reader, timeout),
+            Err(super::ProtocolError::ExecErrorPartial)
+        );
+        writer.join().expect("interleaved writer");
+
+        let (status_reader, _status_writer, helper_reader, helper_writer) = status_pipes();
+        drop(helper_writer);
+        assert_eq!(
+            super::read_status_with_timeout(status_reader, helper_reader, timeout),
+            Err(super::ProtocolError::HelperBeforeExecuted)
+        );
+    }
+
     #[test]
     fn signal_handoff_restores_before_returning_to_the_caller() {
         let coordinator = LaunchCoordinator::new();
@@ -1773,6 +2100,7 @@ mod tests {
             backend.event_names(),
             ["capture", "block", "spawn", "restore"]
         );
+        assert_eq!(backend.cleanup_count(), 0);
 
         let mut backend = FakeBackend::passing();
         backend.restore = Err(BackendError::Restore);
@@ -1787,6 +2115,7 @@ mod tests {
             backend.event_names(),
             ["capture", "block", "spawn", "restore"]
         );
+        assert_eq!(backend.cleanup_count(), 1);
     }
 
     #[test]

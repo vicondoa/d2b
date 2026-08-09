@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
@@ -150,6 +151,105 @@ static int d2b_remaining_ms(int64_t deadline) {
   }
   int64_t remaining = deadline - now;
   return remaining > INT_MAX ? INT_MAX : (int)remaining;
+}
+
+static pid_t d2b_create_child(void) {
+  return fork();
+}
+
+static int d2b_probe_wait(pid_t child, int expected_stop, int expect_exit,
+                          int64_t deadline, int *status) {
+  while (d2b_remaining_ms(deadline) > 0) {
+    pid_t waited = waitpid(child, status, WNOHANG | __WALL);
+    if (waited == child) {
+      if (expect_exit) {
+        return WIFEXITED(*status) && WEXITSTATUS(*status) == 0 ? 0 : -1;
+      }
+      return WIFSTOPPED(*status) && WSTOPSIG(*status) == expected_stop ? 0 : -1;
+    }
+    if (waited < 0 && errno != EINTR) {
+      return -1;
+    }
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {
+      if (d2b_remaining_ms(deadline) == 0) {
+        return -1;
+      }
+    }
+  }
+  return -1;
+}
+
+static void d2b_probe_cleanup(pid_t child, int64_t deadline) {
+  int status;
+  pid_t observed = waitpid(child, &status, WNOHANG | __WALL);
+  if (observed == child || (observed < 0 && errno == ECHILD)) {
+    return;
+  }
+  if (observed < 0 && errno != EINTR) {
+    return;
+  }
+  (void)kill(child, SIGKILL);
+  while (d2b_remaining_ms(deadline) > 0) {
+    pid_t waited = waitpid(child, &status, WNOHANG | __WALL);
+    if (waited == child || (waited < 0 && errno == ECHILD)) {
+      return;
+    }
+    if (waited < 0 && errno != EINTR) {
+      return;
+    }
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};
+    (void)nanosleep(&delay, NULL);
+  }
+}
+
+static int d2b_run_startup_probe(void) {
+#ifndef SYS_ptrace
+  return 1;
+#else
+  int64_t now = d2b_monotonic_ms();
+  if (now < 0) {
+    return 1;
+  }
+  int64_t deadline = now + 1000;
+  pid_t child = d2b_create_child();
+  if (child < 0) {
+    return 1;
+  }
+  if (child == 0) {
+    pid_t parent = getppid();
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent) {
+      _exit(2);
+    }
+    if (syscall(SYS_ptrace, (long)PTRACE_TRACEME, (long)0, (void *)0,
+                (void *)0) != 0) {
+      _exit(2);
+    }
+    if (raise(SIGSTOP) != 0 || raise(SIGSTOP) != 0) {
+      _exit(2);
+    }
+    _exit(0);
+  }
+
+  int status = 0;
+  if (d2b_probe_wait(child, SIGSTOP, 0, deadline, &status) != 0 ||
+      syscall(SYS_ptrace, (long)PTRACE_SETOPTIONS, (long)child, (void *)0,
+              (void *)(uintptr_t)PTRACE_O_TRACEEXEC) != 0 ||
+      syscall(SYS_ptrace, (long)PTRACE_CONT, (long)child, (void *)0,
+              (void *)0) != 0 ||
+      d2b_probe_wait(child, SIGSTOP, 0, deadline, &status) != 0 ||
+      syscall(SYS_ptrace, (long)PTRACE_DETACH, (long)child, (void *)0,
+              (void *)0) != 0 ||
+      d2b_probe_wait(child, 0, 1, deadline, &status) != 0) {
+    d2b_probe_cleanup(child, deadline);
+    return 1;
+  }
+
+  errno = 0;
+  long denied =
+      syscall(SYS_ptrace, (long)16, (long)getpid(), (void *)0, (void *)0);
+  return denied == -1 && errno == EACCES ? 0 : EACCES;
+#endif
 }
 
 static void d2b_emit_code(const char *code) {
@@ -373,17 +473,43 @@ static void d2b_child_fail(int error_fd, enum d2b_child_error error,
 }
 
 static int d2b_close_inherited_descriptors(int error_writer) {
+#ifdef SYS_close_range
+  unsigned int first_keep =
+      error_writer < D2B_PRIVATE_EXECUTABLE_FD
+          ? (unsigned int)error_writer
+          : (unsigned int)D2B_PRIVATE_EXECUTABLE_FD;
+  unsigned int second_keep =
+      error_writer < D2B_PRIVATE_EXECUTABLE_FD
+          ? (unsigned int)D2B_PRIVATE_EXECUTABLE_FD
+          : (unsigned int)error_writer;
+  int close_range_supported = 1;
+  if (first_keep > 3 &&
+      syscall(SYS_close_range, 3U, first_keep - 1U, 0U) != 0) {
+    close_range_supported = errno != ENOSYS && errno != EINVAL ? -1 : 0;
+  }
+  if (close_range_supported > 0 && second_keep > first_keep + 1U &&
+      syscall(SYS_close_range, first_keep + 1U, second_keep - 1U, 0U) != 0) {
+    close_range_supported = errno != ENOSYS && errno != EINVAL ? -1 : 0;
+  }
+  if (close_range_supported > 0 && second_keep < UINT_MAX &&
+      syscall(SYS_close_range, second_keep + 1U, UINT_MAX, 0U) != 0) {
+    close_range_supported = errno != ENOSYS && errno != EINVAL ? -1 : 0;
+  }
+  if (close_range_supported > 0) {
+    return 0;
+  }
+  if (close_range_supported < 0) {
+    return -1;
+  }
+#endif
+
   struct rlimit limit;
   if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
     return -1;
   }
-  rlim_t upper = limit.rlim_cur;
-  if (upper == RLIM_INFINITY) {
-    long configured = sysconf(_SC_OPEN_MAX);
-    if (configured <= 0) {
-      return -1;
-    }
-    upper = (rlim_t)configured;
+  rlim_t upper = limit.rlim_max;
+  if (upper == RLIM_INFINITY || upper > (rlim_t)INT_MAX + 1U) {
+    return -1;
   }
   for (rlim_t value = 3; value < upper; ++value) {
     int descriptor = (int)value;
@@ -401,6 +527,10 @@ static int d2b_close_inherited_descriptors(int error_writer) {
 static void d2b_child_exec(int error_writer, char *const target_argv[]) {
   int64_t deadline = d2b_monotonic_ms() + D2B_EXEC_DEADLINE_MS;
 
+  pid_t supervisor = getppid();
+  if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != supervisor) {
+    d2b_child_fail(error_writer, D2B_CHILD_SIGNAL, deadline);
+  }
   if (setpgid(0, 0) != 0) {
     d2b_child_fail(error_writer, D2B_CHILD_GROUP, deadline);
   }
@@ -957,6 +1087,10 @@ int main(int argc, char **argv, char **envp) {
   (void)d2b_recovery_codes;
   sigset_t managed;
 
+  if (argc == 2 && strcmp(argv[1], "--d2b-startup-probe") == 0) {
+    return d2b_run_startup_probe();
+  }
+
   if (d2b_check_fd(D2B_PRIVATE_EXECUTABLE_FD, 0) != 0 ||
       d2b_check_fd(D2B_STATUS_FD, 0) != 0 ||
       d2b_check_fd(D2B_HELPER_ERROR_FD, 0) != 0) {
@@ -1007,7 +1141,7 @@ int main(int argc, char **argv, char **envp) {
    * Exactly one fork is owned by this helper.  The child and supervisor each
    * call setpgid; the kernel ptrace stop, not a confirmation pipe, releases it.
    */
-  pid_t child = fork();
+  pid_t child = d2b_create_child();
   if (child < 0) {
     close(exec_pipe[0]);
     close(exec_pipe[1]);

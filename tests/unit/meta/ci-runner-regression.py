@@ -686,6 +686,12 @@ set -euo pipefail
         self.assertNotIn("smoke-eval-aarch64.nix", block)
         self.assertIn("nix build --no-link", block)
         self.assertIn("make test-rust-supply-chain", block)
+        self.assertIn("D2B_BAZEL_NATIVE_SYSTEM=aarch64-linux", block)
+        self.assertIn(
+            "native_bazel_runs_network_descriptor_and_cleanup_plants",
+            block,
+        )
+        self.assertIn("-- --ignored --exact", block)
         self.assertIn("github.event.pull_request.head.sha", block)
         self.assertIn("git rev-parse HEAD", block)
         self.assertIn("git status --porcelain", block)
@@ -698,6 +704,26 @@ set -euo pipefail
                 1,
                 msg=f"aarch64 realization must name {check} once",
             )
+
+    def test_x86_native_bazel_plant_is_an_enforcing_rollup_need(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+        block = workflow_job_block(workflow, "bazel-native-x86")
+
+        self.assertNotEqual(
+            manifest["jobs"]["bazel-native-x86"].get("enforcement"),
+            "advisory",
+        )
+        self.assertIn("bazel-native-x86", manifest["ci"]["rollupNeeds"])
+        self.assertIn("D2B_BAZEL_NATIVE_SYSTEM=x86_64-linux", block)
+        self.assertIn("--enable_bzlmod", (
+            ROOT / "packages" / "xtask" / "tests" / "bazel_action_network.rs"
+        ).read_text(encoding="utf-8"))
+        for evidence in ("cargo_bazel_pinned", "cquery", "aquery", "execution log"):
+            self.assertIn(evidence, (
+                ROOT / "packages" / "xtask" / "tests" / "bazel_action_network.rs"
+            ).read_text(encoding="utf-8"))
 
     def test_aarch64_advisory_classification_mutation_is_refused(self) -> None:
         layer1_jobs = load_layer1_jobs()

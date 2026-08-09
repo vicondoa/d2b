@@ -1304,6 +1304,38 @@ jobs:
           D2B_FLAKE_OUTPUTS: "1"
         run: make test-flake
 
+  bazel-native-x86:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Run native x86_64-linux patched-Bazel verification plants
+        run: |
+          set -euo pipefail
+          bazel_out=$(nix build --no-link --print-out-paths \
+            '.#packages.x86_64-linux."bazel-8.6.0-seccomp"')
+          java_home=$(nix-store -q --references "$bazel_out" \
+            | awk '/-openjdk-headless-[0-9]/ { print }')
+          test -n "$java_home"
+          test "$(printf '%s\n' "$java_home" | wc -l)" -eq 1
+          test -x "$bazel_out/bin/bazel"
+          test -x "$java_home/bin/java"
+          export D2B_BAZEL_NATIVE_BIN="$bazel_out/bin/bazel"
+          export D2B_BAZEL_NATIVE_SYSTEM=x86_64-linux
+          export JAVA_HOME="$java_home"
+          nix develop --command cargo test --locked \
+            --manifest-path packages/Cargo.toml \
+            --package xtask --test bazel_action_network \
+            'native_patched_bazel::native_bazel_runs_network_descriptor_and_cleanup_plants' -- --ignored --exact
+
   test-flake-x86:
     needs: [flake-eval-discover, flake-eval-x86, flake-eval-x86-realized, flake-eval-x86-outputs]
     if: always()
@@ -1366,6 +1398,27 @@ jobs:
             .#checks.aarch64-linux.guest-real-libshpool-package-policy \
             .#checks.aarch64-linux.broker-host-artifact-contract \
             .#checks.aarch64-linux.guest-static-elf
+      - name: Run native aarch64-linux patched-Bazel verification plants
+        env:
+          D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$D2B_STABLE_HEAD"
+          bazel_out=$(nix build --no-link --print-out-paths \
+            '.#packages.aarch64-linux."bazel-8.6.0-seccomp"')
+          java_home=$(nix-store -q --references "$bazel_out" \
+            | awk '/-openjdk-headless-[0-9]/ { print }')
+          test -n "$java_home"
+          test "$(printf '%s\n' "$java_home" | wc -l)" -eq 1
+          test -x "$bazel_out/bin/bazel"
+          test -x "$java_home/bin/java"
+          export D2B_BAZEL_NATIVE_BIN="$bazel_out/bin/bazel"
+          export D2B_BAZEL_NATIVE_SYSTEM=aarch64-linux
+          export JAVA_HOME="$java_home"
+          nix develop --command cargo test --locked \
+            --manifest-path packages/Cargo.toml \
+            --package xtask --test bazel_action_network \
+            'native_patched_bazel::native_bazel_runs_network_descriptor_and_cleanup_plants' -- --ignored --exact
       - name: Run native aarch64 supply-chain gate
         env:
           D2B_STABLE_HEAD: ${{ steps.stable-head.outputs.commit }}
@@ -1599,7 +1652,7 @@ jobs:
 
 
   check:
-    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
+    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, bazel-native-x86, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1646,6 +1699,7 @@ jobs:
           require_success test-fixture-contracts '${{ needs.test-fixture-contracts.result }}'
           require_success test-proofs '${{ needs.test-proofs.result }}'
           require_success test-nix-unit '${{ needs.test-nix-unit.result }}'
+          require_success bazel-native-x86 '${{ needs.bazel-native-x86.result }}'
           require_success test-flake-x86 '${{ needs.test-flake-x86.result }}'
           require_success test-flake-aarch64 '${{ needs.test-flake-aarch64.result }}'
           require_success test-drift '${{ needs.test-drift.result }}'

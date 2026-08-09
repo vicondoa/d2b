@@ -33,7 +33,7 @@ index 1a4bc4d..d2b9a01 100644
 +#include <stdint.h>
 +#include <time.h>
  #include <unistd.h>
-@@ -72,4 +81,399 @@
+@@ -72,4 +81,391 @@
 -static int global_child_pid;
 -
 +/*
@@ -49,14 +49,12 @@ index 1a4bc4d..d2b9a01 100644
 + * direct-parent relation, initial trace stop, sole wait, and exec event.
 + * Every governed action receives a fresh CLONE_NEWPID namespace.
 + * Sandbox recovery ownership is closed to:
-+ * D2B-BZLEXEC-SANDBOX-NAMESPACE,
 + * D2B-BZLEXEC-SANDBOX-PTRACE-POLICY,
 + * D2B-BZLEXEC-SANDBOX-MONITOR,
 + * D2B-BZLEXEC-SANDBOX-KILL,
 + * D2B-BZLEXEC-SANDBOX-REAP,
-+ * D2B-BZLEXEC-SANDBOX-CEILING,
 + * D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP, and
-+ * D2B-BZLEXEC-SANDBOX-CLEANUP.
++ * D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE.
 + */
 +static const char kD2BPolicyAbi[] = "d2b-bazel-seccomp-abi-v1";
 +static const char kD2BPolicyAbiSha256[] =
@@ -69,12 +67,6 @@ index 1a4bc4d..d2b9a01 100644
 +static const char kD2BFilterFailure[] = "D2B-BZLNET-FILTER-LOAD";
 +static const char kD2BSandboxPolicyFailure[] =
 +    "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY";
-+static const char kD2BPendingCleanup[] =
-+    "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP";
-+static const char kD2BPendingRunbook[] =
-+    "docs/contributing/critical-subsystems.md#bazel-pending-kernel-cleanup-quarantine";
-+static const char kD2BConsumingReapRelease[] =
-+    "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
 +static void D2BPrintSandboxDiagnostic(const char *code) {
 +  fprintf(stderr, "%s\n", code);
 +  fprintf(stderr, "input=pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch\n");
@@ -151,22 +143,22 @@ index 1a4bc4d..d2b9a01 100644
 +    D2BDescriptorPreflightResult result) {
 +  switch (result) {
 +    case D2BDescriptorPreflightResult::kCensusFailure:
-+      D2BPrintSandboxDiagnostic(kD2BPreflightFailure);
++      fprintf(stderr, "%s outcome=descriptor-census-failed action=refused\n",
++              kD2BPreflightFailure);
 +      return;
 +    case D2BDescriptorPreflightResult::kInheritedSocket:
-+      D2BPrintSandboxDiagnostic(kD2BInheritedSocketFailure);
-+      fprintf(stderr,
-+              "correction=Close inherited socket descriptors before invoking the pinned Bazel sandbox.\n");
++      fprintf(stderr, "%s outcome=inherited-socket action=refused\n",
++              kD2BInheritedSocketFailure);
 +      return;
 +    case D2BDescriptorPreflightResult::kInheritedRing:
-+      D2BPrintSandboxDiagnostic(kD2BInheritedRingFailure);
-+      fprintf(stderr,
-+              "correction=Close inherited io_uring descriptors and registered files before invoking the pinned Bazel sandbox.\n");
++      fprintf(stderr, "%s outcome=inherited-io-uring action=refused\n",
++              kD2BInheritedRingFailure);
 +      return;
 +    case D2BDescriptorPreflightResult::kOk:
 +      return;
 +  }
-+  D2BPrintSandboxDiagnostic(kD2BPreflightFailure);
++  fprintf(stderr, "%s outcome=descriptor-census-invalid action=refused\n",
++          kD2BPreflightFailure);
 +}
 +
 +static std::string D2BPolicyPath() {
@@ -435,45 +427,9 @@ index 1a4bc4d..d2b9a01 100644
 +
  // Helper methods
  static void CreateFile(const char *path) {
-@@ -534,4 +929,43 @@
+@@ -534,4 +929,7 @@
      // permissions predictable.
      umask(022);
-+    const std::string d2b_path =
-+        getenv("PATH") == nullptr ? "" : getenv("PATH");
-+    const std::string d2b_tmpdir =
-+        getenv("TMPDIR") == nullptr ? "" : getenv("TMPDIR");
-+    const std::string d2b_pwd =
-+        getenv("PWD") == nullptr ? "" : getenv("PWD");
-+    const std::string d2b_zero_ar_date =
-+        getenv("ZERO_AR_DATE") == nullptr ? "" : getenv("ZERO_AR_DATE");
-+    if (clearenv() != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (!d2b_path.empty() &&
-+        setenv("PATH", d2b_path.c_str(), 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (!d2b_tmpdir.empty() &&
-+        setenv("TMPDIR", d2b_tmpdir.c_str(), 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (!d2b_pwd.empty() &&
-+        setenv("PWD", d2b_pwd.c_str(), 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (!d2b_zero_ar_date.empty() &&
-+        setenv("ZERO_AR_DATE", d2b_zero_ar_date.c_str(), 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (setenv("BASH_ENV", "/dev/null", 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (setenv("__ETC_PROFILE_SOURCED", "1", 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
-+    if (setenv("__ETC_PROFILE_DONE", "1", 1) != 0) {
-+      _exit(EXIT_FAILURE);
-+    }
 +    unsetenv("D2B_BAZEL_SECCOMP_POLICY");
 +    unsetenv("D2B_BAZEL_STRATEGY_LOCK");
 +
@@ -579,7 +535,7 @@ index 2c92d4e..b8f1b73 100644
 +static volatile sig_atomic_t d2b_abnormal_teardown_started = 0;
  static void OnTimeoutOrTerm(int) {
 +  d2b_abnormal_teardown_started = 1;
-@@ -214,13 +240,52 @@ static pid_t SpawnPid1() {
+@@ -214,13 +240,49 @@ static pid_t SpawnPid1() {
    return child_pid;
  }
 -
@@ -599,9 +555,6 @@ index 2c92d4e..b8f1b73 100644
 +    "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
 +static const char kD2BSandboxMonitorFailure[] =
 +    "D2B-BZLEXEC-SANDBOX-MONITOR";
-+static const char kD2BSandboxCeilingFailure[] =
-+    "D2B-BZLEXEC-SANDBOX-CEILING";
-+
 +static void D2BMarkAbnormalTeardown(int) {
 +  d2b_abnormal_teardown_started = 1;
 +}
@@ -643,7 +596,7 @@ index 2c92d4e..b8f1b73 100644
 @@ -233,1 +298,1 @@
 -    if (errno == EINTR) {
 +    if (ret < 0 && errno == EINTR) {
-@@ -236,0 +301,29 @@
+@@ -236,0 +301,25 @@
 +    if (ret == 0) {
 +      if (ceiling < 0 && d2b_abnormal_teardown_started) {
 +        const int64_t now = D2BMonotonicMilliseconds();
@@ -654,21 +607,17 @@ index 2c92d4e..b8f1b73 100644
 +      if (!quarantined && ceiling >= 0 &&
 +          D2BMonotonicMilliseconds() >= ceiling) {
 +        quarantined = true;
-+        D2BPrintSandboxDiagnostic(kD2BSandboxCeilingFailure);
-+        D2BPrintSandboxDiagnostic(kD2BPendingCleanup);
-+        fprintf(stderr, "state=pending-kernel-cleanup\n");
-+        fprintf(stderr, "quarantine=entered-and-held\n");
-+        fprintf(stderr, "owner=original-monitor\n");
-+        fprintf(stderr, "runbook=%s\n", kD2BPendingRunbook);
-+        fprintf(stderr, "result=failed;reuse=denied\n");
-+        fprintf(stderr, "action=no-success-no-reuse\n");
-+        fprintf(stderr, "prohibited=reboot,retry-before-release,"
-+                        "replacement-waiter,manual-release\n");
++        fprintf(stderr,
++                "%s state=pending-kernel-cleanup quarantine=entered-and-held "
++                "owner=original-monitor wait-owner=original-monitor "
++                "result=failed reuse=denied action=no-success-no-reuse "
++                "runbook=%s\n",
++                kD2BPendingCleanup, kD2BPendingRunbook);
 +      }
 +      /*
-+       * WNOHANG is observation only. The original monitor remains the sole
-+       * wait owner until its consuming wait proves PID 1 reaped. No
-+       * replacement waiter, PID file, host PID, or manual release path exists.
++       * A zero WNOHANG result is observation only. This same wait4 call is
++       * consuming when it returns child_pid; the original monitor remains the
++       * sole wait owner. No replacement waiter or manual release path exists.
 +       */
 +      usleep(1000);
 +      continue;
@@ -679,11 +628,11 @@ index 2c92d4e..b8f1b73 100644
 +    return EXIT_FAILURE;
 @@ -240,0 +335,8 @@
 +  if (quarantined) {
-+    fprintf(stderr, "%s\n", kD2BConsumingReapRelease);
-+    fprintf(stderr, "cleanup=complete-after-quarantine\n");
-+    fprintf(stderr, "quarantine=entered-and-released-after-consuming-reap\n");
-+    fprintf(stderr, "owner=original-monitor\n");
-+    fprintf(stderr, "result=failed\n");
++    fprintf(stderr,
++            "%s cleanup=complete-after-quarantine "
++            "quarantine=entered-and-released-after-consuming-reap "
++            "owner=original-monitor wait=consuming result=failed\n",
++            kD2BConsumingReapRelease);
 +    return EXIT_FAILURE;
 +  }
 @@ -305,5 +408,6 @@ int main(int argc, char *argv[]) {
@@ -723,7 +672,7 @@ diff --git a/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUti
 index 1234567..89abcde 100644
 --- a/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUtil.java
 +++ b/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUtil.java
-@@ -37,4 +37,12 @@ public final class LinuxSandboxUtil {
+@@ -37,2 +37,10 @@ public final class LinuxSandboxUtil {
 -    return blazeWorkspace.getBinTools().getEmbeddedPath(LINUX_SANDBOX);
 +    Path embedded = blazeWorkspace.getBinTools().getEmbeddedPath(LINUX_SANDBOX);
 +    String patched = System.getenv("D2B_BAZEL_LINUX_SANDBOX");

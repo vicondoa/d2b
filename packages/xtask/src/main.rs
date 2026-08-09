@@ -485,9 +485,11 @@ fn bazel_repin_with_fresh_executor(
     let root = if let Some(root) = override_root {
         root
     } else if let Some(worktree) = env::var_os("D2B_BAZEL_WORKTREE") {
-        fs::canonicalize(worktree)?
+        fs::canonicalize(worktree)
+            .map_err(|_| "D2B-BZL-WORKTREE: D2B_BAZEL_WORKTREE is not a repository directory.")?
     } else {
-        fs::canonicalize(repo_root()?)?
+        fs::canonicalize(repo_root()?)
+            .map_err(|_| "D2B-BZL-WORKTREE: repository root is unavailable.")?
     };
     reject_ambient_repin_before_bootstrap()?;
     if let Some(output) = fresh_hub_bootstrap(&root, hub, fresh_executor)? {
@@ -752,9 +754,12 @@ impl FreshBootstrapExecutor for ProcessFreshBootstrapExecutor {
                 command.env(name, value);
             }
         }
-        command
-            .status()
-            .map_err(|_| fresh_bootstrap_error(hub, "cannot start pinned Bazel"))
+        command.status().map_err(|_| {
+            fresh_bootstrap_error(
+                hub,
+                "cannot start pinned Bazel; from the repository root run nix develop",
+            )
+        })
     }
 }
 
@@ -1041,7 +1046,26 @@ fn acquire_fresh_bootstrap_guard(path: &Path) -> Result<std::fs::File, &'static 
             "cannot lock fresh bootstrap guard"
         }
     })?;
+    verify_fresh_bootstrap_guard_identity(parent_fd.as_fd(), name, &file)?;
     Ok(file)
+}
+
+fn verify_fresh_bootstrap_guard_identity(
+    parent: impl AsFd,
+    name: &str,
+    guard: &std::fs::File,
+) -> Result<(), &'static str> {
+    let named = rustix::fs::statat(parent.as_fd(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|_| "fresh bootstrap guard changed identity")?;
+    let pinned = rustix::fs::fstat(guard.as_fd())
+        .map_err(|_| "fresh bootstrap guard identity is unavailable")?;
+    if rustix::fs::FileType::from_raw_mode(named.st_mode) != rustix::fs::FileType::RegularFile
+        || named.st_dev != pinned.st_dev
+        || named.st_ino != pinned.st_ino
+    {
+        return Err("fresh bootstrap guard changed identity");
+    }
+    Ok(())
 }
 
 fn fresh_content_snapshot(
@@ -1240,7 +1264,7 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
         command_args: &[String],
         environment: &[(&str, &str)],
     ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
-        let executable = env::var_os("BAZEL").unwrap_or_else(|| "bazel".into());
+        let executable = bazel::bazel_executable()?;
         let mut command = Command::new(executable);
         command
             .current_dir(root)
@@ -1255,7 +1279,7 @@ impl bazel::BazelExecutor for ExecutableBazelExecutor {
         let output = command
             .output()
             .map_err(|_| -> Box<dyn std::error::Error> {
-                "could not start the Bazel child".into()
+                bazel::bazel_executable_diagnostic().into()
             })?;
         self.diagnostic = Some(bazel::bounded_child_diagnostic(&output.stderr));
         Ok(output.status)
@@ -2729,6 +2753,28 @@ mod fresh_bootstrap_tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    #[test]
+    fn guard_identity_check_rejects_a_replaced_directory_entry() {
+        let root = create_exclusive_temp_dir("xtask-fresh-guard-identity").expect("root");
+        let parent = root.join(".scratch/bazel");
+        fs::create_dir_all(&parent).expect("guard parent");
+        let path = parent.join("fresh-bootstrap.guard");
+        let guard = acquire_fresh_bootstrap_guard(&path).expect("guard");
+        fs::rename(&path, parent.join("replaced.guard")).expect("move pinned guard");
+        fs::write(&path, b"replacement").expect("replacement guard");
+        let parent_fd = anchor_fresh_directory(&parent).expect("anchored parent");
+        assert!(
+            verify_fresh_bootstrap_guard_identity(
+                parent_fd.as_fd(),
+                "fresh-bootstrap.guard",
+                &guard,
+            )
+            .is_err()
+        );
+        drop(guard);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[cfg(unix)]
     #[test]
     fn fresh_bootstrap_refuses_replaceable_guard_parents_and_guard_leaves() {
@@ -2768,7 +2814,11 @@ mod fresh_bootstrap_tests {
 
     #[test]
     fn process_executor_pins_the_bzlmod_bootstrap_contract() {
-        let workspace = create_exclusive_temp_dir("xtask-fresh-process").expect("workspace");
+        let workspace = repo_root()
+            .expect("repository root")
+            .join(".scratch")
+            .join(format!("xtask-fresh-process-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&workspace);
         fs::create_dir_all(workspace.join("bazel/cargo")).expect("cargo directory");
         let executable = workspace.join("fake-bazel");
         fs::write(

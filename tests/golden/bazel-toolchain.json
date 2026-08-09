@@ -14,7 +14,7 @@
   },
   "patch": {
     "path": "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch",
-    "sha256": "c6a81500fef9aa0744ab5c554e2add98b149268a8546aa583af11e3c070f31e9",
+    "sha256": "8bdef8f9c14a8ccbbc2c94ecfa3a956fb2582e93f42a95e8d99e77757ef0eb98",
     "loadPoint": "after-sandbox-construction-before-action-command-exec"
   },
   "policy": {

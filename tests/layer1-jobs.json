@@ -56,6 +56,7 @@
       "flake-eval-x86",
       "flake-eval-x86-realized",
       "flake-eval-x86-outputs",
+      "bazel-native-x86",
       "test-flake-x86",
       "test-flake-aarch64",
       "test-drift",
@@ -73,6 +74,7 @@
       "test-fixture-contracts",
       "test-proofs",
       "test-nix-unit",
+      "bazel-native-x86",
       "test-flake-x86",
       "test-flake-aarch64",
       "test-drift",
@@ -353,6 +355,16 @@
       "timeoutMinutes": 20,
       "runsOn": "ubuntu-latest"
     },
+    "bazel-native-x86": {
+      "displayName": "Native x86_64 patched-Bazel verification plants",
+      "nativeSystem": "x86_64-linux",
+      "nativeBazelPlant": true,
+      "ciKind": "bazel-native",
+      "ciJobId": "bazel-native-x86",
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
     "test-flake-x86": {
       "displayName": "Require all x86 flake jobs to pass",
       "ciKind": "flake-x86-rollup",
@@ -372,6 +384,7 @@
         "broker-host-artifact-contract",
         "guest-static-elf"
       ],
+      "nativeBazelPlant": true,
       "stableHeadBinding": true,
       "ciKind": "flake-aarch64-native",
       "ciJobId": "test-flake-aarch64",

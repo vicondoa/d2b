@@ -9,6 +9,8 @@ let
   };
   policy = ./seccomp-policy.json;
   sandboxPatch = ./linux-sandbox-seccomp.patch;
+  nativeExecutable =
+    "bazel-${version}-linux-${pkgs.stdenv.hostPlatform.parsed.cpu.name}";
 in
 pkgs.bazel_8.overrideAttrs (old: {
   pname = "bazel-${version}-seccomp";
@@ -22,6 +24,12 @@ pkgs.bazel_8.overrideAttrs (old: {
   postFixup = (old.postFixup or "") + ''
     install -Dm444 ${policy} \
       "$out/share/d2b/bazel/seccomp-policy.json"
+    if [ ! -x "$out/bin/${nativeExecutable}" ]; then
+      echo "missing pinned native Bazel executable: ${nativeExecutable}" >&2
+      exit 1
+    fi
+    rm "$out/bin/bazel"
+    ln -s "${nativeExecutable}" "$out/bin/bazel"
     wrapProgram "$out/bin/bazel" \
       --set D2B_BAZEL_SECCOMP_POLICY \
       "$out/share/d2b/bazel/seccomp-policy.json" \
@@ -29,6 +37,11 @@ pkgs.bazel_8.overrideAttrs (old: {
       --unset BAZELRC \
       --unset BAZELISK_HOME \
       --unset BAZELISK_USER_AGENT \
+      --unset BAZEL_INTERNAL_INVOCATION_POLICY \
+      --unset BAZEL_OPTS \
+      --unset BAZEL_REAL \
+      --unset BAZEL_WRAPPER \
+      --unset USE_BAZEL_VERSION \
       --unset D2B_BAZEL_LINUX_SANDBOX \
       --run '
         d2b_workspace_rc="$(pwd -P 2>/dev/null)/.bazelrc"
@@ -40,9 +53,9 @@ pkgs.bazel_8.overrideAttrs (old: {
         fi
         for d2b_arg in "$@"; do
           case "$d2b_arg" in
-            --spawn_strategy=*|--spawn_strategy|--strategy=*|--strategy|--strategy_regexp=*|--strategy_regexp|--test_strategy=*|--test_strategy|--genrule_strategy=*|--genrule_strategy|--worker_strategy=*|--worker_strategy|--remote_executor=*|--remote_executor|--remote_cache=*|--remote_cache|--experimental_spawn_scheduler|--experimental_remote_downloader=*|--experimental_remote_downloader|--bazelrc=*|--bazelrc|--system_rc|--home_rc|--workspace_rc|--noworkspace_rc|--ignore_all_rc_files|--config=*|--config|--action_env=*|--action_env|--host_action_env=*|--host_action_env|--test_env=*|--test_env|--client_env=*)
+            --spawn_strategy=*|--spawn_strategy|--strategy=*|--strategy|--strategy_regexp=*|--strategy_regexp|--test_strategy=*|--test_strategy|--genrule_strategy=*|--genrule_strategy|--worker_strategy=*|--worker_strategy|--remote_executor=*|--remote_executor|--remote_cache=*|--remote_cache|--experimental_spawn_scheduler|--experimental_remote_downloader=*|--experimental_remote_downloader|--bazelrc=*|--bazelrc|--system_rc|--home_rc|--workspace_rc|--noworkspace_rc|--ignore_all_rc_files|--config=*|--config|--action_env=*|--action_env|--host_action_env=*|--host_action_env|--test_env=*|--test_env|--client_env=*|--client_env|--invocation_policy=*|--invocation_policy|--flagfile=*|--flagfile|--noenable_bzlmod|--enable_workspace)
               printf "%s\n" D2B-BZLNET-STRATEGY
-              printf "%s\n" "correction=Use the repository .bazelrc and the pinned sandboxed strategy without rc, config, environment, or strategy overrides."
+              printf "%s\n" "correction=Use the repository .bazelrc and the pinned sandboxed strategy without rc, flag-file, invocation-policy, environment, or strategy overrides."
               printf "%s\n" "retry=make test-flake"
               exit 64
               ;;
@@ -67,6 +80,8 @@ pkgs.bazel_8.overrideAttrs (old: {
       strategy = "sandboxed";
       strategyLock = "d2b-bazel-sandbox-v1";
       strategyOverrides = false;
+      invocationPolicyOverrides = false;
+      flagFiles = false;
       rcPolicy = "workspace-only";
       actionEnvPolicy = "strict-pinned";
       testEnvPolicy = "strict-empty";
@@ -90,11 +105,6 @@ pkgs.bazel_8.overrideAttrs (old: {
       diagnostics = [
         {
           owner = "patched-sandbox";
-          stage = "SANDBOX_NAMESPACE";
-          code = "D2B-BZLEXEC-SANDBOX-NAMESPACE";
-        }
-        {
-          owner = "patched-sandbox";
           stage = "SANDBOX_PTRACE_POLICY";
           code = "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY";
         }
@@ -115,18 +125,13 @@ pkgs.bazel_8.overrideAttrs (old: {
         }
         {
           owner = "patched-sandbox";
-          stage = "SANDBOX_CEILING";
-          code = "D2B-BZLEXEC-SANDBOX-CEILING";
-        }
-        {
-          owner = "patched-sandbox";
           stage = "SANDBOX_PENDING_KERNEL_CLEANUP";
           code = "D2B-BZLEXEC-SANDBOX-PENDING-KERNEL-CLEANUP";
         }
         {
           owner = "patched-sandbox";
-          stage = "SANDBOX_CLEANUP";
-          code = "D2B-BZLEXEC-SANDBOX-CLEANUP";
+          stage = "SANDBOX_CONSUMING_REAP_RELEASE";
+          code = "D2B-BZLEXEC-SANDBOX-CONSUMING-REAP-RELEASE";
         }
       ];
     };

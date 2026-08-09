@@ -61,5 +61,19 @@
     "guest-real-libshpool-package-policy",
     "broker-host-artifact-contract",
     "guest-static-elf"
-  ]
+  ],
+  "bazelNativePlant": {
+    "testName": "native_patched_bazel::native_bazel_runs_network_descriptor_and_cleanup_plants",
+    "systems": [
+      "x86_64-linux",
+      "aarch64-linux"
+    ],
+    "requiredEvidence": [
+      "bzlmod",
+      "cargo-bazel",
+      "cquery",
+      "aquery",
+      "execution-log"
+    ]
+  }
 }

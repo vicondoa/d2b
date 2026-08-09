@@ -28,7 +28,7 @@
     },
     {
       "path": "bazel/generated/configured-targets.json",
-      "sha256": "5c8273cc147faf5994191c169e4808c4ba605cc5e61b9985ba75ec252d1dedfa"
+      "sha256": "5c6daff6a182b7e1d400a60ca82ab84ca6b46092f9c924d84e659216ca05affd"
     },
     {
       "path": "bazel/generated/evidence-sink-policy.json",
@@ -36,7 +36,7 @@
     },
     {
       "path": "bazel/generated/no-shell-inventory.json",
-      "sha256": "be432d9a7c387e202e908a71cc9d779a211e449cba09e49fa41a1e00bc82ec12"
+      "sha256": "e2bc2cd78b882c0440aff4b44cd4a959ce0166686fbc0e2c8ed461a9edf9967b"
     },
     {
       "path": "bazel/generated/package-policy-targets.bzl",
@@ -44,11 +44,11 @@
     },
     {
       "path": "bazel/generated/product-targets.bzl",
-      "sha256": "d4c7856c94d90d4855bbd3cc9e7babe60f473d57d943e25edaae9b8a6339f797"
+      "sha256": "7f9caf6fef6c9ba1e469575fb81c8d09114506a356ce2b69240758ab005c4ab2"
     },
     {
       "path": "bazel/generated/source-census.json",
-      "sha256": "704b18e49b4d73973c9b04e51a4df79fa2bf54fb7850773b71f9c6c743582e6d"
+      "sha256": "be68636bfdeb5dd3078103aa55133c0fc209b70da0b438914ac5dabdc79a3f32"
     }
   ],
   "schemaVersion": 1,

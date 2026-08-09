@@ -7495,9 +7495,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "spawnSiteCount": 3,
       "spawnSiteKeys": [
-        "packages/xtask/src/bazel.rs:248:27:executable",
-        "packages/xtask/src/bazel.rs:2682:27:\"cargo\"",
-        "packages/xtask/src/bazel.rs:3510:18:\"git\""
+        "packages/xtask/src/bazel.rs:2725:27:\"cargo\"",
+        "packages/xtask/src/bazel.rs:276:27:executable",
+        "packages/xtask/src/bazel.rs:3569:18:\"git\""
       ],
       "status": "scanned"
     },
@@ -7505,7 +7505,7 @@
       "source": "packages/xtask/src/bazel_yanked.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/xtask/src/bazel_yanked.rs:77:27:\"curl\""
+        "packages/xtask/src/bazel_yanked.rs:79:27:\"curl\""
       ],
       "status": "scanned"
     },
@@ -7641,10 +7641,10 @@
       "source": "packages/xtask/src/main.rs",
       "spawnSiteCount": 4,
       "spawnSiteKeys": [
-        "packages/xtask/src/main.rs:1244:27:executable",
-        "packages/xtask/src/main.rs:2577:27:\"false\"",
-        "packages/xtask/src/main.rs:2586:16:\"true\"",
-        "packages/xtask/src/main.rs:730:27:&self.executable"
+        "packages/xtask/src/main.rs:1268:27:executable",
+        "packages/xtask/src/main.rs:2601:27:\"false\"",
+        "packages/xtask/src/main.rs:2610:16:\"true\"",
+        "packages/xtask/src/main.rs:732:27:&self.executable"
       ],
       "status": "scanned"
     },
@@ -8758,25 +8758,25 @@
       }
     },
     {
-      "programExpression": "executable",
-      "shellInvocation": false,
-      "source": "packages/xtask/src/bazel.rs",
-      "span": {
-        "endColumn": 51,
-        "endLine": 248,
-        "startColumn": 27,
-        "startLine": 248
-      }
-    },
-    {
       "programExpression": "\"cargo\"",
       "shellInvocation": false,
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2682,
+        "endLine": 2725,
         "startColumn": 27,
-        "startLine": 2682
+        "startLine": 2725
+      }
+    },
+    {
+      "programExpression": "executable",
+      "shellInvocation": false,
+      "source": "packages/xtask/src/bazel.rs",
+      "span": {
+        "endColumn": 51,
+        "endLine": 276,
+        "startColumn": 27,
+        "startLine": 276
       }
     },
     {
@@ -8785,9 +8785,9 @@
       "source": "packages/xtask/src/bazel.rs",
       "span": {
         "endColumn": 37,
-        "endLine": 3510,
+        "endLine": 3569,
         "startColumn": 18,
-        "startLine": 3510
+        "startLine": 3569
       }
     },
     {
@@ -8796,9 +8796,9 @@
       "source": "packages/xtask/src/bazel_yanked.rs",
       "span": {
         "endColumn": 47,
-        "endLine": 77,
+        "endLine": 79,
         "startColumn": 27,
-        "startLine": 77
+        "startLine": 79
       }
     },
     {
@@ -8917,9 +8917,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 1244,
+        "endLine": 1268,
         "startColumn": 27,
-        "startLine": 1244
+        "startLine": 1268
       }
     },
     {
@@ -8928,9 +8928,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2577,
+        "endLine": 2601,
         "startColumn": 27,
-        "startLine": 2577
+        "startLine": 2601
       }
     },
     {
@@ -8939,9 +8939,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 36,
-        "endLine": 2586,
+        "endLine": 2610,
         "startColumn": 16,
-        "startLine": 2586
+        "startLine": 2610
       }
     },
     {
@@ -8950,9 +8950,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 57,
-        "endLine": 730,
+        "endLine": 732,
         "startColumn": 27,
-        "startLine": 730
+        "startLine": 732
       }
     },
     {

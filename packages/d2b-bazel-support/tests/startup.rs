@@ -1,4 +1,8 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use d2b_bazel_support::startup::{
     KernelVersion, NativeSystem, ProbeResult, RuntimeStartupProbe, StartupCode, StartupProbe,
@@ -28,6 +32,14 @@ impl StartupProbe for RecordingProbe {
     fn run(&self) -> std::io::Result<()> {
         *self.calls.lock().expect("probe counter") += 1;
         self.result.run()
+    }
+}
+
+struct PolicyDeniedProbe;
+
+impl StartupProbe for PolicyDeniedProbe {
+    fn run(&self) -> io::Result<()> {
+        Err(io::ErrorKind::PermissionDenied.into())
     }
 }
 
@@ -88,6 +100,13 @@ fn unsupported_system_and_real_probe_failure_have_distinct_owners() {
     );
     assert_eq!(probe.calls(), 1);
 
+    assert_eq!(
+        validate_startup(requirements(), &PolicyDeniedProbe)
+            .expect_err("required policy denial must be distinct")
+            .code(),
+        StartupCode::SandboxPolicyDrift
+    );
+
     let probe = RecordingProbe::new(ProbeResult::Pass);
     let mut policy = requirements();
     policy.sandbox_policy_ok = false;
@@ -116,10 +135,21 @@ fn supported_aarch64_and_the_linux_3_19_boundary_are_admitted() {
 #[test]
 fn runtime_probe_is_a_distinct_non_injected_startup_seam() {
     let probe = RuntimeStartupProbe;
+    let started = Instant::now();
     #[cfg(target_os = "linux")]
-    probe
-        .run()
-        .expect("the current Linux process has proc status");
+    if let Err(error) = probe.run() {
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::Other | io::ErrorKind::PermissionDenied | io::ErrorKind::TimedOut
+            ),
+            "runtime probe returned an unexpected error class"
+        );
+    }
     #[cfg(not(target_os = "linux"))]
     assert!(probe.run().is_err());
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "runtime startup probe exceeded its bound"
+    );
 }

@@ -1,24 +1,6 @@
 package(default_visibility = ["//visibility:public"])
 
-load(":defs.bzl", "D2B_BAZEL_VERSION")
-load(":manifest.bzl", "d2b_generated_target_manifest")
-load(
-    ":rules/sandboxed_action.bzl",
-    "d2b_sandboxed_action",
-)
-load(
-    ":toolchains.bzl",
-    "D2B_CONFIGURED_BAZEL",
-    "d2b_toolchain_metadata_tags",
-)
-load(
-    "//bazel/generated:package-policy-targets.bzl",
-    "PACKAGE_POLICY_TARGETS",
-)
-load(
-    "//bazel/generated:product-targets.bzl",
-    "PRODUCT_TARGETS",
-)
+load(":manifest.bzl", "d2b_evidence_manifest")
 
 exports_files([
     "defs.bzl",
@@ -27,36 +9,14 @@ exports_files([
     "rules/sandboxed_action.bzl",
 ])
 
-d2b_generated_target_manifest(
-    name = "generated-target-manifest",
-    product_targets = PRODUCT_TARGETS,
-    package_policy_targets = PACKAGE_POLICY_TARGETS,
-)
-
-filegroup(
-    name = "toolchain-and-policy-sources",
-    srcs = [
-        ":defs.bzl",
-        ":manifest.bzl",
-        ":rules/sandboxed_action.bzl",
-        ":toolchains.bzl",
-        "//bazel/generated:action-network-policy.json",
-        "//bazel/generated:configured-targets.json",
-        "//bazel/generated:package-policy-targets.bzl",
-        "//bazel/generated:product-targets.bzl",
-        "//bazel/evidence:action-network-observation.json",
-    ],
-    tags = d2b_toolchain_metadata_tags() + [
-        "d2b-bazel-version-{}".format(D2B_BAZEL_VERSION),
-        "d2b-product-targets-wired",
-        "d2b-package-policy-targets-wired",
+d2b_evidence_manifest(
+    name = "rules-rust-evidence-manifest",
+    targets = [
+        "//bazel/evidence:rules-rust-evidence-build",
     ],
 )
 
-d2b_sandboxed_action(
-    genrule,
+alias(
     name = "policy-probe",
-    srcs = ["//bazel/generated:action-network-policy.json"],
-    outs = ["policy-probe.txt"],
-    cmd = "cat $(location //bazel/generated:action-network-policy.json) > $@",
+    actual = ":rules-rust-evidence-manifest",
 )

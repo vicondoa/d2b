@@ -22,6 +22,8 @@ Then run: cd packages
 cargo xtask bazel-yanked-refresh
 Review and commit bazel/supply_chain/yanked-snapshot.json.
 Rerun cargo xtask bazel-yanked-check, then rerun the failed command.";
+const INDEX_REVISION_ERROR: &str = "D2B-BZL-YANKED-INDEX: yanked index revision lookup failed.";
+const INDEX_LOOKUP_ERROR: &str = "D2B-BZL-YANKED-INDEX: yanked package-state lookup failed.";
 
 /// The injected boundary for the one reviewed, networked yanked-index refresh.
 #[allow(dead_code)]
@@ -79,8 +81,10 @@ impl IndexClient {
         if head {
             command.arg("--head");
         }
-        let output = command.arg(url).output().map_err(|error| {
-            IndexClientError::new(format!("could not start the index transport: {error}"))
+        let output = command.arg(url).output().map_err(|_| {
+            IndexClientError::new(
+                "D2B-BZL-YANKED-TRANSPORT: index transport could not start; verify curl is available in PATH.",
+            )
         })?;
         if !output.status.success() {
             return Err(IndexClientError::new(format!(
@@ -134,20 +138,24 @@ impl YankedIndex for IndexClient {
         let payload = self.fetch(&path, false)?;
         let text = String::from_utf8(payload)
             .map_err(|_| IndexClientError::new("index response is not UTF-8"))?;
-        for line in text.lines() {
-            let value: Value = serde_json::from_str(line).map_err(|error| {
-                IndexClientError::new(format!("malformed index payload: {error}"))
-            })?;
-            if value.get("vers").and_then(Value::as_str) == Some(version) {
-                return value.get("yanked").and_then(Value::as_bool).ok_or_else(|| {
-                    IndexClientError::new("index entry has no boolean yanked state")
-                });
-            }
-        }
-        Err(IndexClientError::new(format!(
-            "index response omitted crate version {name} {version}"
-        )))
+        parse_yanked_response(&text, version)
     }
+}
+
+fn parse_yanked_response(text: &str, version: &str) -> Result<bool, IndexClientError> {
+    for line in text.lines() {
+        let value: Value = serde_json::from_str(line)
+            .map_err(|_| IndexClientError::new("index response contains malformed JSON"))?;
+        if value.get("vers").and_then(Value::as_str) == Some(version) {
+            return value
+                .get("yanked")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| IndexClientError::new("index entry has no boolean yanked state"));
+        }
+    }
+    Err(IndexClientError::new(
+        "index response omitted the requested crate version",
+    ))
 }
 
 pub(crate) fn bazel_yanked_refresh(args: &[String]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
@@ -184,7 +192,7 @@ pub(crate) fn refresh_with_index_at<I: YankedIndex>(
     if keys.is_empty() {
         return Err("the committed Cargo locks contain no package keys".into());
     }
-    let revision = index.revision().map_err(index_error)?;
+    let revision = index.revision().map_err(|_| INDEX_REVISION_ERROR)?;
     if revision.trim().is_empty() {
         return Err("the yanked index returned no revision".into());
     }
@@ -193,7 +201,7 @@ pub(crate) fn refresh_with_index_at<I: YankedIndex>(
     for (name, version) in keys {
         let yanked = index
             .is_yanked(&name, &version)
-            .map_err(|error| format!("yanked index lookup failed: {error}"))?;
+            .map_err(|_| INDEX_LOOKUP_ERROR)?;
         entries.push(json!({
             "name": name,
             "version": version,
@@ -205,12 +213,15 @@ pub(crate) fn refresh_with_index_at<I: YankedIndex>(
         "entries": entries,
     });
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)
+            .map_err(|_| "D2B-BZL-YANKED-OUTPUT: snapshot directory could not be created.")?;
     }
-    let contents = serde_json::to_vec_pretty(&document)?;
+    let contents = serde_json::to_vec_pretty(&document)
+        .map_err(|_| "D2B-BZL-YANKED-OUTPUT: snapshot could not be serialized.")?;
     let mut contents = contents;
     contents.push(b'\n');
-    fs::write(output_path, contents)?;
+    fs::write(output_path, contents)
+        .map_err(|_| "D2B-BZL-YANKED-OUTPUT: snapshot could not be written.")?;
     let relative = output_path
         .strip_prefix(root)
         .unwrap_or(output_path)
@@ -219,14 +230,10 @@ pub(crate) fn refresh_with_index_at<I: YankedIndex>(
 }
 
 pub(crate) fn check_snapshot(root: &Path, snapshot_path: &Path) -> Result<(), Box<dyn Error>> {
-    let text = fs::read_to_string(snapshot_path).map_err(|error| {
-        let _ = error;
-        YANKED_DRIFT_REMEDIATION.to_owned()
-    })?;
-    let document: Value = serde_json::from_str(&text).map_err(|error| {
-        let _ = error;
-        YANKED_DRIFT_REMEDIATION.to_owned()
-    })?;
+    let text =
+        fs::read_to_string(snapshot_path).map_err(|_| YANKED_DRIFT_REMEDIATION.to_owned())?;
+    let document: Value =
+        serde_json::from_str(&text).map_err(|_| YANKED_DRIFT_REMEDIATION.to_owned())?;
     if document
         .get("indexRevision")
         .and_then(Value::as_str)
@@ -296,14 +303,11 @@ pub(crate) fn check_projection(
     Ok(())
 }
 
-fn index_error<E: Error + Send + Sync + 'static>(error: E) -> Box<dyn Error> {
-    Box::new(error)
-}
-
 fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(root) = env::var_os("D2B_BAZEL_WORKTREE") {
-        return fs::canonicalize(root)
-            .map_err(|error| format!("cannot canonicalize D2B_BAZEL_WORKTREE: {error}").into());
+        return fs::canonicalize(root).map_err(|_| {
+            "D2B-BZL-YANKED-WORKTREE: D2B_BAZEL_WORKTREE is not a repository directory.".into()
+        });
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -315,8 +319,9 @@ fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
 fn lock_keys(root: &Path) -> Result<BTreeSet<(String, String)>, Box<dyn Error>> {
     let mut keys = BTreeSet::new();
     for relative in LOCKS {
-        let text = fs::read_to_string(root.join(relative))
-            .map_err(|error| format!("cannot read committed lock {relative}: {error}"))?;
+        let text = fs::read_to_string(root.join(relative)).map_err(|_| {
+            format!("D2B-BZL-YANKED-LOCK: committed lock is unreadable: {relative}")
+        })?;
         for block in text.split("[[package]]").skip(1) {
             let Some(name) = toml_string(block, "name") else {
                 continue;
@@ -487,16 +492,15 @@ mod tests {
     }
 
     #[test]
-    fn refresh_preserves_fake_failures_for_missing_malformed_and_transport_answers() {
+    fn refresh_closes_injected_index_failures() {
         let root = fixture_root("failure");
         let mut transport = FakeIndex::clear();
         transport.fail_on = Some(("example".to_owned(), "1.0.0".to_owned()));
-        assert!(
-            refresh_with_index(&root, &mut transport)
-                .unwrap_err()
-                .to_string()
-                .contains("transport failed part-way through")
-        );
+        let error = refresh_with_index(&root, &mut transport)
+            .expect_err("lookup failure")
+            .to_string();
+        assert_eq!(error, INDEX_LOOKUP_ERROR);
+        assert!(!error.contains("transport failed part-way through"));
 
         let mut no_revision = FakeIndex::clear();
         no_revision.revision = Ok(String::new());
@@ -508,15 +512,29 @@ mod tests {
         );
 
         let mut malformed = FakeIndex::clear();
-        malformed.revision = Err(FakeError("malformed payload".to_owned()));
-        assert!(
-            refresh_with_index(&root, &mut malformed)
-                .unwrap_err()
-                .to_string()
-                .contains("malformed payload")
-        );
+        malformed.revision = Err(FakeError(
+            "malformed payload at /home/operator/private".to_owned(),
+        ));
+        let error = refresh_with_index(&root, &mut malformed)
+            .expect_err("revision failure")
+            .to_string();
+        assert_eq!(error, INDEX_REVISION_ERROR);
+        assert!(!error.contains("/home/operator"));
         assert!(!root.join(SNAPSHOT).exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parser_diagnostics_do_not_echo_payload_or_parser_details() {
+        let error = parse_yanked_response(
+            r#"{"vers":"1.0.0","private":"/home/operator/private""#,
+            "1.0.0",
+        )
+        .expect_err("malformed payload")
+        .to_string();
+        assert_eq!(error, "index response contains malformed JSON");
+        assert!(!error.contains("/home/operator"));
+        assert!(!error.contains("column"));
     }
 
     #[test]
