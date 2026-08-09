@@ -242,11 +242,14 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 
 `advance-verification` validates the exact selection digest, lifecycle,
 candidate, roster, prior ledger, response envelope, and adapted verification
-bindings before publishing `NEXT/discovery-ledger.json` and
-`NEXT/responses.json` independently with create-or-compare semantics. A retry
-after a partial publication compares any existing file byte-for-byte and
-creates only the missing file; conflicting bytes fail. Consumers must require
-both files before use. It appends admitted late findings with contiguous `R`
+bindings before publishing three per-file create-or-compare artifacts:
+`NEXT/discovery-ledger.json`, `NEXT/responses.json`, and
+`NEXT/handoff.json`. It publishes the ledger and responses independently, then
+publishes `handoff.json` last as completeness evidence. A retry after a
+partial publication compares every existing file byte-for-byte and creates
+only missing files; conflicting bytes fail. Consumers must require all three
+files before use. This marker is not an atomic transaction and is not a
+security proof. It appends admitted late findings with contiguous `R`
 identifiers and preserved source identity. Every issue that any selected seat
 did not pass receives a canonical blank response; passed issues retain their
 validated response, and every late issue starts blank. Fill those blanks with

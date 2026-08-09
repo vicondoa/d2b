@@ -9,12 +9,18 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import {
+  createVerificationResultArtifact,
+  stableStringify,
+  writeAdvanceVerification,
+} from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -122,13 +128,21 @@ function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function stageArgs(base, previousTip, round, selection, candidate, request) {
+function stageArgs(
+  base,
+  previousTip,
+  round,
+  selection,
+  candidate,
+  request,
+  lifecycle = "spec001w1",
+) {
   return [
     base,
     previousTip,
     round,
     "--lifecycle",
-    "spec001w1",
+    lifecycle,
     "--selection",
     selection,
     "--candidate",
@@ -150,14 +164,13 @@ try {
       stageSource.includes("writeFileSync"),
   );
   check(
-    "discovery treats an unmarked canonical packet as damaged",
-    stageSource.includes(
-      "incomplete packet retains canonical artifact content without .complete",
-    ) &&
+    "discovery incrementally scans bounded packet entries",
+    stageSource.includes("opendirSync") &&
+      stageSource.includes("readSync()") &&
       stageSource.includes("canonicalFileNames") &&
       stageSource.includes("canonicalContentDirectories") &&
-      stageSource.includes("canonical top-level categories") &&
-      !stageSource.includes("scanDirectory"),
+      stageSource.includes('failScan("canonical-remnant"') &&
+      !stageSource.includes("readdirSync(panelRoot)"),
   );
 
   git(repo, "init", "--quiet");
@@ -441,7 +454,7 @@ try {
     check(
       `${name} discovery packet fails closed`,
       result.status === 2 &&
-        /completed packet validation failed/.test(result.text) &&
+        /category=invalid-completion-packet count=1/.test(result.text) &&
         expectedText.test(result.text) &&
         !existsSync(join(repo, ".scratch", "panel", `${name}-r1`, ".complete")),
       result.text,
@@ -501,7 +514,7 @@ try {
   check(
     "a fully validated discovery packet still blocks a second discovery",
     validPrefixDiscovery.status === 2 &&
-      /exactly once by lifecycle identity/.test(validPrefixDiscovery.text) &&
+      /category=completed-discovery count=1/.test(validPrefixDiscovery.text) &&
       !existsSync(
       join(repo, ".scratch", "panel", "validprefix-r1", ".complete"),
       ),
@@ -512,12 +525,12 @@ try {
   expectCorruptDiscoveryPacket(
     "partialpacket",
     (packet) => rmSync(join(packet, "reviewer-notes", "software.md")),
-    /reviewer-notes\/software\.md|bound artifact/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "deletedpacket",
     (packet) => rmSync(join(packet, "delta.diff")),
-    /delta\.diff|unavailable/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "digestpacket",
@@ -526,7 +539,7 @@ try {
       chmodSync(evidence, 0o644);
       writeFileSync(evidence, "changed after completion\n");
     },
-    /evidence\.md.*(?:size or digest|different)/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "selectionpacket",
@@ -538,7 +551,7 @@ try {
       writeJson(selectionFile, selection);
       rewritePacketBinding(packet, "selection.json");
     },
-    /selection_sha256|selection\.json/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "addresspacket",
@@ -550,7 +563,7 @@ try {
       writeJson(addressFile, address);
       rewritePacketBinding(packet, "address.json");
     },
-    /address\.json.*metadata|address\.json/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "deltapacket",
@@ -560,7 +573,7 @@ try {
       writeFileSync(delta, "changed delta\n");
       rewritePacketBinding(packet, "delta.diff");
     },
-    /delta_sha256|delta\.diff/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "fullpacket",
@@ -570,7 +583,7 @@ try {
       writeFileSync(full, "changed full\n");
       rewritePacketBinding(packet, "full.diff");
     },
-    /full_sha256|full\.diff/,
+    /category=invalid-completion-packet count=1/,
   );
   expectCorruptDiscoveryPacket(
     "tippacket",
@@ -582,7 +595,7 @@ try {
       writeJson(markerPath, marker);
       chmodSync(markerPath, 0o444);
     },
-    /invalid tip/,
+    /category=invalid-completion-packet count=1/,
   );
 
   const deletedMarkerPacket = copyCompletedDiscoveryPacket(
@@ -605,7 +618,7 @@ try {
   check(
     "a deleted completion marker with remaining canonical artifacts blocks discovery",
     deletedMarkerDiscovery.status === 2 &&
-      /incomplete packet retains canonical artifact content without \.complete/.test(
+      /category=canonical-remnant count=13/.test(
         deletedMarkerDiscovery.text,
       ) &&
       !existsSync(join(repo, ".scratch", "panel", "deletedmarker-r1", ".complete")),
@@ -644,7 +657,7 @@ try {
   check(
     "a sole canonical file is a bounded packet remnant",
     soleCanonicalFile.status === 2 &&
-      /Remaining canonical top-level categories \(1\): \[address\.json\]/.test(
+      /category=canonical-remnant count=1/.test(
         soleCanonicalFile.text,
       ),
     soleCanonicalFile.text,
@@ -661,7 +674,7 @@ try {
   check(
     "a nested artifact is reported only by its canonical top-level directory",
     nestedPacketArtifact.status === 2 &&
-      /Remaining canonical top-level categories \(1\): \[reviewer-notes\/\]/.test(
+      /category=canonical-remnant count=1/.test(
         nestedPacketArtifact.text,
       ) &&
       !nestedPacketArtifact.text.includes("software.md"),
@@ -675,58 +688,11 @@ try {
   check(
     "an empty canonical directory is a packet remnant",
     emptyCanonicalDirectory.status === 2 &&
-      /Remaining canonical top-level categories \(1\): \[verification\/\]/.test(
+      /category=canonical-remnant count=1/.test(
         emptyCanonicalDirectory.text,
       ),
     emptyCanonicalDirectory.text,
   );
-
-  const handoffPacket = join(
-    repo,
-    ".scratch",
-    "panel",
-    "advance-verification-handoff",
-  );
-  const unrelatedDiscoveryPacket = join(
-    repo,
-    ".scratch",
-    "panel",
-    "unrelated-discovery",
-  );
-  mkdirSync(handoffPacket, { recursive: true });
-  writeJson(join(handoffPacket, "discovery-ledger.json"), {
-    artifact_kind: "d2b-panel/issue-ledger",
-  });
-  writeJson(join(handoffPacket, "responses.json"), {
-    artifact_kind: "d2b-panel/implementation-responses",
-  });
-  mkdirSync(unrelatedDiscoveryPacket, { recursive: true });
-  writeFileSync(join(unrelatedDiscoveryPacket, ".complete"), "unrelated\n");
-  const handoffDiscovery = run(
-    repo,
-    stageArgs(
-      base,
-      base,
-      "handoffdiscovery-r1",
-      selectionPath,
-      candidatePath,
-      discoveryRequestPath,
-    ),
-  );
-  check(
-    "a complete ledger-response handoff beside unrelated discovery does not block",
-    handoffDiscovery.status === 0 &&
-      existsSync(
-        join(repo, ".scratch", "panel", "handoffdiscovery-r1", ".complete"),
-      ),
-    handoffDiscovery.text,
-  );
-  rmSync(handoffPacket, { recursive: true, force: true });
-  rmSync(unrelatedDiscoveryPacket, { recursive: true, force: true });
-  rmSync(join(repo, ".scratch", "panel", "handoffdiscovery-r1"), {
-    recursive: true,
-    force: true,
-  });
 
   for (const [name, otherName] of [
     ["lone-ledger", "discovery-ledger.json"],
@@ -738,12 +704,7 @@ try {
     check(
       `${otherName} without its handoff pair blocks discovery`,
       loneHandoff.status === 2 &&
-        new RegExp(
-          `Remaining canonical top-level categories \\(1\\): \\[${otherName.replace(
-            ".",
-            "\\.",
-          )}\\]`,
-        ).test(loneHandoff.text),
+        /category=partial-handoff count=1/.test(loneHandoff.text),
       loneHandoff.text,
     );
   }
@@ -774,7 +735,7 @@ try {
   check(
     "deep and wide nested names never enter packet diagnostics",
     nestedNamesPacket.status === 2 &&
-      /Remaining canonical top-level categories \(2\): \[agent-definitions\/, reviewer-notes\/\]/.test(
+      /category=canonical-remnant count=2/.test(
         nestedNamesPacket.text,
       ) &&
       !nestedNamesPacket.text.includes("sensitive-input-derived-secret-token") &&
@@ -1049,6 +1010,300 @@ try {
     { cwd: repo, encoding: "utf8" },
   );
   const verificationRoster = readJson(currentSelectionPath).roster;
+
+  const continuationSelection = readJson(currentSelectionPath);
+  const continuationLedger = readJson(stagedLedger);
+  const continuationResponses = readJson(stagedResponses);
+  const continuationVerification = createVerificationResultArtifact({
+    selection: continuationSelection,
+    selection_bytes: readFileSync(currentSelectionPath, "utf8"),
+    ledger: continuationLedger,
+    ledger_bytes: readFileSync(stagedLedger, "utf8"),
+    current_candidate: readJson(currentCandidatePath),
+    results: Object.fromEntries(
+      verificationRoster.map((seat) => [
+        seat,
+        {
+          seat,
+          complete: true,
+          signoff: true,
+          summary: "Verified.",
+          recommendations: [],
+          verified_issue_statuses: Object.fromEntries(
+            continuationLedger.issues.map((issue) => [issue.id, "verified"]),
+          ),
+          late_findings: [],
+        },
+      ]),
+    ),
+  });
+  const realHandoffDir = join(repo, "real-advance-handoff");
+  const realHandoffInput = {
+    current_selection: continuationSelection,
+    selection_bytes: readFileSync(currentSelectionPath, "utf8"),
+    discovery_ledger: continuationLedger,
+    discovery_ledger_bytes: readFileSync(stagedLedger, "utf8"),
+    responses: continuationResponses,
+    responses_bytes: readFileSync(stagedResponses, "utf8"),
+    verification_results: continuationVerification,
+    verification_results_bytes: stableStringify(continuationVerification),
+    current_candidate: readJson(currentCandidatePath),
+  };
+  const firstHandoffPublication = writeAdvanceVerification(
+    realHandoffDir,
+    realHandoffInput,
+  );
+  const secondHandoffPublication = writeAdvanceVerification(
+    realHandoffDir,
+    realHandoffInput,
+  );
+  check(
+    "real advance output publishes and byte-identically retries all three files",
+    firstHandoffPublication.publication.handoff.created === true &&
+      secondHandoffPublication.publication.ledger.created === false &&
+      secondHandoffPublication.publication.responses.created === false &&
+      secondHandoffPublication.publication.handoff.created === false &&
+      readdirSync(realHandoffDir).sort().join(",") ===
+        "discovery-ledger.json,handoff.json,responses.json",
+  );
+
+  const unrelatedCandidatePath = join(repo, "unrelated-candidate.json");
+  const unrelatedSelectionPath = join(repo, "unrelated-selection.json");
+  const unrelatedRequestPath = join(repo, "unrelated-request.json");
+  writeJson(unrelatedCandidatePath, {
+    program: "SPEC002",
+    wave: "spec002w1",
+    candidate_id: "1".repeat(64),
+    content_id: "2".repeat(64),
+    snapshot_sha256: "3".repeat(64),
+    changed_paths: ["Makefile", "first.txt", literalBackslashPath],
+  });
+  const generatedUnrelatedSelection = execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "select",
+      unrelatedCandidatePath,
+      "spec002w1",
+      "--git-range",
+      `${base}..${secondTip}`,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  ).trim();
+  cpSync(generatedUnrelatedSelection, unrelatedSelectionPath);
+  execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "discovery-request",
+      unrelatedSelectionPath,
+      unrelatedCandidatePath,
+      unrelatedRequestPath,
+    ],
+    { cwd: repo, encoding: "utf8" },
+  );
+
+  const runRealHandoffDiscovery = (
+    name,
+    selection,
+    candidate,
+    request,
+    lifecycle,
+    mutate,
+  ) => {
+    const packet = join(repo, ".scratch", "panel", name);
+    const round = `${name.replace(/[^A-Za-z0-9]/g, "")}-r1`;
+    cpSync(realHandoffDir, packet, { recursive: true });
+    try {
+      if (mutate) mutate(packet);
+      return run(
+        repo,
+        stageArgs(base, base, round, selection, candidate, request, lifecycle),
+      );
+    } finally {
+      rmSync(packet, { recursive: true, force: true });
+      rmSync(join(repo, ".scratch", "panel", round), {
+        recursive: true,
+        force: true,
+      });
+    }
+  };
+
+  const unrelatedHandoff = runRealHandoffDiscovery(
+    "handoff-with-unrelated-lifecycle-and-sensitive-name",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+  );
+  check(
+    "an unrelated valid handoff is ignored",
+    unrelatedHandoff.status === 0 &&
+      !unrelatedHandoff.text.includes(
+        "handoff-with-unrelated-lifecycle-and-sensitive-name",
+      ),
+    unrelatedHandoff.text,
+  );
+
+  const discoveryPacketBackup = join(repo, "discovery-packet-backup");
+  cpSync(firstDir, discoveryPacketBackup, { recursive: true });
+  rmSync(firstDir, { recursive: true, force: true });
+  const sameLifecycleHandoff = runRealHandoffDiscovery(
+    "same-lifecycle-handoff",
+    selectionPath,
+    candidatePath,
+    discoveryRequestPath,
+    "spec001w1",
+  );
+  cpSync(discoveryPacketBackup, firstDir, { recursive: true });
+  rmSync(discoveryPacketBackup, { recursive: true, force: true });
+  check(
+    "a same-lifecycle handoff blocks discovery",
+    sameLifecycleHandoff.status === 2 &&
+      /category=same-lifecycle-handoff count=1/.test(sameLifecycleHandoff.text),
+    sameLifecycleHandoff.text,
+  );
+
+  const unmarkedPair = runRealHandoffDiscovery(
+    "unmarked-ledger-response-pair",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => rmSync(join(packet, "handoff.json")),
+  );
+  check(
+    "an unmarked ledger-response pair is damaged packet state",
+    unmarkedPair.status === 2 &&
+      /category=damaged-handoff count=2/.test(unmarkedPair.text),
+    unmarkedPair.text,
+  );
+
+  const malformedMarker = runRealHandoffDiscovery(
+    "malformed-sensitive-handoff-marker",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => writeFileSync(join(packet, "handoff.json"), "{not-json\n"),
+  );
+  check(
+    "a malformed handoff marker fails closed without its packet name",
+    malformedMarker.status === 2 &&
+      /category=invalid-handoff count=1/.test(malformedMarker.text) &&
+      !malformedMarker.text.includes("malformed-sensitive-handoff-marker"),
+    malformedMarker.text,
+  );
+
+  const digestMismatch = runRealHandoffDiscovery(
+    "handoff-digest-mismatch",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => {
+      const markerPath = join(packet, "handoff.json");
+      const marker = readJson(markerPath);
+      marker.ledger_sha256 = "f".repeat(64);
+      writeJson(markerPath, marker);
+    },
+  );
+  check(
+    "a handoff digest mismatch fails closed",
+    digestMismatch.status === 2 &&
+      /category=invalid-handoff count=1/.test(digestMismatch.text),
+    digestMismatch.text,
+  );
+
+  const sizeMismatch = runRealHandoffDiscovery(
+    "handoff-size-mismatch",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => {
+      const markerPath = join(packet, "handoff.json");
+      const marker = readJson(markerPath);
+      marker.responses_bytes += 1;
+      writeJson(markerPath, marker);
+    },
+  );
+  check(
+    "a handoff byte-size mismatch fails closed",
+    sizeMismatch.status === 2 &&
+      /category=invalid-handoff count=1/.test(sizeMismatch.text),
+    sizeMismatch.text,
+  );
+
+  const envelopeMismatch = runRealHandoffDiscovery(
+    "handoff-envelope-mismatch",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => {
+      const markerPath = join(packet, "handoff.json");
+      const marker = readJson(markerPath);
+      marker.candidate_id = "e".repeat(64);
+      writeJson(markerPath, marker);
+    },
+  );
+  check(
+    "a handoff envelope mismatch fails closed",
+    envelopeMismatch.status === 2 &&
+      /category=invalid-handoff count=1/.test(envelopeMismatch.text),
+    envelopeMismatch.text,
+  );
+
+  const partialHandoff = runRealHandoffDiscovery(
+    "partial-handoff-files",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => rmSync(join(packet, "responses.json")),
+  );
+  check(
+    "partial handoff files fail closed",
+    partialHandoff.status === 2 &&
+      /category=partial-handoff count=2/.test(partialHandoff.text),
+    partialHandoff.text,
+  );
+
+  const overLimitPacket = join(
+    repo,
+    ".scratch",
+    "panel",
+    "over-limit-sensitive-packet-name",
+  );
+  mkdirSync(overLimitPacket, { recursive: true });
+  for (let index = 0; index <= 4096; index += 1) {
+    writeFileSync(join(overLimitPacket, `entry-${index}.tmp`), "");
+  }
+  const overLimitDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "overlimit-r1",
+      unrelatedSelectionPath,
+      unrelatedCandidatePath,
+      unrelatedRequestPath,
+      "spec002w1",
+    ),
+  );
+  check(
+    "top-level packet entry limits fail early with redacted diagnostics",
+    overLimitDiscovery.status === 2 &&
+      /category=top-level-entry-limit count=4097/.test(
+        overLimitDiscovery.text,
+      ) &&
+      !overLimitDiscovery.text.includes("over-limit-sensitive-packet-name"),
+    overLimitDiscovery.text,
+  );
+  rmSync(overLimitPacket, { recursive: true, force: true });
+
+  rmSync(realHandoffDir, { recursive: true, force: true });
 
   console.log("stage-diffs: later review");
   const predecessorMarker = join(firstDir, ".complete");

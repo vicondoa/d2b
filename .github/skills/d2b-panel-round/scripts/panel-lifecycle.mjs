@@ -35,6 +35,9 @@ export const DISCOVERY_REQUEST_ARTIFACT = "d2b-panel/discovery-request";
 export const DISCOVERY_RESULT_ARTIFACT = "d2b-panel/discovery-result";
 export const LEDGER_ARTIFACT = "d2b-panel/issue-ledger";
 export const RESPONSE_ARTIFACT = "d2b-panel/implementation-responses";
+export const CONTINUATION_HANDOFF_ARTIFACT =
+  "d2b-panel/continuation-handoff";
+export const CONTINUATION_HANDOFF_SCHEMA_VERSION = 1;
 export const VERIFICATION_ARTIFACT = "d2b-panel/verification";
 export const LEGACY_IMPORT_ARTIFACT = "d2b-panel/legacy-import";
 export const APPROVAL_ARTIFACT = "d2b-panel/approval";
@@ -159,7 +162,13 @@ export const stableStringify = (value) =>
 
 export const sha256 = (value) =>
   createHash("sha256")
-    .update(typeof value === "string" ? value : stableStringify(value))
+    .update(
+      Buffer.isBuffer(value) || value instanceof Uint8Array
+        ? value
+        : typeof value === "string"
+          ? value
+          : stableStringify(value),
+    )
     .digest("hex");
 
 const MAX_PANEL_READ_BYTES = 64 * 1024 * 1024;
@@ -3838,13 +3847,33 @@ function validateResponseHandoff(ledger, envelope) {
   return envelope;
 }
 
-function exactArtifactBytes(bytes, value, label) {
-  if (typeof bytes !== "string" || bytes.length === 0) {
-    error(`${label} requires exact JSON bytes`);
+function artifactByteLength(bytes, label) {
+  if (typeof bytes === "string") {
+    if (bytes.length === 0) error(`${label} requires exact JSON bytes`);
+    return Buffer.byteLength(bytes, "utf8");
   }
+  if (Buffer.isBuffer(bytes)) {
+    if (bytes.length === 0) error(`${label} requires exact JSON bytes`);
+    return bytes.length;
+  }
+  error(`${label} requires exact JSON bytes`);
+}
+
+function artifactText(bytes, label) {
+  artifactByteLength(bytes, label);
+  if (typeof bytes === "string") return bytes;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (cause) {
+    error(`${label} bytes are not valid UTF-8: ${cause.message}`);
+  }
+}
+
+function exactArtifactBytes(bytes, value, label) {
+  const text = artifactText(bytes, label);
   let decoded;
   try {
-    decoded = JSON.parse(bytes);
+    decoded = JSON.parse(text);
   } catch (cause) {
     error(`${label} bytes are not valid JSON: ${cause.message}`);
   }
@@ -3852,6 +3881,166 @@ function exactArtifactBytes(bytes, value, label) {
     error(`${label} object disagrees with its exact JSON bytes`);
   }
   return bytes;
+}
+
+const CONTINUATION_HANDOFF_KEYS = Object.freeze([
+  "artifact_kind",
+  "schema_version",
+  "lifecycle_id",
+  "program",
+  "wave",
+  "candidate_id",
+  "content_id",
+  "snapshot_sha256",
+  "ledger_sha256",
+  "ledger_bytes",
+  "responses_sha256",
+  "responses_bytes",
+]);
+
+function validateHandoffFileBinding(marker, bytes, digestKey, sizeKey, label) {
+  const size = artifactByteLength(bytes, label);
+  if (
+    size > MAX_PANEL_READ_BYTES ||
+    marker[sizeKey] !== size ||
+    marker[digestKey] !== sha256(bytes)
+  ) {
+    error(`${label} does not match the continuation handoff marker`);
+  }
+}
+
+export function validateAdvanceVerificationHandoff(marker, options = {}) {
+  assertExactKeys(
+    marker,
+    CONTINUATION_HANDOFF_KEYS,
+    "continuation handoff marker",
+  );
+  if (marker.artifact_kind !== CONTINUATION_HANDOFF_ARTIFACT) {
+    error("continuation handoff marker has an unexpected artifact_kind");
+  }
+  if (marker.schema_version !== CONTINUATION_HANDOFF_SCHEMA_VERSION) {
+    error("continuation handoff marker schema_version is unsupported");
+  }
+  safePathPart(marker.lifecycle_id, "continuation handoff lifecycle_id");
+  validateProgramWave(marker.program, marker.wave);
+  for (const key of ["candidate_id", "content_id", "snapshot_sha256"]) {
+    assertDigest(marker[key], `continuation handoff ${key}`);
+  }
+  for (const [digestKey, sizeKey] of [
+    ["ledger_sha256", "ledger_bytes"],
+    ["responses_sha256", "responses_bytes"],
+  ]) {
+    assertDigest(marker[digestKey], `continuation handoff ${digestKey}`);
+    if (
+      !Number.isSafeInteger(marker[sizeKey]) ||
+      marker[sizeKey] < 0 ||
+      marker[sizeKey] > MAX_PANEL_READ_BYTES
+    ) {
+      error(`continuation handoff ${sizeKey} is out of bounds`);
+    }
+  }
+
+  const suppliedLedgerBytes =
+    options.ledger_bytes ?? options.ledgerBytes;
+  const suppliedResponseBytes =
+    options.responses_bytes ??
+    options.response_bytes ??
+    options.responsesBytes ??
+    options.responseBytes;
+  if (
+    suppliedLedgerBytes === undefined ||
+    suppliedResponseBytes === undefined
+  ) {
+    error("continuation handoff requires both bound artifact files");
+  }
+
+  validateHandoffFileBinding(
+    marker,
+    suppliedLedgerBytes,
+    "ledger_sha256",
+    "ledger_bytes",
+    "continuation handoff discovery ledger",
+  );
+  validateHandoffFileBinding(
+    marker,
+    suppliedResponseBytes,
+    "responses_sha256",
+    "responses_bytes",
+    "continuation handoff responses",
+  );
+
+  let ledger;
+  let responses;
+  try {
+    ledger = options.ledger ??
+      JSON.parse(artifactText(suppliedLedgerBytes, "continuation handoff discovery ledger"));
+    responses = options.responses ??
+      JSON.parse(artifactText(suppliedResponseBytes, "continuation handoff responses"));
+  } catch (cause) {
+    error(`continuation handoff artifact JSON is malformed: ${cause.message}`);
+  }
+  validateLedger(ledger, { table: options.table });
+  validateResponseHandoff(ledger, responses);
+  for (const key of [
+    "lifecycle_id",
+    "program",
+    "wave",
+    "candidate_id",
+    "content_id",
+    "snapshot_sha256",
+  ]) {
+    if (ledger[key] !== marker[key] || responses[key] !== marker[key]) {
+      error(`continuation handoff ${key} disagrees with its artifact envelopes`);
+    }
+  }
+  return { marker, ledger, responses };
+}
+
+export const validateContinuationHandoff =
+  validateAdvanceVerificationHandoff;
+
+export function createContinuationHandoff(input, options = {}) {
+  if (!isPlainObject(input)) {
+    error("continuation handoff input must be an object");
+  }
+  const ledger = input.ledger ?? input.discovery_ledger;
+  const responses = input.responses;
+  const ledgerBytes =
+    input.ledger_bytes ?? input.discovery_ledger_bytes;
+  const responseBytes =
+    input.responses_bytes ?? input.response_bytes;
+  if (!ledger || !responses) {
+    error("continuation handoff requires ledger and responses");
+  }
+  exactArtifactBytes(ledgerBytes, ledger, "continuation handoff ledger");
+  exactArtifactBytes(responseBytes, responses, "continuation handoff responses");
+  validateLedger(ledger, { table: options.table });
+  validateResponseHandoff(ledger, responses);
+  const marker = sortedObject({
+    artifact_kind: CONTINUATION_HANDOFF_ARTIFACT,
+    schema_version: CONTINUATION_HANDOFF_SCHEMA_VERSION,
+    lifecycle_id: ledger.lifecycle_id,
+    program: ledger.program,
+    wave: ledger.wave,
+    candidate_id: ledger.candidate_id,
+    content_id: ledger.content_id,
+    snapshot_sha256: ledger.snapshot_sha256,
+    ledger_sha256: sha256(ledgerBytes),
+    ledger_bytes: artifactByteLength(ledgerBytes, "continuation handoff ledger"),
+    responses_sha256: sha256(responseBytes),
+    responses_bytes: artifactByteLength(
+      responseBytes,
+      "continuation handoff responses",
+    ),
+  });
+  validateAdvanceVerificationHandoff(marker, {
+    ledger,
+    responses,
+    ledger_bytes: ledgerBytes,
+    responses_bytes: responseBytes,
+    table: options.table,
+  });
+  return marker;
 }
 
 export function advanceVerification(input, options = {}) {
@@ -4027,11 +4216,22 @@ export function writeAdvanceVerification(outputDir, input, options = {}) {
       advanced.responses,
     ),
   };
+  const handoff = createContinuationHandoff({
+    ledger: advanced.ledger,
+    ledger_bytes: publication.ledger.bytes,
+    responses: advanced.responses,
+    responses_bytes: publication.responses.bytes,
+  }, options);
+  publication.handoff = writeCreateOrCompare(
+    join(outputDir, "handoff.json"),
+    handoff,
+  );
   return {
     ...advanced,
     publication,
     ledger_path: join(outputDir, "discovery-ledger.json"),
     responses_path: join(outputDir, "responses.json"),
+    handoff_path: join(outputDir, "handoff.json"),
   };
 }
 
@@ -6135,7 +6335,7 @@ async function main(argv) {
         current_candidate: readJson(candidatePath, "current candidate"),
       });
       console.log(
-        `wrote next ledger and response envelope to ${outputDir}`,
+        `wrote next ledger, response envelope, and handoff marker to ${outputDir}`,
       );
       return;
     }

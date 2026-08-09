@@ -513,7 +513,7 @@ import path from "node:path";
 import {
   existsSync,
   lstatSync,
-  readdirSync,
+  opendirSync,
   readFileSync,
 } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -526,6 +526,19 @@ const MAX_DIRECTORY_ENTRIES = 4096;
 const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
 const MAX_BOUND_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
+const MAX_HANDOFF_MARKER_BYTES = 256 * 1024;
+
+class DiscoveryScanFailure extends Error {
+  constructor(category, count = 1) {
+    super(category);
+    this.category = category;
+    this.count = count;
+  }
+}
+
+const failScan = (category, count = 1) => {
+  throw new DiscoveryScanFailure(category, count);
+};
 
 const readBounded = (file, label, maximum) => {
   const stat = lstatSync(file);
@@ -613,44 +626,59 @@ const canonicalContentDirectories = new Set([
   "verdicts",
 ]);
 
-const advanceVerificationHandoffFiles = new Set([
+const continuationHandoffFiles = new Set([
+  "handoff.json",
   "discovery-ledger.json",
   "responses.json",
 ]);
 
-const canonicalRemnants = (packet) => {
-  const entries = readdirSync(packet).filter((name) => name !== ".complete");
-  if (entries.length > MAX_DIRECTORY_ENTRIES) {
-    throw new Error(
-      `${packet}: packet has more than ${MAX_DIRECTORY_ENTRIES} top-level entries`,
-    );
-  }
-  const hasCompleteAdvanceVerificationHandoff =
-    entries.length === advanceVerificationHandoffFiles.size &&
-    [...advanceVerificationHandoffFiles].every((name) => {
-      if (!entries.includes(name)) return false;
-      try {
-        return lstatSync(path.join(packet, name)).isFile();
-      } catch {
-        return false;
+const scanTopLevel = (directory) => {
+  const result = {
+    total: 0,
+    complete: false,
+    handoff: false,
+    ledger: false,
+    responses: false,
+    handoffRegular: false,
+    ledgerRegular: false,
+    responsesRegular: false,
+    canonicalFiles: 0,
+    canonicalDirectories: 0,
+  };
+  const entries = opendirSync(directory);
+  try {
+    let entry;
+    while ((entry = entries.readSync()) !== null) {
+      result.total += 1;
+      if (result.total > MAX_DIRECTORY_ENTRIES) {
+        failScan("top-level-entry-limit", result.total);
       }
-    });
-  const remnants = [];
-  for (const name of entries) {
-    if (
-      hasCompleteAdvanceVerificationHandoff &&
-      advanceVerificationHandoffFiles.has(name)
-    ) {
-      continue;
+      const regular = entry.isFile();
+      if (entry.name === ".complete") {
+        result.complete = true;
+      } else if (entry.name === "handoff.json") {
+        result.handoff = true;
+        result.handoffRegular = regular;
+      } else if (entry.name === "discovery-ledger.json") {
+        result.ledger = true;
+        result.ledgerRegular = regular;
+      } else if (entry.name === "responses.json") {
+        result.responses = true;
+        result.responsesRegular = regular;
+      } else if (canonicalFileNames.has(entry.name)) {
+        result.canonicalFiles += 1;
+      } else if (canonicalContentDirectories.has(entry.name)) {
+        result.canonicalDirectories += 1;
+      }
     }
-    if (canonicalFileNames.has(name)) {
-      remnants.push(name);
-      continue;
+  } finally {
+    try {
+      entries.closeSync();
+    } catch (cause) {
+      if (cause.code !== "ERR_DIR_CLOSED") throw cause;
     }
-    if (!canonicalContentDirectories.has(name)) continue;
-    remnants.push(`${name}/`);
   }
-  return remnants.sort();
+  return result;
 };
 
 async function validateCompletedPacket(packet, markerPath) {
@@ -939,73 +967,133 @@ async function validateCompletedPacket(packet, markerPath) {
   return marker.phase === "discovery" && marker.lifecycle_id === lifecycle;
 }
 
+async function readContinuationHandoff(packet) {
+  const { validateAdvanceVerificationHandoff } =
+    await import(pathToFileURL(lifecycleHelper).href);
+  try {
+    const markerBytes = readBounded(
+      path.join(packet, "handoff.json"),
+      "continuation handoff marker",
+      MAX_HANDOFF_MARKER_BYTES,
+    );
+    const ledgerBytes = readBounded(
+      path.join(packet, "discovery-ledger.json"),
+      "continuation handoff ledger",
+      MAX_BOUND_ARTIFACT_BYTES,
+    );
+    const responsesBytes = readBounded(
+      path.join(packet, "responses.json"),
+      "continuation handoff responses",
+      MAX_BOUND_ARTIFACT_BYTES,
+    );
+    const marker = JSON.parse(markerBytes.toString("utf8"));
+    validateAdvanceVerificationHandoff(marker, {
+      ledger_bytes: ledgerBytes,
+      responses_bytes: responsesBytes,
+    });
+    return marker;
+  } catch {
+    failScan("invalid-handoff", 1);
+  }
+}
+
+const diagnostic = (category, count) => {
+  console.error(`discovery scan blocked: category=${category} count=${count}`);
+};
+
 if (!existsSync(panelRoot)) process.exit(0);
-const rootStat = lstatSync(panelRoot);
-if (!rootStat.isDirectory()) {
-  console.error(`${panelRoot}: panel scratch root is not a directory`);
-  process.exit(1);
-}
-const packets = readdirSync(panelRoot).sort();
-if (packets.length > MAX_DIRECTORY_ENTRIES) {
-  console.error(
-    `${panelRoot}: panel scratch root has more than ${MAX_DIRECTORY_ENTRIES} entries`,
-  );
-  process.exit(1);
-}
-for (const name of packets) {
-  const packet = path.join(panelRoot, name);
-  if (path.resolve(packet) === currentOut) continue;
-  let packetStat;
-  try {
-    packetStat = lstatSync(packet);
-  } catch (error) {
-    if (error.code === "ENOENT") continue;
-    throw error;
+try {
+  const rootStat = lstatSync(panelRoot);
+  if (!rootStat.isDirectory()) {
+    failScan("panel-root-not-directory", 1);
   }
-  if (!packetStat.isDirectory()) continue;
-  const markerPath = path.join(packet, ".complete");
-  let markerStat;
+  const packets = opendirSync(panelRoot);
+  let packetCount = 0;
   try {
-    markerStat = lstatSync(markerPath);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      const remnants = canonicalRemnants(packet);
-      if (remnants.length > 0) {
-        console.error(
-          `${packet}: incomplete packet retains canonical artifact content without .complete; ` +
-            `refusing discovery. Remaining canonical top-level categories ` +
-            `(${remnants.length}): [${remnants.join(", ")}]`,
-        );
-        process.exit(1);
+    let entry;
+    while ((entry = packets.readSync()) !== null) {
+      packetCount += 1;
+      if (packetCount > MAX_DIRECTORY_ENTRIES) {
+        failScan("panel-root-entry-limit", packetCount);
       }
-      continue;
+      if (!entry.isDirectory()) continue;
+      const packet = path.join(panelRoot, entry.name);
+      if (path.resolve(packet) === currentOut) continue;
+
+      const state = scanTopLevel(packet);
+      if (state.total === 1 && state.complete) continue;
+
+      if (state.complete) {
+        const markerPath = path.join(packet, ".complete");
+        let markerStat;
+        try {
+          markerStat = lstatSync(markerPath);
+        } catch {
+          failScan("invalid-completion-packet", 1);
+        }
+        if (!markerStat.isFile()) {
+          failScan("invalid-completion-packet", 1);
+        }
+        let blocksDiscovery;
+        try {
+          blocksDiscovery = await validateCompletedPacket(packet, markerPath);
+        } catch {
+          failScan("invalid-completion-packet", 1);
+        }
+        if (blocksDiscovery) {
+          failScan("completed-discovery", 1);
+        }
+        continue;
+      }
+
+      const continuationCount =
+        Number(state.handoff) + Number(state.ledger) + Number(state.responses);
+      const completeHandoff =
+        state.total === continuationHandoffFiles.size &&
+        state.handoff &&
+        state.ledger &&
+        state.responses &&
+        state.handoffRegular &&
+        state.ledgerRegular &&
+        state.responsesRegular;
+      if (completeHandoff) {
+        const marker = await readContinuationHandoff(packet);
+        if (marker.lifecycle_id === lifecycle) {
+          failScan("same-lifecycle-handoff", 1);
+        }
+        continue;
+      }
+      if (
+        !state.handoff &&
+        state.ledger &&
+        state.responses &&
+        state.total === 2
+      ) {
+        failScan("damaged-handoff", 2);
+      }
+      if (continuationCount > 0) {
+        failScan("partial-handoff", continuationCount);
+      }
+      const canonicalCount =
+        state.canonicalFiles + state.canonicalDirectories;
+      if (canonicalCount > 0) {
+        failScan("canonical-remnant", canonicalCount);
+      }
     }
-    throw error;
+  } finally {
+    try {
+      packets.closeSync();
+    } catch (cause) {
+      if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+    }
   }
-  const packetEntries = readdirSync(packet);
-  if (packetEntries.every((entry) => entry === ".complete")) continue;
-  if (!markerStat.isFile()) {
-    console.error(
-      `${packet}: packet artifacts exist but .complete is not a regular file`,
-    );
-    process.exit(1);
+} catch (cause) {
+  if (cause instanceof DiscoveryScanFailure) {
+    diagnostic(cause.category, cause.count);
+  } else {
+    diagnostic("scan-error", 1);
   }
-  let blocksDiscovery;
-  try {
-    blocksDiscovery = await validateCompletedPacket(packet, markerPath);
-  } catch (error) {
-    console.error(
-      `${packet}: completed packet validation failed: ${error.message}`,
-    );
-    process.exit(1);
-  }
-  if (blocksDiscovery) {
-    console.error(
-      `lifecycle "${lifecycle}" already has a completed discovery packet at ${packet}; ` +
-        "discovery is exactly once by lifecycle identity, independent of round prefix",
-    );
-    process.exit(1);
-  }
+  process.exit(1);
 }
 NODE
 }

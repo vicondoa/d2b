@@ -41,6 +41,7 @@ import {
   validateVerificationResults,
   writeVerificationArtifacts,
   writeAdvanceVerification,
+  validateAdvanceVerificationHandoff,
   writeDirectoryCreateOrCompare,
   writeCreateOrCompare,
 } from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
@@ -2236,22 +2237,70 @@ try {
   );
   const advanceOutput = join(root, "advance-handoff");
   const publishedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
+  const firstAdvanceBytes = Object.fromEntries(
+    ["discovery-ledger.json", "responses.json", "handoff.json"].map((name) => [
+      name,
+      readFileSync(join(advanceOutput, name)),
+    ]),
+  );
   const repeatedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
+  const repeatedAdvanceBytes = Object.fromEntries(
+    Object.keys(firstAdvanceBytes).map((name) => [
+      name,
+      readFileSync(join(advanceOutput, name)),
+    ]),
+  );
+  const advanceLedgerBytes = readFileSync(
+    join(advanceOutput, "discovery-ledger.json"),
+  );
+  const advanceResponseBytes = readFileSync(
+    join(advanceOutput, "responses.json"),
+  );
+  const advanceHandoff = JSON.parse(
+    readFileSync(join(advanceOutput, "handoff.json"), "utf8"),
+  );
   check(
-    "advance publishes ledger and responses independently",
+    "advance publishes ledger and responses independently then marks completeness",
     publishedAdvance.publication.ledger.created === true &&
       publishedAdvance.publication.responses.created === true &&
+      publishedAdvance.publication.handoff.created === true &&
       repeatedAdvance.publication.ledger.created === false &&
       repeatedAdvance.publication.responses.created === false &&
+      repeatedAdvance.publication.handoff.created === false &&
+      Object.keys(firstAdvanceBytes).every((name) =>
+        firstAdvanceBytes[name].equals(repeatedAdvanceBytes[name]),
+      ) &&
       readdirSync(advanceOutput).sort().join(",") ===
-        "discovery-ledger.json,responses.json",
+        "discovery-ledger.json,handoff.json,responses.json",
+  );
+  check(
+    "handoff binds the exact continuation envelopes and candidate address",
+    advanceHandoff.artifact_kind === "d2b-panel/continuation-handoff" &&
+      advanceHandoff.schema_version === 1 &&
+      advanceHandoff.lifecycle_id === advanced.ledger.lifecycle_id &&
+      advanceHandoff.program === advanced.ledger.program &&
+      advanceHandoff.wave === advanced.ledger.wave &&
+      advanceHandoff.candidate_id === advanced.ledger.candidate_id &&
+      advanceHandoff.content_id === advanced.ledger.content_id &&
+      advanceHandoff.snapshot_sha256 === advanced.ledger.snapshot_sha256 &&
+      advanceHandoff.ledger_sha256 === sha256(advanceLedgerBytes) &&
+      advanceHandoff.ledger_bytes === advanceLedgerBytes.length &&
+      advanceHandoff.responses_sha256 === sha256(advanceResponseBytes) &&
+      advanceHandoff.responses_bytes === advanceResponseBytes.length &&
+      validateAdvanceVerificationHandoff(advanceHandoff, {
+        ledger_bytes: advanceLedgerBytes,
+        responses_bytes: advanceResponseBytes,
+      }).marker.artifact_kind === advanceHandoff.artifact_kind,
   );
   rmSync(join(advanceOutput, "responses.json"));
   const partialAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
   check(
-    "advance compares an existing ledger and creates a missing response",
+    "advance compares existing files, recreates a missing response, and rechecks the marker",
     partialAdvance.publication.ledger.created === false &&
-      partialAdvance.publication.responses.created === true,
+      partialAdvance.publication.responses.created === true &&
+      partialAdvance.publication.handoff.created === false &&
+      readdirSync(advanceOutput).sort().join(",") ===
+        "discovery-ledger.json,handoff.json,responses.json",
   );
   const completedResponses = JSON.parse(stableStringify(advanced.responses));
   completedResponses.responses = completedResponses.responses.map((response) =>
@@ -3306,7 +3355,7 @@ try {
         advancedCliResponses.responses.find((response) => response.issue_id === "R1")
           .disposition === null &&
         readdirSync(cliAdvanceDirectory).sort().join(",") ===
-          "discovery-ledger.json,responses.json",
+          "discovery-ledger.json,handoff.json,responses.json",
       `${advanceVerificationResult.stdout}${advanceVerificationResult.stderr}`,
     );
     const repeatedAdvanceVerification = spawnSync("node", [
