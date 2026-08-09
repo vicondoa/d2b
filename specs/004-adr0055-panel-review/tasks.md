@@ -122,6 +122,23 @@ describe and enforce one selected-roster Discover-Fix-Verify lifecycle.
 
 ---
 
+## Phase 8: Convergence Corrections
+
+**Purpose**: Resolve R17-R19 and R25 under the operator clarification that
+panel artifacts are process evidence rather than a security boundary.
+
+- [ ] T028 Make discovery reviewers return exactly `engineer`, `signoff`, `summary`, and `recommendations`, keep verification's exact two-field extension, and keep `seat`, `complete`, `findings`, and the normalized verification fields adapter-produced in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`, `.github/skills/d2b-panel-round/scripts/stage-diffs.sh`, `scripts/copilot/test-panel-lifecycle.mjs`, and `scripts/copilot/test-stage-diffs.mjs`
+- [ ] T029 Admit every actionable discovery and late finding to the ledger, require complete processing before MINOR or NIT becomes non-blocking, and make only repository tree changes create a new candidate snapshot while disposition, acceptance, response, and evidence-only rounds retain the candidate digest triple in `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs` and `scripts/copilot/test-panel-lifecycle.mjs`
+- [ ] T030 Make `.complete` byte-bind the immutable reviewer packet and require every packet correction to use a new qualified round; replace generic flock, fsync, raw-syscall, procfs-pinning, retention, quota, and filesystem transaction machinery with simple create-or-compare publication, retaining atomic sibling-directory publication only for selected-seat verification requests and selected-seat delivery records in `.github/skills/d2b-panel-round/scripts/stage-diffs.sh`, `.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs`, `.github/skills/d2b-panel-round/scripts/make-records.mjs`, `scripts/copilot/test-stage-diffs.mjs`, `scripts/copilot/test-panel-lifecycle.mjs`, and `scripts/copilot/test-make-records.mjs`
+- [ ] T031 Update binding panel prompts and contributor process docs to call panel artifacts process evidence, preserve deterministic selected-roster and exact schemas, and reject authentication, privilege, secrecy, hostile-input, cryptographic-authority, or adversarial same-UID claims without changing ADR 0055's historical record
+- [ ] T032 Run the focused enforcing validation, prove the R17-R19/R25 corrections and planted negatives, then stage a new qualified immutable reviewer packet and obtain unanimous selected-roster verification
+
+**Checkpoint**: The panel documents feedback and fixes with exact immutable
+packets and deterministic schemas, without pretending that contributor scratch
+storage is a security boundary.
+
+---
+
 ## Dependencies and Execution Order
 
 ### Phase Dependencies
@@ -134,6 +151,8 @@ describe and enforce one selected-roster Discover-Fix-Verify lifecycle.
   Stories 1 and 2.
 - Delivery integration depends on all three user stories.
 - Validation and review depend on the complete atomic implementation.
+- Phase 8 depends on the initial work review and must complete before merge or
+  any final acceptance of the feature.
 
 ### Parallel Opportunities
 
@@ -165,6 +184,8 @@ validation.
 5. Integrate the selected roster with existing delivery validation and docs.
 6. Commit the atomic implementation, run focused enforcing validation, and run
    one finished-diff Discover-Fix-Verify panel.
+7. Apply the convergence corrections, rerun focused validation, and stage a new
+   qualified reviewer packet without rewriting a completed packet.
 
 The minimum useful behavior is User Story 1, but it is not independently
 mergeable because ADR 0055 requires atomic compatibility and delivery cutover.

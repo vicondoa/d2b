@@ -11,8 +11,8 @@ Implement ADR 0055 as one atomic Track B cutover of the standard Copilot panel
 skill. Keep one comprehensive discovery, let the orchestrator assign stable
 `R1`...`Rn` identifiers and merge one ledger, batch all implementation
 responses and self-verification, then run scoped verification. Verification
-admits only introduced regressions, unsafe late issues, and previously missed
-`BLOCKER` or `MAJOR` issues.
+records every actionable late issue. MINOR and NIT become non-blocking only
+after complete response and verification processing.
 
 Use one versioned selection table to choose a deterministic roster, including
 optional `build`, with Rust as a `software` profile. For every reviewed
@@ -23,6 +23,12 @@ delta and only widen the lifecycle roster. Generate the discovery, ledger,
 response, and per-seat verification artifacts automatically; fail on
 conflicting regeneration. Automatically import complete or partial legacy
 rounds, preserve raw findings and attribution, and keep metrics informational.
+Keep reviewer-produced verdicts distinct from adapter-produced normalized
+results. Treat a completed `.complete`-bound reviewer packet as immutable; any
+packet correction uses a new qualified round. Only repository tree changes
+create candidate snapshots, so disposition, acceptance, response, and
+evidence-only rounds retain the candidate digest triple.
+
 Keep workspace delivery schema version 2, but add the smallest panel-specific
 discriminator: current request, record, attestation, and the seal's embedded
 panel object carry `panel_format_version: 1`; legacy fixed-ten artifacts omit
@@ -30,10 +36,14 @@ it. Probe bounded JSON before selecting strict legacy or current DTOs. The
 current format supports the expanded role domain, while legacy remains exactly
 the historical ten roles including `rust`.
 
-This is contributor tooling only. It adds no service, daemon, broker surface,
+This is contributor tooling and process evidence only. It is not a privilege,
+authentication, secrecy, hostile-input, cryptographic-authority, or
+adversarial same-UID boundary. It adds no service, daemon, broker surface,
 socket, operating-system principal, authorization protocol, cryptographic
 receipt, privileged audit path, crate, Gas City implementation, or exhaustive
-crash/process machinery.
+crash/process machinery. Single files use create-or-compare. Atomic
+family-directory publication is limited to selected-seat verification
+requests and selected-seat delivery records.
 
 ## Spec Corrections
 
@@ -44,6 +54,11 @@ crash/process machinery.
 | Current delivery records require exactly the legacy ten roles. | `packages/xtask/src/delivery/panel.rs` and `make-records.mjs` each carry a separate fixed roster. No shared candidate-bound selection artifact exists. | Generate one lifecycle-selection artifact per candidate state, require both producers to consume it, populate the request's existing ordered `roles` and `record_files`, and validate records against that request-bound roster. |
 | Every delivery artifact currently uses workspace schema version `2` and no panel-specific discriminator. | Existing fixed-ten request, record, attestation, and seal panel objects cannot be distinguished safely from the selected-roster format if only their shared schema version is inspected. | Keep `DELIVERY_SCHEMA_VERSION = 2`; add `panel_format_version: 1` only to current panel request, record, attestation, and the seal's embedded panel object. Legacy fixed-ten DTOs omit it and retain `rust`. |
 | The checked prompt corpus enforces an exact 32-file shape with thirteen agent files, and ADR 0053's prompt-source specification describes the superseded twelve-role, `relevant`/`signoff`/`recommendations`/`prior_resolutions` verdict, held-reviewer, repeated-round lifecycle with no build seat. | `prompt-corpus.mjs`, its binding tests, and `docs/adr/specs/0053-panel-prompt-sources.md` agree with the current pre-ADR-0055 contract. | Replace or explicitly withdraw every superseded fixed-roster, four-field verdict, held-reviewer, repeated-round, and old verification contract in that source document; make the selected roster, complete discovery results, shared ledger and responses, and scoped verification operative; add build guidance; and pin the corpus and tests to 35 files with sixteen agent files in the same atomic cutover. |
+| The feature contract calls staged packet files editable scratch. | The schema-version-2 `.complete` marker already enumerates and byte-binds the canonical reviewer packet, and reuse validates those bytes. | Keep completed packets immutable. Any packet correction uses a new qualified round; do not edit bound inputs in place. |
+| The feature artifacts describe `seat`, `complete`, and `findings` as reviewer output. | Panel agents and staged prompts require discovery reviewers to return exactly `engineer`, `signoff`, `summary`, and `recommendations`; `panel-lifecycle.mjs` adapts that verdict into `seat`, `complete`, and `findings`. Verification similarly has a closed reviewer schema and a distinct normalized adapter schema. | Document both layers exactly and reject cross-layer field substitution. |
+| The plan says lower-severity feedback stays informational and out of the fix ledger. | The discovery adapter maps every recommendation into a source finding, and ledger validation requires complete exactly-once source mapping. | Put every actionable finding in the ledger. MINOR and NIT become non-blocking only after complete response and verification processing. |
+| The feature contract requires a non-empty fix delta for verification. | Lifecycle selection and verification already support an explicit empty fix-delta sentinel. | Only tree changes create a candidate snapshot. Disposition, acceptance, response, and evidence-only updates retain the candidate digest triple and use a new qualified round when packet bytes change. |
+| The current follow-up implementation adds root flocking, fsync, raw-syscall publication, procfs descriptor pinning, retained-byte quotas, and generic filesystem transaction helpers. | These mechanisms protect contributor-owned scratch from a same-UID adversary only by implication, while the panel is a bypassable process record. | R25's operator clarification supersedes that implementation direction. Delete the generic machinery; use simple create-or-compare and the two narrowly named atomic family-directory publications only. |
 
 ## Adjudication
 
@@ -53,6 +68,14 @@ panel artifacts as bypassable process records rather than authorization.
 Acceptance remains a plain recorded response under ordinary repository
 controls. The implementation shape-checks it but adds no identity verification,
 signature, GitHub API lookup, service, protected principal, or authority.
+
+R17-R19 are accepted as contract corrections: completed packets are immutable,
+reviewer verdicts and adapter results are different layers, all actionable
+findings enter the ledger, and snapshots track tree content only. R25 is
+accepted only with the operator clarification: make publication deterministic
+and complete for cooperative use, but reject generic lock, fsync, raw-syscall,
+procfs-pinning, retention, quota, and transaction frameworks. The panel process
+documents feedback and fixes; it is not a security boundary.
 
 ## Technical Context
 
@@ -65,8 +88,11 @@ skills and read-only agents, and existing xtask dependencies (`serde`,
 
 **Storage**: Versioned JSON and Markdown in `.scratch/panel/<lifecycle>/`,
 including immutable selections under
-`selections/<candidate-id>/<snapshot-sha256>.json`, plus the existing external
-candidate-addressed delivery state. No database or privileged storage.
+`selections/<candidate-id>/<snapshot-sha256>.json`, immutable completed
+reviewer packets, and the existing external candidate-addressed delivery
+state. Single files use create-or-compare. Only selected-seat verification
+requests and delivery records use atomic sibling-directory publication. No
+database, privileged storage, retention manager, or quota manager.
 
 **Testing**: Plain Node.js behavior tests through `make test-lint`, xtask unit
 tests, focused xtask clippy and formatting, Tier 0, changelog validation, and
@@ -87,9 +113,11 @@ selection-table-version, panel-format-version, family, or ordered-roster
 mismatch; missing seat results, mappings, or ledger responses; incomplete
 required justification, evidence, factual verification, or acceptance when
 required; conflicting bytes; roster narrowing; malformed legacy data;
-unrelated fix scope; or incomplete merge blockers. Every delivery JSON read is
-bounded before discriminator probing and strict DTO parsing. Cutover is one PR
-with no wave seal.
+unrelated fix scope; in-place completed-packet mutation; false candidate
+snapshot changes for process-only updates; or incomplete issue processing.
+Every delivery JSON read is bounded before discriminator probing and strict DTO
+parsing. Cutover is one PR with no wave seal. The implementation must not claim
+hostile-input or same-UID protection.
 
 **Scale/Scope**: Thirteen-seat pool, code/configuration floor of ten,
 documentation-only floor of eight, existing ten-seat legacy rounds, and
@@ -128,12 +156,13 @@ The check remains passed after design: both implementation slices are
 serialized, the cutover is atomic, and the expected binding docs are updated
 with the code. There is no constitutional exception.
 
-For this feature's implementation panel, only `CRITICAL` and `HIGH` defects
-that make the accepted ADR lifecycle unsafe or incorrect are merge-blocking
-recommendations. Lower-severity, optional, or scope-expanding feedback belongs
-in the summary and does not enter the fix ledger. The operator explicitly
-rejected scope-expanding feedback. Current verdict JSON continues to spell
-those values `critical` and `high`.
+For this feature's implementation panel, every actionable discovery finding
+enters the fix ledger. Unresolved `CRITICAL` and `HIGH` defects remain
+merge-blocking. `MEDIUM` and `LOW` findings, normalized to MINOR and NIT, are
+non-blocking only after complete response and verification processing.
+Non-actionable optional or scope-expanding feedback belongs in the summary and
+does not become a finding. Current verdict JSON continues to spell severity
+values `critical`, `high`, `medium`, and `low`.
 
 ## Project Structure
 
@@ -220,7 +249,10 @@ admitted by an implementation-time adjustment.
 spec004w1.lifecycle-selection
     -> spec004w1.delivery-docs
     -> focused validation
-    -> selected-roster work review
+    -> initial selected-roster work review
+    -> R17-R19/R25 convergence corrections
+    -> focused validation
+    -> new qualified selected-roster verification
     -> one Track B PR
 ```
 
@@ -237,7 +269,11 @@ The standard Copilot panel performs deterministic selection, one comprehensive
 discovery, one merged ledger, batched responses and self-verification, and
 scoped verification. Generated artifacts, complete and partial legacy import,
 monotonic roster widening, informational metrics, and selected-roster xtask
-delivery validation work together at merge.
+delivery validation work together at merge. Completed reviewer packets remain
+immutable process evidence, reviewer and adapter schemas stay distinct, all
+actionable findings receive complete processing, candidate snapshots track
+tree changes only, and publication stays within the narrow mechanisms defined
+by this plan.
 
 ### Slice 1 - Lifecycle and Selection Tooling
 
@@ -326,6 +362,24 @@ delivery validation work together at merge.
    roles. Preserve model and effort checks, candidate binding, distinct run
    provenance, and
    `signoff == recommendations.is_empty()`.
+10. Preserve the exact reviewer-produced discovery and verification verdict
+    schemas, then adapt them into their separate exact normalized result
+    schemas. Reject reviewer output containing adapter-only fields and reject
+    normalized output containing reviewer-only shape substitutions.
+11. Admit every actionable discovery and late finding to the ledger. Require a
+    complete response and passing verification status before MINOR or NIT
+    becomes non-blocking. Create a new candidate snapshot only when the
+    repository tree changes; process-only updates keep the candidate digest
+    triple.
+12. Treat `.complete` as the immutable reviewer-packet byte binding. Write it
+    last and refuse any later mismatch. A correction stages a new qualified
+    round and leaves the prior completed packet unchanged.
+13. Delete generic root flocking, fsync, raw-syscall publication, procfs
+    descriptor pinning, retention and quota enforcement, and filesystem
+    transaction helpers. Use simple create-or-compare for individual files.
+    Keep atomic sibling-directory publication only for the complete
+    selected-seat verification request family and complete selected-seat
+    delivery record family.
 
 ### Slice 2 - Delivery and Documentation Integration
 
@@ -399,6 +453,11 @@ delivery validation work together at merge.
    thirteen-agent assumptions to the exact 35-file and sixteen-agent current
    pool, as pinned by Slice 1's binding tests. Recapture only after all governed
    prompts and contributor documents are final.
+9. State consistently that panel artifacts are process evidence rather than a
+   privilege, authentication, secrecy, hostile-input, cryptographic-authority,
+   or adversarial same-UID boundary. Preserve deterministic selection and exact
+   schemas without presenting digests as signatures or roster validation as
+   identity authority.
 
 ### Validation
 
@@ -471,7 +530,10 @@ It does not merely prove that selected runtime paths stayed clean.
    build citation negatives, deterministic `R` identifiers, complete source
    mapping, all dispositions, conflict refusal, scope refusal, monotonic
    widening, late-issue admission/refusal, metrics including zero denominator,
-   prompt scope, and complete/partial repeated legacy import. Planted cases
+   prompt scope, and complete/partial repeated legacy import. They also prove
+   the exact reviewer and adapter schemas, all-actionable ledger admission,
+   complete MINOR/NIT processing, tree-only snapshot changes, and
+   `.complete`-bound packet immutability. Planted cases
    refuse a missing selected-seat discovery result, a missing ledger response,
    and incomplete required justification or evidence, while accepting an
    explicit complete zero-finding seat result.
@@ -507,13 +569,18 @@ It does not merely prove that selected runtime paths stayed clean.
    repeated-round, and old verification contracts; and a second lifecycle
    artifact generation produces identical bytes.
 7. The work review records `signoff: true` with empty recommendations for every
-   selected lifecycle seat; only unresolved `CRITICAL` or `HIGH` merge blockers
-   may prevent that state.
+   selected lifecycle seat. Every actionable finding is in the ledger;
+   unresolved `CRITICAL` or `HIGH` issues block, and MINOR or NIT is
+   non-blocking only after complete processing.
 8. With `BASE="$(git merge-base origin/v3 HEAD)"`, the changed-path allowlist
    guard above exits zero. Any changed path not in the expanded literal set
    fails the wave.
 9. The branch opens one Track B PR for `spec004w1`; there is no delivery seal
    and no partial-cutover PR.
+10. Source checks find no generic flock, fsync, raw-syscall, procfs-pinning,
+    retention, quota, or filesystem transaction machinery in the panel
+    implementation. Behavior tests prove create-or-compare for individual
+    files and atomic publication only for the two named directory families.
 
 ## Concrete Failures and Guards
 
@@ -527,15 +594,18 @@ It does not merely prove that selected runtime paths stayed clean.
 | A factually verified Invalid or Withdrawn MAJOR is wrongly held for acceptance, or an unresolved Intentionally rejected or Deferred MAJOR passes without it. | Severity-by-disposition tests positively cover resolved factual responses without acceptance and require recorded acceptance only for the two unresolved dispositions. |
 | A malformed acceptance object approves an unresolved Intentionally rejected or Deferred MAJOR. | Planted structural, type, content, and whitespace negatives for each disposition refuse missing acceptance, non-object values, missing or extra fields, non-string fields, blank strings, and out-of-enum capacity. |
 | A fix silently removes a reviewer. | Recorded set-union validation requires monotonic roster widening. |
-| A late style issue restarts discovery. | Verification admission rejects non-blocking late issues. |
+| A MINOR or NIT finding is omitted as informational. | Complete source mapping, response coverage, and verification-status coverage require it in the ledger through complete processing. |
 | Partial legacy import loses completed work or relabels Rust attribution. | Lifecycle import fixtures assert raw-byte preservation, source identity stability, and Rust-profile responsibility. |
 | xtask accepts a global default instead of the selected roster. | Request-bound variable-roster tests reject every missing or extra record. |
 | A malformed current artifact falls back to legacy parsing, or a current record is mixed into a legacy request. | Bounded discriminator probes select exactly one strict DTO family; malformed, unknown, and mixed-family fixture negatives fail without fallback. |
 | Delivery compatibility grows a new workspace schema or silently drops legacy `rust`. | Serialized-field assertions keep workspace schema version 2, and the compact legacy fixture requires exact fixed-ten ordering including `rust`. |
 | The prompt-source document adds `build` but leaves old roster, verdict, held-seat, repeated-round, or verification requirements operative. | Focused prompt-source contract checks require the current lifecycle markers and reject the superseded operative clauses unless explicitly withdrawn. |
 | Maintainer acceptance becomes an identity or authorization boundary. | Contract tests validate only the plain response shape; the owned-file set has no signature, GitHub API, service, principal, or authority surface. |
+| A contributor edits a completed packet in place. | `.complete` byte validation refuses reuse and directs the contributor to a new qualified round. |
+| An evidence-only update mints a false candidate snapshot. | Candidate tests require the digest triple to change only when the repository tree changes. |
+| Contributor scratch machinery is presented as same-UID security. | Source guards reject generic lock, fsync, raw-syscall, procfs-pinning, retention, quota, and transaction helpers; only the two named family-directory publications remain atomic. |
 | A changed runtime or other undeclared file escapes a narrow denylist. | The final literal changed-path allowlist fails on every undeclared path. |
-| Review expands the accepted scope. | Only `CRITICAL` and `HIGH` merge blockers enter implementation recommendations; all other feedback stays informational. |
+| Review expands the accepted scope. | Every actionable finding enters the ledger, while non-actionable optional or scope-expanding feedback stays in the summary. |
 
 ## Complexity Tracking
 

@@ -1,11 +1,17 @@
 # Panel Artifact Contract
 
-This contract defines contributor-tooling files only. It adds no protected
-authority, service, principal, socket, capability, receipt resolver, or
-migration controller. Maintainer acceptance is a plain recorded response under
-ordinary repository controls. Its claimed username and capacity are not
-verified through signatures, GitHub API lookup, another service, or an
-authoritative identity mechanism.
+This contract defines contributor-tooling process evidence only. Panel
+artifacts are not a privilege, authentication, secrecy, hostile-input, or
+adversarial same-UID security boundary. Digests and deterministic bytes detect
+workflow mistakes and conflicting regeneration; they are not signatures,
+cryptographic authority, or protection from a process that can already modify
+the contributor's files.
+
+The contract adds no protected authority, service, principal, socket,
+capability, receipt resolver, or migration controller. Maintainer acceptance
+is a plain recorded response under ordinary repository controls. Its claimed
+username and capacity are not verified through signatures, GitHub API lookup,
+another service, or an authoritative identity mechanism.
 
 ## Version namespaces
 
@@ -53,8 +59,15 @@ The strict `PanelSelectionV1` DTO has these closed fields:
 - `roster`: the ordered lifecycle roster after monotonic union
 
 Identical selection inputs render identical bytes, and conflicting regeneration
-is refused. Selection identity remains lifecycle-tooling state and is not
-copied into delivery artifacts.
+is refused. A selection is process evidence, not cryptographic authority.
+Selection identity remains lifecycle-tooling state and is not copied into
+delivery artifacts.
+
+Only a repository tree change creates a new candidate snapshot and therefore a
+new candidate-bound selection. A disposition change, acceptance update,
+response correction, or evidence-only update keeps the existing candidate
+digest triple. Such an update still requires a new qualified review round, but
+it does not pretend that the reviewed tree changed.
 
 The two consumers are explicit:
 
@@ -83,26 +96,47 @@ canonical-artifact disagreement fails before output is written.
 The discovery request binds the full candidate, validation evidence, selected
 roster, seat focus, and comprehensive discovery instruction.
 
-Each selected seat must produce a result with:
+Each selected reviewer returns exactly this discovery verdict layer:
+
+- `engineer`: the selected seat
+- `signoff`: true if and only if `recommendations` is empty
+- `summary`: a non-blank string
+- `recommendations`: an ordered array that may be empty
+
+Each recommendation has exactly `severity`, `where`, `what`, `why`, and `fix`.
+The adapter validates the reviewer verdict and produces exactly this normalized
+per-seat discovery result layer:
 
 - `seat`
 - `complete: true`
-- `findings`, an ordered array that may be empty
+- `findings`, an ordered array derived from `recommendations`
 
-Every finding records the seat, source ordinal, severity, impact, and
-recommendation. A missing selected-seat result is an error. The explicit
-positive result `{ "complete": true, "findings": [] }` is accepted and is
-never inferred from absence.
+Every normalized finding records the seat, source ordinal, raw text,
+attribution, normalized severity, impact, and recommendation. Reviewers do not
+return `seat`, `complete`, or `findings`; those fields exist only after the
+adapter succeeds. A missing selected-seat verdict is an error. A reviewer
+verdict with an empty `recommendations` array adapts to the explicit positive
+result `{ "complete": true, "findings": [] }`; absence is never treated as
+zero findings.
+
+Verification reviewers return the same four base fields plus exactly
+`verified_issue_statuses` and `late_findings`. The verification adapter emits
+`seat`, `complete`, `summary`, `signoff`, `verified_issue_statuses`,
+`blocking_recommendations`, `recommendations`, and `late_findings`. These
+reviewer and adapter schemas are distinct and closed.
 
 ## Ledger
 
 The ledger records stable `R` identifiers and complete source-to-issue
-mappings. The orchestrator supplies deduplication groups; generation validates
+mappings. Every actionable discovery finding enters the ledger regardless of
+severity. The orchestrator supplies deduplication groups; generation validates
 complete, exactly-once mapping and deterministic identifier order.
 
 Every ledger identifier must have exactly one implementation response.
 Verification preparation refuses a missing response instead of dropping the
-issue.
+issue. MINOR and NIT are non-blocking only after they have a complete supported
+response and verification has processed them; severity never permits omission
+from the ledger or response envelope.
 
 ## Implementation responses and approval
 
@@ -151,9 +185,11 @@ Approval applies this matrix before reviewer sign-off:
 Verification artifacts carry every response, the applicable validation and
 self-review evidence, the latest delta, full candidate context, prior status,
 and seat obligations. After discovery, verification preparation requires an
-explicit current candidate, prior selection, non-empty actual delta, and
-non-empty full candidate context. `signoff` remains true exactly when blocking
-recommendations are empty.
+explicit current candidate, prior selection, explicit actual delta, and
+non-empty full candidate context. The actual delta may have no changed paths
+when only dispositions, acceptance, responses, or evidence changed. Only
+changed tree paths create a new candidate snapshot. `signoff` remains true
+exactly when blocking recommendations are empty.
 
 The approval artifact is bound to the exact UTF-8 bytes of the immutable
 discovery ledger, implementation response envelope, and adapted
@@ -168,15 +204,35 @@ selected seat. A final issue status is passing only when it is exactly
 `resolved` or `verified`; every other status is blocking even when the verdict
 claims sign-off. The status map must cover every ledger issue exactly once.
 
-Generated verification requests are built as a complete family in a sibling
-staging directory, preflighted there, and protected for publication by a
-separate exclusive sibling claim. While the destination is absent, one atomic
-directory rename exposes the complete family. Existing output is accepted only
-when it is a complete, byte-identical family. Record generation uses the same
-directory publication rule. No lock, fsync protocol, service, daemon, or broad
-transaction framework is part of this contract. Editable stage-diffs scratch
-files remain per-file; staging stops at the first conflict and tells the
-operator to restore the expected bytes or use a new review id.
+## Reviewer packet completion and publication
+
+The completed `.complete` marker byte-binds the immutable reviewer packet. Its
+artifact digest and byte-count maps enumerate the reviewer-visible packet
+files. The marker is written last. Before it exists, the directory is
+incomplete and non-authoritative. After it exists, every enumerated packet file
+must continue to match its bound bytes. Evidence, reviewer notes, agent
+definitions, requests, diffs, selections, and other bound inputs are not
+editable scratch.
+
+Any reviewer packet content change requires a new qualified round identifier
+and a new `.complete` marker. The prior completed packet remains unchanged.
+This applies even when the tree candidate is unchanged because only a
+disposition, response, acceptance, or evidence changed.
+
+Ordinary single-file outputs, including selection files and `.complete`, use
+simple create-or-compare publication: create an absent destination, accept an
+existing byte-identical file, and refuse an existing conflicting file. The
+only atomic family-directory publication is for the selected-seat verification
+request family and the selected-seat delivery record family. Each family is
+built in a unique sibling directory and renamed to an absent destination;
+existing output is accepted only when membership and bytes match exactly.
+
+This is a cooperative contributor workflow, not a filesystem security or
+durability protocol. It deliberately rejects generic lock management, fsync
+protocols, raw-syscall wrappers, procfs descriptor pinning, retention or quota
+systems, and filesystem transaction frameworks. No such machinery may be
+added to claim adversarial same-UID protection. A conflict fails with the
+remedy to restore the expected bytes or use a new qualified round.
 
 Final metrics validate the canonical selection, ledger, response envelope, and
 adapted verification-result bytes. They require complete verification and emit
