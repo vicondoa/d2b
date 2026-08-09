@@ -19,10 +19,10 @@
   discovery request, while `adapt-discovery` now consumes an exact complete
   per-seat verdict directory and binds its output to the lifecycle, candidate,
   and selection bytes.
-- Added a cumulative immutable panel-packet-root quota of 1 GiB that operators
-  may lower but not raise. The schema-version `2` `.complete` marker records
-  the round address and selection/diff digests, then byte-binds every canonical
-  artifact through `artifact_sha256` and `artifact_bytes` maps.
+- Added bounded input reads and create-or-compare publication for panel
+  artifacts. Schema-version `3` completion markers byte-bind the canonical
+  packet including selected agent definitions; schema-version `2` predecessor
+  packets remain readable with their original exact artifact set.
 - Added the canonical blocked-verification continuation handoff, which
   promotes admitted late findings and nonpassing issue responses into one
   immutable next ledger/response family without reopening discovery.
