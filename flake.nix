@@ -1505,10 +1505,10 @@
               closure_count=$(${pkgs.coreutils}/bin/wc -l < ${closureInfo}/store-paths)
               closure_count=$(${pkgs.coreutils}/bin/tr -d '[:space:]' <<< "$closure_count")
               closure_sha=$(${pkgs.coreutils}/bin/sha256sum ${closureInfo}/store-paths | ${pkgs.gawk}/bin/awk '{print $1}')
-              test "$closure_count" -eq ${toString row.closureCount} \
-                || fail D2B-BZLARTIFACT-CLOSURE
-              test "$closure_sha" = ${lib.escapeShellArg row.closureSha256} \
-                || fail D2B-BZLARTIFACT-CLOSURE
+              if test "$closure_count" -ne ${toString row.closureCount} \
+                || test "$closure_sha" != ${lib.escapeShellArg row.closureSha256}; then
+                fail "D2B-BZLARTIFACT-CLOSURE-MEASURE-${system}-${artifact}-$closure_count-$closure_sha"
+              fi
               policy_sha=$(${pkgs.coreutils}/bin/sha256sum \
                 ${lib.escapeShellArg "${policyRoot}/policy/metadata.json"} \
                 | ${pkgs.gawk}/bin/awk '{print $1}')
