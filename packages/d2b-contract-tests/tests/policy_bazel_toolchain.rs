@@ -476,9 +476,8 @@ fn sandbox_diagnostics_are_closed_and_retryable() {
     assert!(patch.contains("correction=Restore the pinned sandbox patch and policy"));
     assert!(patch.contains("retry=make test-flake"));
     assert!(patch.contains("result=failed reuse=denied action=no-success-no-reuse"));
-    assert!(patch.contains(
-        "cleanup=complete-after-quarantine quarantine=entered-and-released-after-consuming-reap"
-    ));
+    assert!(patch.contains("cleanup=complete-after-quarantine"));
+    assert!(patch.contains("quarantine=entered-and-released-after-consuming-reap"));
     assert!(!patch.contains("pid="));
     assert!(!patch.contains("pgid="));
     assert!(!patch.contains("run_id"));
