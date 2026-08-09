@@ -13,10 +13,13 @@ import {
   createDiscoveryResultArtifact,
   createResponseTemplate,
   createSelection,
+  createVerificationResultArtifact,
+  continueLegacyImport,
   directoryTreeUsageNoFollow,
   evaluateApproval,
   importLegacyRound,
   lateFindingAdmission,
+  LATE_FINDING_SCHEMA,
   mergeDiscoveryLedger,
   prepareVerification,
   readDirectoryNoFollow,
@@ -28,9 +31,11 @@ import {
   stableStringify,
   validateDiscoveryResults,
   validateDiscoveryResultArtifact,
+  validateVerificationResultArtifact,
   validateCandidateAgainstSelection,
   validateFixScope,
   validateMonotonicRoster,
+  validateSelectionAgainstTable,
   validateResponses,
   validateSelection,
   validateSelfVerification,
@@ -523,8 +528,8 @@ function candidate(overrides = {}) {
   return {
     program: "SPEC004",
     wave: "spec004w1",
-    candidate_id: "candidate-1",
-    content_id: "content-1",
+    candidate_id: "b".repeat(64),
+    content_id: "c".repeat(64),
     snapshot_sha256: "a".repeat(64),
     changed_paths: ["src/panel.js"],
     ...overrides,
@@ -587,7 +592,7 @@ function makeSelection(root, overrides = {}) {
   return createSelection(
     {
       ...candidate(overrides),
-      lifecycle_id: "spec004w1",
+      lifecycle_id: overrides.lifecycle_id ?? "spec004w1",
       phase: overrides.phase ?? "discovery",
     },
     { root },
@@ -603,8 +608,8 @@ function makeLedger() {
     selection_table_version: 2,
     program: "SPEC004",
     wave: "spec004w1",
-    candidate_id: "candidate-1",
-    content_id: "content-1",
+    candidate_id: "b".repeat(64),
+    content_id: "c".repeat(64),
     snapshot_sha256: "a".repeat(64),
     roster: [
       "software",
@@ -987,13 +992,58 @@ try {
   check(
     "selection is rendered at the candidate-bound lifecycle address",
     initial.path.endsWith(
-      "/.scratch/panel/spec004w1/selections/candidate-1/" +
+      "/.scratch/panel/spec004w1/selections/" +
+        `${"b".repeat(64)}/` +
       `${"a".repeat(64)}.json`,
     ),
   );
   check("selection schema version is one", initial.selection.schema_version === 1);
   check("selection table version is two", initial.selection.selection_table_version === 2);
-  check("selection is readable after rendering", readSelection(initial.path).candidate_id === "candidate-1");
+  check(
+    "selection is readable after rendering",
+    readSelection(initial.path).candidate_id === "b".repeat(64),
+  );
+  rejects(
+    "selection producer rejects a non-digest candidate identifier",
+    () => makeSelection(root, { candidate_id: "candidate-1" }),
+    /candidate_id.*64-character hexadecimal/,
+  );
+  rejects(
+    "selection producer rejects a non-digest content identifier",
+    () => makeSelection(root, { content_id: "content-1" }),
+    /content_id.*64-character hexadecimal/,
+  );
+  rejects(
+    "selection producer mirrors qualified program and wave validation",
+    () => makeSelection(root, { wave: "otherw1" }),
+    /disagrees with candidate program|candidate wave/,
+  );
+  rejects(
+    "selection producer applies the Rust bounded lifecycle rule",
+    () => makeSelection(root, { lifecycle_id: "x".repeat(4097) }),
+    /at most 4096 bytes/,
+  );
+  const duplicateProfileSelection = {
+    ...initial.selection,
+    profiles: {
+      ...initial.selection.profiles,
+      software: [...initial.selection.profiles.software, "javascript"],
+    },
+  };
+  rejects(
+    "selection producer rejects duplicate profiles",
+    () => validateSelection(duplicateProfileSelection),
+    /repeats profile/,
+  );
+  rejects(
+    "one lifecycle cannot create a second discovery selection",
+    () => createSelection({
+      ...candidate({ snapshot_sha256: "9".repeat(64) }),
+      lifecycle_id: "spec004w1",
+      phase: "discovery",
+    }, { root }),
+    /already has a discovery selection/,
+  );
   check(
     "identity-only current candidates remain valid staged addresses",
     validateCandidateAgainstSelection(initial.selection, {
@@ -1026,6 +1076,25 @@ try {
   );
   check("build fix widening keeps every prior seat", initial.selection.roster.every((seat) => widened.selection.roster.includes(seat)));
   check("build fix widening adds build", widened.selection.roster.includes("build"));
+  const floorHole = {
+    ...initial.selection,
+    roster: [
+      ...initial.selection.roster.filter((seat) => seat !== "reliability"),
+      "build",
+    ],
+    profiles: {
+      ...Object.fromEntries(
+        Object.entries(initial.selection.profiles)
+          .filter(([seat]) => seat !== "reliability"),
+      ),
+      build: [],
+    },
+  };
+  rejects(
+    "selection validation requires canonical deterministic floor fill",
+    () => validateSelectionAgainstTable(floorHole),
+    /canonical floor-fill seat.*reliability/,
+  );
   const nestedSelection = createSelection(
     {
       ...candidate({
@@ -1122,7 +1191,7 @@ try {
         snapshot_sha256: "6".repeat(64),
         changed_paths: ["src\\panel.js"],
       }),
-      lifecycle_id: "spec004w1",
+      lifecycle_id: "spec004w1-backslash",
       phase: "discovery",
     },
     { root },
@@ -1453,15 +1522,16 @@ try {
     /not bound to the exact selection bytes/,
   );
   const staleCandidate = candidate({
-    candidate_id: "candidate-2",
-    content_id: "content-2",
+    candidate_id: "d".repeat(64),
+    content_id: "e".repeat(64),
     snapshot_sha256: "b".repeat(64),
   });
-  const staleCandidateSelection = createSelection({
-    ...staleCandidate,
-    lifecycle_id: initial.selection.lifecycle_id,
-    phase: "discovery",
-  }, { root: join(root, "stale-candidate-selection") }).selection;
+  const staleCandidateSelection = {
+    ...initial.selection,
+    candidate_id: staleCandidate.candidate_id,
+    content_id: staleCandidate.content_id,
+    snapshot_sha256: staleCandidate.snapshot_sha256,
+  };
   check(
     "stale candidate negative keeps the same roster",
     staleCandidateSelection.roster.join(",") ===
@@ -2024,6 +2094,80 @@ process.stdout.write("attacker-controlled timing\\n");
       }).approved === true,
     );
   }
+  const fixedMajor = {
+    issue_id: "R1",
+    disposition: "Fixed",
+    changed_surface: ["src/panel.js"],
+    justification: "The MAJOR was fixed.",
+    evidence: "focused test",
+  };
+  check(
+    "fixed MAJOR is approvable",
+    evaluateApproval({
+      selection: initial.selection,
+      ledger: majorLedger,
+      responses: [fixedMajor],
+      verification_results: allVerificationResults(
+        initial.selection.roster,
+        {},
+        majorLedger,
+      ),
+    }).approved === true,
+  );
+  const rejectedBlocker = {
+    issue_id: "R1",
+    disposition: "Intentionally rejected",
+    justification: "The BLOCKER is intentionally rejected for this process test.",
+  };
+  const blockerLedger = {
+    ...majorLedger,
+    sources: [{ ...majorLedger.sources[0], severity: "BLOCKER" }],
+    issues: [{ ...majorLedger.issues[0], severity: "BLOCKER" }],
+  };
+  check(
+    "Intentionally rejected BLOCKER remains blocking",
+    evaluateApproval({
+      selection: initial.selection,
+      ledger: blockerLedger,
+      responses: [rejectedBlocker],
+      verification_results: allVerificationResults(
+        initial.selection.roster,
+        {},
+        blockerLedger,
+      ),
+    }).approved === false,
+  );
+  rejects(
+    "unverified Withdrawn MAJOR is refused before approval",
+    () => validateResponses(majorLedger, [{
+      issue_id: "R1",
+      disposition: "Withdrawn",
+      justification: "The report was withdrawn.",
+      evidence: "source inspection",
+    }]),
+    /verified_factual_status/,
+  );
+  const repositoryAcceptedMajor = {
+    ...acceptedMajor,
+    acceptance: {
+      accepter: "repository-maintainer",
+      capacity: "repository maintainer",
+      justification: "The maintainer accepts the documented residual risk.",
+    },
+  };
+  check(
+    "repository-maintainer acceptance approves Deferred MAJOR",
+    evaluateApproval({
+      selection: initial.selection,
+      ledger: majorLedger,
+      responses: [repositoryAcceptedMajor],
+      verification_results: allVerificationResults(
+        initial.selection.roster,
+        {},
+        majorLedger,
+      ),
+    }).approved === true,
+  );
   const acceptanceMutations = [
     undefined,
     null,
@@ -2041,12 +2185,18 @@ process.stdout.write("attacker-controlled timing\\n");
     { accepter: "x", capacity: " ", justification: "x" },
     { accepter: "x", capacity: "repository owner", justification: "x" },
   ];
-  for (const [index, acceptance] of acceptanceMutations.entries()) {
-    rejects(
-      `malformed acceptance ${index + 1} is refused`,
-      () => validateResponses(majorLedger, [{ ...acceptedMajor, acceptance }]),
-      /acceptance|capacity/,
-    );
+  for (const disposition of ["Deferred", "Intentionally rejected"]) {
+    for (const [index, acceptance] of acceptanceMutations.entries()) {
+      rejects(
+        `malformed ${disposition} acceptance ${index + 1} is refused`,
+        () => validateResponses(majorLedger, [{
+          ...acceptedMajor,
+          disposition,
+          acceptance,
+        }]),
+        /acceptance|capacity/,
+      );
+    }
   }
   rejects(
     "Intentionally rejected without acceptance is refused at approval",
@@ -2087,22 +2237,74 @@ process.stdout.write("attacker-controlled timing\\n");
     () => validateFixScope({ latest_delta_paths: ["src/unrelated.js"], allowed_paths: ["src/panel.js"] }),
     /unrelated paths|new lifecycle/,
   );
+  check(
+    "late-finding schema publishes the required admission fields",
+    LATE_FINDING_SCHEMA.required.includes("admission_reason") &&
+      LATE_FINDING_SCHEMA.required.includes("seat") &&
+      LATE_FINDING_SCHEMA.text.includes("raw_text") &&
+      LATE_FINDING_SCHEMA.fix.includes("recommendation"),
+  );
+  rejects(
+    "late findings reject the old flag and category aliases",
+    () => lateFindingAdmission({
+      severity: "MAJOR",
+      seat: "software",
+      introduced_regression: true,
+      category: "correctness",
+      raw_text: "An unsafe late finding.",
+      impact: "Approval is unsafe.",
+      recommendation: "Fix it.",
+    }),
+    /unknown field/,
+  );
+  check(
+    "late findings accept the documented description and fix spellings",
+    lateFindingAdmission({
+      admission_reason: "unsafe-merge-risk",
+      severity: "high",
+      seat: "software",
+      description: "An unsafe late finding.",
+      impact: "Approval is unsafe.",
+      fix: "Fix it.",
+    }).recommendation === "Fix it.",
+  );
   rejects(
     "pre-existing late NIT is refused",
-    () => lateFindingAdmission({ severity: "NIT", category: "style", previously_missed: true }),
+    () => lateFindingAdmission({
+      admission_reason: "previously-missed-merge-risk",
+      severity: "NIT",
+      seat: "software",
+      raw_text: "A pre-existing style issue.",
+      impact: "It is not a merge risk.",
+      recommendation: "Record it without reopening discovery.",
+    }),
     /not admissible/,
   );
   check(
     "introduced late NIT is admitted as a non-discovery regression",
-    lateFindingAdmission({ severity: "NIT", introduced_regression: true }).late === true,
+    lateFindingAdmission({
+      admission_reason: "introduced-regression",
+      severity: "NIT",
+      seat: "software",
+      raw_text: "A new style regression.",
+      impact: "The fix introduced a regression.",
+      recommendation: "Correct the regression.",
+    }).late === true,
   );
   check(
     "previously missed late MAJOR is admitted",
-    lateFindingAdmission({ severity: "MAJOR", previously_missed: true }).late === true,
+    lateFindingAdmission({
+      admission_reason: "previously-missed-merge-risk",
+      severity: "MAJOR",
+      seat: "software",
+      raw_text: "A missed merge-risk issue.",
+      impact: "Approval would be unsafe.",
+      recommendation: "Fix the issue.",
+    }).late === true,
   );
   const appended = appendLateFindings(responseInput, [{
+    admission_reason: "previously-missed-merge-risk",
     severity: "MAJOR",
-    previously_missed: true,
     seat: "software",
     raw_text: "A late unsafe issue.",
     impact: "Approval would be unsafe.",
@@ -2112,8 +2314,8 @@ process.stdout.write("attacker-controlled timing\\n");
   rejects(
     "re-admitting the same late source is refused",
     () => appendLateFindings(appended, [{
+      admission_reason: "previously-missed-merge-risk",
       severity: "MAJOR",
-      previously_missed: true,
       seat: "software",
       raw_text: "A late unsafe issue.",
       impact: "Approval would be unsafe.",
@@ -2166,7 +2368,7 @@ process.stdout.write("attacker-controlled timing\\n");
     self_verification: selfVerification,
     current_candidate: candidate({
       snapshot_sha256: "c".repeat(64),
-      content_id: "content-1",
+      content_id: "c".repeat(64),
     }),
     prior_selection: initial.selection,
     prior_verdicts: priorVerdicts,
@@ -2191,7 +2393,7 @@ process.stdout.write("attacker-controlled timing\\n");
       self_verification: selfVerification,
       current_candidate: candidate({
         snapshot_sha256: "c".repeat(64),
-        content_id: "content-1",
+        content_id: "c".repeat(64),
       }),
       prior_selection: initial.selection,
       previous_status: priorVerdicts[verificationInput.requests[0].seat],
@@ -2223,6 +2425,60 @@ process.stdout.write("attacker-controlled timing\\n");
     "actual verdict JSON adapts to explicit verification status",
     actualVerificationVerdict.verified_issue_statuses.R1 === "resolved" &&
       actualVerificationVerdict.signoff === true,
+  );
+  const verificationLedger = {
+    ...responseInput,
+    snapshot_sha256: "c".repeat(64),
+  };
+  const verificationArtifact = createVerificationResultArtifact({
+    selection: verificationSelection.selection,
+    selection_bytes: stableStringify(verificationSelection.selection),
+    ledger: verificationLedger,
+    ledger_bytes: stableStringify(verificationLedger),
+    current_candidate: candidate({
+      snapshot_sha256: "c".repeat(64),
+      content_id: "c".repeat(64),
+    }),
+    results: allVerificationResults(
+      verificationSelection.selection.roster,
+      {},
+      verificationLedger,
+    ),
+  });
+  rejects(
+    "verification rejects selection bytes that decode to another selection object",
+    () => validateVerificationResultArtifact(verificationArtifact, {
+      selection: verificationSelection.selection,
+      selection_bytes: stableStringify({
+        ...verificationSelection.selection,
+        lifecycle_id: "foreign-lifecycle",
+      }),
+      ledger: verificationLedger,
+      ledger_bytes: stableStringify(verificationLedger),
+    }),
+    /exact JSON bytes|staged artifact/,
+  );
+  rejects(
+    "verification rejects a foreign lifecycle ledger",
+    () => createVerificationResultArtifact({
+      selection: verificationSelection.selection,
+      selection_bytes: stableStringify(verificationSelection.selection),
+      ledger: { ...verificationLedger, lifecycle_id: "foreign-lifecycle" },
+      ledger_bytes: stableStringify({
+        ...verificationLedger,
+        lifecycle_id: "foreign-lifecycle",
+      }),
+      current_candidate: candidate({
+        snapshot_sha256: "c".repeat(64),
+        content_id: "c".repeat(64),
+      }),
+      results: allVerificationResults(
+        verificationSelection.selection.roster,
+        {},
+        verificationLedger,
+      ),
+    }),
+    /ledger and selection lifecycle_id disagree/,
   );
   const malformedCurrentVerificationVerdicts = [
     [
@@ -2344,7 +2600,7 @@ process.stdout.write("attacker-controlled timing\\n");
   );
   const noOpCandidate = candidate({
     snapshot_sha256: "d".repeat(64),
-    content_id: "content-1",
+    content_id: "c".repeat(64),
   });
   const noOpVerificationSelection = createSelection(
     {
@@ -2461,8 +2717,9 @@ process.stdout.write("attacker-controlled timing\\n");
           verified_issue_statuses: verificationStatuses,
           late_findings: seat === "software"
             ? [{
+                admission_reason: "introduced-regression",
                 severity: "MAJOR",
-                introduced_regression: true,
+                seat: "software",
                 raw_text: "A late blocking regression.",
                 impact: "The current candidate is unsafe.",
                 recommendation: "Fix the regression.",
@@ -2478,19 +2735,47 @@ process.stdout.write("attacker-controlled timing\\n");
       lateApproval.approved === false &&
       lateApproval.ledger.issues.at(-1).late === true,
   );
+  const introducedNitResults = Object.fromEntries(
+    verificationSelection.selection.roster.map((seat) => [
+      seat,
+      {
+        ...allVerificationResults(verificationSelection.selection.roster).software,
+        seat,
+        verified_issue_statuses: verificationStatuses,
+        late_findings: seat === "software"
+          ? [{
+              admission_reason: "introduced-regression",
+              severity: "NIT",
+              seat: "software",
+              raw_text: "A newly introduced NIT regression.",
+              impact: "The latest fix is not clean.",
+              recommendation: "Correct the introduced regression.",
+            }]
+          : [],
+      },
+    ]),
+  );
+  const introducedNitApproval = evaluateApproval({
+    selection: verificationSelection.selection,
+    ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) },
+    responses,
+    verification_results: introducedNitResults,
+  });
+  check(
+    "introduced late NIT is blocking until continued",
+    introducedNitApproval.late_blocking_issues.length === 1 &&
+      introducedNitApproval.approved === false,
+  );
   console.log("panel lifecycle: blocked verification advance");
   const advanceLedger = { ...responseInput };
   const advanceResponseEnvelope = createResponseTemplate(advanceLedger);
   advanceResponseEnvelope.responses = responses;
   const lateSpec003Finding = {
+    admission_reason: "previously-missed-merge-risk",
     source_id: "spec003:late-agentic",
     seat: "agentic",
-    attribution: "agentic",
     severity: "MAJOR",
-    category: "correctness",
-    previously_missed: true,
     raw_text: "Active Spec 003 instructions still require retired panels.",
-    description: "Active Spec 003 instructions still require retired panels.",
     impact: "Operators can dispatch the wrong roster.",
     recommendation: "Replace fixed-count instructions with the selected roster.",
   };
@@ -2516,7 +2801,7 @@ process.stdout.write("attacker-controlled timing\\n");
     verification_results_bytes: stableStringify(advanceVerificationArtifact),
     current_candidate: candidate({
       snapshot_sha256: "c".repeat(64),
-      content_id: "content-1",
+      content_id: "c".repeat(64),
     }),
   };
   const advanced = advanceVerification(advanceInput);
@@ -2581,8 +2866,8 @@ process.stdout.write("attacker-controlled timing\\n");
     }).latest_delta_paths[0] === "specs/003-adr052-bazel-rust/plan.md",
   );
   const nextCandidate = candidate({
-    candidate_id: "candidate-next",
-    content_id: "content-next",
+    candidate_id: "e".repeat(64),
+    content_id: "f".repeat(64),
     snapshot_sha256: "d".repeat(64),
     changed_paths: ["src/panel.js", "specs/003-adr052-bazel-rust/plan.md"],
   });
@@ -2604,6 +2889,12 @@ process.stdout.write("attacker-controlled timing\\n");
         engineer: seat,
         signoff: false,
         summary: "The blocked verification is being continued.",
+        verified_issue_statuses: Object.fromEntries(
+          advanced.ledger.issues
+            .filter((issue) => issue.late !== true)
+            .map((issue) => [issue.id, "verified"]),
+        ),
+        late_findings: [],
         recommendations: [{
           severity: "high",
           where: "panel",
@@ -2613,6 +2904,48 @@ process.stdout.write("attacker-controlled timing\\n");
         }],
       },
     ]),
+  );
+  rejects(
+    "verification prior verdicts use the prior selection phase schema",
+    () => prepareVerification({
+      selection: nextSelection.selection,
+      ledger: advanced.ledger,
+      responses: completedResponses,
+      self_verification: selfVerification,
+      current_candidate: nextCandidate,
+      prior_selection: verificationSelection.selection,
+      prior_verdicts: {
+        ...nextPriorVerdicts,
+        software: {
+          engineer: "software",
+          signoff: true,
+          summary: "Wrong discovery-shaped prior result.",
+          recommendations: [],
+        },
+      },
+      latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+    }),
+    /fields.*verified_issue_statuses|exactly/,
+  );
+  rejects(
+    "verification prior verdicts require complete status coverage",
+    () => prepareVerification({
+      selection: nextSelection.selection,
+      ledger: advanced.ledger,
+      responses: completedResponses,
+      self_verification: selfVerification,
+      current_candidate: nextCandidate,
+      prior_selection: verificationSelection.selection,
+      prior_verdicts: {
+        ...nextPriorVerdicts,
+        software: {
+          ...nextPriorVerdicts.software,
+          verified_issue_statuses: { R1: "verified" },
+        },
+      },
+      latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+    }),
+    /cover each issue|missing/,
   );
   const nextPreparation = prepareVerification({
     selection: nextSelection.selection,
@@ -2675,7 +3008,7 @@ process.stdout.write("attacker-controlled timing\\n");
       current_candidate: candidate({
         candidate_id: "different-candidate",
         snapshot_sha256: "c".repeat(64),
-        content_id: "content-1",
+        content_id: "c".repeat(64),
       }),
     }),
     /selection candidate mismatch|candidate_id/,
@@ -2704,7 +3037,7 @@ process.stdout.write("attacker-controlled timing\\n");
     self_verification: selfVerification,
     current_candidate: candidate({
       snapshot_sha256: "c".repeat(64),
-      content_id: "content-1",
+      content_id: "c".repeat(64),
     }),
     prior_selection: initial.selection,
     prior_verdicts: priorVerdicts,
@@ -2724,7 +3057,7 @@ process.stdout.write("attacker-controlled timing\\n");
       self_verification: selfVerification,
       current_candidate: candidate({
         snapshot_sha256: "c".repeat(64),
-        content_id: "content-1",
+        content_id: "c".repeat(64),
       }),
       prior_selection: initial.selection,
       prior_verdicts: priorVerdicts,
@@ -3029,10 +3362,10 @@ process.stdout.write("attacker-controlled timing\\n");
       "scripts",
       "make-records.mjs",
     );
-    const address = (snapshot, content = "cli-content") => ({
+    const address = (snapshot, content = "2".repeat(64)) => ({
       program: "SPEC004",
       wave: "spec004w1",
-      candidate_id: "cli-candidate",
+      candidate_id: "1".repeat(64),
       content_id: content,
       snapshot_sha256: snapshot,
       changed_paths: ["src/panel.js"],
@@ -3359,7 +3692,7 @@ process.stdout.write("attacker-controlled timing\\n");
     execFileSync("git", ["commit", "--quiet", "-m", "fix"], { cwd: cliRoot });
     writeFileSync(
       cliVerificationSelectionCandidate,
-      stableStringify(address("e".repeat(64), "cli-current-content")),
+      stableStringify(address("e".repeat(64), "3".repeat(64))),
     );
     const verificationSelection = runCli(
       "select",
@@ -3534,12 +3867,10 @@ process.stdout.write("attacker-controlled timing\\n");
       fix: "Complete and verify the source mapping fix.",
     }];
     blockedVerificationResults.results[0].late_findings = [{
+      admission_reason: "previously-missed-merge-risk",
       source_id: "spec003:cli-late",
       seat: verificationRoster[0],
-      attribution: verificationRoster[0],
       severity: "high",
-      category: "correctness",
-      previously_missed: true,
       raw_text: "Spec 003 still names the retired panel roster.",
       impact: "The next fix path must be admitted to the ledger.",
       recommendation: "Use the selected roster in the active instructions.",
@@ -3656,6 +3987,65 @@ process.stdout.write("attacker-controlled timing\\n");
           `${invalidApprovalInvocation.stdout}${invalidApprovalInvocation.stderr}`,
         ),
     );
+    const unknownApprovalFlag = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      join(cliRound, "verification-results.json"),
+      join(cliRoot, "unknown-flag-approval.json"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+      "--unknown",
+      "value",
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI refuses unknown flags",
+      unknownApprovalFlag.status === 2 &&
+        /does not recognize argument/.test(
+          `${unknownApprovalFlag.stdout}${unknownApprovalFlag.stderr}`,
+        ),
+    );
+    const duplicateApprovalFlag = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      join(cliRound, "verification-results.json"),
+      join(cliRoot, "duplicate-flag-approval.json"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI refuses duplicate flags",
+      duplicateApprovalFlag.status === 2 &&
+        /duplicate flag/.test(
+          `${duplicateApprovalFlag.stdout}${duplicateApprovalFlag.stderr}`,
+        ),
+    );
+    const surplusApprovalPositional = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "approval",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      join(cliRound, "verification-results.json"),
+      join(cliRoot, "surplus-positional-approval.json"),
+      "unexpected",
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "approval CLI refuses surplus positional arguments",
+      surplusApprovalPositional.status === 2 &&
+        /exactly 5 positional/.test(
+          `${surplusApprovalPositional.stdout}${surplusApprovalPositional.stderr}`,
+        ),
+    );
     const invalidApprovalResponses = join(cliRoot, "invalid-approval-responses.json");
     writeFileSync(invalidApprovalResponses, "{\n");
     const invalidApprovalInput = spawnSync("node", [
@@ -3690,12 +4080,13 @@ process.stdout.write("attacker-controlled timing\\n");
     writeFileSync(join(cliRound, "observed.json"), stableStringify(
       Object.fromEntries(verificationRoster.map((seat, index) => {
         const definition = readFileSync(
-          join(cliRound, "agent-definitions", `panel-${seat}.agent.md`),
+          join(cliRoot, ".github", "agents", `panel-${seat}.agent.md`),
         );
         return [seat, {
           provider: "github-copilot",
           model: "gpt-5.6-sol",
           reasoning_effort: "xhigh",
+          context_tier: "long_context",
           agent_type: `panel-${seat}`,
           agent_definition_sha256: sha256(definition.toString("utf8")),
           run_id: `cli-run-${index}`,
@@ -3897,6 +4288,24 @@ console.log("panel lifecycle: legacy continuation");
     exactObjectImport.complete === true &&
       exactObjectImport.discovery_required === false,
   );
+  const shuffledLegacyAttestation = {
+    ...exactLegacyAttestation,
+    records: [
+      exactLegacyAttestation.records[1],
+      exactLegacyAttestation.records[0],
+      ...exactLegacyAttestation.records.slice(2),
+    ],
+  };
+  rejects(
+    "legacy attestation rejects records outside historical roster order",
+    () => importLegacyRound({
+      request: legacyRequest,
+      records: legacyWireRecords,
+      record_bytes: exactLegacyRecordBytes,
+      attestation: shuffledLegacyAttestation,
+    }, { candidate: legacyCandidate }),
+    /roster order|expected software/,
+  );
   const exactPartialRecords = legacyWireRecords.slice(0, 2);
   const exactPartialImport = importLegacyRound(
     {
@@ -3913,6 +4322,26 @@ console.log("panel lifecycle: legacy continuation");
     exactPartialImport.complete === false &&
       exactPartialImport.discovery_required === true &&
       exactPartialImport.sources.length === 2,
+  );
+  const continuedComplete = continueLegacyImport(exactObjectImport, {
+    selection: priorSelection,
+    candidate: candidate(),
+  });
+  check(
+    "complete legacy imports continue directly into an issue ledger",
+    continuedComplete.discovery_required === false &&
+      continuedComplete.artifact.artifact_kind === "d2b-panel/issue-ledger" &&
+      continuedComplete.artifact.issues.length === legacyWireRecords.length,
+  );
+  const continuedPartial = continueLegacyImport(exactPartialImport, {
+    selection: priorSelection,
+    candidate: candidate(),
+  });
+  check(
+    "partial legacy imports continue into one current discovery request",
+    continuedPartial.discovery_required === true &&
+      continuedPartial.artifact.artifact_kind === "d2b-panel/discovery-request" &&
+      continuedPartial.artifact.context.legacy_import.sources.length === 2,
   );
   const exactWithoutAttestation = importLegacyRound(
     {
@@ -4032,6 +4461,31 @@ console.log("panel lifecycle: legacy continuation");
     }
   } finally {
     rmSync(legacyDir, { recursive: true, force: true });
+  }
+  const partialLegacyDir = mkdtempSync(join(tmpdir(), "d2b-legacy-partial-round-"));
+  try {
+    mkdirSync(join(partialLegacyDir, "records"));
+    writeFileSync(
+      join(partialLegacyDir, "panel-request.json"),
+      stableStringify(legacyRequest),
+    );
+    for (const record of legacyWireRecords.slice(0, 2)) {
+      writeFileSync(
+        join(partialLegacyDir, "records", `${record.role}.json`),
+        stableStringify(record),
+      );
+    }
+    const partialDirectoryImport = importLegacyRound(partialLegacyDir, {
+      candidate: legacyCandidate,
+    });
+    check(
+      "legacy directory import accepts a validated partial record subset",
+      partialDirectoryImport.complete === false &&
+        partialDirectoryImport.sources.length === 2 &&
+        partialDirectoryImport.discovery_required === true,
+    );
+  } finally {
+    rmSync(partialLegacyDir, { recursive: true, force: true });
   }
 
   const partial = importLegacyRound(
