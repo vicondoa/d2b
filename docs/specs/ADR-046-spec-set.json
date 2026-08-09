@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "d0634339b6a1712769cae183d04a17dc710530b98ec7da7f2df71538b8f8c720",
+      "sha256" : "49bcfa1d0431d2c115f3b83792bcb893545916a3b1d259822402a69ac087444e",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "7c195da4ae1d0c00f2ca6bddbf220990e94bfa4452720326a562d616595a3c53",
+      "sha256" : "58e9dd61fd5c5de6dd271474dd47f788eeb1131424021199f9cf3aa603a02e05",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
