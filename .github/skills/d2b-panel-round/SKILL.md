@@ -46,6 +46,14 @@ own relevance.
 | kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | build | `panel-build` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 
+The `agent_type` column is an exact dispatch binding, not a suggested role
+name. Each current observed binding must also record
+`agent_definition_sha256`, the SHA-256 of the custom agent definition loaded
+for that run. Before records are generated, make-records compares the exact
+agent type with this table and the observed definition digest with the
+immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by `.complete`.
+Missing, substituted, parent-worktree, or legacy agent definitions fail closed.
+
 The current pool has seven mandatory seats. Code and operative configuration
 have a floor of ten; documentation-only candidates have a floor of eight.
 Every matching optional trigger is selected even when the floor is already
@@ -193,6 +201,62 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   approval "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
   "$ROUND/responses.json" "$ROUND/verification-results.json" \
   "$ROUND/approval.json" --candidate "$ROUND/current-candidate.json"
+```
+
+When approval is blocked, do not edit the immutable round ledger or copy its
+responses by hand. Promote the exact blocked handoff into one new immutable
+ledger/response family:
+
+```bash
+NEXT=.scratch/panel/<next-handoff>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+`advance-verification` validates the exact selection digest, lifecycle,
+candidate, roster, prior ledger, response envelope, and adapted verification
+bindings before publishing `NEXT/discovery-ledger.json` and
+`NEXT/responses.json` as one atomic directory. It appends admitted late
+findings with contiguous `R` identifiers and preserved source identity. Every
+issue that any selected seat did not pass receives a canonical blank response;
+passed issues retain their validated response, and every late issue starts
+blank. Fill those blanks with complete implementation responses, then rerun
+selection over the new candidate and fix delta, prepare verification, and
+stage:
+
+```bash
+FIX_DELTA=.scratch/panel/<next-fix-delta>.json
+CURRENT_CANDIDATE=.scratch/panel/<next-current-candidate>.json
+NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select "$CURRENT_CANDIDATE" <lifecycle-id> --phase verification \
+  --previous-selection "$ROUND/selection.json" --fix-delta "$FIX_DELTA")
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses.json" "$ROUND/self-verification.json" "$NEXT/verification" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA"
+
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> \
+  --selection "$NEXT_SELECTION" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --ledger "$NEXT/discovery-ledger.json" --responses "$NEXT/responses.json" \
+  --self-verification "$ROUND/self-verification.json" \
+  --verification-dir "$NEXT/verification" \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
+
+Do not run final metrics on blocked verification; metrics remain final-only
+and refuse nonpassing verification. After the next verification passes, run
+approval, metrics, and record generation against the new canonical paths.
+
+```bash
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   metrics --selection "$ROUND/selection.json" \
   --ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json" \
@@ -426,8 +490,14 @@ Current candidate selection is unioned into the imported roster, including
 
 ## Dispatch and verdict
 
-Dispatch only the seats in the current selection artifact. Panel agents are
-read-only and must inspect staged evidence rather than run validation. The
+Dispatch only the seats in the current selection artifact through proper task
+subagents registered from the exact reviewed worktree. Never substitute a
+different agent type and never spawn a nested `copilot` CLI reviewer. If the
+current session registry cannot supply every selected exact agent definition,
+park and restart the session in the reviewed worktree before dispatch; do not
+fall back to a parent-worktree or legacy definition.
+
+Panel agents are read-only and must inspect staged evidence rather than run validation. The
 exact discovery reviewer schema and recommendation schema are defined above.
 A verification reviewer uses those same four base fields and adds
 `verified_issue_statuses` plus `late_findings`:
@@ -447,8 +517,9 @@ A verification reviewer uses those same four base fields and adds
 
 `verified_issue_statuses` has exactly one entry per ledger issue.
 `late_findings` is an array. `signoff` is true if and only if
-`recommendations` is empty. Generate records only after every selected seat
-has a verdict and observed binding:
+`recommendations` is empty. Generate records only after every selected seat has a verdict and an observed
+binding containing provider, model, reasoning effort, exact `agent_type`,
+`agent_definition_sha256`, run ID, and receipt locator:
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \

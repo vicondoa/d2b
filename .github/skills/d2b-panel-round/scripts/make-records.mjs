@@ -27,6 +27,7 @@ import {
   validateApprovalArtifact,
   validateResponses,
   validateVerificationResultArtifact,
+  readBoundArtifactSetNoFollow,
   writeDirectoryCreateOrCompare,
   sha256,
   stableStringify,
@@ -40,6 +41,21 @@ const LEGACY_EFFORT_POLICY = "high";
 const ARTIFACT_KIND = "d2b-delivery/panel-receipt";
 const SCHEMA_VERSION = 2;
 const PANEL_FORMAT_VERSION = 1;
+const PANEL_AGENT_TYPES = Object.freeze({
+  software: "panel-software",
+  test: "panel-test",
+  product: "panel-product",
+  docs: "panel-docs",
+  security: "panel-security",
+  observability: "panel-observability",
+  simplicity: "panel-simplicity",
+  reliability: "panel-reliability",
+  agentic: "panel-agentic",
+  nixos: "panel-nixos",
+  networking: "panel-networking",
+  kernel: "panel-kernel",
+  build: "panel-build",
+});
 const MAX_RECOMMENDATIONS = 64;
 // Reviewer-authored free text is the only unbounded input on the sealing path.
 const MAX_SUMMARY_CHARS = 4000;
@@ -104,6 +120,63 @@ const readJson = (path, label) => {
     return null;
   }
 };
+
+function stagedAgentDefinitionDigests(roundDir, roster, selectionBytes, lifecycleId) {
+  let bound;
+  try {
+    bound = readBoundArtifactSetNoFollow(join(roundDir, ".complete"));
+  } catch (cause) {
+    fail(`invalid immutable panel completion marker: ${cause.message}`);
+    return {};
+  }
+  const marker = bound.marker;
+  if (
+    marker.artifact_kind !== "d2b-panel/stage-completion" ||
+    marker.schema_version !== 2 ||
+    marker.complete !== true ||
+    marker.phase !== "verification" ||
+    marker.lifecycle_id !== lifecycleId ||
+    marker.selection_sha256 !== sha256(selectionBytes)
+  ) {
+    fail(
+      "immutable panel completion marker does not bind the current verification " +
+      "lifecycle and selection",
+    );
+    return {};
+  }
+  const digests = {};
+  for (const seat of roster) {
+    const relativePath = `agent-definitions/panel-${seat}.agent.md`;
+    const bytes = bound.artifacts[relativePath];
+    const expectedDigest = marker.artifact_sha256?.[relativePath];
+    const expectedBytes = marker.artifact_bytes?.[relativePath];
+    if (!Buffer.isBuffer(bytes)) {
+      fail(
+        `immutable panel completion marker has no staged agent definition for ${seat}`,
+      );
+      continue;
+    }
+    if (
+      typeof expectedDigest !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(expectedDigest) ||
+      expectedBytes !== bytes.length
+    ) {
+      fail(
+        `immutable panel completion marker has an invalid binding for ${relativePath}`,
+      );
+      continue;
+    }
+    const actualDigest = createHash("sha256").update(bytes).digest("hex");
+    if (actualDigest !== expectedDigest) {
+      fail(
+        `staged agent definition digest for ${seat} does not match .complete`,
+      );
+      continue;
+    }
+    digests[seat] = actualDigest;
+  }
+  return digests;
+}
 
 const address = readJson(join(dir, "address.json"), "round address");
 const candidate = readJson(
@@ -330,6 +403,12 @@ for (const seat of roster) {
     fail(`observed.json has no entry for selected seat "${seat}"`);
   }
 }
+const stagedDefinitionDigests = stagedAgentDefinitionDigests(
+  dir,
+  roster,
+  selectionBytes,
+  selection.lifecycle_id,
+);
 
 const seenRunIds = new Set();
 const seenReceipts = new Set();
@@ -437,13 +516,45 @@ for (const role of roster) {
     fail(`observed.json ${role} must be an object`);
     continue;
   }
-  for (const key of ["provider", "model", "reasoning_effort", "run_id", "receipt_locator"]) {
+  for (const key of [
+    "provider",
+    "model",
+    "reasoning_effort",
+    "agent_type",
+    "agent_definition_sha256",
+    "run_id",
+    "receipt_locator",
+  ]) {
     if (
       typeof observedBinding[key] !== "string" ||
       observedBinding[key].length === 0
     ) {
       fail(`observed.json ${role}: ${key} is required`);
     }
+  }
+  const expectedAgentType = PANEL_AGENT_TYPES[role];
+  if (observedBinding.agent_type !== expectedAgentType) {
+    fail(
+      `observed.json ${role}: agent_type "${observedBinding.agent_type}" does not ` +
+      `match the selected binding "${expectedAgentType}"`,
+    );
+  }
+  if (
+    typeof observedBinding.agent_definition_sha256 === "string" &&
+    !/^[0-9a-f]{64}$/u.test(observedBinding.agent_definition_sha256)
+  ) {
+    fail(
+      `observed.json ${role}: agent_definition_sha256 must be a 64-character hexadecimal SHA-256`,
+    );
+  }
+  if (
+    stagedDefinitionDigests[role] === undefined ||
+    observedBinding.agent_definition_sha256 !== stagedDefinitionDigests[role]
+  ) {
+    fail(
+      `observed.json ${role}: agent definition digest does not match the immutable ` +
+      `staged agent-definitions/panel-${role}.agent.md digest`,
+    );
   }
   const currentBinding =
     observedBinding.model === MODEL_POLICY &&

@@ -23,3 +23,9 @@
   may lower but not raise. The schema-version `2` `.complete` marker records
   the round address and selection/diff digests, then byte-binds every canonical
   artifact through `artifact_sha256` and `artifact_bytes` maps.
+- Added the canonical blocked-verification continuation handoff, which
+  promotes admitted late findings and nonpassing issue responses into one
+  immutable next ledger/response family without reopening discovery.
+- Bound current panel records to the exact selected agent type and staged
+  custom-agent definition digest, while retaining explicit legacy record
+  readability and rejecting parent-worktree or substituted definitions.

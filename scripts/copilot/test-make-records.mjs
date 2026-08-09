@@ -12,7 +12,7 @@
 // It is a plain node script with no test framework because the repository
 // does not add tooling for one gate. It runs from `make test-lint`.
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -121,13 +121,21 @@ function buildRound(mutate) {
       issues: [],
       complete: true,
     },
-    observed: Object.fromEntries(ROLES.map((r, i) => [r, {
-      provider: "github-copilot",
-      model: "gpt-5.6-sol",
-      reasoning_effort: "xhigh",
-      run_id: `run-${i}`,
-      receipt_locator: `github-copilot://receipt/${i}`,
-    }])),
+    observed: Object.fromEntries(ROLES.map((r, i) => {
+      const definition = readFileSync(
+        join(root, ".github", "agents", `panel-${r}.agent.md`),
+        "utf8",
+      );
+      return [r, {
+        provider: "github-copilot",
+        model: "gpt-5.6-sol",
+        reasoning_effort: "xhigh",
+        agent_type: `panel-${r}`,
+        agent_definition_sha256: sha256(definition),
+        run_id: `run-${i}`,
+        receipt_locator: `github-copilot://receipt/${i}`,
+      }];
+    })),
     verdicts: Object.fromEntries(ROLES.map((r) => [r, {
       engineer: r,
       signoff: true,
@@ -197,6 +205,29 @@ function buildRound(mutate) {
   writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
   writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
   writeFileSync(join(dir, "observed.json"), stableStringify(state.observed));
+  const definitionsDir = join(dir, "agent-definitions");
+  mkdirSync(definitionsDir);
+  const artifactSha256 = {};
+  const artifactBytes = {};
+  for (const role of ROLES) {
+    const relativePath = `agent-definitions/panel-${role}.agent.md`;
+    const source = join(root, ".github", "agents", `panel-${role}.agent.md`);
+    const destination = join(dir, relativePath);
+    cpSync(source, destination);
+    const bytes = readFileSync(destination);
+    artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
+    artifactBytes[relativePath] = bytes.length;
+  }
+  writeFileSync(join(dir, ".complete"), stableStringify({
+    artifact_kind: "d2b-panel/stage-completion",
+    schema_version: 2,
+    complete: true,
+    phase: "verification",
+    lifecycle_id: state.selection.lifecycle_id,
+    selection_sha256: sha256(selectionBytes),
+    artifact_sha256: artifactSha256,
+    artifact_bytes: artifactBytes,
+  }));
   for (const [role, v] of Object.entries(state.verdicts)) {
     writeFileSync(join(dir, "verdicts", `${role}.json`), stableStringify(v));
   }
@@ -441,6 +472,55 @@ rejects(
   (s) => { s.observed.product.receipt_locator = "receipt/7"; },
   /receipt_locator/i,
 );
+rejects(
+  "a substituted agent type cannot be attested",
+  (s) => { s.observed.agentic.agent_type = "panel-software"; },
+  /agent_type.*selected binding/i,
+);
+rejects(
+  "an old agent definition digest cannot be attested",
+  (s) => { s.observed.agentic.agent_definition_sha256 = "0".repeat(64); },
+  /agent definition digest|agent_definition_sha256/i,
+);
+rejects(
+  "a missing agent definition digest is not defaulted",
+  (s) => { delete s.observed.product.agent_definition_sha256; },
+  /agent_definition_sha256/i,
+);
+{
+  const dir = buildRound();
+  try {
+    writeFileSync(
+      join(dir, "agent-definitions", "panel-software.agent.md"),
+      "substituted definition\n",
+    );
+    const r = run(dir);
+    check(
+      "a substituted staged agent definition fails against .complete",
+      r.code !== 0 &&
+        /staged agent definition digest|immutable.*staged/.test(
+          `${r.out}${r.err}`,
+        ),
+      `${r.out}${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    rmSync(join(dir, ".complete"));
+    const r = run(dir);
+    check(
+      "a missing immutable completion marker fails closed",
+      r.code !== 0 && /completion marker|\.complete/.test(`${r.out}${r.err}`),
+      `${r.out}${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log("make-records: the verdict contract");
 rejects(

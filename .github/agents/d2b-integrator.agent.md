@@ -84,6 +84,22 @@ are read-only by construction and take no heavy-gate slot. Asking selected
 reviewers to rebuild would stampede the shared Nix store and cargo target
 while implementation agents are still running.
 
+**Dispatch provenance is fail-closed.** Dispatch proper task subagents
+registered from the exact reviewed worktree. Never substitute an agent type,
+use a parent-worktree or legacy definition, or spawn a nested `copilot` CLI
+reviewer. If the current session registry cannot supply every selected exact
+agent definition, park with a restart-in-worktree instruction before dispatch.
+The observed binding must carry the exact agent type and definition SHA-256
+alongside provider, model, reasoning effort, run ID, and receipt locator;
+make-records compares those values with the selected table and the immutable
+`.complete`-bound definition bytes.
+
+When verification is blocked, run `advance-verification` on the exact current
+selection, prior ledger, prior responses, adapted verification results, and
+current candidate. Fill its canonical blank responses, rerun selection over
+the fix delta, prepare verification, and stage the new verification packet.
+Do not edit the prior immutable ledger or hand-copy its findings.
+
 ## Merging
 
 One PR per wave, merged before the next wave starts. This is not a preference:

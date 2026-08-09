@@ -88,8 +88,12 @@ Track A runs all steps. Track B runs steps 1 through 6 once, then 7 and 8.
 **1. Plan the slices.** Read the wave tasks and plan's file-ownership map. Give every
 slice disjoint files; serialize slices that would write the same file.
 
-**2. Dispatch implementer lanes.** Send one `d2b-implementer` per slice in one
-batch. Each prompt carries the task, file-ownership list, and acceptance criteria.
+**2. Dispatch implementer lanes.** Send one `d2b-implementer` task subagent per
+slice in one batch from the exact reviewed worktree. Each prompt carries the
+task, file-ownership list, and acceptance criteria. Never substitute a
+different agent type and never spawn a nested `copilot` CLI session. If the
+current session registry cannot supply every selected exact agent definition,
+park with a restart-in-worktree instruction before dispatch.
 **Commit each slice as it lands**, staging only its paths. Do not accumulate
 slices or run `git add -A` while a gate writes scratch.
 
@@ -113,11 +117,17 @@ batch response and self-verification templates. Reselect over the full
 candidate and every fix delta, unioning the roster without narrowing it.
 Record the reviewed tip and supplied evidence for scoped verification.
 
-**5. Fix and verify.** If verification returns findings, dispatch fix lanes
-**scoped strictly to those findings**. A genuine defect found while fixing
-something else goes to `/d2b-memory record`, not this lifecycle. Revalidate
-and run scoped verification again. Any content change invalidates every prior
-phase sign-off; do not reopen comprehensive discovery.
+**5. Fix and verify.** If verification returns findings, run the canonical
+`advance-verification` command against the exact selection, prior ledger,
+prior responses, adapted verification results, and current candidate. Fill
+its blank responses, rerun selection over the new fix delta, prepare
+verification, and stage the new request. Dispatch fix lanes **scoped strictly
+to those findings** as proper task subagents from the exact reviewed
+worktree. A genuine defect found while fixing something else goes to
+`/d2b-memory record`, not this lifecycle. Revalidate and run scoped
+verification again. Any content change invalidates every prior phase sign-off;
+do not reopen comprehensive discovery. Never use a parent-worktree or legacy
+agent definition as a fallback.
 
 **6. Advance only on a unanimous panel and green enforcing validation.**
 Otherwise park.

@@ -77,6 +77,12 @@ reconstructing those instructions in free-form prompts. For a later
 review, staging fails unless the supplied previous tip matches the prior
 `address.json` and every seat's prior verdict is present.
 
+Dispatch selected seats through proper task subagents registered from the
+exact reviewed worktree. Never substitute an agent type or definition and
+never spawn a nested `copilot` CLI reviewer. If the current session registry
+cannot supply every selected exact agent definition, park and restart in the
+reviewed worktree before dispatch.
+
 The completed packet also contains the exact selected agent definition bytes
 at `agent-definitions/panel-<seat>.agent.md`. The completion marker binds those
 bytes, and both the immutable request and generated dispatch prompt direct the
@@ -86,6 +92,13 @@ phase contract is authoritative for output: discovery uses exactly
 adds required `verified_issue_statuses` and `late_findings`. Keeping the
 schemas distinct lets first discovery bootstrap the ledger before issue
 statuses exist.
+
+Current observed bindings also carry the exact `agent_type` and
+`agent_definition_sha256` for the custom definition loaded by each task
+subagent. `make-records` compares the type with the selected dispatch table
+and the digest with the matching immutable definition bytes bound by
+`.complete`. A missing, substituted, parent-worktree, or legacy definition is
+not a valid current record.
 
 Any content change invalidates sign-off for that candidate. The lifecycle
 roster remains selected, may widen, and verifies the new candidate without
@@ -154,6 +167,64 @@ reviewer's prior obligations. It checks resolutions, dispositions, evidence,
 regressions, and unsafe late `BLOCKER` or `MAJOR` findings. A pre-existing late
 `MINOR` or `NIT` remains non-blocking history. Sign-off remains true exactly
 when the blocking recommendation list is empty.
+
+### Continuing blocked verification
+
+Approval may embed late findings without producing the next implementation
+handoff. When verification is blocked, preserve the completed round and run
+the canonical continuation command against its exact selection, immutable
+ledger, response envelope, adapted verification results, and current
+candidate:
+
+```bash
+ROUND=.scratch/panel/<round-id>
+NEXT=.scratch/panel/<next-handoff>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+The command atomically publishes `NEXT/discovery-ledger.json` and
+`NEXT/responses.json`. It validates lifecycle, selection digest, roster,
+candidate, ledger, response, and verification bindings; appends admitted late
+findings with stable contiguous `R` identifiers; carries a prior response only
+when every selected seat passed that issue; and resets every nonpassing issue
+and every new late issue to the canonical blank response. It rejects
+conflicting regeneration, duplicate late sources, candidate or selection
+mismatch, missing prior responses, and malformed verification statuses.
+
+After the command, fill the blank responses with complete implementation
+responses. Then rerun selection with the new fix delta, prepare verification
+from the new ledger and response envelope, and stage the new packet:
+
+```bash
+FIX_DELTA=.scratch/panel/<next-fix-delta>.json
+CURRENT_CANDIDATE=.scratch/panel/<next-current-candidate>.json
+NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select "$CURRENT_CANDIDATE" <lifecycle-id> --phase verification \
+  --previous-selection "$ROUND/selection.json" --fix-delta "$FIX_DELTA")
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses.json" "$ROUND/self-verification.json" "$NEXT/verification" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA"
+
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> --selection "$NEXT_SELECTION" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --ledger "$NEXT/discovery-ledger.json" --responses "$NEXT/responses.json" \
+  --self-verification "$ROUND/self-verification.json" \
+  --verification-dir "$NEXT/verification" \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
+
+Metrics remain final-only and may refuse blocked verification. Do not run
+metrics until the new verification is passing.
 
 The current selection table defines these thirteen seats:
 `software`, `test`, `product`, `docs`, `security`, `observability`,

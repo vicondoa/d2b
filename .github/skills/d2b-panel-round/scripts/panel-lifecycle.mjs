@@ -4914,6 +4914,7 @@ export function appendLateFindings(ledger, findings) {
   if (!Array.isArray(findings)) error("late findings must be an array");
   const issues = ledger.issues.map((issue) => ({ ...issue }));
   const sources = ledger.sources.map((source) => ({ ...source }));
+  const admittedSourceIds = new Set();
   let nextId = issues.length + 1;
   for (const finding of findings) {
     const admitted = lateFindingAdmission(finding);
@@ -4924,20 +4925,39 @@ export function appendLateFindings(ledger, findings) {
         seat: admitted.seat ?? "verification",
         raw_text: rawLateText,
       })}`;
+    nonBlank(sourceId, "late finding source_id");
+    if (admittedSourceIds.has(sourceId)) {
+      error(`late source finding ${sourceId} already exists`);
+    }
     if (sources.some((source) => source.source_id === sourceId)) {
       error(`late source finding ${sourceId} already exists`);
     }
+    admittedSourceIds.add(sourceId);
     const rawText = rawLateText;
     nonBlank(rawText, `late finding ${sourceId}.raw_text`);
+    const sourceOrdinal = admitted.source_ordinal ?? nextId;
+    if (!Number.isInteger(sourceOrdinal) || sourceOrdinal < 1) {
+      error(`late finding ${sourceId}.source_ordinal must be a positive integer`);
+    }
+    const attribution = nonBlank(
+      admitted.attribution ?? admitted.raw_attribution ?? admitted.seat ?? "verification",
+      `late finding ${sourceId}.attribution`,
+    );
     const source = {
       source_id: sourceId,
       seat: nonBlank(admitted.seat ?? "verification", `late finding ${sourceId}.seat`),
-      source_ordinal: admitted.source_ordinal ?? nextId,
+      source_ordinal: sourceOrdinal,
       raw_text: rawText,
-      attribution: admitted.attribution ?? admitted.seat ?? "verification",
+      attribution,
       severity: admitted.severity,
       impact: nonBlank(admitted.impact ?? "Late finding makes approval unsafe.", `late finding ${sourceId}.impact`),
       recommendation: nonBlank(admitted.recommendation ?? admitted.fix ?? rawText, `late finding ${sourceId}.recommendation`),
+      ...(admitted.raw_attribution !== undefined
+        ? { raw_attribution: nonBlank(admitted.raw_attribution, `late finding ${sourceId}.raw_attribution`) }
+        : {}),
+      ...(admitted.migration_assigned_severity === true
+        ? { migration_assigned_severity: true }
+        : {}),
     };
     sources.push(source);
     issues.push({
@@ -4955,6 +4975,280 @@ export function appendLateFindings(ledger, findings) {
     ...ledger,
     sources,
     issues,
+  };
+}
+
+function canonicalResponseBlank(issueId) {
+  return {
+    issue_id: issueId,
+    disposition: null,
+    changed_surface: [],
+    justification: "",
+    evidence: "",
+    verified_factual_status: null,
+  };
+}
+
+function validateResponseHandoff(ledger, envelope) {
+  validateResponseEnvelope(ledger, envelope);
+  if (!Array.isArray(envelope.responses)) {
+    error("next implementation response envelope responses must be an array");
+  }
+  const expected = ledger.issues.map((issue) => issue.id);
+  const actual = envelope.responses.map((response) => response?.issue_id);
+  if (
+    actual.length !== expected.length ||
+    actual.some((issueId, index) => issueId !== expected[index])
+  ) {
+    error(
+      "next implementation response envelope must contain one response for every " +
+      "ledger issue in ledger order",
+    );
+  }
+  for (const [index, response] of envelope.responses.entries()) {
+    if (!isPlainObject(response)) {
+      error(`next implementation response ${expected[index]} must be an object`);
+    }
+    if (response.disposition === null) {
+      assertExactKeys(
+        response,
+        [
+          "issue_id",
+          "disposition",
+          "changed_surface",
+          "justification",
+          "evidence",
+          "verified_factual_status",
+        ],
+        `blank implementation response ${expected[index]}`,
+      );
+      if (
+        !Array.isArray(response.changed_surface) ||
+        response.changed_surface.length !== 0 ||
+        response.justification !== "" ||
+        response.evidence !== "" ||
+        response.verified_factual_status !== null
+      ) {
+        error(`blank implementation response ${expected[index]} is not canonical`);
+      }
+      continue;
+    }
+    if (!DISPOSITIONS.includes(response.disposition)) {
+      error(
+        `next implementation response ${expected[index]} disposition is unsupported`,
+      );
+    }
+    if (!Array.isArray(response.changed_surface)) {
+      error(
+        `next implementation response ${expected[index]} changed_surface must be an array`,
+      );
+    }
+    if (
+      typeof response.justification !== "string" ||
+      response.justification.trim() === ""
+    ) {
+      error(
+        `next implementation response ${expected[index]} requires a non-blank justification`,
+      );
+    }
+  }
+  return envelope;
+}
+
+function exactArtifactBytes(bytes, value, label) {
+  if (typeof bytes !== "string" || bytes.length === 0) {
+    error(`${label} requires exact JSON bytes`);
+  }
+  let decoded;
+  try {
+    decoded = JSON.parse(bytes);
+  } catch (cause) {
+    error(`${label} bytes are not valid JSON: ${cause.message}`);
+  }
+  if (stableStringify(decoded) !== stableStringify(value)) {
+    error(`${label} object disagrees with its exact JSON bytes`);
+  }
+  return bytes;
+}
+
+export function advanceVerification(input, options = {}) {
+  if (!isPlainObject(input)) error("advance-verification input must be an object");
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection =
+    input.current_selection ??
+    input.currentSelection ??
+    input.selection ??
+    (input.selection_path
+      ? readSelection(input.selection_path, { table })
+      : undefined);
+  if (!selection) {
+    error("advance-verification requires the exact current verification selection");
+  }
+  validateSelection(selection, table);
+  if (selection.phase !== "verification") {
+    error("advance-verification requires a verification selection");
+  }
+  const selectionBytes =
+    input.selection_bytes ?? input.selectionBytes ?? stableStringify(selection);
+  exactArtifactBytes(selectionBytes, selection, "advance-verification selection");
+
+  const currentCandidate =
+    input.current_candidate ??
+    input.currentCandidate ??
+    input.candidate;
+  if (!currentCandidate) {
+    error("advance-verification requires the exact current candidate");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  const currentCandidateAddress = candidateAddress(currentCandidate);
+
+  const ledger =
+    input.discovery_ledger ??
+    input.discoveryLedger ??
+    input.ledger;
+  if (!ledger) {
+    error("advance-verification requires the exact prior immutable ledger");
+  }
+  const ledgerBytes =
+    input.discovery_ledger_bytes ??
+    input.discoveryLedgerBytes ??
+    input.ledger_bytes ??
+    stableStringify(ledger);
+  exactArtifactBytes(ledgerBytes, ledger, "advance-verification ledger");
+  validateLedger(ledger);
+  for (const key of ["lifecycle_id", "program", "wave"]) {
+    if (ledger[key] !== selection[key]) {
+      error(`advance-verification ledger and selection ${key} disagree`);
+    }
+  }
+  validateMonotonicRoster(ledger.roster, selection.roster, table);
+
+  const responses = input.responses;
+  if (
+    !isPlainObject(responses) ||
+    responses.artifact_kind !== RESPONSE_ARTIFACT
+  ) {
+    error(
+      "advance-verification requires the prior implementation response envelope",
+    );
+  }
+  const responseBytes =
+    input.responses_bytes ??
+    input.response_bytes ??
+    stableStringify(responses);
+  exactArtifactBytes(
+    responseBytes,
+    responses,
+    "advance-verification responses",
+  );
+  const priorResponses = validateResponses(ledger, responses);
+  validateResponseEnvelope(ledger, responses);
+
+  const verificationResults =
+    input.verification_results ??
+    input.verificationResults;
+  if (!verificationResults) {
+    error("advance-verification requires adapted verification results");
+  }
+  const verificationResultsBytes =
+    input.verification_results_bytes ??
+    input.verificationBytes ??
+    stableStringify(verificationResults);
+  exactArtifactBytes(
+    verificationResultsBytes,
+    verificationResults,
+    "advance-verification verification results",
+  );
+  const verification = validateVerificationResultArtifact(
+    verificationResults,
+    {
+      selection,
+      selection_bytes: selectionBytes,
+      ledger,
+      ledger_bytes: ledgerBytes,
+    },
+  );
+  if (
+    stableStringify(candidateAddress(verificationResults.current_candidate)) !==
+    stableStringify(currentCandidateAddress)
+  ) {
+    error(
+      "advance-verification verification results current candidate disagrees " +
+      "with the exact current candidate",
+    );
+  }
+  if (verificationResults.lifecycle_id !== selection.lifecycle_id) {
+    error("advance-verification verification lifecycle_id disagrees with selection");
+  }
+
+  const lateFindings = lateFindingsFromVerification(verification);
+  const appended = appendLateFindings(ledger, lateFindings);
+  const nextLedger = sortedObject({
+    ...appended,
+    program: selection.program,
+    wave: selection.wave,
+    candidate_id: currentCandidateAddress.candidate_id,
+    content_id: currentCandidateAddress.content_id,
+    snapshot_sha256: currentCandidateAddress.snapshot_sha256,
+    roster: [...selection.roster],
+  });
+  validateLedger(nextLedger);
+
+  const priorByIssue = new Map(
+    priorResponses.map((response) => [response.issue_id, response]),
+  );
+  const statusByIssue = new Map(
+    ledger.issues.map((issue) => [
+      issue.id,
+      verification.every((result) =>
+        PASSING_VERIFICATION_STATUSES.has(
+          statusName(result.verified_issue_statuses[issue.id]),
+        )),
+    ]),
+  );
+  const carriedIssueIds = [];
+  const resetIssueIds = [];
+  const template = createResponseTemplate(nextLedger);
+  template.responses = nextLedger.issues.map((issue) => {
+    if (!statusByIssue.has(issue.id) || statusByIssue.get(issue.id) !== true) {
+      resetIssueIds.push(issue.id);
+      return canonicalResponseBlank(issue.id);
+    }
+    const response = priorByIssue.get(issue.id);
+    if (!response) {
+      error(`advance-verification has no prior response for ${issue.id}`);
+    }
+    carriedIssueIds.push(issue.id);
+    return response;
+  });
+  const nextResponses = sortedObject(template);
+  validateResponseHandoff(nextLedger, nextResponses);
+  return {
+    ledger: nextLedger,
+    responses: nextResponses,
+    carried_issue_ids: carriedIssueIds,
+    reset_issue_ids: resetIssueIds,
+    late_findings: lateFindings,
+  };
+}
+
+export function writeAdvanceVerification(outputDir, input, options = {}) {
+  const advanced = advanceVerification(input, options);
+  const publication = writeDirectoryCreateOrCompare(outputDir, [
+    {
+      name: "discovery-ledger.json",
+      bytes: stableStringify(advanced.ledger),
+    },
+    {
+      name: "responses.json",
+      bytes: stableStringify(advanced.responses),
+    },
+  ]);
+  return {
+    ...advanced,
+    publication,
+    ledger_path: join(outputDir, "discovery-ledger.json"),
+    responses_path: join(outputDir, "responses.json"),
   };
 }
 
@@ -6521,6 +6815,7 @@ function usage() {
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
     "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
     "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH",
+    "  panel-lifecycle.mjs advance-verification <selection.json> <ledger.json> <responses.json> <verification-results.json> <output-dir> --candidate PATH",
     "  panel-lifecycle.mjs approval <selection.json> <ledger.json> <responses.json> <verification-results.json> <output.json> --candidate PATH",
     "    approval exit codes: 0 approved; 3 valid but blocked; 2 invalid invocation or input",
     "  panel-lifecycle.mjs metrics --selection PATH --ledger PATH --responses PATH --verification-results PATH --output PATH [--implementation-history PATH] [--verification-history PATH]",
@@ -6685,6 +6980,47 @@ async function main(argv) {
         actual_delta_paths: actualDeltaPaths,
       });
       console.log(`wrote ${result.written.length} verification artifacts to ${argv[5]}`);
+      return;
+    }
+    if (command === "advance-verification") {
+      const candidatePath = flagValue(argv.slice(6), "--candidate");
+      if (
+        !argv[1] ||
+        !argv[2] ||
+        !argv[3] ||
+        !argv[4] ||
+        !argv[5] ||
+        !candidatePath
+      ) {
+        error(
+          "advance-verification requires selection, ledger, responses, " +
+          "verification results, output directory, and --candidate",
+        );
+      }
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(argv[1]);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(argv[2], "prior immutable ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(argv[3], "prior implementation responses");
+      const {
+        value: verificationResults,
+        bytes: verificationResultsBytes,
+      } = readJsonWithBytes(argv[4], "adapted verification results");
+      const result = writeAdvanceVerification(argv[5], {
+        current_selection: selection,
+        selection_bytes: selectionBytes,
+        discovery_ledger: ledger,
+        discovery_ledger_bytes: ledgerBytes,
+        responses,
+        responses_bytes: responseBytes,
+        verification_results: verificationResults,
+        verification_results_bytes: verificationResultsBytes,
+        current_candidate: readJson(candidatePath, "current candidate"),
+      });
+      console.log(
+        `wrote next ledger and response envelope to ${argv[5]}`,
+      );
       return;
     }
     if (command === "adapt-verification") {

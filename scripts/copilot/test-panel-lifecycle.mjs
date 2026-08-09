@@ -3,6 +3,7 @@
 
 import {
   appendLateFindings,
+  advanceVerification,
   adaptDiscoveryVerdict,
   adaptVerificationVerdict,
   calculateMetrics,
@@ -39,6 +40,7 @@ import {
   writeDirectoryCreateOrCompare,
   writeCommandOutputCreateOrCompare,
   writeVerificationArtifacts,
+  writeAdvanceVerification,
   writeCreateOrCompare,
 } from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
 import {
@@ -2476,6 +2478,224 @@ process.stdout.write("attacker-controlled timing\\n");
       lateApproval.approved === false &&
       lateApproval.ledger.issues.at(-1).late === true,
   );
+  console.log("panel lifecycle: blocked verification advance");
+  const advanceLedger = { ...responseInput };
+  const advanceResponseEnvelope = createResponseTemplate(advanceLedger);
+  advanceResponseEnvelope.responses = responses;
+  const lateSpec003Finding = {
+    source_id: "spec003:late-agentic",
+    seat: "agentic",
+    attribution: "agentic",
+    severity: "MAJOR",
+    category: "correctness",
+    previously_missed: true,
+    raw_text: "Active Spec 003 instructions still require retired panels.",
+    description: "Active Spec 003 instructions still require retired panels.",
+    impact: "Operators can dispatch the wrong roster.",
+    recommendation: "Replace fixed-count instructions with the selected roster.",
+  };
+  const advanceRawResults = allVerificationResults(
+    verificationSelection.selection.roster,
+    { agentic: [lateSpec003Finding] },
+    advanceLedger,
+  );
+  advanceRawResults.software.verified_issue_statuses.R2 = "open";
+  const advanceVerificationArtifact = adaptedVerificationArtifact(
+    verificationSelection.selection,
+    advanceLedger,
+    advanceRawResults,
+  );
+  const advanceInput = {
+    current_selection: verificationSelection.selection,
+    selection_bytes: stableStringify(verificationSelection.selection),
+    discovery_ledger: advanceLedger,
+    discovery_ledger_bytes: stableStringify(advanceLedger),
+    responses: advanceResponseEnvelope,
+    responses_bytes: stableStringify(advanceResponseEnvelope),
+    verification_results: advanceVerificationArtifact,
+    verification_results_bytes: stableStringify(advanceVerificationArtifact),
+    current_candidate: candidate({
+      snapshot_sha256: "c".repeat(64),
+      content_id: "content-1",
+    }),
+  };
+  const advanced = advanceVerification(advanceInput);
+  check(
+    "advance appends late findings with stable attribution and R identifiers",
+    advanced.ledger.issues.at(-1).id === "R5" &&
+      advanced.ledger.issues.at(-1).late === true &&
+      advanced.ledger.sources.at(-1).source_id === "spec003:late-agentic" &&
+      advanced.ledger.sources.at(-1).attribution === "agentic",
+  );
+  check(
+    "advance rebinds the next ledger to the current candidate and roster",
+    advanced.ledger.candidate_id === verificationSelection.selection.candidate_id &&
+      advanced.ledger.snapshot_sha256 === verificationSelection.selection.snapshot_sha256 &&
+      advanced.ledger.roster.join(",") === verificationSelection.selection.roster.join(","),
+  );
+  const advancedResponseById = new Map(
+    advanced.responses.responses.map((response) => [response.issue_id, response]),
+  );
+  check(
+    "advance carries passed responses and blanks every nonpassing or late issue",
+    advancedResponseById.get("R1").disposition === "Fixed" &&
+      advancedResponseById.get("R2").disposition === null &&
+      advancedResponseById.get("R5").disposition === null &&
+      advanced.reset_issue_ids.join(",") === "R2,R5",
+  );
+  const advanceOutput = join(root, "advance-handoff");
+  const publishedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
+  const repeatedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
+  check(
+    "advance publishes one atomic ledger and response family",
+    publishedAdvance.publication.created === true &&
+      repeatedAdvance.publication.created === false &&
+      readdirSync(advanceOutput).sort().join(",") ===
+        "discovery-ledger.json,responses.json",
+  );
+  const completedResponses = JSON.parse(stableStringify(advanced.responses));
+  completedResponses.responses = completedResponses.responses.map((response) =>
+    response.issue_id === "R2"
+      ? {
+          issue_id: "R2",
+          disposition: "Fixed",
+          changed_surface: ["src/panel.js"],
+          justification: "The verification regression is fixed.",
+          evidence: "focused lifecycle test",
+        }
+      : response.issue_id === "R5"
+        ? {
+            issue_id: "R5",
+            disposition: "Fixed",
+            changed_surface: ["specs/003-adr052-bazel-rust/plan.md"],
+            justification: "The active instructions now use the selected roster.",
+            evidence: "Spec 003 instruction audit",
+          }
+        : response
+  );
+  check(
+    "a completed late response exposes the Spec 003 fix path to scope validation",
+    validateFixScope({
+      latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+      responses: completedResponses.responses,
+    }).latest_delta_paths[0] === "specs/003-adr052-bazel-rust/plan.md",
+  );
+  const nextCandidate = candidate({
+    candidate_id: "candidate-next",
+    content_id: "content-next",
+    snapshot_sha256: "d".repeat(64),
+    changed_paths: ["src/panel.js", "specs/003-adr052-bazel-rust/plan.md"],
+  });
+  const nextSelection = createSelection(
+    {
+      ...nextCandidate,
+      lifecycle_id: "spec004w1",
+      phase: "verification",
+      full_candidate: nextCandidate,
+      fix_delta: { changed_paths: ["specs/003-adr052-bazel-rust/plan.md"] },
+      previous_selection: verificationSelection.selection,
+    },
+    { root },
+  );
+  const nextPriorVerdicts = Object.fromEntries(
+    verificationSelection.selection.roster.map((seat) => [
+      seat,
+      {
+        engineer: seat,
+        signoff: false,
+        summary: "The blocked verification is being continued.",
+        recommendations: [{
+          severity: "high",
+          where: "panel",
+          what: "A verification issue remains.",
+          why: "The next fix must be reviewed.",
+          fix: "Verify the next response.",
+        }],
+      },
+    ]),
+  );
+  const nextPreparation = prepareVerification({
+    selection: nextSelection.selection,
+    ledger: advanced.ledger,
+    responses: completedResponses,
+    self_verification: selfVerification,
+    current_candidate: nextCandidate,
+    prior_selection: verificationSelection.selection,
+    prior_verdicts: nextPriorVerdicts,
+    latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+  });
+  check(
+    "advance output feeds rerun selection and verification preparation",
+    nextPreparation.scope.latest_delta_paths.join(",") ===
+      "specs/003-adr052-bazel-rust/plan.md",
+  );
+  rejects(
+    "advance rejects a duplicate late source identity",
+    () => {
+      const duplicateResults = JSON.parse(stableStringify(advanceRawResults));
+      duplicateResults.software.late_findings = [lateSpec003Finding];
+      const duplicateArtifact = adaptedVerificationArtifact(
+        verificationSelection.selection,
+        advanceLedger,
+        duplicateResults,
+      );
+      advanceVerification({
+        ...advanceInput,
+        verification_results: duplicateArtifact,
+        verification_results_bytes: stableStringify(duplicateArtifact),
+      });
+    },
+    /late source finding.*already exists/,
+  );
+  rejects(
+    "advance rejects a missing prior response",
+    () => {
+      const missing = JSON.parse(stableStringify(advanceResponseEnvelope));
+      missing.responses = missing.responses.slice(0, -1);
+      advanceVerification({
+        ...advanceInput,
+        responses: missing,
+        responses_bytes: stableStringify(missing),
+      });
+    },
+    /missing implementation responses/,
+  );
+  rejects(
+    "advance rejects a selection digest mismatch",
+    () => advanceVerification({
+      ...advanceInput,
+      selection_bytes: `${stableStringify(verificationSelection.selection)}\n`,
+    }),
+    /selection bytes|exact selection bytes/,
+  );
+  rejects(
+    "advance rejects a candidate and selection mismatch",
+    () => advanceVerification({
+      ...advanceInput,
+      current_candidate: candidate({
+        candidate_id: "different-candidate",
+        snapshot_sha256: "c".repeat(64),
+        content_id: "content-1",
+      }),
+    }),
+    /selection candidate mismatch|candidate_id/,
+  );
+  rejects(
+    "advance rejects malformed blocked status input",
+    () => {
+      const malformedResults = JSON.parse(
+        stableStringify(advanceVerificationArtifact),
+      );
+      Object.values(malformedResults.results).find((result) => result.seat === "software")
+        .verified_issue_statuses.R1 = { status: "blocked", extra: "no" };
+      advanceVerification({
+        ...advanceInput,
+        verification_results: malformedResults,
+        verification_results_bytes: stableStringify(malformedResults),
+      });
+    },
+    /status|only/,
+  );
   const verificationDir = join(root, "verification");
   const writtenVerification = writeVerificationArtifacts(verificationDir, {
     selection: verificationSelection.selection,
@@ -3313,6 +3533,17 @@ process.stdout.write("attacker-controlled timing\\n");
       why: "The ledger issue is not resolved.",
       fix: "Complete and verify the source mapping fix.",
     }];
+    blockedVerificationResults.results[0].late_findings = [{
+      source_id: "spec003:cli-late",
+      seat: verificationRoster[0],
+      attribution: verificationRoster[0],
+      severity: "high",
+      category: "correctness",
+      previously_missed: true,
+      raw_text: "Spec 003 still names the retired panel roster.",
+      impact: "The next fix path must be admitted to the ledger.",
+      recommendation: "Use the selected roster in the active instructions.",
+    }];
     writeFileSync(
       blockedVerificationResultsPath,
       stableStringify(blockedVerificationResults),
@@ -3334,6 +3565,80 @@ process.stdout.write("attacker-controlled timing\\n");
       blockedApprovalResult.status === 3 &&
         JSON.parse(readFileSync(blockedApprovalPath, "utf8")).approved === false,
       `${blockedApprovalResult.stdout}${blockedApprovalResult.stderr}`,
+    );
+    const cliAdvanceDirectory = join(cliRoot, "advance-handoff");
+    const advanceVerificationResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "advance-verification",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      blockedVerificationResultsPath,
+      cliAdvanceDirectory,
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    const advancedCliLedger = JSON.parse(
+      readFileSync(join(cliAdvanceDirectory, "discovery-ledger.json"), "utf8"),
+    );
+    const advancedCliResponses = JSON.parse(
+      readFileSync(join(cliAdvanceDirectory, "responses.json"), "utf8"),
+    );
+    check(
+      "advance-verification CLI publishes the blocked handoff",
+      advanceVerificationResult.status === 0 &&
+        advancedCliLedger.issues.at(-1).id === "R2" &&
+        advancedCliLedger.sources.at(-1).source_id === "spec003:cli-late" &&
+        advancedCliResponses.responses.find((response) => response.issue_id === "R1")
+          .disposition === null &&
+        readdirSync(cliAdvanceDirectory).sort().join(",") ===
+          "discovery-ledger.json,responses.json",
+      `${advanceVerificationResult.stdout}${advanceVerificationResult.stderr}`,
+    );
+    const repeatedAdvanceVerification = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "advance-verification",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      blockedVerificationResultsPath,
+      cliAdvanceDirectory,
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "advance-verification CLI compares an identical existing handoff",
+      repeatedAdvanceVerification.status === 0,
+      `${repeatedAdvanceVerification.stdout}${repeatedAdvanceVerification.stderr}`,
+    );
+    const conflictingAdvanceResultsPath = join(
+      cliRoot,
+      "conflicting-blocked-verification-results.json",
+    );
+    blockedVerificationResults.results[0].late_findings[0].recommendation =
+      "Use the exact selected roster and profile in active instructions.";
+    writeFileSync(
+      conflictingAdvanceResultsPath,
+      stableStringify(blockedVerificationResults),
+    );
+    const conflictingAdvanceVerification = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "advance-verification",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      conflictingAdvanceResultsPath,
+      cliAdvanceDirectory,
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "advance-verification CLI refuses conflicting regeneration",
+      conflictingAdvanceVerification.status !== 0 &&
+        /conflicting generated bytes/.test(
+          `${conflictingAdvanceVerification.stdout}${conflictingAdvanceVerification.stderr}`,
+        ),
+      `${conflictingAdvanceVerification.stdout}${conflictingAdvanceVerification.stderr}`,
     );
     const invalidApprovalInvocation = spawnSync("node", [
       LIFECYCLE_CLI,
@@ -3383,13 +3688,20 @@ process.stdout.write("attacker-controlled timing\\n");
       join(cliRound, "metrics.json"),
     );
     writeFileSync(join(cliRound, "observed.json"), stableStringify(
-      Object.fromEntries(verificationRoster.map((seat, index) => [seat, {
-        provider: "github-copilot",
-        model: "gpt-5.6-sol",
-        reasoning_effort: "xhigh",
-        run_id: `cli-run-${index}`,
-        receipt_locator: `github-copilot://cli/${index}`,
-      }])),
+      Object.fromEntries(verificationRoster.map((seat, index) => {
+        const definition = readFileSync(
+          join(cliRound, "agent-definitions", `panel-${seat}.agent.md`),
+        );
+        return [seat, {
+          provider: "github-copilot",
+          model: "gpt-5.6-sol",
+          reasoning_effort: "xhigh",
+          agent_type: `panel-${seat}`,
+          agent_definition_sha256: sha256(definition.toString("utf8")),
+          run_id: `cli-run-${index}`,
+          receipt_locator: `github-copilot://cli/${index}`,
+        }];
+      })),
     ));
     const recordsResult = spawnSync("node", [
       cliMakeRecords,

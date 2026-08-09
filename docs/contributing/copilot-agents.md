@@ -236,6 +236,24 @@ failure can take on an attestation gate. Three layers defend it:
 3. the record helper, which takes the **observed** effort as input and fails
    closed rather than defaulting to the policy string.
 
+### Agent definition provenance
+
+Dispatch every selected seat through a proper task subagent registered from
+the exact reviewed worktree. Never substitute an agent type, load a definition
+from a parent worktree, or spawn a nested `copilot` CLI reviewer. If the
+current session registry cannot supply every selected exact agent definition,
+park and restart the session in the reviewed worktree before dispatch.
+
+Each current `observed.json` seat entry must contain the exact `agent_type` and
+`agent_definition_sha256` in addition to provider, model, reasoning effort,
+run ID, and receipt locator. `make-records.mjs` compares the type with the
+selected panel binding table and compares the digest with the matching
+immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by
+`.complete`. A wrong, missing, parent-worktree, or substituted definition
+fails closed. Legacy imported records remain readable through their explicit
+legacy path; that compatibility does not weaken current workspace-schema
+records.
+
 New panel work uses `gpt-5.6-sol` at `xhigh`. Existing
 `gemini-3.1-pro-preview` records at `high` remain readable as one exact
 compatibility pair; mixed model and effort pairs are rejected.
@@ -333,6 +351,26 @@ non-authoritative and must be cleaned up before retrying. Later reviews fail
 closed unless `<prev-tip>` matches the previous recorded tip and every seat's
 prior verdict is available, so the incremental range and prior-finding
 instructions cannot be replaced by a free-form summary.
+
+If approval is blocked, preserve that immutable round and promote its exact
+handoff before dispatching fixes:
+
+```bash
+NEXT=.scratch/panel/<next-handoff>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+Fill the canonical blank responses in `NEXT/responses.json`, rerun selection
+with the new fix delta, prepare verification from
+`NEXT/discovery-ledger.json` and `NEXT/responses.json`, and stage the new
+packet. The command is the only continuation path: it appends admitted late
+findings, resets issues with any nonpassing status, and refuses duplicate
+sources, missing responses, candidate or selection mismatches, malformed
+statuses, and conflicting output. Do not hand-copy findings or responses.
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:
