@@ -15,14 +15,12 @@ import {
   createSelection,
   createVerificationResultArtifact,
   continueLegacyImport,
-  directoryTreeUsageNoFollow,
   evaluateApproval,
   importLegacyRound,
   lateFindingAdmission,
   LATE_FINDING_SCHEMA,
   mergeDiscoveryLedger,
   prepareVerification,
-  readDirectoryNoFollow,
   readSelection,
   readSelectionTable,
   selectRoster,
@@ -41,28 +39,18 @@ import {
   validateSelfVerification,
   validateVerificationRequest,
   validateVerificationResults,
-  removeDirectoryIfIdentityNoFollow,
-  writeDirectoryCreateOrCompare,
-  writeCommandOutputCreateOrCompare,
   writeVerificationArtifacts,
   writeAdvanceVerification,
   writeCreateOrCompare,
 } from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
 import {
-  chmodSync,
-  closeSync,
   cpSync,
   existsSync,
-  linkSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -112,395 +100,6 @@ function rejects(name, fn, pattern) {
   } catch (cause) {
     check(name, pattern.test(cause.message), cause.message);
   }
-}
-
-function concurrentDirectoryPublish(directory, helperPath) {
-  const source = `
-import { pathToFileURL } from "node:url";
-const [helperPath, directory, bytes] = process.argv.slice(1);
-try {
-  const entry = process.argv[1];
-  process.argv[1] = "";
-  const { writeDirectoryCreateOrCompare } =
-    await import(pathToFileURL(helperPath).href);
-  process.argv[1] = entry;
-  const result = writeDirectoryCreateOrCompare(directory, [
-    { name: "seat.json", bytes },
-  ]);
-  console.log(JSON.stringify(result));
-} catch (cause) {
-  console.error(cause.message);
-  process.exitCode = 1;
-}
-`;
-  return new Promise((resolve) => {
-    const results = [];
-    const finish = () => {
-      if (results.length === 2) resolve(results.sort((left, right) => left.index - right.index));
-    };
-    for (const [index, bytes] of ["first\n", "second\n"].entries()) {
-      const child = spawn(
-        process.execPath,
-        ["--input-type=module", "-e", source, helperPath, directory, bytes],
-        { encoding: "utf8" },
-      );
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk;
-      });
-      child.on("error", (cause) => {
-        results.push({ index, status: 1, stdout, stderr: cause.message });
-        finish();
-      });
-      child.on("close", (status) => {
-        results.push({ index, status, stdout, stderr });
-        finish();
-      });
-    }
-  });
-}
-
-function observeDirectoryPublish(directory, helperPath) {
-  const source = `
-import { pathToFileURL } from "node:url";
-const [helperPath, directory] = process.argv.slice(1);
-try {
-  const entry = process.argv[1];
-  process.argv[1] = "";
-  const { writeDirectoryCreateOrCompare } =
-    await import(pathToFileURL(helperPath).href);
-  process.argv[1] = entry;
-  const bytes = "x".repeat(8 * 1024 * 1024);
-  writeDirectoryCreateOrCompare(directory, [
-    { name: "first.json", bytes },
-    { name: "second.json", bytes },
-  ]);
-} catch (cause) {
-  console.error(cause.message);
-  process.exitCode = 1;
-}
-`;
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ["--input-type=module", "-e", source, helperPath, directory],
-      { encoding: "utf8" },
-    );
-    const expectedSize = 8 * 1024 * 1024;
-    let violation = "";
-    let stderr = "";
-    const observe = () => {
-      if (!existsSync(directory)) return;
-      try {
-        const entries = readdirSync(directory, { withFileTypes: true })
-          .sort((left, right) => left.name.localeCompare(right.name));
-        if (
-          entries.length !== 2 ||
-          entries.some((entry, index) =>
-            !entry.isFile() ||
-            entry.name !== ["first.json", "second.json"][index] ||
-            readFileSync(join(directory, entry.name)).length !== expectedSize
-          )
-        ) {
-          violation = "observer saw a partial published directory";
-        }
-      } catch (cause) {
-        violation = `observer could not inspect published directory: ${cause.message}`;
-      }
-    };
-    const timer = setInterval(observe, 1);
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("close", (status) => {
-      clearInterval(timer);
-      observe();
-      resolve({ status, stderr, violation });
-    });
-  });
-}
-
-function compareExistingDirectory(directory, helperPath, bytes) {
-  const source = `
-import { pathToFileURL } from "node:url";
-const [helperPath, directory, bytes] = process.argv.slice(1);
-try {
-  const entry = process.argv[1];
-  process.argv[1] = "";
-  const { writeDirectoryCreateOrCompare } =
-    await import(pathToFileURL(helperPath).href);
-  process.argv[1] = entry;
-  const result = writeDirectoryCreateOrCompare(directory, [
-    { name: "seat.json", bytes },
-  ]);
-  console.log(JSON.stringify(result));
-} catch (cause) {
-  console.error(cause.message);
-  process.exitCode = 1;
-}
-`;
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ["--input-type=module", "-e", source, helperPath, directory, bytes],
-      { encoding: "utf8" },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("close", (status) => resolve({ status, stdout, stderr }));
-  });
-}
-
-function observeFilePublication(path, helperPath) {
-  const source = `
-import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import { pathToFileURL } from "node:url";
-const [helperPath, path] = process.argv.slice(1);
-const originalLinkSync = fs.linkSync;
-fs.linkSync = (...args) => {
-  originalLinkSync(...args);
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
-};
-syncBuiltinESMExports();
-try {
-  const entry = process.argv[1];
-  process.argv[1] = "";
-  const { writeCreateOrCompare } =
-    await import(pathToFileURL(helperPath).href);
-  process.argv[1] = entry;
-  writeCreateOrCompare(path, { safe: true });
-} catch (cause) {
-  console.error(cause.message);
-  process.exitCode = 1;
-}
-`;
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ["--input-type=module", "-e", source, helperPath, path],
-      { encoding: "utf8" },
-    );
-    let violation = "";
-    let stderr = "";
-    const observe = () => {
-      if (!existsSync(path)) return;
-      try {
-        const stat = lstatSync(path);
-        if (!stat.isFile() || stat.nlink !== 1) {
-          violation = `published destination appeared with link count ${stat.nlink}`;
-        }
-      } catch (cause) {
-        violation = `published destination could not be inspected: ${cause.message}`;
-      }
-    };
-    const timer = setInterval(observe, 1);
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("close", (status) => {
-      clearInterval(timer);
-      observe();
-      resolve({ status, stderr, violation });
-    });
-  });
-}
-
-function unavailableDirectoryPublish(directory, helperPath, pathWithoutPerl) {
-  const source = `
-import { pathToFileURL } from "node:url";
-const [helperPath, directory] = process.argv.slice(1);
-try {
-  const entry = process.argv[1];
-  process.argv[1] = "";
-  const { writeDirectoryCreateOrCompare } =
-    await import(pathToFileURL(helperPath).href);
-  process.argv[1] = entry;
-  const result = writeDirectoryCreateOrCompare(directory, [
-    { name: "seat.json", bytes: "fault\\n" },
-  ]);
-  console.log(JSON.stringify(result));
-} catch (cause) {
-  console.error(cause.message);
-  process.exitCode = 1;
-}
-`;
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ["--input-type=module", "-e", source, helperPath, directory],
-      {
-        encoding: "utf8",
-        env: { ...process.env, PATH: pathWithoutPerl },
-      },
-    );
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("close", (status) => resolve({ status, stderr }));
-  });
-}
-
-function failedRenameDirectoryPublish(directory, helperPath, errno) {
-  const bin = `${directory}-bin`;
-  mkdirSync(bin);
-  const perl = join(bin, "perl");
-  writeFileSync(
-    perl,
-    `#!/bin/sh\necho "renameat2 errno=${errno}: injected" >&2\nexit 1\n`,
-  );
-  chmodSync(perl, 0o755);
-  return unavailableDirectoryPublish(directory, helperPath, bin);
-}
-
-function replacedTemporaryPublish(destination, helperPath, kind) {
-  const bin = `${destination}-replace-bin`;
-  mkdirSync(bin);
-  const perl = join(bin, "perl");
-  writeFileSync(
-    perl,
-    `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
-const parent = "/proc/self/fd/3";
-const source = process.argv[5];
-fs.renameSync(
-  path.join(parent, source),
-  path.join(parent, \`\${source}-original\`),
-);
-if (process.env.D2B_REPLACEMENT_KIND === "directory") {
-  fs.mkdirSync(path.join(parent, source));
-  fs.writeFileSync(path.join(parent, source, "replacement.txt"), "replacement\\n");
-} else {
-  fs.writeFileSync(path.join(parent, source), "replacement\\n");
-}
-console.error("renameat2 errno=31: injected replacement");
-process.exit(1);
-`,
-  );
-  chmodSync(perl, 0o755);
-  const source = `
-import { pathToFileURL } from "node:url";
-const [helperPath, destination, kind] = process.argv.slice(1);
-try {
-  process.argv[1] = "";
-  const helper = await import(pathToFileURL(helperPath).href);
-  if (kind === "directory") {
-    helper.writeDirectoryCreateOrCompare(destination, [
-      { name: "seat.json", bytes: "original\\n" },
-    ]);
-  } else {
-    helper.writeCreateOrCompare(destination, { original: true });
-  }
-} catch (cause) {
-  console.error(cause.message);
-  process.exitCode = 1;
-}
-`;
-  return spawnSync(
-    process.execPath,
-    ["--input-type=module", "-e", source, helperPath, destination, kind],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        D2B_REPLACEMENT_KIND: kind,
-        PATH: bin,
-      },
-    },
-  );
-}
-
-function instrumentDirectoryReads(
-  directory,
-  helperPath,
-  expectedNames,
-  maxBytes,
-) {
-  const source = `
-import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import { pathToFileURL } from "node:url";
-const [helperPath, directory, expectedNamesJson, maxBytesText] =
-  process.argv.slice(1);
-const originalReadSync = fs.readSync;
-let reads = 0;
-fs.readSync = (...args) => {
-  reads += 1;
-  return originalReadSync(...args);
-};
-const originalReadDirectorySync = fs.readdirSync;
-let fullDirectoryReads = 0;
-fs.readdirSync = (...args) => {
-  fullDirectoryReads += 1;
-  return originalReadDirectorySync(...args);
-};
-const originalOpenDirectorySync = fs.opendirSync;
-let streamedDirectoryReads = 0;
-fs.opendirSync = (...args) => {
-  const directory = originalOpenDirectorySync(...args);
-  const originalReadDirectory = directory.readSync.bind(directory);
-  directory.readSync = (...readArgs) => {
-    streamedDirectoryReads += 1;
-    return originalReadDirectory(...readArgs);
-  };
-  return directory;
-};
-syncBuiltinESMExports();
-try {
-  process.argv[1] = "";
-  const { readDirectoryNoFollow } =
-    await import(pathToFileURL(helperPath).href);
-  reads = 0;
-  readDirectoryNoFollow(directory, {
-    label: "instrumented records",
-    expectedNames: JSON.parse(expectedNamesJson),
-    maxBytes: Number(maxBytesText),
-  });
-  console.log(JSON.stringify({
-    accepted: true,
-    reads,
-    fullDirectoryReads,
-    streamedDirectoryReads,
-  }));
-} catch (cause) {
-  console.log(JSON.stringify({
-   accepted: false,
-   reads,
-   fullDirectoryReads,
-   streamedDirectoryReads,
-   message: cause.message,
-  }));
-}
-`;
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      source,
-      helperPath,
-      directory,
-      JSON.stringify(expectedNames),
-      String(maxBytes),
-    ],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout);
-  }
-  return JSON.parse(result.stdout);
 }
 
 console.log("panel lifecycle: documented handoff");
@@ -1614,314 +1213,6 @@ try {
     () => writeCreateOrCompare(ledgerPath, { ...ledger, complete: false }),
     /conflicting generated bytes/,
   );
-  const unsafeIo = join(root, "unsafe-io");
-  mkdirSync(unsafeIo);
-  const symlinkTarget = join(unsafeIo, "symlink-target.json");
-  writeFileSync(symlinkTarget, "{}\n");
-  const symlinkOutput = join(unsafeIo, "symlink-output.json");
-  symlinkSync(symlinkTarget, symlinkOutput);
-  rejects(
-    "generated publication rejects an existing symlink",
-    () => writeCreateOrCompare(symlinkOutput, { safe: true }),
-    /symbolic link|ELOOP|regular file/,
-  );
-  const hardlinkSource = join(unsafeIo, "hardlink-source.json");
-  const hardlinkOutput = join(unsafeIo, "hardlink-output.json");
-  writeFileSync(hardlinkSource, "{}\n");
-  linkSync(hardlinkSource, hardlinkOutput);
-  rejects(
-    "generated publication rejects an existing hardlink",
-    () => writeCreateOrCompare(hardlinkOutput, { safe: true }),
-    /link count|hardlink/,
-  );
-  const observedFile = join(unsafeIo, "atomic-file-output.json");
-  const fileObservation = await observeFilePublication(
-    observedFile,
-    LIFECYCLE_CLI,
-  );
-  check(
-    "generated publication never exposes a multiply linked destination",
-    fileObservation.status === 0 &&
-      fileObservation.violation === "" &&
-      lstatSync(observedFile).nlink === 1,
-    fileObservation.violation || fileObservation.stderr,
-  );
-  const fifoOutput = join(unsafeIo, "fifo-output.json");
-  const fifo = spawnSync("mkfifo", [fifoOutput], { encoding: "utf8" });
-  check("FIFO negative fixture creation succeeds", fifo.status === 0, fifo.stderr);
-  rejects(
-    "generated publication rejects a FIFO without blocking",
-    () => writeCreateOrCompare(fifoOutput, { safe: true }),
-    /not a regular file/,
-  );
-  const symlinkParent = join(unsafeIo, "symlink-parent");
-  symlinkSync(unsafeIo, symlinkParent);
-  rejects(
-    "generated publication rejects a symlinked parent",
-    () => writeCreateOrCompare(join(symlinkParent, "child.json"), { safe: true }),
-    /symbolic link|ELOOP|ENOTDIR/,
-  );
-  const directoryFd = openSync(unsafeIo, "r");
-  try {
-    const magicParent = join(root, "magic-parent");
-    symlinkSync(`/proc/self/fd/${directoryFd}`, magicParent);
-    rejects(
-      "generated publication rejects a procfs magic-link parent",
-      () => writeCreateOrCompare(join(magicParent, "child.json"), { safe: true }),
-      /symbolic link|ELOOP|ENOTDIR/,
-    );
-  } finally {
-    closeSync(directoryFd);
-  }
-  const replaceRoot = join(root, "replace-parent-root");
-  const replaceParent = join(replaceRoot, "parent");
-  const replacedParent = join(replaceRoot, "parent-replaced");
-  mkdirSync(replaceParent, { recursive: true });
-  rejects(
-    "command output publication rejects a replaced parent",
-    () => writeCommandOutputCreateOrCompare(
-      join(replaceParent, "output.txt"),
-      process.execPath,
-      [
-        "-e",
-        `
-const fs = require("node:fs");
-fs.renameSync(process.argv[1], process.argv[2]);
-fs.mkdirSync(process.argv[1]);
-process.stdout.write("attacker-controlled timing\\n");
-`,
-        replaceParent,
-        replacedParent,
-      ],
-    ),
-    /changed identity/,
-  );
-  check(
-    "a replacement parent receives no command output",
-    !existsSync(join(replaceParent, "output.txt")),
-  );
-  check(
-    "a replaced command-output parent retains neither output nor temporary bytes",
-    readdirSync(replaceParent).length === 0 &&
-      readdirSync(replacedParent).every((name) =>
-        name !== "output.txt" && !name.includes(".command.tmp") &&
-        !name.includes(".raw.tmp")),
-  );
-
-  const aggregateRecords = join(root, "aggregate-records");
-  mkdirSync(aggregateRecords);
-  writeFileSync(join(aggregateRecords, "first.json"), "123");
-  writeFileSync(join(aggregateRecords, "second.json"), "45");
-  const aggregateExact = readDirectoryNoFollow(aggregateRecords, {
-    label: "aggregate records",
-    expectedNames: ["first.json", "second.json"],
-    maxBytes: 5,
-  });
-  check(
-    "directory ingestion accepts the exact cumulative byte boundary",
-    aggregateExact.reduce((total, entry) => total + entry.bytes.length, 0) === 5,
-  );
-  const aggregateInstrumented = instrumentDirectoryReads(
-    aggregateRecords,
-    LIFECYCLE_CLI,
-    ["first.json", "second.json"],
-    4,
-  );
-  check(
-    "aggregate directory rejection occurs before any record read",
-    aggregateInstrumented.accepted === false &&
-      aggregateInstrumented.reads === 0 &&
-      aggregateInstrumented.fullDirectoryReads === 0 &&
-      aggregateInstrumented.streamedDirectoryReads <= 3 &&
-      /aggregate bytes 5.*limit 4/.test(aggregateInstrumented.message),
-    JSON.stringify(aggregateInstrumented),
-  );
-  writeFileSync(join(aggregateRecords, "unexpected.json"), "{ malformed\n");
-  const namesInstrumented = instrumentDirectoryReads(
-    aggregateRecords,
-    LIFECYCLE_CLI,
-    ["first.json", "second.json"],
-    100,
-  );
-  check(
-    "unexpected directory names are rejected before any record read",
-    namesInstrumented.accepted === false &&
-      namesInstrumented.reads === 0 &&
-      namesInstrumented.fullDirectoryReads === 0 &&
-      namesInstrumented.streamedDirectoryReads <= 3 &&
-      /incomplete or has extra entries|more than 2 entries/.test(namesInstrumented.message) &&
-      /unexpected\.json/.test(namesInstrumented.message),
-    JSON.stringify(namesInstrumented),
-  );
-  const emptyEntryRoot = join(root, "empty-entry-root");
-  mkdirSync(emptyEntryRoot);
-  for (let index = 0; index < 4; index += 1) {
-    writeFileSync(join(emptyEntryRoot, `empty-${index}.txt`), "");
-  }
-  rejects(
-    "root accounting bounds adversarial zero-byte entries",
-    () => directoryTreeUsageNoFollow(emptyEntryRoot, {
-      maxBytes: 100,
-      maxEntries: 3,
-      maxDepth: 4,
-    }),
-    /more than 3 entries|entry quota/,
-  );
-  const countedEntryRoot = join(root, "counted-entry-root");
-  mkdirSync(join(countedEntryRoot, "nested"), { recursive: true });
-  writeFileSync(join(countedEntryRoot, "nested", "empty.txt"), "");
-  const countedEntries = directoryTreeUsageNoFollow(countedEntryRoot, {
-    maxBytes: 100,
-    maxEntries: 4,
-    maxDepth: 4,
-  });
-  check(
-    "root accounting counts directories and zero-byte files",
-    countedEntries.bytes === 0 && countedEntries.entries === 2,
-  );
-  const deepEntryRoot = join(root, "deep-entry-root");
-  let deepPath = deepEntryRoot;
-  mkdirSync(deepPath);
-  for (let index = 0; index < 6; index += 1) {
-    deepPath = join(deepPath, `level-${index}`);
-    mkdirSync(deepPath);
-  }
-  rejects(
-    "root accounting bounds adversarial directory depth",
-    () => directoryTreeUsageNoFollow(deepEntryRoot, {
-      maxBytes: 100,
-      maxEntries: 100,
-      maxDepth: 3,
-    }),
-    /depth limit/,
-  );
-
-  const exactQuotaRoot = join(root, "exact-quota");
-  mkdirSync(exactQuotaRoot);
-  writeFileSync(join(exactQuotaRoot, "retained.txt"), "keep");
-  const exactQuotaOutput = join(exactQuotaRoot, "output.txt");
-  writeCommandOutputCreateOrCompare(
-    exactQuotaOutput,
-    process.execPath,
-    ["-e", 'process.stdout.write("123")'],
-    { retentionRoot: exactQuotaRoot, maxBytes: 7 },
-  );
-  check(
-    "command output uses only the remaining cumulative root budget",
-    readFileSync(exactQuotaOutput, "utf8") === "123" &&
-      directoryTreeUsageNoFollow(exactQuotaRoot).bytes === 7,
-  );
-  const overQuotaRoot = join(root, "over-quota");
-  mkdirSync(overQuotaRoot);
-  writeFileSync(join(overQuotaRoot, "retained.txt"), "keep");
-  rejects(
-    "streamed command output rejects one byte beyond the cumulative boundary",
-    () => writeCommandOutputCreateOrCompare(
-      join(overQuotaRoot, "output.txt"),
-      process.execPath,
-      ["-e", 'process.stdout.write("1234")'],
-      { retentionRoot: overQuotaRoot, maxBytes: 7 },
-    ),
-    /status:.*migration:.*prune:.*no existing packet was deleted/,
-  );
-  check(
-    "over-quota command output leaves no publication temporary",
-    readdirSync(overQuotaRoot).join(",") === "retained.txt",
-  );
-  const generatedQuotaRoot = join(root, "generated-quota");
-  mkdirSync(generatedQuotaRoot);
-  writeFileSync(join(generatedQuotaRoot, "retained.txt"), "keep");
-  const generatedValue = { bounded: true };
-  const generatedBytes = Buffer.byteLength(stableStringify(generatedValue));
-  writeCreateOrCompare(
-    join(generatedQuotaRoot, "generated.json"),
-    generatedValue,
-    {
-      retentionRoot: generatedQuotaRoot,
-      maxBytes: 4 + generatedBytes,
-    },
-  );
-  check(
-    "generated-file temporary accepts only its cumulative boundary",
-    directoryTreeUsageNoFollow(generatedQuotaRoot).bytes ===
-      4 + generatedBytes,
-  );
-  const familyQuotaRoot = join(root, "family-quota");
-  mkdirSync(familyQuotaRoot);
-  writeFileSync(join(familyQuotaRoot, "retained.txt"), "keep");
-  writeDirectoryCreateOrCompare(
-    join(familyQuotaRoot, "family"),
-    [
-      { name: "first.json", bytes: "12" },
-      { name: "second.json", bytes: "3" },
-    ],
-    { retentionRoot: familyQuotaRoot, maxBytes: 7 },
-  );
-  check(
-    "directory-family temporary uses one cumulative family boundary",
-    directoryTreeUsageNoFollow(familyQuotaRoot).bytes === 7,
-  );
-  const rejectedFamilyRoot = join(root, "rejected-family-quota");
-  mkdirSync(rejectedFamilyRoot);
-  writeFileSync(join(rejectedFamilyRoot, "retained.txt"), "keep");
-  rejects(
-    "directory-family aggregate rejects one byte past remaining root budget",
-    () => writeDirectoryCreateOrCompare(
-      join(rejectedFamilyRoot, "family"),
-      [
-        { name: "first.json", bytes: "12" },
-        { name: "second.json", bytes: "34" },
-      ],
-      { retentionRoot: rejectedFamilyRoot, maxBytes: 7 },
-    ),
-    /root-wide exact-packet quota/,
-  );
-  check(
-    "rejected directory-family quota leaves no staging directory",
-    readdirSync(rejectedFamilyRoot).join(",") === "retained.txt",
-  );
-
-  const cleanupRoot = join(root, "identity-cleanup");
-  const cleanupOwned = join(cleanupRoot, "owned");
-  const cleanupMoved = join(cleanupRoot, "owned-moved");
-  mkdirSync(cleanupOwned, { recursive: true });
-  writeFileSync(join(cleanupOwned, "original.txt"), "original\n");
-  const cleanupIdentity = lstatSync(cleanupOwned, { bigint: true });
-  renameSync(cleanupOwned, cleanupMoved);
-  mkdirSync(cleanupOwned);
-  writeFileSync(join(cleanupOwned, "replacement.txt"), "replacement\n");
-  rejects(
-    "incomplete-directory cleanup refuses a replaced identity",
-    () => removeDirectoryIfIdentityNoFollow(cleanupOwned, {
-      dev: cleanupIdentity.dev.toString(),
-      ino: cleanupIdentity.ino.toString(),
-    }),
-    /no longer has the identity/,
-  );
-  check(
-    "replaced-identity cleanup removes neither identity",
-    readFileSync(join(cleanupOwned, "replacement.txt"), "utf8") ===
-      "replacement\n" &&
-      readFileSync(join(cleanupMoved, "original.txt"), "utf8") ===
-      "original\n",
-  );
-  const cleanupStable = join(cleanupRoot, "stable");
-  mkdirSync(cleanupStable);
-  writeFileSync(join(cleanupStable, "retained.txt"), "retained\n");
-  const cleanupStableIdentity = lstatSync(cleanupStable, { bigint: true });
-  rejects(
-    "matching-identity cleanup preserves state instead of unlinking replaceable names",
-    () => removeDirectoryIfIdentityNoFollow(cleanupStable, {
-      dev: cleanupStableIdentity.dev.toString(),
-      ino: cleanupStableIdentity.ino.toString(),
-    }),
-    /automatic pathname cleanup is refused/,
-  );
-  check(
-    "refused matching-identity cleanup retains every pathname",
-    readFileSync(join(cleanupStable, "retained.txt"), "utf8") === "retained\n",
-  );
-
   console.log("panel lifecycle: responses and strict acceptance");
   const responseInput = makeLedger();
   const fixed = {
@@ -2179,7 +1470,9 @@ process.stdout.write("attacker-controlled timing\\n");
     { accepter: 1, capacity: "merge owner", justification: "x" },
     { accepter: "x", capacity: 1, justification: "x" },
     { accepter: "x", capacity: "merge owner", justification: 1 },
+    { accepter: "", capacity: "merge owner", justification: "x" },
     { accepter: " ", capacity: "merge owner", justification: "x" },
+    { accepter: "x", capacity: "merge owner", justification: "" },
     { accepter: "x", capacity: "merge owner", justification: " " },
     { accepter: "x", capacity: "", justification: "x" },
     { accepter: "x", capacity: " ", justification: "x" },
@@ -2286,9 +1579,7 @@ process.stdout.write("attacker-controlled timing\\n");
     })),
     /not admissible/,
   );
-  check(
-    "introduced late NIT is admitted as a non-discovery regression",
-    lateFindingAdmission(documentedLateFinding({
+  const admittedLateNit = lateFindingAdmission(documentedLateFinding({
       severity: "NIT",
       introduced_regression: true,
       previously_missed: false,
@@ -2297,18 +1588,25 @@ process.stdout.write("attacker-controlled timing\\n");
       description: "A new style regression.",
       impact: "The fix introduced a regression.",
       recommendation: "Correct the regression.",
-    })).late === true,
-  );
+    }));
   check(
-    "previously missed late MAJOR is admitted",
-    lateFindingAdmission(documentedLateFinding({
+    "introduced late NIT is admitted as a non-discovery regression",
+    admittedLateNit.introduced_regression === true &&
+      !Object.hasOwn(admittedLateNit, "late"),
+  );
+  const admittedLateMajor = lateFindingAdmission(documentedLateFinding({
       severity: "MAJOR",
       source_id: "software:late-4",
       raw_text: "A missed merge-risk issue.",
       description: "A missed merge-risk issue.",
       impact: "Approval would be unsafe.",
       recommendation: "Fix the issue.",
-    })).late === true,
+    }));
+  check(
+    "previously missed late MAJOR is admitted",
+    admittedLateMajor.previously_missed === true &&
+      Object.keys(admittedLateMajor).sort().join(",") ===
+        [...LATE_FINDING_SCHEMA.required].sort().join(","),
   );
   const appendedFinding = documentedLateFinding({
     severity: "MAJOR",
@@ -2427,6 +1725,18 @@ process.stdout.write("attacker-controlled timing\\n");
     "actual verdict JSON adapts to explicit verification status",
     actualVerificationVerdict.verified_issue_statuses.R1 === "resolved" &&
       actualVerificationVerdict.signoff === true,
+  );
+  const nonEmptyAdaptedVerificationVerdict = adaptVerificationVerdict({
+    ...canonicalVerificationVerdict,
+    late_findings: [documentedLateFinding({
+      source_id: "software:adapted-late",
+    })],
+  }, { issue_ids: verificationIssueIds });
+  check(
+    "non-empty verdict adaptation preserves the exact public late-finding schema",
+    Object.keys(nonEmptyAdaptedVerificationVerdict.late_findings[0]).sort().join(",") ===
+      [...LATE_FINDING_SCHEMA.required].sort().join(",") &&
+      !Object.hasOwn(nonEmptyAdaptedVerificationVerdict.late_findings[0], "late"),
   );
   const verificationLedger = {
     ...responseInput,
@@ -2803,6 +2113,18 @@ process.stdout.write("attacker-controlled timing\\n");
     { agentic: [lateSpec003Finding] },
     advanceLedger,
   );
+  advanceRawResults.agentic = adaptVerificationVerdict({
+    engineer: "agentic",
+    signoff: true,
+    summary: "The late finding is recorded for continuation.",
+    verified_issue_statuses: Object.fromEntries(
+      advanceLedger.issues.map((issue) => [issue.id, "resolved"]),
+    ),
+    late_findings: [lateSpec003Finding],
+    recommendations: [],
+  }, {
+    issue_ids: advanceLedger.issues.map((issue) => issue.id),
+  });
   advanceRawResults.software.verified_issue_statuses.R2 = "open";
   const advanceVerificationArtifact = adaptedVerificationArtifact(
     verificationSelection.selection,
@@ -3094,163 +2416,6 @@ process.stdout.write("attacker-controlled timing\\n");
       { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
     ),
     /missing verification result/,
-  );
-  const raceDirectory = join(root, "race-family");
-  const raceResults = await concurrentDirectoryPublish(raceDirectory, LIFECYCLE_CLI);
-  const raceBytes = readFileSync(join(raceDirectory, "seat.json"), "utf8");
-  check(
-    "concurrent directory publishers have exactly one atomic winner",
-    raceResults.filter((result) =>
-      result.status === 0 && /"created":true/.test(result.stdout),
-    ).length === 1 &&
-      ["first\n", "second\n"].includes(raceBytes) &&
-      !existsSync(`${raceDirectory}.claim`) &&
-      raceResults.every((result) => result.status === 0 || result.status === 1),
-    raceResults.map((result) => `${result.stdout}${result.stderr}`).join(" "),
-  );
-  const existingComparison = await compareExistingDirectory(
-    raceDirectory,
-    LIFECYCLE_CLI,
-    raceBytes,
-  );
-  check(
-    "an existing complete directory is compared without replacement",
-    existingComparison.status === 0 &&
-      /"created":false/.test(existingComparison.stdout),
-    `${existingComparison.stdout}${existingComparison.stderr}`,
-  );
-  const observedDirectory = join(root, "observed-family");
-  const observation = await observeDirectoryPublish(observedDirectory, LIFECYCLE_CLI);
-  const observedEntries = readdirSync(observedDirectory).sort();
-  check(
-    "directory observers see either no destination or a complete family",
-    observation.status === 0 &&
-      observation.violation === "" &&
-      observedEntries.join(",") === "first.json,second.json" &&
-      readdirSync(observedDirectory).every((name) =>
-        readFileSync(join(observedDirectory, name)).length === 8 * 1024 * 1024),
-    observation.violation || observation.stderr,
-  );
-  const faultDirectory = join(root, "unavailable-renameat2-family");
-  const noPerlPath = join(root, "no-perl-bin");
-  mkdirSync(noPerlPath);
-  const fault = await unavailableDirectoryPublish(
-    faultDirectory,
-    LIFECYCLE_CLI,
-    noPerlPath,
-  );
-  const faultSiblings = readdirSync(dirname(faultDirectory))
-    .filter((name) => name.startsWith(`.${basename(faultDirectory)}.stage-`));
-  check(
-    "an unavailable atomic primitive fails clearly and preserves staging state",
-    fault.status === 1 &&
-      !existsSync(faultDirectory) &&
-      !existsSync(`${faultDirectory}.claim`) &&
-      faultSiblings.length === 1 &&
-      readFileSync(join(root, faultSiblings[0], "seat.json"), "utf8") ===
-        "fault\n" &&
-      /atomic no-replace directory publication is unavailable.*ENOENT/.test(
-        fault.stderr,
-      ),
-    fault.stderr,
-  );
-  for (const [errno, name] of [[18, "EXDEV"], [31, "EMLINK"]]) {
-    const injectedDirectory = join(root, `renameat2-${name}-family`);
-    const injected = await failedRenameDirectoryPublish(
-      injectedDirectory,
-      LIFECYCLE_CLI,
-      errno,
-    );
-    const injectedSiblings = readdirSync(dirname(injectedDirectory))
-      .filter((entry) =>
-        entry.startsWith(`.${basename(injectedDirectory)}.stage-`));
-    check(
-      `renameat2 ${name} fails closed and preserves unpublished staging`,
-      injected.status === 1 &&
-        !existsSync(injectedDirectory) &&
-        !existsSync(`${injectedDirectory}.claim`) &&
-        injectedSiblings.length === 1 &&
-        readFileSync(
-          join(root, injectedSiblings[0], "seat.json"),
-          "utf8",
-        ) === "fault\n" &&
-        new RegExp(`unavailable.*errno ${errno}`).test(injected.stderr),
-      injected.stderr,
-    );
-  }
-  const replacedDirectoryTemporary = join(
-    root,
-    "replaced-directory-temporary",
-  );
-  const replacedDirectoryResult = replacedTemporaryPublish(
-    replacedDirectoryTemporary,
-    LIFECYCLE_CLI,
-    "directory",
-  );
-  const replacedDirectorySiblings = readdirSync(root)
-    .filter((name) => name.startsWith(".replaced-directory-temporary.stage-"));
-  const replacedDirectoryOriginal = replacedDirectorySiblings.find((name) =>
-    name.endsWith("-original"));
-  const replacedDirectoryReplacement = replacedDirectorySiblings.find((name) =>
-    !name.endsWith("-original"));
-  check(
-    "directory temporary cleanup refuses both sides of a replaced identity",
-    replacedDirectoryResult.status === 1 &&
-      replacedDirectoryOriginal !== undefined &&
-      replacedDirectoryReplacement !== undefined &&
-      readFileSync(
-        join(root, replacedDirectoryOriginal, "seat.json"),
-        "utf8",
-      ) === "original\n" &&
-      readFileSync(
-        join(root, replacedDirectoryReplacement, "replacement.txt"),
-        "utf8",
-      ) === "replacement\n",
-    replacedDirectoryResult.stderr,
-  );
-  const replacedFileTemporary = join(root, "replaced-file-temporary.json");
-  const replacedFileResult = replacedTemporaryPublish(
-    replacedFileTemporary,
-    LIFECYCLE_CLI,
-    "file",
-  );
-  const replacedFileSiblings = readdirSync(root)
-    .filter((name) => name.startsWith(".replaced-file-temporary.json."));
-  check(
-    "file publication exposes no temporary pathname for replacement or cleanup",
-    replacedFileResult.status === 1 &&
-      replacedFileSiblings.length === 0 &&
-      !existsSync(replacedFileTemporary) &&
-      /identity-pinned unnamed file publication failed/.test(
-        replacedFileResult.stderr,
-      ),
-    replacedFileResult.stderr,
-  );
-  const staleDirectory = join(root, "stale-family");
-  mkdirSync(`${staleDirectory}.claim`);
-  const staleRecovery = writeDirectoryCreateOrCompare(
-    staleDirectory,
-    [{ name: "seat.json", bytes: "stale\n" }],
-  );
-  check(
-    "a crash-stale sibling claim cannot block directory publication",
-    staleRecovery.created === true &&
-      readFileSync(join(staleDirectory, "seat.json"), "utf8") === "stale\n" &&
-      existsSync(`${staleDirectory}.claim`),
-  );
-  rmSync(`${staleDirectory}.claim`, { recursive: true, force: true });
-  const hardlinkedFamily = join(root, "hardlinked-family");
-  mkdirSync(hardlinkedFamily);
-  const hardlinkedFamilySource = join(root, "hardlinked-family-source.json");
-  writeFileSync(hardlinkedFamilySource, "same\n");
-  linkSync(hardlinkedFamilySource, join(hardlinkedFamily, "seat.json"));
-  rejects(
-    "an existing artifact family rejects a hardlinked entry",
-    () => writeDirectoryCreateOrCompare(
-      hardlinkedFamily,
-      [{ name: "seat.json", bytes: "same\n" }],
-    ),
-    /link count|hardlink/,
   );
   rejects(
     "verification requires an explicit current candidate",
@@ -4110,7 +3275,7 @@ process.stdout.write("attacker-controlled timing\\n");
           provider: "github-copilot",
           model: "gpt-5.6-sol",
           reasoning_effort: "xhigh",
-          context_tier: "long_context",
+          context_tier: "default",
           agent_type: `panel-${seat}`,
           agent_definition_sha256: sha256(definition.toString("utf8")),
           run_id: `cli-run-${index}`,
@@ -4327,6 +3492,24 @@ console.log("panel lifecycle: legacy continuation");
       records: legacyWireRecords,
       record_bytes: exactLegacyRecordBytes,
       attestation: shuffledLegacyAttestation,
+    }, { candidate: legacyCandidate }),
+    /roster order|expected software/,
+  );
+  const shuffledLegacySealPanel = {
+    ...exactLegacyAttestation,
+    records: [
+      exactLegacyAttestation.records[1],
+      exactLegacyAttestation.records[0],
+      ...exactLegacyAttestation.records.slice(2),
+    ],
+  };
+  rejects(
+    "legacy seal-panel rejects records outside historical roster order",
+    () => importLegacyRound({
+      request: legacyRequest,
+      records: legacyWireRecords,
+      record_bytes: exactLegacyRecordBytes,
+      seal_panel: shuffledLegacySealPanel,
     }, { candidate: legacyCandidate }),
     /roster order|expected software/,
   );

@@ -53,6 +53,7 @@ const MAX_STAGED_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
 const MAX_POST_STAGE_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_VERDICT_BYTES = 512 * 1024;
+const MAX_RECORD_BYTES = 512 * 1024;
 const MAX_ARTIFACT_PATH_CHARS = 1024;
 
 const errors = [];
@@ -804,7 +805,13 @@ function writeRecordFamilyCreateOrCompare(directory, entries) {
       throw new Error(`record family at ${directory} is incomplete or has extra entries`);
     }
     for (const name of expectedNames) {
-      if (!readFileSync(join(directory, name)).equals(expected.get(name))) {
+      if (
+        !readLimitedBytes(
+          join(directory, name),
+          `existing record ${name}`,
+          MAX_RECORD_BYTES,
+        ).equals(expected.get(name))
+      ) {
         throw new Error(`conflicting generated record bytes at ${join(directory, name)}`);
       }
     }

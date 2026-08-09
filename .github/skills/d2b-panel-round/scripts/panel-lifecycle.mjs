@@ -9,22 +9,19 @@
  */
 
 import { createHash } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { TextDecoder } from "node:util";
 import {
-  closeSync,
-  constants as fsConstants,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
-  openSync,
-  opendirSync,
-  readSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, posix, resolve } from "node:path";
+import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -98,8 +95,6 @@ const error = (message) => {
   throw new Error(message);
 };
 
-let temporaryCounter = 0;
-
 /*
  * Rust's ordered sets compare the UTF-8 representation of valid strings.
  * JavaScript's default Array#sort compares UTF-16 code units, which puts a
@@ -167,294 +162,38 @@ export const sha256 = (value) =>
     .update(typeof value === "string" ? value : stableStringify(value))
     .digest("hex");
 
-const MAX_ANCHORED_READ_BYTES = 1024 * 1024 * 1024;
-const DIRECTORY_OPEN_FLAGS =
-  fsConstants.O_RDONLY |
-  fsConstants.O_DIRECTORY |
-  fsConstants.O_NOFOLLOW |
-  fsConstants.O_CLOEXEC;
-const FILE_READ_FLAGS =
-  fsConstants.O_RDONLY |
-  fsConstants.O_NONBLOCK |
-  fsConstants.O_NOFOLLOW |
-  fsConstants.O_CLOEXEC;
-// Linux UAPI value: __O_TMPFILE | O_DIRECTORY. Node does not expose it.
-const O_TMPFILE = 0x410000;
+const MAX_PANEL_READ_BYTES = 64 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 4096;
-const MAX_DIRECTORY_TREE_ENTRIES = 100000;
-const MAX_DIRECTORY_TREE_DEPTH = 64;
 
-function procFdPath(fd, name = undefined) {
-  return name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`;
-}
-
-function closeAll(fds) {
-  for (const fd of [...fds].reverse()) {
-    try {
-      closeSync(fd);
-    } catch {
-      // Preserve the primary filesystem error.
-    }
-  }
-}
-
-function sameIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-function verifyDirectoryDescriptor(fd, label) {
-  const stat = fstatSync(fd, { bigint: true });
-  if (!stat.isDirectory()) error(`${label} is not a directory`);
-  return stat;
-}
-
-function verifyNamedIdentity(parentFd, name, openedStat, label) {
-  const named = lstatSync(procFdPath(parentFd, name), { bigint: true });
-  if (named.isSymbolicLink() || !sameIdentity(named, openedStat)) {
-    error(`${label} changed identity during anchored access`);
-  }
-  return named;
-}
-
-function absoluteComponents(path, label) {
-  if (typeof path !== "string" || path.length === 0 || path.includes("\0")) {
-    error(`${label} path must be a non-empty string without NUL`);
-  }
-  const absolute = resolve(path);
-  const components = absolute.split("/").filter(Boolean);
-  if (components.length === 0) error(`${label} path must name an entry below /`);
-  return components;
-}
-
-function descriptorPath(path, label) {
-  const match = /^\/proc\/self\/fd\/([0-9]+)(?:\/(.*))?$/u.exec(path);
-  if (!match) return undefined;
-  if (process.env.D2B_PANEL_ROOT_FD !== match[1]) {
-    error(`${label} descriptor path is not bound to the locked panel root`);
-  }
-  const fd = Number(match[1]);
-  if (!Number.isSafeInteger(fd) || fd < 0) {
-    error(`${label} descriptor path has an invalid descriptor`);
-  }
-  const suffix = match[2] ?? "";
-  const components = suffix === "" ? [] : suffix.split("/");
-  if (
-    components.some((component) =>
-      component === "" || component === "." || component === "..")
-  ) {
-    error(`${label} descriptor path is not normalized`);
-  }
-  verifyDirectoryDescriptor(fd, `${label} descriptor root`);
-  return { fd, components };
-}
-
-/*
- * Node does not expose openat2. Walk one component at a time from a pinned
- * root descriptor and address each child through the trusted procfs handle.
- * O_NOFOLLOW rejects both ordinary symlinks and procfs magic links supplied
- * as path components. Retaining the descriptor chain makes a renamed parent
- * harmless: later access remains on the inode that was opened and verified.
- */
-function openAnchoredParent(path, label, { create = false } = {}) {
-  const descriptor = descriptorPath(path, label);
-  const components = descriptor
-    ? [...descriptor.components]
-    : absoluteComponents(path, label);
-  const leaf = components.pop() ?? ".";
-  const openedNames = [];
-  const fds = [];
-  try {
-    let current;
-    if (descriptor === undefined) {
-      current = openSync("/", DIRECTORY_OPEN_FLAGS);
-      fds.push(current);
-    } else {
-      current = descriptor.fd;
-    }
-    for (const component of components) {
-      let child;
-      try {
-        child = openSync(procFdPath(current, component), DIRECTORY_OPEN_FLAGS);
-      } catch (cause) {
-        if (!create || cause.code !== "ENOENT") throw cause;
-        try {
-          mkdirSync(procFdPath(current, component), { mode: 0o700 });
-          fsyncSync(current);
-        } catch (mkdirCause) {
-          if (mkdirCause.code !== "EEXIST") throw mkdirCause;
-        }
-        child = openSync(procFdPath(current, component), DIRECTORY_OPEN_FLAGS);
-      }
-      const childStat = verifyDirectoryDescriptor(child, `${label} parent`);
-      verifyNamedIdentity(current, component, childStat, `${label} parent`);
-      fds.push(child);
-      openedNames.push(component);
-      current = child;
-    }
-    return {
-      parentFd: descriptor === undefined
-        ? fds.at(-1)
-        : (fds.at(-1) ?? descriptor.fd),
-      leaf,
-      verify: () => {
-        if (descriptor !== undefined) {
-          verifyDirectoryDescriptor(descriptor.fd, `${label} descriptor root`);
-        }
-        const firstChild = descriptor === undefined ? 1 : 0;
-        for (let index = firstChild; index < fds.length; index += 1) {
-          const stat = verifyDirectoryDescriptor(fds[index], `${label} parent`);
-          const parentFd = index === firstChild
-            ? (descriptor?.fd ?? fds[index - 1])
-            : fds[index - 1];
-          verifyNamedIdentity(
-            parentFd,
-            openedNames[index - firstChild],
-            stat,
-            `${label} parent`,
-          );
-        }
-      },
-      close: () => closeAll(fds),
-    };
-  } catch (cause) {
-    closeAll(fds);
-    throw cause;
-  }
-}
-
-function verifyRegularDescriptor(fd, parentFd, name, label, expectedLinks = 1n) {
-  const stat = fstatSync(fd, { bigint: true });
+function regularFileStat(path, label) {
+  const stat = lstatSync(path);
   if (!stat.isFile()) error(`${label} is not a regular file`);
-  if (stat.nlink !== expectedLinks) {
-    error(
-      `${label} has link count ${stat.nlink}; expected ${expectedLinks} and refusing a hardlink`,
-    );
-  }
-  const named = verifyNamedIdentity(parentFd, name, stat, label);
-  if (!named.isFile() || named.nlink !== expectedLinks) {
-    error(`${label} is not a singly linked regular file`);
-  }
   return stat;
 }
 
-function verifyUnnamedRegularDescriptor(fd, label, expectedLinks = 0n) {
-  const stat = fstatSync(fd, { bigint: true });
-  if (!stat.isFile()) error(`${label} is not a regular file`);
-  if (stat.nlink !== expectedLinks) {
-    error(
-      `${label} has link count ${stat.nlink}; expected ${expectedLinks}`,
-    );
-  }
-  return stat;
-}
-
-function openUnnamedTemporaryAt(parentFd, label) {
-  let fd;
-  try {
-    fd = openSync(
-      procFdPath(parentFd),
-      fsConstants.O_RDWR | fsConstants.O_CLOEXEC | O_TMPFILE,
-      0o600,
-    );
-    verifyUnnamedRegularDescriptor(fd, label);
-    return fd;
-  } catch (cause) {
-    if (fd !== undefined) closeSync(fd);
-    const reason = cause.code ?? cause.message;
-    error(
-      `identity-pinned unnamed file publication is unavailable for ${label}: ${reason}`,
-    );
-  }
-}
-
-function readOpenedFile(fd, maxBytes, label, start = null) {
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const remaining = maxBytes - total;
-    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining + 1));
-    const position = start === null ? null : start + total;
-    const count = readSync(fd, chunk, 0, chunk.length, position);
-    if (count === 0) break;
-    total += count;
-    if (total > maxBytes) error(`${label} exceeds ${maxBytes} bytes`);
-    chunks.push(chunk.subarray(0, count));
-  }
-  return Buffer.concat(chunks, total);
-}
-
-function readFileAt(parentFd, name, label, options = {}) {
-  const maxBytes = options.maxBytes ?? MAX_ANCHORED_READ_BYTES;
+function readRegularFile(path, options = {}) {
+  const label = options.label ?? path;
+  const maxBytes = options.maxBytes ?? MAX_PANEL_READ_BYTES;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     error(`${label} byte limit is malformed`);
   }
-  let fd;
-  try {
-    fd = openSync(procFdPath(parentFd, name), FILE_READ_FLAGS);
-    const before = verifyRegularDescriptor(fd, parentFd, name, label);
-    if (before.size > BigInt(maxBytes)) error(`${label} exceeds ${maxBytes} bytes`);
-    const bytes = readOpenedFile(fd, maxBytes, label);
-    const after = verifyRegularDescriptor(fd, parentFd, name, label);
-    if (
-      !sameIdentity(before, after) ||
-      before.size !== after.size ||
-      before.mtimeNs !== after.mtimeNs ||
-      before.ctimeNs !== after.ctimeNs ||
-      after.size !== BigInt(bytes.length)
-    ) {
-      error(`${label} changed while its opened descriptor was being read`);
-    }
-    if (options.nonEmpty && bytes.length === 0) error(`${label} is empty`);
-    return bytes;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  const stat = regularFileStat(path, label);
+  if (stat.size > maxBytes) {
+    error(`${label} exceeds ${maxBytes} bytes`);
   }
+  const bytes = readFileSync(path);
+  if (bytes.length > maxBytes) {
+    error(`${label} exceeds ${maxBytes} bytes`);
+  }
+  if (options.nonEmpty && bytes.length === 0) {
+    error(`${label} is empty`);
+  }
+  return bytes;
 }
 
 export function readFileNoFollow(path, options = {}) {
-  const label = options.label ?? path;
-  const parent = openAnchoredParent(path, label);
-  try {
-    parent.verify();
-    const bytes = readFileAt(parent.parentFd, parent.leaf, label, options);
-    parent.verify();
-    return options.encoding ? bytes.toString(options.encoding) : bytes;
-  } finally {
-    parent.close();
-  }
-}
-
-function openDirectoryAt(parentFd, name, label) {
-  const fd = openSync(procFdPath(parentFd, name), DIRECTORY_OPEN_FLAGS);
-  const stat = verifyDirectoryDescriptor(fd, label);
-  verifyNamedIdentity(parentFd, name, stat, label);
-  return { fd, stat };
-}
-
-function directoryNames(fd, options = {}) {
-  const label = options.label ?? "directory";
-  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
-  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
-    error(`${label} entry limit is malformed`);
-  }
-  const directory = opendirSync(procFdPath(fd), { bufferSize: 32 });
-  const names = [];
-  try {
-    for (;;) {
-      const entry = directory.readSync();
-      if (entry === null) break;
-      names.push(entry.name);
-      if (names.length > maxEntries) {
-        error(
-          `${label} has more than ${maxEntries} entries; found ` +
-          `[${names.sort().join(", ")}]`,
-        );
-      }
-    }
-  } finally {
-    directory.closeSync();
-  }
-  return names.sort();
+  const bytes = readRegularFile(path, options);
+  return options.encoding ? bytes.toString(options.encoding) : bytes;
 }
 
 function expectedDirectoryNames(value, label) {
@@ -465,7 +204,7 @@ function expectedDirectoryNames(value, label) {
   ) {
     error(`${label} expected entry names must be non-empty strings`);
   }
-  const names = [...value].sort();
+  const names = sortUtf8(value);
   if (new Set(names).size !== names.length) {
     error(`${label} expected entry names must be unique`);
   }
@@ -493,613 +232,65 @@ function requireExactDirectoryNames(actual, expected, label) {
   }
 }
 
-function retainedQuotaError(scope, bytes, maxBytes) {
-  error(
-    `${scope} retained bytes ${bytes} exceed the root-wide exact-packet ` +
-    `quota ${maxBytes}; status: inspect retained packet bytes and round ` +
-    `directories; migration: archive and verify required immutable packets ` +
-    `before changing retention; prune: remove only exact, ` +
-    `operator-confirmed obsolete round paths; no existing packet was deleted`,
-  );
-}
-
-function retainedEntryQuotaError(scope, entries, maxEntries) {
-  error(
-    `${scope} retained entries ${entries} exceed the aggregate entry quota ` +
-    `${maxEntries}; status: inspect retained packet entries; migration: archive ` +
-    "and verify required immutable packets before changing retention; prune: " +
-    "remove only exact, operator-confirmed obsolete round paths; no existing " +
-    "packet was deleted",
-  );
-}
-
-function addDirectoryTreeUsage(
-  directory,
-  label,
-  usage,
-  maxBytes,
-  maxEntries,
-  maxDepth,
-) {
-  const stack = [{
-    directory,
-    label,
-    depth: 0,
-    owned: false,
-    names: undefined,
-    index: 0,
-    parent: undefined,
-    parentName: undefined,
-  }];
-  try {
-    while (stack.length > 0) {
-      const current = stack.at(-1);
-      if (current.names === undefined) {
-        current.names = directoryNames(current.directory.fd, {
-          label: current.label,
-          maxEntries: maxEntries - usage.entries,
-        });
-      }
-      if (current.index < current.names.length) {
-        const name = current.names[current.index];
-        current.index += 1;
-        const entryLabel = `${current.label}/${name}`;
-        let childDirectory;
-        try {
-          childDirectory = openDirectoryAt(
-            current.directory.fd,
-            name,
-            entryLabel,
-          );
-        } catch (cause) {
-          if (cause.code !== "ENOTDIR") throw cause;
-        }
-        if (childDirectory !== undefined) {
-          usage.entries += 1;
-          if (usage.entries > maxEntries) {
-            closeSync(childDirectory.fd);
-            retainedEntryQuotaError(label, usage.entries, maxEntries);
-          }
-          if (current.depth >= maxDepth) {
-            closeSync(childDirectory.fd);
-            error(
-              `${entryLabel} exceeds the aggregate directory depth limit ` +
-              `${maxDepth}`,
-            );
-          }
-          stack.push({
-            directory: childDirectory,
-            label: entryLabel,
-            depth: current.depth + 1,
-            owned: true,
-            names: undefined,
-            index: 0,
-            parent: current.directory,
-            parentName: name,
-          });
-          continue;
-        }
-
-        let fd;
-        try {
-          fd = openSync(procFdPath(current.directory.fd, name), FILE_READ_FLAGS);
-          const stat = verifyRegularDescriptor(
-            fd,
-            current.directory.fd,
-            name,
-            entryLabel,
-          );
-          usage.entries += 1;
-          if (usage.entries > maxEntries) {
-            retainedEntryQuotaError(label, usage.entries, maxEntries);
-          }
-          usage.bytes += stat.size;
-          if (usage.bytes > maxBytes) {
-            retainedQuotaError(label, usage.bytes, maxBytes);
-          }
-        } finally {
-          if (fd !== undefined) closeSync(fd);
-        }
-        continue;
-      }
-
-      const afterNames = directoryNames(current.directory.fd, {
-        label: current.label,
-        maxEntries: current.names.length,
-      });
-      const afterStat = verifyDirectoryDescriptor(
-        current.directory.fd,
-        current.label,
-      );
-      if (
-        !sameIdentity(afterStat, current.directory.stat) ||
-        current.names.length !== afterNames.length ||
-        current.names.some((name, index) => name !== afterNames[index])
-      ) {
-        error(`${current.label} changed while its retained bytes were being accounted`);
-      }
-      stack.pop();
-      if (current.parent !== undefined) {
-        verifyNamedIdentity(
-          current.parent.fd,
-          current.parentName,
-          current.directory.stat,
-          current.label,
-        );
-      }
-      if (current.owned) closeSync(current.directory.fd);
-    }
-  } finally {
-    closeAll(stack.filter((item) => item.owned).map((item) => item.directory.fd));
-  }
-}
-
-export function directoryTreeUsageNoFollow(path, options = {}) {
-  const maxBytes = options.maxBytes ?? Number.MAX_SAFE_INTEGER;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
-    error("directory-tree byte quota is malformed");
-  }
-  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_TREE_ENTRIES;
-  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
-    error("directory-tree entry quota is malformed");
-  }
-  const maxDepth = options.maxDepth ?? MAX_DIRECTORY_TREE_DEPTH;
-  if (!Number.isSafeInteger(maxDepth) || maxDepth < 0) {
-    error("directory-tree depth quota is malformed");
-  }
-  const label = options.label ?? path;
-  const parent = openAnchoredParent(path, label);
-  let directory;
-  try {
-    parent.verify();
-    directory = openDirectoryAt(parent.parentFd, parent.leaf, label);
-    const usage = { bytes: 0n, entries: 0 };
-    addDirectoryTreeUsage(
-      directory,
-      label,
-      usage,
-      BigInt(maxBytes),
-      maxEntries,
-      maxDepth,
-    );
-    verifyNamedIdentity(parent.parentFd, parent.leaf, directory.stat, label);
-    parent.verify();
-    return { bytes: Number(usage.bytes), entries: usage.entries };
-  } finally {
-    if (directory !== undefined) closeSync(directory.fd);
-    parent.close();
-  }
-}
-
-function retentionQuota(options, label) {
-  const hasRoot = options.retentionRoot !== undefined;
-  if (!hasRoot) return undefined;
-  if (
-    typeof options.retentionRoot !== "string" ||
-    options.retentionRoot.length === 0 ||
-    !Number.isSafeInteger(options.maxBytes) ||
-    options.maxBytes < 0
-  ) {
-    error(`${label} retention quota is malformed`);
-  }
-  const root = resolve(options.retentionRoot);
-  const destination = options.destination === undefined
-    ? undefined
-    : resolve(options.destination);
-  if (
-    destination !== undefined &&
-    destination !== root &&
-    !destination.startsWith(`${root}/`)
-  ) {
-    error(`${label} destination is outside its retention root`);
-  }
-  return { root, maxBytes: options.maxBytes };
-}
-
-function retentionUsage(options, label, destination = undefined) {
-  const quota = retentionQuota(
-    { ...options, destination },
-    label,
-  );
-  if (quota === undefined) return undefined;
-  const usage = directoryTreeUsageNoFollow(quota.root, {
-    label: "panel packet root",
-    maxBytes: quota.maxBytes,
-  });
-  return { ...quota, usage };
-}
-
-function existingPublicationBytes(path, label) {
-  const parent = openAnchoredParent(path, label);
-  let fd;
-  try {
-    parent.verify();
-    try {
-      fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
-    } catch (cause) {
-      if (cause.code === "ENOENT") return 0;
-      throw cause;
-    }
-    const stat = verifyRegularDescriptor(
-      fd,
-      parent.parentFd,
-      parent.leaf,
-      label,
-    );
-    if (stat.size > BigInt(Number.MAX_SAFE_INTEGER)) {
-      error(`${label} is too large to account safely`);
-    }
-    parent.verify();
-    return Number(stat.size);
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-    parent.close();
-  }
-}
-
-function publicationByteBudget(path, options, label) {
-  const retained = retentionUsage(options, label, path);
-  if (retained === undefined) return MAX_ANCHORED_READ_BYTES;
-  const reusable = existingPublicationBytes(path, label);
-  return retained.maxBytes - retained.usage.bytes + reusable;
-}
-
-function requireTemporaryByteBudget(path, bytes, options, label) {
-  if (!Number.isSafeInteger(bytes) || bytes < 0) {
-    error(`${label} temporary byte count is malformed`);
-  }
-  const retained = retentionUsage(options, label, path);
-  if (retained === undefined) return;
-  const total = retained.usage.bytes + bytes;
-  if (total > retained.maxBytes) {
-    retainedQuotaError("panel packet root", total, retained.maxBytes);
-  }
-}
-
-function readDirectoryAt(parentFd, name, label, options = {}) {
-  const directory = openDirectoryAt(parentFd, name, label);
-  const opened = [];
-  try {
-    const maxBytes = options.maxBytes ?? MAX_ANCHORED_READ_BYTES;
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
-      error(`${label} aggregate byte limit is malformed`);
-    }
-    const expectedNames = expectedDirectoryNames(options.expectedNames, label);
-    const entryLimit = expectedNames?.length ??
-      options.maxEntries ??
-      MAX_DIRECTORY_ENTRIES;
-    const names = directoryNames(directory.fd, {
-      label,
-      maxEntries: entryLimit,
-    });
-    requireExactDirectoryNames(names, expectedNames, label);
-
-    let plannedBytes = 0n;
-    for (const entryName of names) {
-      const entryLabel = `${label}/${entryName}`;
-      const fd = openSync(procFdPath(directory.fd, entryName), FILE_READ_FLAGS);
-      try {
-        const stat = verifyRegularDescriptor(
-          fd,
-          directory.fd,
-          entryName,
-          entryLabel,
-        );
-        plannedBytes += stat.size;
-        if (plannedBytes > BigInt(maxBytes)) {
-          error(
-            `${label} aggregate bytes ${plannedBytes} exceed the ` +
-            `directory-ingestion limit ${maxBytes}`,
-          );
-        }
-        opened.push({ name: entryName, fd, before: stat, label: entryLabel });
-      } catch (cause) {
-        closeSync(fd);
-        throw cause;
-      }
-    }
-
-    const plannedNames = directoryNames(directory.fd, {
-      label,
-      maxEntries: names.length,
-    });
-    const plannedStat = verifyDirectoryDescriptor(directory.fd, label);
-    verifyNamedIdentity(parentFd, name, plannedStat, label);
-    if (
-      names.length !== plannedNames.length ||
-      names.some((entryName, index) => entryName !== plannedNames[index])
-    ) {
-      error(`${label} changed while its aggregate bytes were being checked`);
-    }
-
-    let ingestedBytes = 0;
-    const entries = opened.map((entry) => {
-      const bytes = readOpenedFile(
-        entry.fd,
-        maxBytes - ingestedBytes,
-        entry.label,
-      );
-      ingestedBytes += bytes.length;
-      const after = verifyRegularDescriptor(
-        entry.fd,
-        directory.fd,
-        entry.name,
-        entry.label,
-      );
-      if (
-        !sameIdentity(entry.before, after) ||
-        entry.before.size !== after.size ||
-        entry.before.mtimeNs !== after.mtimeNs ||
-        entry.before.ctimeNs !== after.ctimeNs ||
-        after.size !== BigInt(bytes.length)
-      ) {
-        error(`${entry.label} changed while its opened descriptor was being read`);
-      }
-      if (options.nonEmpty && bytes.length === 0) {
-        error(`${entry.label} is empty`);
-      }
-      return { name: entry.name, bytes };
-    });
-    const afterNames = directoryNames(directory.fd, {
-      label,
-      maxEntries: expectedNames?.length ?? names.length,
-    });
-    const afterStat = verifyDirectoryDescriptor(directory.fd, label);
-    verifyNamedIdentity(parentFd, name, afterStat, label);
-    if (
-      !sameIdentity(afterStat, directory.stat) ||
-      names.length !== afterNames.length ||
-      names.some((entryName, index) => entryName !== afterNames[index])
-    ) {
-      error(`${label} changed while its entries were being read`);
-    }
-    return entries;
-  } finally {
-    closeAll(opened.map((entry) => entry.fd));
-    closeSync(directory.fd);
-  }
-}
-
 export function readDirectoryNoFollow(path, options = {}) {
   const label = options.label ?? path;
-  const parent = openAnchoredParent(path, label);
-  try {
-    parent.verify();
-    const entries = readDirectoryAt(parent.parentFd, parent.leaf, label, options);
-    parent.verify();
-    return entries;
-  } finally {
-    parent.close();
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) error(`${label} is not a directory`);
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
+  const maxBytes = options.maxBytes ?? MAX_PANEL_READ_BYTES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+    error(`${label} entry limit is malformed`);
   }
-}
-
-function relativeComponents(path, label) {
-  if (
-    typeof path !== "string" ||
-    path.length === 0 ||
-    posix.isAbsolute(path) ||
-    path.split("/").some((component) =>
-      component === "" || component === "." || component === "..")
-  ) {
-    error(`${label} must be a normalized relative path`);
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    error(`${label} aggregate byte limit is malformed`);
   }
-  return path.split("/");
-}
-
-function readRelativeFileAt(anchorFd, relative, label, options = {}) {
-  const components = relativeComponents(relative, label);
-  const leaf = components.pop();
-  const directories = [];
-  let parentFd = anchorFd;
-  try {
-    for (const component of components) {
-      const directory = openDirectoryAt(parentFd, component, label);
-      directories.push(directory.fd);
-      parentFd = directory.fd;
-    }
-    return readFileAt(parentFd, leaf, label, options);
-  } finally {
-    closeAll(directories);
+  const names = sortUtf8(readdirSync(path));
+  if (names.length > maxEntries) {
+    error(`${label} has more than ${maxEntries} entries`);
   }
-}
-
-export function readBoundArtifactSetNoFollow(markerPath) {
-  const parent = openAnchoredParent(markerPath, "stage completion marker");
-  try {
-    parent.verify();
-    const markerBytes = readFileAt(
-      parent.parentFd,
-      parent.leaf,
-      "stage completion marker",
-    );
-    let marker;
-    try {
-      marker = JSON.parse(markerBytes.toString("utf8"));
-    } catch (cause) {
-      error(`invalid stage completion marker: ${cause.message}`);
-    }
-    if (
-      !isPlainObject(marker.artifact_sha256) ||
-      !isPlainObject(marker.artifact_bytes)
-    ) {
-      error("stage completion marker has invalid artifact maps");
-    }
-    const digestNames = Object.keys(marker.artifact_sha256).sort();
-    const sizeNames = Object.keys(marker.artifact_bytes).sort();
-    if (
-      digestNames.length !== sizeNames.length ||
-      digestNames.some((name, index) => name !== sizeNames[index])
-    ) {
-      error("stage completion marker artifact maps disagree");
-    }
-    let expectedTotal = 0;
-    for (const relative of digestNames) {
-      relativeComponents(relative, "bound artifact path");
-      if (
-        !/^[0-9a-f]{64}$/u.test(marker.artifact_sha256[relative]) ||
-        !Number.isSafeInteger(marker.artifact_bytes[relative]) ||
-        marker.artifact_bytes[relative] < 0
-      ) {
-        error(`stage completion marker has invalid bound artifact ${relative}`);
-      }
-      expectedTotal += marker.artifact_bytes[relative];
-      if (
-        !Number.isSafeInteger(expectedTotal) ||
-        expectedTotal > MAX_ANCHORED_READ_BYTES
-      ) {
-        error(
-          `stage completion marker aggregate artifact bytes exceed ` +
-          `${MAX_ANCHORED_READ_BYTES}`,
-        );
-      }
-    }
-    const artifacts = {};
-    let ingestedTotal = 0;
-    for (const relative of digestNames) {
-      try {
-        artifacts[relative] = readRelativeFileAt(
-          parent.parentFd,
-          relative,
-          `bound artifact ${relative}`,
-          { maxBytes: MAX_ANCHORED_READ_BYTES - ingestedTotal },
-        );
-      } catch (cause) {
-        error(`bound artifact ${relative} is unavailable: ${cause.message}`);
-      }
-      ingestedTotal += artifacts[relative].length;
-    }
-    parent.verify();
-    return { marker, markerBytes, artifacts };
-  } finally {
-    parent.close();
+  requireExactDirectoryNames(
+    names,
+    expectedDirectoryNames(options.expectedNames, label),
+    label,
+  );
+  let remaining = maxBytes;
+  const entries = [];
+  for (const name of names) {
+    const bytes = readFileNoFollow(join(path, name), {
+      ...options,
+      label: `${label}/${name}`,
+      maxBytes: remaining,
+    });
+    remaining -= bytes.length;
+    entries.push({ name, bytes });
   }
-}
-
-export function writeBoundCompletionCreateOrCompare(
-  markerPath,
-  metadata,
-  relativePaths,
-  options = {},
-) {
-  if (!isPlainObject(metadata) || !Array.isArray(relativePaths)) {
-    error("bound completion publication requires metadata and artifact paths");
-  }
-  const parent = openAnchoredParent(markerPath, "stage completion marker", {
-    create: true,
-  });
-  try {
-    parent.verify();
-    const artifact_sha256 = {};
-    const artifact_bytes = {};
-    const sortedRelativePaths = [...relativePaths].sort();
-    if (new Set(sortedRelativePaths).size !== sortedRelativePaths.length) {
-      error("bound completion artifact paths must be unique");
-    }
-    for (const relative of sortedRelativePaths) {
-      relativeComponents(relative, "completion artifact path");
-    }
-    let currentBytes = 0;
-    for (const relative of sortedRelativePaths) {
-      const bytes = readRelativeFileAt(
-        parent.parentFd,
-        relative,
-        `completion artifact ${relative}`,
-        {
-          maxBytes: (options.maxBytes ?? MAX_ANCHORED_READ_BYTES) - currentBytes,
-        },
-      );
-      artifact_sha256[relative] =
-        createHash("sha256").update(bytes).digest("hex");
-      artifact_bytes[relative] = bytes.length;
-      currentBytes += bytes.length;
-    }
-    const value = {
-      ...metadata,
-      artifact_sha256,
-      artifact_bytes,
-    };
-    const bytes = Buffer.from(stableStringify(value));
-    if (options.maxBytes !== undefined) {
-      if (
-        !Number.isSafeInteger(options.maxBytes) ||
-        options.maxBytes < 0 ||
-        (
-          options.retentionRoot === undefined &&
-          (
-            !Number.isSafeInteger(options.priorBytes ?? 0) ||
-            (options.priorBytes ?? 0) < 0
-          )
-        )
-      ) {
-        error("bound completion byte quota is malformed");
-      }
-      const total = options.retentionRoot === undefined
-        ? (options.priorBytes ?? 0) + currentBytes
-        : directoryTreeUsageNoFollow(options.retentionRoot, {
-            label: "panel packet root",
-            maxBytes: options.maxBytes,
-          }).bytes +
-          (
-            pathKindNoFollow(markerPath, "stage completion marker") === "missing"
-              ? bytes.length
-              : 0
-          );
-      if (total > options.maxBytes) {
-        const scope = options.retentionRoot === undefined
-          ? `lifecycle ${metadata.lifecycle_id} staged packet`
-          : "panel packet root";
-        retainedQuotaError(scope, total, options.maxBytes);
-      }
-    }
-    const result = writeRawAtCreateOrCompare(
-      parent.parentFd,
-      parent.leaf,
-      markerPath,
-      bytes,
-      options,
-    );
-    parent.verify();
-    return { ...result, value };
-  } finally {
-    parent.close();
-  }
+  return entries;
 }
 
 export function pathKindNoFollow(path, label = path) {
-  let parent;
-  let fd;
   try {
-    parent = openAnchoredParent(path, label);
-    parent.verify();
-    fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
-    const stat = fstatSync(fd, { bigint: true });
-    verifyNamedIdentity(parent.parentFd, parent.leaf, stat, label);
-    parent.verify();
-    return stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other";
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) return "directory";
+    if (stat.isFile()) return "file";
+    return "other";
   } catch (cause) {
     if (cause.code === "ENOENT") return "missing";
     throw cause;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-    parent?.close();
   }
 }
 
 export function listDirectoryNamesNoFollow(path, label = path, options = {}) {
-  const parent = openAnchoredParent(path, label);
-  let directory;
-  try {
-    parent.verify();
-    directory = openDirectoryAt(parent.parentFd, parent.leaf, label);
-    const names = directoryNames(directory.fd, { ...options, label });
-    const after = verifyDirectoryDescriptor(directory.fd, label);
-    verifyNamedIdentity(parent.parentFd, parent.leaf, after, label);
-    parent.verify();
-    return names;
-  } finally {
-    if (directory !== undefined) closeSync(directory.fd);
-    parent.close();
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) error(`${label} is not a directory`);
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+    error(`${label} entry limit is malformed`);
   }
+  const names = sortUtf8(readdirSync(path));
+  if (names.length > maxEntries) {
+    error(`${label} has more than ${maxEntries} entries`);
+  }
+  return names;
 }
 
 function readJsonWithBytes(path, label = path) {
@@ -1110,6 +301,9 @@ function readJsonWithBytes(path, label = path) {
     });
     return { value: JSON.parse(bytes), bytes };
   } catch (cause) {
+    if (cause.code === "ENOENT") {
+      error(`missing ${label} at ${path}`);
+    }
     error(`invalid ${label} at ${path}: ${cause.message}`);
   }
 }
@@ -1173,278 +367,78 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
 }
 
 /*
- * Every generated file is create-or-compare. A caller can safely retry a
- * command, but cannot silently replace an artifact that another step already
- * consumed.
+ * Generated files are published with ordinary Node create-or-compare
+ * operations. Retries compare the complete bytes and never overwrite an
+ * existing artifact.
  */
-export function writeCreateOrCompare(path, value, options = {}) {
+export function writeCreateOrCompare(path, value) {
   const expected = stableStringify(value);
-  const parent = openAnchoredParent(path, "generated artifact", { create: true });
-  let temporaryFd;
+  mkdirSync(dirname(path), { recursive: true });
   try {
-    parent.verify();
-    retentionUsage(options, "generated artifact", path);
-    let actual;
-    try {
-      actual = readFileAt(
-        parent.parentFd,
-        parent.leaf,
-        "existing generated artifact",
-      ).toString("utf8");
-    } catch (cause) {
-      if (cause.code !== "ENOENT") throw cause;
-    }
-    if (actual !== undefined) {
-      if (actual !== expected) {
-        error(
-          `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
-        );
-      }
-      parent.verify();
-      return { path, created: false, bytes: expected };
-    }
-
-    requireTemporaryByteBudget(
-      path,
-      Buffer.byteLength(expected),
-      options,
-      "generated artifact",
-    );
-    temporaryFd = openUnnamedTemporaryAt(
-      parent.parentFd,
-      "generated artifact temporary",
-    );
-    writeFileSync(temporaryFd, expected);
-    fsyncSync(temporaryFd);
-    verifyUnnamedRegularDescriptor(
-      temporaryFd,
-      "generated artifact temporary",
-    );
-    requireTemporaryByteBudget(
-      path,
-      Buffer.byteLength(expected),
-      options,
-      "generated artifact",
-    );
-    const moved = atomicNoReplaceLinkUnnamed(
-      parent.parentFd,
-      temporaryFd,
-      parent.leaf,
-      path,
-    );
-    if (!moved) {
-      verifyUnnamedRegularDescriptor(
-        temporaryFd,
-        "unpublished generated artifact temporary",
+    const actual = readFileNoFollow(path, {
+      encoding: "utf8",
+      label: "existing generated artifact",
+    });
+    if (actual !== expected) {
+      error(
+        `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
       );
-      const raced = readFileAt(
-        parent.parentFd,
-        parent.leaf,
-        "concurrently published generated artifact",
-      ).toString("utf8");
-      if (raced !== expected) {
-        error(
-          `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
-        );
-      }
-      parent.verify();
-      return { path, created: false, bytes: expected };
     }
-    verifyRegularDescriptor(
-      temporaryFd,
-      parent.parentFd,
-      parent.leaf,
-      "published generated artifact",
-    );
-    fsyncSync(parent.parentFd);
-    parent.verify();
-    return { path, created: true, bytes: expected };
-  } finally {
-    if (temporaryFd !== undefined) closeSync(temporaryFd);
-    parent.close();
+    return { path, created: false, bytes: expected };
+  } catch (cause) {
+    if (cause.code !== "ENOENT") throw cause;
   }
-}
 
-function createFileAt(parentFd, name, bytes, label) {
-  let fd;
   try {
-    fd = openSync(
-      procFdPath(parentFd, name),
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_NOFOLLOW |
-        fsConstants.O_CLOEXEC,
-      0o600,
-    );
-    writeFileSync(fd, bytes);
-    fsyncSync(fd);
-    verifyRegularDescriptor(fd, parentFd, name, label);
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+    writeFileSync(path, expected, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    return { path, created: true, bytes: expected };
+  } catch (cause) {
+    if (cause.code !== "EEXIST") throw cause;
+    const actual = readFileNoFollow(path, {
+      encoding: "utf8",
+      label: "concurrently published generated artifact",
+    });
+    if (actual !== expected) {
+      error(
+        `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
+      );
+    }
+    return { path, created: false, bytes: expected };
   }
 }
 
-function compareExistingDirectoryAt(parentFd, name, path, expected, expectedNames) {
-  const actualEntries = readDirectoryAt(
-    parentFd,
-    name,
-    `existing artifact family at ${path}`,
-    { expectedNames },
-  );
-  const actualNames = actualEntries.map((entry) => entry.name);
-  if (
-    actualNames.length !== expectedNames.length ||
-    actualNames.some((entryName, index) => entryName !== expectedNames[index])
-  ) {
-    error(
-      `existing artifact family at ${path} is incomplete or has extra entries; ` +
-      `expected [${expectedNames.join(", ")}], found [${actualNames.join(", ")}]`,
-    );
+function compareExistingDirectory(directory, expected, expectedNames) {
+  if (pathKindNoFollow(directory, "existing artifact family") !== "directory") {
+    error(`existing artifact family at ${directory} is not a directory`);
   }
+  const actualEntries = readDirectoryNoFollow(directory, {
+    label: `existing artifact family at ${directory}`,
+    expectedNames,
+  });
   for (const entry of actualEntries) {
     const expectedBytes = expected.get(entry.name);
     const expectedBuffer = Buffer.isBuffer(expectedBytes)
       ? expectedBytes
       : Buffer.from(expectedBytes);
     if (!entry.bytes.equals(expectedBuffer)) {
-      error(`conflicting generated bytes at ${join(path, entry.name)}; refusing to overwrite`);
-    }
-  }
-  return { path, created: false };
-}
-
-const RENAMEAT2_NOREPLACE_SYSCALL = Object.freeze({
-  arm64: 276,
-  x64: 316,
-});
-const LINKAT_SYSCALL = Object.freeze({
-  arm64: 37,
-  x64: 265,
-});
-
-function atomicNoReplaceLinkUnnamed(
-  parentFd,
-  unnamedFd,
-  destination,
-  displayPath,
-) {
-  const syscall = LINKAT_SYSCALL[process.arch];
-  if (syscall === undefined) {
-    error(
-      `identity-pinned unnamed file publication is unsupported on architecture ${process.arch}`,
-    );
-  }
-  const program = String.raw`
-use strict;
-use warnings;
-my ($number, $destination) = @ARGV;
-my $source = "/proc/self/fd/4";
-my $target = $destination;
-my $result = syscall(0 + $number, -100, $source, 3, $target, 1024);
-if ($result == -1) {
-  my $number = 0 + $!;
-  print STDERR "linkat errno=$number: $!\n";
-  exit 1;
-}
-`;
-  try {
-    execFileSync(
-      "perl",
-      ["-e", program, String(syscall), destination],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe", parentFd, unnamedFd],
-      },
-    );
-    return true;
-  } catch (cause) {
-    const detail = String(cause.stderr ?? cause.message);
-    const errno = Number(detail.match(/linkat errno=(\d+)/)?.[1]);
-    if (errno === 17) return false; // EEXIST
-    if ([18, 22, 31, 38, 95].includes(errno) || cause.code === "ENOENT") {
-      const reason = Number.isFinite(errno) ? `errno ${errno}` : cause.code;
       error(
-        `identity-pinned unnamed file publication is unavailable for ` +
-        `${displayPath}: ${reason}`,
+        `conflicting generated bytes at ${join(directory, entry.name)}; refusing to overwrite`,
       );
     }
-    error(
-      `identity-pinned unnamed file publication failed for ` +
-      `${displayPath}: ${detail.trim()}`,
-    );
   }
-}
-
-function atomicNoReplaceMove(
-  parentFd,
-  source,
-  destination,
-  displayPath,
-  publicationKind,
-) {
-  const syscall = RENAMEAT2_NOREPLACE_SYSCALL[process.arch];
-  if (syscall === undefined) {
-    error(
-      `atomic no-replace directory publication is unsupported on architecture ${process.arch}`,
-    );
-  }
-  const program = String.raw`
-use strict;
-use warnings;
-my ($number, $source, $destination) = @ARGV;
-my $result = syscall(0 + $number, 3, $source, 3, $destination, 1);
-if ($result == -1) {
-  my $number = 0 + $!;
-  print STDERR "renameat2 errno=$number: $!\n";
-  exit 1;
-}
-`;
-  try {
-    execFileSync(
-      "perl",
-      ["-e", program, String(syscall), source, destination],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe", parentFd],
-      },
-    );
-    return true;
-  } catch (cause) {
-    const detail = String(cause.stderr ?? cause.message);
-    const errno = Number(detail.match(/renameat2 errno=(\d+)/)?.[1]);
-    if (errno === 17) return false; // EEXIST
-    if ([18, 22, 31, 38, 95].includes(errno) || cause.code === "ENOENT") {
-      const reason = Number.isFinite(errno) ? `errno ${errno}` : cause.code;
-      error(
-        `atomic no-replace ${publicationKind} publication is unavailable for ` +
-        `${displayPath}: ${reason}`,
-      );
-    }
-    error(
-      `atomic no-replace ${publicationKind} publication failed for ` +
-      `${displayPath}: ${detail.trim()}`,
-    );
-  }
-}
-
-function createDirectoryAt(parentFd, name, label) {
-  mkdirSync(procFdPath(parentFd, name), { mode: 0o700 });
-  fsyncSync(parentFd);
-  return openDirectoryAt(parentFd, name, label);
+  return { path: directory, created: false };
 }
 
 /*
- * A directory is the publication unit for an artifact family. Build it below
- * a pinned parent, then call renameat2(RENAME_NOREPLACE) directly. There is no
- * check-then-rename fallback when the syscall, filesystem, or mount rejects
- * the primitive.
+ * Artifact families are the one place where a complete sibling directory is
+ * published as a unit. Standard Node rename makes the finished directory
+ * visible in one operation; ordinary retries compare every member.
  */
-export function writeDirectoryCreateOrCompare(
-  directory,
-  entries,
-  options = {},
-) {
+export function writeDirectoryCreateOrCompare(directory, entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
     error("directory publication requires at least one artifact");
   }
@@ -1458,455 +452,39 @@ export function writeDirectoryCreateOrCompare(
     }
     expected.set(name, entry.bytes);
   }
-  const expectedNames = [...expected.keys()].sort();
+  const expectedNames = sortUtf8([...expected.keys()]);
   if (expectedNames.length > MAX_DIRECTORY_ENTRIES) {
     error(
       `directory publication contains more than ${MAX_DIRECTORY_ENTRIES} entries`,
     );
   }
-  const parent = openAnchoredParent(directory, "artifact family", { create: true });
-  const temporary = `.${parent.leaf}.stage-${process.pid}-${temporaryCounter += 1}`;
-  let staged;
+
+  mkdirSync(dirname(directory), { recursive: true });
+  if (pathKindNoFollow(directory, "artifact family") !== "missing") {
+    return compareExistingDirectory(directory, expected, expectedNames);
+  }
+
+  const temporary = mkdtempSync(
+    join(dirname(directory), `.${basename(directory)}.stage-`),
+  );
   try {
-    parent.verify();
-    retentionUsage(options, "artifact family", directory);
-    if (pathKindAt(parent.parentFd, parent.leaf, "artifact family") !== "missing") {
-      const result = compareExistingDirectoryAt(
-        parent.parentFd,
-        parent.leaf,
-        directory,
-        expected,
-        expectedNames,
-      );
-      parent.verify();
-      return result;
-    }
-    const totalBytes = expectedNames.reduce((total, name) => {
-      const bytes = expected.get(name);
-      return total + (
-        Buffer.isBuffer(bytes) ? bytes.length : Buffer.byteLength(bytes)
-      );
-    }, 0);
-    if (!Number.isSafeInteger(totalBytes)) {
-      error("artifact family is too large to account safely");
-    }
-    requireTemporaryByteBudget(
-      directory,
-      totalBytes,
-      options,
-      "artifact family",
-    );
-    staged = createDirectoryAt(
-      parent.parentFd,
-      temporary,
-      "staged artifact family",
-    );
     for (const name of expectedNames) {
-      createFileAt(
-        staged.fd,
-        name,
-        expected.get(name),
-        `staged artifact family entry ${name}`,
-      );
-      retentionUsage(options, "artifact family", directory);
+      writeFileSync(join(temporary, name), expected.get(name), {
+        flag: "wx",
+        mode: 0o600,
+      });
     }
-    fsyncSync(staged.fd);
-    const stagedNames = directoryNames(staged.fd, {
-      label: "staged artifact family",
-      maxEntries: expectedNames.length,
-    });
-    if (
-      stagedNames.length !== expectedNames.length ||
-      stagedNames.some((name, index) => name !== expectedNames[index])
-    ) {
-      error(`staged artifact family at ${directory} is incomplete before publication`);
-    }
-
-    const moved = atomicNoReplaceMove(
-      parent.parentFd,
-      temporary,
-      parent.leaf,
-      directory,
-      "directory",
-    );
-    if (!moved) {
-      const result = compareExistingDirectoryAt(
-        parent.parentFd,
-        parent.leaf,
-        directory,
-        expected,
-        expectedNames,
-      );
-      parent.verify();
-      return result;
-    }
-    const published = lstatSync(procFdPath(parent.parentFd, parent.leaf), {
-      bigint: true,
-    });
-    if (!published.isDirectory() || !sameIdentity(published, staged.stat)) {
-      error(`published artifact family at ${directory} changed identity`);
-    }
-    fsyncSync(parent.parentFd);
-    parent.verify();
-    return { path: directory, created: true };
-  } finally {
-    if (staged !== undefined) closeSync(staged.fd);
-    // A named directory cannot be unlinked through its descriptor. Preserve a
-    // failed or raced staging name rather than deleting a replaceable pathname.
-    parent.close();
-  }
-}
-
-function pathKindAt(parentFd, name, label) {
-  let fd;
-  try {
-    fd = openSync(procFdPath(parentFd, name), FILE_READ_FLAGS);
-    const stat = fstatSync(fd, { bigint: true });
-    verifyNamedIdentity(parentFd, name, stat, label);
-    return stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other";
-  } catch (cause) {
-    if (cause.code === "ENOENT") return "missing";
-    throw cause;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-export function copyFileCreateOrCompare(source, destination, options = {}) {
-  const publicationBudget = publicationByteBudget(
-    destination,
-    options,
-    "copied artifact",
-  );
-  const budget =
-    options.retentionRoot === undefined && options.maxBytes !== undefined
-      ? Math.min(publicationBudget, options.maxBytes)
-      : publicationBudget;
-  let bytes;
-  try {
-    bytes = readFileNoFollow(source, { ...options, maxBytes: budget });
-  } catch (cause) {
-    if (
-      options.retentionRoot !== undefined &&
-      /exceeds [0-9]+ bytes/u.test(cause.message)
-    ) {
-      retainedQuotaError(
-        "copied artifact",
-        `more than the remaining ${budget}`,
-        options.maxBytes,
-      );
-    }
-    throw cause;
-  }
-  return writeBytesCreateOrCompare(destination, bytes, options);
-}
-
-export function writeBytesCreateOrCompare(path, bytes, options = {}) {
-  if (typeof bytes !== "string" && !Buffer.isBuffer(bytes)) {
-    error("published bytes must be a string or Buffer");
-  }
-  return writeRawCreateOrCompare(path, Buffer.from(bytes), options);
-}
-
-export function writeStandardInputCreateOrCompare(path, options = {}) {
-  const budget = publicationByteBudget(
-    path,
-    options,
-    "standard input publication",
-  );
-  let bytes;
-  try {
-    bytes = readOpenedFile(0, budget, "standard input");
-  } catch (cause) {
-    if (
-      options.retentionRoot !== undefined &&
-      /exceeds [0-9]+ bytes/u.test(cause.message)
-    ) {
-      retainedQuotaError(
-        "standard input",
-        `more than the remaining ${budget}`,
-        options.maxBytes,
-      );
-    }
-    throw cause;
-  }
-  return writeRawCreateOrCompare(path, bytes, options);
-}
-
-export function writeCommandOutputCreateOrCompare(
-  path,
-  command,
-  args,
-  options = {},
-) {
-  if (typeof command !== "string" || command.length === 0 || !Array.isArray(args)) {
-    error("command output publication requires a command and argument array");
-  }
-  const parent = openAnchoredParent(path, "command output", { create: true });
-  try {
-    parent.verify();
-    const budget = publicationByteBudget(
-      path,
-      options,
-      "command output",
-    );
-    const result = spawnSync(command, args, {
-      stdio: ["ignore", "pipe", "inherit"],
-      maxBuffer: Math.max(1, budget),
-    });
-    if (result.error?.code === "ENOBUFS") {
-      if (options.retentionRoot === undefined) {
-        error(`command output exceeds ${budget} bytes`);
-      }
-      retainedQuotaError("command output", `more than ${budget}`, options.maxBytes);
-    }
-    if (result.error) throw result.error;
-    if (result.status !== 0) {
-      error(`${command} exited with status ${result.status}`);
-    }
-    const bytes = result.stdout ?? Buffer.alloc(0);
-    if (!Buffer.isBuffer(bytes)) {
-      error("command output was not returned as bytes");
-    }
-    if (bytes.length > budget) {
-      if (options.retentionRoot === undefined) {
-        error(`command output exceeds ${budget} bytes`);
-      }
-      retainedQuotaError("command output", bytes.length, options.maxBytes);
-    }
-    parent.verify();
-    const published = writeRawAtCreateOrCompare(
-      parent.parentFd,
-      parent.leaf,
-      path,
-      bytes,
-      options,
-    );
-    parent.verify();
-    return published;
-  } finally {
-    parent.close();
-  }
-}
-
-function writeRawCreateOrCompare(path, expected, options = {}) {
-  const parent = openAnchoredParent(path, "raw artifact", { create: true });
-  try {
-    parent.verify();
-    const result = writeRawAtCreateOrCompare(
-      parent.parentFd,
-      parent.leaf,
-      path,
-      expected,
-      options,
-    );
-    parent.verify();
-    return result;
-  } finally {
-    parent.close();
-  }
-}
-
-function writeRawAtCreateOrCompare(
-  parentFd,
-  leaf,
-  path,
-  expected,
-  options = {},
-) {
-  let fd;
-  try {
-    retentionUsage(options, "raw artifact", path);
     try {
-      const actual = readFileAt(parentFd, leaf, "existing raw artifact");
-      if (!actual.equals(expected)) {
-        error(`conflicting generated bytes at ${path}; refusing to overwrite`);
-      }
-      return { path, created: false, bytes: expected };
+      renameSync(temporary, directory);
+      return { path: directory, created: true };
     } catch (cause) {
-      if (cause.code !== "ENOENT") throw cause;
+      if (cause.code !== "EEXIST") throw cause;
+      return compareExistingDirectory(directory, expected, expectedNames);
     }
-    requireTemporaryByteBudget(
-      path,
-      expected.length,
-      options,
-      "raw artifact",
-    );
-    fd = openUnnamedTemporaryAt(parentFd, "raw artifact temporary");
-    writeFileSync(fd, expected);
-    fsyncSync(fd);
-    verifyUnnamedRegularDescriptor(fd, "raw artifact temporary");
-    requireTemporaryByteBudget(
-      path,
-      expected.length,
-      options,
-      "raw artifact",
-    );
-    const moved = atomicNoReplaceLinkUnnamed(
-      parentFd,
-      fd,
-      leaf,
-      path,
-    );
-    if (!moved) {
-      verifyUnnamedRegularDescriptor(fd, "unpublished raw artifact temporary");
-      const actual = readFileAt(
-        parentFd,
-        leaf,
-        "concurrently published raw artifact",
-      );
-      if (!actual.equals(expected)) {
-        error(`conflicting generated bytes at ${path}; refusing to overwrite`);
-      }
-      return { path, created: false, bytes: expected };
+  } finally {
+    if (pathKindNoFollow(temporary, "staged artifact family") === "directory") {
+      rmSync(temporary, { recursive: true, force: true });
     }
-    verifyRegularDescriptor(fd, parentFd, leaf, "published raw artifact");
-    fsyncSync(parentFd);
-    return { path, created: true, bytes: expected };
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-export function chmodFileNoFollow(path, mode) {
-  const parent = openAnchoredParent(path, "artifact mode update");
-  let fd;
-  try {
-    parent.verify();
-    fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
-    verifyRegularDescriptor(fd, parent.parentFd, parent.leaf, "artifact mode update");
-    fchmodSync(fd, mode);
-    fsyncSync(fd);
-    parent.verify();
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-    parent.close();
-  }
-}
-
-export function removeFileNoFollow(path) {
-  const parent = openAnchoredParent(path, "temporary artifact cleanup");
-  let fd;
-  try {
-    parent.verify();
-    fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
-    verifyRegularDescriptor(
-      fd,
-      parent.parentFd,
-      parent.leaf,
-      "temporary artifact cleanup",
-    );
-    parent.verify();
-    error(
-      "automatic pathname cleanup is refused; preserve the pinned file for operator inspection",
-    );
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-    parent.close();
-  }
-}
-
-export function removeDirectoryIfIdentityNoFollow(path, expectedIdentity) {
-  if (
-    !isPlainObject(expectedIdentity) ||
-    !/^[0-9]+$/.test(expectedIdentity.dev) ||
-    !/^[0-9]+$/.test(expectedIdentity.ino)
-  ) {
-    error("incomplete-directory cleanup identity is malformed");
-  }
-  const parent = openAnchoredParent(path, "incomplete staging directory");
-  let directory;
-  try {
-    parent.verify();
-    directory = openDirectoryAt(
-      parent.parentFd,
-      parent.leaf,
-      "incomplete staging directory",
-    );
-    if (
-      directory.stat.dev !== BigInt(expectedIdentity.dev) ||
-      directory.stat.ino !== BigInt(expectedIdentity.ino)
-    ) {
-      error(
-        "incomplete staging directory no longer has the identity created by this invocation",
-      );
-    }
-    parent.verify();
-    error(
-      "automatic pathname cleanup is refused; preserve the incomplete staging directory for operator inspection",
-    );
-  } finally {
-    if (directory !== undefined) closeSync(directory.fd);
-    parent.close();
-  }
-}
-
-export function ensureDirectoryNoFollow(path, { exclusive = false } = {}) {
-  const parent = openAnchoredParent(path, "staging directory", { create: true });
-  try {
-    parent.verify();
-    if (exclusive) {
-      const directory = createDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
-      closeSync(directory.fd);
-      parent.verify();
-      return {
-        created: true,
-        identity: {
-          dev: directory.stat.dev.toString(),
-          ino: directory.stat.ino.toString(),
-        },
-      };
-    }
-    const kind = pathKindAt(parent.parentFd, parent.leaf, "staging directory");
-    if (kind === "missing") {
-      const directory = createDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
-      closeSync(directory.fd);
-      parent.verify();
-      return {
-        created: true,
-        identity: {
-          dev: directory.stat.dev.toString(),
-          ino: directory.stat.ino.toString(),
-        },
-      };
-    }
-    if (kind !== "directory") error("staging path is not a directory");
-    const directory = openDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
-    closeSync(directory.fd);
-    parent.verify();
-    return {
-      created: false,
-      identity: {
-        dev: directory.stat.dev.toString(),
-        ino: directory.stat.ino.toString(),
-      },
-    };
-  } finally {
-    parent.close();
-  }
-}
-
-export function verifyDirectoryReservationNoFollow(path, fd) {
-  if (!Number.isInteger(fd) || fd < 0) {
-    error("directory reservation descriptor is malformed");
-  }
-  const reserved = verifyDirectoryDescriptor(fd, "directory reservation");
-  const parent = openAnchoredParent(path, "directory reservation");
-  let directory;
-  try {
-    parent.verify();
-    directory = openDirectoryAt(
-      parent.parentFd,
-      parent.leaf,
-      "directory reservation",
-    );
-    if (!sameIdentity(reserved, directory.stat)) {
-      error("directory reservation does not pin the retained packet root");
-    }
-    parent.verify();
-  } finally {
-    if (directory !== undefined) closeSync(directory.fd);
-    parent.close();
   }
 }
 
@@ -5119,10 +3697,7 @@ export function lateFindingAdmission(finding, label = "late finding") {
       "pre-existing MINOR/NIT and optional improvements do not reopen discovery",
     );
   }
-  return {
-    ...normalized,
-    late: true,
-  };
+  return normalized;
 }
 
 function publicLateFinding(finding) {
