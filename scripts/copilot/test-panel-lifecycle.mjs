@@ -2067,7 +2067,7 @@ try {
       },
       { ledger: { ...responseInput, snapshot_sha256: "c".repeat(64) } },
     ),
-    /cover each issue|missing/,
+    /prior-ledger prefix|cover each issue|missing/,
   );
   const lateApproval = evaluateApproval({
     selection: verificationSelection.selection,
@@ -2348,7 +2348,7 @@ try {
       },
       latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
     }),
-    /cover each issue|missing/,
+    /prior-ledger prefix|cover each issue|missing/,
   );
   const nextPreparation = prepareVerification({
     selection: nextSelection.selection,

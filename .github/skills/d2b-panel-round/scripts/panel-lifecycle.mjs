@@ -4218,7 +4218,15 @@ function validatePriorVerdict(verdict, seat, priorSelection, ledger) {
     validateDiscoveryVerdict(verdict, label);
   } else {
     validateVerificationVerdict(verdict, label);
-    const expectedIssues = ledger.issues.filter((issue) => issue.late !== true);
+    const statusCount = Object.keys(verdict.verified_issue_statuses).length;
+    const requiredCount = ledger.issues.filter((issue) => issue.late !== true).length;
+    if (statusCount < requiredCount || statusCount > ledger.issues.length) {
+      error(
+        `${label}.verified_issue_statuses must cover a prior-ledger prefix ` +
+        `between ${requiredCount} and ${ledger.issues.length} issues`,
+      );
+    }
+    const expectedIssues = ledger.issues.slice(0, statusCount);
     exactIssueStatuses(
       { issues: expectedIssues },
       verdict.verified_issue_statuses,
