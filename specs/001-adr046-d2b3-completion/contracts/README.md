@@ -282,13 +282,17 @@ post-merge seal, merge-target registration, and merge eligibility.
     receipt values. This correlation evidence is not authentication, an authentication
     proof, a security boundary, or proof that a particular definition executed.
 18. **A reviewed base cannot move into merge.** Every prospective `v3` merge requires
-    effective repository enforcement that atomically refuses base movement: either a merge
-    queue configured with that refusal or nonempty strict up-to-date required checks. The
-    operator checks the exact base OID before snapshot, after required checks, and immediately
-    before merge; repository enforcement closes the final race. A head-only match or
-    post-merge tree comparison is insufficient. Any base change makes the old validation,
+    effective protection with a nonempty set of required status checks configured for strict
+    up-to-date enforcement. The operator checks the exact base OID before snapshot, after
+    required checks, and immediately before merge; GitHub atomically refuses the final race
+    once the expected base is stale. A merge queue does not replace this requirement and is
+    sufficient only when a required `merge_group` check compares the actual merge-group
+    integration tree with the snapshot-bound expected `integration_tree_oid` and refuses a
+    mismatch. A head-only match or post-merge tree comparison is insufficient. Any base
+    change requires an integration-branch update and makes the old validation,
     selected-roster verification, snapshot, binding, records, attestation, and CI evidence
-    ineligible and requires their restart in Track A order. If the wave's sole request is
-    already consumed, replacement binding remains blocked until accepted external
-    disposition. This rule does not reorder request, records, attestation, merge, seal,
-    merge-target, or merge-eligibility and does not relax FR-036.
+    ineligible; validation, selected-roster verification, snapshot, binding, and required
+    checks restart in Track A order. If the wave's sole request is already consumed,
+    replacement binding remains blocked until accepted external disposition. This rule does
+    not reorder request, records, attestation, merge, seal, merge-target, or
+    merge-eligibility and does not relax FR-036.

@@ -178,11 +178,15 @@ Enter only after the final nonbinding Discover-Fix-Verify lifecycle is unanimous
 and no content-changing fix remains. The PR may already exist as a draft because `snapshot`
 must bind its real number and head, but it stays unmergeable until the sole request, records,
 and attestation below are complete. The changelog fold and every generated artifact must
-already be part of the approved tree. The `v3` effective repository rules must provide either
-a merge queue that refuses a queued candidate when its bound base changes, or nonempty
-required status checks with strict up-to-date enforcement. A merely protected branch, a
-head-only `--match-head-commit` check, or the post-merge tree comparison below is not the
-preventive base guard.
+already be part of the approved tree. The effective `v3` repository rules must configure a
+nonempty set of required status checks for strict up-to-date enforcement. This requirement
+applies whether or not a merge queue is enabled, so GitHub atomically refuses merge after the
+expected base becomes stale. A merge queue is sufficient only when
+`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group` that resolves the
+actual merge-group head's tree, compares it with the snapshot-bound expected
+`integration_tree_oid`, and refuses a mismatch. A queue without that required comparison, a
+merely protected branch, a head-only `--match-head-commit` check, or the post-merge tree
+comparison below is not the preventive base guard.
 
 Immediately after the selected Task runs return, the same-user integrator must materialize
 `$ROUND/task-runs.json` directly from the Task result envelopes. It is an object keyed by
@@ -207,12 +211,13 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
 git fetch origin "$TARGET_BRANCH"
 BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")"
 git merge-base --is-ancestor "$BASE_OID" HEAD ||
-  fail "HEAD is not based on current origin/$TARGET_BRANCH; rebase, validate, and rerun selected-roster verification"
+  fail "HEAD is not based on current origin/$TARGET_BRANCH; update the integration branch and restart validation, selected-roster verification, snapshot, binding, and required checks"
 HEAD_REF="$(git symbolic-ref --short HEAD)"
 PR_NUMBER="$(gh pr view --json number --jq .number)"
 PROGRAM="${PROGRAM:-ADR046}"
 WAVE="${WAVE:?set WAVE to the current qualified wave}"
 ROUND="${ROUND:?set ROUND to the final verification round directory}"
+MERGE_GROUP_TREE_CHECK="${MERGE_GROUP_TREE_CHECK:-}"
 
 PR_IDENTITY="$(gh pr view "$PR_NUMBER" \
   --json baseRefName,baseRefOid,headRefName,headRefOid)"
@@ -227,25 +232,36 @@ jq -e \
   .headRefName == $head_ref and
   .headRefOid == $head_oid
 ' <<<"$PR_IDENTITY" ||
-  fail "PR identity or base changed; restart validation, selected-roster verification, snapshot, and binding"
+  fail "PR identity or base changed; update the integration branch and restart validation, selected-roster verification, snapshot, binding, and required checks"
 
 BRANCH_RULES="$(gh api \
   "repos/$GITHUB_REPOSITORY/rules/branches/$TARGET_BRANCH")"
-MERGE_GUARD="$(
-  jq -er '
-    if any(.[]; .type == "merge_queue") then
-      "merge-queue"
-    elif any(.[];
+MERGE_MODE="direct"
+jq -e '
+  any(.[];
+    .type == "required_status_checks" and
+    .parameters.strict_required_status_checks_policy == true and
+    ((.parameters.required_status_checks // []) | length) > 0
+  )
+' <<<"$BRANCH_RULES" >/dev/null ||
+  fail "configure effective v3 protection with nonempty strict up-to-date required status checks before binding"
+
+if jq -e 'any(.[]; .type == "merge_queue")' \
+  <<<"$BRANCH_RULES" >/dev/null; then
+  MERGE_MODE="merge-queue"
+  test -n "$MERGE_GROUP_TREE_CHECK" ||
+    fail "v3 uses a merge queue; set MERGE_GROUP_TREE_CHECK to its required snapshot-bound integration-tree check"
+  jq -e --arg context "$MERGE_GROUP_TREE_CHECK" '
+    any(.[];
       .type == "required_status_checks" and
       .parameters.strict_required_status_checks_policy == true and
-      ((.parameters.required_status_checks // []) | length) > 0
-    ) then
-      "strict-required-checks"
-    else
-      error("v3 lacks a merge queue or strict nonempty required status checks")
-    end
-  ' <<<"$BRANCH_RULES"
-)" || fail "configure an atomic base-change merge guard on v3 before binding"
+      any(.parameters.required_status_checks[]?;
+        .context == $context
+      )
+    )
+  ' <<<"$BRANCH_RULES" >/dev/null ||
+    fail "the merge queue check is not required by effective strict v3 protection"
+fi
 
 SELECTION="$ROUND/selection.json"
 LEDGER="$ROUND/discovery-ledger.json"
@@ -273,6 +289,16 @@ SNAPSHOT_RESULT="$("${X[@]}" snapshot \
   --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF" \
   --state-dir "$STATE_DIR")"
 SNAPSHOT="$(printf '%s\n' "$SNAPSHOT_RESULT" | artifact_ref)"
+EXPECTED_INTEGRATION_TREE_OID="$(
+  jq -er --arg repository "$REPOSITORY" '
+    .material.repository_set[]
+    | select(.id == $repository)
+    | .integration_tree_oid
+  ' "$STATE_DIR/$SNAPSHOT"
+)"
+test "$EXPECTED_INTEGRATION_TREE_OID" = \
+  "$(git rev-parse "${HEAD_OID}^{tree}")" ||
+  fail "snapshot integration_tree_oid does not match the selected integration tree"
 
 jq -e --slurpfile snapshot "$STATE_DIR/$SNAPSHOT" '
   .candidate_id == $snapshot[0].candidate_id and
@@ -385,7 +411,7 @@ REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)"
 jq -e 'length > 0 and all(.state == "SUCCESS")' <<<"$REQUIRED_CHECKS"
 CURRENT_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)"
 test "$CURRENT_BASE_OID" = "$BASE_OID" ||
-  fail "v3 changed; do not merge - restart validation, selected-roster verification, snapshot, and binding"
+  fail "v3 changed; update the integration branch and restart validation, selected-roster verification, snapshot, binding, and required checks"
 
 EVIDENCE_GITHUB_CI_RESULT="$("${X[@]}" validate-import \
   --snapshot "$SNAPSHOT" \
@@ -417,7 +443,7 @@ jq -e \
   .baseRefOid == $base_oid and
   .headRefOid == $head
 ' <<<"$PR_STATE" ||
-  fail "PR base or head changed; restart validation, selected-roster verification, snapshot, and binding"
+  fail "PR base or head changed; update the integration branch and restart validation, selected-roster verification, snapshot, binding, and required checks"
 MERGE_TARGET_INPUT="$(mktemp)"
 trap 'rm -f "$MERGE_TARGET_INPUT"' EXIT
 jq -n \
@@ -448,14 +474,17 @@ jq -n \
 
 # This is the point of no return. GitHub's effective v3 rule is the preventive
 # base guard. The post-merge tree comparison is defense in depth, not the guard.
-if [ "$MERGE_GUARD" = "merge-queue" ]; then
+IMMEDIATE_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)"
+test "$IMMEDIATE_BASE_OID" = "$BASE_OID" ||
+  fail "v3 changed immediately before merge; update the integration branch and restart validation, selected-roster verification, snapshot, binding, and required checks"
+if [ "$MERGE_MODE" = "merge-queue" ]; then
   gh pr merge "$PR_NUMBER" --match-head-commit "$HEAD_OID"
   attempts=0
   while [ "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = "OPEN" ]; do
     current_base="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)"
     if [ "$current_base" != "$BASE_OID" ]; then
       gh pr merge "$PR_NUMBER" --disable-auto || true
-      fail "v3 changed while queued; restart validation, selected-roster verification, snapshot, and binding"
+      fail "v3 changed while queued; update the integration branch and restart validation, selected-roster verification, snapshot, binding, and required checks"
     fi
     attempts=$((attempts + 1))
     test "$attempts" -lt 120 ||
@@ -528,10 +557,14 @@ authentication proof, or evidence that a particular definition executed.
 If `v3` changes at any point after validation or selected-roster verification begins, the
 atomic repository rule must refuse the merge. The operator then updates the integration
 branch and restarts validation, selected-roster verification, snapshot creation, and
-candidate binding in the same Track A order. The old snapshot, records, attestation, and CI
-evidence are ineligible. If the old attempt already consumed the wave's sole binding request,
-the existing no-second-request rule requires an accepted external disposition before that
-restart can establish another binding; it never permits merging the stale attempt.
+candidate binding, then reruns the required checks in the same Track A order. The old
+snapshot, records, attestation, and CI evidence are ineligible. If the old attempt already
+consumed the wave's sole binding request, the existing no-second-request rule requires an
+accepted external disposition before that restart can establish another binding; it never
+permits merging the stale attempt. When a merge queue is enabled, its required
+`merge_group` check must use the actual merge-group integration tree and the same
+snapshot-bound expected `integration_tree_oid`; the polling loop is defense in depth, not a
+substitute for that atomic refusal.
 
 `history-proof` is **not** a separate subcommand; it runs inside `merge-eligibility`.
 

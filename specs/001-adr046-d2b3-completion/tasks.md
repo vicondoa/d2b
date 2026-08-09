@@ -184,17 +184,19 @@ metadata validated against the packet for correlation and uniqueness, not authen
 an authentication proof, or proof that a particular definition executed.
 
 T480, T556, and T561 MUST require effective `v3` rules that atomically refuse a merge when
-the base changes: either a merge queue configured with that refusal or nonempty required
-checks with strict up-to-date enforcement. They verify the exact base OID before snapshot,
-after required checks, and immediately before merge, while repository enforcement closes the
-last race. A head-only match and a post-merge tree comparison are insufficient. On any base
-change, the operator updates the integration branch and restarts validation,
-selected-roster verification, snapshot creation, and binding in the existing Track A order.
-The old snapshot, records, attestation, and CI evidence are ineligible. If the wave's sole
-request was already consumed, no replacement binding may be established until an accepted
-external disposition permits it. These R12 and R55 requirements add no task ID, change no
-checkbox, preserve Track A order, and remain blocked with every other action while FR-036 is
-open.
+the expected base becomes stale by configuring a nonempty required-check set with strict
+up-to-date enforcement. They verify the exact base OID before snapshot, after required
+checks, and immediately before merge, while GitHub enforcement closes the last race. A merge
+queue does not replace this requirement. It is sufficient only when a required
+`merge_group` check compares the actual merge-group integration tree with the snapshot-bound
+expected `integration_tree_oid` and refuses a mismatch. A head-only match and a post-merge
+tree comparison are insufficient. On any base change, the operator updates the integration
+branch and restarts validation, selected-roster verification, snapshot creation, binding,
+and required checks in the existing Track A order. The old snapshot, records, attestation,
+and CI evidence are ineligible. If the wave's sole request was already consumed, no
+replacement binding may be established until an accepted external disposition permits it.
+These R12 and R55 requirements add no task ID, change no checkbox, preserve Track A order,
+and remain blocked with every other action while FR-036 is open.
 
 T589 owns the wave-scoped fail-closed implementation and table-driven coverage in
 `packages/xtask/src/delivery/{panel.rs,seal.rs,eligibility.rs,history_proof.rs,storage.rs}` for
