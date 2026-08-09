@@ -5,8 +5,8 @@
 //! the selected current roles with the required provider, model, and reasoning
 //! effort from [`PANEL_PROVIDER_POLICY`], [`PANEL_MODEL_POLICY`], and
 //! [`PANEL_REASONING_EFFORT_POLICY`]. Existing fixed-ten request-record sets
-//! on the legacy Gemini/high pair remain readable for delivery-state
-//! compatibility.
+//! on the prior unversioned model/effort pair remain readable for
+//! delivery-state compatibility.
 //!
 //! `panel-attest` validates a directory holding exactly one strict record per
 //! role named by the stored request, each bound to the same `candidate_id`,
@@ -37,18 +37,11 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::{OsStr, OsString},
     fs::{self, File},
-    io::{Read, Write},
-    os::{
-        fd::{AsFd, BorrowedFd, OwnedFd},
-        unix::ffi::OsStringExt,
-    },
-    path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    io::Write,
+    path::{Path, PathBuf},
 };
 
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, RenameFlags, ResolveFlags};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -72,10 +65,6 @@ use super::{
 /// transcript; anything larger is a malformed artifact rather than a review.
 const MAX_RECOMMENDATIONS: usize = 64;
 const MAX_PANEL_RECORD_SET_BYTES: usize = MAX_JSON_BYTES;
-const INPUT_RESOLVE_FLAGS: ResolveFlags = ResolveFlags::BENEATH
-    .union(ResolveFlags::NO_SYMLINKS)
-    .union(ResolveFlags::NO_MAGICLINKS);
-static IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Every panel record file is named after the role that produced it, so a
 /// mislabeled or duplicated role is refused by name as well as by content.
@@ -1145,20 +1134,40 @@ pub fn attest(
 
 /// Reads every record file from an operator-supplied directory.
 ///
-/// The directory holds records and nothing else: a subdirectory, a symlink, a
-/// dotfile, or a non-JSON file is a rejection, so an unnoticed extra file
-/// cannot dilute the request's exact roster requirement.
+/// The directory holds exactly the request's record names and nothing else, so
+/// an unnoticed extra file cannot dilute the request's exact roster
+/// requirement.
 fn read_record_dir(dir: &Path, expected_files: &[String]) -> Result<Vec<RecordFile>> {
-    let opened = open_input_directory(dir, "panel record path")?;
-    let names = input_directory_names_bounded(
-        opened.directory.as_fd(),
-        "panel record directory",
-        expected_files.len(),
-    )?;
-    let mut expected_names = expected_files
-        .iter()
-        .map(OsString::from)
-        .collect::<Vec<_>>();
+    let metadata = fs::metadata(dir).map_err(|error| {
+        DeliveryError::environment(format!("cannot read panel record directory: {error}"))
+    })?;
+    if !metadata.is_dir() {
+        return Err(DeliveryError::new("panel record path is not a directory"));
+    }
+    let mut names = fs::read_dir(dir)
+        .map_err(|error| {
+            DeliveryError::environment(format!("cannot list panel record directory: {error}"))
+        })?
+        .map(|entry| {
+            let entry = entry.map_err(|error| {
+                DeliveryError::environment(format!(
+                    "cannot read panel record directory entry: {error}"
+                ))
+            })?;
+            entry
+                .file_name()
+                .into_string()
+                .map_err(|_| DeliveryError::new("panel record file name is not UTF-8"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if names.len() > expected_files.len() {
+        return Err(DeliveryError::new(format!(
+            "panel record directory contains more than the exact {}-entry bound",
+            expected_files.len()
+        )));
+    }
+    names.sort();
+    let mut expected_names = expected_files.to_vec();
     expected_names.sort();
     if names != expected_names {
         return Err(DeliveryError::new(format!(
@@ -1169,21 +1178,19 @@ fn read_record_dir(dir: &Path, expected_files: &[String]) -> Result<Vec<RecordFi
     }
 
     let mut aggregate_bytes = 0usize;
-    let mut opened_files = Vec::with_capacity(names.len());
-    for raw_name in &names {
-        let name = raw_name
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| DeliveryError::new("panel record file name is not UTF-8"))?;
+    for name in &names {
         if !name.ends_with(".json") {
             return Err(DeliveryError::new(format!(
                 "panel record directory holds {name:?}, which is not a regular record file"
             )));
         }
-        let (file, stat) =
-            open_file_at_limited(opened.directory.as_fd(), raw_name, "panel record")?;
+        let size = fs::metadata(dir.join(name))
+            .map_err(|error| {
+                DeliveryError::environment(format!("cannot stat panel record: {error}"))
+            })?
+            .len() as usize;
         aggregate_bytes = aggregate_bytes
-            .checked_add(stat.st_size as usize)
+            .checked_add(size)
             .ok_or_else(|| DeliveryError::new("panel record aggregate byte count overflowed"))?;
         if aggregate_bytes > MAX_PANEL_RECORD_SET_BYTES {
             return Err(DeliveryError::new(format!(
@@ -1191,39 +1198,15 @@ fn read_record_dir(dir: &Path, expected_files: &[String]) -> Result<Vec<RecordFi
                  {MAX_PANEL_RECORD_SET_BYTES}-byte bound before record bytes are read"
             )));
         }
-        opened_files.push((name, raw_name, file, stat));
     }
 
     let mut files = Vec::with_capacity(names.len());
-    for (name, raw_name, file, before) in opened_files {
+    for name in names {
         files.push((
-            name,
-            read_opened_file_limited(
-                opened.directory.as_fd(),
-                raw_name,
-                file,
-                before,
-                "panel record",
-            )?,
+            name.clone(),
+            read_file_limited(&dir.join(&name), "panel record")?,
         ));
     }
-    let after = input_directory_names_bounded(
-        opened.directory.as_fd(),
-        "panel record directory",
-        expected_files.len(),
-    )?;
-    if after != names {
-        return Err(DeliveryError::new(
-            "panel record directory changed while its opened entries were being read",
-        ));
-    }
-    verify_opened_name(
-        opened.parent.as_fd(),
-        &opened.name,
-        opened.directory.as_fd(),
-        "panel record path",
-    )?;
-    verify_directory_path_identity(dir, opened.directory.as_fd(), "panel record path")?;
     files.sort();
     Ok(files)
 }
@@ -1333,371 +1316,24 @@ pub(crate) fn read_json_file<T: DeserializeOwned>(path: &Path, label: &str) -> R
 }
 
 fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
-    let (parent, name) = open_input_parent(path, label)?;
-    let bytes = read_file_at_limited(parent.as_fd(), &name, label)?;
-    verify_parent_path_identity(path, parent.as_fd(), label)?;
-    Ok(bytes)
-}
-
-struct OpenedInputDirectory {
-    parent: OwnedFd,
-    name: OsString,
-    directory: OwnedFd,
-}
-
-fn path_components(path: &Path, label: &str) -> Result<Vec<OsString>> {
-    if path.as_os_str().is_empty() {
-        return Err(DeliveryError::new(format!("{label} path is empty")));
-    }
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut names = Vec::new();
-    for component in absolute.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => names.push(name.to_os_string()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if names.pop().is_none() {
-                    return Err(DeliveryError::new(format!(
-                        "{label} path traverses above the filesystem root"
-                    )));
-                }
-            }
-            Component::Prefix(_) => {
-                return Err(DeliveryError::new(format!(
-                    "{label} path contains unsupported traversal"
-                )));
-            }
-        }
-    }
-    if names.is_empty() {
-        return Err(DeliveryError::new(format!(
-            "{label} path must name an entry below the filesystem root"
-        )));
-    }
-    Ok(names)
-}
-
-fn open_root(label: &str) -> Result<OwnedFd> {
-    rustix::fs::open(
-        "/",
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| {
-        DeliveryError::environment(format!("cannot open filesystem root for {label}: {error}"))
-    })
-}
-
-fn open_input_parent(path: &Path, label: &str) -> Result<(OwnedFd, OsString)> {
-    let mut names = path_components(path, label)?;
-    let name = names
-        .pop()
-        .ok_or_else(|| DeliveryError::new(format!("{label} path has no leaf")))?;
-    let mut parent = open_root(label)?;
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    for component in names {
-        let directory = rustix::fs::openat2(
-            parent.as_fd(),
-            component.as_os_str(),
-            flags,
-            Mode::empty(),
-            INPUT_RESOLVE_FLAGS,
-        )
-        .map_err(|error| {
-            DeliveryError::environment(format!(
-                "cannot open an anchored parent for {label}: {error}"
-            ))
-        })?;
-        verify_directory(directory.as_fd(), label)?;
-        verify_opened_name(
-            parent.as_fd(),
-            component.as_os_str(),
-            directory.as_fd(),
-            label,
-        )?;
-        parent = directory;
-    }
-    Ok((parent, name))
-}
-
-fn open_input_directory(path: &Path, label: &str) -> Result<OpenedInputDirectory> {
-    let (parent, name) = open_input_parent(path, label)?;
-    let directory = rustix::fs::openat2(
-        parent.as_fd(),
-        name.as_os_str(),
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-        INPUT_RESOLVE_FLAGS,
-    )
-    .map_err(|error| {
-        DeliveryError::environment(format!("cannot open anchored {label}: {error}"))
-    })?;
-    verify_directory(directory.as_fd(), label)?;
-    verify_opened_name(parent.as_fd(), &name, directory.as_fd(), label)?;
-    Ok(OpenedInputDirectory {
-        parent,
-        name,
-        directory,
-    })
-}
-
-fn verify_directory(fd: BorrowedFd<'_>, label: &str) -> Result<rustix::fs::Stat> {
-    let stat = rustix::fs::fstat(fd).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat opened {label}: {error}"))
-    })?;
-    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
-        return Err(DeliveryError::new(format!("{label} is not a directory")));
-    }
-    Ok(stat)
-}
-
-fn verify_opened_name(
-    parent: BorrowedFd<'_>,
-    name: &OsStr,
-    opened: BorrowedFd<'_>,
-    label: &str,
-) -> Result<()> {
-    let named = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
-        DeliveryError::environment(format!("cannot re-stat opened {label}: {error}"))
-    })?;
-    let pinned = rustix::fs::fstat(opened).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat opened {label}: {error}"))
-    })?;
-    if FileType::from_raw_mode(named.st_mode) == FileType::Symlink
-        || named.st_dev != pinned.st_dev
-        || named.st_ino != pinned.st_ino
-    {
-        return Err(DeliveryError::new(format!(
-            "{label} changed identity during anchored access"
-        )));
-    }
-    Ok(())
-}
-
-fn same_stat_identity(left: &rustix::fs::Stat, right: &rustix::fs::Stat) -> bool {
-    left.st_dev == right.st_dev && left.st_ino == right.st_ino
-}
-
-fn verify_parent_path_identity(path: &Path, expected: BorrowedFd<'_>, label: &str) -> Result<()> {
-    let (current, _) = open_input_parent(path, label)?;
-    let expected = rustix::fs::fstat(expected).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat anchored parent for {label}: {error}"))
-    })?;
-    let current = rustix::fs::fstat(current.as_fd()).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat current parent for {label}: {error}"))
-    })?;
-    if !same_stat_identity(&expected, &current) {
-        return Err(DeliveryError::new(format!(
-            "{label} parent changed identity during anchored access"
-        )));
-    }
-    Ok(())
-}
-
-fn verify_directory_path_identity(
-    path: &Path,
-    expected: BorrowedFd<'_>,
-    label: &str,
-) -> Result<()> {
-    let current = open_input_directory(path, label)?;
-    let expected = rustix::fs::fstat(expected).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat anchored {label}: {error}"))
-    })?;
-    let current = rustix::fs::fstat(current.directory.as_fd()).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat current {label}: {error}"))
-    })?;
-    if !same_stat_identity(&expected, &current) {
-        return Err(DeliveryError::new(format!(
-            "{label} changed identity during anchored access"
-        )));
-    }
-    Ok(())
-}
-
-fn verify_regular_file(
-    parent: BorrowedFd<'_>,
-    name: &OsStr,
-    file: BorrowedFd<'_>,
-    label: &str,
-) -> Result<rustix::fs::Stat> {
-    let stat = rustix::fs::fstat(file).map_err(|error| {
-        DeliveryError::environment(format!("cannot stat opened {label}: {error}"))
-    })?;
-    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
-        return Err(DeliveryError::new(format!("{label} is not a regular file")));
-    }
-    if stat.st_nlink != 1 {
-        return Err(DeliveryError::new(format!(
-            "{label} has link count {}; refusing a hardlink",
-            stat.st_nlink
-        )));
-    }
-    verify_opened_name(parent, name, file, label)?;
-    let named = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
-        DeliveryError::environment(format!("cannot re-stat opened {label}: {error}"))
-    })?;
-    if FileType::from_raw_mode(named.st_mode) != FileType::RegularFile || named.st_nlink != 1 {
-        return Err(DeliveryError::new(format!(
-            "{label} is not a singly linked regular file"
-        )));
-    }
-    Ok(stat)
-}
-
-fn read_file_at_limited(parent: BorrowedFd<'_>, name: &OsStr, label: &str) -> Result<Vec<u8>> {
-    let (file, before) = open_file_at_limited(parent, name, label)?;
-    read_opened_file_limited(parent, name, file, before, label)
-}
-
-fn open_file_at_limited(
-    parent: BorrowedFd<'_>,
-    name: &OsStr,
-    label: &str,
-) -> Result<(File, rustix::fs::Stat)> {
-    let fd = rustix::fs::openat2(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-        INPUT_RESOLVE_FLAGS,
-    )
-    .map_err(|error| {
-        DeliveryError::environment(format!("cannot open anchored {label}: {error}"))
-    })?;
-    let before = verify_regular_file(parent, name, fd.as_fd(), label)?;
-    if before.st_size < 0 || before.st_size as u64 > MAX_JSON_BYTES as u64 {
-        return Err(DeliveryError::new(format!(
-            "{label} exceeds {MAX_JSON_BYTES} bytes"
-        )));
-    }
-    Ok((File::from(fd), before))
-}
-
-fn read_opened_file_limited(
-    parent: BorrowedFd<'_>,
-    name: &OsStr,
-    mut file: File,
-    before: rustix::fs::Stat,
-    label: &str,
-) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MAX_JSON_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
+    let bytes = fs::read(path)
+        .map_err(|error| DeliveryError::environment(format!("cannot read {label}: {error}")))?;
     if bytes.len() > MAX_JSON_BYTES {
         return Err(DeliveryError::new(format!(
             "{label} exceeds {MAX_JSON_BYTES} bytes"
         )));
     }
-    let after = verify_regular_file(parent, name, file.as_fd(), label)?;
-    if before.st_dev != after.st_dev
-        || before.st_ino != after.st_ino
-        || before.st_size != after.st_size
-        || before.st_mtime != after.st_mtime
-        || before.st_mtime_nsec != after.st_mtime_nsec
-        || before.st_ctime != after.st_ctime
-        || before.st_ctime_nsec != after.st_ctime_nsec
-        || after.st_size as usize != bytes.len()
-    {
-        return Err(DeliveryError::new(format!(
-            "{label} changed while its opened descriptor was being read"
-        )));
-    }
     Ok(bytes)
 }
 
-fn input_directory_names_bounded(
-    directory: BorrowedFd<'_>,
-    label: &str,
-    max_entries: usize,
-) -> Result<Vec<OsString>> {
-    let entries = rustix::fs::Dir::read_from(directory).map_err(|error| {
-        DeliveryError::environment(format!("cannot list opened {label}: {error}"))
-    })?;
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            DeliveryError::environment(format!("cannot read opened {label}: {error}"))
-        })?;
-        let bytes = entry.file_name().to_bytes();
-        if bytes == b"." || bytes == b".." {
-            continue;
-        }
-        if names.len() >= max_entries {
-            return Err(DeliveryError::new(format!(
-                "{label} contains more than the exact {max_entries}-entry bound"
-            )));
-        }
-        names.push(OsString::from_vec(bytes.to_vec()));
-    }
-    names.sort();
-    Ok(names)
-}
-
 fn publish_record_set_no_replace(candidate: &CandidateDir, files: &[RecordFile]) -> Result<()> {
-    let candidate_directory =
-        open_input_directory(candidate.path(), "candidate delivery directory")?;
-    let panel = match rustix::fs::mkdirat(
-        candidate_directory.directory.as_fd(),
-        PANEL_DIR,
-        Mode::from_bits_truncate(0o700),
-    ) {
-        Ok(()) => {
-            rustix::fs::fsync(candidate_directory.directory.as_fd()).map_err(|error| {
-                DeliveryError::environment(format!(
-                    "cannot fsync candidate directory after panel creation: {error}"
-                ))
-            })?;
-            rustix::fs::openat2(
-                candidate_directory.directory.as_fd(),
-                PANEL_DIR,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-                INPUT_RESOLVE_FLAGS,
-            )
-        }
-        Err(rustix::io::Errno::EXIST) => rustix::fs::openat2(
-            candidate_directory.directory.as_fd(),
-            PANEL_DIR,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-            INPUT_RESOLVE_FLAGS,
-        ),
-        Err(error) => {
-            return Err(DeliveryError::environment(format!(
-                "cannot create candidate panel directory: {error}"
-            )));
-        }
-    }
-    .map_err(|error| {
-        DeliveryError::environment(format!("cannot open candidate panel directory: {error}"))
+    let panel_dir = candidate.panel_dir();
+    fs::create_dir_all(&panel_dir).map_err(|error| {
+        DeliveryError::environment(format!("cannot create candidate panel directory: {error}"))
     })?;
-    let panel_stat = verify_directory(panel.as_fd(), "candidate panel directory")?;
-    if panel_stat.st_mode & 0o777 != 0o700 || panel_stat.st_uid != nix::unistd::geteuid().as_raw() {
-        return Err(DeliveryError::new(
-            "candidate panel directory must be mode 0700 and owned by the current user",
-        ));
-    }
-    verify_opened_name(
-        candidate_directory.directory.as_fd(),
-        OsStr::new(PANEL_DIR),
-        panel.as_fd(),
-        "candidate panel directory",
-    )?;
-
     for (name, bytes) in files {
-        write_panel_file_no_replace(panel.as_fd(), name, bytes, "panel record")?;
+        write_panel_file_no_replace(&panel_dir.join(name), bytes, "panel record")?;
     }
-    verify_directory_path_identity(
-        candidate.path(),
-        candidate_directory.directory.as_fd(),
-        "candidate delivery directory",
-    )?;
     Ok(())
 }
 
@@ -1707,144 +1343,45 @@ fn publish_candidate_file_no_replace(
     bytes: &[u8],
     label: &str,
 ) -> Result<()> {
-    let candidate_directory =
-        open_input_directory(candidate.path(), "candidate delivery directory")?;
-    let candidate_stat = verify_directory(
-        candidate_directory.directory.as_fd(),
-        "candidate delivery directory",
-    )?;
-    if candidate_stat.st_mode & 0o777 != 0o700
-        || candidate_stat.st_uid != nix::unistd::geteuid().as_raw()
-    {
-        return Err(DeliveryError::new(
-            "candidate delivery directory must be mode 0700 and owned by the current user",
-        ));
-    }
-    write_panel_file_no_replace(candidate_directory.directory.as_fd(), name, bytes, label)?;
-    verify_directory_path_identity(
-        candidate.path(),
-        candidate_directory.directory.as_fd(),
-        "candidate delivery directory",
-    )
+    write_panel_file_no_replace(&candidate.path().join(name), bytes, label)
 }
 
-fn write_panel_file_no_replace(
-    parent: BorrowedFd<'_>,
-    name: &str,
-    bytes: &[u8],
-    label: &str,
-) -> Result<()> {
-    let existing_label = format!("existing {label}");
-    match read_file_at_limited(parent, OsStr::new(name), &existing_label) {
-        Ok(existing) => {
+fn write_panel_file_no_replace(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
+    if let Ok(existing) = fs::read(path) {
+        if existing != bytes {
+            return Err(DeliveryError::new(format!(
+                "conflicting {label}; refusing to replace it"
+            )));
+        }
+        return Ok(());
+    }
+
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = fs::read(path).map_err(|read_error| {
+                DeliveryError::environment(format!("cannot read existing {label}: {read_error}"))
+            })?;
             if existing != bytes {
                 return Err(DeliveryError::new(format!(
-                    "conflicting {label} {name:?}; refusing to replace it"
+                    "conflicting {label}; refusing to replace it"
                 )));
             }
             return Ok(());
         }
-        Err(error)
-            if matches!(
-                rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW),
-                Err(rustix::io::Errno::NOENT)
-            ) =>
-        {
-            drop(error);
+        Err(error) => {
+            return Err(DeliveryError::environment(format!(
+                "cannot create {label}: {error}"
+            )));
         }
-        Err(error) => return Err(error),
-    }
-
-    let ordinal = IMPORT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary = format!(".{name}.{}.{}.tmp", std::process::id(), ordinal);
-    let fd = rustix::fs::openat(
-        parent,
-        temporary.as_str(),
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_bits_truncate(0o600),
-    )
-    .map_err(|error| {
-        DeliveryError::environment(format!("cannot create {label} temporary: {error}"))
-    })?;
-    let mut temporary_present = true;
-    let mut file = File::from(fd);
-    let result = (|| {
-        let temporary_label = format!("{label} temporary");
-        verify_regular_file(
-            parent,
-            OsStr::new(&temporary),
-            file.as_fd(),
-            &temporary_label,
-        )?;
-        file.write_all(bytes).and_then(|()| file.sync_all())?;
-        verify_regular_file(
-            parent,
-            OsStr::new(&temporary),
-            file.as_fd(),
-            &temporary_label,
-        )?;
-        match rustix::fs::renameat_with(
-            parent,
-            temporary.as_str(),
-            parent,
-            name,
-            RenameFlags::NOREPLACE,
-        ) {
-            Ok(()) => {
-                temporary_present = false;
-                verify_regular_file(
-                    parent,
-                    OsStr::new(name),
-                    file.as_fd(),
-                    &format!("published {label}"),
-                )?;
-                rustix::fs::fsync(parent).map_err(|error| {
-                    DeliveryError::environment(format!(
-                        "cannot fsync candidate directory after {label} publication: {error}"
-                    ))
-                })
-            }
-            Err(rustix::io::Errno::EXIST) => {
-                let existing = read_file_at_limited(parent, OsStr::new(name), &existing_label)?;
-                if existing != bytes {
-                    return Err(DeliveryError::new(format!(
-                        "conflicting {label} {name:?}; refusing to replace it"
-                    )));
-                }
-                Ok(())
-            }
-            Err(error)
-                if matches!(
-                    error,
-                    rustix::io::Errno::NOSYS
-                        | rustix::io::Errno::INVAL
-                        | rustix::io::Errno::NOTSUP
-                        | rustix::io::Errno::XDEV
-                        | rustix::io::Errno::MLINK
-                ) =>
-            {
-                Err(DeliveryError::environment(format!(
-                    "atomic no-replace {label} publication is unavailable: {error}"
-                )))
-            }
-            Err(error) => Err(DeliveryError::environment(format!(
-                "cannot publish {label} without replacement: {error}"
-            ))),
-        }
-    })();
-    if temporary_present
-        && let Err(cleanup) = rustix::fs::unlinkat(parent, temporary.as_str(), AtFlags::empty())
-    {
-        return Err(match result {
-            Ok(()) => {
-                DeliveryError::environment(format!("cannot clean {label} temporary: {cleanup}"))
-            }
-            Err(primary) => DeliveryError::environment(format!(
-                "{primary}; additionally cannot clean {label} temporary: {cleanup}"
-            )),
-        });
-    }
-    result
+    };
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| DeliveryError::environment(format!("cannot write {label}: {error}")))
 }
 
 #[cfg(test)]
@@ -1858,8 +1395,6 @@ pub(crate) mod tests {
             tests::{Scratch, assert_no_absolute_path, repo_root},
         },
     };
-    use std::os::{fd::AsRawFd, unix::fs::symlink};
-
     pub(crate) fn snapshot() -> SnapshotView {
         snapshot_from(fixtures::material())
     }
@@ -2031,90 +1566,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn supplied_panel_files_reject_symlinks_magiclinks_fifos_devices_and_hardlinks() {
-        let scratch = Scratch::new("panel-input-types");
-        let regular = scratch.path.join("regular.json");
-        fs::write(&regular, b"{}\n").expect("write regular input");
-
-        let symlink_path = scratch.path.join("symlink.json");
-        symlink(&regular, &symlink_path).expect("create symlink");
-        assert!(
-            read_file_limited(&symlink_path, "panel input").is_err(),
-            "a symlinked input must fail closed"
-        );
-
-        let hardlink_path = scratch.path.join("hardlink.json");
-        fs::hard_link(&regular, &hardlink_path).expect("create hardlink");
-        let hardlink_error =
-            read_file_limited(&hardlink_path, "panel input").expect_err("hardlink rejected");
-        assert!(
-            hardlink_error.message().contains("hardlink")
-                || hardlink_error.message().contains("link count"),
-            "{hardlink_error}"
-        );
-        fs::remove_file(&hardlink_path).expect("remove hardlink");
-
-        let fifo_path = scratch.path.join("fifo.json");
-        nix::unistd::mkfifo(
-            &fifo_path,
-            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-        )
-        .expect("create fifo");
-        let fifo_error = read_file_limited(&fifo_path, "panel input").expect_err("fifo rejected");
-        assert!(
-            fifo_error.message().contains("not a regular file"),
-            "{fifo_error}"
-        );
-
-        let device_error =
-            read_file_limited(Path::new("/dev/null"), "panel input").expect_err("device rejected");
-        assert!(
-            device_error.message().contains("not a regular file"),
-            "{device_error}"
-        );
-
-        let opened = File::open(&regular).expect("open regular input");
-        let magiclink_path = scratch.path.join("magiclink.json");
-        symlink(
-            format!("/proc/self/fd/{}", opened.as_raw_fd()),
-            &magiclink_path,
-        )
-        .expect("create procfs magiclink");
-        assert!(
-            read_file_limited(&magiclink_path, "panel input").is_err(),
-            "a procfs magiclink must fail closed"
-        );
-
-        let linked_parent = scratch.path.join("linked-parent");
-        symlink(&scratch.path, &linked_parent).expect("create linked parent");
-        assert!(
-            read_file_limited(&linked_parent.join("regular.json"), "panel input").is_err(),
-            "a symlinked parent must fail closed"
-        );
-
-        let replacement_root = scratch.path.join("replacement-root");
-        let replacement_parent = replacement_root.join("parent");
-        let moved_parent = replacement_root.join("moved-parent");
-        fs::create_dir_all(&replacement_parent).expect("create replacement parent");
-        let replacement_input = replacement_parent.join("input.json");
-        fs::write(&replacement_input, b"original\n").expect("write replacement input");
-        let (pinned_parent, _) =
-            open_input_parent(&replacement_input, "panel input").expect("pin input parent");
-        fs::rename(&replacement_parent, &moved_parent).expect("move pinned parent");
-        fs::create_dir(&replacement_parent).expect("create substitute parent");
-        fs::write(&replacement_input, b"substitute\n").expect("write substitute input");
-        let replacement_error =
-            verify_parent_path_identity(&replacement_input, pinned_parent.as_fd(), "panel input")
-                .expect_err("replaced parent rejected");
-        assert!(
-            replacement_error
-                .message()
-                .contains("parent changed identity"),
-            "{replacement_error}"
-        );
-    }
-
-    #[test]
     fn record_directory_rejects_aggregate_bound_before_reads() {
         let scratch = Scratch::new("panel-record-aggregate-bounds");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
@@ -2141,23 +1592,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn record_ingest_and_publication_reject_hardlinks_and_conflicts_without_replacement() {
+    fn record_publication_compares_existing_bytes_without_replacement() {
         let scratch = Scratch::new("panel-record-no-replace");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         requested(&candidate, &snapshot);
         let files = record_files(&snapshot);
         let dir = write_record_dir(&scratch, &files);
         let first_name = &files[0].0;
-        let first_input = dir.join(first_name);
-        let input_alias = scratch.path.join("input-alias.json");
-        fs::hard_link(&first_input, &input_alias).expect("hardlink input record");
-        let input_error = attest(&candidate, &snapshot, &dir).expect_err("hardlink input rejected");
-        assert!(
-            input_error.message().contains("hardlink")
-                || input_error.message().contains("link count"),
-            "{input_error}"
-        );
-        fs::remove_file(&input_alias).expect("remove input alias");
 
         let conflicting = b"{\"foreign\":true}\n";
         candidate
@@ -2451,8 +1892,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_legacy_gemini_request_and_record_set_remain_accepted() {
-        let scratch = Scratch::new("panel-legacy-gemini");
+    fn a_prior_unversioned_fixed_ten_request_and_record_set_remain_accepted() {
+        let scratch = Scratch::new("panel-legacy-fixed-ten");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let mut request = PanelRequest::legacy_for_snapshot(&snapshot);
         request.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
@@ -2466,16 +1907,15 @@ pub(crate) mod tests {
         }
 
         let attestation = validate_record_set(&candidate, &request, &files)
-            .expect("legacy Gemini records remain compatible");
+            .expect("prior unversioned records remain compatible");
         assert!(attestation.unanimous);
     }
 
     #[test]
-    fn current_records_reject_the_legacy_binding() {
+    fn current_records_reject_an_unsupported_binding() {
         let error = reject(|files, _| {
             rewrite(files, PanelRole::Security, |record| {
-                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
-                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
+                record.model_version = "other-model".to_owned();
             });
         });
         assert!(
@@ -2487,14 +1927,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_legacy_fixed_ten_family_rejects_the_current_binding() {
+    fn the_prior_unversioned_fixed_ten_family_rejects_an_unsupported_binding() {
         let scratch = Scratch::new("panel-legacy-current-binding");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let mut request = PanelRequest::legacy_for_snapshot(&snapshot);
-        request.model_version = PANEL_MODEL_POLICY.to_owned();
-        request.reasoning_effort = PANEL_REASONING_EFFORT_POLICY.to_owned();
+        request.model_version = "other-model".to_owned();
         let error = validate_record_set(&candidate, &request, &legacy_record_files(&snapshot))
-            .expect_err("legacy requests must retain the legacy binding");
+            .expect_err("prior unversioned requests must retain their fixed binding");
         assert!(
             error
                 .message()
@@ -2505,12 +1944,13 @@ pub(crate) mod tests {
 
     #[test]
     fn a_record_binding_must_match_its_request_binding() {
-        let error = reject(|files, _| {
-            rewrite(files, PanelRole::Security, |record| {
-                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
-                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
-            });
-        });
+        let scratch = Scratch::new("panel-record-request-binding");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let mut request = PanelRequest::for_snapshot(&snapshot);
+        request.provider = "other-provider".to_owned();
+        let error = record(PanelRole::Security, &snapshot)
+            .validate(&request)
+            .expect_err("a record must match its request binding");
         assert!(error.message().contains("exactly match"), "{error}");
     }
 
@@ -2778,6 +2218,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn legacy_attestation_requires_strict_record_order() {
+        let mut bundle: FixtureBundle =
+            serde_json::from_str(include_str!("testdata/panel-legacy-ten.json"))
+                .expect("legacy fixture");
+        bundle.attestation.records.swap(0, 1);
+        let error = bundle
+            .attestation
+            .validate()
+            .expect_err("legacy records must stay in roster order");
+        assert!(error.message().contains("not in roster order"), "{error}");
+
+        let mut seal_panel = bundle.seal_panel;
+        seal_panel.records.swap(0, 1);
+        let error = seal_panel
+            .validate()
+            .expect_err("legacy seal records must stay in roster order");
+        assert!(error.message().contains("not in roster order"), "{error}");
+    }
+
+    #[test]
     fn byte_real_legacy_request_and_seal_deserialize_and_validate() {
         let request_bytes = include_bytes!("testdata/panel-legacy-request.json");
         let request: PanelRequest =
@@ -2870,7 +2330,7 @@ pub(crate) mod tests {
             "legacy seal panels must reject unversioned selection state"
         );
 
-        let seal: crate::delivery::seal::SealRecord =
+        let mut seal: crate::delivery::seal::SealRecord =
             serde_json::from_value(seal_value).expect("legacy seal");
         let mut current_request_value = legacy_request;
         current_request_value["panel_format_version"] = serde_json::json!(1);
@@ -2900,6 +2360,8 @@ pub(crate) mod tests {
         candidate
             .write_json(PANEL_REQUEST_FILE, &current_request)
             .expect("write current request");
+        seal.panel_request_sha256 =
+            sha256_bytes(&serde_json::to_vec(&current_request).expect("current request bytes"));
         let error = seal
             .validate(&candidate)
             .expect_err("a legacy seal must not validate against a current request");

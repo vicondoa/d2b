@@ -185,13 +185,40 @@ impl SealRecord {
             ));
         }
         candidate.validate_artifact_address(&self.wave, &self.candidate_id, "wave seal")?;
+        let request_bytes = candidate.read_bytes(PANEL_REQUEST_FILE).map_err(|error| {
+            DeliveryError::new(format!(
+                "wave seal has no readable panel request for its embedded panel: {error}"
+            ))
+        })?;
+        let request_sha256 = sha256_bytes(&request_bytes);
+        if request_sha256 != self.panel_request_sha256 {
+            return Err(DeliveryError::new(
+                "wave seal panel request digest does not match the exact stored panel request \
+                 bytes",
+            ));
+        }
         let request: panel::PanelRequest =
-            candidate.read_json(PANEL_REQUEST_FILE).map_err(|error| {
+            serde_json::from_slice(&request_bytes).map_err(|error| {
                 DeliveryError::new(format!(
-                    "wave seal has no readable panel request for its embedded panel: {error}"
+                    "wave seal has an invalid stored panel request: {error}"
                 ))
             })?;
         request.validate()?;
+        candidate.validate_artifact_address(
+            &request.wave,
+            &request.candidate_id,
+            "wave seal panel request",
+        )?;
+        if request.program != self.program
+            || request.wave != self.wave
+            || request.candidate_id != self.candidate_id
+            || request.content_id != self.content_id
+        {
+            return Err(DeliveryError::new(
+                "wave seal panel request identity does not match the sealed program, wave, \
+                 candidate, and content",
+            ));
+        }
         if request.format()? != self.panel.format()? || request.roles != self.panel.roles {
             return Err(DeliveryError::new(
                 "wave seal mixes a panel request and embedded panel from different format or roster families",
@@ -320,7 +347,10 @@ pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
         evidence::EvidenceRecord,
-        model::{CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_CURRENT_ROLES},
+        model::{
+            CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_CURRENT_ROLES,
+            fixtures,
+        },
         panel::tests::{
             candidate_with_snapshot, candidate_with_snapshot_from, record_files, write_record_dir,
         },
@@ -686,6 +716,57 @@ pub(crate) mod tests {
         record.content_id = ContentId::parse("d".repeat(64)).expect("digest");
         let error = record.validate(&candidate).expect_err("forged seal");
         assert!(error.message().contains("re-derive"), "{error}");
+    }
+
+    #[test]
+    fn a_seal_rejects_mutated_panel_request_bytes() {
+        let scratch = Scratch::new("seal-mutated-panel-request");
+        let (candidate, snapshot) = sealable(&scratch);
+        seal(&candidate, &snapshot).expect("seal");
+        let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
+        let mut request_bytes = candidate
+            .read_bytes(PANEL_REQUEST_FILE)
+            .expect("panel request bytes");
+        request_bytes.push(b'\n');
+        candidate
+            .write_bytes(PANEL_REQUEST_FILE, &request_bytes)
+            .expect("mutate panel request bytes");
+
+        let error = record
+            .validate(&candidate)
+            .expect_err("mutated request bytes must not validate");
+        assert!(error.message().contains("panel request digest"), "{error}");
+    }
+
+    #[test]
+    fn a_seal_rejects_a_foreign_panel_request_even_when_its_digest_is_updated() {
+        let scratch = Scratch::new("seal-foreign-panel-request");
+        let (candidate, snapshot) = sealable(&scratch);
+        seal(&candidate, &snapshot).expect("seal");
+        let mut record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
+
+        let mut foreign_material = fixtures::material();
+        foreign_material.repository_set[0].integration_tree_oid = fixtures::oid(9);
+        let foreign_scratch = Scratch::new("seal-foreign-panel-request-source");
+        let (foreign_candidate, foreign_snapshot) =
+            candidate_with_snapshot_from(&foreign_scratch, foreign_material);
+        panel::request(&foreign_candidate, &foreign_snapshot).expect("foreign panel request");
+        let foreign_request = foreign_candidate
+            .read_bytes(PANEL_REQUEST_FILE)
+            .expect("foreign panel request bytes");
+        candidate
+            .write_bytes(PANEL_REQUEST_FILE, &foreign_request)
+            .expect("install foreign panel request");
+        record.panel_request_sha256 = sha256_bytes(&foreign_request);
+
+        let error = record
+            .validate(&candidate)
+            .expect_err("foreign request must not validate");
+        assert!(
+            error.message().contains("panel request")
+                && (error.message().contains("address") || error.message().contains("identity")),
+            "{error}"
+        );
     }
 
     #[test]

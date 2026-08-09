@@ -7,8 +7,8 @@
   "content_id": "2a7104db2b2fb08db7062bf0080594f4c002abede9328b579fee4700725a1c40",
   "snapshot_sha256": "c6364dcb391510507604fbd15d5cc8fba1617ede694403fcb2296332cecd04c8",
   "provider": "github-copilot",
-  "model_version": "gemini-3.1-pro-preview",
-  "reasoning_effort": "high",
+  "model_version": "gpt-5.6-sol",
+  "reasoning_effort": "xhigh",
   "roles": [
     "software",
     "test",
