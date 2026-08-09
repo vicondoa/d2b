@@ -825,7 +825,7 @@ run_fast_lint_gate() {
   local lint_base path package tracked_paths untracked_paths changed_paths
   local sorted_packages workspace_metadata workspace_rows workspace_root
   local workspace_root_real package_root_real package_manifest package_root
-  local path_abs candidate_dir candidate_real independent
+  local path_abs candidate_dir candidate_real independent matched
   local main_workspace_changed=0
   local guest_shell_runner_changed=0
   local main_workspace_metadata_needed=0
@@ -907,7 +907,7 @@ run_fast_lint_gate() {
         if [[ "$path" == *.rs || "$path" == */Cargo.toml \
           || "$path" == */build.rs ]]; then
           case "$path" in
-            packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
+            packages/.config/*|packages/policy-inputs/*|packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
               ;;
             *)
               main_workspace_metadata_needed=1
@@ -1009,7 +1009,7 @@ run_fast_lint_gate() {
           ;;
       esac
       case "$path" in
-        packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
+        packages/.config/*|packages/policy-inputs/*|packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
           continue
           ;;
       esac
@@ -1036,15 +1036,21 @@ run_fast_lint_gate() {
       done
       [ "$independent" -eq 0 ] || continue
 
+      matched=0
       for package in "${!main_package_roots[@]}"; do
         package_root=${main_package_roots[$package]}
         case "$path_abs" in
           "$package_root"|"$package_root"/*)
             main_packages["$package"]=1
+            matched=1
             break
             ;;
         esac
       done
+      if [ "$matched" -eq 0 ]; then
+        fail "changed Rust path is not a main workspace member or classified independent/generated path: $path"
+        exit 1
+      fi
     done <<<"$changed_paths"
   fi
 

@@ -856,6 +856,11 @@ cargo() {
             "independent",
             "packages/d2b-core/fuzz/src/lib.rs",
         )
+        unknown_result, unknown = run_scenario(
+            "unknown",
+            "packages/not-a-member/src/lib.rs",
+            expect_success=False,
+        )
         _, guest = run_scenario(
             "guest",
             "packages/d2b-guest-shell-runner/src/lib.rs",
@@ -880,6 +885,12 @@ cargo() {
         self.assertFalse(
             any(command.startswith("clippy ") for command in independent)
         )
+        self.assertNotEqual(unknown_result.returncode, 0)
+        self.assertIn(
+            "changed Rust path is not a main workspace member",
+            unknown_result.stderr,
+        )
+        self.assertFalse(any(command.startswith("clippy ") for command in unknown))
 
         guest_clippy = [
             command for command in guest if command.startswith("clippy ")
