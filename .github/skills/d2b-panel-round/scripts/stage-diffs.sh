@@ -585,6 +585,63 @@ const sameNames = (left, right) =>
   left.length === right.length &&
   left.every((name, index) => name === right[index]);
 
+const canonicalFileNames = new Set([
+  "address.json",
+  "approval.json",
+  "commits.txt",
+  "current-candidate.json",
+  "delta.diff",
+  "dispatch-binding.json",
+  "dispatch-prompt.txt",
+  "discovery-ledger.json",
+  "discovery-request.json",
+  "discovery-results.json",
+  "evidence.md",
+  "full.diff",
+  "metrics.json",
+  "review-request.md",
+  "responses.json",
+  "self-verification.json",
+  "selection.json",
+  "verification-results.json",
+]);
+const canonicalContentDirectories = new Set([
+  "agent-definitions",
+  "records",
+  "reviewer-notes",
+  "verification",
+  "verdicts",
+]);
+
+const canonicalRemnants = (packet) => {
+  const remnants = [];
+  const scanDirectory = (directory, prefix) => {
+    for (const name of readdirSync(directory).sort()) {
+      const relative = `${prefix}/${name}`;
+      const absolute = path.join(directory, name);
+      const stat = lstatSync(absolute);
+      remnants.push(relative);
+      if (stat.isDirectory()) scanDirectory(absolute, relative);
+    }
+  };
+  for (const name of readdirSync(packet).sort()) {
+    if (name === ".complete") continue;
+    const absolute = path.join(packet, name);
+    if (canonicalFileNames.has(name)) {
+      remnants.push(name);
+      continue;
+    }
+    if (!canonicalContentDirectories.has(name)) continue;
+    const stat = lstatSync(absolute);
+    if (!stat.isDirectory()) {
+      remnants.push(name);
+      continue;
+    }
+    scanDirectory(absolute, name);
+  }
+  return remnants.sort();
+};
+
 async function validateCompletedPacket(packet, markerPath) {
   const { readSelectionTable, validateSelection } =
     await import(pathToFileURL(lifecycleHelper).href);
@@ -900,7 +957,17 @@ for (const name of packets) {
   try {
     markerStat = lstatSync(markerPath);
   } catch (error) {
-    if (error.code === "ENOENT") continue;
+    if (error.code === "ENOENT") {
+      const remnants = canonicalRemnants(packet);
+      if (remnants.length > 0) {
+        console.error(
+          `${packet}: incomplete packet retains canonical artifact content without .complete; ` +
+            `refusing discovery. Remaining [${remnants.join(", ")}]`,
+        );
+        process.exit(1);
+      }
+      continue;
+    }
     throw error;
   }
   const packetEntries = readdirSync(packet);

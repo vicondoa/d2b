@@ -15,10 +15,10 @@
 //   * Repo-scope `.github/copilot/settings.json` cannot carry `subagents`.
 //
 // So the only working per-lane binding is the dispatch parameters written in
-// the skill tables, and a panel record attests `reasoning_effort`. A lane
-// dispatched without an explicit effort therefore produces a false
-// attestation rather than an error. This script is the cheap place to catch
-// the mistakes that lead there.
+// the skill tables, and a panel record carries declared `reasoning_effort`
+// metadata. A lane dispatched without an explicit effort therefore produces a
+// false attestation rather than an error. This script is the cheap place to
+// catch the mistakes that lead there.
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -1370,19 +1370,36 @@ const observedBindingResidualDocs = [
   ["panel-review.md", panelReviewDoc],
   ["copilot-agents.md", copilotAgentsDoc],
 ];
+const forbiddenObservedBindingClaims = [
+  [
+    "direct record-helper catch/proof claim",
+    /\b(?:make-records(?:\.mjs)?|record helper)\s+(?:catches?|detects?|proves?|verifies?|authenticates?)\b/i,
+  ],
+  [
+    "conjoined record-helper catch/proof claim",
+    /\b(?:make-records(?:\.mjs)?|record helper)\b[^.!?]{0,160}\b(?:and|but)\s+(?:it\s+)?(?:catches?|detects?|proves?|verifies?|authenticates?)\b/i,
+  ],
+];
 for (const [label, path] of observedBindingResidualDocs) {
   if (!existsSync(path)) continue;
   const source = readFileSync(path, "utf8").toLowerCase().replace(/\s+/g, " ");
   for (const phrase of [
-    "does not prove actual execution",
-    "catch a lying declaration",
-    "accepted residual",
-    "authenticated receipts are not added",
+    "validates declared same-user metadata against the completion-bound policy",
+    "cannot detect a lying declaration or prove execution",
+    "residual is accepted without authenticated receipts",
   ]) {
     if (!source.includes(phrase)) {
       fail(
         `${label}: observed process metadata residual documentation is missing ` +
         `required text: ${phrase}`,
+      );
+    }
+  }
+  for (const [description, pattern] of forbiddenObservedBindingClaims) {
+    if (pattern.test(source)) {
+      fail(
+        `${label}: forbidden observed process metadata claim (${description}); ` +
+        "make-records validates declarations but cannot establish runtime execution",
       );
     }
   }

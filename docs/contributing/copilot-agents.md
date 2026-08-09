@@ -221,9 +221,9 @@ sufficient with no `subagents` block in either scope.
 the fallback behaviours differ and one is dangerous. An agent that omits
 `model` and is hand-invoked inherits the caller's model, so a panel seat could
 run on an unrelated parent binding. An agent that pins it still runs the panel
-model and only loses the effort, which the record helper catches. One line per
-agent converts a false model attestation into something requiring two
-independent mistakes.
+model, but the model pin does not establish the runtime effort; the record
+helper validates only the declared effort. One line per agent converts a false
+model attestation into something requiring two independent mistakes.
 
 **The residual risk is the silent downgrade.** An unpinned panel lane runs at
 the model default while a record attests `xhigh`. That produces a
@@ -233,8 +233,9 @@ failure can take on an attestation gate. Three layers defend it:
 1. the dispatch policy and its table projection, which make it rarely happen;
 2. `scripts/copilot/check-bindings.mjs`, which rejects a mispinned or illegal
    effort before a run;
-3. the record helper, which takes the **observed** effort as input and fails
-   closed rather than defaulting to the policy string.
+3. the record helper, which validates the **declared** observed effort against
+   the completion-bound policy and fails closed rather than defaulting to the
+   policy string; it cannot prove the runtime effort.
 
 ### Agent definition provenance
 
@@ -251,19 +252,19 @@ Unknown fields are rejected. `make-records.mjs` compares the declared
 dispatch fields with the selected policy, compares the definition digest with
 the matching immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by
 `.complete`, and checks run and receipt uniqueness and provider correlation.
-This validates declared same-user process metadata against the
-completion-bound policy and definition bytes; it does not prove actual
-execution or catch a lying declaration. That accepted residual is why
-authenticated receipts are not added. `observed.json` is not authentication
-and does not establish a security boundary. A wrong, missing, parent-worktree,
-or substituted definition fails closed. Legacy imported records remain
-readable through their explicit legacy path; that compatibility does not
-weaken current workspace-schema records.
+`make-records.mjs` validates declared same-user metadata against the
+completion-bound policy and bound definition bytes; it cannot detect a lying
+declaration or prove execution. That residual is accepted without
+authenticated receipts. `observed.json` is not authentication and does not establish
+a security boundary. A wrong, missing, parent-worktree, or
+substituted definition fails closed. Legacy imported records remain readable
+through their explicit legacy path; that compatibility does not weaken current
+workspace-schema records.
 
 The panel dispatch policy is one machine readable source for every seat's
 agent type, model, reasoning effort, context tier, and communication. Staging
 places the selected projection in the completion bound packet, and record
-generation compares observed same user process metadata with that projection.
+generation compares observed same-user process metadata with that projection.
 These declared values are process evidence and correlation data, not
 authentication; the helper cannot establish that the corresponding process
 actually ran.

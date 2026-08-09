@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -147,6 +148,14 @@ try {
     ) &&
       stageSource.includes("renameSync") &&
       stageSource.includes("writeFileSync"),
+  );
+  check(
+    "discovery treats an unmarked canonical packet as damaged",
+    stageSource.includes(
+      "incomplete packet retains canonical artifact content without .complete",
+    ) &&
+      stageSource.includes("canonicalFileNames") &&
+      stageSource.includes("canonicalContentDirectories"),
   );
 
   git(repo, "init", "--quiet");
@@ -393,6 +402,9 @@ try {
   const copyCompletedDiscoveryPacket = (name, relocateSelection = true) => {
     const packet = join(repo, ".scratch", "panel", name);
     cpSync(firstDir, packet, { recursive: true });
+    if (existsSync(join(packet, ".complete"))) {
+      chmodSync(join(packet, ".complete"), 0o644);
+    }
     writeFileSync(join(packet, ".complete"), savedFirstCompletionMarker);
     chmodSync(join(packet, ".complete"), 0o444);
     if (relocateSelection) {
@@ -439,6 +451,8 @@ try {
     "panel",
     "alternate-prefix-r1",
   );
+  const firstPacketTemplateDir = join(repo, "first-packet-template");
+  renameSync(firstDir, firstPacketTemplateDir);
   mkdirSync(alternateDiscoveryDir, { recursive: true });
   writeFileSync(
     join(alternateDiscoveryDir, ".complete"),
@@ -462,6 +476,7 @@ try {
       existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
     markerOnlyDiscovery.text,
   );
+  renameSync(firstPacketTemplateDir, firstDir);
   rmSync(alternateDiscoveryDir, { recursive: true, force: true });
   rmSync(join(repo, ".scratch", "panel", "otherprefix-r1"), {
     recursive: true,
@@ -571,6 +586,92 @@ try {
 
   writeFileSync(join(firstDir, ".complete"), savedFirstCompletionMarker);
   chmodSync(join(firstDir, ".complete"), 0o444);
+
+  const deletedMarkerPacket = copyCompletedDiscoveryPacket(
+    "deletedmarker",
+    true,
+  );
+  rmSync(join(deletedMarkerPacket, ".complete"));
+  rmSync(join(deletedMarkerPacket, "delta.diff"));
+  const deletedMarkerDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "deletedmarker-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "a deleted completion marker with remaining canonical artifacts blocks discovery",
+    deletedMarkerDiscovery.status === 2 &&
+      /incomplete packet retains canonical artifact content without \.complete/.test(
+        deletedMarkerDiscovery.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "deletedmarker-r1", ".complete")),
+    deletedMarkerDiscovery.text,
+  );
+  rmSync(deletedMarkerPacket, { recursive: true, force: true });
+
+  const emptyPacket = join(repo, ".scratch", "panel", "empty-packet");
+  mkdirSync(emptyPacket, { recursive: true });
+  const emptyPacketDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "emptypacket-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "an empty unmarked packet does not block discovery",
+    emptyPacketDiscovery.status === 0 &&
+      existsSync(join(repo, ".scratch", "panel", "emptypacket-r1", ".complete")),
+    emptyPacketDiscovery.text,
+  );
+  rmSync(emptyPacket, { recursive: true, force: true });
+  rmSync(join(repo, ".scratch", "panel", "emptypacket-r1"), {
+    recursive: true,
+    force: true,
+  });
+
+  const irrelevantPacket = join(
+    repo,
+    ".scratch",
+    "panel",
+    "irrelevant-packet",
+  );
+  mkdirSync(irrelevantPacket, { recursive: true });
+  writeFileSync(join(irrelevantPacket, "operator-note.txt"), "not a packet\n");
+  const irrelevantPacketDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "irrelevantpacket-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "an unmarked packet with only irrelevant files does not block discovery",
+    irrelevantPacketDiscovery.status === 0 &&
+      existsSync(
+        join(repo, ".scratch", "panel", "irrelevantpacket-r1", ".complete"),
+      ),
+    irrelevantPacketDiscovery.text,
+  );
+  rmSync(irrelevantPacket, { recursive: true, force: true });
+  rmSync(join(repo, ".scratch", "panel", "irrelevantpacket-r1"), {
+    recursive: true,
+    force: true,
+  });
 
   const reusedSecondDiscovery = run(
     repo,

@@ -317,10 +317,24 @@ const CASES = [
       mutateFile(
         dir,
         "docs/contributing/panel-review.md",
-        (text) => text.replace("catch a lying declaration", "catch an inaccurate declaration"),
+        (text) => text.replace(
+          "cannot detect a lying declaration",
+          "can detect a lying declaration",
+        ),
       ),
     expectExit: 1,
     expectText: "observed process metadata residual documentation is missing",
+  },
+  {
+    name: "a positive record-helper execution claim is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => `${text}\nmake-records catches actual reasoning-effort downgrade.\n`,
+      ),
+    expectExit: 1,
+    expectText: "forbidden observed process metadata claim",
   },
   {
     name: "schema compatibility documentation drift is rejected",

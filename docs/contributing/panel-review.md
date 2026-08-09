@@ -117,10 +117,11 @@ unknown fields are rejected. The dispatch fields are checked against the
 completion-bound policy, and the definition digest is checked against the
 bound definition bytes. `run_id` and `receipt_locator` are same-user process
 metadata used for correlation and uniqueness. `make-records.mjs` validates
-those declared values against the completion-bound policy; it does not prove
-actual execution or catch a lying declaration. That accepted residual is why
-authenticated receipts are not added. `observed.json` is not authentication
-and does not establish a security boundary. The active phase contract is authoritative for output:
+declared same-user metadata against the completion-bound policy and bound
+definition bytes; it cannot detect a lying declaration or prove execution. That
+residual is accepted without authenticated receipts. `observed.json` is not authentication
+and does not establish a security boundary. The active phase
+contract is authoritative for output:
 discovery uses exactly `engineer`, `signoff`, `summary`, and
 `recommendations`, while verification adds required
 `verified_issue_statuses` and `late_findings`. Keeping the schemas distinct
