@@ -43,6 +43,95 @@ fi
 rustup set profile minimal >/dev/null
 rustup toolchain install "$pin" >/dev/null
 
+if ! command -v jq >/dev/null 2>&1; then
+  fail "api-surface workspace package discovery requires jq"
+  exit 1
+fi
+workspace_metadata=$(
+  cd "$ROOT/packages"
+  cargo "+$pin" metadata --format-version 1 --no-deps --locked
+) || {
+  fail "api-surface workspace metadata discovery failed"
+  exit 1
+}
+if ! printf '%s' "$workspace_metadata" | jq -e '
+      type == "object"
+      and (has("workspace_root") and (.workspace_root | type == "string"))
+      and (has("workspace_members")
+        and (.workspace_members | type == "array" and length > 0
+          and all(.[]; type == "string")))
+      and (has("packages")
+        and (.packages | type == "array" and length > 0
+          and all(.[]; type == "object"
+            and has("id") and (.id | type == "string")
+            and has("name") and (.name | type == "string")
+            and has("manifest_path") and (.manifest_path | type == "string")
+            and has("targets") and (.targets | type == "array")
+            and all(.targets[]; type == "object"
+              and has("kind") and (.kind | type == "array")
+              and all(.kind[]; type == "string")))))
+      and ([. as $metadata
+        | $metadata.packages[]
+        | select(.id as $id | $metadata.workspace_members | index($id))]
+        | length > 0)
+    ' >/dev/null; then
+  fail "api-surface workspace metadata did not describe valid workspace packages"
+  exit 1
+fi
+workspace_root=$(printf '%s' "$workspace_metadata" | jq -r '.workspace_root')
+workspace_root_real=$(readlink -f -- "$workspace_root") || {
+  fail "api-surface workspace metadata root could not be resolved"
+  exit 1
+}
+expected_workspace_root=$(readlink -f -- "$ROOT/packages") || {
+  fail "api-surface package root could not be resolved"
+  exit 1
+}
+[ "$workspace_root_real" = "$expected_workspace_root" ] || {
+  fail "api-surface workspace metadata root does not match packages/"
+  exit 1
+}
+
+doc_package_names=$(
+  printf '%s' "$workspace_metadata" | jq -r '
+    . as $metadata
+    | $metadata.packages[]
+    | select(.id as $id | $metadata.workspace_members | index($id))
+    | select(([.targets[] | .kind[]] | index("lib")) != null)
+    | .name
+  ' | LC_ALL=C sort -u
+) || {
+  fail "api-surface library package extraction failed"
+  exit 1
+}
+workspace_doc_args=()
+while IFS= read -r package_name; do
+  [ -n "$package_name" ] || continue
+  workspace_doc_args+=(--package "$package_name")
+done <<<"$doc_package_names"
+[ "${#workspace_doc_args[@]}" -gt 0 ] || {
+  fail "api-surface workspace metadata selected no library packages"
+  exit 1
+}
+
+api_surface_manifest="$ROOT/packages/d2b-api-surface/Cargo.toml"
+api_surface_package=$(
+  printf '%s' "$workspace_metadata" | jq -r --arg manifest "$api_surface_manifest" '
+    . as $metadata
+    | $metadata.packages[]
+    | select(.id as $id | $metadata.workspace_members | index($id))
+    | select(.manifest_path == $manifest)
+    | .name
+  '
+) || {
+  fail "api-surface checker package discovery failed"
+  exit 1
+}
+[ -n "$api_surface_package" ] && [ "$api_surface_package" != null ] || {
+  fail "api-surface checker package is not a workspace member"
+  exit 1
+}
+
 mkdir -p "$ROOT/.scratch"
 scratch=$(d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX")
 public_dir="$scratch/public"
@@ -112,7 +201,7 @@ run_public_census() {
       RUSTC_WORKSPACE_WRAPPER= \
       CARGO_BUILD_RUSTC_WRAPPER= \
       RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json" \
-      cargo "+$pin" doc --locked --workspace --lib --no-deps \
+      cargo "+$pin" doc --locked "${workspace_doc_args[@]}" --lib --no-deps \
         --target-dir "$public_target"
   ) >"$scratch/public-rustdoc.log" 2>&1 || rc=$?
   [ "$rc" = 0 ] || return "$rc"
@@ -130,7 +219,7 @@ run_private_census() {
       RUSTC_WORKSPACE_WRAPPER= \
       CARGO_BUILD_RUSTC_WRAPPER= \
       RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json --document-private-items --document-hidden-items" \
-      cargo "+$pin" doc --locked --workspace --lib --no-deps \
+      cargo "+$pin" doc --locked "${workspace_doc_args[@]}" --lib --no-deps \
         --target-dir "$private_target"
   ) >"$scratch/private-rustdoc.log" 2>&1 || rc=$?
   [ "$rc" = 0 ] || return "$rc"
@@ -189,7 +278,7 @@ log "--> d2b-api-surface snapshot check"
 (
 cd "$ROOT/packages"
 CARGO_TARGET_DIR="$checker_target" cargo run --quiet --release --locked \
-  -p d2b-api-surface --bin d2b-api-surface -- \
+  --package "$api_surface_package" --bin d2b-api-surface --no-default-features -- \
   --public-json-dir "$public_dir" \
   --private-json-dir "$private_dir" \
   --metadata "$metadata" \

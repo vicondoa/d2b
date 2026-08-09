@@ -823,11 +823,15 @@ fi
 # package also warms the later authoritative workspace clippy pass.
 run_fast_lint_gate() {
   local lint_base path package tracked_paths untracked_paths changed_paths
-  local sorted_packages
+  local sorted_packages workspace_metadata workspace_rows workspace_root
+  local workspace_root_real package_root_real package_manifest package_root
+  local path_abs candidate_dir candidate_real independent
   local main_workspace_changed=0
   local guest_shell_runner_changed=0
+  local main_workspace_metadata_needed=0
   local -a main_package_args=()
   declare -A main_packages=()
+  declare -A main_package_roots=()
 
   [ -f "$no_bash_manifest" ] || {
     fail "missing Rust workspace input: $no_bash_manifest"
@@ -902,13 +906,147 @@ run_fast_lint_gate() {
       packages/*)
         if [[ "$path" == *.rs || "$path" == */Cargo.toml \
           || "$path" == */build.rs ]]; then
-          package=${path#packages/}
-          package=${package%%/*}
-          [ -f "$ROOT/packages/$package/Cargo.toml" ] && main_packages["$package"]=1
+          case "$path" in
+            packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
+              ;;
+            *)
+              main_workspace_metadata_needed=1
+              ;;
+          esac
         fi
         ;;
     esac
   done <<<"$changed_paths"
+
+  if [ "$main_workspace_metadata_needed" -eq 1 ]; then
+    command -v jq >/dev/null 2>&1 || {
+      fail "jq is required to derive changed main workspace package scope"
+      exit 1
+    }
+    if ! workspace_metadata=$(cargo metadata --format-version 1 --no-deps \
+        --locked --manifest-path "$manifest"); then
+      fail "cargo metadata failed while deriving changed main workspace package scope"
+      exit 1
+    fi
+    if ! printf '%s' "$workspace_metadata" | jq -e '
+          type == "object"
+          and (has("workspace_root") and (.workspace_root | type == "string"))
+          and (has("workspace_members")
+            and (.workspace_members | type == "array" and length > 0
+              and all(.[]; type == "string")))
+          and (has("packages")
+            and (.packages | type == "array" and length > 0
+              and all(.[]; type == "object"
+                and has("id") and (.id | type == "string")
+                and has("name") and (.name | type == "string")
+                and has("manifest_path") and (.manifest_path | type == "string"))))
+          and ([. as $metadata
+            | $metadata.packages[]
+            | select(.id as $id | $metadata.workspace_members | index($id))]
+            | length > 0)
+        ' >/dev/null; then
+      fail "cargo metadata did not describe any main workspace packages"
+      exit 1
+    fi
+    workspace_root=$(printf '%s' "$workspace_metadata" | jq -r '.workspace_root')
+    workspace_root_real=$(readlink -f -- "$workspace_root") || {
+      fail "main workspace root from cargo metadata could not be resolved"
+      exit 1
+    }
+    package_root_real=$(readlink -f -- "$ROOT/packages") || {
+      fail "main workspace package root could not be resolved"
+      exit 1
+    }
+    if [ "$workspace_root_real" != "$package_root_real" ]; then
+      fail "cargo metadata workspace root does not match packages/"
+      exit 1
+    fi
+    if ! workspace_rows=$(printf '%s' "$workspace_metadata" | jq -r '
+          . as $metadata
+          | $metadata.packages[]
+          | select(.id as $id | $metadata.workspace_members | index($id))
+          | [.name, .manifest_path]
+          | @tsv
+        '); then
+      fail "cargo metadata package extraction failed while deriving changed scope"
+      exit 1
+    fi
+    while IFS=$'\t' read -r package_manifest_name package_manifest; do
+      [ -n "$package_manifest_name" ] || continue
+      [ -n "$package_manifest" ] || {
+        fail "cargo metadata returned a package without a manifest path"
+        exit 1
+      }
+      if [ ! -f "$package_manifest" ] || [ -L "$package_manifest" ]; then
+        fail "cargo metadata returned an unusable package manifest for $package_manifest_name"
+        exit 1
+      fi
+      package_manifest=$(readlink -f -- "$package_manifest") || {
+        fail "cargo metadata package manifest could not be resolved for $package_manifest_name"
+        exit 1
+      }
+      package_root=$(dirname "$package_manifest")
+      case "$package_root" in
+        "$package_root_real"/*) ;;
+        *)
+          fail "cargo metadata returned a package outside packages/: $package_manifest"
+          exit 1
+          ;;
+      esac
+      main_package_roots["$package_manifest_name"]="$package_root"
+    done <<<"$workspace_rows"
+
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      case "$path" in
+        packages/d2b-priv-broker/*|packages/d2b-guest-shell-runner/*)
+          continue
+          ;;
+        *.rs|*/Cargo.toml|*/build.rs)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+      case "$path" in
+        packages/target/*|packages/*/target/*|packages/*/.scratch/*|packages/*/generated/*)
+          continue
+          ;;
+      esac
+
+      path_abs="$ROOT/$path"
+      candidate_dir=$(dirname "$path_abs")
+      independent=0
+      while [ "$candidate_dir" != "$package_root_real" ] \
+        && [ "$candidate_dir" != "$ROOT" ]; do
+        if [ -f "$candidate_dir/Cargo.toml" ]; then
+          if grep -Eq '^[[:space:]]*\[workspace\][[:space:]]*$' \
+              "$candidate_dir/Cargo.toml"; then
+            candidate_real=$(readlink -f -- "$candidate_dir") || {
+              fail "independent workspace root could not be resolved for $path"
+              exit 1
+            }
+            if [ "$candidate_real" != "$workspace_root_real" ]; then
+              independent=1
+            fi
+            break
+          fi
+        fi
+        candidate_dir=$(dirname "$candidate_dir")
+      done
+      [ "$independent" -eq 0 ] || continue
+
+      for package in "${!main_package_roots[@]}"; do
+        package_root=${main_package_roots[$package]}
+        case "$path_abs" in
+          "$package_root"|"$package_root"/*)
+            main_packages["$package"]=1
+            break
+            ;;
+        esac
+      done
+    done <<<"$changed_paths"
+  fi
 
   if [ "$main_workspace_changed" -eq 1 ]; then
     main_package_args=(--workspace)

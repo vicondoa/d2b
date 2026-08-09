@@ -355,8 +355,12 @@ class CiRunnerRegressionTests(unittest.TestCase):
                 '[workspace]\nmembers = ["example"]\nresolver = "2"\n'
             ),
             "packages/Cargo.lock": "# fixture lock\n",
+            "packages/.cargo/config.toml": "[build]\n",
             "packages/rust-toolchain.toml": (
                 '[toolchain]\nchannel = "1.97.0"\n'
+            ),
+            "packages/d2b-api-surface/rust-toolchain.toml": (
+                '[toolchain]\nchannel = "nightly-test"\n'
             ),
             "packages/example/Cargo.toml": (
                 '[package]\nname = "example"\nversion = "0.0.0"\n'
@@ -637,12 +641,7 @@ set -euo pipefail
         unexpected_entry = tree / "packages/unexpected-entry"
         os.mkfifo(unexpected_entry)
         special_entry = self.run_api_fingerprint(tree, "--check")
-        self.assertNotEqual(special_entry.returncode, 0)
-        self.assertIn(
-            "api-surface package entry has an unexpected type: "
-            "packages/unexpected-entry",
-            special_entry.stderr,
-        )
+        self.assertEqual(special_entry.returncode, 0, msg=special_entry.stderr)
         unexpected_entry.unlink()
 
         source_link = tree / "packages/example/src/linked.rs"
@@ -681,6 +680,11 @@ fail() { printf 'FAIL: %s\\n' "$*" >&2; }
 log() { :; }
 ok() { :; }
 cargo() {
+  if [ "${1:-}" = metadata ]; then
+    printf '{"workspace_root":"%s/packages","workspace_members":["path+file://%s/packages/d2b-core#0.0.0"],"packages":[{"id":"path+file://%s/packages/d2b-core#0.0.0","name":"d2b-core","manifest_path":"%s/packages/d2b-core/Cargo.toml"}]}\n' \
+      "$ROOT" "$ROOT" "$ROOT" "$ROOT"
+    return 0
+  fi
   {
     printf '%q ' "$@"
     printf '\\n'
@@ -714,6 +718,10 @@ cargo() {
                     '[package]\nname = "d2b-core"\nversion = "0.0.0"\n'
                 ),
                 "packages/d2b-core/src/lib.rs": "pub struct Core;\n",
+                "packages/d2b-core/fuzz/Cargo.toml": (
+                    "[workspace]\n"
+                    '[package]\nname = "d2b-core-fuzz"\nversion = "0.0.0"\n'
+                ),
                 "packages/d2b-priv-broker/Cargo.toml": (
                     '[package]\nname = "broker"\nversion = "0.0.0"\n'
                 ),
@@ -806,12 +814,16 @@ cargo() {
             "packages/d2b-priv-broker/src/lib.rs",
         )
         _, main = run_scenario("main", "packages/d2b-core/src/lib.rs")
+        _, independent = run_scenario(
+            "independent",
+            "packages/d2b-core/fuzz/src/lib.rs",
+        )
         _, guest = run_scenario(
             "guest",
             "packages/d2b-guest-shell-runner/src/lib.rs",
         )
 
-        for commands in (unrelated, broker, main, guest):
+        for commands in (unrelated, broker, main, independent, guest):
             self.assertEqual(
                 sum(command.startswith("fmt ") for command in commands),
                 4,
@@ -827,6 +839,9 @@ cargo() {
         self.assertEqual(len(main_clippy), 1)
         self.assertIn("-p d2b-core", main_clippy[0])
         self.assertNotIn("--workspace", main_clippy[0])
+        self.assertFalse(
+            any(command.startswith("clippy ") for command in independent)
+        )
 
         guest_clippy = [
             command for command in guest if command.startswith("clippy ")
@@ -1988,7 +2003,14 @@ wait
         self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
         self.assertIn("--document-hidden-items", api_driver)
         self.assertIn("--document-private-items", api_driver)
-        self.assertIn("--workspace --lib --no-deps", api_driver)
+        self.assertIn("cargo \"+$pin\" metadata --format-version 1 --no-deps --locked", api_driver)
+        self.assertIn("workspace_doc_args+=(--package \"$package_name\")", api_driver)
+        self.assertIn('"${workspace_doc_args[@]}" --lib --no-deps', api_driver)
+        self.assertIn(
+            '--package "$api_surface_package" --bin d2b-api-surface '
+            '--no-default-features',
+            api_driver,
+        )
         self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
         self.assertIn('D2B_API_SURFACE_TARGET_DIR must be an absolute path', api_driver)
         self.assertIn('D2B_API_SURFACE_UPDATE must be 0 or 1', api_driver)

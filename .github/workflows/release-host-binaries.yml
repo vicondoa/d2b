@@ -57,8 +57,49 @@ jobs:
             exit 1
           fi
 
-  build:
+  prepublication-gate:
     needs: detect-version
+    if: needs.detect-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Validate release identity and prebuilt manifest
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest_version=$(jq -er '.version | strings' nix/prebuilt.json)
+          if [ "$manifest_version" = "$VERSION" ]; then
+            echo "Release blocked: nix/prebuilt.json already advertises v$VERSION; refusing to publish stale or duplicate binaries." >&2
+            exit 1
+          fi
+
+          for manifest in \
+            packages/d2bd/Cargo.toml \
+            packages/d2b/Cargo.toml \
+            packages/d2b-wayland-proxy/Cargo.toml \
+            packages/d2b-unsafe-local-helper/Cargo.toml \
+            packages/d2b-host/Cargo.toml \
+            packages/d2b-priv-broker/Cargo.toml
+          do
+            package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
+            [ -n "$package_version" ] || {
+              echo "Release blocked: no package version in $manifest." >&2
+              exit 1
+            }
+            case "$package_version" in
+              0.0.0-bootstrap)
+                echo "Release blocked: $manifest still has bootstrap package identity." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+  build:
+    needs: [detect-version, prepublication-gate]
     if: needs.detect-version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     env:
@@ -70,6 +111,46 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+      - name: Activate pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          [ -n "$PINNED" ] || {
+            echo "Release blocked: packages/rust-toolchain.toml has no channel." >&2
+            exit 1
+          }
+          rustup toolchain install "$PINNED" \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+          rustup default "$PINNED"
+      - name: Assert active Rust toolchain versions
+        run: |
+          set -euo pipefail
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          active=$(rustup show active-toolchain | awk '{print $1}')
+          case "$active" in
+            "$PINNED"|"$PINNED"-*) ;;
+            *)
+              echo "Release blocked: active Rust toolchain '$active' is not $PINNED." >&2
+              exit 1
+              ;;
+          esac
+          expected_cargo=$(rustup run "$PINNED" cargo --version)
+          expected_rustc=$(rustup run "$PINNED" rustc --version)
+          actual_cargo=$(cargo --version)
+          actual_rustc=$(rustc --version)
+          [ "$actual_cargo" = "$expected_cargo" ] || {
+            echo "Release blocked: cargo is not running from $PINNED." >&2
+            printf 'expected: %s\nactual: %s\n' "$expected_cargo" "$actual_cargo" >&2
+            exit 1
+          }
+          [ "$actual_rustc" = "$expected_rustc" ] || {
+            echo "Release blocked: rustc is not running from $PINNED." >&2
+            printf 'expected: %s\nactual: %s\n' "$expected_rustc" "$actual_rustc" >&2
+            exit 1
+          }
+          printf 'cargo: %s\nrustc: %s\n' "$actual_cargo" "$actual_rustc"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
@@ -88,12 +169,20 @@ jobs:
           VERSION: ${{ needs.detect-version.outputs.version }}
         run: |
           set -euo pipefail
-          cargo build --release --package d2bd --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-wayland-proxy --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-unsafe-local-helper --manifest-path packages/Cargo.toml
-          cargo build --release --bin d2b-activation-helper --package d2b-host --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-priv-broker --manifest-path packages/d2b-priv-broker/Cargo.toml
+          cargo build --release --locked --manifest-path packages/Cargo.toml \
+            --package d2bd --bin d2bd --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml \
+            --package d2b --bin d2b --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml \
+            --package d2b-wayland-proxy --bin d2b-wayland-proxy --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml \
+            --package d2b-unsafe-local-helper --bin d2b-unsafe-local-helper \
+            --no-default-features
+          cargo build --release --locked --manifest-path packages/Cargo.toml \
+            --package d2b-host --bin d2b-activation-helper --no-default-features
+          cargo build --release --locked \
+            --manifest-path packages/d2b-priv-broker/Cargo.toml \
+            --package d2b-priv-broker --bin d2b-priv-broker --no-default-features
 
           rm -rf dist
           mkdir -p dist/bin
@@ -128,7 +217,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [detect-version, build]
+    needs: [detect-version, prepublication-gate, build]
     if: needs.detect-version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
