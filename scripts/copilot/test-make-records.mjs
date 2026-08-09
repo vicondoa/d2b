@@ -239,7 +239,7 @@ function buildRound(mutate) {
   }
   writeFileSync(join(dir, ".complete"), stableStringify({
     artifact_kind: "d2b-panel/stage-completion",
-    schema_version: 2,
+    schema_version: 3,
     complete: true,
     round: state.address.round,
     base: state.address.base,

@@ -297,7 +297,7 @@ try {
   );
   check(
     "completion binds canonical evidence with size and digest",
-    firstCompletion.schema_version === 2 &&
+    firstCompletion.schema_version === 3 &&
       firstCompletion.artifact_sha256["evidence.md"] === evidenceDescriptor.sha256 &&
       firstCompletion.artifact_bytes["evidence.md"] === evidenceDescriptor.size_bytes &&
       firstCompletion.artifact_sha256["selection.json"] ===
@@ -600,9 +600,9 @@ try {
     verificationSourceDir,
   ]);
   check(
-    "later staging requires a canonical schema-v2 predecessor marker first",
+    "later staging requires a canonical predecessor marker first",
     missingPredecessor.status === 2 &&
-      /missing canonical schema-v2 predecessor packet/.test(missingPredecessor.text),
+      /missing canonical predecessor packet/.test(missingPredecessor.text),
     missingPredecessor.text,
   );
   restorePredecessorMarker();
@@ -615,7 +615,7 @@ try {
   check(
     "later staging rejects a legacy completion marker",
     legacyPredecessor.status === 2 &&
-      /not a canonical schema-v2 completion packet/.test(
+      /not a supported canonical completion packet/.test(
         legacyPredecessor.text,
       ) &&
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),

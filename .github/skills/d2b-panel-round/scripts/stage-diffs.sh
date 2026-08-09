@@ -272,14 +272,14 @@ const exactKeys = [
 ].sort();
 if (
   marker.artifact_kind !== "d2b-panel/stage-completion" ||
-  marker.schema_version !== 2 ||
+  ![2, 3].includes(marker.schema_version) ||
   marker.complete !== true ||
   !marker.artifact_sha256 ||
   !marker.artifact_bytes ||
   Object.keys(marker).sort().join("\0") !== exactKeys.join("\0")
 ) {
   console.error(
-    `${markerPath}: completion marker is not a canonical byte-bound schema-version 2 marker`,
+    `${markerPath}: completion marker is not a supported canonical byte-bound marker`,
   );
   process.exit(1);
 }
@@ -294,13 +294,17 @@ if (
   process.exit(1);
 }
 const actualNames = Object.keys(digests).sort();
+const compatibleExpectedNames = marker.schema_version === 2
+  ? expectedNames.filter((name) => !name.startsWith("agent-definitions/"))
+  : expectedNames;
 if (
   marker.phase !== expectedPhase ||
-  expectedNames.length !== actualNames.length ||
-  expectedNames.some((name, index) => name !== actualNames[index])
+  ![2, 3].includes(marker.schema_version) ||
+  compatibleExpectedNames.length !== actualNames.length ||
+  compatibleExpectedNames.some((name, index) => name !== actualNames[index])
 ) {
-  const missing = expectedNames.filter((name) => !actualNames.includes(name));
-  const extra = actualNames.filter((name) => !expectedNames.includes(name));
+  const missing = compatibleExpectedNames.filter((name) => !actualNames.includes(name));
+  const extra = actualNames.filter((name) => !compatibleExpectedNames.includes(name));
   console.error(
     `${markerPath}: completion artifact set disagrees with phase and selected roster; ` +
     `missing [${missing.join(", ")}], extra [${extra.join(", ")}]`,
@@ -479,7 +483,7 @@ fi
 
 if [ "$round_number" -gt 1 ]; then
   if [ ! -f "$op_previous_dir/.complete" ]; then
-    echo "missing canonical schema-v2 predecessor packet: $display_previous_dir/.complete" >&2
+    echo "missing canonical predecessor packet: $display_previous_dir/.complete" >&2
     echo "later-round staging requires the predecessor completion marker before reading its artifacts" >&2
     exit 2
   fi
@@ -514,7 +518,7 @@ process.stdout.write([selection.phase, selection.roster.join(",")].join("\t"));
   if ! validate_bound_completion \
     "$op_previous_dir/.complete" "$previous_phase" \
     "${previous_canonical_artifacts[@]}"; then
-    echo "previous review is not a canonical schema-v2 completion packet" >&2
+    echo "previous review is not a supported canonical completion packet" >&2
     exit 2
   fi
   previous_address="$op_previous_dir/address.json"
@@ -1488,7 +1492,7 @@ for (const relative of artifactPaths) {
 }
 process.stdout.write(stableStringify({
   artifact_kind: "d2b-panel/stage-completion",
-  schema_version: 2,
+  schema_version: 3,
   complete: true,
   round,
   lifecycle_id: lifecycle,
