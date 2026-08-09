@@ -93,24 +93,30 @@ lives in the committed skill markdown. Frontmatter `model:` is kept as well,
 even though the tables always pass `model` explicitly, because the two failure
 modes differ. An agent that omits `model` and is hand-invoked runs on the
 caller's model; an agent that pins it runs the right model and loses only the
-effort, which the record helper catches. One line per agent makes a false model
-attestation require two independent mistakes.
+effort. The record helper can reject a declared effort that disagrees with
+policy, but it cannot prove the effort actually used. One line per agent makes
+a false model declaration require two independent mistakes.
 
 Nothing modifies the operator's `~/.copilot/settings.json`. Per-lane dispatch
 was measured sufficient with no `subagents` block in either scope.
 
-### Defence against the silent downgrade
+### Configuration checks do not prove execution
 
 An unpinned panel lane runs at the model default while its record would attest
-the policy effort. That failure produces a plausible-looking artifact rather
-than an error, which is why it gets three layers rather than one:
+the policy effort. The committed checks reduce configuration drift, but the
+same-user process metadata is not an authenticated execution receipt and
+cannot detect a lying declaration:
 
 1. the committed dispatch tables, which make it rarely happen;
 2. `scripts/copilot/check-bindings.mjs`, which rejects a missing row, an
    illegal effort for a model, a disagreement with the delivery policy
    constants, or any effort-like frontmatter key, before a run starts;
-3. the record helper, which takes the **observed** effort as an input and fails
-   closed rather than defaulting to the policy string.
+3. the record helper, which requires declared process metadata and rejects a
+   declaration that disagrees with the completion-bound policy rather than
+   defaulting missing values.
+
+The residual risk is explicit: without authenticated execution receipts, these
+checks validate configuration and declarations, not the effort actually used.
 
 ### Panel agents are read-only by construction
 
