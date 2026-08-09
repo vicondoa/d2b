@@ -129,15 +129,22 @@ Both consumers must refuse a candidate, selection schema, selection-table
 version, or ordered-roster mismatch. Records are current workspace
 schema-version `2` objects with `panel_format_version: 1`.
 
-Staging materializes the supplied exact bytes into the round directory:
-`selection.json`, `current-candidate.json`, `discovery-request.json`,
-`discovery-ledger.json`,
-`responses.json`, and `self-verification.json` when those artifacts are
-supplied. Finalize the non-empty validation evidence before staging and pass it
-with the required `--evidence` argument. To supply integrator-authored notes,
-finalize them before staging and pass `--reviewer-notes-dir`; that directory
-must contain exactly one non-empty regular `<seat>.md` file per selected seat
-and no other entries. Omitting the notes argument uses the generated defaults.
+Staging materializes the supplied exact bytes for `selection.json`,
+`current-candidate.json`, `discovery-ledger.json`, `responses.json`, and
+`self-verification.json` when those artifacts are supplied. The discovery
+request is intentionally different: `--discovery-request` supplies the
+generated request before evidence binding, and staging derives the round-local
+`discovery-request.json` by preserving that request and appending the exact
+`evidence.md` SHA-256 and byte-count descriptor to `validation_evidence`.
+Staging reuses an already matching descriptor and rejects a conflicting one.
+The staged request is therefore the canonical evidence-bound request; it is
+not claimed to be a byte-for-byte copy of the supplied request.
+
+Finalize the non-empty validation evidence before staging and pass it with the
+required `--evidence` argument. To supply integrator-authored notes, finalize
+them before staging and pass `--reviewer-notes-dir`; that directory must
+contain exactly one non-empty regular `<seat>.md` file per selected seat and no
+other entries. Omitting the notes argument uses the generated defaults.
 Discovery staging additionally requires a readable `--discovery-request`
 artifact. Verification staging requires a readable complete per-seat
 `--verification-dir`; it also requires the ledger, response, and
@@ -204,19 +211,32 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 
 The discovery instruction is comprehensive: spend the effort now, report
 every reasonably discoverable actionable finding, and do not save observations
-for later rounds. Every seat must return exactly one explicit result:
+for later rounds. Every seat returns exactly one reviewer verdict with exactly
+these four top-level fields:
 
 ```json
 {
-  "seat": "software",
-  "complete": true,
-  "findings": []
+  "engineer": "software",
+  "signoff": false,
+  "summary": "A source mapping issue was found.",
+  "recommendations": [
+    {
+      "severity": "high",
+      "where": "scripts/panel.js:1",
+      "what": "A source can disappear.",
+      "why": "The ledger would be incomplete.",
+      "fix": "Validate source coverage."
+    }
+  ]
 }
 ```
 
-`findings: []` is a positive zero-finding result. A missing result is an
-error, never an inferred empty result. Findings include severity, impact,
-recommendation, source ordinal, raw text, and attribution.
+Each recommendation has exactly `severity`, `where`, `what`, `why`, and
+`fix`. Severity is exactly `critical`, `high`, `medium`, or `low`. A
+zero-finding verdict uses `signoff: true` and `recommendations: []`; otherwise
+`signoff` is false. A missing verdict is an error, never an inferred
+zero-finding result. Reviewers do not return `seat`, `complete`, or
+`findings`; those are adapter-owned fields.
 
 Adapt the canonical per-seat verdict directory without hand-copying or
 aggregating reviewer output:
@@ -226,12 +246,62 @@ ROUND=.scratch/panel/<round-id>
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   adapt-discovery "$ROUND/verdicts" "$ROUND/discovery-results.json" \
-  --selection "$ROUND/selection.json"
+  --selection "$ROUND/selection.json" \
+  --candidate "$ROUND/current-candidate.json"
 ```
 
 The directory must contain exactly one regular `<seat>.json` file for every
 selected seat and no other entries. Each verdict's declared seat must match
-its filename; missing, unselected, mismatched, or duplicate seats are errors.
+its filename; missing, unselected, mismatched, duplicate, or malformed entries
+are errors. A malformed entry error names both its directory and filename.
+
+`adapt-discovery` writes exactly one `d2b-panel/discovery-result` artifact:
+
+```json
+{
+  "artifact_kind": "d2b-panel/discovery-result",
+  "current_candidate": {
+    "candidate_id": "candidate-1",
+    "content_id": "content-1",
+    "program": "SPEC004",
+    "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "wave": "spec004w1"
+  },
+  "lifecycle_id": "spec004w1",
+  "phase": "discovery",
+  "results": [
+    {
+      "complete": true,
+      "findings": [
+        {
+          "attribution": "software",
+          "impact": "The ledger would be incomplete.",
+          "raw_text": "scripts/panel.js:1: A source can disappear.: The ledger would be incomplete.: Validate source coverage.",
+          "recommendation": "Validate source coverage.",
+          "seat": "software",
+          "severity": "MAJOR",
+          "source_id": "software:1",
+          "source_ordinal": 1
+        }
+      ],
+      "seat": "software"
+    }
+  ],
+  "schema_version": 1,
+  "selection_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
+```
+
+The example abbreviates `results` to one seat; the real array contains exactly
+one result per selected seat in roster order. The shown digest is a shape
+placeholder; the adapter writes the SHA-256 of the exact selection file bytes.
+It maps `critical`, `high`, `medium`, and `low` to `BLOCKER`, `MAJOR`,
+`MINOR`, and `NIT`. It derives `source_id` and `source_ordinal` from
+recommendation order, copies `why` to `impact`, copies `fix` to
+`recommendation`, and constructs `raw_text` from `where`, `what`, `why`, and
+`fix`. The envelope binds the lifecycle, exact selection bytes, and canonical
+candidate address. `merge-ledger` validates all three, so an artifact from a
+stale same-roster selection is not reusable.
 
 The orchestrator supplies deduplication groups. The lifecycle helper validates
 that every source finding maps to exactly one group, then assigns contiguous
@@ -240,7 +310,7 @@ stable lifecycle-local identifiers `R1`, `R2`, and so on:
 ```
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   merge-ledger <selection.json> <discovery-results.json> \
-  <dedup-groups.json> <ledger.json>
+  <dedup-groups.json> <ledger.json> --candidate <current-candidate.json>
 ```
 
 All source attribution and source-to-issue mappings remain in the ledger.
@@ -344,20 +414,28 @@ Current candidate selection is unioned into the imported roster, including
 ## Dispatch and verdict
 
 Dispatch only the seats in the current selection artifact. Panel agents are
-read-only and must inspect staged evidence rather than run validation. Each
-selected seat returns exactly one JSON verdict:
+read-only and must inspect staged evidence rather than run validation. The
+exact discovery reviewer schema and recommendation schema are defined above.
+A verification reviewer uses those same four base fields and adds
+`verified_issue_statuses` plus `late_findings`:
 
 ```json
 {
   "engineer": "software",
   "signoff": true,
   "summary": "What was reviewed and the overall posture.",
+  "verified_issue_statuses": {
+    "R1": "verified"
+  },
+  "late_findings": [],
   "recommendations": []
 }
 ```
 
-`signoff` is true if and only if `recommendations` is empty. Generate records
-only after every selected seat has a verdict and observed binding:
+`verified_issue_statuses` has exactly one entry per ledger issue.
+`late_findings` is an array. `signoff` is true if and only if
+`recommendations` is empty. Generate records only after every selected seat
+has a verdict and observed binding:
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \

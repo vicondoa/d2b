@@ -17,7 +17,6 @@ import {
   fchmodSync,
   fstatSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -362,6 +361,94 @@ function directoryNames(fd) {
     .sort();
 }
 
+function addDirectoryTreeUsage(directory, label, usage, maxBytes) {
+  const names = directoryNames(directory.fd);
+  for (const name of names) {
+    let childDirectory;
+    try {
+      childDirectory = openDirectoryAt(
+        directory.fd,
+        name,
+        `${label}/${name}`,
+      );
+    } catch (cause) {
+      if (cause.code !== "ENOTDIR") throw cause;
+    }
+    if (childDirectory !== undefined) {
+      usage.entries += 1;
+      if (!Number.isSafeInteger(usage.entries)) {
+        error(`${label} has too many entries to account safely`);
+      }
+      try {
+        addDirectoryTreeUsage(
+          childDirectory,
+          `${label}/${name}`,
+          usage,
+          maxBytes,
+        );
+      } finally {
+        closeSync(childDirectory.fd);
+      }
+      continue;
+    }
+
+    let fd;
+    try {
+      fd = openSync(procFdPath(directory.fd, name), FILE_READ_FLAGS);
+      const stat = verifyRegularDescriptor(
+        fd,
+        directory.fd,
+        name,
+        `${label}/${name}`,
+      );
+      usage.entries += 1;
+      if (!Number.isSafeInteger(usage.entries)) {
+        error(`${label} has too many entries to account safely`);
+      }
+      usage.bytes += stat.size;
+      if (usage.bytes > maxBytes) {
+        error(
+          `${label} retained bytes ${usage.bytes} exceed the root-wide ` +
+          `exact-packet quota ${maxBytes}`,
+        );
+      }
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+  const afterNames = directoryNames(directory.fd);
+  const afterStat = verifyDirectoryDescriptor(directory.fd, label);
+  if (
+    !sameIdentity(afterStat, directory.stat) ||
+    names.length !== afterNames.length ||
+    names.some((name, index) => name !== afterNames[index])
+  ) {
+    error(`${label} changed while its retained bytes were being accounted`);
+  }
+}
+
+export function directoryTreeUsageNoFollow(path, options = {}) {
+  const maxBytes = options.maxBytes ?? Number.MAX_SAFE_INTEGER;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    error("directory-tree byte quota is malformed");
+  }
+  const label = options.label ?? path;
+  const parent = openAnchoredParent(path, label);
+  let directory;
+  try {
+    parent.verify();
+    directory = openDirectoryAt(parent.parentFd, parent.leaf, label);
+    const usage = { bytes: 0n, entries: 0 };
+    addDirectoryTreeUsage(directory, label, usage, BigInt(maxBytes));
+    verifyNamedIdentity(parent.parentFd, parent.leaf, directory.stat, label);
+    parent.verify();
+    return { bytes: Number(usage.bytes), entries: usage.entries };
+  } finally {
+    if (directory !== undefined) closeSync(directory.fd);
+    parent.close();
+  }
+}
+
 function readDirectoryAt(parentFd, name, label, options = {}) {
   const directory = openDirectoryAt(parentFd, name, label);
   try {
@@ -501,31 +588,47 @@ export function writeBoundCompletionCreateOrCompare(
       artifact_bytes[relative] = bytes.length;
       currentBytes += bytes.length;
     }
-    if (options.maxBytes !== undefined) {
-      const priorBytes = options.priorBytes ?? 0;
-      if (
-        !Number.isSafeInteger(options.maxBytes) ||
-        !Number.isSafeInteger(priorBytes) ||
-        options.maxBytes < 0 ||
-        priorBytes < 0
-      ) {
-        error("bound completion byte quota is malformed");
-      }
-      const total = priorBytes + currentBytes;
-      if (total > options.maxBytes) {
-        error(
-          `lifecycle ${metadata.lifecycle_id} staged packet bytes ${total} exceed ` +
-          `the exact-packet quota ${options.maxBytes}; retain the immutable ` +
-          "packets and start a newly scoped lifecycle",
-        );
-      }
-    }
     const value = {
       ...metadata,
       artifact_sha256,
       artifact_bytes,
     };
     const bytes = Buffer.from(stableStringify(value));
+    if (options.maxBytes !== undefined) {
+      if (
+        !Number.isSafeInteger(options.maxBytes) ||
+        options.maxBytes < 0 ||
+        (
+          options.retentionRoot === undefined &&
+          (
+            !Number.isSafeInteger(options.priorBytes ?? 0) ||
+            (options.priorBytes ?? 0) < 0
+          )
+        )
+      ) {
+        error("bound completion byte quota is malformed");
+      }
+      const total = options.retentionRoot === undefined
+        ? (options.priorBytes ?? 0) + currentBytes
+        : directoryTreeUsageNoFollow(options.retentionRoot, {
+            label: "panel packet root",
+            maxBytes: options.maxBytes,
+          }).bytes +
+          (
+            pathKindNoFollow(markerPath, "stage completion marker") === "missing"
+              ? bytes.length
+              : 0
+          );
+      if (total > options.maxBytes) {
+        const scope = options.retentionRoot === undefined
+          ? `lifecycle ${metadata.lifecycle_id} staged packet`
+          : "panel packet root retained";
+        error(
+          `${scope} bytes ${total} exceed the root-wide exact-packet quota ` +
+          `${options.maxBytes}; retain immutable packets only within the bound`,
+        );
+      }
+    }
     const result = writeRawAtCreateOrCompare(
       parent.parentFd,
       parent.leaf,
@@ -698,23 +801,27 @@ export function writeCreateOrCompare(path, value) {
       "generated artifact temporary",
     );
     try {
-      /*
-       * link(2) is an atomic no-replace commit for a file. Both names are
-       * resolved below the same pinned parent; EXDEV and EMLINK are hard
-       * failures, never copy or rename fallbacks.
-       */
-      linkSync(
-        procFdPath(parent.parentFd, temporary),
-        procFdPath(parent.parentFd, parent.leaf),
-      );
-      verifyRegularDescriptor(
-        temporaryFd,
+      const moved = atomicNoReplaceMove(
         parent.parentFd,
+        temporary,
         parent.leaf,
-        "published generated artifact",
-        2n,
+        path,
+        "file",
       );
-      unlinkSync(procFdPath(parent.parentFd, temporary));
+      if (!moved) {
+        const raced = readFileAt(
+          parent.parentFd,
+          parent.leaf,
+          "concurrently published generated artifact",
+        ).toString("utf8");
+        if (raced !== expected) {
+          error(
+            `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
+          );
+        }
+        parent.verify();
+        return { path, created: false, bytes: expected };
+      }
       temporaryPresent = false;
       verifyRegularDescriptor(
         temporaryFd,
@@ -726,26 +833,7 @@ export function writeCreateOrCompare(path, value) {
       parent.verify();
       return { path, created: true, bytes: expected };
     } catch (cause) {
-      if (cause.code !== "EEXIST") {
-        if (cause.code === "EXDEV" || cause.code === "EMLINK") {
-          error(
-            `atomic no-replace publication is unavailable for ${path}: ${cause.code}`,
-          );
-        }
-        throw cause;
-      }
-      const raced = readFileAt(
-        parent.parentFd,
-        parent.leaf,
-        "concurrently published generated artifact",
-      ).toString("utf8");
-      if (raced !== expected) {
-        error(
-          `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
-        );
-      }
-      parent.verify();
-      return { path, created: false, bytes: expected };
+      throw cause;
     }
   } finally {
     if (temporaryFd !== undefined) closeSync(temporaryFd);
@@ -842,7 +930,13 @@ const RENAMEAT2_NOREPLACE_SYSCALL = Object.freeze({
   x64: 316,
 });
 
-function atomicNoReplaceDirectoryMove(parentFd, source, destination, displayPath) {
+function atomicNoReplaceMove(
+  parentFd,
+  source,
+  destination,
+  displayPath,
+  publicationKind,
+) {
   const syscall = RENAMEAT2_NOREPLACE_SYSCALL[process.arch];
   if (syscall === undefined) {
     error(
@@ -877,11 +971,13 @@ if ($result == -1) {
     if ([18, 22, 31, 38, 95].includes(errno) || cause.code === "ENOENT") {
       const reason = Number.isFinite(errno) ? `errno ${errno}` : cause.code;
       error(
-        `atomic no-replace directory publication is unavailable for ${displayPath}: ${reason}`,
+        `atomic no-replace ${publicationKind} publication is unavailable for ` +
+        `${displayPath}: ${reason}`,
       );
     }
     error(
-      `atomic no-replace directory publication failed for ${displayPath}: ${detail.trim()}`,
+      `atomic no-replace ${publicationKind} publication failed for ` +
+      `${displayPath}: ${detail.trim()}`,
     );
   }
 }
@@ -915,9 +1011,7 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
   const expectedNames = [...expected.keys()].sort();
   const parent = openAnchoredParent(directory, "artifact family", { create: true });
   const temporary = `.${parent.leaf}.stage-${process.pid}-${temporaryCounter += 1}`;
-  const claim = `${parent.leaf}.claim`;
   let temporaryPresent = false;
-  let claimOwned = false;
   let staged;
   try {
     parent.verify();
@@ -955,39 +1049,12 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
       error(`staged artifact family at ${directory} is incomplete before publication`);
     }
 
-    try {
-      const claimDirectory = createDirectoryAt(
-        parent.parentFd,
-        claim,
-        "artifact family publication claim",
-      );
-      closeSync(claimDirectory.fd);
-      claimOwned = true;
-    } catch (cause) {
-      if (cause.code !== "EEXIST") throw cause;
-      if (pathKindAt(parent.parentFd, parent.leaf, "artifact family") !== "missing") {
-        const result = compareExistingDirectoryAt(
-          parent.parentFd,
-          parent.leaf,
-          directory,
-          expected,
-          expectedNames,
-        );
-        parent.verify();
-        return result;
-      }
-      error(
-        `sibling publication claim ${directory}.claim already exists while ` +
-        `destination ${directory} is absent; it may be stale. ` +
-        `Clean up the stale claim before retrying: rm -rf -- '${directory}.claim'`,
-      );
-    }
-
-    const moved = atomicNoReplaceDirectoryMove(
+    const moved = atomicNoReplaceMove(
       parent.parentFd,
       temporary,
       parent.leaf,
       directory,
+      "directory",
     );
     if (!moved) {
       const result = compareExistingDirectoryAt(
@@ -1015,14 +1082,6 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
     if (temporaryPresent) {
       try {
         removeOwnedDirectoryAt(parent.parentFd, temporary);
-      } catch {
-        // Preserve the primary publication error.
-      }
-    }
-    if (claimOwned) {
-      try {
-        rmdirSync(procFdPath(parent.parentFd, claim));
-        fsyncSync(parent.parentFd);
       } catch {
         // Preserve the primary publication error.
       }
@@ -1164,30 +1223,24 @@ function writeRawAtCreateOrCompare(parentFd, leaf, path, expected) {
     writeFileSync(fd, expected);
     fsyncSync(fd);
     verifyRegularDescriptor(fd, parentFd, temporary, "raw artifact temporary");
-    try {
-      linkSync(
-        procFdPath(parentFd, temporary),
-        procFdPath(parentFd, leaf),
+    const moved = atomicNoReplaceMove(
+      parentFd,
+      temporary,
+      leaf,
+      path,
+      "file",
+    );
+    if (!moved) {
+      const actual = readFileAt(
+        parentFd,
+        leaf,
+        "concurrently published raw artifact",
       );
-    } catch (cause) {
-      if (cause.code === "EEXIST") {
-        const actual = readFileAt(
-          parentFd,
-          leaf,
-          "concurrently published raw artifact",
-        );
-        if (!actual.equals(expected)) {
-          error(`conflicting generated bytes at ${path}; refusing to overwrite`);
-        }
-        return { path, created: false, bytes: expected };
+      if (!actual.equals(expected)) {
+        error(`conflicting generated bytes at ${path}; refusing to overwrite`);
       }
-      if (cause.code === "EXDEV" || cause.code === "EMLINK") {
-        error(`atomic no-replace publication is unavailable for ${path}: ${cause.code}`);
-      }
-      throw cause;
+      return { path, created: false, bytes: expected };
     }
-    verifyRegularDescriptor(fd, parentFd, leaf, "published raw artifact", 2n);
-    unlinkSync(procFdPath(parentFd, temporary));
     temporaryPresent = false;
     verifyRegularDescriptor(fd, parentFd, leaf, "published raw artifact");
     fsyncSync(parentFd);
@@ -1245,6 +1298,115 @@ export function removeFileNoFollow(path) {
   }
 }
 
+function removePinnedDirectoryContents(directoryFd, label) {
+  for (const name of directoryNames(directoryFd)) {
+    let childDirectory;
+    try {
+      childDirectory = openDirectoryAt(
+        directoryFd,
+        name,
+        `${label}/${name}`,
+      );
+    } catch (cause) {
+      if (cause.code !== "ENOTDIR") throw cause;
+    }
+    if (childDirectory !== undefined) {
+      try {
+        removePinnedDirectoryContents(
+          childDirectory.fd,
+          `${label}/${name}`,
+        );
+        const after = verifyDirectoryDescriptor(
+          childDirectory.fd,
+          `${label}/${name}`,
+        );
+        verifyNamedIdentity(
+          directoryFd,
+          name,
+          after,
+          `${label}/${name}`,
+        );
+        rmdirSync(procFdPath(directoryFd, name));
+      } finally {
+        closeSync(childDirectory.fd);
+      }
+      continue;
+    }
+
+    let fd;
+    try {
+      fd = openSync(procFdPath(directoryFd, name), FILE_READ_FLAGS);
+      verifyRegularDescriptor(
+        fd,
+        directoryFd,
+        name,
+        `${label}/${name}`,
+      );
+      unlinkSync(procFdPath(directoryFd, name));
+      const after = fstatSync(fd, { bigint: true });
+      if (!after.isFile() || after.nlink !== 0n) {
+        error(`${label}/${name} was not unlinked from its pinned identity`);
+      }
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+  if (directoryNames(directoryFd).length !== 0) {
+    error(`${label} changed while its pinned contents were being removed`);
+  }
+}
+
+export function removeDirectoryIfIdentityNoFollow(path, expectedIdentity) {
+  if (
+    !isPlainObject(expectedIdentity) ||
+    !/^[0-9]+$/.test(expectedIdentity.dev) ||
+    !/^[0-9]+$/.test(expectedIdentity.ino)
+  ) {
+    error("incomplete-directory cleanup identity is malformed");
+  }
+  const parent = openAnchoredParent(path, "incomplete staging directory");
+  let directory;
+  try {
+    parent.verify();
+    directory = openDirectoryAt(
+      parent.parentFd,
+      parent.leaf,
+      "incomplete staging directory",
+    );
+    if (
+      directory.stat.dev !== BigInt(expectedIdentity.dev) ||
+      directory.stat.ino !== BigInt(expectedIdentity.ino)
+    ) {
+      error(
+        "incomplete staging directory no longer has the identity created by this invocation",
+      );
+    }
+    removePinnedDirectoryContents(
+      directory.fd,
+      "incomplete staging directory",
+    );
+    const after = verifyDirectoryDescriptor(
+      directory.fd,
+      "incomplete staging directory",
+    );
+    if (!sameIdentity(after, directory.stat)) {
+      error("incomplete staging directory changed identity during cleanup");
+    }
+    verifyNamedIdentity(
+      parent.parentFd,
+      parent.leaf,
+      after,
+      "incomplete staging directory",
+    );
+    rmdirSync(procFdPath(parent.parentFd, parent.leaf));
+    fsyncSync(parent.parentFd);
+    parent.verify();
+  } finally {
+    if (directory !== undefined) closeSync(directory.fd);
+    parent.close();
+  }
+}
+
 export function ensureDirectoryNoFollow(path, { exclusive = false } = {}) {
   const parent = openAnchoredParent(path, "staging directory", { create: true });
   try {
@@ -1253,20 +1415,38 @@ export function ensureDirectoryNoFollow(path, { exclusive = false } = {}) {
       const directory = createDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
       closeSync(directory.fd);
       parent.verify();
-      return { created: true };
+      return {
+        created: true,
+        identity: {
+          dev: directory.stat.dev.toString(),
+          ino: directory.stat.ino.toString(),
+        },
+      };
     }
     const kind = pathKindAt(parent.parentFd, parent.leaf, "staging directory");
     if (kind === "missing") {
       const directory = createDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
       closeSync(directory.fd);
       parent.verify();
-      return { created: true };
+      return {
+        created: true,
+        identity: {
+          dev: directory.stat.dev.toString(),
+          ino: directory.stat.ino.toString(),
+        },
+      };
     }
     if (kind !== "directory") error("staging path is not a directory");
     const directory = openDirectoryAt(parent.parentFd, parent.leaf, "staging directory");
     closeSync(directory.fd);
     parent.verify();
-    return { created: false };
+    return {
+      created: false,
+      identity: {
+        dev: directory.stat.dev.toString(),
+        ino: directory.stat.ino.toString(),
+      },
+    };
   } finally {
     parent.close();
   }
@@ -2505,6 +2685,18 @@ function validateActualVerdict(verdict, label = "verdict") {
   return seat;
 }
 
+const DISCOVERY_VERDICT_KEYS = [
+  "engineer",
+  "signoff",
+  "summary",
+  "recommendations",
+];
+
+function validateDiscoveryVerdict(verdict, label = "discovery verdict") {
+  assertExactKeys(verdict, DISCOVERY_VERDICT_KEYS, label);
+  return validateActualVerdict(verdict, label);
+}
+
 const CURRENT_RECOMMENDATION_KEYS = [
   "severity",
   "where",
@@ -2555,7 +2747,7 @@ function rejectDuplicateVerdictSeats(adapted, label) {
 }
 
 export function adaptDiscoveryVerdict(verdict, options = {}) {
-  const seat = validateActualVerdict(verdict, "discovery verdict");
+  const seat = validateDiscoveryVerdict(verdict);
   const expectedSeat = options.seat ?? seat;
   if (seat !== expectedSeat) {
     error(`discovery verdict engineer "${seat}" disagrees with selected seat "${expectedSeat}"`);
@@ -2581,6 +2773,159 @@ export function adaptDiscoveryResults(input, options = {}) {
       (options.selection?.roster?.indexOf(right.seat) ?? Number.MAX_SAFE_INTEGER) ||
     String(left.seat).localeCompare(String(right.seat)),
   );
+}
+
+const ADAPTED_DISCOVERY_KEYS = [
+  "artifact_kind",
+  "schema_version",
+  "phase",
+  "lifecycle_id",
+  "selection_sha256",
+  "current_candidate",
+  "results",
+];
+
+const ADAPTED_DISCOVERY_RESULT_KEYS = [
+  "seat",
+  "complete",
+  "findings",
+];
+
+const ADAPTED_DISCOVERY_FINDING_KEYS = [
+  "source_id",
+  "seat",
+  "source_ordinal",
+  "raw_text",
+  "attribution",
+  "severity",
+  "impact",
+  "recommendation",
+];
+
+function validateAdaptedDiscoveryShape(results) {
+  if (!Array.isArray(results)) {
+    error("adapted discovery result results must be an array");
+  }
+  for (const [resultIndex, result] of results.entries()) {
+    const resultLabel = `adapted discovery result results[${resultIndex}]`;
+    assertExactKeys(result, ADAPTED_DISCOVERY_RESULT_KEYS, resultLabel);
+    if (!Array.isArray(result.findings)) {
+      error(`${resultLabel}.findings must be an array`);
+    }
+    for (const [findingIndex, finding] of result.findings.entries()) {
+      assertExactKeys(
+        finding,
+        ADAPTED_DISCOVERY_FINDING_KEYS,
+        `${resultLabel}.findings[${findingIndex}]`,
+      );
+    }
+  }
+  return results;
+}
+
+function validateExactJsonBytes(bytes, value, label) {
+  if (typeof bytes !== "string" || bytes.length === 0) {
+    error(`${label} requires exact JSON bytes`);
+  }
+  let decoded;
+  try {
+    decoded = JSON.parse(bytes);
+  } catch (cause) {
+    error(`${label} bytes are not valid JSON: ${cause.message}`);
+  }
+  if (stableStringify(decoded) !== stableStringify(value)) {
+    error(`${label} object disagrees with the exact JSON bytes`);
+  }
+  return bytes;
+}
+
+export function createDiscoveryResultArtifact(input, options = {}) {
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection = input.selection ??
+    (input.selection_path ? readSelection(input.selection_path, { table }) : undefined);
+  if (!selection) error("adapted discovery requires the discovery selection");
+  validateSelection(selection, table);
+  if (selection.phase !== "discovery") {
+    error("adapted discovery requires a discovery selection");
+  }
+  const selectionBytes = validateExactJsonBytes(
+    input.selection_bytes,
+    selection,
+    "adapted discovery selection",
+  );
+  const currentCandidate = input.current_candidate ??
+    input.currentCandidate ??
+    input.candidate;
+  if (!currentCandidate) {
+    error("adapted discovery requires the current candidate");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  const results = adaptDiscoveryResults(
+    input.verdicts ?? input.results,
+    { selection },
+  );
+  validateAdaptedDiscoveryShape(results);
+  validateDiscoveryResults(selection, results, { table });
+  return sortedObject({
+    artifact_kind: DISCOVERY_RESULT_ARTIFACT,
+    schema_version: SELECTION_SCHEMA_VERSION,
+    phase: "discovery",
+    lifecycle_id: selection.lifecycle_id,
+    selection_sha256: sha256(selectionBytes),
+    current_candidate: candidateAddress(currentCandidate),
+    results,
+  });
+}
+
+export function validateDiscoveryResultArtifact(artifact, options = {}) {
+  assertExactKeys(
+    artifact,
+    ADAPTED_DISCOVERY_KEYS,
+    "adapted discovery result",
+  );
+  if (artifact.artifact_kind !== DISCOVERY_RESULT_ARTIFACT) {
+    error("adapted discovery result has an unexpected artifact_kind");
+  }
+  if (artifact.schema_version !== SELECTION_SCHEMA_VERSION) {
+    error("adapted discovery result schema_version is unsupported");
+  }
+  if (artifact.phase !== "discovery") {
+    error("adapted discovery result phase must be discovery");
+  }
+  const selection = options.selection;
+  if (!selection) {
+    error("adapted discovery validation requires the discovery selection");
+  }
+  const table = options.table ?? readSelectionTable(options.table_path);
+  validateSelection(selection, table);
+  if (selection.phase !== "discovery") {
+    error("adapted discovery validation requires a discovery selection");
+  }
+  const selectionBytes = validateExactJsonBytes(
+    options.selection_bytes,
+    selection,
+    "adapted discovery selection",
+  );
+  if (artifact.lifecycle_id !== selection.lifecycle_id) {
+    error("adapted discovery result lifecycle_id disagrees with selection");
+  }
+  if (artifact.selection_sha256 !== sha256(selectionBytes)) {
+    error("adapted discovery result is not bound to the exact selection bytes");
+  }
+  const currentCandidate = options.current_candidate ??
+    options.currentCandidate ??
+    options.candidate;
+  if (!currentCandidate) {
+    error("adapted discovery validation requires the current candidate");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  assertCanonicalEqual(
+    artifact.current_candidate,
+    candidateAddress(currentCandidate),
+    "adapted discovery result current_candidate",
+  );
+  validateAdaptedDiscoveryShape(artifact.results);
+  return validateDiscoveryResults(selection, artifact.results, { table });
 }
 
 export function adaptVerificationVerdict(verdict, options = {}) {
@@ -2855,7 +3200,21 @@ export function mergeDiscoveryLedger(input, options = {}) {
   const table = options.table ?? readSelectionTable(options.table_path);
   const selection = input.selection ?? readSelection(input.selection_path, { table });
   validateSelection(selection, table);
-  const sources = validateDiscoveryResults(selection, input.results ?? input.discovery_results, { table });
+  const discoveryResult = input.discovery_result ??
+    input.discovery_results ??
+    input.results;
+  if (!discoveryResult) {
+    error("merge-ledger requires the adapted discovery result artifact");
+  }
+  const sources = validateDiscoveryResultArtifact(discoveryResult, {
+    table,
+    selection,
+    selection_bytes: input.selection_bytes,
+    current_candidate:
+      input.current_candidate ??
+      input.currentCandidate ??
+      input.candidate,
+  });
   if (!Array.isArray(input.groups ?? input.dedup_groups)) {
     error("orchestrator-supplied dedup_groups are required");
   }
@@ -5521,10 +5880,18 @@ function readJsonDirectory(path, label) {
   }
   if (entries.length === 0) error(`${label} directory contains no JSON artifacts`);
   return Object.fromEntries(
-    entries.map((entry) => [
-      entry.name.slice(0, -5),
-      JSON.parse(entry.bytes.toString("utf8")),
-    ]),
+    entries.map((entry) => {
+      let value;
+      try {
+        value = JSON.parse(entry.bytes.toString("utf8"));
+      } catch (cause) {
+        error(
+          `${label} directory ${path} entry ${entry.name} contains malformed JSON: ` +
+          cause.message,
+        );
+      }
+      return [entry.name.slice(0, -5), value];
+    }),
   );
 }
 
@@ -5588,8 +5955,8 @@ function usage() {
     "usage:",
     "  panel-lifecycle.mjs select <candidate.json> <lifecycle-id> [--phase discovery|verification] [--previous-selection PATH] [--fix-delta PATH] [--git-range RANGE]",
     "  panel-lifecycle.mjs discovery-request <selection.json> <candidate.json> <output.json>",
-    "  panel-lifecycle.mjs adapt-discovery <verdicts-dir> <output.json> --selection PATH",
-    "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json>",
+    "  panel-lifecycle.mjs adapt-discovery <verdicts-dir> <output.json> --selection PATH --candidate PATH",
+    "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json> --candidate PATH",
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
     "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
     "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH",
@@ -5671,29 +6038,45 @@ async function main(argv) {
     }
     if (command === "adapt-discovery") {
       const selectionPath = flagValue(argv.slice(3), "--selection");
-      if (!argv[1] || !argv[2] || !selectionPath) {
-        error("adapt-discovery requires a verdict directory, output, and --selection");
+      const candidatePath = flagValue(argv.slice(3), "--candidate");
+      if (!argv[1] || !argv[2] || !selectionPath || !candidatePath) {
+        error(
+          "adapt-discovery requires a verdict directory, output, --selection, and --candidate",
+        );
       }
-      const selection = readSelection(selectionPath);
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
       if (selection.phase !== "discovery") {
         error("adapt-discovery requires a discovery selection");
       }
+      const candidate = readJson(candidatePath, "current candidate");
       const verdicts = readDiscoveryVerdicts(argv[1], selection);
-      writeCreateOrCompare(argv[2], {
-        artifact_kind: DISCOVERY_RESULT_ARTIFACT,
-        schema_version: SELECTION_SCHEMA_VERSION,
-        results: adaptDiscoveryResults(verdicts, { selection }),
-      });
+      writeCreateOrCompare(argv[2], createDiscoveryResultArtifact({
+        selection,
+        selection_bytes: selectionBytes,
+        candidate,
+        verdicts,
+      }));
       console.log(argv[2]);
       return;
     }
     if (command === "merge-ledger") {
-      const selection = readSelection(argv[1]);
+      const candidatePath = flagValue(argv.slice(5), "--candidate");
+      if (!argv[1] || !argv[2] || !argv[3] || !argv[4] || !candidatePath) {
+        error(
+          "merge-ledger requires selection, adapted discovery results, groups, output, and --candidate",
+        );
+      }
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(argv[1]);
+      const candidate = readJson(candidatePath, "current candidate");
       const results = readJson(argv[2], "discovery results");
       const groups = readJson(argv[3], "deduplication groups");
       const ledger = mergeDiscoveryLedger({
         selection,
-        results: results.results ?? results.verdicts ?? results,
+        selection_bytes: selectionBytes,
+        candidate,
+        discovery_results: results,
         groups,
       });
       writeCreateOrCompare(argv[4], ledger);

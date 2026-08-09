@@ -71,6 +71,7 @@ use super::{
 /// Upper bound on findings carried by one record. A record is a verdict, not a
 /// transcript; anything larger is a malformed artifact rather than a review.
 const MAX_RECOMMENDATIONS: usize = 64;
+const MAX_PANEL_RECORD_SET_BYTES: usize = MAX_JSON_BYTES;
 const INPUT_RESOLVE_FLAGS: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_SYMLINKS)
     .union(ResolveFlags::NO_MAGICLINKS);
@@ -1116,7 +1117,7 @@ pub fn attest(
     records_dir: &Path,
 ) -> Result<WorkflowOutput> {
     let request = stored_request(candidate, snapshot)?;
-    let files = read_record_dir(records_dir)?;
+    let files = read_record_dir(records_dir, &request.record_files)?;
     let attestation = validate_record_set(candidate, &request, &files)?;
 
     publish_record_set_no_replace(candidate, &files)?;
@@ -1147,10 +1148,28 @@ pub fn attest(
 /// The directory holds records and nothing else: a subdirectory, a symlink, a
 /// dotfile, or a non-JSON file is a rejection, so an unnoticed extra file
 /// cannot dilute the request's exact roster requirement.
-fn read_record_dir(dir: &Path) -> Result<Vec<RecordFile>> {
+fn read_record_dir(dir: &Path, expected_files: &[String]) -> Result<Vec<RecordFile>> {
     let opened = open_input_directory(dir, "panel record path")?;
-    let names = input_directory_names(opened.directory.as_fd(), "panel record directory")?;
-    let mut files = Vec::new();
+    let names = input_directory_names_bounded(
+        opened.directory.as_fd(),
+        "panel record directory",
+        expected_files.len(),
+    )?;
+    let mut expected_names = expected_files
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    expected_names.sort();
+    if names != expected_names {
+        return Err(DeliveryError::new(format!(
+            "panel record directory must contain exactly {} requested record entries before \
+             record bytes are read",
+            expected_files.len()
+        )));
+    }
+
+    let mut aggregate_bytes = 0usize;
+    let mut opened_files = Vec::with_capacity(names.len());
     for raw_name in &names {
         let name = raw_name
             .to_str()
@@ -1161,12 +1180,38 @@ fn read_record_dir(dir: &Path) -> Result<Vec<RecordFile>> {
                 "panel record directory holds {name:?}, which is not a regular record file"
             )));
         }
+        let (file, stat) =
+            open_file_at_limited(opened.directory.as_fd(), raw_name, "panel record")?;
+        aggregate_bytes = aggregate_bytes
+            .checked_add(stat.st_size as usize)
+            .ok_or_else(|| DeliveryError::new("panel record aggregate byte count overflowed"))?;
+        if aggregate_bytes > MAX_PANEL_RECORD_SET_BYTES {
+            return Err(DeliveryError::new(format!(
+                "panel record directory exceeds the aggregate \
+                 {MAX_PANEL_RECORD_SET_BYTES}-byte bound before record bytes are read"
+            )));
+        }
+        opened_files.push((name, raw_name, file, stat));
+    }
+
+    let mut files = Vec::with_capacity(names.len());
+    for (name, raw_name, file, before) in opened_files {
         files.push((
             name,
-            read_file_at_limited(opened.directory.as_fd(), raw_name, "panel record")?,
+            read_opened_file_limited(
+                opened.directory.as_fd(),
+                raw_name,
+                file,
+                before,
+                "panel record",
+            )?,
         ));
     }
-    let after = input_directory_names(opened.directory.as_fd(), "panel record directory")?;
+    let after = input_directory_names_bounded(
+        opened.directory.as_fd(),
+        "panel record directory",
+        expected_files.len(),
+    )?;
     if after != names {
         return Err(DeliveryError::new(
             "panel record directory changed while its opened entries were being read",
@@ -1505,6 +1550,15 @@ fn verify_regular_file(
 }
 
 fn read_file_at_limited(parent: BorrowedFd<'_>, name: &OsStr, label: &str) -> Result<Vec<u8>> {
+    let (file, before) = open_file_at_limited(parent, name, label)?;
+    read_opened_file_limited(parent, name, file, before, label)
+}
+
+fn open_file_at_limited(
+    parent: BorrowedFd<'_>,
+    name: &OsStr,
+    label: &str,
+) -> Result<(File, rustix::fs::Stat)> {
     let fd = rustix::fs::openat2(
         parent,
         name,
@@ -1521,7 +1575,16 @@ fn read_file_at_limited(parent: BorrowedFd<'_>, name: &OsStr, label: &str) -> Re
             "{label} exceeds {MAX_JSON_BYTES} bytes"
         )));
     }
-    let mut file = File::from(fd);
+    Ok((File::from(fd), before))
+}
+
+fn read_opened_file_limited(
+    parent: BorrowedFd<'_>,
+    name: &OsStr,
+    mut file: File,
+    before: rustix::fs::Stat,
+    label: &str,
+) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
         .take(MAX_JSON_BYTES as u64 + 1)
@@ -1548,7 +1611,11 @@ fn read_file_at_limited(parent: BorrowedFd<'_>, name: &OsStr, label: &str) -> Re
     Ok(bytes)
 }
 
-fn input_directory_names(directory: BorrowedFd<'_>, label: &str) -> Result<Vec<OsString>> {
+fn input_directory_names_bounded(
+    directory: BorrowedFd<'_>,
+    label: &str,
+    max_entries: usize,
+) -> Result<Vec<OsString>> {
     let entries = rustix::fs::Dir::read_from(directory).map_err(|error| {
         DeliveryError::environment(format!("cannot list opened {label}: {error}"))
     })?;
@@ -1560,6 +1627,11 @@ fn input_directory_names(directory: BorrowedFd<'_>, label: &str) -> Result<Vec<O
         let bytes = entry.file_name().to_bytes();
         if bytes == b"." || bytes == b".." {
             continue;
+        }
+        if names.len() >= max_entries {
+            return Err(DeliveryError::new(format!(
+                "{label} contains more than the exact {max_entries}-entry bound"
+            )));
         }
         names.push(OsString::from_vec(bytes.to_vec()));
     }
@@ -2039,6 +2111,32 @@ pub(crate) mod tests {
                 .message()
                 .contains("parent changed identity"),
             "{replacement_error}"
+        );
+    }
+
+    #[test]
+    fn record_directory_rejects_aggregate_bound_before_reads() {
+        let scratch = Scratch::new("panel-record-aggregate-bounds");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let request = requested(&candidate, &snapshot);
+        let files = record_files(&snapshot);
+        let dir = write_record_dir(&scratch, &files);
+
+        for (name, _) in files.iter().take(2) {
+            File::options()
+                .write(true)
+                .open(dir.join(name))
+                .expect("open aggregate fixture")
+                .set_len((MAX_PANEL_RECORD_SET_BYTES / 2 + 1) as u64)
+                .expect("extend aggregate fixture");
+        }
+        let aggregate_error = read_record_dir(&dir, &request.record_files)
+            .expect_err("an oversized aggregate must be rejected before record reads");
+        assert!(
+            aggregate_error
+                .message()
+                .contains("aggregate 2097152-byte bound before record bytes are read"),
+            "{aggregate_error}"
         );
     }
 
@@ -2869,10 +2967,7 @@ pub(crate) mod tests {
         let dir = write_record_dir(&scratch, &files);
         fs::create_dir(dir.join("nested")).expect("nested directory");
         let error = attest(&candidate, &snapshot, &dir).expect_err("nested entry");
-        assert!(
-            error.message().contains("not a regular record file"),
-            "{error}"
-        );
+        assert!(error.message().contains("exact 13-entry bound"), "{error}");
     }
 
     #[test]

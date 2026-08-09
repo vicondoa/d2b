@@ -15,3 +15,11 @@
   version `2`.
 - Defined approval CLI exit statuses as `0` for approved, `3` for a valid but
   blocked gate, and `2` for an invalid invocation or input.
+- Made staging require finalized `--evidence` and derive the evidence-bound
+  discovery request, while `adapt-discovery` now consumes an exact complete
+  per-seat verdict directory and binds its output to the lifecycle, candidate,
+  and selection bytes.
+- Added a cumulative immutable panel-packet-root quota of 1 GiB that operators
+  may lower but not raise. The schema-version `2` `.complete` marker records
+  the round address and selection/diff digests, then byte-binds every canonical
+  artifact through `artifact_sha256` and `artifact_bytes` maps.

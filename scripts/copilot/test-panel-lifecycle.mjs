@@ -9,6 +9,7 @@ import {
   changedPathsFromGitRange,
   createApprovalArtifact,
   createDiscoveryRequest,
+  createDiscoveryResultArtifact,
   createResponseTemplate,
   createSelection,
   evaluateApproval,
@@ -23,6 +24,7 @@ import {
   sha256,
   stableStringify,
   validateDiscoveryResults,
+  validateDiscoveryResultArtifact,
   validateCandidateAgainstSelection,
   validateFixScope,
   validateMonotonicRoster,
@@ -42,6 +44,7 @@ import {
   cpSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -247,6 +250,61 @@ try {
   });
 }
 
+function observeFilePublication(path, helperPath) {
+  const source = `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { pathToFileURL } from "node:url";
+const [helperPath, path] = process.argv.slice(1);
+const originalLinkSync = fs.linkSync;
+fs.linkSync = (...args) => {
+  originalLinkSync(...args);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+};
+syncBuiltinESMExports();
+try {
+  const entry = process.argv[1];
+  process.argv[1] = "";
+  const { writeCreateOrCompare } =
+    await import(pathToFileURL(helperPath).href);
+  process.argv[1] = entry;
+  writeCreateOrCompare(path, { safe: true });
+} catch (cause) {
+  console.error(cause.message);
+  process.exitCode = 1;
+}
+`;
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", source, helperPath, path],
+      { encoding: "utf8" },
+    );
+    let violation = "";
+    let stderr = "";
+    const observe = () => {
+      if (!existsSync(path)) return;
+      try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.nlink !== 1) {
+          violation = `published destination appeared with link count ${stat.nlink}`;
+        }
+      } catch (cause) {
+        violation = `published destination could not be inspected: ${cause.message}`;
+      }
+    };
+    const timer = setInterval(observe, 1);
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status) => {
+      clearInterval(timer);
+      observe();
+      resolve({ status, stderr, violation });
+    });
+  });
+}
+
 function unavailableDirectoryPublish(directory, helperPath, pathWithoutPerl) {
   const source = `
 import { pathToFileURL } from "node:url";
@@ -349,6 +407,35 @@ function completeResults(roster, findingSeat = null) {
       },
     ]),
   );
+}
+
+function adaptedDiscoveryArtifact(
+  selection,
+  results,
+  currentCandidate = candidate(),
+  selectionBytes = stableStringify(selection),
+) {
+  return {
+    artifact_kind: "d2b-panel/discovery-result",
+    schema_version: 1,
+    phase: "discovery",
+    lifecycle_id: selection.lifecycle_id,
+    selection_sha256: sha256(selectionBytes),
+    current_candidate: {
+      program: currentCandidate.program,
+      wave: currentCandidate.wave,
+      candidate_id: currentCandidate.candidate_id,
+      content_id: currentCandidate.content_id,
+      snapshot_sha256: currentCandidate.snapshot_sha256,
+    },
+    results: selection.roster.map((seat) => ({
+      ...results[seat],
+      findings: results[seat].findings.map((finding) => ({
+        ...finding,
+        seat,
+      })),
+    })),
+  };
 }
 
 function makeSelection(root, overrides = {}) {
@@ -1032,10 +1119,68 @@ try {
       adaptedDiscovery.seat === "software" &&
       adaptedDiscovery.findings[0].severity === "MAJOR",
   );
+  const actualDiscoveryVerdicts = Object.fromEntries(
+    initial.selection.roster.map((seat) => [
+      seat,
+      seat === "software"
+        ? actualDiscoveryVerdict
+        : {
+            engineer: seat,
+            signoff: true,
+            summary: "No findings.",
+            recommendations: [],
+          },
+    ]),
+  );
+  const adaptedDiscoveryOutput = createDiscoveryResultArtifact({
+    selection: initial.selection,
+    selection_bytes: stableStringify(initial.selection),
+    candidate: candidate(),
+    verdicts: actualDiscoveryVerdicts,
+  });
+  check(
+    "discovery adapter output binds lifecycle, exact selection bytes, and candidate",
+    adaptedDiscoveryOutput.lifecycle_id === initial.selection.lifecycle_id &&
+      adaptedDiscoveryOutput.selection_sha256 ===
+        sha256(stableStringify(initial.selection)) &&
+      adaptedDiscoveryOutput.current_candidate.snapshot_sha256 ===
+        candidate().snapshot_sha256 &&
+      adaptedDiscoveryOutput.results[0].complete === true,
+  );
+  check(
+    "strict discovery artifact validation accepts canonical adapter output",
+    validateDiscoveryResultArtifact(adaptedDiscoveryOutput, {
+      selection: initial.selection,
+      selection_bytes: stableStringify(initial.selection),
+      candidate: candidate(),
+    }).length === 1,
+  );
+  rejects(
+    "adapted discovery output refuses undeclared result fields",
+    () => validateDiscoveryResultArtifact({
+      ...adaptedDiscoveryOutput,
+      results: adaptedDiscoveryOutput.results.map((result, index) => index === 0
+        ? { ...result, summary: "Adapter output must stay canonical." }
+        : result),
+    }, {
+      selection: initial.selection,
+      selection_bytes: stableStringify(initial.selection),
+      candidate: candidate(),
+    }),
+    /fields.*summary.*expected exactly/,
+  );
   rejects(
     "an inconsistent actual discovery signoff is refused",
     () => adaptDiscoveryVerdict({ ...actualDiscoveryVerdict, signoff: true }),
     /signoff/,
+  );
+  rejects(
+    "a discovery reviewer verdict refuses undeclared top-level fields",
+    () => adaptDiscoveryVerdict({
+      ...actualDiscoveryVerdict,
+      complete: true,
+    }),
+    /fields.*complete.*expected exactly/,
   );
   rejects(
     "a current discovery recommendation must be an object",
@@ -1132,24 +1277,95 @@ try {
       recommendation: "Validate the exact source mapping.",
     },
   ];
-  const ledger = mergeDiscoveryLedger({
+  const discoveryArtifact = adaptedDiscoveryArtifact(
+    initial.selection,
+    withFinding,
+  );
+  const discoveryMergeInput = {
     selection: initial.selection,
-    results: withFinding,
+    selection_bytes: stableStringify(initial.selection),
+    candidate: candidate(),
+    discovery_results: discoveryArtifact,
+  };
+  const ledger = mergeDiscoveryLedger({
+    ...discoveryMergeInput,
     groups,
   });
   check("deduplication creates one stable R identifier", ledger.issues[0].id === "R1");
   check("deduplication preserves both source attributions", ledger.issues[0].source_finding_ids.join(",") === "software:1,test:1");
   const ledgerAgain = mergeDiscoveryLedger({
-    selection: initial.selection,
-    results: withFinding,
+    ...discoveryMergeInput,
     groups,
   });
   check("identical ledger inputs are byte-stable", stableStringify(ledger) === stableStringify(ledgerAgain));
   rejects(
+    "merge refuses stale discovery results when exact selection bytes differ",
+    () => mergeDiscoveryLedger({
+      ...discoveryMergeInput,
+      selection_bytes: `${stableStringify(initial.selection)}\n`,
+      groups,
+    }),
+    /not bound to the exact selection bytes/,
+  );
+  const staleCandidate = candidate({
+    candidate_id: "candidate-2",
+    content_id: "content-2",
+    snapshot_sha256: "b".repeat(64),
+  });
+  const staleCandidateSelection = createSelection({
+    ...staleCandidate,
+    lifecycle_id: initial.selection.lifecycle_id,
+    phase: "discovery",
+  }, { root: join(root, "stale-candidate-selection") }).selection;
+  check(
+    "stale candidate negative keeps the same roster",
+    staleCandidateSelection.roster.join(",") ===
+      initial.selection.roster.join(","),
+  );
+  const staleCandidateSelectionBytes = stableStringify(staleCandidateSelection);
+  rejects(
+    "merge refuses stale same-roster discovery results for another candidate",
+    () => mergeDiscoveryLedger({
+      selection: staleCandidateSelection,
+      selection_bytes: staleCandidateSelectionBytes,
+      candidate: staleCandidate,
+      discovery_results: {
+        ...discoveryArtifact,
+        selection_sha256: sha256(staleCandidateSelectionBytes),
+      },
+      groups,
+    }),
+    /current_candidate.*does not match|current_candidate.*disagrees/,
+  );
+  const staleLifecycleSelection = createSelection({
+    ...candidate(),
+    lifecycle_id: "spec004w1-stale",
+    phase: "discovery",
+  }, { root: join(root, "stale-lifecycle-selection") }).selection;
+  check(
+    "stale lifecycle negative keeps the same roster",
+    staleLifecycleSelection.roster.join(",") ===
+      initial.selection.roster.join(","),
+  );
+  const staleLifecycleSelectionBytes = stableStringify(staleLifecycleSelection);
+  rejects(
+    "merge refuses stale same-roster discovery results from another lifecycle",
+    () => mergeDiscoveryLedger({
+      selection: staleLifecycleSelection,
+      selection_bytes: staleLifecycleSelectionBytes,
+      candidate: candidate(),
+      discovery_results: {
+        ...discoveryArtifact,
+        selection_sha256: sha256(staleLifecycleSelectionBytes),
+      },
+      groups,
+    }),
+    /lifecycle_id disagrees/,
+  );
+  rejects(
     "an unmapped source finding is refused",
     () => mergeDiscoveryLedger({
-      selection: initial.selection,
-      results: withFinding,
+      ...discoveryMergeInput,
       groups: [{ source_finding_ids: ["software:1"] }],
     }),
     /mapping is incomplete/,
@@ -1157,8 +1373,7 @@ try {
   rejects(
     "a source mapped into two groups is refused",
     () => mergeDiscoveryLedger({
-      selection: initial.selection,
-      results: withFinding,
+      ...discoveryMergeInput,
       groups: [
         { source_finding_ids: ["software:1", "test:1"] },
         { source_finding_ids: ["software:1"] },
@@ -1169,8 +1384,7 @@ try {
   rejects(
     "a ledger group cannot downgrade source severity",
     () => mergeDiscoveryLedger({
-      selection: initial.selection,
-      results: withFinding,
+      ...discoveryMergeInput,
       groups: [{
         source_finding_ids: ["software:1", "test:1"],
         severity: "MINOR",
@@ -1204,6 +1418,18 @@ try {
     "generated publication rejects an existing hardlink",
     () => writeCreateOrCompare(hardlinkOutput, { safe: true }),
     /link count|hardlink/,
+  );
+  const observedFile = join(unsafeIo, "atomic-file-output.json");
+  const fileObservation = await observeFilePublication(
+    observedFile,
+    LIFECYCLE_CLI,
+  );
+  check(
+    "generated publication never exposes a multiply linked destination",
+    fileObservation.status === 0 &&
+      fileObservation.violation === "" &&
+      lstatSync(observedFile).nlink === 1,
+    fileObservation.violation || fileObservation.stderr,
   );
   const fifoOutput = join(unsafeIo, "fifo-output.json");
   const fifo = spawnSync("mkfifo", [fifoOutput], { encoding: "utf8" });
@@ -1937,13 +2163,15 @@ process.stdout.write("attacker-controlled timing\\n");
   }
   const staleDirectory = join(root, "stale-family");
   mkdirSync(`${staleDirectory}.claim`);
-  rejects(
-    "a stale sibling claim names the required cleanup",
-    () => writeDirectoryCreateOrCompare(
-      staleDirectory,
-      [{ name: "seat.json", bytes: "stale\n" }],
-    ),
-    /stale.*rm -rf --/,
+  const staleRecovery = writeDirectoryCreateOrCompare(
+    staleDirectory,
+    [{ name: "seat.json", bytes: "stale\n" }],
+  );
+  check(
+    "a crash-stale sibling claim cannot block directory publication",
+    staleRecovery.created === true &&
+      readFileSync(join(staleDirectory, "seat.json"), "utf8") === "stale\n" &&
+      existsSync(`${staleDirectory}.claim`),
   );
   rmSync(`${staleDirectory}.claim`, { recursive: true, force: true });
   const hardlinkedFamily = join(root, "hardlinked-family");
@@ -2231,11 +2459,22 @@ process.stdout.write("attacker-controlled timing\\n");
       cliDiscoveryResults,
       "--selection",
       join(cliFirstRound, "selection.json"),
+      "--candidate",
+      join(cliFirstRound, "current-candidate.json"),
+    );
+    const cliAdaptedDiscovery = JSON.parse(
+      readFileSync(cliDiscoveryResults, "utf8"),
     );
     check(
-      "adapt-discovery reads the canonical staged verdict directory in roster order",
-      JSON.parse(readFileSync(cliDiscoveryResults, "utf8"))
-        .results.map((result) => result.seat).join(",") === discoveryRoster.join(","),
+      "adapt-discovery binds the staged selection, candidate, lifecycle, and roster order",
+      cliAdaptedDiscovery.lifecycle_id === "spec004w1" &&
+        cliAdaptedDiscovery.selection_sha256 === sha256(
+          readFileSync(join(cliFirstRound, "selection.json"), "utf8"),
+        ) &&
+        cliAdaptedDiscovery.current_candidate.snapshot_sha256 ===
+          "d".repeat(64) &&
+        cliAdaptedDiscovery.results.map((result) => result.seat).join(",") ===
+          discoveryRoster.join(","),
     );
     const adaptDiscoveryDirectory = (directory, output) => spawnSync("node", [
       LIFECYCLE_CLI,
@@ -2244,6 +2483,8 @@ process.stdout.write("attacker-controlled timing\\n");
       output,
       "--selection",
       join(cliFirstRound, "selection.json"),
+      "--candidate",
+      join(cliFirstRound, "current-candidate.json"),
     ], { cwd: cliRoot, encoding: "utf8" });
     const incompleteDiscoveryVerdicts = join(cliRoot, "incomplete-discovery-verdicts");
     cpSync(join(cliFirstRound, "verdicts"), incompleteDiscoveryVerdicts, {
@@ -2333,6 +2574,31 @@ process.stdout.write("attacker-controlled timing\\n");
           `${duplicateDiscovery.stdout}${duplicateDiscovery.stderr}`,
         ),
     );
+    const malformedDiscoveryDirectory = join(
+      cliRoot,
+      "malformed-discovery-verdicts",
+    );
+    cpSync(join(cliFirstRound, "verdicts"), malformedDiscoveryDirectory, {
+      recursive: true,
+    });
+    const malformedDiscoveryFilename = `${discoveryRoster[0]}.json`;
+    writeFileSync(
+      join(malformedDiscoveryDirectory, malformedDiscoveryFilename),
+      "{ malformed\n",
+    );
+    const malformedDiscovery = adaptDiscoveryDirectory(
+      malformedDiscoveryDirectory,
+      join(cliRoot, "malformed-discovery-results.json"),
+    );
+    const malformedDiscoveryText =
+      `${malformedDiscovery.stdout}${malformedDiscovery.stderr}`;
+    check(
+      "adapt-discovery malformed JSON names its directory and entry filename",
+      malformedDiscovery.status !== 0 &&
+        malformedDiscoveryText.includes(malformedDiscoveryDirectory) &&
+        malformedDiscoveryText.includes(malformedDiscoveryFilename),
+      malformedDiscoveryText,
+    );
     writeFileSync(
       cliGroups,
       stableStringify([{
@@ -2343,7 +2609,15 @@ process.stdout.write("attacker-controlled timing\\n");
         recommendation: "Validate source coverage.",
       }]),
     );
-    runCli("merge-ledger", discoverySelection, cliDiscoveryResults, cliGroups, cliLedger);
+    runCli(
+      "merge-ledger",
+      discoverySelection,
+      cliDiscoveryResults,
+      cliGroups,
+      cliLedger,
+      "--candidate",
+      join(cliFirstRound, "current-candidate.json"),
+    );
     runCli("response-template", cliLedger, cliResponses);
     const cliResponseObject = JSON.parse(readFileSync(cliResponses, "utf8"));
     cliResponseObject.responses[0] = {

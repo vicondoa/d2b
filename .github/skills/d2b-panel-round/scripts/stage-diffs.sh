@@ -158,7 +158,8 @@ tip="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse "$base")"
 prev_sha="$(git rev-parse "$prev")"
 
-out="$root/.scratch/panel/$round"
+panel_root="$root/.scratch/panel"
+out="$panel_root/$round"
 completion_marker="$out/.complete"
 staged_selection_path="$out/selection.json"
 staged_candidate_path="$out/current-candidate.json"
@@ -169,15 +170,15 @@ staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
 
-# Staged packets remain exact and untruncated. Bound their aggregate logical
-# bytes instead of pruning historical evidence. Operators may lower this
-# ceiling for constrained environments, but may not raise the repository
-# policy limit.
-default_lifecycle_packet_max_bytes=$((1024 * 1024 * 1024))
-lifecycle_packet_max_bytes="${D2B_PANEL_LIFECYCLE_MAX_BYTES:-$default_lifecycle_packet_max_bytes}"
-if ! [[ "$lifecycle_packet_max_bytes" =~ ^[1-9][0-9]*$ ]] ||
-   [ "$lifecycle_packet_max_bytes" -gt "$default_lifecycle_packet_max_bytes" ]; then
-  echo "D2B_PANEL_LIFECYCLE_MAX_BYTES must be a positive integer no greater than $default_lifecycle_packet_max_bytes" >&2
+# Staged packets remain exact and untruncated. Bound aggregate logical bytes
+# across the entire packet root, including every lifecycle and incomplete
+# packet. Operators may lower this ceiling for constrained environments, but
+# may not raise the repository policy limit.
+default_panel_root_max_bytes=$((1024 * 1024 * 1024))
+panel_root_max_bytes="${D2B_PANEL_LIFECYCLE_MAX_BYTES:-$default_panel_root_max_bytes}"
+if ! [[ "$panel_root_max_bytes" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$panel_root_max_bytes" -gt "$default_panel_root_max_bytes" ]; then
+  echo "D2B_PANEL_LIFECYCLE_MAX_BYTES must be a positive integer no greater than $default_panel_root_max_bytes" >&2
   exit 2
 fi
 
@@ -293,10 +294,25 @@ if [ -e "$out" ]; then
   fi
 fi
 
+round_directory_owned=false
+round_directory_dev=""
+round_directory_ino=""
 stage_exit() {
   local status="$?"
-  if [ "$status" -ne 0 ] && [ -d "$out" ] && [ ! -f "$completion_marker" ]; then
-    partial_cleanup_hint
+  if [ "$status" -ne 0 ] &&
+     [ "$round_directory_owned" = true ] &&
+     [ ! -f "$completion_marker" ]; then
+    if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [directory, dev, ino, helperPath] = process.argv.slice(1);
+const { removeDirectoryIfIdentityNoFollow } =
+  await import(pathToFileURL(helperPath).href);
+removeDirectoryIfIdentityNoFollow(directory, { dev, ino });
+' "$out" "$round_directory_dev" "$round_directory_ino" "$lifecycle_helper"
+    then
+      echo "refused to clean an incomplete staging directory whose pinned identity or contents changed" >&2
+      partial_cleanup_hint
+    fi
   fi
   exit "$status"
 }
@@ -723,13 +739,27 @@ if [ -d "$out/verdicts" ] &&
 fi
 
 reuse_existing=false
+enforce_panel_root_quota() {
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [panelRoot, maxText, helperPath] = process.argv.slice(1);
+const { directoryTreeUsageNoFollow } =
+  await import(pathToFileURL(helperPath).href);
+const usage = directoryTreeUsageNoFollow(panelRoot, {
+  label: "panel packet root",
+  maxBytes: Number(maxText),
+});
+process.stdout.write(String(usage.bytes));
+' "$panel_root" "$panel_root_max_bytes" "$lifecycle_helper"
+}
+
 claim_round_directory() {
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const { ensureDirectoryNoFollow } =
   await import(pathToFileURL(process.argv[2]).href);
 ensureDirectoryNoFollow(process.argv[1]);
-' "$root/.scratch/panel" "$lifecycle_helper"
+' "$panel_root" "$lifecycle_helper"
   if [ -e "$out" ]; then
     if [ ! -f "$completion_marker" ]; then
       partial_cleanup_hint
@@ -738,13 +768,14 @@ ensureDirectoryNoFollow(process.argv[1]);
     reuse_existing=true
     return
   fi
-  if ! node --input-type=module -e '
+  if ! round_identity="$(node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const { ensureDirectoryNoFollow } =
   await import(pathToFileURL(process.argv[2]).href);
-ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
+const result = ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
+process.stdout.write(`${result.identity.dev}\t${result.identity.ino}`);
 ' "$out" "$lifecycle_helper"
-  then
+  )"; then
     if [ -f "$completion_marker" ]; then
       reuse_existing=true
       return
@@ -752,8 +783,20 @@ ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
     partial_cleanup_hint
     exit 2
   fi
+  IFS=$'\t' read -r round_directory_dev round_directory_ino <<<"$round_identity"
+  round_directory_owned=true
 }
 
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[2]).href);
+ensureDirectoryNoFollow(process.argv[1]);
+' "$panel_root" "$lifecycle_helper"
+if ! enforce_panel_root_quota >/dev/null; then
+  echo "panel packet root quota refused staging before round materialization" >&2
+  exit 2
+fi
 claim_round_directory
 
 require_reused_path() {
@@ -1293,90 +1336,8 @@ for seat in "${panel_seats[@]}"; do
   fi
 done
 
-if ! prior_packet_bytes="$(
-node - "$root/.scratch/panel" "$out" "$lifecycle" \
-  "$lifecycle_packet_max_bytes" "$lifecycle_helper" <<'NODE'
-const path = require("node:path");
-const { pathToFileURL } = require("node:url");
-const [panelRoot, currentRound, lifecycle, maxText, helperPath] =
-  process.argv.slice(2);
-const maxBytes = Number(maxText);
-let total = 0;
-(async () => {
-const {
-  listDirectoryNamesNoFollow,
-  pathKindNoFollow,
-  readBoundArtifactSetNoFollow,
-  readFileNoFollow,
-} = await import(pathToFileURL(helperPath).href);
-const addFile = (file) => {
-  total += readFileNoFollow(file, { label: "lifecycle packet artifact" }).length;
-};
-for (const name of listDirectoryNamesNoFollow(panelRoot, "panel packet root")) {
-  const directory = path.join(panelRoot, name);
-  if (pathKindNoFollow(directory, "panel packet entry") !== "directory") continue;
-  if (path.resolve(directory) === path.resolve(currentRound)) continue;
-  const markerPath = path.join(directory, ".complete");
-  if (pathKindNoFollow(markerPath, "panel completion marker") === "missing") continue;
-  let marker;
-  try {
-    marker = JSON.parse(readFileNoFollow(markerPath, {
-      encoding: "utf8",
-      label: "panel completion marker",
-    }));
-  } catch (error) {
-    throw new Error(`${markerPath} is unreadable: ${error.message}`);
-  }
-  if (marker.lifecycle_id !== lifecycle) continue;
-  if (
-    marker.schema_version === 2 &&
-    marker.artifact_sha256 &&
-    typeof marker.artifact_sha256 === "object" &&
-    !Array.isArray(marker.artifact_sha256)
-  ) {
-    const bound = readBoundArtifactSetNoFollow(markerPath);
-    if (bound.marker.lifecycle_id !== lifecycle) {
-      throw new Error(`${markerPath} changed lifecycle during bound read`);
-    }
-    for (const bytes of Object.values(bound.artifacts)) {
-      total += bytes.length;
-    }
-    continue;
-  }
-  const walkLegacy = (parent) => {
-    for (const child of listDirectoryNamesNoFollow(parent, "legacy panel packet")) {
-      if (child === ".complete" || child.endsWith(".tmp")) continue;
-      const childPath = path.join(parent, child);
-      const kind = pathKindNoFollow(childPath, "legacy panel packet entry");
-      if (kind === "directory") {
-        if (child !== "verdicts" && child !== "records") {
-          walkLegacy(childPath);
-        }
-      } else if (kind === "file") {
-        addFile(childPath);
-      } else {
-        throw new Error(`${childPath} is not a regular file or directory`);
-      }
-    }
-  };
-  walkLegacy(directory);
-}
-if (total > maxBytes) {
-  console.error(
-    `lifecycle ${lifecycle} staged packet bytes ${total} exceed the exact-packet ` +
-    `quota ${maxBytes}; retain the immutable packets and start a newly scoped lifecycle`,
-  );
-  process.exit(1);
-}
-process.stdout.write(String(total));
-})().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
-NODE
-)"
-then
-  echo "lifecycle packet quota refused completion; .complete will not be written" >&2
+if ! enforce_panel_root_quota >/dev/null; then
+  echo "panel packet root quota refused completion; .complete will not be written" >&2
   exit 2
 fi
 
@@ -1395,7 +1356,7 @@ import { pathToFileURL } from "node:url";
 const [path, round, lifecycle, base, previousTip, tip, phase, selectionSha,
   deltaSha, fullSha, helperPath, ...artifactPaths] = process.argv.slice(1);
 const maxBytes = Number(artifactPaths.pop());
-const priorBytes = Number(artifactPaths.pop());
+const retentionRoot = artifactPaths.pop();
 const { writeBoundCompletionCreateOrCompare } =
   await import(pathToFileURL(helperPath).href);
 writeBoundCompletionCreateOrCompare(path, {
@@ -1412,15 +1373,15 @@ writeBoundCompletionCreateOrCompare(path, {
   delta_sha256: deltaSha,
   full_sha256: fullSha,
 }, artifactPaths, {
-  priorBytes,
+  retentionRoot,
   maxBytes,
 });
 ' "$completion_marker" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
   "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-  "${canonical_artifacts[@]}" "$prior_packet_bytes" "$lifecycle_packet_max_bytes"
+  "${canonical_artifacts[@]}" "$panel_root" "$panel_root_max_bytes"
 then
-  echo "lifecycle packet quota or atomic completion publication refused .complete" >&2
+  echo "panel packet root quota or atomic completion publication refused .complete" >&2
   exit 2
 fi
 node --input-type=module -e '

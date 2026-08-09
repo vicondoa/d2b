@@ -311,13 +311,17 @@ required `--evidence` argument, and passes integrator-authored notes with
 non-empty regular `<seat>.md` file per selected seat and no other entries;
 omitting it uses generated defaults. The integrator then dispatches every
 reviewer with the exact generated prompt. Staging materializes supplied exact
-artifacts as round-local
-`selection.json`, `current-candidate.json`, `discovery-request.json`,
-`discovery-ledger.json`,
-`responses.json`, and `self-verification.json` before `.complete`. Discovery
-staging requires a readable `--discovery-request`; verification staging
-requires a readable complete per-seat `--verification-dir`, which is staged
-under `verification/`.
+artifacts as round-local `selection.json`, `current-candidate.json`,
+`discovery-ledger.json`, `responses.json`, and `self-verification.json` before
+`.complete`. The supplied discovery request is the pre-evidence input:
+discovery staging preserves it and derives round-local
+`discovery-request.json` by appending the exact staged `evidence.md` SHA-256
+and byte-count descriptor to `validation_evidence`. An already matching
+descriptor is reused and a conflicting descriptor is rejected. The staged
+request, not the supplied request bytes, is the canonical evidence-bound
+request. Discovery staging requires a readable `--discovery-request`;
+verification staging requires a readable complete per-seat
+`--verification-dir`, which is staged under `verification/`.
 
 The `.complete` marker byte-binds every reviewer-visible canonical artifact,
 including the finalized evidence and reviewer notes. Once it exists, the round

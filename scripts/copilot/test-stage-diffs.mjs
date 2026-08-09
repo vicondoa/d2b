@@ -226,10 +226,10 @@ try {
     discoveryRequestPath,
   ]);
   check(
-    "discovery staging rejects a well-formed cross-candidate request",
+    "discovery staging rejects a cross-candidate request and removes only its owned packet",
     staleDiscoveryRequest.status === 2 &&
       /strict lifecycle validation/.test(staleDiscoveryRequest.text) &&
-      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")),
     staleDiscoveryRequest.text,
   );
   rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
@@ -292,16 +292,70 @@ try {
     env: { D2B_PANEL_LIFECYCLE_MAX_BYTES: "1" },
   });
   check(
-    "staging preserves exact packets and refuses an exceeded lifecycle quota",
+    "staging preserves exact packets and removes an over-quota owned packet",
     boundedPacket.status === 2 &&
       /exact-packet quota/.test(boundedPacket.text) &&
-      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")),
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")),
     boundedPacket.text,
   );
   rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
     recursive: true,
     force: true,
   });
+  const panelRoot = join(repo, ".scratch", "panel");
+  const foreignLifecycle = join(panelRoot, "spec999w1-r1");
+  mkdirSync(foreignLifecycle);
+  writeFileSync(join(foreignLifecycle, ".complete"), "complete\n");
+  const crossLifecycleQuota = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], {
+    env: { D2B_PANEL_LIFECYCLE_MAX_BYTES: "1" },
+  });
+  check(
+    "root quota rejects another lifecycle before materializing the current round",
+    crossLifecycleQuota.status === 2 &&
+      /root-wide exact-packet quota/.test(crossLifecycleQuota.text) &&
+      /before round materialization/.test(crossLifecycleQuota.text) &&
+      !existsSync(join(panelRoot, "spec001w1-r1")) &&
+      existsSync(foreignLifecycle),
+    crossLifecycleQuota.text,
+  );
+  rmSync(foreignLifecycle, { recursive: true });
+
+  const incompletePacket = join(panelRoot, "abandoned-r1");
+  mkdirSync(incompletePacket);
+  writeFileSync(join(incompletePacket, "partial.diff"), "partial\n");
+  const incompleteQuota = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], {
+    env: { D2B_PANEL_LIFECYCLE_MAX_BYTES: "1" },
+  });
+  check(
+    "root quota includes incomplete packets without deleting foreign state",
+    incompleteQuota.status === 2 &&
+      /root-wide exact-packet quota/.test(incompleteQuota.text) &&
+      !existsSync(join(panelRoot, "spec001w1-r1")) &&
+      existsSync(incompletePacket),
+    incompleteQuota.text,
+  );
+  rmSync(incompletePacket, { recursive: true });
+
   const first = run(repo, [
     base,
     base,
@@ -649,25 +703,33 @@ try {
   const discoveryResultsPath = join(repo, "discovery-results.json");
   const groupsPath = join(repo, "discovery-groups.json");
   writeFileSync(
-    discoveryResultsPath,
-    `${JSON.stringify(Object.fromEntries(firstRoster.map((seat) => [
-      seat,
-      {
-        seat,
-        complete: true,
-        findings: seat === "software"
-          ? [{
-              source_id: "software:1",
-              source_ordinal: 1,
-              raw_text: "The fix needs verification.",
-              attribution: "software",
-              severity: "MAJOR",
-              impact: "The change could regress the handoff.",
-              recommendation: "Verify the fix.",
-            }]
-          : [],
-      },
-    ])), null, 2)}\n`,
+    join(firstDir, "verdicts", "software.json"),
+    `${JSON.stringify({
+      engineer: "software",
+      signoff: false,
+      summary: "The fix needs verification.",
+      recommendations: [{
+        severity: "high",
+        where: "Makefile",
+        what: "The fix needs verification.",
+        why: "The change could regress the handoff.",
+        fix: "Verify the fix.",
+      }],
+    }, null, 2)}\n`,
+  );
+  execFileSync(
+    "node",
+    [
+      lifecycleScript,
+      "adapt-discovery",
+      join(firstDir, "verdicts"),
+      discoveryResultsPath,
+      "--selection",
+      selectionPath,
+      "--candidate",
+      candidatePath,
+    ],
+    { cwd: repo, encoding: "utf8" },
   );
   writeFileSync(
     groupsPath,
@@ -681,7 +743,16 @@ try {
   );
   execFileSync(
     "node",
-    [lifecycleScript, "merge-ledger", selectionPath, discoveryResultsPath, groupsPath, stagedLedger],
+    [
+      lifecycleScript,
+      "merge-ledger",
+      selectionPath,
+      discoveryResultsPath,
+      groupsPath,
+      stagedLedger,
+      "--candidate",
+      candidatePath,
+    ],
     { cwd: repo, encoding: "utf8" },
   );
   execFileSync(
