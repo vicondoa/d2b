@@ -17,7 +17,13 @@ const INVENTORY_SCHEMA_VERSION: u32 = 1;
 /// contributor's shell. In particular, HOME, PWD, and tool-selection
 /// variables are deliberately absent: tools belong in the declared
 /// toolchain/data annotations.
-const ACTION_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR"];
+const ACTION_ENV_ALLOWLIST: &[&str] = &[
+    "BASH_ENV",
+    "PATH",
+    "TMPDIR",
+    "__ETC_PROFILE_DONE",
+    "__ETC_PROFILE_SOURCED",
+];
 
 pub(crate) const GENERATED_ARTIFACT_PATH: &str = "bazel/generated/action-network-policy.json";
 
@@ -508,23 +514,16 @@ pub const FIXED_POLICY_PATH: &str = "pkgs/bazel-8.6.0-seccomp/seccomp-policy.jso
 pub const CAPABILITY_ABI: &str = "d2b-bazel-seccomp-abi-v1";
 pub const ACTION_NETWORK: &str = "none";
 pub const SANDBOX_STRATEGY: &str = "sandboxed";
+pub const SANDBOX_RUNNER: &str = "linux-sandbox";
 pub const RUSTSEC_DATABASE_INPUT: &str = "flake.nix:advisoryDbGit";
 pub const BAZEL_SOURCE_SHA256: &str =
     "5b6d9e0742331cd65edf1685f0064e9144c30a2737357932a5da920d8eb54aed";
 pub const BAZEL_ARCHIVE_SHA256: &str =
     "13a84586429b6084b13bd5040d78deda58d523012151e71e7d4be0c63dd831f9";
 pub const BAZEL_PATCH_SHA256: &str =
-    "efb0f2d806cc9f91ecdaab25be77586e744040bbf8263404302b5ecdd1a4906c";
+    "c6a81500fef9aa0744ab5c554e2add98b149268a8546aa583af11e3c070f31e9";
 pub const BAZEL_POLICY_SHA256: &str =
-    "971210290491c3d359ae2540827ab1f544e86ead84db31ab7400e8dbdef2b68d";
-pub const BAZEL_X86_NAR_SHA256: &str =
-    "197e2e792a7a3cf72bc9a5892b418d4abcce590dad969d23619f2bb492486be5";
-pub const BAZEL_X86_EXECUTABLE_SHA256: &str =
-    "7cbf33369f34c39ceaed716ab26f4c37d32df009f290243e301e0cf8b83eafa8";
-pub const BAZEL_ARM_NAR_SHA256: &str =
-    "618ea346831a892c9617a124722634098aea215b56d183ae1c47c54a7a1a3a91";
-pub const BAZEL_ARM_EXECUTABLE_SHA256: &str =
-    "a9f37bf61a755bcd833e9a95dbd4b60978b03156be71add606fabb5c91df90fb";
+    "fb657bb56bd5c14f4a6a8f83ac0d3f54067cddce1ecb384e49bff41d8d2d8edc";
 
 pub const GOVERNED_ACTION_KINDS: &[&str] = &[
     "stable:Rustc",
@@ -575,6 +574,39 @@ pub const INHERITED_DESCRIPTOR_PLANTS: &[&str] = &[
 pub struct NativeBazelOutput {
     pub nar_sha256: String,
     pub executable_sha256: String,
+}
+
+fn measured_native_outputs() -> BTreeMap<String, NativeBazelOutput> {
+    #[derive(Deserialize)]
+    struct MeasuredNativeOutput {
+        #[serde(rename = "narSha256")]
+        nar_sha256: String,
+        #[serde(rename = "executableSha256")]
+        executable_sha256: String,
+    }
+
+    #[derive(Deserialize)]
+    struct ToolchainRecord {
+        #[serde(rename = "nativeOutputs")]
+        native_outputs: BTreeMap<String, MeasuredNativeOutput>,
+    }
+
+    let record: ToolchainRecord =
+        serde_json::from_str(include_str!("../../../tests/golden/bazel-toolchain.json"))
+            .expect("pinned Bazel toolchain record must be valid JSON");
+    record
+        .native_outputs
+        .into_iter()
+        .map(|(system, output)| {
+            (
+                system,
+                NativeBazelOutput {
+                    nar_sha256: output.nar_sha256,
+                    executable_sha256: output.executable_sha256,
+                },
+            )
+        })
+        .collect()
 }
 
 pub const DENIED_SYSCALLS: &[&str] = &[
@@ -740,6 +772,12 @@ pub(crate) struct ActionNetworkObservation {
     pub aquery_actions: BTreeSet<String>,
     pub effective_strategies: BTreeMap<String, String>,
     pub fallback_strategies: BTreeSet<String>,
+    #[serde(skip)]
+    pub cquery_targets: BTreeSet<String>,
+    #[serde(skip)]
+    pub action_environment: BTreeSet<String>,
+    #[serde(skip)]
+    pub test_environment: BTreeSet<String>,
 }
 
 impl ActionNetworkObservation {
@@ -769,7 +807,9 @@ impl ActionNetworkObservation {
         let effective: serde_json::Value = serde_json::from_str(effective_strategies)
             .map_err(|_| ActionNetworkError::MalformedToolchainRecord)?;
 
-        let configured_targets = string_set(&configured, &["configuredTargets", "actionKinds"])?;
+        let configured_targets = string_set(&configured, &["actionKinds", "configuredTargets"])?;
+        let cquery_targets =
+            string_set_optional(&configured, &["cqueryTargets", "configuredTargetLabels"]);
         let coverage_targets = string_set(&configured, &["coverageTargets"])?;
         let aquery_actions = string_set(&aquery, &["actions", "aqueryActions", "actionKinds"])?;
         let mut effective_map = BTreeMap::new();
@@ -779,12 +819,19 @@ impl ActionNetworkObservation {
         }
         let fallback_strategies =
             string_set_optional(&effective, &["fallbackStrategies", "fallback_strategies"]);
+        let action_environment =
+            string_set_optional(&effective, &["actionEnvironment", "action_environment"]);
+        let test_environment =
+            string_set_optional(&effective, &["testEnvironment", "test_environment"]);
         Ok(Self {
             configured_targets,
             coverage_targets,
             aquery_actions,
             effective_strategies: effective_map,
             fallback_strategies,
+            cquery_targets,
+            action_environment,
+            test_environment,
         })
     }
 }
@@ -859,7 +906,7 @@ fn collect_strategy_observations(
             let action = ["action", "actionKind", "kind", "mnemonic"]
                 .iter()
                 .find_map(|key| fields.get(*key).and_then(serde_json::Value::as_str));
-            let strategy = ["effectiveStrategy", "strategy"]
+            let strategy = ["effectiveStrategy", "strategy", "runner"]
                 .iter()
                 .find_map(|key| fields.get(*key).and_then(serde_json::Value::as_str));
             if let (Some(action), Some(strategy)) = (action, strategy) {
@@ -874,28 +921,22 @@ fn collect_strategy_observations(
 }
 
 pub fn complete_action_network_inventory() -> ActionNetworkInventory {
-    let action_kinds = GOVERNED_ACTION_KINDS
-        .iter()
-        .map(|kind| (*kind).to_owned())
-        .collect::<BTreeSet<_>>();
-    complete_action_network_inventory_from_observation(&ActionNetworkObservation {
-        configured_targets: action_kinds.clone(),
-        coverage_targets: CONFIGURED_COVERAGE_TARGETS
-            .iter()
-            .map(|target| (*target).to_owned())
-            .collect(),
-        aquery_actions: action_kinds.clone(),
-        effective_strategies: action_kinds
-            .iter()
-            .map(|kind| (kind.clone(), SANDBOX_STRATEGY.to_owned()))
-            .collect(),
-        fallback_strategies: BTreeSet::new(),
-    })
+    let evidence = include_str!("../../../bazel/evidence/action-network-observation.json");
+    let observation = ActionNetworkObservation::from_json(evidence, evidence, evidence)
+        .expect("pinned Bazel observation must be valid JSON");
+    let inventory = complete_action_network_inventory_from_observation(&observation);
+    validate_observed_action_network(&inventory, &observation)
+        .expect("pinned Bazel observation must reconcile");
+    inventory
 }
 
 pub(crate) fn complete_action_network_inventory_from_observation(
     observation: &ActionNetworkObservation,
 ) -> ActionNetworkInventory {
+    let native_outputs = measured_native_outputs();
+    let x86 = native_outputs
+        .get("x86_64-linux")
+        .expect("pinned x86_64 Bazel output identity");
     let strategy_inventory = observation.effective_strategies.clone();
     ActionNetworkInventory {
         action_network: ACTION_NETWORK.to_owned(),
@@ -907,24 +948,9 @@ pub(crate) fn complete_action_network_inventory_from_observation(
         bazel_archive_sha256: BAZEL_ARCHIVE_SHA256.to_owned(),
         patch_sha256: BAZEL_PATCH_SHA256.to_owned(),
         policy_sha256: BAZEL_POLICY_SHA256.to_owned(),
-        output_nar_sha256: BAZEL_X86_NAR_SHA256.to_owned(),
-        executable_sha256: BAZEL_X86_EXECUTABLE_SHA256.to_owned(),
-        native_outputs: BTreeMap::from([
-            (
-                "x86_64-linux".to_owned(),
-                NativeBazelOutput {
-                    nar_sha256: BAZEL_X86_NAR_SHA256.to_owned(),
-                    executable_sha256: BAZEL_X86_EXECUTABLE_SHA256.to_owned(),
-                },
-            ),
-            (
-                "aarch64-linux".to_owned(),
-                NativeBazelOutput {
-                    nar_sha256: BAZEL_ARM_NAR_SHA256.to_owned(),
-                    executable_sha256: BAZEL_ARM_EXECUTABLE_SHA256.to_owned(),
-                },
-            ),
-        ]),
+        output_nar_sha256: x86.nar_sha256.clone(),
+        executable_sha256: x86.executable_sha256.clone(),
+        native_outputs,
         load_point: "after-sandbox-construction-before-action-command-exec".to_owned(),
         configured_targets: observation.configured_targets.iter().cloned().collect(),
         coverage_targets: observation.coverage_targets.iter().cloned().collect(),
@@ -988,6 +1014,12 @@ pub(crate) fn validate_observed_action_network(
             .cloned()
             .collect::<BTreeSet<_>>()
             != observation.fallback_strategies
+        || observation.cquery_targets.is_empty()
+        || !observation.test_environment.is_empty()
+        || observation
+            .action_environment
+            .iter()
+            .any(|name| !ACTION_ENV_ALLOWLIST.contains(&name.as_str()))
     {
         return Err(ActionNetworkError::MalformedToolchainRecord);
     }
@@ -1015,20 +1047,24 @@ pub fn validate_action_network_inventory(
         || inventory.bazel_archive_sha256 != BAZEL_ARCHIVE_SHA256
         || inventory.patch_sha256 != BAZEL_PATCH_SHA256
         || inventory.policy_sha256 != BAZEL_POLICY_SHA256
-        || inventory.output_nar_sha256 != BAZEL_X86_NAR_SHA256
-        || inventory.executable_sha256 != BAZEL_X86_EXECUTABLE_SHA256
+        || inventory.output_nar_sha256
+            != measured_native_outputs()
+                .get("x86_64-linux")
+                .expect("pinned x86_64 Bazel output identity")
+                .nar_sha256
+        || inventory.executable_sha256
+            != measured_native_outputs()
+                .get("x86_64-linux")
+                .expect("pinned x86_64 Bazel output identity")
+                .executable_sha256
     {
         return Err(ActionNetworkError::WrongSandboxProvider);
     }
+    let measured_outputs = measured_native_outputs();
     let native_x86 = inventory.native_outputs.get("x86_64-linux");
     let native_arm = inventory.native_outputs.get("aarch64-linux");
-    if native_x86.is_none_or(|output| {
-        output.nar_sha256 != BAZEL_X86_NAR_SHA256
-            || output.executable_sha256 != BAZEL_X86_EXECUTABLE_SHA256
-    }) || native_arm.is_none_or(|output| {
-        output.nar_sha256 != BAZEL_ARM_NAR_SHA256
-            || output.executable_sha256 != BAZEL_ARM_EXECUTABLE_SHA256
-    }) {
+    if inventory.native_outputs != measured_outputs || native_x86.is_none() || native_arm.is_none()
+    {
         return Err(ActionNetworkError::WrongSandboxProvider);
     }
     if inventory.load_point != "after-sandbox-construction-before-action-command-exec" {
@@ -1054,7 +1090,7 @@ pub fn validate_action_network_inventory(
             .strategy_inventory
             .get(*kind)
             .ok_or_else(|| ActionNetworkError::MissingActionKind((*kind).to_owned()))?;
-        if strategy != SANDBOX_STRATEGY {
+        if strategy != SANDBOX_STRATEGY && strategy != SANDBOX_RUNNER {
             return Err(ActionNetworkError::WrongStrategy {
                 action: (*kind).to_owned(),
                 strategy: strategy.clone(),
@@ -1064,7 +1100,13 @@ pub fn validate_action_network_inventory(
     for strategy in inventory.strategy_inventory.values() {
         if matches!(
             strategy.as_str(),
-            "process" | "local" | "standalone" | "worker" | "remote" | "no-sandbox"
+            "process"
+                | "local"
+                | "standalone"
+                | "worker"
+                | "remote"
+                | "no-sandbox"
+                | "processwrapper-sandbox"
         ) {
             return Err(ActionNetworkError::ForbiddenStrategy(strategy.clone()));
         }
@@ -1172,6 +1214,11 @@ pub fn validate_pinned_toolchain_record(record: &str) -> Result<(), ActionNetwor
             .and_then(serde_json::Value::as_str)
             != Some(SANDBOX_STRATEGY)
         || value
+            .get("actionNetwork")
+            .and_then(|action| action.get("effectiveRunner"))
+            .and_then(serde_json::Value::as_str)
+            != Some(SANDBOX_RUNNER)
+        || value
             .get("policy")
             .and_then(|policy| policy.get("noNetwork"))
             .and_then(serde_json::Value::as_bool)
@@ -1183,6 +1230,25 @@ pub fn validate_pinned_toolchain_record(record: &str) -> Result<(), ActionNetwor
             != Some(true)
     {
         return Err(ActionNetworkError::MalformedToolchainRecord);
+    }
+    let measured_outputs = measured_native_outputs();
+    let record_outputs = value
+        .get("nativeOutputs")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(ActionNetworkError::MalformedToolchainRecord)?;
+    for (system, measured) in measured_outputs {
+        let output = record_outputs
+            .get(&system)
+            .ok_or(ActionNetworkError::MalformedToolchainRecord)?;
+        if output.get("narSha256").and_then(serde_json::Value::as_str)
+            != Some(measured.nar_sha256.as_str())
+            || output
+                .get("executableSha256")
+                .and_then(serde_json::Value::as_str)
+                != Some(measured.executable_sha256.as_str())
+        {
+            return Err(ActionNetworkError::WrongSandboxProvider);
+        }
     }
     Ok(())
 }
@@ -1238,7 +1304,7 @@ mod tests {
     fn input(hubs: Vec<HubInput>) -> InventoryInput {
         InventoryInput {
             hubs,
-            observed_action_environment: BTreeSet::from(["PATH".to_owned(), "TMPDIR".to_owned()]),
+            observed_action_environment: BTreeSet::from(["PATH".to_owned()]),
         }
     }
 
@@ -1421,7 +1487,13 @@ mod tests {
         assert_eq!(json["schema_version"], 1);
         assert_eq!(
             json["action_env_allowlist"],
-            serde_json::json!(["PATH", "TMPDIR"])
+            serde_json::json!([
+                "BASH_ENV",
+                "PATH",
+                "TMPDIR",
+                "__ETC_PROFILE_DONE",
+                "__ETC_PROFILE_SOURCED"
+            ])
         );
     }
 

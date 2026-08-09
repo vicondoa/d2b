@@ -6,4 +6,15 @@ exports_files([
     "packages/Cargo.lock",
     "tests/tools/no-bash-ast-walker/Cargo.toml",
     "tests/tools/no-bash-ast-walker/Cargo.lock",
+    "tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c",
 ])
+
+alias(
+    name = "d2b-bazel-policy-probe",
+    actual = "//bazel:policy-probe",
+)
+
+alias(
+    name = "d2b-bazel-action-probes",
+    actual = "//bazel/evidence:action-probes",
+)

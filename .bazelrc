@@ -1,7 +1,13 @@
 # Module resolution is part of the committed build input.
 common --lockfile_mode=error
 common --check_direct_dependencies=error
+common --incompatible_strict_action_env
 common --spawn_strategy=sandboxed
+common --strategy=Genrule=sandboxed
+common --strategy=CppCompile=sandboxed
+common --strategy=CppLink=sandboxed
+common --strategy=FileWrite=sandboxed
+common --strategy=SymlinkTree=sandboxed
 common --strategy=Rustc=sandboxed
 common --strategy=RustcMetadata=sandboxed
 common --strategy=Clippy=sandboxed

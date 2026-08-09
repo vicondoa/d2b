@@ -7,6 +7,7 @@ one network setting, and no ordered fallback list.
 
 D2B_ACTION_NETWORK = "none"
 D2B_SANDBOX_STRATEGY = "sandboxed"
+D2B_SANDBOX_RUNNER = "linux-sandbox"
 D2B_FORBIDDEN_STRATEGIES = [
     "process",
     "processwrapper",
@@ -23,6 +24,7 @@ D2B_STRATEGY_OVERRIDE_KEYS = [
     "genrule_strategy",
     "worker_strategy",
 ]
+D2B_EXECUTION_STRATEGY_PROPERTY = "d2b.execution_strategy"
 
 def d2b_sandbox_tags():
     """Return the closed tags attached to a governed action."""
@@ -32,7 +34,7 @@ def d2b_sandbox_tags():
 def d2b_validate_strategy(strategy):
     """Fail closed if a caller attempts a non-patched execution strategy."""
 
-    if strategy != D2B_SANDBOX_STRATEGY:
+    if strategy not in [D2B_SANDBOX_STRATEGY, D2B_SANDBOX_RUNNER]:
         fail("governed Bazel actions require the patched Linux sandbox")
     if strategy in D2B_FORBIDDEN_STRATEGIES:
         fail("governed Bazel actions do not permit strategy fallbacks")
@@ -58,11 +60,13 @@ def d2b_sandboxed_kwargs(kwargs = {}):
     properties = dict(result.get("exec_properties", {}))
     if properties.get("network") not in [None, D2B_ACTION_NETWORK]:
         fail("governed Bazel actions cannot enable network access")
-    if properties.get("d2b.execution_strategy") not in [None, D2B_SANDBOX_STRATEGY]:
+    if D2B_EXECUTION_STRATEGY_PROPERTY in properties:
         fail("governed Bazel actions cannot override the patched strategy")
     properties["network"] = D2B_ACTION_NETWORK
-    properties["d2b.execution_strategy"] = D2B_SANDBOX_STRATEGY
     result["exec_properties"] = properties
+    result["tags"] = sorted(
+        set(result["tags"] + ["d2b-execution-strategy-sandboxed"])
+    )
     return result
 
 def d2b_sandboxed_action(rule, name, **kwargs):

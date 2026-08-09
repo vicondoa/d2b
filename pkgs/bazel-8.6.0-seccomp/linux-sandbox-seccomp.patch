@@ -33,13 +33,9 @@ index 1a4bc4d..d2b9a01 100644
 +#include <stdint.h>
 +#include <time.h>
  #include <unistd.h>
-@@ -68,8 +69,354 @@
- #include "src/main/tools/logging.h"
- #include "src/main/tools/process-tools.h"
+@@ -72,4 +81,399 @@
+-static int global_child_pid;
 -
-+
--
-+
 +/*
 + * D2B action policy
 + *
@@ -66,6 +62,10 @@ index 1a4bc4d..d2b9a01 100644
 +static const char kD2BPolicyAbiSha256[] =
 +    "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f";
 +static const char kD2BPreflightFailure[] = "D2B-BZLNET-PREFLIGHT";
++static const char kD2BInheritedSocketFailure[] =
++    "D2B-BZLNET-INHERITED-SOCKET";
++static const char kD2BInheritedRingFailure[] =
++    "D2B-BZLNET-INHERITED-RING";
 +static const char kD2BFilterFailure[] = "D2B-BZLNET-FILTER-LOAD";
 +static const char kD2BSandboxPolicyFailure[] =
 +    "D2B-BZLEXEC-SANDBOX-PTRACE-POLICY";
@@ -87,37 +87,48 @@ index 1a4bc4d..d2b9a01 100644
 +  _exit(EXIT_FAILURE);
 +}
 +
-+static bool D2BHasSocketOrRing(int fd) {
++enum class D2BDescriptorPreflightResult {
++  kOk,
++  kCensusFailure,
++  kInheritedSocket,
++  kInheritedRing,
++};
++
++static D2BDescriptorPreflightResult D2BClassifyDescriptor(int fd) {
 +  struct stat statbuf;
 +  if (fstat(fd, &statbuf) < 0) {
-+    return true;
++    return D2BDescriptorPreflightResult::kCensusFailure;
 +  }
 +  if (S_ISSOCK(statbuf.st_mode)) {
-+    return true;
++    return D2BDescriptorPreflightResult::kInheritedSocket;
 +  }
 +  char link[128];
 +  const ssize_t length =
 +      readlink(("/proc/self/fd/" + std::to_string(fd)).c_str(), link,
 +               sizeof(link) - 1);
 +  if (length <= 0) {
-+    return true;
++    return D2BDescriptorPreflightResult::kCensusFailure;
 +  }
 +  link[length] = '\0';
-+  return strstr(link, "anon_inode:[io_uring]") != nullptr;
++  if (strstr(link, "anon_inode:[io_uring]") != nullptr) {
++    return D2BDescriptorPreflightResult::kInheritedRing;
++  }
++  return D2BDescriptorPreflightResult::kOk;
 +}
 +
-+static bool D2BInheritedDescriptorPreflight() {
++static D2BDescriptorPreflightResult D2BInheritedDescriptorPreflight() {
 +  DIR *fds = opendir("/proc/self/fd");
 +  if (fds == nullptr) {
-+    return false;
++    return D2BDescriptorPreflightResult::kCensusFailure;
 +  }
-+  bool valid = true;
++  D2BDescriptorPreflightResult result =
++      D2BDescriptorPreflightResult::kOk;
 +  while (true) {
 +    errno = 0;
 +    struct dirent *entry = readdir(fds);
 +    if (entry == nullptr) {
 +      if (errno != 0) {
-+        valid = false;
++        result = D2BDescriptorPreflightResult::kCensusFailure;
 +      }
 +      break;
 +    }
@@ -127,13 +138,35 @@ index 1a4bc4d..d2b9a01 100644
 +        fd == dirfd(fds)) {
 +      continue;
 +    }
-+    if (D2BHasSocketOrRing(static_cast<int>(fd))) {
-+      valid = false;
++    result = D2BClassifyDescriptor(static_cast<int>(fd));
++    if (result != D2BDescriptorPreflightResult::kOk) {
 +      break;
 +    }
 +  }
 +  closedir(fds);
-+  return valid;
++  return result;
++}
++
++static void D2BFailInheritedDescriptorPreflight(
++    D2BDescriptorPreflightResult result) {
++  switch (result) {
++    case D2BDescriptorPreflightResult::kCensusFailure:
++      D2BPrintSandboxDiagnostic(kD2BPreflightFailure);
++      return;
++    case D2BDescriptorPreflightResult::kInheritedSocket:
++      D2BPrintSandboxDiagnostic(kD2BInheritedSocketFailure);
++      fprintf(stderr,
++              "correction=Close inherited socket descriptors before invoking the pinned Bazel sandbox.\n");
++      return;
++    case D2BDescriptorPreflightResult::kInheritedRing:
++      D2BPrintSandboxDiagnostic(kD2BInheritedRingFailure);
++      fprintf(stderr,
++              "correction=Close inherited io_uring descriptors and registered files before invoking the pinned Bazel sandbox.\n");
++      return;
++    case D2BDescriptorPreflightResult::kOk:
++      return;
++  }
++  D2BPrintSandboxDiagnostic(kD2BPreflightFailure);
 +}
 +
 +static std::string D2BPolicyPath() {
@@ -228,6 +261,15 @@ index 1a4bc4d..d2b9a01 100644
 +                            offsetof(struct seccomp_data, nr)));
 +  filter.push_back(BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K,
 +                            __X32_SYSCALL_BIT, 0, 1));
++  filter.push_back(
++      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EACCES));
++#endif
++
++#ifdef __NR_connect
++  filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
++                            offsetof(struct seccomp_data, nr)));
++  filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
++                            __NR_connect, 0, 1));
 +  filter.push_back(
 +      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EACCES));
 +#endif
@@ -375,8 +417,11 @@ index 1a4bc4d..d2b9a01 100644
 +}
 +
 +static void D2BPrepareActionPolicy() {
-+  if (!D2BInheritedDescriptorPreflight()) {
-+    D2BFail(kD2BPreflightFailure);
++  const D2BDescriptorPreflightResult preflight =
++      D2BInheritedDescriptorPreflight();
++  if (preflight != D2BDescriptorPreflightResult::kOk) {
++    D2BFailInheritedDescriptorPreflight(preflight);
++    _exit(EXIT_FAILURE);
 +  }
 +  if (!D2BPolicyIdentityMatches()) {
 +    D2BFail(kD2BSandboxPolicyFailure);
@@ -386,12 +431,55 @@ index 1a4bc4d..d2b9a01 100644
 +  }
 +}
 +
- static int global_child_pid;
--
++static int global_child_pid;
 +
  // Helper methods
  static void CreateFile(const char *path) {
-@@ -549,1 +882,36 @@ static int WaitForChild() {
+@@ -534,4 +929,43 @@
+     // permissions predictable.
+     umask(022);
++    const std::string d2b_path =
++        getenv("PATH") == nullptr ? "" : getenv("PATH");
++    const std::string d2b_tmpdir =
++        getenv("TMPDIR") == nullptr ? "" : getenv("TMPDIR");
++    const std::string d2b_pwd =
++        getenv("PWD") == nullptr ? "" : getenv("PWD");
++    const std::string d2b_zero_ar_date =
++        getenv("ZERO_AR_DATE") == nullptr ? "" : getenv("ZERO_AR_DATE");
++    if (clearenv() != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (!d2b_path.empty() &&
++        setenv("PATH", d2b_path.c_str(), 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (!d2b_tmpdir.empty() &&
++        setenv("TMPDIR", d2b_tmpdir.c_str(), 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (!d2b_pwd.empty() &&
++        setenv("PWD", d2b_pwd.c_str(), 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (!d2b_zero_ar_date.empty() &&
++        setenv("ZERO_AR_DATE", d2b_zero_ar_date.c_str(), 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (setenv("BASH_ENV", "/dev/null", 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (setenv("__ETC_PROFILE_SOURCED", "1", 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    if (setenv("__ETC_PROFILE_DONE", "1", 1) != 0) {
++      _exit(EXIT_FAILURE);
++    }
++    unsetenv("D2B_BAZEL_SECCOMP_POLICY");
++    unsetenv("D2B_BAZEL_STRATEGY_LOCK");
++
+     // argv[] passed to execve() must be a null-terminated array.
+     opt.args.push_back(nullptr);
+@@ -549,1 +1008,36 @@ static int WaitForChild() {
 +static bool D2BKillAndReapRemaining() {
 +  bool cleanup_ok = true;
 +  if (kill(-1, SIGKILL) != 0 && errno != ESRCH) {
@@ -428,22 +516,22 @@ index 1a4bc4d..d2b9a01 100644
 +}
 +
  static int WaitForChild() {
-@@ -575,1 +948,3 @@
+@@ -575,1 +1069,3 @@
 -      return 128 + signal;
 +      D2BNotifyOuterMonitor();
 +      const bool cleanup_ok = D2BKillAndReapRemaining();
 +      return cleanup_ok ? 128 + signal : 128 + signal;
-@@ -581,1 +954,4 @@
+@@ -581,1 +1077,4 @@
 -    return exit_code;
 +    D2BNotifyOuterMonitor();
 +    const bool cleanup_ok = D2BKillAndReapRemaining();
 +    return exit_code != EXIT_SUCCESS ? exit_code
 +                                     : (cleanup_ok ? EXIT_SUCCESS : EXIT_FAILURE);
-@@ -742,0 +1117,3 @@
+@@ -742,0 +1241,3 @@
 +  // The fixed policy is loaded after namespace construction and before the
 +  // action command. There is no policy-open, digest, load, or exec fallback.
 +  D2BPrepareActionPolicy();
-@@ -755,3 +1133,2 @@
+@@ -755,3 +1264,2 @@
 -  // Note that there's no need to kill any remaining descendant processes; they
 -  // are in our PID namespace and the kernel will send them SIGKILL
 -  // automatically once we exit.
@@ -458,11 +546,40 @@ index 2c92d4e..b8f1b73 100644
 +#include <stdint.h>
 +#include <time.h>
  #include <unistd.h>
-@@ -136,1 +137,3 @@ static void OnTimeoutOrTerm(int) {
+@@ -88,0 +90,21 @@
++static bool D2BInheritedNetworkCapability(int fd) {
++  struct stat statbuf;
++  if (fstat(fd, &statbuf) < 0) {
++    return true;
++  }
++  if (S_ISSOCK(statbuf.st_mode)) {
++    return true;
++  }
++  char link[128];
++  char path[64];
++  const int path_length = snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
++  if (path_length <= 0 || (size_t)path_length >= sizeof(path)) {
++    return true;
++  }
++  const ssize_t length = readlink(path, link, sizeof(link) - 1);
++  if (length <= 0) {
++    return true;
++  }
++  link[length] = '\0';
++  return strstr(link, "anon_inode:[io_uring]") != nullptr;
++}
+@@ -113,4 +136,5 @@
+       if (errno == 0 && fd > STDERR_FILENO &&
+           (global_debug == NULL || fd != fileno(global_debug)) &&
+-          fd != dirfd(fds)) {
++          fd != dirfd(fds) &&
++          !D2BInheritedNetworkCapability(fd)) {
+         if (close(fd) < 0) {
+@@ -136,1 +160,3 @@ static void OnTimeoutOrTerm(int) {
 +static volatile sig_atomic_t d2b_abnormal_teardown_started = 0;
  static void OnTimeoutOrTerm(int) {
 +  d2b_abnormal_teardown_started = 1;
-@@ -214,13 +215,52 @@ static pid_t SpawnPid1() {
+@@ -214,13 +240,52 @@ static pid_t SpawnPid1() {
    return child_pid;
  }
 -
@@ -517,16 +634,16 @@ index 2c92d4e..b8f1b73 100644
      if (ret > 0) {
        break;
      }
-@@ -229,3 +255,4 @@
+@@ -229,3 +294,4 @@
      if (getppid() != initial_ppid) {
 -      break;
 +      D2BPrintSandboxDiagnostic(kD2BSandboxMonitorFailure);
 +      return EXIT_FAILURE;
      }
-@@ -233,1 +259,1 @@
+@@ -233,1 +298,1 @@
 -    if (errno == EINTR) {
 +    if (ret < 0 && errno == EINTR) {
-@@ -236,0 +262,29 @@
+@@ -236,0 +301,29 @@
 +    if (ret == 0) {
 +      if (ceiling < 0 && d2b_abnormal_teardown_started) {
 +        const int64_t now = D2BMonotonicMilliseconds();
@@ -556,11 +673,11 @@ index 2c92d4e..b8f1b73 100644
 +      usleep(1000);
 +      continue;
 +    }
-@@ -237,1 +290,2 @@
+@@ -237,1 +331,2 @@
 -    DIE("wait4");
 +    D2BPrintSandboxDiagnostic(kD2BSandboxMonitorFailure);
 +    return EXIT_FAILURE;
-@@ -240,0 +294,8 @@
+@@ -240,0 +335,8 @@
 +  if (quarantined) {
 +    fprintf(stderr, "%s\n", kD2BConsumingReapRelease);
 +    fprintf(stderr, "cleanup=complete-after-quarantine\n");
@@ -569,10 +686,52 @@ index 2c92d4e..b8f1b73 100644
 +    fprintf(stderr, "result=failed\n");
 +    return EXIT_FAILURE;
 +  }
-@@ -305,5 +306,6 @@ int main(int argc, char *argv[]) {
+@@ -305,5 +408,6 @@ int main(int argc, char *argv[]) {
    // Spawn the child that will fork the sandboxed program with fresh
    // namespaces etc.
 +  InstallSignalHandler(SIGUSR1, D2BMarkAbnormalTeardown);
    const pid_t child_pid = SpawnPid1();
    // Let the signal handlers installed below know the PID of the child.
    global_child_pid.store(child_pid, std::memory_order_relaxed);
+diff --git a/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxedSpawnRunner.java b/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxedSpawnRunner.java
+index 1234567..89abcde 100644
+--- a/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxedSpawnRunner.java
++++ b/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxedSpawnRunner.java
+@@ -107,5 +107,9 @@ public final class LinuxSandboxedSpawnRunner extends AbstractContainerizingSandboxedSpawnRunner {
+               .setTimeout(options.getLocalSigkillGraceSeconds())
+               .buildForCommand(ImmutableList.of("/bin/true"));
+-    ImmutableMap<String, String> env = ImmutableMap.of();
++    String policyPath = cmdEnv.getClientEnv().get("D2B_BAZEL_SECCOMP_POLICY");
++    ImmutableMap<String, String> env =
++        policyPath == null
++            ? ImmutableMap.of()
++            : ImmutableMap.of("D2B_BAZEL_SECCOMP_POLICY", policyPath);
+      Path execRoot = cmdEnv.getExecRoot();
+      File cwd = execRoot.getPathFile();
+@@ -276,3 +280,10 @@
+      ImmutableMap<String, String> environment =
+          localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), binTools, "/tmp");
++    ImmutableMap.Builder<String, String> environmentBuilder = ImmutableMap.builder();
++    environmentBuilder.putAll(environment);
++    String policyPath = System.getenv("D2B_BAZEL_SECCOMP_POLICY");
++    if (policyPath != null) {
++      environmentBuilder.put("D2B_BAZEL_SECCOMP_POLICY", policyPath);
++    }
++    environment = environmentBuilder.build();
+      ImmutableSet<Path> writableDirs = getWritableDirs(sandboxExecRoot, environment);
+diff --git a/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUtil.java b/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUtil.java
+index 1234567..89abcde 100644
+--- a/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUtil.java
++++ b/src/main/java/com/google/devtools/build/lib/sandbox/LinuxSandboxUtil.java
+@@ -37,4 +37,12 @@ public final class LinuxSandboxUtil {
+-    return blazeWorkspace.getBinTools().getEmbeddedPath(LINUX_SANDBOX);
++    Path embedded = blazeWorkspace.getBinTools().getEmbeddedPath(LINUX_SANDBOX);
++    String patched = System.getenv("D2B_BAZEL_LINUX_SANDBOX");
++    if (patched != null && !patched.isEmpty() && embedded != null) {
++      Path candidate = embedded.getFileSystem().getPath(patched);
++      if (candidate.isFile()) {
++        return candidate;
++      }
++    }
++    return embedded;
+   }

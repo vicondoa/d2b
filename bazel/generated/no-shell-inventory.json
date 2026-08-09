@@ -3818,7 +3818,7 @@
       "source": "packages/d2b-bazel-exec/src/execute.rs",
       "spawnSiteCount": 1,
       "spawnSiteKeys": [
-        "packages/d2b-bazel-exec/src/execute.rs:430:31:helper"
+        "packages/d2b-bazel-exec/src/execute.rs:570:31:helper"
       ],
       "status": "scanned"
     },
@@ -7701,9 +7701,9 @@
       "source": "packages/xtask/src/main.rs",
       "spawnSiteCount": 4,
       "spawnSiteKeys": [
-        "packages/xtask/src/main.rs:1076:27:executable",
-        "packages/xtask/src/main.rs:2405:27:\"false\"",
-        "packages/xtask/src/main.rs:2414:16:\"true\"",
+        "packages/xtask/src/main.rs:1085:27:executable",
+        "packages/xtask/src/main.rs:2414:27:\"false\"",
+        "packages/xtask/src/main.rs:2423:16:\"true\"",
         "packages/xtask/src/main.rs:711:27:&self.executable"
       ],
       "status": "scanned"
@@ -7767,9 +7767,9 @@
       "source": "packages/d2b-bazel-exec/src/execute.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 430,
+        "endLine": 570,
         "startColumn": 31,
-        "startLine": 430
+        "startLine": 570
       }
     },
     {
@@ -8977,9 +8977,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 51,
-        "endLine": 1076,
+        "endLine": 1085,
         "startColumn": 27,
-        "startLine": 1076
+        "startLine": 1085
       }
     },
     {
@@ -8988,9 +8988,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 48,
-        "endLine": 2405,
+        "endLine": 2414,
         "startColumn": 27,
-        "startLine": 2405
+        "startLine": 2414
       }
     },
     {
@@ -8999,9 +8999,9 @@
       "source": "packages/xtask/src/main.rs",
       "span": {
         "endColumn": 36,
-        "endLine": 2414,
+        "endLine": 2423,
         "startColumn": 16,
-        "startLine": 2414
+        "startLine": 2423
       }
     },
     {

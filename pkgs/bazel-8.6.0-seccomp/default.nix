@@ -26,17 +26,29 @@ pkgs.bazel_8.overrideAttrs (old: {
       --set D2B_BAZEL_SECCOMP_POLICY \
       "$out/share/d2b/bazel/seccomp-policy.json" \
       --set D2B_BAZEL_STRATEGY_LOCK d2b-bazel-sandbox-v1 \
+      --unset BAZELRC \
+      --unset BAZELISK_HOME \
+      --unset BAZELISK_USER_AGENT \
+      --unset D2B_BAZEL_LINUX_SANDBOX \
       --run '
+        d2b_workspace_rc="$(pwd -P 2>/dev/null)/.bazelrc"
+        if [ ! -f "$d2b_workspace_rc" ]; then
+          printf "%s\n" D2B-BZLNET-RC
+          printf "%s\n" "correction=Run the pinned Bazel from a repository with its governed .bazelrc."
+          printf "%s\n" "retry=make test-flake"
+          exit 64
+        fi
         for d2b_arg in "$@"; do
           case "$d2b_arg" in
-            --spawn_strategy=*|--spawn_strategy|--strategy=*|--strategy|--strategy_regexp=*|--strategy_regexp|--test_strategy=*|--test_strategy|--genrule_strategy=*|--genrule_strategy|--worker_strategy=*|--worker_strategy|--remote_executor=*|--remote_executor|--bazelrc=*|--bazelrc|--ignore_all_rc_files|--nohome_rc|--nosystem_rc|--noworkspace_rc)
+            --spawn_strategy=*|--spawn_strategy|--strategy=*|--strategy|--strategy_regexp=*|--strategy_regexp|--test_strategy=*|--test_strategy|--genrule_strategy=*|--genrule_strategy|--worker_strategy=*|--worker_strategy|--remote_executor=*|--remote_executor|--remote_cache=*|--remote_cache|--experimental_spawn_scheduler|--experimental_remote_downloader=*|--experimental_remote_downloader|--bazelrc=*|--bazelrc|--system_rc|--home_rc|--workspace_rc|--noworkspace_rc|--ignore_all_rc_files|--config=*|--config|--action_env=*|--action_env|--host_action_env=*|--host_action_env|--test_env=*|--test_env|--client_env=*)
               printf "%s\n" D2B-BZLNET-STRATEGY
-              printf "%s\n" "correction=Use the repository .bazelrc and the pinned sandboxed strategy without overrides."
+              printf "%s\n" "correction=Use the repository .bazelrc and the pinned sandboxed strategy without rc, config, environment, or strategy overrides."
               printf "%s\n" "retry=make test-flake"
               exit 64
               ;;
           esac
         done
+        set -- --nosystem_rc --nohome_rc --noworkspace_rc "--bazelrc=$d2b_workspace_rc" "$@"
       '
   '';
   passthru = (old.passthru or { }) // {
@@ -55,6 +67,9 @@ pkgs.bazel_8.overrideAttrs (old: {
       strategy = "sandboxed";
       strategyLock = "d2b-bazel-sandbox-v1";
       strategyOverrides = false;
+      rcPolicy = "workspace-only";
+      actionEnvPolicy = "strict-pinned";
+      testEnvPolicy = "strict-empty";
       retryCommand = "make test-flake";
       x86X32SyscallBit = {
         rejectedBeforeDispatch = true;

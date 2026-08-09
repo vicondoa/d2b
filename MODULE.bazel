@@ -5,11 +5,13 @@ module(
 
 bazel_dep(name = "rules_rust", version = "0.73.0")
 
-# rules_rust 0.73.0 ships an empty cargo-bazel URL table.  Replace its
-# non-reproducible source-bootstrap repository with this checksum-pinned
-# release binary before the crate-universe extension is evaluated.
-CARGO_BAZEL_URL = "https://github.com/bazelbuild/rules_rust/releases/download/0.73.0/cargo-bazel-x86_64-unknown-linux-gnu"
-CARGO_BAZEL_SHA256 = "dcf36eda09624c7cdd700103959a44a10b49a90d2efe1dd41c226a8cf4706846"
+# rules_rust 0.73.0 ships an empty cargo-bazel URL table. Replace its
+# non-reproducible source-bootstrap repository with a checksum-pinned native
+# release binary selected by the host architecture.
+CARGO_BAZEL_X86_64_URL = "https://github.com/bazelbuild/rules_rust/releases/download/0.73.0/cargo-bazel-x86_64-unknown-linux-gnu"
+CARGO_BAZEL_X86_64_SHA256 = "dcf36eda09624c7cdd700103959a44a10b49a90d2efe1dd41c226a8cf4706846"
+CARGO_BAZEL_AARCH64_URL = "https://github.com/bazelbuild/rules_rust/releases/download/0.73.0/cargo-bazel-aarch64-unknown-linux-gnu"
+CARGO_BAZEL_AARCH64_SHA256 = "736b045185326560c677256435685cef9fd734ce4d5e7d41ac7f0e27dd9c2a69"
 
 cargo_bazel_repository = use_repo_rule(
     "//bazel/cargo:cargo_bazel.bzl",
@@ -17,8 +19,10 @@ cargo_bazel_repository = use_repo_rule(
 )
 cargo_bazel_repository(
     name = "cargo_bazel_pinned",
-    url = CARGO_BAZEL_URL,
-    sha256 = CARGO_BAZEL_SHA256,
+    aarch64_sha256 = CARGO_BAZEL_AARCH64_SHA256,
+    aarch64_url = CARGO_BAZEL_AARCH64_URL,
+    x86_64_sha256 = CARGO_BAZEL_X86_64_SHA256,
+    x86_64_url = CARGO_BAZEL_X86_64_URL,
 )
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")

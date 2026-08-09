@@ -39,7 +39,12 @@
       "registered-files",
       "fixed-sockets"
     ],
-    "failureCode": "D2B-BZLNET-PREFLIGHT"
+    "failureCode": "D2B-BZLNET-PREFLIGHT",
+    "failureCodes": {
+      "descriptorCensus": "D2B-BZLNET-PREFLIGHT",
+      "inheritedSocket": "D2B-BZLNET-INHERITED-SOCKET",
+      "inheritedRing": "D2B-BZLNET-INHERITED-RING"
+    }
   },
   "deniedSyscalls": [
     "socket",

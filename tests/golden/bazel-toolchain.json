@@ -14,12 +14,12 @@
   },
   "patch": {
     "path": "pkgs/bazel-8.6.0-seccomp/linux-sandbox-seccomp.patch",
-    "sha256": "efb0f2d806cc9f91ecdaab25be77586e744040bbf8263404302b5ecdd1a4906c",
+    "sha256": "c6a81500fef9aa0744ab5c554e2add98b149268a8546aa583af11e3c070f31e9",
     "loadPoint": "after-sandbox-construction-before-action-command-exec"
   },
   "policy": {
     "path": "pkgs/bazel-8.6.0-seccomp/seccomp-policy.json",
-    "sha256": "971210290491c3d359ae2540827ab1f544e86ead84db31ab7400e8dbdef2b68d",
+    "sha256": "fb657bb56bd5c14f4a6a8f83ac0d3f54067cddce1ecb384e49bff41d8d2d8edc",
     "abiSha256": "b0ab93e7faa7393d4af87552ae33d0030d88f3d52d0ff4742f578bfb58c9e21f",
     "capabilityAbi": "d2b-bazel-seccomp-abi-v1",
     "denialErrno": "EACCES",
@@ -61,6 +61,7 @@
   },
   "actionNetwork": {
     "strategy": "sandboxed",
+    "effectiveRunner": "linux-sandbox",
     "deniedSyscalls": [
       "socket",
       "socketpair",
@@ -93,6 +94,11 @@
       "io_uring-registered-files",
       "io_uring-fixed-sockets"
     ],
+    "inheritedDescriptorFailureCodes": {
+      "descriptorCensus": "D2B-BZLNET-PREFLIGHT",
+      "inheritedSocket": "D2B-BZLNET-INHERITED-SOCKET",
+      "inheritedRing": "D2B-BZLNET-INHERITED-RING"
+    },
     "forbiddenStrategies": [
       "process",
       "local",

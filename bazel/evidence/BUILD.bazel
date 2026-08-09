@@ -1,0 +1,95 @@
+package(default_visibility = ["//visibility:public"])
+
+load(
+    ":action_probe.bzl",
+    "d2b_action_probe",
+    "d2b_environment_probe",
+)
+
+exports_files([
+    "action-network-observation.json",
+])
+
+_ACTION_PROBES = [
+    ("stable-cargo-build-script", "StableCargoBuildScript"),
+    ("stable-clippy", "StableClippy"),
+    ("stable-rustc", "StableRustc"),
+    ("stable-rustc-metadata", "StableRustcMetadata"),
+    ("stable-repository", "StableRepository"),
+    ("stable-rustdoc", "StableRustdoc"),
+    ("stable-rustdoc-test-compile", "StableRustdocTestCompile"),
+    ("stable-rustdoc-test-run", "StableRustdocTestRun"),
+    ("stable-rustfmt", "StableRustfmt"),
+    ("stable-setup", "StableSetup"),
+    ("stable-test", "StableTest"),
+    ("stable-unpretty", "StableUnpretty"),
+    ("nightly-cargo-build-script", "NightlyCargoBuildScript"),
+    ("nightly-clippy", "NightlyClippy"),
+    ("nightly-rustc", "NightlyRustc"),
+    ("nightly-rustc-metadata", "NightlyRustcMetadata"),
+    ("nightly-repository", "NightlyRepository"),
+    ("nightly-rustdoc", "NightlyRustdoc"),
+    ("nightly-rustdoc-test-compile", "NightlyRustdocTestCompile"),
+    ("nightly-rustdoc-test-run", "NightlyRustdocTestRun"),
+    ("nightly-rustfmt", "NightlyRustfmt"),
+    ("nightly-setup", "NightlySetup"),
+    ("nightly-test", "NightlyTest"),
+    ("nightly-unpretty", "NightlyUnpretty"),
+]
+
+[
+    d2b_action_probe(
+        name = name,
+        mnemonic = mnemonic,
+    )
+    for name, mnemonic in _ACTION_PROBES
+]
+
+filegroup(
+    name = "action-probes",
+    srcs = [":" + name for name, _ in _ACTION_PROBES],
+)
+
+cc_binary(
+    name = "inherited-fd-launcher",
+    srcs = ["inherited_fd_launcher.c"],
+)
+
+cc_binary(
+    name = "network-plant",
+    srcs = ["network_plant.c"],
+)
+
+cc_binary(
+    name = "environment-probe",
+    srcs = ["environment_probe.c"],
+)
+
+cc_binary(
+    name = "sandbox-crash-plant",
+    srcs = ["//:tests/tools/d2b-bazel-exec-supervisor/sandbox-crash-plant.c"],
+)
+
+genrule(
+    name = "network-plant-action",
+    outs = ["network-plant-action.txt"],
+    tools = [":network-plant"],
+    cmd = "$(location :network-plant) > $@",
+)
+
+genrule(
+    name = "crash-plant-action",
+    outs = ["crash-plant-action.txt"],
+    tools = [":sandbox-crash-plant"],
+    cmd = "$(location :sandbox-crash-plant) --stage $(D2B_STAGE) --liveness-path $(D2B_LIVENESS_PATH) --barrier-path $(D2B_BARRIER_PATH) > $@",
+)
+
+genrule(
+    name = "environment-action",
+    outs = ["environment-action.txt"],
+    cmd = "env > $@",
+)
+
+d2b_environment_probe(
+    name = "environment-probe-action",
+)

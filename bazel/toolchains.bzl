@@ -16,6 +16,16 @@ D2B_CONFIGURED_BAZEL = struct(
     action_network = "none",
 )
 
+def d2b_toolchain_metadata_tags():
+    """Expose the pinned toolchain identity to reachable graph nodes."""
+
+    return [
+        "d2b-bazel-version-{}".format(D2B_CONFIGURED_BAZEL.version),
+        "d2b-bazel-capability-{}".format(D2B_CONFIGURED_BAZEL.capability_abi),
+        "d2b-bazel-strategy-{}".format(D2B_CONFIGURED_BAZEL.strategy),
+        "d2b-bazel-network-{}".format(D2B_CONFIGURED_BAZEL.action_network),
+    ]
+
 def d2b_register_rust_toolchains(rust_extension):
     """Register stable and dated nightly without a global channel setting."""
 

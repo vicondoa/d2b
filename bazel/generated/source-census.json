@@ -23,7 +23,7 @@
       "manifest": "packages/d2b-bazel-exec/Cargo.toml",
       "package": "d2b-bazel-exec",
       "path": "packages/d2b-bazel-exec/src/execute.rs",
-      "sha256": "5b5f688229b3bf713549002761d6323cae3002173f367244f6f2296398adff23",
+      "sha256": "781243c856584768f9985c6c3be37a13dbe095b135dcaf00cc24eb4596fcbee6",
       "targetLabels": [
         "//packages/d2b-bazel-exec:d2b-bazel-exec"
       ]
@@ -32,7 +32,7 @@
       "manifest": "packages/d2b-bazel-exec/Cargo.toml",
       "package": "d2b-bazel-exec",
       "path": "packages/d2b-bazel-exec/src/lib.rs",
-      "sha256": "f983e2f80e98a1fc5d93c188d904aacac2547271324c5bbb2ddca58fdaf44303",
+      "sha256": "ea7228bdc897b5f86d9316684da26c890b202849400e2565192b3d214b011359",
       "targetLabels": [
         "//packages/d2b-bazel-exec:d2b-bazel-exec"
       ]
@@ -41,7 +41,7 @@
       "manifest": "packages/d2b-bazel-exec/Cargo.toml",
       "package": "d2b-bazel-exec",
       "path": "packages/d2b-bazel-exec/src/provider.rs",
-      "sha256": "506f4cd943be5ad9d43e265946f87ab786162496aa0004797e3d1ca488312ef6",
+      "sha256": "9252fb184520b45761b861c24b5a477541a1ff90141e6396af723eff70923614",
       "targetLabels": [
         "//packages/d2b-bazel-exec:d2b-bazel-exec"
       ]
@@ -50,7 +50,7 @@
       "manifest": "packages/d2b-bazel-runner/Cargo.toml",
       "package": "d2b-bazel-runner",
       "path": "packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs",
-      "sha256": "52c73bb432c116090eedd2cf6a538ec1da1f88e8639f0c14ce5b9871d95422fb",
+      "sha256": "022d26ae13e89fe90e8b0aaf1d4f787031503291fce52cf8f1bec665229af884",
       "targetLabels": [
         "//packages/d2b-bazel-runner:d2b-bazel-runner"
       ]
@@ -104,7 +104,7 @@
       "manifest": "packages/d2b-bazel-support/Cargo.toml",
       "package": "d2b-bazel-support",
       "path": "packages/d2b-bazel-support/src/startup.rs",
-      "sha256": "aff49721c62bc83d8f0fa966721f4824ccef1bbea966b2f15530dbca62e5ec34",
+      "sha256": "5327fb4f40fabcb311b73eab26018ccff2cfbd5835a92be292ee0296c9fc3d7e",
       "targetLabels": [
         "//packages/d2b-bazel-support:d2b-bazel-support"
       ]
@@ -5562,7 +5562,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/delivery/command.rs",
-      "sha256": "24f6a3f694e9ba61d85d41e8f8c777f0a1dc6f46e0e9db575df49851c8d24119",
+      "sha256": "20c3883b5f197c9e95ee8d04b2b1d403b577269a24e79a8a2c4e97c7b2c7b20a",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5580,7 +5580,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/delivery/evidence.rs",
-      "sha256": "894698c4a1e02aa393b84e1dbb175321bd70e6aae2bf75170c7ca39a6ec390f6",
+      "sha256": "1fe38588230e85c3b570c0c3c3b64918c51b5cf653f6c49b88a95507f2b17212",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5598,7 +5598,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/delivery/mod.rs",
-      "sha256": "724f53625f6e72c1afca0591668dafbd8247c072cd311a0bdd444cefbd3862b3",
+      "sha256": "4df8f886c67deb130ea6086ee0fbfe8b0bde82df09c3f140a42247ce99a27547",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5607,7 +5607,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/delivery/model.rs",
-      "sha256": "7c91e29f095be043527070a74030d0920c4fef9fcb276e63d8c85a9ab69c0572",
+      "sha256": "233155fa6452b6ab0d9ad72755fb863bafb50342389e946d6dfda7d26f87bb42",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5616,7 +5616,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/delivery/panel.rs",
-      "sha256": "aaaa7e8b8573a8bc476168bcc7517817386ed547907ffdd32189429d0d7eead7",
+      "sha256": "7492637743d0d19170df4526772d7db09dd6fae89965996b3bd6a062ca35a7eb",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5625,7 +5625,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/delivery/seal.rs",
-      "sha256": "8a94425c1443020de408ff054c70d24b07c2ab7af9b91a204245c3907e0eefad",
+      "sha256": "f8acfe1dc0ef5ede7d5d537f1305023b2872418575242ecfd4403c7161ba3e3c",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5688,7 +5688,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/hermeticity.rs",
-      "sha256": "03ddeb6123d96309df14ddae065ed4f6367f0311f776fa2b2ccb0b3cda6af6ea",
+      "sha256": "5e078c4af086fa55bad5c4e65ea5abf4105ca8d050ec1cf8d6e87f23458c8e9b",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
@@ -5715,7 +5715,7 @@
       "manifest": "packages/xtask/Cargo.toml",
       "package": "xtask",
       "path": "packages/xtask/src/main.rs",
-      "sha256": "49fc14c6e6afcebda3c78ad7e5f705f0739fa99be2b50cdc4cb1a728d3b236eb",
+      "sha256": "ce6f7df3d3cf8e59d358b966d06c3270005fe3aae45ae335a2bf2f7d9c209734",
       "targetLabels": [
         "//packages/xtask:xtask"
       ]
