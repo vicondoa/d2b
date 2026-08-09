@@ -312,6 +312,17 @@ const CASES = [
     expectText: "observed binding documentation is missing receipt_locator",
   },
   {
+    name: "observed metadata residual documentation drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => text.replace("catch a lying declaration", "catch an inaccurate declaration"),
+      ),
+    expectExit: 1,
+    expectText: "observed process metadata residual documentation is missing",
+  },
+  {
     name: "schema compatibility documentation drift is rejected",
     mutate: (dir) =>
       mutateFile(

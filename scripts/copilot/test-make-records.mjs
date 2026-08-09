@@ -640,6 +640,11 @@ rejects(
   /run_id/i,
 );
 rejects(
+  "an unknown observed binding field is rejected",
+  (s) => { s.observed.kernel.unexpected = "not-allowed"; },
+  /exactly the nine documented fields|unknown.*unexpected/i,
+);
+rejects(
   "a receipt locator without its provider scheme is rejected",
   (s) => { s.observed.product.receipt_locator = "receipt/7"; },
   /receipt_locator/i,

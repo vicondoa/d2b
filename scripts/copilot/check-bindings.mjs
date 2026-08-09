@@ -1366,6 +1366,27 @@ if (!existsSync(adrSkill)) {
     }
   }
 }
+const observedBindingResidualDocs = [
+  ["panel-review.md", panelReviewDoc],
+  ["copilot-agents.md", copilotAgentsDoc],
+];
+for (const [label, path] of observedBindingResidualDocs) {
+  if (!existsSync(path)) continue;
+  const source = readFileSync(path, "utf8").toLowerCase();
+  for (const phrase of [
+    "does not prove actual execution",
+    "catch a lying declaration",
+    "accepted residual",
+    "authenticated receipts are not added",
+  ]) {
+    if (!source.includes(phrase)) {
+      fail(
+        `${label}: observed process metadata residual documentation is missing ` +
+        `required text: ${phrase}`,
+      );
+    }
+  }
+}
 
 // ADR 0055 replaces the old fixed-seat verdict contract. Keep this small
 // source check next to the binding gate so a prompt corpus refresh cannot

@@ -374,6 +374,17 @@ const DISPATCH_BINDING_KEYS = [
   "context_tier",
   "communication",
 ];
+const OBSERVED_BINDING_KEYS = [
+  "provider",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+  "agent_type",
+  "agent_definition_sha256",
+  "run_id",
+  "receipt_locator",
+];
 
 function validateDispatchBinding(value, selection) {
   if (
@@ -869,17 +880,24 @@ for (const role of roster) {
     fail(`observed.json ${role} must be an object`);
     continue;
   }
-  for (const key of [
-    "provider",
-    "model",
-    "reasoning_effort",
-    "context_tier",
-    "agent_type",
-    "communication",
-    "agent_definition_sha256",
-    "run_id",
-    "receipt_locator",
-  ]) {
+  const observedKeysForSeat = Object.keys(observedBinding).sort();
+  const expectedObservedKeys = OBSERVED_BINDING_KEYS.slice().sort();
+  if (
+    observedKeysForSeat.length !== expectedObservedKeys.length ||
+    observedKeysForSeat.some((key, index) => key !== expectedObservedKeys[index])
+  ) {
+    const unknown = observedKeysForSeat.filter(
+      (key) => !expectedObservedKeys.includes(key),
+    );
+    const missing = expectedObservedKeys.filter(
+      (key) => !observedKeysForSeat.includes(key),
+    );
+    fail(
+      `observed.json ${role} must contain exactly the nine documented fields; ` +
+      `unknown [${unknown.join(", ")}], missing [${missing.join(", ")}]`,
+    );
+  }
+  for (const key of OBSERVED_BINDING_KEYS) {
     if (
       typeof observedBinding[key] !== "string" ||
       observedBinding[key].length === 0

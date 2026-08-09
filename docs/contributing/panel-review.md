@@ -110,14 +110,17 @@ reviewed worktree before dispatch.
 The completion-bound packet carries the exact selected agent-definition bytes
 at `agent-definitions/panel-<seat>.agent.md`, their SHA-256 digests, and each
 seat's exact `context_tier`. These are process evidence for the round. Each
-current `observed.json` seat entry carries `provider`, `model`,
-`reasoning_effort`, `context_tier`, `communication`, `agent_type`,
-`agent_definition_sha256`, `run_id`, and `receipt_locator`. The dispatch
-fields are checked against the completion-bound policy, and the definition
-digest is checked against the bound definition bytes. `run_id` and
-`receipt_locator` are same-user process metadata used for correlation and
-uniqueness. `observed.json` is not authentication and does not establish a
-security boundary. The active phase contract is authoritative for output:
+current `observed.json` seat entry carries exactly these nine fields:
+`provider`, `model`, `reasoning_effort`, `context_tier`, `communication`,
+`agent_type`, `agent_definition_sha256`, `run_id`, and `receipt_locator`;
+unknown fields are rejected. The dispatch fields are checked against the
+completion-bound policy, and the definition digest is checked against the
+bound definition bytes. `run_id` and `receipt_locator` are same-user process
+metadata used for correlation and uniqueness. `make-records.mjs` validates
+those declared values against the completion-bound policy; it does not prove
+actual execution or catch a lying declaration. That accepted residual is why
+authenticated receipts are not added. `observed.json` is not authentication
+and does not establish a security boundary. The active phase contract is authoritative for output:
 discovery uses exactly `engineer`, `signoff`, `summary`, and
 `recommendations`, while verification adds required
 `verified_issue_statuses` and `late_findings`. Keeping the schemas distinct
@@ -128,7 +131,7 @@ type, model, reasoning effort, context tier, and communication. Staging
 projects the selected roster into the packet and binds that projection along
 with the agent definitions. Observed same user process metadata is compared
 with the bound policy and definition digest for correlation; it does not
-authenticate a run.
+authenticate a run or prove that the declared process actually ran.
 
 The observed `agent_type` and `agent_definition_sha256` value are checked
 against the completion-bound selection and definition bytes when records are

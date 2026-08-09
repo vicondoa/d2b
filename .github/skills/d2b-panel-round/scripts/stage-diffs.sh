@@ -585,154 +585,290 @@ const sameNames = (left, right) =>
   left.length === right.length &&
   left.every((name, index) => name === right[index]);
 
-async function isFullyBoundDiscoveryPacket(packet, markerPath) {
+async function validateCompletedPacket(packet, markerPath) {
+  const { readSelectionTable, validateSelection } =
+    await import(pathToFileURL(lifecycleHelper).href);
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const markerBytes = readBounded(
+    markerPath,
+    "completion marker",
+    MAX_COMPLETION_MARKER_BYTES,
+  );
+  let marker;
   try {
-    const { readSelectionTable, validateSelection } =
-      await import(pathToFileURL(lifecycleHelper).href);
-    const markerBytes = readBounded(
-      markerPath,
-      "completion marker",
-      MAX_COMPLETION_MARKER_BYTES,
+    marker = JSON.parse(markerBytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`invalid completion marker JSON: ${error.message}`);
+  }
+  const markerKeys = [
+    "artifact_bytes",
+    "artifact_kind",
+    "artifact_sha256",
+    "base",
+    "complete",
+    "delta_sha256",
+    "full_sha256",
+    "lifecycle_id",
+    "phase",
+    "previous_tip",
+    "round",
+    "schema_version",
+    "selection_sha256",
+    "tip",
+  ];
+  assert(
+    exactKeys(marker, markerKeys),
+    "completion marker has an unexpected schema",
+  );
+  assert(
+    marker.artifact_kind === "d2b-panel/stage-completion",
+    "completion marker has the wrong artifact kind",
+  );
+  assert(
+    [2, 3, 4].includes(marker.schema_version),
+    `completion marker has unsupported schema_version ${JSON.stringify(marker.schema_version)}`,
+  );
+  assert(marker.complete === true, "completion marker does not claim completion");
+  assert(
+    marker.phase === "discovery" || marker.phase === "verification",
+    `completion marker has unsupported phase ${JSON.stringify(marker.phase)}`,
+  );
+  for (const key of ["round", "lifecycle_id"]) {
+    assert(
+      typeof marker[key] === "string" &&
+        marker[key].length > 0 &&
+        !marker[key].includes("/") &&
+        !marker[key].includes("\\") &&
+        !marker[key].includes("\0"),
+      `completion marker has invalid ${key}`,
     );
-    const marker = JSON.parse(markerBytes.toString("utf8"));
-    const markerKeys = [
-      "artifact_bytes",
-      "artifact_kind",
-      "artifact_sha256",
-      "base",
-      "complete",
-      "delta_sha256",
-      "full_sha256",
-      "lifecycle_id",
-      "phase",
-      "previous_tip",
-      "round",
-      "schema_version",
-      "selection_sha256",
-      "tip",
-    ];
-    if (
-      !exactKeys(marker, markerKeys) ||
-      marker.artifact_kind !== "d2b-panel/stage-completion" ||
-      ![2, 3, 4].includes(marker.schema_version) ||
-      marker.complete !== true ||
-      marker.lifecycle_id !== lifecycle ||
-      marker.phase !== "discovery"
-    ) {
-      return false;
-    }
-    const digests = marker.artifact_sha256;
-    const sizes = marker.artifact_bytes;
-    if (
-      !digests ||
-      Array.isArray(digests) ||
-      typeof digests !== "object" ||
-      !sizes ||
-      Array.isArray(sizes) ||
-      typeof sizes !== "object" ||
-      Object.keys(digests).sort().join("\0") !==
-        Object.keys(sizes).sort().join("\0")
-    ) {
-      return false;
-    }
-    const selectionDigest = digests["selection.json"];
-    const selectionSize = sizes["selection.json"];
-    if (
-      typeof selectionDigest !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(selectionDigest) ||
-      !Number.isSafeInteger(selectionSize) ||
-      selectionSize < 0 ||
-      selectionSize > MAX_BOUND_ARTIFACT_BYTES
-    ) {
-      return false;
-    }
-    const selectionBytes = readBounded(
-      path.join(packet, "selection.json"),
-      "bound selection.json",
-      MAX_BOUND_ARTIFACT_BYTES,
+  }
+  for (const key of ["base", "previous_tip", "tip"]) {
+    assert(
+      typeof marker[key] === "string" &&
+        /^[0-9a-f]{40}$/u.test(marker[key]),
+      `completion marker has invalid ${key}`,
     );
-    if (
-      selectionBytes.length !== selectionSize ||
-      crypto.createHash("sha256").update(selectionBytes).digest("hex") !==
-        selectionDigest
-    ) {
-      return false;
-    }
-    const selection = JSON.parse(selectionBytes.toString("utf8"));
-    if (
-      !selection ||
-      typeof selection !== "object" ||
-      Array.isArray(selection) ||
-      selection.lifecycle_id !== lifecycle ||
-      selection.phase !== "discovery" ||
-      !Array.isArray(selection.roster) ||
-      selection.roster.length === 0 ||
-      selection.roster.some(
-        (seat) =>
-          typeof seat !== "string" ||
-          seat.length === 0 ||
-          seat.includes("/") ||
-          seat.includes("\\") ||
-          seat.includes("\0"),
-      ) ||
-      new Set(selection.roster).size !== selection.roster.length
-    ) {
-      return false;
-    }
-    validateSelection(selection, readSelectionTable());
-    const expectedNames = canonicalNames("discovery", selection.roster);
-    const withoutDefinitions = expectedNames.filter(
-      (name) =>
-        !name.startsWith("agent-definitions/") &&
-        name !== "dispatch-binding.json",
+  }
+  for (const key of ["selection_sha256", "delta_sha256", "full_sha256"]) {
+    assert(
+      typeof marker[key] === "string" &&
+        /^[0-9a-f]{64}$/u.test(marker[key]),
+      `completion marker has invalid ${key}`,
     );
-    const withDefinitions = expectedNames.filter(
-      (name) => name !== "dispatch-binding.json",
+  }
+
+  const digests = marker.artifact_sha256;
+  const sizes = marker.artifact_bytes;
+  assert(
+    digests &&
+      !Array.isArray(digests) &&
+      typeof digests === "object" &&
+      sizes &&
+      !Array.isArray(sizes) &&
+      typeof sizes === "object" &&
+      Object.keys(digests).sort().join("\0") ===
+        Object.keys(sizes).sort().join("\0"),
+    "completion marker artifact size and digest maps disagree",
+  );
+  const actualNames = Object.keys(digests).sort();
+  const selectionDigest = digests["selection.json"];
+  const selectionSize = sizes["selection.json"];
+  assert(
+    typeof selectionDigest === "string" &&
+      /^[0-9a-f]{64}$/u.test(selectionDigest) &&
+      Number.isSafeInteger(selectionSize) &&
+      selectionSize >= 0 &&
+      selectionSize <= MAX_BOUND_ARTIFACT_BYTES,
+    "completion marker does not carry a valid selection.json binding",
+  );
+
+  const artifacts = new Map();
+  for (const relative of actualNames) {
+    assert(
+      relative.length > 0 &&
+        relative.length <= 1024 &&
+        !path.isAbsolute(relative) &&
+        !relative.includes("\\") &&
+        relative.split("/").every(
+          (component) =>
+            component !== "" && component !== "." && component !== "..",
+        ) &&
+        /^[0-9a-f]{64}$/u.test(digests[relative]) &&
+        Number.isSafeInteger(sizes[relative]) &&
+        sizes[relative] >= 0,
+      `completion marker has an invalid bound artifact entry ${relative}`,
     );
-    const actualNames = Object.keys(digests).sort();
-    const allowedSets = marker.schema_version === 2
-      ? [withoutDefinitions, withDefinitions]
-      : marker.schema_version === 3
-        ? [withDefinitions]
-        : [expectedNames];
-    if (!allowedSets.some((names) => sameNames(names, actualNames))) {
-      return false;
-    }
-    for (const relative of actualNames) {
-      if (
-        relative.length === 0 ||
-        path.isAbsolute(relative) ||
-        relative.includes("\\") ||
-        relative.split("/").some((component) =>
-          component === "" || component === "." || component === ".."
-        ) ||
-        !/^[0-9a-f]{64}$/u.test(digests[relative]) ||
-        !Number.isSafeInteger(sizes[relative]) ||
-        sizes[relative] < 0
-      ) {
-        return false;
-      }
-      const maximum = relative.startsWith("agent-definitions/")
-        ? MAX_AGENT_DEFINITION_BYTES
-        : MAX_BOUND_ARTIFACT_BYTES;
-      if (sizes[relative] > maximum) return false;
-      const bytes = readBounded(
+    const maximum = relative.startsWith("agent-definitions/")
+      ? MAX_AGENT_DEFINITION_BYTES
+      : MAX_BOUND_ARTIFACT_BYTES;
+    assert(
+      sizes[relative] <= maximum,
+      `completion marker bound artifact ${relative} exceeds its size limit`,
+    );
+    let bytes;
+    try {
+      bytes = readBounded(
         path.join(packet, relative),
         `bound artifact ${relative}`,
         maximum,
       );
-      if (
-        bytes.length !== sizes[relative] ||
-        crypto.createHash("sha256").update(bytes).digest("hex") !==
-          digests[relative]
-      ) {
-        return false;
-      }
+    } catch (error) {
+      throw new Error(
+        `bound artifact ${relative} is unavailable: ${error.message}`,
+      );
     }
-    return true;
-  } catch {
-    return false;
+    assert(
+      bytes.length === sizes[relative] &&
+        crypto.createHash("sha256").update(bytes).digest("hex") ===
+          digests[relative],
+      `bound artifact ${relative} has a different size or digest`,
+    );
+    artifacts.set(relative, bytes);
   }
+
+  const expectedNames = canonicalNames(
+    marker.phase,
+    (() => {
+      const bytes = artifacts.get("selection.json");
+      assert(bytes, "completion packet has no bound selection.json");
+      let value;
+      try {
+        value = JSON.parse(bytes.toString("utf8"));
+      } catch (error) {
+        throw new Error(`bound selection.json is not valid JSON: ${error.message}`);
+      }
+      assert(
+        value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          Array.isArray(value.roster) &&
+          value.roster.length > 0 &&
+          value.roster.every(
+            (seat) =>
+              typeof seat === "string" &&
+              seat.length > 0 &&
+              !seat.includes("/") &&
+              !seat.includes("\\") &&
+              !seat.includes("\0"),
+          ) &&
+          new Set(value.roster).size === value.roster.length,
+        "bound selection.json has an invalid selected roster",
+      );
+      try {
+        validateSelection(value, readSelectionTable());
+      } catch (error) {
+        throw new Error(`bound selection.json is invalid: ${error.message}`);
+      }
+      assert(
+        value.lifecycle_id === marker.lifecycle_id,
+        "bound selection.json lifecycle_id disagrees with the completion marker",
+      );
+      assert(
+        value.phase === marker.phase,
+        "bound selection.json phase disagrees with the completion marker",
+      );
+      return value.roster;
+    })(),
+  );
+  const withoutDefinitions = expectedNames.filter(
+    (name) =>
+      !name.startsWith("agent-definitions/") &&
+      name !== "dispatch-binding.json",
+  );
+  const withDefinitions = expectedNames.filter(
+    (name) => name !== "dispatch-binding.json",
+  );
+  const allowedSets = marker.schema_version === 2
+    ? [withoutDefinitions, withDefinitions]
+    : marker.schema_version === 3
+      ? [withDefinitions]
+      : [expectedNames];
+  assert(
+    allowedSets.some((names) => sameNames(names, actualNames)),
+    `completion artifact set is invalid for schema_version ${marker.schema_version}`,
+  );
+
+  const selectionBytes = artifacts.get("selection.json");
+  const selectionActualDigest = crypto
+    .createHash("sha256")
+    .update(selectionBytes)
+    .digest("hex");
+  assert(
+    selectionActualDigest === marker.selection_sha256 &&
+      selectionActualDigest === selectionDigest,
+    "completion packet selection_sha256 does not match selection.json",
+  );
+
+  const readArtifactJson = (relative, label) => {
+    const bytes = artifacts.get(relative);
+    assert(bytes, `completion packet has no bound ${relative}`);
+    try {
+      return JSON.parse(bytes.toString("utf8"));
+    } catch (error) {
+      throw new Error(`${label} is not valid JSON: ${error.message}`);
+    }
+  };
+  const address = readArtifactJson("address.json", "bound address.json");
+  const addressKeys = [
+    "base",
+    "delta_sha256",
+    "full_sha256",
+    "lifecycle_id",
+    "phase",
+    "previous_tip",
+    "round",
+    "selection_path",
+    "selection_sha256",
+    "tip",
+  ];
+  assert(
+    exactKeys(address, addressKeys),
+    "bound address.json has an unexpected schema",
+  );
+  assert(
+    address.round === marker.round &&
+      address.lifecycle_id === marker.lifecycle_id &&
+      address.base === marker.base &&
+      address.previous_tip === marker.previous_tip &&
+      address.tip === marker.tip &&
+      address.phase === marker.phase &&
+      address.selection_sha256 === marker.selection_sha256 &&
+      address.delta_sha256 === marker.delta_sha256 &&
+      address.full_sha256 === marker.full_sha256,
+    "bound address.json metadata disagrees with the completion marker",
+  );
+  assert(
+    typeof address.selection_path === "string" &&
+      path.resolve(address.selection_path) ===
+        path.resolve(packet, "selection.json"),
+    "bound address.json selection_path does not identify the packet selection",
+  );
+
+  const deltaBytes = artifacts.get("delta.diff");
+  const fullBytes = artifacts.get("full.diff");
+  const deltaActualDigest = crypto
+    .createHash("sha256")
+    .update(deltaBytes)
+    .digest("hex");
+  const fullActualDigest = crypto
+    .createHash("sha256")
+    .update(fullBytes)
+    .digest("hex");
+  assert(
+    deltaActualDigest === marker.delta_sha256 &&
+      deltaActualDigest === address.delta_sha256,
+    "completion packet delta_sha256 does not match delta.diff",
+  );
+  assert(
+    fullActualDigest === marker.full_sha256 &&
+      fullActualDigest === address.full_sha256,
+    "completion packet full_sha256 does not match full.diff",
+  );
+
+  return marker.phase === "discovery" && marker.lifecycle_id === lifecycle;
 }
 
 if (!existsSync(panelRoot)) process.exit(0);
@@ -767,8 +903,24 @@ for (const name of packets) {
     if (error.code === "ENOENT") continue;
     throw error;
   }
-  if (!markerStat.isFile()) continue;
-  if (await isFullyBoundDiscoveryPacket(packet, markerPath)) {
+  const packetEntries = readdirSync(packet);
+  if (packetEntries.every((entry) => entry === ".complete")) continue;
+  if (!markerStat.isFile()) {
+    console.error(
+      `${packet}: packet artifacts exist but .complete is not a regular file`,
+    );
+    process.exit(1);
+  }
+  let blocksDiscovery;
+  try {
+    blocksDiscovery = await validateCompletedPacket(packet, markerPath);
+  } catch (error) {
+    console.error(
+      `${packet}: completed packet validation failed: ${error.message}`,
+    );
+    process.exit(1);
+  }
+  if (blocksDiscovery) {
     console.error(
       `lifecycle "${lifecycle}" already has a completed discovery packet at ${packet}; ` +
         "discovery is exactly once by lifecycle identity, independent of round prefix",

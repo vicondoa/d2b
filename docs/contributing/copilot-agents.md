@@ -244,25 +244,29 @@ from a parent worktree, or spawn a nested `copilot` CLI reviewer. If the
 current session registry cannot supply every selected exact agent definition,
 park and restart the session in the reviewed worktree before dispatch.
 
-Each current `observed.json` seat entry must contain `provider`, `model`,
-`reasoning_effort`, `context_tier`, `communication`, `agent_type`,
-`agent_definition_sha256`, `run_id`, and `receipt_locator`. `make-records.mjs`
-compares the dispatch fields with the selected policy, compares the definition
-digest with the matching immutable
-`agent-definitions/panel-<seat>.agent.md` bytes bound by `.complete`, and
-checks run and receipt uniqueness and provider correlation. These are
-same-user process metadata checked against the completion-bound policy and
-definition bytes; `observed.json` is not authentication and does not
-establish a security boundary. A wrong, missing, parent-worktree, or
-substituted definition fails closed. Legacy imported records remain readable
-through their explicit legacy path; that compatibility does not weaken current
-workspace-schema records.
+Each current `observed.json` seat entry must contain exactly these nine fields:
+`provider`, `model`, `reasoning_effort`, `context_tier`, `communication`,
+`agent_type`, `agent_definition_sha256`, `run_id`, and `receipt_locator`.
+Unknown fields are rejected. `make-records.mjs` compares the declared
+dispatch fields with the selected policy, compares the definition digest with
+the matching immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by
+`.complete`, and checks run and receipt uniqueness and provider correlation.
+This validates declared same-user process metadata against the
+completion-bound policy and definition bytes; it does not prove actual
+execution or catch a lying declaration. That accepted residual is why
+authenticated receipts are not added. `observed.json` is not authentication
+and does not establish a security boundary. A wrong, missing, parent-worktree,
+or substituted definition fails closed. Legacy imported records remain
+readable through their explicit legacy path; that compatibility does not
+weaken current workspace-schema records.
 
 The panel dispatch policy is one machine readable source for every seat's
 agent type, model, reasoning effort, context tier, and communication. Staging
 places the selected projection in the completion bound packet, and record
 generation compares observed same user process metadata with that projection.
-These values are process evidence and correlation data, not authentication.
+These declared values are process evidence and correlation data, not
+authentication; the helper cannot establish that the corresponding process
+actually ran.
 
 New panel work uses `gpt-5.6-sol` at `xhigh`. Existing
 `gemini-3.1-pro-preview` records at `high` remain readable as one exact

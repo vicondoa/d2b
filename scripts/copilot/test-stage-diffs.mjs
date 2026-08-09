@@ -380,6 +380,59 @@ try {
 
   const savedFirstCompletionMarker = readFileSync(join(firstDir, ".complete"));
   rmSync(join(firstDir, ".complete"));
+  const rewritePacketBinding = (packet, relativePath) => {
+    const markerPath = join(packet, ".complete");
+    const marker = readJson(markerPath);
+    const bytes = readFileSync(join(packet, relativePath));
+    marker.artifact_sha256[relativePath] = digest(bytes);
+    marker.artifact_bytes[relativePath] = bytes.length;
+    chmodSync(markerPath, 0o644);
+    writeJson(markerPath, marker);
+    chmodSync(markerPath, 0o444);
+  };
+  const copyCompletedDiscoveryPacket = (name, relocateSelection = false) => {
+    const packet = join(repo, ".scratch", "panel", name);
+    cpSync(firstDir, packet, { recursive: true });
+    writeFileSync(join(packet, ".complete"), savedFirstCompletionMarker);
+    chmodSync(join(packet, ".complete"), 0o444);
+    if (relocateSelection) {
+      const addressPath = join(packet, "address.json");
+      const address = readJson(addressPath);
+      chmodSync(addressPath, 0o644);
+      address.selection_path = join(packet, "selection.json");
+      writeJson(addressPath, address);
+      rewritePacketBinding(packet, "address.json");
+    }
+    return packet;
+  };
+  const expectCorruptDiscoveryPacket = (name, mutate, expectedText) => {
+    const packet = copyCompletedDiscoveryPacket(name);
+    let result;
+    try {
+      mutate(packet);
+      result = run(
+        repo,
+        stageArgs(
+          base,
+          base,
+          `${name}-r1`,
+          selectionPath,
+          candidatePath,
+          discoveryRequestPath,
+        ),
+      );
+    } finally {
+      rmSync(packet, { recursive: true, force: true });
+    }
+    check(
+      `${name} discovery packet fails closed`,
+      result.status === 2 &&
+        /completed packet validation failed/.test(result.text) &&
+        expectedText.test(result.text) &&
+        !existsSync(join(repo, ".scratch", "panel", `${name}-r1`, ".complete")),
+      result.text,
+    );
+  };
   const alternateDiscoveryDir = join(
     repo,
     ".scratch",
@@ -414,18 +467,10 @@ try {
     recursive: true,
     force: true,
   });
-  const validDiscoveryDir = join(
-    repo,
-    ".scratch",
-    "panel",
+  const validDiscoveryDir = copyCompletedDiscoveryPacket(
     "valid-prefix-r1",
+    true,
   );
-  cpSync(firstDir, validDiscoveryDir, { recursive: true });
-  writeFileSync(
-    join(validDiscoveryDir, ".complete"),
-    savedFirstCompletionMarker,
-  );
-  chmodSync(join(validDiscoveryDir, ".complete"), 0o444);
   const validPrefixDiscovery = run(
     repo,
     stageArgs(
@@ -447,6 +492,83 @@ try {
     validPrefixDiscovery.text,
   );
   rmSync(validDiscoveryDir, { recursive: true, force: true });
+
+  expectCorruptDiscoveryPacket(
+    "partialpacket",
+    (packet) => rmSync(join(packet, "reviewer-notes", "software.md")),
+    /reviewer-notes\/software\.md|bound artifact/,
+  );
+  expectCorruptDiscoveryPacket(
+    "deletedpacket",
+    (packet) => rmSync(join(packet, "delta.diff")),
+    /delta\.diff|unavailable/,
+  );
+  expectCorruptDiscoveryPacket(
+    "digestpacket",
+    (packet) => {
+      const evidence = join(packet, "evidence.md");
+      chmodSync(evidence, 0o644);
+      writeFileSync(evidence, "changed after completion\n");
+    },
+    /evidence\.md.*(?:size or digest|different)/,
+  );
+  expectCorruptDiscoveryPacket(
+    "selectionpacket",
+    (packet) => {
+      const selectionFile = join(packet, "selection.json");
+      const selection = readJson(selectionFile);
+      selection.candidate_id = "e".repeat(64);
+      chmodSync(selectionFile, 0o644);
+      writeJson(selectionFile, selection);
+      rewritePacketBinding(packet, "selection.json");
+    },
+    /selection_sha256|selection\.json/,
+  );
+  expectCorruptDiscoveryPacket(
+    "addresspacket",
+    (packet) => {
+      const addressFile = join(packet, "address.json");
+      const address = readJson(addressFile);
+      address.tip = "0".repeat(40);
+      chmodSync(addressFile, 0o644);
+      writeJson(addressFile, address);
+      rewritePacketBinding(packet, "address.json");
+    },
+    /address\.json.*metadata|address\.json/,
+  );
+  expectCorruptDiscoveryPacket(
+    "deltapacket",
+    (packet) => {
+      const delta = join(packet, "delta.diff");
+      chmodSync(delta, 0o644);
+      writeFileSync(delta, "changed delta\n");
+      rewritePacketBinding(packet, "delta.diff");
+    },
+    /delta_sha256|delta\.diff/,
+  );
+  expectCorruptDiscoveryPacket(
+    "fullpacket",
+    (packet) => {
+      const full = join(packet, "full.diff");
+      chmodSync(full, 0o644);
+      writeFileSync(full, "changed full\n");
+      rewritePacketBinding(packet, "full.diff");
+    },
+    /full_sha256|full\.diff/,
+  );
+  expectCorruptDiscoveryPacket(
+    "tippacket",
+    (packet) => {
+      const markerPath = join(packet, ".complete");
+      const marker = readJson(markerPath);
+      marker.tip = "not-a-commit";
+      chmodSync(markerPath, 0o644);
+      writeJson(markerPath, marker);
+      chmodSync(markerPath, 0o444);
+    },
+    /invalid tip/,
+  );
+
   writeFileSync(join(firstDir, ".complete"), savedFirstCompletionMarker);
   chmodSync(join(firstDir, ".complete"), 0o444);
 
