@@ -2719,6 +2719,17 @@ fn r55_require_order(
     }
 }
 
+fn r55_require_normalized_order(
+    findings: &mut Vec<String>,
+    file: &str,
+    content: &str,
+    needles: &[&str],
+    requirement: &str,
+) {
+    let normalized = normalized_whitespace(content);
+    r55_require_order(findings, file, &normalized, needles, requirement);
+}
+
 fn r55_mutate_once(
     documents: &R55Documents,
     path: &str,
@@ -2769,7 +2780,7 @@ fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
         "nonempty required-check set with strict up-to-date enforcement",
         "task strict required-check policy",
     );
-    r55_require_raw(
+    r55_require_normalized(
         &mut findings,
         R55_QUICKSTART,
         quickstart,
@@ -2797,7 +2808,7 @@ fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
         r#"((.parameters.required_status_checks // []) | length) > 0"#,
         "nonempty required-check enforcement",
     );
-    r55_require_raw(
+    r55_require_normalized(
         &mut findings,
         R55_QUICKSTART,
         quickstart,
@@ -2834,7 +2845,7 @@ fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
             &mut findings,
             R55_QUICKSTART,
             quickstart,
-            "MERGE_GROUP_TREE_CHECK names a required check triggered for merge_group",
+            "`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group`",
             "required merge-group check",
         );
         r55_require_raw(
@@ -2889,7 +2900,7 @@ fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
                 "actual merge-group integration tree",
                 "merge-group integration-tree subject",
             );
-            r55_require_order(
+            r55_require_normalized_order(
                 &mut findings,
                 file,
                 content,
@@ -3047,9 +3058,9 @@ fn r55_mutation_fixtures_reject_each_removed_merge_guard() {
         (
             "strict up-to-date policy",
             R55_QUICKSTART,
-            ".parameters.strict_required_status_checks_policy == true",
-            "",
-            "strict up-to-date enforcement",
+            "    .type == \"required_status_checks\" and\n    .parameters.strict_required_status_checks_policy == true and",
+            "    .type == \"required_status_checks\" and",
+            "default strict guard",
         ),
         (
             "nonempty required-check set",
@@ -3082,8 +3093,8 @@ fn r55_mutation_fixtures_reject_each_removed_merge_guard() {
         (
             "BASE_OID before snapshot",
             R55_QUICKSTART,
-            ".baseRefOid == $base_oid",
-            "",
+            "  .baseRefName == $base_ref and\n  .baseRefOid == $base_oid and\n  .headRefName == $head_ref and",
+            "  .baseRefName == $base_ref and\n  .headRefName == $head_ref and",
             "exact BASE_OID check before snapshot",
         ),
         (
