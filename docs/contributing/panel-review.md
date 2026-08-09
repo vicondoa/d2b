@@ -77,6 +77,16 @@ reconstructing those instructions in free-form prompts. For a later
 review, staging fails unless the supplied previous tip matches the prior
 `address.json` and every seat's prior verdict is present.
 
+The completed packet also contains the exact selected agent definition bytes
+at `agent-definitions/panel-<seat>.agent.md`. The completion marker binds those
+bytes, and both the immutable request and generated dispatch prompt direct the
+reviewer to that copy for seat focus and the shared finding bar. Their active
+phase contract is authoritative for output: discovery uses exactly
+`engineer`, `signoff`, `summary`, and `recommendations`, while verification
+adds required `verified_issue_statuses` and `late_findings`. Keeping the
+schemas distinct lets first discovery bootstrap the ledger before issue
+statuses exist.
+
 Any content change invalidates sign-off for that candidate. The lifecycle
 roster remains selected, may widen, and verifies the new candidate without
 running a second discovery.
@@ -88,7 +98,7 @@ stays byte-identical, verdict JSON stays exact, `signoff` still means
 `recommendations` is empty, and optional communication never waives or changes
 the normal panel gate.
 
-Each engineer returns a JSON sign-off record shaped like:
+During discovery, each engineer returns a JSON sign-off record shaped like:
 
 ```json
 {
@@ -104,6 +114,24 @@ Otherwise, `recommendations[]` carries merge-blocking conditions. Discovery
 findings enter the shared ledger, implementation resolves them in a batch,
 and the selected lifecycle roster performs scoped verification. Green tests
 do not waive this gate; a phase closes only on unanimous sign-off.
+
+Verification uses the distinct exact top-level shape:
+
+```json
+{
+  "engineer": "software",
+  "signoff": true,
+  "summary": "What was verified and the overall posture.",
+  "verified_issue_statuses": {
+    "R1": "verified"
+  },
+  "late_findings": [],
+  "recommendations": []
+}
+```
+
+`verified_issue_statuses` has exactly one entry per ledger issue, and
+`late_findings` is present even when empty.
 
 ## Discover-Fix-Verify lifecycle
 

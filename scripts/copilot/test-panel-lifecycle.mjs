@@ -12,11 +12,13 @@ import {
   createDiscoveryResultArtifact,
   createResponseTemplate,
   createSelection,
+  directoryTreeUsageNoFollow,
   evaluateApproval,
   importLegacyRound,
   lateFindingAdmission,
   mergeDiscoveryLedger,
   prepareVerification,
+  readDirectoryNoFollow,
   readSelection,
   readSelectionTable,
   selectRoster,
@@ -33,6 +35,7 @@ import {
   validateSelfVerification,
   validateVerificationRequest,
   validateVerificationResults,
+  removeDirectoryIfIdentityNoFollow,
   writeDirectoryCreateOrCompare,
   writeCommandOutputCreateOrCompare,
   writeVerificationArtifacts,
@@ -50,6 +53,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -351,6 +355,117 @@ function failedRenameDirectoryPublish(directory, helperPath, errno) {
   );
   chmodSync(perl, 0o755);
   return unavailableDirectoryPublish(directory, helperPath, bin);
+}
+
+function replacedTemporaryPublish(destination, helperPath, kind) {
+  const bin = `${destination}-replace-bin`;
+  mkdirSync(bin);
+  const perl = join(bin, "perl");
+  writeFileSync(
+    perl,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const parent = "/proc/self/fd/3";
+const source = process.argv[5];
+fs.renameSync(
+  path.join(parent, source),
+  path.join(parent, \`\${source}-original\`),
+);
+if (process.env.D2B_REPLACEMENT_KIND === "directory") {
+  fs.mkdirSync(path.join(parent, source));
+  fs.writeFileSync(path.join(parent, source, "replacement.txt"), "replacement\\n");
+} else {
+  fs.writeFileSync(path.join(parent, source), "replacement\\n");
+}
+console.error("renameat2 errno=31: injected replacement");
+process.exit(1);
+`,
+  );
+  chmodSync(perl, 0o755);
+  const source = `
+import { pathToFileURL } from "node:url";
+const [helperPath, destination, kind] = process.argv.slice(1);
+try {
+  process.argv[1] = "";
+  const helper = await import(pathToFileURL(helperPath).href);
+  if (kind === "directory") {
+    helper.writeDirectoryCreateOrCompare(destination, [
+      { name: "seat.json", bytes: "original\\n" },
+    ]);
+  } else {
+    helper.writeCreateOrCompare(destination, { original: true });
+  }
+} catch (cause) {
+  console.error(cause.message);
+  process.exitCode = 1;
+}
+`;
+  return spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", source, helperPath, destination, kind],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        D2B_REPLACEMENT_KIND: kind,
+        PATH: bin,
+      },
+    },
+  );
+}
+
+function instrumentDirectoryReads(
+  directory,
+  helperPath,
+  expectedNames,
+  maxBytes,
+) {
+  const source = `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { pathToFileURL } from "node:url";
+const [helperPath, directory, expectedNamesJson, maxBytesText] =
+  process.argv.slice(1);
+const originalReadSync = fs.readSync;
+let reads = 0;
+fs.readSync = (...args) => {
+  reads += 1;
+  return originalReadSync(...args);
+};
+syncBuiltinESMExports();
+try {
+  process.argv[1] = "";
+  const { readDirectoryNoFollow } =
+    await import(pathToFileURL(helperPath).href);
+  reads = 0;
+  readDirectoryNoFollow(directory, {
+    label: "instrumented records",
+    expectedNames: JSON.parse(expectedNamesJson),
+    maxBytes: Number(maxBytesText),
+  });
+  console.log(JSON.stringify({ accepted: true, reads }));
+} catch (cause) {
+  console.log(JSON.stringify({ accepted: false, reads, message: cause.message }));
+}
+`;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      source,
+      helperPath,
+      directory,
+      JSON.stringify(expectedNames),
+      String(maxBytes),
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout);
+  }
+  return JSON.parse(result.stdout);
 }
 
 console.log("panel lifecycle: documented handoff");
@@ -1485,6 +1600,165 @@ process.stdout.write("attacker-controlled timing\\n");
     "a replacement parent receives no command output",
     !existsSync(join(replaceParent, "output.txt")),
   );
+  check(
+    "a replaced command-output parent retains neither output nor temporary bytes",
+    readdirSync(replaceParent).length === 0 &&
+      readdirSync(replacedParent).every((name) =>
+        name !== "output.txt" && !name.includes(".command.tmp") &&
+        !name.includes(".raw.tmp")),
+  );
+
+  const aggregateRecords = join(root, "aggregate-records");
+  mkdirSync(aggregateRecords);
+  writeFileSync(join(aggregateRecords, "first.json"), "123");
+  writeFileSync(join(aggregateRecords, "second.json"), "45");
+  const aggregateExact = readDirectoryNoFollow(aggregateRecords, {
+    label: "aggregate records",
+    expectedNames: ["first.json", "second.json"],
+    maxBytes: 5,
+  });
+  check(
+    "directory ingestion accepts the exact cumulative byte boundary",
+    aggregateExact.reduce((total, entry) => total + entry.bytes.length, 0) === 5,
+  );
+  const aggregateInstrumented = instrumentDirectoryReads(
+    aggregateRecords,
+    LIFECYCLE_CLI,
+    ["first.json", "second.json"],
+    4,
+  );
+  check(
+    "aggregate directory rejection occurs before any record read",
+    aggregateInstrumented.accepted === false &&
+      aggregateInstrumented.reads === 0 &&
+      /aggregate bytes 5.*limit 4/.test(aggregateInstrumented.message),
+    JSON.stringify(aggregateInstrumented),
+  );
+  writeFileSync(join(aggregateRecords, "unexpected.json"), "{ malformed\n");
+  const namesInstrumented = instrumentDirectoryReads(
+    aggregateRecords,
+    LIFECYCLE_CLI,
+    ["first.json", "second.json"],
+    100,
+  );
+  check(
+    "unexpected directory names are rejected before any record read",
+    namesInstrumented.accepted === false &&
+      namesInstrumented.reads === 0 &&
+      /incomplete or has extra entries/.test(namesInstrumented.message) &&
+      /unexpected\.json/.test(namesInstrumented.message),
+    JSON.stringify(namesInstrumented),
+  );
+
+  const exactQuotaRoot = join(root, "exact-quota");
+  mkdirSync(exactQuotaRoot);
+  writeFileSync(join(exactQuotaRoot, "retained.txt"), "keep");
+  const exactQuotaOutput = join(exactQuotaRoot, "output.txt");
+  writeCommandOutputCreateOrCompare(
+    exactQuotaOutput,
+    process.execPath,
+    ["-e", 'process.stdout.write("123")'],
+    { retentionRoot: exactQuotaRoot, maxBytes: 7 },
+  );
+  check(
+    "command output uses only the remaining cumulative root budget",
+    readFileSync(exactQuotaOutput, "utf8") === "123" &&
+      directoryTreeUsageNoFollow(exactQuotaRoot).bytes === 7,
+  );
+  const overQuotaRoot = join(root, "over-quota");
+  mkdirSync(overQuotaRoot);
+  writeFileSync(join(overQuotaRoot, "retained.txt"), "keep");
+  rejects(
+    "streamed command output rejects one byte beyond the cumulative boundary",
+    () => writeCommandOutputCreateOrCompare(
+      join(overQuotaRoot, "output.txt"),
+      process.execPath,
+      ["-e", 'process.stdout.write("1234")'],
+      { retentionRoot: overQuotaRoot, maxBytes: 7 },
+    ),
+    /status:.*migration:.*prune:.*no existing packet was deleted/,
+  );
+  check(
+    "over-quota command output leaves no publication temporary",
+    readdirSync(overQuotaRoot).join(",") === "retained.txt",
+  );
+  const generatedQuotaRoot = join(root, "generated-quota");
+  mkdirSync(generatedQuotaRoot);
+  writeFileSync(join(generatedQuotaRoot, "retained.txt"), "keep");
+  const generatedValue = { bounded: true };
+  const generatedBytes = Buffer.byteLength(stableStringify(generatedValue));
+  writeCreateOrCompare(
+    join(generatedQuotaRoot, "generated.json"),
+    generatedValue,
+    {
+      retentionRoot: generatedQuotaRoot,
+      maxBytes: 4 + generatedBytes,
+    },
+  );
+  check(
+    "generated-file temporary accepts only its cumulative boundary",
+    directoryTreeUsageNoFollow(generatedQuotaRoot).bytes ===
+      4 + generatedBytes,
+  );
+  const familyQuotaRoot = join(root, "family-quota");
+  mkdirSync(familyQuotaRoot);
+  writeFileSync(join(familyQuotaRoot, "retained.txt"), "keep");
+  writeDirectoryCreateOrCompare(
+    join(familyQuotaRoot, "family"),
+    [
+      { name: "first.json", bytes: "12" },
+      { name: "second.json", bytes: "3" },
+    ],
+    { retentionRoot: familyQuotaRoot, maxBytes: 7 },
+  );
+  check(
+    "directory-family temporary uses one cumulative family boundary",
+    directoryTreeUsageNoFollow(familyQuotaRoot).bytes === 7,
+  );
+  const rejectedFamilyRoot = join(root, "rejected-family-quota");
+  mkdirSync(rejectedFamilyRoot);
+  writeFileSync(join(rejectedFamilyRoot, "retained.txt"), "keep");
+  rejects(
+    "directory-family aggregate rejects one byte past remaining root budget",
+    () => writeDirectoryCreateOrCompare(
+      join(rejectedFamilyRoot, "family"),
+      [
+        { name: "first.json", bytes: "12" },
+        { name: "second.json", bytes: "34" },
+      ],
+      { retentionRoot: rejectedFamilyRoot, maxBytes: 7 },
+    ),
+    /root-wide exact-packet quota/,
+  );
+  check(
+    "rejected directory-family quota leaves no staging directory",
+    readdirSync(rejectedFamilyRoot).join(",") === "retained.txt",
+  );
+
+  const cleanupRoot = join(root, "identity-cleanup");
+  const cleanupOwned = join(cleanupRoot, "owned");
+  const cleanupMoved = join(cleanupRoot, "owned-moved");
+  mkdirSync(cleanupOwned, { recursive: true });
+  writeFileSync(join(cleanupOwned, "original.txt"), "original\n");
+  const cleanupIdentity = lstatSync(cleanupOwned, { bigint: true });
+  renameSync(cleanupOwned, cleanupMoved);
+  mkdirSync(cleanupOwned);
+  writeFileSync(join(cleanupOwned, "replacement.txt"), "replacement\n");
+  rejects(
+    "incomplete-directory cleanup refuses a replaced identity",
+    () => removeDirectoryIfIdentityNoFollow(cleanupOwned, {
+      dev: cleanupIdentity.dev.toString(),
+      ino: cleanupIdentity.ino.toString(),
+    }),
+    /no longer has the identity/,
+  );
+  check(
+    "replaced-identity cleanup removes neither identity",
+    readFileSync(join(cleanupOwned, "replacement.txt"), "utf8") ===
+      "replacement\n" &&
+      readFileSync(join(cleanupMoved, "original.txt"), "utf8") ===
+      "original\n",
+  );
 
   console.log("panel lifecycle: responses and strict acceptance");
   const responseInput = makeLedger();
@@ -2161,6 +2435,60 @@ process.stdout.write("attacker-controlled timing\\n");
       injected.stderr,
     );
   }
+  const replacedDirectoryTemporary = join(
+    root,
+    "replaced-directory-temporary",
+  );
+  const replacedDirectoryResult = replacedTemporaryPublish(
+    replacedDirectoryTemporary,
+    LIFECYCLE_CLI,
+    "directory",
+  );
+  const replacedDirectorySiblings = readdirSync(root)
+    .filter((name) => name.startsWith(".replaced-directory-temporary.stage-"));
+  const replacedDirectoryOriginal = replacedDirectorySiblings.find((name) =>
+    name.endsWith("-original"));
+  const replacedDirectoryReplacement = replacedDirectorySiblings.find((name) =>
+    !name.endsWith("-original"));
+  check(
+    "directory temporary cleanup refuses both sides of a replaced identity",
+    replacedDirectoryResult.status === 1 &&
+      replacedDirectoryOriginal !== undefined &&
+      replacedDirectoryReplacement !== undefined &&
+      readFileSync(
+        join(root, replacedDirectoryOriginal, "seat.json"),
+        "utf8",
+      ) === "original\n" &&
+      readFileSync(
+        join(root, replacedDirectoryReplacement, "replacement.txt"),
+        "utf8",
+      ) === "replacement\n",
+    replacedDirectoryResult.stderr,
+  );
+  const replacedFileTemporary = join(root, "replaced-file-temporary.json");
+  const replacedFileResult = replacedTemporaryPublish(
+    replacedFileTemporary,
+    LIFECYCLE_CLI,
+    "file",
+  );
+  const replacedFileSiblings = readdirSync(root)
+    .filter((name) => name.startsWith(".replaced-file-temporary.json."));
+  const replacedFileOriginal = replacedFileSiblings.find((name) =>
+    name.endsWith("-original"));
+  const replacedFileReplacement = replacedFileSiblings.find((name) =>
+    !name.endsWith("-original"));
+  check(
+    "file temporary cleanup refuses both sides of a replaced identity",
+    replacedFileResult.status === 1 &&
+      replacedFileOriginal !== undefined &&
+      replacedFileReplacement !== undefined &&
+      JSON.parse(
+        readFileSync(join(root, replacedFileOriginal), "utf8"),
+      ).original === true &&
+      readFileSync(join(root, replacedFileReplacement), "utf8") ===
+        "replacement\n",
+    replacedFileResult.stderr,
+  );
   const staleDirectory = join(root, "stale-family");
   mkdirSync(`${staleDirectory}.claim`);
   const staleRecovery = writeDirectoryCreateOrCompare(
@@ -3178,8 +3506,37 @@ console.log("panel lifecycle: legacy continuation");
       candidate: legacyCandidate,
     });
     check("legacy directory import reads its fixed-ten records directory", directoryImport.sources.length === 10);
+    const legacySoftwarePath = join(
+      legacyDir,
+      "records",
+      "software.json",
+    );
+    writeFileSync(legacySoftwarePath, "{ malformed\n");
+    try {
+      importLegacyRound(legacyDir, { candidate: legacyCandidate });
+      check("legacy record parse failures name directory and filename", false);
+    } catch (cause) {
+      check(
+        "legacy record parse failures name directory and filename",
+        cause.message.includes(join(legacyDir, "records")) &&
+          cause.message.includes("software.json") &&
+          /malformed JSON/.test(cause.message),
+        cause.message,
+      );
+    }
+    writeFileSync(legacySoftwarePath, stableStringify(legacyWireRecords[0]));
     writeFileSync(
-      join(legacyDir, "records", "software.json"),
+      join(legacyDir, "records", "unexpected.json"),
+      "{ malformed\n",
+    );
+    rejects(
+      "legacy directory rejects non-fixed-ten names before parsing records",
+      () => importLegacyRound(legacyDir, { candidate: legacyCandidate }),
+      /incomplete or has extra entries.*unexpected\.json/,
+    );
+    rmSync(join(legacyDir, "records", "unexpected.json"));
+    writeFileSync(
+      legacySoftwarePath,
       stableStringify({
         ...legacyWireRecords[0],
         recommendations: ["tampered"],

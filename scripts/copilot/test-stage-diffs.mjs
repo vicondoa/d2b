@@ -9,8 +9,10 @@ import {
   cpSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -89,6 +91,18 @@ function git(cwd, ...args) {
     );
   }
   return result.stdout.trim();
+}
+
+function retainedBytes(path) {
+  const stat = lstatSync(path);
+  if (stat.isFile()) return stat.size;
+  if (!stat.isDirectory()) {
+    throw new Error(`unexpected retained entry type at ${path}`);
+  }
+  return readdirSync(path).reduce(
+    (total, name) => total + retainedBytes(join(path, name)),
+    0,
+  );
 }
 
 const repo = mkdtempSync(join(tmpdir(), "d2b-stage-diffs-"));
@@ -295,6 +309,9 @@ try {
     "staging preserves exact packets and removes an over-quota owned packet",
     boundedPacket.status === 2 &&
       /exact-packet quota/.test(boundedPacket.text) &&
+      /status:.*migration:.*prune:/.test(boundedPacket.text) &&
+      /no existing packet was deleted/.test(boundedPacket.text) &&
+      !/rm -rf/.test(boundedPacket.text) &&
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")),
     boundedPacket.text,
   );
@@ -370,10 +387,59 @@ try {
   check("first review stages successfully", first.status === 0, first.text);
 
   const firstDir = join(repo, ".scratch", "panel", "spec001w1-r1");
+  const exactRetainedBytes = retainedBytes(panelRoot);
+  const exactCumulativeQuota = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], {
+    env: {
+      D2B_PANEL_LIFECYCLE_MAX_BYTES: String(exactRetainedBytes),
+    },
+  });
+  check(
+    "the exact cumulative root quota permits byte-identical reuse",
+    exactCumulativeQuota.status === 0 &&
+      retainedBytes(panelRoot) === exactRetainedBytes,
+    exactCumulativeQuota.text,
+  );
+  const belowCumulativeQuota = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], {
+    env: {
+      D2B_PANEL_LIFECYCLE_MAX_BYTES: String(exactRetainedBytes - 1),
+    },
+  });
+  check(
+    "one byte below cumulative usage rejects without pruning retained state",
+    belowCumulativeQuota.status === 2 &&
+      /root-wide exact-packet quota/.test(belowCumulativeQuota.text) &&
+      /status:.*migration:.*prune:/.test(belowCumulativeQuota.text) &&
+      /no existing packet was deleted/.test(belowCumulativeQuota.text) &&
+      !/rm -rf/.test(belowCumulativeQuota.text) &&
+      existsSync(join(firstDir, ".complete")) &&
+      retainedBytes(panelRoot) === exactRetainedBytes,
+    belowCumulativeQuota.text,
+  );
   const firstAddress = JSON.parse(readFileSync(join(firstDir, "address.json"), "utf8"));
   const firstCompletion = JSON.parse(
     readFileSync(join(firstDir, ".complete"), "utf8"),
   );
+  const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
   check(
     "first review records its lifecycle id",
     firstAddress.lifecycle_id === "spec001w1",
@@ -392,6 +458,12 @@ try {
         typeof firstCompletion.artifact_sha256[
           `reviewer-notes/${seat}.md`
         ] === "string") &&
+      ["software", "test"].every((seat) =>
+        firstCompletion.artifact_sha256[
+          `agent-definitions/panel-${seat}.agent.md`
+        ] === createHash("sha256")
+          .update(readFileSync(join(agents, `panel-${seat}.agent.md`)))
+          .digest("hex")) &&
       typeof firstCompletion.artifact_sha256["review-request.md"] === "string" &&
       typeof firstCompletion.artifact_sha256["dispatch-prompt.txt"] === "string",
   );
@@ -448,6 +520,22 @@ try {
     firstRequest.includes("full candidate") &&
       firstRequest.includes("every reasonably discoverable actionable finding"),
   );
+  check(
+    "discovery request and dispatch carry the distinct four-field verdict contract",
+    [firstRequest, firstDispatch].every((text) =>
+      text.includes("discovery verdict has exactly four top-level fields") &&
+      text.includes("does not contain") &&
+      text.includes("`verified_issue_statuses` or `late_findings`") &&
+      text.includes('"recommendations": []')),
+  );
+  check(
+    "selected agent definitions are staged exactly for bootstrap-compatible dispatch",
+    firstRoster.every((seat) =>
+      readFileSync(
+        join(firstDir, "agent-definitions", `panel-${seat}.agent.md`),
+        "utf8",
+      ) === readFileSync(join(agents, `panel-${seat}.agent.md`), "utf8")),
+  );
   const malformedSelection = JSON.parse(readFileSync(selectionPath, "utf8"));
   malformedSelection.classification_inputs.unexpected = true;
   const validSelectionBytes = readFileSync(selectionPath, "utf8");
@@ -478,7 +566,15 @@ try {
   );
   check(
     "dispatch prompt points at the complete request",
-    firstDispatch.includes(join(firstDir, "review-request.md")),
+    firstDispatch.includes(join(firstDir, "review-request.md")) &&
+      firstDispatch.includes("This is the discovery phase") &&
+      firstDispatch.includes(
+        join(
+          firstDir,
+          "agent-definitions",
+          "panel-<your-seat>.agent.md",
+        ),
+      ),
   );
   check(
     "seat-specific note files are staged",
@@ -564,6 +660,36 @@ try {
   writeFileSync(softwareNote, originalSoftwareNote);
   chmodSync(softwareNote, 0o444);
 
+  const stagedSoftwareAgent = join(
+    firstDir,
+    "agent-definitions",
+    "panel-software.agent.md",
+  );
+  const originalStagedSoftwareAgent = readFileSync(stagedSoftwareAgent);
+  chmodSync(stagedSoftwareAgent, 0o644);
+  writeFileSync(stagedSoftwareAgent, "mutated staged agent\n");
+  const mutatedAgentDefinition = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "post-completion panel-agent mutation is refused",
+    mutatedAgentDefinition.status === 2 &&
+      /post-completion mutation of agent-definitions\/panel-software\.agent\.md is refused/.test(
+        mutatedAgentDefinition.text,
+      ),
+    mutatedAgentDefinition.text,
+  );
+  writeFileSync(stagedSoftwareAgent, originalStagedSoftwareAgent);
+  chmodSync(stagedSoftwareAgent, 0o444);
+
   const originalDeltaBytes = readFileSync(join(firstDir, "delta.diff"), "utf8");
   chmodSync(join(firstDir, "delta.diff"), 0o644);
   writeFileSync(join(firstDir, "delta.diff"), "conflicting scratch bytes\n");
@@ -616,7 +742,6 @@ try {
   writeFileSync(dispatchPath, originalDispatchBytes);
   chmodSync(dispatchPath, 0o444);
 
-  const firstRoster = JSON.parse(readFileSync(selectionPath, "utf8")).roster;
   for (const seat of firstRoster) {
     writeFileSync(
       join(firstDir, "verdicts", `${seat}.json`),
@@ -915,7 +1040,8 @@ try {
   check(
     "verification staging refuses an incomplete per-seat request directory",
     incompleteVerification.status === 2 &&
-      /exactly one readable JSON request per selected seat/.test(incompleteVerification.text) &&
+      /incomplete or has extra entries/.test(incompleteVerification.text) &&
+      /expected exactly/.test(incompleteVerification.text) &&
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
     incompleteVerification.text,
   );
@@ -1133,6 +1259,10 @@ try {
   const delta = readFileSync(join(secondDir, "delta.diff"), "utf8");
   const full = readFileSync(join(secondDir, "full.diff"), "utf8");
   const secondRequest = readFileSync(join(secondDir, "review-request.md"), "utf8");
+  const secondDispatch = readFileSync(
+    join(secondDir, "dispatch-prompt.txt"),
+    "utf8",
+  );
   check(
     "incremental diff excludes earlier changed paths",
     delta.includes("Makefile") && !delta.includes("first.txt"),
@@ -1160,6 +1290,15 @@ try {
       secondRequest.includes("Immutable discovery ledger:") &&
       secondRequest.includes("Approval output after verdict collection:") &&
       !secondRequest.includes("missing previous verdict for seat build"),
+  );
+  check(
+    "verification request and dispatch carry the exact six-field verdict contract",
+    [secondRequest, secondDispatch].every((text) =>
+      text.includes("verification verdict has exactly six top-level fields") &&
+      text.includes("`engineer`, `signoff`, `summary`, `verified_issue_statuses`, `late_findings`,") &&
+      text.includes('"verified_issue_statuses": {') &&
+      text.includes('"R1": "verified"') &&
+      text.includes('"late_findings": []')),
   );
   check(
     "new-seat request makes the absent prior verdict explicit",
@@ -1309,7 +1448,9 @@ createSelection({
     "an unmarked scratch directory is non-authoritative and names cleanup",
     incompleteRetry.status === 2 &&
       /non-authoritative/.test(incompleteRetry.text) &&
-      /rm -rf/.test(incompleteRetry.text),
+      /inspect its identity and contents/.test(incompleteRetry.text) &&
+      /do not recursively delete/.test(incompleteRetry.text) &&
+      !/rm -rf/.test(incompleteRetry.text),
     incompleteRetry.text,
   );
 

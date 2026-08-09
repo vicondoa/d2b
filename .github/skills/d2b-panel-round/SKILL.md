@@ -159,6 +159,16 @@ evidence or reviewer notes require a new qualified round. The generated
 `dispatch-prompt.txt` is usable only when the round's `.complete` marker
 exists; an unmarked scratch directory is non-authoritative.
 
+Staging also snapshots each selected
+`.github/agents/panel-<seat>.agent.md` at
+`agent-definitions/panel-<seat>.agent.md` and byte-binds it in `.complete`.
+Both `review-request.md` and `dispatch-prompt.txt` name that immutable copy and
+carry the active phase's authoritative verdict contract. Discovery keeps its
+bootstrap-compatible four-field schema and explicitly excludes
+`verified_issue_statuses` and `late_findings`; verification requires those two
+fields in its distinct six-field schema. An inactive-phase output example in
+the bound agent definition does not override the staged phase contract.
+
 The phase handoff uses a staged candidate, a discovery request, an immutable
 ledger, a response envelope, verification requests, an approval artifact, and
 a metrics artifact as its canonical inputs. The public command sequence covers
@@ -382,6 +392,9 @@ and theoretical out-of-scope observations remain non-blocking ledger history.
 Every verification result must status every ledger issue exactly once. Only
 `resolved` or `verified` is a passing status; `open`, `blocked`, `unresolved`,
 `regression`, `accepted`, and every other status keep approval blocked.
+The reviewer verdict always includes `verified_issue_statuses` and
+`late_findings`, even when the latter is empty; discovery verdicts include
+neither field.
 
 The lifecycle records initial and late findings, late BLOCKER and MAJOR
 counts, review and implementation iterations, and average fixed issues per

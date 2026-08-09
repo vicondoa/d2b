@@ -299,7 +299,8 @@ function readOpenedFile(fd, maxBytes, label, start = null) {
   const chunks = [];
   let total = 0;
   for (;;) {
-    const chunk = Buffer.allocUnsafe(64 * 1024);
+    const remaining = maxBytes - total;
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining + 1));
     const position = start === null ? null : start + total;
     const count = readSync(fd, chunk, 0, chunk.length, position);
     if (count === 0) break;
@@ -312,6 +313,9 @@ function readOpenedFile(fd, maxBytes, label, start = null) {
 
 function readFileAt(parentFd, name, label, options = {}) {
   const maxBytes = options.maxBytes ?? MAX_ANCHORED_READ_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    error(`${label} byte limit is malformed`);
+  }
   let fd;
   try {
     fd = openSync(procFdPath(parentFd, name), FILE_READ_FLAGS);
@@ -361,6 +365,47 @@ function directoryNames(fd) {
     .sort();
 }
 
+function expectedDirectoryNames(value, label) {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((name) => typeof name !== "string" || name.length === 0)
+  ) {
+    error(`${label} expected entry names must be non-empty strings`);
+  }
+  const names = [...value].sort();
+  if (new Set(names).size !== names.length) {
+    error(`${label} expected entry names must be unique`);
+  }
+  return names;
+}
+
+function requireExactDirectoryNames(actual, expected, label) {
+  if (
+    expected !== undefined &&
+    (
+      actual.length !== expected.length ||
+      actual.some((name, index) => name !== expected[index])
+    )
+  ) {
+    error(
+      `${label} is incomplete or has extra entries; ` +
+      `expected exactly [${expected.join(", ")}]; ` +
+      `found [${actual.join(", ")}]`,
+    );
+  }
+}
+
+function retainedQuotaError(scope, bytes, maxBytes) {
+  error(
+    `${scope} retained bytes ${bytes} exceed the root-wide exact-packet ` +
+    `quota ${maxBytes}; status: inspect retained packet bytes and round ` +
+    `directories; migration: archive and verify required immutable packets ` +
+    `before changing retention; prune: remove only exact, ` +
+    `operator-confirmed obsolete round paths; no existing packet was deleted`,
+  );
+}
+
 function addDirectoryTreeUsage(directory, label, usage, maxBytes) {
   const names = directoryNames(directory.fd);
   for (const name of names) {
@@ -386,6 +431,12 @@ function addDirectoryTreeUsage(directory, label, usage, maxBytes) {
           usage,
           maxBytes,
         );
+        verifyNamedIdentity(
+          directory.fd,
+          name,
+          childDirectory.stat,
+          `${label}/${name}`,
+        );
       } finally {
         closeSync(childDirectory.fd);
       }
@@ -407,10 +458,7 @@ function addDirectoryTreeUsage(directory, label, usage, maxBytes) {
       }
       usage.bytes += stat.size;
       if (usage.bytes > maxBytes) {
-        error(
-          `${label} retained bytes ${usage.bytes} exceed the root-wide ` +
-          `exact-packet quota ${maxBytes}`,
-        );
+        retainedQuotaError(label, usage.bytes, maxBytes);
       }
     } finally {
       if (fd !== undefined) closeSync(fd);
@@ -449,23 +497,171 @@ export function directoryTreeUsageNoFollow(path, options = {}) {
   }
 }
 
+function retentionQuota(options, label) {
+  const hasRoot = options.retentionRoot !== undefined;
+  if (!hasRoot) return undefined;
+  if (
+    typeof options.retentionRoot !== "string" ||
+    options.retentionRoot.length === 0 ||
+    !Number.isSafeInteger(options.maxBytes) ||
+    options.maxBytes < 0
+  ) {
+    error(`${label} retention quota is malformed`);
+  }
+  const root = resolve(options.retentionRoot);
+  const destination = options.destination === undefined
+    ? undefined
+    : resolve(options.destination);
+  if (
+    destination !== undefined &&
+    destination !== root &&
+    !destination.startsWith(`${root}/`)
+  ) {
+    error(`${label} destination is outside its retention root`);
+  }
+  return { root, maxBytes: options.maxBytes };
+}
+
+function retentionUsage(options, label, destination = undefined) {
+  const quota = retentionQuota(
+    { ...options, destination },
+    label,
+  );
+  if (quota === undefined) return undefined;
+  const usage = directoryTreeUsageNoFollow(quota.root, {
+    label: "panel packet root",
+    maxBytes: quota.maxBytes,
+  });
+  return { ...quota, usage };
+}
+
+function existingPublicationBytes(path, label) {
+  const parent = openAnchoredParent(path, label);
+  let fd;
+  try {
+    parent.verify();
+    try {
+      fd = openSync(procFdPath(parent.parentFd, parent.leaf), FILE_READ_FLAGS);
+    } catch (cause) {
+      if (cause.code === "ENOENT") return 0;
+      throw cause;
+    }
+    const stat = verifyRegularDescriptor(
+      fd,
+      parent.parentFd,
+      parent.leaf,
+      label,
+    );
+    if (stat.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+      error(`${label} is too large to account safely`);
+    }
+    parent.verify();
+    return Number(stat.size);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    parent.close();
+  }
+}
+
+function publicationByteBudget(path, options, label) {
+  const retained = retentionUsage(options, label, path);
+  if (retained === undefined) return MAX_ANCHORED_READ_BYTES;
+  const reusable = existingPublicationBytes(path, label);
+  return retained.maxBytes - retained.usage.bytes + reusable;
+}
+
+function requireTemporaryByteBudget(path, bytes, options, label) {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) {
+    error(`${label} temporary byte count is malformed`);
+  }
+  const retained = retentionUsage(options, label, path);
+  if (retained === undefined) return;
+  const total = retained.usage.bytes + bytes;
+  if (total > retained.maxBytes) {
+    retainedQuotaError("panel packet root", total, retained.maxBytes);
+  }
+}
+
 function readDirectoryAt(parentFd, name, label, options = {}) {
   const directory = openDirectoryAt(parentFd, name, label);
+  const opened = [];
   try {
+    const maxBytes = options.maxBytes ?? MAX_ANCHORED_READ_BYTES;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      error(`${label} aggregate byte limit is malformed`);
+    }
+    const expectedNames = expectedDirectoryNames(options.expectedNames, label);
     const names = directoryNames(directory.fd);
-    const entries = names.map((entryName) => ({
-      name: entryName,
-      bytes: readFileAt(
+    requireExactDirectoryNames(names, expectedNames, label);
+
+    let plannedBytes = 0n;
+    for (const entryName of names) {
+      const entryLabel = `${label}/${entryName}`;
+      const fd = openSync(procFdPath(directory.fd, entryName), FILE_READ_FLAGS);
+      try {
+        const stat = verifyRegularDescriptor(
+          fd,
+          directory.fd,
+          entryName,
+          entryLabel,
+        );
+        plannedBytes += stat.size;
+        if (plannedBytes > BigInt(maxBytes)) {
+          error(
+            `${label} aggregate bytes ${plannedBytes} exceed the ` +
+            `directory-ingestion limit ${maxBytes}`,
+          );
+        }
+        opened.push({ name: entryName, fd, before: stat, label: entryLabel });
+      } catch (cause) {
+        closeSync(fd);
+        throw cause;
+      }
+    }
+
+    const plannedNames = directoryNames(directory.fd);
+    const plannedStat = verifyDirectoryDescriptor(directory.fd, label);
+    verifyNamedIdentity(parentFd, name, plannedStat, label);
+    if (
+      names.length !== plannedNames.length ||
+      names.some((entryName, index) => entryName !== plannedNames[index])
+    ) {
+      error(`${label} changed while its aggregate bytes were being checked`);
+    }
+
+    let ingestedBytes = 0;
+    const entries = opened.map((entry) => {
+      const bytes = readOpenedFile(
+        entry.fd,
+        maxBytes - ingestedBytes,
+        entry.label,
+      );
+      ingestedBytes += bytes.length;
+      const after = verifyRegularDescriptor(
+        entry.fd,
         directory.fd,
-        entryName,
-        `${label}/${entryName}`,
-        options,
-      ),
-    }));
+        entry.name,
+        entry.label,
+      );
+      if (
+        !sameIdentity(entry.before, after) ||
+        entry.before.size !== after.size ||
+        entry.before.mtimeNs !== after.mtimeNs ||
+        entry.before.ctimeNs !== after.ctimeNs ||
+        after.size !== BigInt(bytes.length)
+      ) {
+        error(`${entry.label} changed while its opened descriptor was being read`);
+      }
+      if (options.nonEmpty && bytes.length === 0) {
+        error(`${entry.label} is empty`);
+      }
+      return { name: entry.name, bytes };
+    });
     const afterNames = directoryNames(directory.fd);
     const afterStat = verifyDirectoryDescriptor(directory.fd, label);
     verifyNamedIdentity(parentFd, name, afterStat, label);
     if (
+      !sameIdentity(afterStat, directory.stat) ||
       names.length !== afterNames.length ||
       names.some((entryName, index) => entryName !== afterNames[index])
     ) {
@@ -473,6 +669,7 @@ function readDirectoryAt(parentFd, name, label, options = {}) {
     }
     return entries;
   } finally {
+    closeAll(opened.map((entry) => entry.fd));
     closeSync(directory.fd);
   }
 }
@@ -503,7 +700,7 @@ function relativeComponents(path, label) {
   return path.split("/");
 }
 
-function readRelativeFileAt(anchorFd, relative, label) {
+function readRelativeFileAt(anchorFd, relative, label, options = {}) {
   const components = relativeComponents(relative, label);
   const leaf = components.pop();
   const directories = [];
@@ -514,7 +711,7 @@ function readRelativeFileAt(anchorFd, relative, label) {
       directories.push(directory.fd);
       parentFd = directory.fd;
     }
-    return readFileAt(parentFd, leaf, label);
+    return readFileAt(parentFd, leaf, label, options);
   } finally {
     closeAll(directories);
   }
@@ -541,17 +738,49 @@ export function readBoundArtifactSetNoFollow(markerPath) {
     ) {
       error("stage completion marker has invalid artifact maps");
     }
+    const digestNames = Object.keys(marker.artifact_sha256).sort();
+    const sizeNames = Object.keys(marker.artifact_bytes).sort();
+    if (
+      digestNames.length !== sizeNames.length ||
+      digestNames.some((name, index) => name !== sizeNames[index])
+    ) {
+      error("stage completion marker artifact maps disagree");
+    }
+    let expectedTotal = 0;
+    for (const relative of digestNames) {
+      relativeComponents(relative, "bound artifact path");
+      if (
+        !/^[0-9a-f]{64}$/u.test(marker.artifact_sha256[relative]) ||
+        !Number.isSafeInteger(marker.artifact_bytes[relative]) ||
+        marker.artifact_bytes[relative] < 0
+      ) {
+        error(`stage completion marker has invalid bound artifact ${relative}`);
+      }
+      expectedTotal += marker.artifact_bytes[relative];
+      if (
+        !Number.isSafeInteger(expectedTotal) ||
+        expectedTotal > MAX_ANCHORED_READ_BYTES
+      ) {
+        error(
+          `stage completion marker aggregate artifact bytes exceed ` +
+          `${MAX_ANCHORED_READ_BYTES}`,
+        );
+      }
+    }
     const artifacts = {};
-    for (const relative of Object.keys(marker.artifact_sha256).sort()) {
+    let ingestedTotal = 0;
+    for (const relative of digestNames) {
       try {
         artifacts[relative] = readRelativeFileAt(
           parent.parentFd,
           relative,
           `bound artifact ${relative}`,
+          { maxBytes: MAX_ANCHORED_READ_BYTES - ingestedTotal },
         );
       } catch (cause) {
         error(`bound artifact ${relative} is unavailable: ${cause.message}`);
       }
+      ingestedTotal += artifacts[relative].length;
     }
     parent.verify();
     return { marker, markerBytes, artifacts };
@@ -576,12 +805,22 @@ export function writeBoundCompletionCreateOrCompare(
     parent.verify();
     const artifact_sha256 = {};
     const artifact_bytes = {};
+    const sortedRelativePaths = [...relativePaths].sort();
+    if (new Set(sortedRelativePaths).size !== sortedRelativePaths.length) {
+      error("bound completion artifact paths must be unique");
+    }
+    for (const relative of sortedRelativePaths) {
+      relativeComponents(relative, "completion artifact path");
+    }
     let currentBytes = 0;
-    for (const relative of [...relativePaths].sort()) {
+    for (const relative of sortedRelativePaths) {
       const bytes = readRelativeFileAt(
         parent.parentFd,
         relative,
         `completion artifact ${relative}`,
+        {
+          maxBytes: (options.maxBytes ?? MAX_ANCHORED_READ_BYTES) - currentBytes,
+        },
       );
       artifact_sha256[relative] =
         createHash("sha256").update(bytes).digest("hex");
@@ -622,11 +861,8 @@ export function writeBoundCompletionCreateOrCompare(
       if (total > options.maxBytes) {
         const scope = options.retentionRoot === undefined
           ? `lifecycle ${metadata.lifecycle_id} staged packet`
-          : "panel packet root retained";
-        error(
-          `${scope} bytes ${total} exceed the root-wide exact-packet quota ` +
-          `${options.maxBytes}; retain immutable packets only within the bound`,
-        );
+          : "panel packet root";
+        retainedQuotaError(scope, total, options.maxBytes);
       }
     }
     const result = writeRawAtCreateOrCompare(
@@ -634,6 +870,7 @@ export function writeBoundCompletionCreateOrCompare(
       parent.leaf,
       markerPath,
       bytes,
+      options,
     );
     parent.verify();
     return { ...result, value };
@@ -754,7 +991,7 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
  * command, but cannot silently replace an artifact that another step already
  * consumed.
  */
-export function writeCreateOrCompare(path, value) {
+export function writeCreateOrCompare(path, value, options = {}) {
   const expected = stableStringify(value);
   const parent = openAnchoredParent(path, "generated artifact", { create: true });
   const temporary = `.${parent.leaf}.${process.pid}.${temporaryCounter += 1}.tmp`;
@@ -762,6 +999,7 @@ export function writeCreateOrCompare(path, value) {
   let temporaryPresent = false;
   try {
     parent.verify();
+    retentionUsage(options, "generated artifact", path);
     let actual;
     try {
       actual = readFileAt(
@@ -782,6 +1020,12 @@ export function writeCreateOrCompare(path, value) {
       return { path, created: false, bytes: expected };
     }
 
+    requireTemporaryByteBudget(
+      path,
+      Buffer.byteLength(expected),
+      options,
+      "generated artifact",
+    );
     temporaryFd = openSync(
       procFdPath(parent.parentFd, temporary),
       fsConstants.O_WRONLY |
@@ -800,6 +1044,7 @@ export function writeCreateOrCompare(path, value) {
       temporary,
       "generated artifact temporary",
     );
+    retentionUsage(options, "generated artifact", path);
     try {
       const moved = atomicNoReplaceMove(
         parent.parentFd,
@@ -836,14 +1081,19 @@ export function writeCreateOrCompare(path, value) {
       throw cause;
     }
   } finally {
-    if (temporaryFd !== undefined) closeSync(temporaryFd);
     if (temporaryPresent) {
       try {
-        unlinkSync(procFdPath(parent.parentFd, temporary));
+        unlinkOpenedFileAt(
+          parent.parentFd,
+          temporary,
+          temporaryFd,
+          "generated artifact temporary",
+        );
       } catch {
         // Preserve the primary publication error.
       }
     }
+    if (temporaryFd !== undefined) closeSync(temporaryFd);
     parent.close();
   }
 }
@@ -868,7 +1118,17 @@ function createFileAt(parentFd, name, bytes, label) {
   }
 }
 
-function removeOwnedDirectoryAt(parentFd, name) {
+function unlinkOpenedFileAt(parentFd, name, fd, label) {
+  const opened = fstatSync(fd, { bigint: true });
+  verifyNamedIdentity(parentFd, name, opened, label);
+  unlinkSync(procFdPath(parentFd, name));
+  const after = fstatSync(fd, { bigint: true });
+  if (!after.isFile() || after.nlink !== 0n) {
+    error(`${label} was not unlinked from its pinned identity`);
+  }
+}
+
+function removeOwnedDirectoryAt(parentFd, name, expectedIdentity) {
   let directory;
   try {
     directory = openDirectoryAt(parentFd, name, "temporary artifact family");
@@ -877,6 +1137,9 @@ function removeOwnedDirectoryAt(parentFd, name) {
     throw cause;
   }
   try {
+    if (!sameIdentity(directory.stat, expectedIdentity)) {
+      error("temporary artifact family changed identity before cleanup");
+    }
     for (const entry of directoryNames(directory.fd)) {
       const fd = openSync(procFdPath(directory.fd, entry), FILE_READ_FLAGS);
       try {
@@ -886,15 +1149,30 @@ function removeOwnedDirectoryAt(parentFd, name) {
           entry,
           "temporary artifact family entry",
         );
+        unlinkOpenedFileAt(
+          directory.fd,
+          entry,
+          fd,
+          "temporary artifact family entry",
+        );
       } finally {
         closeSync(fd);
       }
-      unlinkSync(procFdPath(directory.fd, entry));
     }
+    const after = verifyDirectoryDescriptor(
+      directory.fd,
+      "temporary artifact family",
+    );
+    verifyNamedIdentity(
+      parentFd,
+      name,
+      after,
+      "temporary artifact family",
+    );
+    rmdirSync(procFdPath(parentFd, name));
   } finally {
     closeSync(directory.fd);
   }
-  rmdirSync(procFdPath(parentFd, name));
 }
 
 function compareExistingDirectoryAt(parentFd, name, path, expected, expectedNames) {
@@ -902,6 +1180,7 @@ function compareExistingDirectoryAt(parentFd, name, path, expected, expectedName
     parentFd,
     name,
     `existing artifact family at ${path}`,
+    { expectedNames },
   );
   const actualNames = actualEntries.map((entry) => entry.name);
   if (
@@ -994,7 +1273,11 @@ function createDirectoryAt(parentFd, name, label) {
  * check-then-rename fallback when the syscall, filesystem, or mount rejects
  * the primitive.
  */
-export function writeDirectoryCreateOrCompare(directory, entries) {
+export function writeDirectoryCreateOrCompare(
+  directory,
+  entries,
+  options = {},
+) {
   if (!Array.isArray(entries) || entries.length === 0) {
     error("directory publication requires at least one artifact");
   }
@@ -1015,6 +1298,7 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
   let staged;
   try {
     parent.verify();
+    retentionUsage(options, "artifact family", directory);
     if (pathKindAt(parent.parentFd, parent.leaf, "artifact family") !== "missing") {
       const result = compareExistingDirectoryAt(
         parent.parentFd,
@@ -1026,6 +1310,21 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
       parent.verify();
       return result;
     }
+    const totalBytes = expectedNames.reduce((total, name) => {
+      const bytes = expected.get(name);
+      return total + (
+        Buffer.isBuffer(bytes) ? bytes.length : Buffer.byteLength(bytes)
+      );
+    }, 0);
+    if (!Number.isSafeInteger(totalBytes)) {
+      error("artifact family is too large to account safely");
+    }
+    requireTemporaryByteBudget(
+      directory,
+      totalBytes,
+      options,
+      "artifact family",
+    );
     staged = createDirectoryAt(
       parent.parentFd,
       temporary,
@@ -1039,6 +1338,7 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
         expected.get(name),
         `staged artifact family entry ${name}`,
       );
+      retentionUsage(options, "artifact family", directory);
     }
     fsyncSync(staged.fd);
     const stagedNames = directoryNames(staged.fd);
@@ -1081,7 +1381,7 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
     if (staged !== undefined) closeSync(staged.fd);
     if (temporaryPresent) {
       try {
-        removeOwnedDirectoryAt(parent.parentFd, temporary);
+        removeOwnedDirectoryAt(parent.parentFd, temporary, staged.stat);
       } catch {
         // Preserve the primary publication error.
       }
@@ -1106,80 +1406,123 @@ function pathKindAt(parentFd, name, label) {
 }
 
 export function copyFileCreateOrCompare(source, destination, options = {}) {
-  const bytes = readFileNoFollow(source, options);
-  return writeBytesCreateOrCompare(destination, bytes);
+  const publicationBudget = publicationByteBudget(
+    destination,
+    options,
+    "copied artifact",
+  );
+  const budget =
+    options.retentionRoot === undefined && options.maxBytes !== undefined
+      ? Math.min(publicationBudget, options.maxBytes)
+      : publicationBudget;
+  let bytes;
+  try {
+    bytes = readFileNoFollow(source, { ...options, maxBytes: budget });
+  } catch (cause) {
+    if (
+      options.retentionRoot !== undefined &&
+      /exceeds [0-9]+ bytes/u.test(cause.message)
+    ) {
+      retainedQuotaError(
+        "copied artifact",
+        `more than the remaining ${budget}`,
+        options.maxBytes,
+      );
+    }
+    throw cause;
+  }
+  return writeBytesCreateOrCompare(destination, bytes, options);
 }
 
-export function writeBytesCreateOrCompare(path, bytes) {
+export function writeBytesCreateOrCompare(path, bytes, options = {}) {
   if (typeof bytes !== "string" && !Buffer.isBuffer(bytes)) {
     error("published bytes must be a string or Buffer");
   }
-  return writeRawCreateOrCompare(path, Buffer.from(bytes));
+  return writeRawCreateOrCompare(path, Buffer.from(bytes), options);
 }
 
-export function writeStandardInputCreateOrCompare(path) {
-  const bytes = readOpenedFile(0, MAX_ANCHORED_READ_BYTES, "standard input");
-  return writeRawCreateOrCompare(path, bytes);
+export function writeStandardInputCreateOrCompare(path, options = {}) {
+  const budget = publicationByteBudget(
+    path,
+    options,
+    "standard input publication",
+  );
+  let bytes;
+  try {
+    bytes = readOpenedFile(0, budget, "standard input");
+  } catch (cause) {
+    if (
+      options.retentionRoot !== undefined &&
+      /exceeds [0-9]+ bytes/u.test(cause.message)
+    ) {
+      retainedQuotaError(
+        "standard input",
+        `more than the remaining ${budget}`,
+        options.maxBytes,
+      );
+    }
+    throw cause;
+  }
+  return writeRawCreateOrCompare(path, bytes, options);
 }
 
-export function writeCommandOutputCreateOrCompare(path, command, args) {
+export function writeCommandOutputCreateOrCompare(
+  path,
+  command,
+  args,
+  options = {},
+) {
   if (typeof command !== "string" || command.length === 0 || !Array.isArray(args)) {
     error("command output publication requires a command and argument array");
   }
   const parent = openAnchoredParent(path, "command output", { create: true });
-  const temporary = `.${parent.leaf}.${process.pid}.${temporaryCounter += 1}.command.tmp`;
-  let fd;
-  let temporaryPresent = false;
   try {
     parent.verify();
-    fd = openSync(
-      procFdPath(parent.parentFd, temporary),
-      fsConstants.O_RDWR |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_NOFOLLOW |
-        fsConstants.O_CLOEXEC,
-      0o600,
+    const budget = publicationByteBudget(
+      path,
+      options,
+      "command output",
     );
-    temporaryPresent = true;
     const result = spawnSync(command, args, {
-      stdio: ["ignore", fd, "inherit"],
+      stdio: ["ignore", "pipe", "inherit"],
+      maxBuffer: Math.max(1, budget),
     });
+    if (result.error?.code === "ENOBUFS") {
+      if (options.retentionRoot === undefined) {
+        error(`command output exceeds ${budget} bytes`);
+      }
+      retainedQuotaError("command output", `more than ${budget}`, options.maxBytes);
+    }
     if (result.error) throw result.error;
     if (result.status !== 0) {
       error(`${command} exited with status ${result.status}`);
     }
-    fsyncSync(fd);
-    verifyRegularDescriptor(
-      fd,
-      parent.parentFd,
-      temporary,
-      "command output temporary",
-    );
-    const bytes = readOpenedFile(fd, MAX_ANCHORED_READ_BYTES, "command output", 0);
+    const bytes = result.stdout ?? Buffer.alloc(0);
+    if (!Buffer.isBuffer(bytes)) {
+      error("command output was not returned as bytes");
+    }
+    if (bytes.length > budget) {
+      if (options.retentionRoot === undefined) {
+        error(`command output exceeds ${budget} bytes`);
+      }
+      retainedQuotaError("command output", bytes.length, options.maxBytes);
+    }
+    parent.verify();
     const published = writeRawAtCreateOrCompare(
       parent.parentFd,
       parent.leaf,
       path,
       bytes,
+      options,
     );
     parent.verify();
     return published;
   } finally {
-    if (fd !== undefined) closeSync(fd);
-    if (temporaryPresent) {
-      try {
-        unlinkSync(procFdPath(parent.parentFd, temporary));
-        fsyncSync(parent.parentFd);
-      } catch {
-        // Preserve the primary command or publication error.
-      }
-    }
     parent.close();
   }
 }
 
-function writeRawCreateOrCompare(path, expected) {
+function writeRawCreateOrCompare(path, expected, options = {}) {
   const parent = openAnchoredParent(path, "raw artifact", { create: true });
   try {
     parent.verify();
@@ -1188,6 +1531,7 @@ function writeRawCreateOrCompare(path, expected) {
       parent.leaf,
       path,
       expected,
+      options,
     );
     parent.verify();
     return result;
@@ -1196,11 +1540,18 @@ function writeRawCreateOrCompare(path, expected) {
   }
 }
 
-function writeRawAtCreateOrCompare(parentFd, leaf, path, expected) {
+function writeRawAtCreateOrCompare(
+  parentFd,
+  leaf,
+  path,
+  expected,
+  options = {},
+) {
   const temporary = `.${leaf}.${process.pid}.${temporaryCounter += 1}.raw.tmp`;
   let fd;
   let temporaryPresent = false;
   try {
+    retentionUsage(options, "raw artifact", path);
     try {
       const actual = readFileAt(parentFd, leaf, "existing raw artifact");
       if (!actual.equals(expected)) {
@@ -1210,6 +1561,12 @@ function writeRawAtCreateOrCompare(parentFd, leaf, path, expected) {
     } catch (cause) {
       if (cause.code !== "ENOENT") throw cause;
     }
+    requireTemporaryByteBudget(
+      path,
+      expected.length,
+      options,
+      "raw artifact",
+    );
     fd = openSync(
       procFdPath(parentFd, temporary),
       fsConstants.O_WRONLY |
@@ -1223,6 +1580,7 @@ function writeRawAtCreateOrCompare(parentFd, leaf, path, expected) {
     writeFileSync(fd, expected);
     fsyncSync(fd);
     verifyRegularDescriptor(fd, parentFd, temporary, "raw artifact temporary");
+    retentionUsage(options, "raw artifact", path);
     const moved = atomicNoReplaceMove(
       parentFd,
       temporary,
@@ -1246,14 +1604,19 @@ function writeRawAtCreateOrCompare(parentFd, leaf, path, expected) {
     fsyncSync(parentFd);
     return { path, created: true, bytes: expected };
   } finally {
-    if (fd !== undefined) closeSync(fd);
     if (temporaryPresent) {
       try {
-        unlinkSync(procFdPath(parentFd, temporary));
+        unlinkOpenedFileAt(
+          parentFd,
+          temporary,
+          fd,
+          "raw artifact temporary",
+        );
       } catch {
         // Preserve the primary publication error.
       }
     }
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -5391,16 +5754,23 @@ function legacyBundle(input) {
     }
     const entries = readDirectoryNoFollow(recordDir, {
       label: "legacy records",
+      expectedNames: LEGACY_ROSTER.map((role) => `${role}.json`),
     });
-    if (entries.some((entry) => !entry.name.endsWith(".json"))) {
-      error("legacy records directory contains a non-JSON or non-regular entry");
-    }
     const records = entries
-      .map((entry) => ({
-        name: entry.name,
-        record: JSON.parse(entry.bytes.toString("utf8")),
-        bytes: entry.bytes,
-      }));
+      .map((entry) => {
+        try {
+          return {
+            name: entry.name,
+            record: JSON.parse(entry.bytes.toString("utf8")),
+            bytes: entry.bytes,
+          };
+        } catch (cause) {
+          error(
+            `legacy records directory ${recordDir} entry ${entry.name} ` +
+            `contains malformed JSON: ${cause.message}`,
+          );
+        }
+      });
     const attestationPath = join(path, "attestation.json");
     const sealPath = join(path, "seal.json");
     const optionalJson = (artifactPath, label) => {
@@ -5870,11 +6240,11 @@ function flagValue(argv, name) {
   return argv[index + 1];
 }
 
-function readJsonDirectory(path, label) {
+function readJsonDirectory(path, label, options = {}) {
   if (pathKindNoFollow(path, label) !== "directory") {
     return readJson(path, label);
   }
-  const entries = readDirectoryNoFollow(path, { label });
+  const entries = readDirectoryNoFollow(path, { ...options, label });
   if (entries.some((entry) => !entry.name.endsWith(".json"))) {
     error(`${label} directory must contain only regular JSON files`);
   }
@@ -5927,12 +6297,35 @@ function validateSelectedVerdictDirectory(verdicts, selection, label) {
   return verdicts;
 }
 
+function selectedVerdictDirectoryNames(path, selection, label) {
+  const names = listDirectoryNamesNoFollow(path, `${label} directory`);
+  const expected = new Set(selection.roster);
+  const actual = new Set();
+  for (const name of names) {
+    const seat = name.endsWith(".json") ? name.slice(0, -5) : name;
+    if (!expected.has(seat)) {
+      error(`${label} directory contains unselected seat "${seat}"`);
+    }
+    actual.add(seat);
+  }
+  const missing = selection.roster.filter((seat) => !actual.has(seat));
+  if (missing.length > 0) {
+    error(`${label} directory is missing selected seat(s): ${missing.join(", ")}`);
+  }
+  return selection.roster.map((seat) => `${seat}.json`).sort();
+}
+
 function readDiscoveryVerdicts(path, selection) {
   if (pathKindNoFollow(path, "actual discovery verdicts") !== "directory") {
     error("actual discovery verdicts must be a canonical per-seat verdict directory");
   }
+  const expectedNames = selectedVerdictDirectoryNames(
+    path,
+    selection,
+    "actual discovery verdict",
+  );
   return validateSelectedVerdictDirectory(
-    readJsonDirectory(path, "actual discovery verdicts"),
+    readJsonDirectory(path, "actual discovery verdicts", { expectedNames }),
     selection,
     "actual discovery verdict",
   );
@@ -5941,7 +6334,18 @@ function readDiscoveryVerdicts(path, selection) {
 function readVerificationVerdicts(path, selection) {
   const isDirectory =
     pathKindNoFollow(path, "actual verification verdicts") === "directory";
-  const verdicts = readJsonDirectory(path, "actual verification verdicts");
+  const expectedNames = isDirectory
+    ? selectedVerdictDirectoryNames(
+        path,
+        selection,
+        "actual verification verdict",
+      )
+    : undefined;
+  const verdicts = readJsonDirectory(
+    path,
+    "actual verification verdicts",
+    { expectedNames },
+  );
   if (!isDirectory) return verdicts;
   return validateSelectedVerdictDirectory(
     verdicts,

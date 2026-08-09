@@ -169,6 +169,7 @@ staged_responses_path="$out/responses.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
+staged_agent_definitions_dir="$out/agent-definitions"
 
 # Staged packets remain exact and untruncated. Bound aggregate logical bytes
 # across the entire packet root, including every lifecycle and incomplete
@@ -280,7 +281,7 @@ NODE
 
 partial_cleanup_hint() {
   echo "partial pre-dispatch scratch directory is non-authoritative: $out" >&2
-  echo "clean it up before retrying: rm -rf -- '$out'" >&2
+  echo "inspect its identity and contents before cleanup; do not recursively delete a path after an identity change" >&2
 }
 
 if [ -e "$out" ]; then
@@ -586,6 +587,7 @@ try {
   files = readDirectoryNoFollow(source, {
     label: "finalized reviewer-notes directory",
     nonEmpty: true,
+    expectedNames: selected.map((seat) => `${seat}.md`),
   });
 } catch (error) {
   console.error(`missing or unreadable finalized reviewer-notes directory: ${source}: ${error.message}`);
@@ -653,6 +655,7 @@ let entries;
 try {
   entries = readDirectoryNoFollow(source, {
     label: "verification request directory",
+    expectedNames: selected.map((seat) => `${seat}.json`),
   });
 } catch (error) {
   console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
@@ -818,6 +821,7 @@ if [ "$reuse_existing" = true ]; then
     "$out/evidence.md" \
     "$out/review-request.md" \
     "$out/dispatch-prompt.txt" \
+    "$staged_agent_definitions_dir" \
     "$out/verdicts"; do
     require_reused_path "$required_path" || exit 2
   done
@@ -833,26 +837,35 @@ if [ "$reuse_existing" = true ]; then
     done
   fi
   for seat in "${panel_seats[@]}"; do
+    require_reused_path \
+      "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
   done
 else
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const { ensureDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[3]).href);
+  await import(pathToFileURL(process.argv[4]).href);
 ensureDirectoryNoFollow(process.argv[1]);
 ensureDirectoryNoFollow(process.argv[2]);
-' "$out/verdicts" "$out/reviewer-notes" "$lifecycle_helper"
+ensureDirectoryNoFollow(process.argv[3]);
+' "$out/verdicts" "$out/reviewer-notes" "$staged_agent_definitions_dir" \
+    "$lifecycle_helper"
 fi
 
 publish_stdin_no_replace() {
   local dest="$1"
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
+const [destination, helperPath, retentionRoot, maxBytesText] =
+  process.argv.slice(1);
 const { writeStandardInputCreateOrCompare } =
-  await import(pathToFileURL(process.argv[2]).href);
-writeStandardInputCreateOrCompare(process.argv[1]);
-' "$dest" "$lifecycle_helper"
+  await import(pathToFileURL(helperPath).href);
+writeStandardInputCreateOrCompare(destination, {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
+});
+' "$dest" "$lifecycle_helper" "$panel_root" "$panel_root_max_bytes"
 }
 
 materialize_exact() {
@@ -865,10 +878,16 @@ materialize_exact() {
   fi
   if ! node --input-type=module -e '
 import { pathToFileURL } from "node:url";
+const [source, destination, helperPath, retentionRoot, maxBytesText] =
+  process.argv.slice(1);
 const { copyFileCreateOrCompare } =
-  await import(pathToFileURL(process.argv[3]).href);
-copyFileCreateOrCompare(process.argv[1], process.argv[2]);
-' "$source" "$destination" "$lifecycle_helper"
+  await import(pathToFileURL(helperPath).href);
+copyFileCreateOrCompare(source, destination, {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
+});
+' "$source" "$destination" "$lifecycle_helper" "$panel_root" \
+    "$panel_root_max_bytes"
   then
     echo "could not materialize supplied $label at $destination" >&2
     return 1
@@ -880,11 +899,15 @@ stage() {
   shift
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [destination, helperPath, command, ...args] = process.argv.slice(1);
+const [destination, helperPath, retentionRoot, maxBytesText, command, ...args] =
+  process.argv.slice(1);
 const { writeCommandOutputCreateOrCompare } =
   await import(pathToFileURL(helperPath).href);
-writeCommandOutputCreateOrCompare(destination, command, args);
-' "$dest" "$lifecycle_helper" "$@"
+writeCommandOutputCreateOrCompare(destination, command, args, {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
+});
+' "$dest" "$lifecycle_helper" "$panel_root" "$panel_root_max_bytes" "$@"
 }
 
 stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"
@@ -908,13 +931,18 @@ if [ -n "$candidate_path" ]; then
 else
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
+const [selectionPath, candidatePath, helperPath, retentionRoot, maxBytesText] =
+  process.argv.slice(1);
 const { candidateFromSelection, readSelection, writeCreateOrCompare } =
   await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
-writeCreateOrCompare(candidatePath, candidateFromSelection(selection));
+writeCreateOrCompare(candidatePath, candidateFromSelection(selection), {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
+});
 ' "$staged_selection_path" "$staged_candidate_path" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
+  "$panel_root" "$panel_root_max_bytes"
 fi
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
@@ -941,10 +969,12 @@ if [ -n "$discovery_request_path" ]; then
   if ! node --input-type=module - \
     "$discovery_request_path" "$staged_discovery_request_path" "$evidence_sha" \
     "$evidence_bytes" \
-    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
+    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
+    "$panel_root" "$panel_root_max_bytes" <<'NODE'
 import { pathToFileURL } from "node:url";
 const [source, destination, evidenceSha256, evidenceBytesText, helperPath] =
-  process.argv.slice(2);
+  process.argv.slice(2, 7);
+const [retentionRoot, maxBytesText] = process.argv.slice(7);
 const { readFileNoFollow, writeCreateOrCompare } =
   await import(pathToFileURL(helperPath).href);
 const request = JSON.parse(readFileNoFollow(source, {
@@ -982,7 +1012,10 @@ if (
 if (priorDescriptors.length === 0) {
   request.validation_evidence.push(descriptor);
 }
-writeCreateOrCompare(destination, request);
+writeCreateOrCompare(destination, request, {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
+});
 NODE
   then
     echo "cannot generate evidence-bound discovery request from $discovery_request_path" >&2
@@ -1011,11 +1044,19 @@ if [ -n "$verification_dir" ]; then
 
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [source, destination, helperPath] = process.argv.slice(1);
+const [
+  source,
+  destination,
+  helperPath,
+  selectedRoster,
+  retentionRoot,
+  maxBytesText,
+] = process.argv.slice(1);
 const { readDirectoryNoFollow, writeDirectoryCreateOrCompare } =
   await import(pathToFileURL(helperPath).href);
 const entries = readDirectoryNoFollow(source, {
   label: "verification request directory",
+  expectedNames: selectedRoster.split(",").map((seat) => `${seat}.json`),
 });
 if (entries.length === 0 || entries.some((entry) =>
   !entry.name.endsWith(".json")
@@ -1025,9 +1066,13 @@ if (entries.length === 0 || entries.some((entry) =>
 writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
   name: entry.name,
   bytes: entry.bytes,
-})));
+})), {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
+});
 ' "$verification_dir" "$staged_verification_dir" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
+  "$selected_roster" "$panel_root" "$panel_root_max_bytes"
 fi
 
 if [ "$phase" = "discovery" ]; then
@@ -1117,6 +1162,7 @@ if (phase === "discovery") {
   artifacts.self_verification = readJson(selfVerificationPath);
   const entries = readDirectoryNoFollow(verificationDir, {
     label: "staged verification request directory",
+    expectedNames: selection.roster.map((seat) => `${seat}.json`),
   });
   artifacts.verification_requests = Object.fromEntries(
     entries.map((entry) => [
@@ -1146,6 +1192,8 @@ fi
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const args = process.argv.slice(1);
+const maxBytesText = args.pop();
+const retentionRoot = args.pop();
 const helperPath = args.pop();
 const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
 const [path, round, lifecycle, selectionPath, base, previousTip, tip, phase,
@@ -1161,12 +1209,23 @@ writeCreateOrCompare(path, {
   tip,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
+}, {
+  retentionRoot,
+  maxBytes: Number(maxBytesText),
 });
 ' "$out/address.json" "$round" "$lifecycle" "$staged_selection_path" "$base_sha" \
   "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
+  "$panel_root" "$panel_root_max_bytes"
 
 for seat in "${panel_seats[@]}"; do
+  if [ "$reuse_existing" != true ]; then
+    materialize_exact \
+      "$root/.github/agents/panel-$seat.agent.md" \
+      "$staged_agent_definitions_dir/panel-$seat.agent.md" \
+      "panel agent definition for $seat"
+  fi
+
   note="$out/reviewer-notes/$seat.md"
   if [ -n "$reviewer_notes_dir" ]; then
     materialize_exact "$reviewer_notes_dir/$seat.md" "$note" \
@@ -1219,6 +1278,71 @@ self_verification_path="$staged_self_verification_path"
 verification_dir="$staged_verification_dir"
 approval_path="$staged_approval_path"
 
+emit_verdict_contract() {
+  if [ "$phase" = "discovery" ]; then
+    cat <<'MD'
+The discovery verdict has exactly four top-level fields. It does not contain
+`verified_issue_statuses` or `late_findings`. Replace `<your-seat>` with the
+selected seat named by the bound panel agent definition:
+
+```json
+{
+  "engineer": "<your-seat>",
+  "signoff": true,
+  "summary": "What was reviewed and the overall posture.",
+  "recommendations": []
+}
+```
+
+Each non-empty `recommendations` entry has exactly `severity`, `where`, `what`,
+`why`, and `fix`. Severity is exactly `critical`, `high`, `medium`, or `low`.
+`signoff` is true if and only if `recommendations` is empty.
+MD
+    return
+  fi
+
+  cat <<'MD'
+The verification verdict has exactly six top-level fields:
+`engineer`, `signoff`, `summary`, `verified_issue_statuses`, `late_findings`,
+and `recommendations`. Use this exact schema:
+
+MD
+  node --input-type=module - "$ledger_path" "$lifecycle_helper" <<'NODE'
+import { pathToFileURL } from "node:url";
+const [ledgerPath, helperPath] = process.argv.slice(2);
+const { readFileNoFollow } =
+  await import(pathToFileURL(helperPath).href);
+const ledger = JSON.parse(readFileNoFollow(ledgerPath, {
+  encoding: "utf8",
+  label: "staged discovery ledger",
+}));
+const statuses = Object.fromEntries(
+  ledger.issues.map((issue) => [issue.id, "verified"]),
+);
+const example = {
+  engineer: "<your-seat>",
+  signoff: true,
+  summary: "What was verified and the overall posture.",
+  verified_issue_statuses: statuses,
+  late_findings: [],
+  recommendations: [],
+};
+process.stdout.write(`\`\`\`json\n${JSON.stringify(example, null, 2)}\n\`\`\`\n`);
+NODE
+  cat <<'MD'
+
+Replace `<your-seat>` with the selected seat named by the bound panel agent
+definition.
+
+`verified_issue_statuses` has exactly one entry for every ledger issue. Use
+`verified` or `resolved` only when confirmed; every other status remains
+blocking. `late_findings` is always present and is an array. Each non-empty
+`recommendations` entry has exactly `severity`, `where`, `what`, `why`, and
+`fix`. `signoff` is true if and only if `recommendations` is empty.
+MD
+}
+verdict_contract="$(emit_verdict_contract)"
+
 {
 cat <<MD
 # Panel review request
@@ -1237,6 +1361,8 @@ with \`view\`; do not substitute a prose summary for them.
 - Phase: \`$phase\`
 - Lifecycle selection: \`$staged_selection_path\` (sha256 \`$selection_sha256\`)
 - Staged current candidate: \`$staged_candidate_path\`
+- Bound panel agent definition:
+  \`$staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
 - Validation evidence and phase deliverable: \`$out/evidence.md\`
   (sha256 \`$evidence_sha\`, bound by the completion marker)
 - Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
@@ -1271,13 +1397,19 @@ fi)
    coverage is a finding. Do not rerun validation unless your seat-specific
    notes explicitly ask you to.
 4. Read your seat-specific notes. Judge any rebuttal on its merits.
-5. Inspect the tree and the diff rather than trusting a summary of what was
+5. Read your bound panel agent definition for the seat focus, finding bar, and
+   read-only review rules. The active phase and verdict schema in this request
+   are authoritative over any inactive-phase example in that definition.
+6. Inspect the tree and the diff rather than trusting a summary of what was
    intended to change.
-6. Confine findings to defects in the candidate or delta that would cause incorrect
+7. Confine findings to defects in the candidate or delta that would cause incorrect
    behaviour, mask a regression, or weaken a stated invariant. Put other
    observations in the summary.
-7. Return exactly the JSON verdict required by your panel agent and no other
-   text. \`signoff\` is true if and only if \`recommendations\` is empty.
+8. Return exactly the phase-specific JSON verdict below and no other text.
+
+## Required $phase verdict contract
+
+$verdict_contract
 MD
 
 if [ "$round_number" -gt 1 ]; then
@@ -1305,9 +1437,17 @@ MD
 fi
 } | publish_stdin_no_replace "$out/review-request.md"
 
-publish_stdin_no_replace "$out/dispatch-prompt.txt" <<MD
-Use this dispatch prompt only when the stage completion marker exists at $completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying. Read and follow the complete phase-aware review request at $out/review-request.md. Use view to read every artifact it names, including the staged current candidate, generated lifecycle artifacts, the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
+{
+cat <<MD
+Use this dispatch prompt only when the stage completion marker exists at $completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying.
+
+This is the $phase phase. Read and follow the complete immutable review request at $out/review-request.md. Use view to read every artifact it names, including the bound panel agent definition at $staged_agent_definitions_dir/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
+
+Required $phase verdict contract:
+
+$verdict_contract
 MD
+} | publish_stdin_no_replace "$out/dispatch-prompt.txt"
 
 canonical_artifacts=(
   "address.json"
@@ -1330,6 +1470,7 @@ else
   )
 fi
 for seat in "${panel_seats[@]}"; do
+  canonical_artifacts+=("agent-definitions/panel-$seat.agent.md")
   canonical_artifacts+=("reviewer-notes/$seat.md")
   if [ "$phase" = "verification" ]; then
     canonical_artifacts+=("verification/$seat.json")
