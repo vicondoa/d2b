@@ -12,9 +12,9 @@
 // It is a plain node script with no test framework because the repository
 // does not add tooling for one gate. It runs from `make test-lint`.
 
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -62,8 +62,8 @@ function buildRound(mutate) {
       selection_path: join(dir, "selection.json"),
     },
     candidate: {
-      candidate_id: "cand-0001",
-      content_id: "content-0001",
+      candidate_id: "c".repeat(64),
+      content_id: "d".repeat(64),
       snapshot_sha256: "f".repeat(64),
       program: "SPEC001",
       wave: "spec001w1",
@@ -78,8 +78,8 @@ function buildRound(mutate) {
       phase: "verification",
       program: "SPEC001",
       wave: "spec001w1",
-      candidate_id: "cand-0001",
-      content_id: "content-0001",
+      candidate_id: "c".repeat(64),
+      content_id: "d".repeat(64),
       snapshot_sha256: "f".repeat(64),
       selection_table_version: 2,
       candidate_class: "code",
@@ -113,8 +113,8 @@ function buildRound(mutate) {
       selection_table_version: 2,
       program: "SPEC001",
       wave: "spec001w1",
-      candidate_id: "cand-0001",
-      content_id: "content-0001",
+      candidate_id: "c".repeat(64),
+      content_id: "d".repeat(64),
       snapshot_sha256: "f".repeat(64),
       roster: ROLES,
       sources: [],
@@ -122,16 +122,12 @@ function buildRound(mutate) {
       complete: true,
     },
     observed: Object.fromEntries(ROLES.map((r, i) => {
-      const definition = readFileSync(
-        join(root, ".github", "agents", `panel-${r}.agent.md`),
-        "utf8",
-      );
       return [r, {
         provider: "github-copilot",
         model: "gpt-5.6-sol",
         reasoning_effort: "xhigh",
         agent_type: `panel-${r}`,
-        agent_definition_sha256: sha256(definition),
+        context_tier: "default",
         run_id: `run-${i}`,
         receipt_locator: `github-copilot://receipt/${i}`,
       }];
@@ -156,8 +152,8 @@ function buildRound(mutate) {
     lifecycle_id: "spec001w1",
     program: "SPEC001",
     wave: "spec001w1",
-    candidate_id: "cand-0001",
-    content_id: "content-0001",
+    candidate_id: "c".repeat(64),
+    content_id: "d".repeat(64),
     snapshot_sha256: "f".repeat(64),
     roster: ROLES,
     responses: [],
@@ -200,21 +196,21 @@ function buildRound(mutate) {
   writeFileSync(join(dir, "address.json"), stableStringify(state.address));
   writeFileSync(join(dir, "current-candidate.json"), stableStringify(state.candidate));
   writeFileSync(join(dir, "selection.json"), finalSelectionBytes);
-  writeFileSync(join(dir, "ledger.json"), finalLedgerBytes);
+  writeFileSync(join(dir, "discovery-ledger.json"), finalLedgerBytes);
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
   writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
   writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
   writeFileSync(join(dir, "observed.json"), stableStringify(state.observed));
-  const definitionsDir = join(dir, "agent-definitions");
-  mkdirSync(definitionsDir);
   const artifactSha256 = {};
   const artifactBytes = {};
-  for (const role of ROLES) {
-    const relativePath = `agent-definitions/panel-${role}.agent.md`;
-    const source = join(root, ".github", "agents", `panel-${role}.agent.md`);
-    const destination = join(dir, relativePath);
-    cpSync(source, destination);
-    const bytes = readFileSync(destination);
+  for (const relativePath of [
+    "address.json",
+    "current-candidate.json",
+    "selection.json",
+    "discovery-ledger.json",
+    "responses.json",
+  ]) {
+    const bytes = readFileSync(join(dir, relativePath));
     artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
     artifactBytes[relativePath] = bytes.length;
   }
@@ -222,9 +218,15 @@ function buildRound(mutate) {
     artifact_kind: "d2b-panel/stage-completion",
     schema_version: 2,
     complete: true,
+    round: state.address.round,
+    base: state.address.base,
+    previous_tip: state.address.previous_tip,
+    tip: state.address.tip,
+    delta_sha256: state.address.delta_sha256,
+    full_sha256: state.address.full_sha256,
     phase: "verification",
     lifecycle_id: state.selection.lifecycle_id,
-    selection_sha256: sha256(selectionBytes),
+    selection_sha256: sha256(finalSelectionBytes),
     artifact_sha256: artifactSha256,
     artifact_bytes: artifactBytes,
   }));
@@ -244,7 +246,7 @@ function run(dir, selectionPath = join(dir, "selection.json")) {
         "--selection",
         selectionPath,
         "--ledger",
-        join(dir, "ledger.json"),
+        join(dir, "discovery-ledger.json"),
         "--responses",
         join(dir, "responses.json"),
         "--verification-results",
@@ -280,8 +282,7 @@ console.log("make-records: the happy path");
 {
   const dir = buildRound();
   try {
-    const relativeSelectionPath = `./${relative(process.cwd(), join(dir, "selection.json"))}`;
-    const r = run(dir, relativeSelectionPath);
+    const r = run(dir);
     check("a complete unanimous round is accepted", r.code === 0, `${r.err}`);
     const recordsDir = join(dir, "records");
     check("one record per seat is written", ROLES.every((x) => existsSync(join(recordsDir, `${x}.json`))));
@@ -289,7 +290,7 @@ console.log("make-records: the happy path");
     if (existsSync(join(recordsDir, "security.json"))) {
       const rec = JSON.parse(readFileSync(join(recordsDir, "security.json"), "utf8"));
       check("the record carries the observed effort", rec.reasoning_effort === "xhigh", JSON.stringify(rec.reasoning_effort));
-      check("the record carries the candidate address", rec.candidate_id === "cand-0001");
+      check("the record carries the candidate address", rec.candidate_id === "c".repeat(64));
       check("the record carries current panel format version", rec.panel_format_version === 1);
       check("the record digests the verdict", typeof rec.output_sha256 === "string" && rec.output_sha256.length === 64);
     }
@@ -478,27 +479,39 @@ rejects(
   /agent_type.*selected binding/i,
 );
 rejects(
-  "an old agent definition digest cannot be attested",
-  (s) => { s.observed.agentic.agent_definition_sha256 = "0".repeat(64); },
-  /agent definition digest|agent_definition_sha256/i,
-);
-rejects(
-  "a missing agent definition digest is not defaulted",
-  (s) => { delete s.observed.product.agent_definition_sha256; },
-  /agent_definition_sha256/i,
+  "a missing context tier is not defaulted",
+  (s) => { delete s.observed.product.context_tier; },
+  /context_tier/i,
 );
 {
   const dir = buildRound();
   try {
-    writeFileSync(
-      join(dir, "agent-definitions", "panel-software.agent.md"),
-      "substituted definition\n",
+    const selectionAlias = join(dir, "selection-alias.json");
+    writeFileSync(selectionAlias, readFileSync(join(dir, "selection.json")));
+    const r = run(dir, selectionAlias);
+    check(
+      "a non-canonical selection path is refused",
+      r.code !== 0 &&
+        /canonical round-local path/.test(
+          `${r.out}${r.err}`,
+        ),
+      `${r.out}${r.err}`,
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    const selectionPath = join(dir, "selection.json");
+    const original = readFileSync(selectionPath);
+    writeFileSync(selectionPath, `${original}tampered\n`);
     const r = run(dir);
     check(
-      "a substituted staged agent definition fails against .complete",
+      "a completion-bound artifact size or digest change is refused",
       r.code !== 0 &&
-        /staged agent definition digest|immutable.*staged/.test(
+        /completion-bound artifact selection\.json has a different size or digest/.test(
           `${r.out}${r.err}`,
         ),
       `${r.out}${r.err}`,

@@ -13,10 +13,15 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
-  readFileSync,
+  mkdirSync,
   readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   adaptVerificationVerdict,
   createApprovalArtifact,
@@ -27,8 +32,6 @@ import {
   validateApprovalArtifact,
   validateResponses,
   validateVerificationResultArtifact,
-  readBoundArtifactSetNoFollow,
-  writeDirectoryCreateOrCompare,
   sha256,
   stableStringify,
 } from "./panel-lifecycle.mjs";
@@ -36,26 +39,11 @@ import {
 const PROVIDER_POLICY = "github-copilot";
 const MODEL_POLICY = "gpt-5.6-sol";
 const EFFORT_POLICY = "xhigh";
-const LEGACY_MODEL_POLICY = "gemini-3.1-pro-preview";
-const LEGACY_EFFORT_POLICY = "high";
+const LEGACY_MODEL_POLICY = "gpt-5.6-sol";
+const LEGACY_EFFORT_POLICY = "xhigh";
 const ARTIFACT_KIND = "d2b-delivery/panel-receipt";
 const SCHEMA_VERSION = 2;
 const PANEL_FORMAT_VERSION = 1;
-const PANEL_AGENT_TYPES = Object.freeze({
-  software: "panel-software",
-  test: "panel-test",
-  product: "panel-product",
-  docs: "panel-docs",
-  security: "panel-security",
-  observability: "panel-observability",
-  simplicity: "panel-simplicity",
-  reliability: "panel-reliability",
-  agentic: "panel-agentic",
-  nixos: "panel-nixos",
-  networking: "panel-networking",
-  kernel: "panel-kernel",
-  build: "panel-build",
-});
 const MAX_RECOMMENDATIONS = 64;
 // Reviewer-authored free text is the only unbounded input on the sealing path.
 const MAX_SUMMARY_CHARS = 4000;
@@ -108,6 +96,85 @@ if (
   process.exit(2);
 }
 
+function readCompletionBoundArtifacts(roundDir) {
+  const markerPath = join(roundDir, ".complete");
+  const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  const expectedKeys = [
+    "artifact_bytes",
+    "artifact_kind",
+    "artifact_sha256",
+    "base",
+    "complete",
+    "delta_sha256",
+    "full_sha256",
+    "lifecycle_id",
+    "phase",
+    "previous_tip",
+    "round",
+    "schema_version",
+    "selection_sha256",
+    "tip",
+  ].sort();
+  if (
+    marker.artifact_kind !== "d2b-panel/stage-completion" ||
+    marker.schema_version !== 2 ||
+    marker.complete !== true ||
+    marker.phase !== "verification" ||
+    Object.keys(marker).sort().join("\0") !== expectedKeys.join("\0")
+  ) {
+    throw new Error(
+      "completion marker must be the canonical schema-version 2 verification packet",
+    );
+  }
+  const digests = marker.artifact_sha256;
+  const sizes = marker.artifact_bytes;
+  if (
+    !digests ||
+    Array.isArray(digests) ||
+    typeof digests !== "object" ||
+    !sizes ||
+    Array.isArray(sizes) ||
+    typeof sizes !== "object" ||
+    Object.keys(digests).sort().join("\0") !== Object.keys(sizes).sort().join("\0")
+  ) {
+    throw new Error("completion marker artifact size and digest maps disagree");
+  }
+  const artifacts = new Map();
+  for (const relativePath of Object.keys(digests).sort()) {
+    if (
+      relativePath.length === 0 ||
+      relativePath.startsWith("/") ||
+      relativePath.split("/").includes("..") ||
+      !/^[0-9a-f]{64}$/u.test(digests[relativePath]) ||
+      !Number.isSafeInteger(sizes[relativePath]) ||
+      sizes[relativePath] < 0
+    ) {
+      throw new Error(`completion marker has an invalid artifact binding for ${relativePath}`);
+    }
+    const path = resolve(roundDir, relativePath);
+    if (path !== roundDir && !path.startsWith(`${roundDir}/`)) {
+      throw new Error(`completion marker artifact escapes the round directory: ${relativePath}`);
+    }
+    const bytes = readFileSync(path);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== digests[relativePath] || bytes.length !== sizes[relativePath]) {
+      throw new Error(
+        `completion-bound artifact ${relativePath} has a different size or digest`,
+      );
+    }
+    artifacts.set(relativePath, bytes);
+  }
+  return { marker, artifacts };
+}
+
+function canonicalRoundPath(roundDir, supplied, name) {
+  const expected = join(roundDir, name);
+  if (resolve(supplied) !== expected) {
+    throw new Error(`${name} must use the canonical round-local path ${expected}`);
+  }
+  return expected;
+}
+
 const readJson = (path, label) => {
   if (!existsSync(path)) {
     fail(`missing ${label} at ${path}`);
@@ -121,78 +188,59 @@ const readJson = (path, label) => {
   }
 };
 
-function stagedAgentDefinitionDigests(roundDir, roster, selectionBytes, lifecycleId) {
-  let bound;
-  try {
-    bound = readBoundArtifactSetNoFollow(join(roundDir, ".complete"));
-  } catch (cause) {
-    fail(`invalid immutable panel completion marker: ${cause.message}`);
-    return {};
-  }
-  const marker = bound.marker;
-  if (
-    marker.artifact_kind !== "d2b-panel/stage-completion" ||
-    marker.schema_version !== 2 ||
-    marker.complete !== true ||
-    marker.phase !== "verification" ||
-    marker.lifecycle_id !== lifecycleId ||
-    marker.selection_sha256 !== sha256(selectionBytes)
-  ) {
-    fail(
-      "immutable panel completion marker does not bind the current verification " +
-      "lifecycle and selection",
-    );
-    return {};
-  }
-  const digests = {};
-  for (const seat of roster) {
-    const relativePath = `agent-definitions/panel-${seat}.agent.md`;
-    const bytes = bound.artifacts[relativePath];
-    const expectedDigest = marker.artifact_sha256?.[relativePath];
-    const expectedBytes = marker.artifact_bytes?.[relativePath];
-    if (!Buffer.isBuffer(bytes)) {
-      fail(
-        `immutable panel completion marker has no staged agent definition for ${seat}`,
-      );
-      continue;
-    }
-    if (
-      typeof expectedDigest !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(expectedDigest) ||
-      expectedBytes !== bytes.length
-    ) {
-      fail(
-        `immutable panel completion marker has an invalid binding for ${relativePath}`,
-      );
-      continue;
-    }
-    const actualDigest = createHash("sha256").update(bytes).digest("hex");
-    if (actualDigest !== expectedDigest) {
-      fail(
-        `staged agent definition digest for ${seat} does not match .complete`,
-      );
-      continue;
-    }
-    digests[seat] = actualDigest;
-  }
-  return digests;
+const roundDir = resolve(dir);
+let boundArtifacts;
+try {
+  boundArtifacts = readCompletionBoundArtifacts(roundDir);
+} catch (cause) {
+  fail(`invalid completion-bound round packet: ${cause.message}`);
 }
-
-const address = readJson(join(dir, "address.json"), "round address");
-const candidate = readJson(
-  join(dir, "current-candidate.json"),
-  "current candidate address",
-);
-const observed = readJson(join(dir, "observed.json"), "observed binding table");
-const approval = readJson(approvalPath, "approval artifact");
+let selectionCanonicalPath;
+let verificationResultsCanonicalPath;
+let approvalCanonicalPath;
+try {
+  selectionCanonicalPath = canonicalRoundPath(roundDir, selectionPath, "selection.json");
+  canonicalRoundPath(roundDir, ledgerPath, "discovery-ledger.json");
+  canonicalRoundPath(roundDir, responsesPath, "responses.json");
+  verificationResultsCanonicalPath = canonicalRoundPath(
+    roundDir,
+    verificationResultsPath,
+    "verification-results.json",
+  );
+  approvalCanonicalPath = canonicalRoundPath(roundDir, approvalPath, "approval.json");
+} catch (cause) {
+  fail(`non-canonical round input: ${cause.message}`);
+}
+if (errors.length) {
+  for (const message of errors) console.error(`error: ${message}`);
+  process.exit(1);
+}
+const boundJson = (relativePath, label) => {
+  const bytes = boundArtifacts.artifacts.get(relativePath);
+  if (!bytes) {
+    fail(`completion marker does not bind ${relativePath}`);
+    return null;
+  }
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (cause) {
+    fail(`invalid ${label} at ${join(roundDir, relativePath)}: ${cause.message}`);
+    return null;
+  }
+};
+const boundBytes = (relativePath) => boundArtifacts.artifacts.get(relativePath);
+const address = boundJson("address.json", "round address");
+const candidate = boundJson("current-candidate.json", "current candidate address");
+const observed = readJson(join(roundDir, "observed.json"), "observed binding table");
+const approval = readJson(approvalCanonicalPath, "approval artifact");
 let approvalBytes = "";
 try {
-  approvalBytes = readFileSync(approvalPath, "utf8");
+  approvalBytes = readFileSync(approvalCanonicalPath, "utf8");
 } catch (cause) {
-  fail(`cannot read approval bytes at ${approvalPath}: ${cause.message}`);
+  fail(`cannot read approval bytes at ${approvalCanonicalPath}: ${cause.message}`);
 }
 let discoveryLedgerBytes = "";
-const discoveryLedger = readJson(ledgerPath, "immutable discovery ledger");
+const discoveryLedger = boundJson("discovery-ledger.json", "immutable discovery ledger");
 const readBytes = (path, label) => {
   if (!existsSync(path)) {
     fail(`missing ${label} at ${path}`);
@@ -205,26 +253,22 @@ const readBytes = (path, label) => {
     return "";
   }
 };
-const responsesBytes = readBytes(responsesPath, "implementation responses");
+const responsesBytes = boundBytes("responses.json")?.toString("utf8") ?? "";
 const verificationResultsBytes = readBytes(
-  verificationResultsPath,
+  verificationResultsCanonicalPath,
   "adapted verification results",
 );
-const responses = readJson(responsesPath, "implementation responses");
+const responses = boundJson("responses.json", "implementation responses");
 const verificationResults = readJson(
-  verificationResultsPath,
+  verificationResultsCanonicalPath,
   "adapted verification results",
 );
-try {
-  discoveryLedgerBytes = readFileSync(ledgerPath, "utf8");
-} catch (cause) {
-  fail(`missing immutable discovery ledger at ${ledgerPath}: ${cause.message}`);
-}
+discoveryLedgerBytes = boundBytes("discovery-ledger.json")?.toString("utf8") ?? "";
 let selection = null;
 try {
   selection = readSelection(selectionPath);
 } catch (cause) {
-  fail(`invalid lifecycle selection at ${selectionPath}: ${cause.message}`);
+  fail(`invalid lifecycle selection at ${selectionCanonicalPath}: ${cause.message}`);
 }
 
 if (errors.length) {
@@ -244,9 +288,9 @@ try {
 
 let selectionBytes;
 try {
-  selectionBytes = readFileSync(selectionPath, "utf8");
+  selectionBytes = boundBytes("selection.json")?.toString("utf8") ?? "";
 } catch (cause) {
-  fail(`cannot read lifecycle selection bytes at ${selectionPath}: ${cause.message}`);
+  fail(`cannot read lifecycle selection bytes at ${selectionCanonicalPath}: ${cause.message}`);
 }
 if (errors.length) {
   for (const message of errors) console.error(`error: ${message}`);
@@ -330,15 +374,13 @@ if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     }
   }
 }
-const canonicalSelectionPath =
-  typeof selectionPath === "string" ? resolve(selectionPath) : undefined;
 const recordedSelectionPath =
   typeof address?.selection_path === "string"
     ? resolve(address.selection_path)
     : undefined;
 if (
   address?.lifecycle_id !== selection.lifecycle_id ||
-  recordedSelectionPath !== canonicalSelectionPath
+  recordedSelectionPath !== selectionCanonicalPath
 ) {
   fail("address.json must bind the exact lifecycle and selection path used for records");
 }
@@ -403,13 +445,6 @@ for (const seat of roster) {
     fail(`observed.json has no entry for selected seat "${seat}"`);
   }
 }
-const stagedDefinitionDigests = stagedAgentDefinitionDigests(
-  dir,
-  roster,
-  selectionBytes,
-  selection.lifecycle_id,
-);
-
 const seenRunIds = new Set();
 const seenReceipts = new Set();
 const records = [];
@@ -520,8 +555,8 @@ for (const role of roster) {
     "provider",
     "model",
     "reasoning_effort",
+    "context_tier",
     "agent_type",
-    "agent_definition_sha256",
     "run_id",
     "receipt_locator",
   ]) {
@@ -532,28 +567,11 @@ for (const role of roster) {
       fail(`observed.json ${role}: ${key} is required`);
     }
   }
-  const expectedAgentType = PANEL_AGENT_TYPES[role];
+  const expectedAgentType = `panel-${role}`;
   if (observedBinding.agent_type !== expectedAgentType) {
     fail(
       `observed.json ${role}: agent_type "${observedBinding.agent_type}" does not ` +
       `match the selected binding "${expectedAgentType}"`,
-    );
-  }
-  if (
-    typeof observedBinding.agent_definition_sha256 === "string" &&
-    !/^[0-9a-f]{64}$/u.test(observedBinding.agent_definition_sha256)
-  ) {
-    fail(
-      `observed.json ${role}: agent_definition_sha256 must be a 64-character hexadecimal SHA-256`,
-    );
-  }
-  if (
-    stagedDefinitionDigests[role] === undefined ||
-    observedBinding.agent_definition_sha256 !== stagedDefinitionDigests[role]
-  ) {
-    fail(
-      `observed.json ${role}: agent definition digest does not match the immutable ` +
-      `staged agent-definitions/panel-${role}.agent.md digest`,
     );
   }
   const currentBinding =
@@ -618,19 +636,65 @@ if (errors.length) {
   process.exit(1);
 }
 
+function writeRecordFamilyCreateOrCompare(directory, entries) {
+  const expected = new Map(
+    entries
+      .map((entry) => [entry.name, Buffer.from(entry.bytes)])
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const compare = () => {
+    if (!statSync(directory).isDirectory()) {
+      throw new Error(`record family at ${directory} is not a directory`);
+    }
+    const actualNames = readdirSync(directory).sort();
+    const expectedNames = [...expected.keys()];
+    if (
+      actualNames.length !== expectedNames.length ||
+      actualNames.some((name, index) => name !== expectedNames[index])
+    ) {
+      throw new Error(`record family at ${directory} is incomplete or has extra entries`);
+    }
+    for (const name of expectedNames) {
+      if (!readFileSync(join(directory, name)).equals(expected.get(name))) {
+        throw new Error(`conflicting generated record bytes at ${join(directory, name)}`);
+      }
+    }
+  };
+  mkdirSync(dirname(directory), { recursive: true });
+  if (existsSync(directory)) {
+    compare();
+    return;
+  }
+  const temporary = `${directory}.stage-${process.pid}-${Date.now()}`;
+  mkdirSync(temporary);
+  try {
+    for (const [name, bytes] of expected) {
+      writeFileSync(join(temporary, name), bytes, { flag: "wx" });
+    }
+    try {
+      renameSync(temporary, directory);
+    } catch (cause) {
+      if (!existsSync(directory)) throw cause;
+      compare();
+    }
+  } finally {
+    if (existsSync(temporary)) {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  }
+}
+
 const outDir = join(dir, "records");
 const pendingWrites = records.map((record) => ({
   name: `${record.role}.json`,
   bytes: `${JSON.stringify(record, null, 2)}\n`,
 }));
 try {
-  writeDirectoryCreateOrCompare(outDir, pendingWrites);
+  writeRecordFamilyCreateOrCompare(outDir, pendingWrites);
 } catch (cause) {
   fail(
     `record set publication stopped before replacement: ` +
-    `${cause.message.replace("conflicting generated bytes", "conflicting generated record bytes")}. ` +
-    "Retry with the same inputs only after restoring a complete matching set, " +
-    "or use a new round directory.",
+    `${cause.message}.`,
   );
 }
 if (errors.length) {

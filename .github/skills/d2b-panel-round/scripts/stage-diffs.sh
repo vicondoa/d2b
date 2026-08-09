@@ -158,7 +158,8 @@ tip="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse "$base")"
 prev_sha="$(git rev-parse "$prev")"
 
-panel_root="$root/.scratch/panel"
+display_panel_root="$root/.scratch/panel"
+panel_root="$display_panel_root"
 out="$panel_root/$round"
 completion_marker="$out/.complete"
 staged_selection_path="$out/selection.json"
@@ -169,8 +170,6 @@ staged_responses_path="$out/responses.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
-staged_agent_definitions_dir="$out/agent-definitions"
-display_panel_root="$panel_root"
 display_out="$out"
 display_completion_marker="$completion_marker"
 display_staged_selection_path="$staged_selection_path"
@@ -181,54 +180,8 @@ display_staged_responses_path="$staged_responses_path"
 display_staged_self_verification_path="$staged_self_verification_path"
 display_staged_approval_path="$staged_approval_path"
 display_staged_verification_dir="$staged_verification_dir"
-display_staged_agent_definitions_dir="$staged_agent_definitions_dir"
-
-# Staged packets remain exact and untruncated. Bound aggregate logical bytes
-# across the entire packet root, including every lifecycle and incomplete
-# packet. Operators may lower this ceiling for constrained environments, but
-# may not raise the repository policy limit.
-default_panel_root_max_bytes=$((1024 * 1024 * 1024))
-panel_root_max_bytes="${D2B_PANEL_LIFECYCLE_MAX_BYTES:-$default_panel_root_max_bytes}"
-if ! [[ "$panel_root_max_bytes" =~ ^[1-9][0-9]*$ ]] ||
-   [ "$panel_root_max_bytes" -gt "$default_panel_root_max_bytes" ]; then
-  echo "D2B_PANEL_LIFECYCLE_MAX_BYTES must be a positive integer no greater than $default_panel_root_max_bytes" >&2
-  exit 2
-fi
-
-if ! node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { ensureDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[2]).href);
-ensureDirectoryNoFollow(process.argv[1]);
-' "$display_panel_root" "$lifecycle_helper"; then
-  echo "could not create or inspect the panel packet root" >&2
-  exit 2
-fi
-if ! command -v flock >/dev/null 2>&1; then
-  echo "flock is required for serialized panel packet root reservation" >&2
-  exit 2
-fi
-if ! exec {panel_root_reservation_fd}<"$display_panel_root"; then
-  echo "could not open the panel packet root for reservation" >&2
-  exit 2
-fi
-if ! flock --exclusive "$panel_root_reservation_fd"; then
-  echo "could not acquire the panel packet root reservation" >&2
-  exit 2
-fi
-export D2B_PANEL_ROOT_FD="$panel_root_reservation_fd"
-if ! node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [panelRoot, descriptorText, helperPath] = process.argv.slice(1);
-const { verifyDirectoryReservationNoFollow } =
-  await import(pathToFileURL(helperPath).href);
-verifyDirectoryReservationNoFollow(panelRoot, Number(descriptorText));
-' "$display_panel_root" "$panel_root_reservation_fd" "$lifecycle_helper"; then
-  echo "panel packet root reservation identity verification failed" >&2
-  exit 2
-fi
-
-panel_root="/proc/self/fd/$panel_root_reservation_fd"
+mkdir -p "$display_panel_root"
+panel_root="$display_panel_root"
 out="$panel_root/$round"
 completion_marker="$out/.complete"
 staged_selection_path="$out/selection.json"
@@ -239,68 +192,17 @@ staged_responses_path="$out/responses.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
-staged_agent_definitions_dir="$out/agent-definitions"
-
-bind_panel_root_path() {
-  local value="$1"
-  if [ -z "$value" ]; then
-    printf '%s\n' "$value"
-    return
-  fi
-  local absolute
-  absolute="$(
-    node --input-type=module -e '
-import { resolve } from "node:path";
-process.stdout.write(resolve(process.argv[1], process.argv[2]));
-' "$root" "$value"
-  )"
-  case "$absolute" in
-    "$display_panel_root")
-      printf '%s\n' "$panel_root"
-      ;;
-    "$display_panel_root"/*)
-      printf '%s/%s\n' "$panel_root" "${absolute#"$display_panel_root/"}"
-      ;;
-    *)
-      printf '%s\n' "$value"
-      ;;
-  esac
-}
-
-verify_locked_panel_root() {
-  node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { verifyDirectoryReservationNoFollow } =
-  await import(pathToFileURL(process.argv[3]).href);
-verifyDirectoryReservationNoFollow(process.argv[1], Number(process.argv[2]));
-' "$display_panel_root" "$panel_root_reservation_fd" "$lifecycle_helper"
-}
-
-selection_path="$(bind_panel_root_path "$selection_path")"
-candidate_path="$(bind_panel_root_path "$candidate_path")"
-discovery_request_path="$(bind_panel_root_path "$discovery_request_path")"
-evidence_path="$(bind_panel_root_path "$evidence_path")"
-reviewer_notes_dir="$(bind_panel_root_path "$reviewer_notes_dir")"
-ledger_path="$(bind_panel_root_path "$ledger_path")"
-responses_path="$(bind_panel_root_path "$responses_path")"
-self_verification_path="$(bind_panel_root_path "$self_verification_path")"
-verification_dir="$(bind_panel_root_path "$verification_dir")"
-approval_path="$(bind_panel_root_path "$approval_path")"
 
 validate_bound_completion() {
   local marker="$1"
-  node --input-type=module - "$marker" "$lifecycle_helper" <<'NODE'
+  node --input-type=module - "$marker" <<'NODE'
 import crypto from "node:crypto";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
 const markerPath = process.argv[2];
-const helperPath = process.argv[3];
-const { readBoundArtifactSetNoFollow } =
-  await import(pathToFileURL(helperPath).href);
 let marker;
-let artifacts;
 try {
-  ({ marker, artifacts } = readBoundArtifactSetNoFollow(markerPath));
+  marker = JSON.parse(readFileSync(markerPath, "utf8"));
 } catch (error) {
   console.error(`${markerPath}: invalid completion marker: ${error.message}`);
   process.exit(1);
@@ -357,7 +259,13 @@ for (const relative of Object.keys(digests).sort()) {
     console.error(`${markerPath}: invalid bound artifact entry ${relative}`);
     process.exit(1);
   }
-  const bytes = artifacts[relative];
+  let bytes;
+  try {
+    bytes = readFileSync(path.join(root, relative));
+  } catch (error) {
+    console.error(`${markerPath}: bound artifact ${relative} is unavailable: ${error.message}`);
+    process.exit(1);
+  }
   const digest = crypto.createHash("sha256").update(bytes).digest("hex");
   if (digest !== digests[relative] || bytes.length !== sizes[relative]) {
     console.error(
@@ -371,26 +279,19 @@ NODE
 }
 
 secure_digest_size() {
-  node --input-type=module - "$1" "$lifecycle_helper" <<'NODE'
+  node --input-type=module - "$1" <<'NODE'
 import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
-const { readFileNoFollow } =
-  await import(pathToFileURL(process.argv[3]).href);
-const bytes = readFileNoFollow(process.argv[2], { label: "staged artifact" });
+import { readFileSync } from "node:fs";
+const bytes = readFileSync(process.argv[2]);
 process.stdout.write(
   `${crypto.createHash("sha256").update(bytes).digest("hex")}\t${bytes.length}`,
 );
 NODE
 }
 
-partial_cleanup_hint() {
-  echo "partial pre-dispatch scratch directory is non-authoritative: $display_out" >&2
-  echo "inspect its identity and contents before cleanup; do not recursively delete a path after an identity change" >&2
-}
-
 if [ -e "$out" ]; then
   if [ ! -f "$completion_marker" ]; then
-    partial_cleanup_hint
+    echo "round $round already has an incomplete packet; remove that exact directory before retrying" >&2
     exit 2
   fi
   if ! validate_bound_completion "$completion_marker"; then
@@ -399,32 +300,13 @@ if [ -e "$out" ]; then
   fi
 fi
 
-round_directory_owned=false
-stage_exit() {
-  local status="$?"
-  if [ "$status" -ne 0 ] &&
-     [ "$round_directory_owned" = true ] &&
-     [ ! -f "$completion_marker" ]; then
-    echo "preserved the incomplete staging directory; automatic pathname cleanup is refused" >&2
-    partial_cleanup_hint
-  fi
-  exit "$status"
-}
-trap stage_exit EXIT
-
 read_address() {
-  node --input-type=module - "$1" "$lifecycle_helper" <<'NODE'
-import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
+  node --input-type=module - "$1" <<'NODE'
+import { readFileSync } from "node:fs";
 const path = process.argv[2];
-const { readFileNoFollow } =
-  await import(pathToFileURL(process.argv[3]).href);
 let value;
 try {
-  value = JSON.parse(readFileNoFollow(path, {
-    encoding: "utf8",
-    label: "review address",
-  }));
+  value = JSON.parse(readFileSync(path, "utf8"));
 } catch (error) {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
@@ -435,38 +317,17 @@ for (const key of ["round", "lifecycle_id", "base", "previous_tip", "tip"]) {
     process.exit(1);
   }
 }
-let phase = value.phase;
-const selectionPath = value.selection_path ?? "";
-let selectionSha256 = value.selection_sha256;
+const phase = value.phase;
+const selectionPath = value.selection_path;
+const selectionSha256 = value.selection_sha256;
 if (
-  selectionPath &&
-  (!phase || !selectionSha256)
+  typeof phase !== "string" ||
+  typeof selectionPath !== "string" ||
+  typeof selectionSha256 !== "string" ||
+  selectionPath.length === 0 ||
+  selectionSha256.length === 0
 ) {
-  let selectionBytes;
-  try {
-    selectionBytes = readFileNoFollow(selectionPath, {
-      label: "recorded lifecycle selection",
-    });
-  } catch (error) {
-    console.error(`${selectionPath}: unreadable lifecycle selection: ${error.message}`);
-    process.exit(1);
-  }
-  let selection;
-  try {
-    selection = JSON.parse(selectionBytes);
-  } catch (error) {
-    console.error(`${selectionPath}: invalid lifecycle selection: ${error.message}`);
-    process.exit(1);
-  }
-  phase ||= selection.phase;
-  selectionSha256 ||=
-    crypto.createHash("sha256").update(selectionBytes).digest("hex");
-}
-if (!phase || !selectionPath || !selectionSha256) {
-  console.error(
-    `${path}: legacy address cannot derive phase and selection digest; ` +
-    "record a readable selection_path or start a new lifecycle",
-  );
+  console.error(`${path}: address.json must record phase, selection_path, and selection_sha256`);
   process.exit(1);
 }
 process.stdout.write(
@@ -494,34 +355,21 @@ else
   previous_round="$wave-r$((round_number - 1))"
   display_previous_dir="$display_panel_root/$previous_round"
   previous_dir="$display_previous_dir"
-  op_previous_dir="$panel_root/$previous_round"
+  op_previous_dir="$previous_dir"
+  if [ ! -f "$op_previous_dir/.complete" ]; then
+    echo "missing canonical schema-v2 predecessor packet: $display_previous_dir/.complete" >&2
+    echo "later-round staging requires the predecessor completion marker before reading its artifacts" >&2
+    exit 2
+  fi
+  if ! validate_bound_completion "$op_previous_dir/.complete"; then
+    echo "previous review is not a canonical schema-v2 completion packet" >&2
+    exit 2
+  fi
   previous_address="$op_previous_dir/address.json"
   if [ ! -f "$previous_address" ]; then
     echo "missing previous review address: $display_previous_dir/address.json" >&2
     echo "stage reviews sequentially so the incremental range is derived from recorded evidence" >&2
     exit 2
-  fi
-  if [ -f "$op_previous_dir/.complete" ]; then
-    previous_completion_schema="$(
-      node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { readFileNoFollow } =
-  await import(pathToFileURL(process.argv[2]).href);
-const value = JSON.parse(readFileNoFollow(process.argv[1], {
-  encoding: "utf8",
-  label: "previous completion marker",
-}));
-process.stdout.write(String(value.schema_version ?? ""));
-' "$op_previous_dir/.complete" "$lifecycle_helper"
-    )" || {
-      echo "previous review has an unreadable completion marker" >&2
-      exit 2
-    }
-    if [ "$previous_completion_schema" = "2" ] &&
-       ! validate_bound_completion "$op_previous_dir/.complete"; then
-      echo "previous review failed canonical completion validation" >&2
-      exit 2
-    fi
   fi
   if ! previous_fields="$(read_address "$previous_address")"; then
     exit 2
@@ -675,19 +523,18 @@ fi
 
 if [ -n "$reviewer_notes_dir" ]; then
   if ! node --input-type=module - \
-    "$reviewer_notes_dir" "$selected_roster" "$lifecycle_helper" <<'NODE'
-import { pathToFileURL } from "node:url";
+    "$reviewer_notes_dir" "$selected_roster" <<'NODE'
+import { readdirSync, readFileSync, statSync } from "node:fs";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
-const { readDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[4]).href);
 let files;
 try {
-  files = readDirectoryNoFollow(source, {
-    label: "finalized reviewer-notes directory",
-    nonEmpty: true,
-    expectedNames: selected.map((seat) => `${seat}.md`),
-  });
+  files = readdirSync(source)
+    .sort()
+    .map((name) => ({
+      name,
+      size: statSync(`${source}/${name}`).size,
+    }));
 } catch (error) {
   console.error(`missing or unreadable finalized reviewer-notes directory: ${source}: ${error.message}`);
   process.exit(1);
@@ -696,7 +543,8 @@ const expected = selected.map((seat) => `${seat}.md`).sort();
 const actual = files.map((entry) => entry.name);
 if (
   files.length !== expected.length ||
-  actual.some((name, index) => name !== expected[index])
+  actual.some((name, index) => name !== expected[index]) ||
+  files.some((entry) => entry.size === 0)
 ) {
   console.error(
     `finalized reviewer-notes directory must contain exactly one regular Markdown file per selected seat; ` +
@@ -717,16 +565,11 @@ readable_json_file() {
     echo "missing or unreadable supplied $label: $path" >&2
     exit 2
   fi
-  if ! node --input-type=module - "$path" "$lifecycle_helper" <<'NODE'
-import { pathToFileURL } from "node:url";
+  if ! node --input-type=module - "$path" <<'NODE'
+import { readFileSync } from "node:fs";
 const path = process.argv[2];
-const { readFileNoFollow } =
-  await import(pathToFileURL(process.argv[3]).href);
 try {
-  JSON.parse(readFileNoFollow(path, {
-    encoding: "utf8",
-    label: "supplied JSON artifact",
-  }));
+  JSON.parse(readFileSync(path, "utf8"));
 } catch (error) {
   console.error(`${path}: supplied JSON artifact is not readable: ${error.message}`);
   process.exit(1);
@@ -744,18 +587,19 @@ else
   readable_json_file "$responses_path" "implementation responses"
   readable_json_file "$self_verification_path" "self-verification"
   if ! node --input-type=module - \
-    "$verification_dir" "$selected_roster" "$lifecycle_helper" <<'NODE'
-import { pathToFileURL } from "node:url";
+    "$verification_dir" "$selected_roster" <<'NODE'
+import { readdirSync, readFileSync, statSync } from "node:fs";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
-const { readDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[4]).href);
 let entries;
 try {
-  entries = readDirectoryNoFollow(source, {
-    label: "verification request directory",
-    expectedNames: selected.map((seat) => `${seat}.json`),
-  });
+  entries = readdirSync(source)
+    .sort()
+    .map((name) => {
+      const path = `${source}/${name}`;
+      const stat = statSync(path);
+      return { name, bytes: readFileSync(path), regular: stat.isFile() };
+    });
 } catch (error) {
   console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
   process.exit(1);
@@ -764,7 +608,8 @@ const expected = selected.map((seat) => `${seat}.json`).sort();
 const actual = entries.map((entry) => entry.name);
 if (
   entries.length !== expected.length ||
-  actual.some((name, index) => name !== expected[index])
+  actual.some((name, index) => name !== expected[index]) ||
+  entries.some((entry) => !entry.regular)
 ) {
   console.error(
     `verification request directory must contain exactly one readable JSON request per selected seat; ` +
@@ -841,57 +686,11 @@ if [ -d "$out/verdicts" ] &&
 fi
 
 reuse_existing=false
-enforce_panel_root_quota() {
-  node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [panelRoot, maxText, helperPath] = process.argv.slice(1);
-const { directoryTreeUsageNoFollow } =
-  await import(pathToFileURL(helperPath).href);
-const usage = directoryTreeUsageNoFollow(panelRoot, {
-  label: "panel packet root",
-  maxBytes: Number(maxText),
-});
-process.stdout.write(String(usage.bytes));
-' "$panel_root" "$panel_root_max_bytes" "$lifecycle_helper"
-}
-
-claim_round_directory() {
-  node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { ensureDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[2]).href);
-ensureDirectoryNoFollow(process.argv[1]);
-' "$panel_root" "$lifecycle_helper"
-  if [ -e "$out" ]; then
-    if [ ! -f "$completion_marker" ]; then
-      partial_cleanup_hint
-      exit 2
-    fi
-    reuse_existing=true
-    return
-  fi
-  if ! node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { ensureDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[2]).href);
-ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
-' "$out" "$lifecycle_helper"
-  then
-    if [ -f "$completion_marker" ]; then
-      reuse_existing=true
-      return
-    fi
-    partial_cleanup_hint
-    exit 2
-  fi
-  round_directory_owned=true
-}
-
-if ! enforce_panel_root_quota >/dev/null; then
-  echo "panel packet root quota refused staging before round materialization" >&2
-  exit 2
+if [ -e "$out" ]; then
+  reuse_existing=true
+else
+  mkdir -p "$out/verdicts" "$out/reviewer-notes"
 fi
-claim_round_directory
 
 require_reused_path() {
   local path="$1"
@@ -912,7 +711,6 @@ if [ "$reuse_existing" = true ]; then
     "$out/evidence.md" \
     "$out/review-request.md" \
     "$out/dispatch-prompt.txt" \
-    "$staged_agent_definitions_dir" \
     "$out/verdicts"; do
     require_reused_path "$required_path" || exit 2
   done
@@ -928,35 +726,40 @@ if [ "$reuse_existing" = true ]; then
     done
   fi
   for seat in "${panel_seats[@]}"; do
-    require_reused_path \
-      "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
   done
-else
-  node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { ensureDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[4]).href);
-ensureDirectoryNoFollow(process.argv[1]);
-ensureDirectoryNoFollow(process.argv[2]);
-ensureDirectoryNoFollow(process.argv[3]);
-' "$out/verdicts" "$out/reviewer-notes" "$staged_agent_definitions_dir" \
-    "$lifecycle_helper"
 fi
 
 publish_stdin_no_replace() {
   local dest="$1"
   node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [destination, helperPath, retentionRoot, maxBytesText] =
-  process.argv.slice(1);
-const { writeStandardInputCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
-writeStandardInputCreateOrCompare(destination, {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-' "$dest" "$lifecycle_helper" "$panel_root" "$panel_root_max_bytes"
+import { dirname } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+const destination = process.argv[1];
+const expected = readFileSync(0);
+mkdirSync(dirname(destination), { recursive: true });
+let actual;
+try {
+  actual = readFileSync(destination);
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+if (actual !== undefined) {
+  if (!actual.equals(expected)) {
+    throw new Error(`conflicting generated bytes at ${destination}`);
+  }
+  process.exit(0);
+}
+try {
+  writeFileSync(destination, expected, { flag: "wx" });
+} catch (error) {
+  if (error.code !== "EEXIST") throw error;
+  actual = readFileSync(destination);
+  if (!actual.equals(expected)) {
+    throw new Error(`conflicting generated bytes at ${destination}`);
+  }
+}
+' "$dest"
 }
 
 materialize_exact() {
@@ -967,38 +770,77 @@ materialize_exact() {
     echo "missing or unreadable supplied $label: $source" >&2
     return 1
   fi
-  if ! node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [source, destination, helperPath, retentionRoot, maxBytesText] =
-  process.argv.slice(1);
-const { copyFileCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
-copyFileCreateOrCompare(source, destination, {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-' "$source" "$destination" "$lifecycle_helper" "$panel_root" \
-    "$panel_root_max_bytes"
-  then
+  if ! publish_stdin_no_replace "$destination" < "$source"; then
     echo "could not materialize supplied $label at $destination" >&2
     return 1
   fi
 }
 
+publish_directory() {
+  local source="$1"
+  local destination="$2"
+  local selected="$3"
+  node --input-type=module -e '
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
+const [source, destination, selectedText] = process.argv.slice(1);
+const expectedNames = selectedText.split(",").filter(Boolean).map((seat) => `${seat}.json`).sort();
+const entries = readdirSync(source).sort();
+if (
+  entries.length !== expectedNames.length ||
+  entries.some((name, index) => name !== expectedNames[index]) ||
+  entries.some((name) => !statSync(join(source, name)).isFile())
+) {
+  throw new Error(
+    `verification request directory must contain exactly one regular JSON file per selected seat; ` +
+    `expected [${expectedNames.join(", ")}], found [${entries.join(", ")}]`,
+  );
+}
+const expected = new Map(entries.map((name) => [name, readFileSync(join(source, name))]));
+const compare = (path) => {
+  const actualNames = readdirSync(path).sort();
+  if (
+    actualNames.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index])
+  ) {
+    throw new Error(`existing artifact family at ${destination} is incomplete or has extra entries`);
+  }
+  for (const name of expectedNames) {
+    if (!readFileSync(join(path, name)).equals(expected.get(name))) {
+      throw new Error(`conflicting generated bytes at ${join(destination, name)}`);
+    }
+  }
+};
+mkdirSync(dirname(destination), { recursive: true });
+if (existsSync(destination)) {
+  if (!statSync(destination).isDirectory()) {
+    throw new Error(`existing artifact family at ${destination} is not a directory`);
+  }
+  compare(destination);
+  process.exit(0);
+}
+const temporary = `${destination}.stage-${process.pid}-${Date.now()}`;
+mkdirSync(temporary);
+try {
+  for (const name of expectedNames) {
+    writeFileSync(join(temporary, name), expected.get(name), { flag: "wx" });
+  }
+  try {
+    renameSync(temporary, destination);
+  } catch (error) {
+    if (!existsSync(destination)) throw error;
+    compare(destination);
+  }
+} finally {
+  if (existsSync(temporary)) rmSync(temporary, { recursive: true, force: true });
+}
+' "$source" "$destination" "$selected"
+}
+
 stage() {
   local dest="$1"
   shift
-  node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [destination, helperPath, retentionRoot, maxBytesText, command, ...args] =
-  process.argv.slice(1);
-const { writeCommandOutputCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
-writeCommandOutputCreateOrCompare(destination, command, args, {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-' "$dest" "$lifecycle_helper" "$panel_root" "$panel_root_max_bytes" "$@"
+  "$@" | publish_stdin_no_replace "$dest"
 }
 
 stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"
@@ -1022,31 +864,25 @@ if [ -n "$candidate_path" ]; then
 else
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, candidatePath, helperPath, retentionRoot, maxBytesText] =
-  process.argv.slice(1);
-const { candidateFromSelection, readSelection, writeCreateOrCompare } =
+const [selectionPath, helperPath] = process.argv.slice(1);
+const { candidateFromSelection, readSelection, stableStringify } =
   await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
-writeCreateOrCompare(candidatePath, candidateFromSelection(selection), {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-' "$staged_selection_path" "$staged_candidate_path" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-  "$panel_root" "$panel_root_max_bytes"
+process.stdout.write(stableStringify(candidateFromSelection(selection)));
+' "$staged_selection_path" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" |
+  publish_stdin_no_replace "$staged_candidate_path"
 fi
 node --input-type=module -e '
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
-const { readFileNoFollow, readSelection, validateSelectionCandidate } =
+const { readSelection, validateSelectionCandidate } =
   await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
 validateSelectionCandidate(
   selection,
-  JSON.parse(readFileNoFollow(candidatePath, {
-    encoding: "utf8",
-    label: "staged current candidate",
-  })),
+  JSON.parse(readFileSync(candidatePath, "utf8")),
 );
 ' "$staged_selection_path" "$staged_candidate_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
@@ -1057,21 +893,14 @@ IFS=$'\t' read -r evidence_sha evidence_bytes \
   <<<"$(secure_digest_size "$out/evidence.md")"
 
 if [ -n "$discovery_request_path" ]; then
-  if ! node --input-type=module - \
-    "$discovery_request_path" "$staged_discovery_request_path" "$evidence_sha" \
-    "$evidence_bytes" \
-    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-    "$panel_root" "$panel_root_max_bytes" <<'NODE'
+  if ! node --input-type=module -e '
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-const [source, destination, evidenceSha256, evidenceBytesText, helperPath] =
-  process.argv.slice(2, 7);
-const [retentionRoot, maxBytesText] = process.argv.slice(7);
-const { readFileNoFollow, writeCreateOrCompare } =
+const [source, evidenceSha256, evidenceBytesText, helperPath] =
+  process.argv.slice(1);
+const { stableStringify } =
   await import(pathToFileURL(helperPath).href);
-const request = JSON.parse(readFileNoFollow(source, {
-  encoding: "utf8",
-  label: "generated discovery request",
-}));
+const request = JSON.parse(readFileSync(source, "utf8"));
 if (!Array.isArray(request.validation_evidence)) {
   throw new Error("generated discovery request validation_evidence must be an array");
 }
@@ -1103,11 +932,10 @@ if (
 if (priorDescriptors.length === 0) {
   request.validation_evidence.push(descriptor);
 }
-writeCreateOrCompare(destination, request, {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-NODE
+process.stdout.write(stableStringify(request));
+' "$discovery_request_path" "$evidence_sha" "$evidence_bytes" \
+    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" |
+    publish_stdin_no_replace "$staged_discovery_request_path"
   then
     echo "cannot generate evidence-bound discovery request from $discovery_request_path" >&2
     exit 2
@@ -1133,51 +961,14 @@ if [ -n "$verification_dir" ]; then
     exit 1
   fi
 
-  node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [
-  source,
-  destination,
-  helperPath,
-  selectedRoster,
-  retentionRoot,
-  maxBytesText,
-] = process.argv.slice(1);
-const { readDirectoryNoFollow, writeDirectoryCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
-const entries = readDirectoryNoFollow(source, {
-  label: "verification request directory",
-  expectedNames: selectedRoster.split(",").map((seat) => `${seat}.json`),
-});
-if (entries.length === 0 || entries.some((entry) =>
-  !entry.name.endsWith(".json")
-)) {
-  throw new Error("verification directory must contain only regular JSON files");
-}
-writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
-  name: entry.name,
-  bytes: entry.bytes,
-})), {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-' "$verification_dir" "$staged_verification_dir" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-  "$selected_roster" "$panel_root" "$panel_root_max_bytes"
+  publish_directory "$verification_dir" "$staged_verification_dir" "$selected_roster"
 fi
 
 if [ "$phase" = "discovery" ]; then
-  if ! node - "$staged_discovery_request_path" "$evidence_sha" \
-    "$evidence_bytes" "$lifecycle_helper" <<'NODE'
-const { pathToFileURL } = require("node:url");
-const [requestPath, evidenceSha256, evidenceBytesText] = process.argv.slice(2);
-(async () => {
-const helperPath = process.argv[5];
-const { readFileNoFollow } = await import(pathToFileURL(helperPath).href);
-const request = JSON.parse(readFileNoFollow(requestPath, {
-  encoding: "utf8",
-  label: "staged discovery request",
-}));
+  if ! node --input-type=module -e '
+import { readFileSync } from "node:fs";
+const [requestPath, evidenceSha256, evidenceBytesText] = process.argv.slice(1);
+const request = JSON.parse(readFileSync(requestPath, "utf8"));
 const evidenceBytes = Number(evidenceBytesText);
 const expected = {
   artifact_kind: "d2b-panel/validation-evidence",
@@ -1200,11 +991,7 @@ if (matches.length !== 1) {
   );
   process.exit(1);
 }
-})().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
-NODE
+' "$staged_discovery_request_path" "$evidence_sha" "$evidence_bytes"
   then
     echo "generated discovery request does not bind finalized validation evidence" >&2
     exit 2
@@ -1218,6 +1005,7 @@ if ! node --input-type=module - \
   "$staged_verification_dir" \
   "$previous_selection_path" "$op_previous_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const [
@@ -1234,10 +1022,10 @@ const [
   previousDir,
   helperPath,
 ] = process.argv.slice(2);
-const { readDirectoryNoFollow, readFileNoFollow, validateStagedRoundArtifacts } =
+const { validateStagedRoundArtifacts } =
   await import(pathToFileURL(helperPath).href);
 const readJson = (path, label = "staged panel artifact") =>
-  JSON.parse(readFileNoFollow(path, { encoding: "utf8", label }));
+  JSON.parse(readFileSync(path, "utf8"));
 const selection = readJson(selectionPath);
 const artifacts = {
   phase,
@@ -1251,10 +1039,25 @@ if (phase === "discovery") {
   artifacts.ledger = readJson(ledgerPath);
   artifacts.responses = readJson(responsesPath);
   artifacts.self_verification = readJson(selfVerificationPath);
-  const entries = readDirectoryNoFollow(verificationDir, {
-    label: "staged verification request directory",
-    expectedNames: selection.roster.map((seat) => `${seat}.json`),
-  });
+  const entries = readdirSync(verificationDir)
+    .sort()
+    .map((name) => ({
+      name,
+      bytes: readFileSync(`${verificationDir}/${name}`),
+      regular: statSync(`${verificationDir}/${name}`).isFile(),
+    }));
+  const expectedNames = selection.roster.map((seat) => `${seat}.json`).sort();
+  const actualNames = entries.map((entry) => entry.name);
+  if (
+    entries.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index]) ||
+    entries.some((entry) => !entry.regular)
+  ) {
+    throw new Error(
+      `staged verification request directory is incomplete or has extra entries; ` +
+      `expected [${expectedNames.join(", ")}], found [${actualNames.join(", ")}]`,
+    );
+  }
   artifacts.verification_requests = Object.fromEntries(
     entries.map((entry) => [
       entry.name.slice(0, -5),
@@ -1282,14 +1085,10 @@ fi
 
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const args = process.argv.slice(1);
-const maxBytesText = args.pop();
-const retentionRoot = args.pop();
-const helperPath = args.pop();
-const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
-const [path, round, lifecycle, selectionPath, base, previousTip, tip, phase,
-  selectionSha, deltaSha, fullSha] = args;
-writeCreateOrCompare(path, {
+const [round, lifecycle, selectionPath, base, previousTip, tip, phase,
+  selectionSha, deltaSha, fullSha, helperPath] = process.argv.slice(1);
+const { stableStringify } = await import(pathToFileURL(helperPath).href);
+process.stdout.write(stableStringify({
   round,
   lifecycle_id: lifecycle,
   selection_path: selectionPath,
@@ -1300,23 +1099,13 @@ writeCreateOrCompare(path, {
   tip,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
-}, {
-  retentionRoot,
-  maxBytes: Number(maxBytesText),
-});
-' "$out/address.json" "$round" "$lifecycle" "$display_staged_selection_path" "$base_sha" \
+}));
+' "$round" "$lifecycle" "$display_staged_selection_path" "$base_sha" \
   "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-  "$panel_root" "$panel_root_max_bytes"
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" |
+  publish_stdin_no_replace "$out/address.json"
 
 for seat in "${panel_seats[@]}"; do
-  if [ "$reuse_existing" != true ]; then
-    materialize_exact \
-      "$root/.github/agents/panel-$seat.agent.md" \
-      "$staged_agent_definitions_dir/panel-$seat.agent.md" \
-      "panel agent definition for $seat"
-  fi
-
   note="$out/reviewer-notes/$seat.md"
   if [ -n "$reviewer_notes_dir" ]; then
     materialize_exact "$reviewer_notes_dir/$seat.md" "$note" \
@@ -1405,14 +1194,10 @@ and `recommendations`. Use this exact schema:
 
 MD
   node --input-type=module - "$ledger_path" "$lifecycle_helper" <<'NODE'
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const [ledgerPath, helperPath] = process.argv.slice(2);
-const { readFileNoFollow } =
-  await import(pathToFileURL(helperPath).href);
-const ledger = JSON.parse(readFileNoFollow(ledgerPath, {
-  encoding: "utf8",
-  label: "staged discovery ledger",
-}));
+const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
 const statuses = Object.fromEntries(
   ledger.issues.map((issue) => [issue.id, "verified"]),
 );
@@ -1433,7 +1218,14 @@ definition.
 
 `verified_issue_statuses` has exactly one entry for every ledger issue. Use
 `verified` or `resolved` only when confirmed; every other status remains
-blocking. `late_findings` is always present and is an array. Each non-empty
+blocking. `late_findings` is always present and is either `[]` or an array of
+objects with exactly `severity`, `introduced_regression`, `previously_missed`,
+`category`,
+`source_id`, `source_ordinal`, `seat`, `attribution`, `raw_text`,
+`description`, `impact`, and `recommendation`. For a non-empty entry,
+`introduced_regression` is `true` or `previously_missed` is `true`, and
+`severity` is `critical`, `high`, `medium`, or `low`; `category` is one of
+`correctness`, `security`, `data-loss`, or `reliability`. Each non-empty
 `recommendations` entry has exactly `severity`, `where`, `what`, `why`, and
 `fix`. `signoff` is true if and only if `recommendations` is empty.
 MD
@@ -1458,8 +1250,7 @@ with \`view\`; do not substitute a prose summary for them.
 - Phase: \`$phase\`
 - Lifecycle selection: \`$display_staged_selection_path\` (sha256 \`$selection_sha256\`)
 - Staged current candidate: \`$display_staged_candidate_path\`
-- Bound panel agent definition:
-  \`$display_staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
+- Panel agent definition: \`$root/.github/agents/panel-<your-seat>.agent.md\`
 - Validation evidence and phase deliverable: \`$display_out/evidence.md\`
   (sha256 \`$evidence_sha\`, bound by the completion marker)
 - Seat-specific notes: \`$display_out/reviewer-notes/<your-seat>.md\`
@@ -1538,7 +1329,7 @@ fi
 cat <<MD
 Use this dispatch prompt only when the stage completion marker exists at $display_completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying.
 
-This is the $phase phase. Read and follow the complete immutable review request at $display_out/review-request.md. Use view to read every artifact it names, including the bound panel agent definition at $display_staged_agent_definitions_dir/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
+This is the $phase phase. Read and follow the complete review request at $display_out/review-request.md. Use view to read every artifact it names, including the panel agent definition at $root/.github/agents/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
 
 Required $phase verdict contract:
 
@@ -1567,41 +1358,36 @@ else
   )
 fi
 for seat in "${panel_seats[@]}"; do
-  canonical_artifacts+=("agent-definitions/panel-$seat.agent.md")
   canonical_artifacts+=("reviewer-notes/$seat.md")
   if [ "$phase" = "verification" ]; then
     canonical_artifacts+=("verification/$seat.json")
   fi
 done
 
-if ! enforce_panel_root_quota >/dev/null; then
-  echo "panel packet root quota refused completion; .complete will not be written" >&2
-  exit 2
-fi
-if ! verify_locked_panel_root; then
-  echo "panel packet root pathname no longer names the locked identity; .complete will not be written" >&2
-  exit 2
-fi
-
-node --input-type=module - "$lifecycle_helper" "$out" \
+node --input-type=module - "$out" \
   "${canonical_artifacts[@]}" <<'NODE'
-import { pathToFileURL } from "node:url";
-const [helperPath, root, ...relativePaths] = process.argv.slice(2);
-const { chmodFileNoFollow } = await import(pathToFileURL(helperPath).href);
+import { chmodSync } from "node:fs";
+const [root, ...relativePaths] = process.argv.slice(2);
 for (const relative of relativePaths) {
-  chmodFileNoFollow(`${root}/${relative}`, 0o444);
+  chmodSync(`${root}/${relative}`, 0o444);
 }
 NODE
 
 if ! node --input-type=module -e '
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const [path, round, lifecycle, base, previousTip, tip, phase, selectionSha,
   deltaSha, fullSha, helperPath, ...artifactPaths] = process.argv.slice(1);
-const maxBytes = Number(artifactPaths.pop());
-const retentionRoot = artifactPaths.pop();
-const { writeBoundCompletionCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
-writeBoundCompletionCreateOrCompare(path, {
+const { stableStringify } = await import(pathToFileURL(helperPath).href);
+const artifactSha256 = {};
+const artifactBytes = {};
+for (const relative of artifactPaths) {
+  const bytes = readFileSync(`${path}/${relative}`);
+  artifactSha256[relative] = createHash("sha256").update(bytes).digest("hex");
+  artifactBytes[relative] = bytes.length;
+}
+process.stdout.write(stableStringify({
   artifact_kind: "d2b-panel/stage-completion",
   schema_version: 2,
   complete: true,
@@ -1614,24 +1400,22 @@ writeBoundCompletionCreateOrCompare(path, {
   selection_sha256: selectionSha,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
-}, artifactPaths, {
-  retentionRoot,
-  maxBytes,
-});
-' "$completion_marker" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
+  artifact_sha256: artifactSha256,
+  artifact_bytes: artifactBytes,
+}));
+' "$out" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
   "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
-  "${canonical_artifacts[@]}" "$panel_root" "$panel_root_max_bytes"
+  "${canonical_artifacts[@]}" |
+  publish_stdin_no_replace "$completion_marker"
 then
-  echo "panel packet root quota or atomic completion publication refused .complete" >&2
+  echo "could not publish the completion marker" >&2
   exit 2
 fi
 node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { chmodFileNoFollow } =
-  await import(pathToFileURL(process.argv[2]).href);
-chmodFileNoFollow(process.argv[1], 0o444);
-' "$completion_marker" "$lifecycle_helper"
+import { chmodSync } from "node:fs";
+chmodSync(process.argv[1], 0o444);
+' "$completion_marker"
 
 echo "staged $display_out"
 echo "  tip          $tip"
