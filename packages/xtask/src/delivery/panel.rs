@@ -1945,7 +1945,7 @@ pub(crate) mod tests {
     #[test]
     fn a_record_binding_must_match_its_request_binding() {
         let scratch = Scratch::new("panel-record-request-binding");
-        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let (_state, _candidate, snapshot) = candidate_with_snapshot(&scratch);
         let mut request = PanelRequest::for_snapshot(&snapshot);
         request.provider = "other-provider".to_owned();
         let error = record(PanelRole::Security, &snapshot)

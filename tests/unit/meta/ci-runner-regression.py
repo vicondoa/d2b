@@ -374,6 +374,24 @@ class CiRunnerRegressionTests(unittest.TestCase):
             path = tree / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+        tool_dir = tree / "test-bin"
+        tool_dir.mkdir()
+        cargo = tool_dir / "cargo"
+        cargo.write_text(
+            "#!/usr/bin/env sh\n"
+            'if [ "${1:-}" = metadata ]; then\n'
+            "  printf '{\"workspace_root\":\"%s/packages\","
+            "\"workspace_members\":[\"path+file://%s/packages/example#0.0.0\"],"
+            "\"packages\":[{\"id\":\"path+file://%s/packages/example#0.0.0\","
+            "\"name\":\"example\","
+            "\"manifest_path\":\"%s/packages/example/Cargo.toml\"}]}\\n' "
+            '"$ROOT" "$ROOT" "$ROOT" "$ROOT"\n'
+            "  exit 0\n"
+            "fi\n"
+            "exit 91\n",
+            encoding="utf-8",
+        )
+        cargo.chmod(0o755)
         fingerprint = tree / "tests/tools/api-surface-input-fingerprint.sh"
         shutil.copy2(API_INPUT_FINGERPRINT, fingerprint)
         return tree
@@ -386,6 +404,8 @@ class CiRunnerRegressionTests(unittest.TestCase):
         path_prefix: pathlib.Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         path = os.environ.get("PATH", "")
+        fixture_tools = tree / "test-bin"
+        path = f"{fixture_tools}{os.pathsep}{path}"
         if path_prefix is not None:
             path = f"{path_prefix}{os.pathsep}{path}"
         env = {

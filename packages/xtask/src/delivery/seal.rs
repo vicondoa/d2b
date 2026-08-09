@@ -748,7 +748,7 @@ pub(crate) mod tests {
         let mut foreign_material = fixtures::material();
         foreign_material.repository_set[0].integration_tree_oid = fixtures::oid(9);
         let foreign_scratch = Scratch::new("seal-foreign-panel-request-source");
-        let (foreign_candidate, foreign_snapshot) =
+        let (_foreign_state, foreign_candidate, foreign_snapshot) =
             candidate_with_snapshot_from(&foreign_scratch, foreign_material);
         panel::request(&foreign_candidate, &foreign_snapshot).expect("foreign panel request");
         let foreign_request = foreign_candidate
