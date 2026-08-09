@@ -884,7 +884,10 @@ cargo() {
         self.assertIn("-p d2b-core", main_clippy[0])
         self.assertNotIn("--workspace", main_clippy[0])
         workspace_clippy = [
-            command for command in workspace if command.startswith("clippy ")
+            command
+            for command in workspace
+            if command.startswith("clippy ")
+            and "packages/Cargo.toml" in command
         ]
         self.assertEqual(len(workspace_clippy), 1)
         self.assertIn("--workspace", workspace_clippy[0])
