@@ -3385,6 +3385,7 @@ try {
           model: "gpt-5.6-sol",
           reasoning_effort: "xhigh",
           context_tier: "default",
+          communication: "caveman-full-optional",
           agent_type: `panel-${seat}`,
           agent_definition_sha256: sha256(definition.toString("utf8")),
           run_id: `cli-run-${index}`,
