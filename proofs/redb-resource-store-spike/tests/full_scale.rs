@@ -303,6 +303,7 @@ async fn owner_fan_in_emits_one_direct_hint_per_child_mutation() {
         }
         (resource_hints, owner_hints)
     });
+    tokio::task::yield_now().await;
 
     for start in (0..4_681).step_by(16) {
         insert_group(
@@ -314,8 +315,12 @@ async fn owner_fan_in_emits_one_direct_hint_per_child_mutation() {
             }),
         )
         .await;
+        tokio::task::yield_now().await;
     }
-    let (resource_hints, owner_hints) = collector.await.unwrap();
+    let (resource_hints, owner_hints) = tokio::time::timeout(Duration::from_secs(30), collector)
+        .await
+        .expect("owner hint collector completes without scheduler starvation")
+        .unwrap();
     assert_eq!(resource_hints, 4_681);
     assert_eq!(owner_hints, 4_680);
     let stats = store.stats().await.unwrap();
