@@ -247,8 +247,8 @@ bindings before publishing three per-file create-or-compare artifacts:
 `NEXT/handoff.json`. It publishes the ledger and responses independently, then
 publishes `handoff.json` last as completeness evidence. A retry after a
 partial publication compares every existing file byte-for-byte and creates
-only missing files; conflicting bytes fail. Consumers must require all three
-files before use. This marker is not an atomic transaction and is not a
+only missing files; conflicting bytes fail. Consumers must require all three files before
+use. This marker is not an atomic transaction and is not a
 security proof. It appends admitted late findings with contiguous `R`
 identifiers and preserved source identity. Every issue that any selected seat
 did not pass receives a canonical blank response; passed issues retain their

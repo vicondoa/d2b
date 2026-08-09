@@ -1314,7 +1314,7 @@ for (const [label, path] of panelContinuationDocs) {
     "schema-version `3`",
     "schema-version `4`",
     "independently",
-    "both files before",
+    "all three files before",
   ]) {
     if (!normalizedSource.includes(phrase.toLowerCase())) {
       fail(`${label}: continuation documentation is missing required text: ${phrase}`);

@@ -240,8 +240,8 @@ The command publishes three per-file create-or-compare artifacts:
 It publishes the ledger and responses independently, then publishes
 `handoff.json` last as completeness evidence. A retry after a partial
 publication compares every existing file byte-for-byte and creates only
-missing files; conflicting bytes fail. Consumers must require all three files
-before using the continuation handoff. The marker is not an atomic transaction
+missing files; conflicting bytes fail. Consumers must require all three files before
+using the continuation handoff. The marker is not an atomic transaction
 and is not a security proof. The command validates lifecycle, selection
 digest, roster, candidate, ledger, response, and verification bindings;
 appends admitted late findings with stable contiguous `R` identifiers; carries

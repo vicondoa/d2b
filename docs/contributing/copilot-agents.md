@@ -392,9 +392,10 @@ Fill the canonical blank responses in `NEXT/responses.json`, rerun selection
 with the new fix delta, prepare verification from
 `NEXT/discovery-ledger.json` and `NEXT/responses.json`, and stage the new
 packet. The command is the only continuation path: it publishes the ledger and
-response files independently with create-or-compare semantics. A retry after
-one file was published compares that file byte-for-byte and creates the
-missing file; conflicting bytes fail. Consumers must require both files before
+response files independently with create-or-compare semantics, then publishes
+`NEXT/handoff.json` last as completeness evidence. A retry after a partial
+publication compares every existing file byte-for-byte and creates only the
+missing files; conflicting bytes fail. Consumers must require all three files before
 use. It appends admitted late findings, resets issues with any nonpassing
 status, and refuses duplicate sources, missing responses, candidate or
 selection mismatches, malformed statuses, and conflicting output. Do not
