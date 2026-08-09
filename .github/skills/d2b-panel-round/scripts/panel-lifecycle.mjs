@@ -5038,88 +5038,80 @@ export function validateFixScope(input) {
 }
 
 export const LATE_FINDING_SCHEMA = Object.freeze({
-  required: Object.freeze(["admission_reason", "severity", "seat", "impact"]),
-  text: Object.freeze(["raw_text", "description"]),
-  fix: Object.freeze(["recommendation", "fix"]),
-  optional: Object.freeze(["source_id", "late"]),
+  required: Object.freeze([
+    "severity",
+    "introduced_regression",
+    "previously_missed",
+    "category",
+    "source_id",
+    "source_ordinal",
+    "seat",
+    "attribution",
+    "raw_text",
+    "description",
+    "impact",
+    "recommendation",
+  ]),
 });
 
-const LATE_ADMISSION_REASONS = Object.freeze([
-  "introduced-regression",
-  "previously-missed-merge-risk",
-  "unsafe-merge-risk",
+const LATE_FINDING_CATEGORIES = Object.freeze([
+  "correctness",
+  "security",
+  "data-loss",
+  "reliability",
 ]);
 
 function validateLateFindingShape(finding, label = "late finding") {
   if (!isPlainObject(finding)) error(`${label} must be an object`);
-  const allowed = new Set([
-    ...LATE_FINDING_SCHEMA.required,
-    ...LATE_FINDING_SCHEMA.text,
-    ...LATE_FINDING_SCHEMA.fix,
-    ...LATE_FINDING_SCHEMA.optional,
-  ]);
-  const unknown = Object.keys(finding).filter((key) => !allowed.has(key));
-  if (unknown.length > 0) {
-    error(`${label} contains unknown field(s): ${unknown.join(", ")}`);
-  }
+  assertExactKeys(finding, LATE_FINDING_SCHEMA.required, label);
   for (const key of LATE_FINDING_SCHEMA.required) {
     if (!Object.hasOwn(finding, key)) {
       error(`${label} must contain ${key}`);
     }
   }
-  const textFields = LATE_FINDING_SCHEMA.text.filter((key) =>
-    Object.hasOwn(finding, key),
-  );
-  if (textFields.length !== 1) {
-    error(`${label} must contain exactly one of raw_text or description`);
-  }
-  const fixFields = LATE_FINDING_SCHEMA.fix.filter((key) =>
-    Object.hasOwn(finding, key),
-  );
-  if (fixFields.length !== 1) {
-    error(`${label} must contain exactly one of recommendation or fix`);
-  }
   if (
-    !LATE_ADMISSION_REASONS.includes(finding.admission_reason)
+    typeof finding.introduced_regression !== "boolean" ||
+    typeof finding.previously_missed !== "boolean"
   ) {
-    error(
-      `${label}.admission_reason must be one of ` +
-      `${LATE_ADMISSION_REASONS.join(", ")}`,
-    );
+    error(`${label} admission flags must be booleans`);
+  }
+  if (!finding.introduced_regression && !finding.previously_missed) {
+    error(`${label} must be introduced_regression or previously_missed`);
+  }
+  if (!LATE_FINDING_CATEGORIES.includes(finding.category)) {
+    error(`${label}.category must be one of ${LATE_FINDING_CATEGORIES.join(", ")}`);
+  }
+  if (!Number.isInteger(finding.source_ordinal) || finding.source_ordinal < 1) {
+    error(`${label}.source_ordinal must be a positive integer`);
   }
   const severity = verdictSeverity(finding.severity, `${label}.severity`);
   const seat = validateBoundedString(finding.seat, `${label}.seat`);
-  const rawText = nonBlank(
-    finding.raw_text ?? finding.description,
-    `${label}.raw_text`,
-  );
+  const sourceId = nonBlank(finding.source_id, `${label}.source_id`);
+  const attribution = nonBlank(finding.attribution, `${label}.attribution`);
+  const rawText = nonBlank(finding.raw_text, `${label}.raw_text`);
+  const description = nonBlank(finding.description, `${label}.description`);
   const impact = nonBlank(finding.impact, `${label}.impact`);
-  const recommendation = nonBlank(
-    finding.recommendation ?? finding.fix,
-    `${label}.recommendation`,
-  );
-  if (Object.hasOwn(finding, "source_id")) {
-    nonBlank(finding.source_id, `${label}.source_id`);
-  }
-  if (Object.hasOwn(finding, "late") && finding.late !== true) {
-    error(`${label}.late must be true when present`);
-  }
+  const recommendation = nonBlank(finding.recommendation, `${label}.recommendation`);
   return {
-    admission_reason: finding.admission_reason,
     severity,
+    introduced_regression: finding.introduced_regression,
+    previously_missed: finding.previously_missed,
+    category: finding.category,
+    source_id: sourceId,
+    source_ordinal: finding.source_ordinal,
     seat,
+    attribution,
     raw_text: rawText,
+    description,
     impact,
     recommendation,
-    ...(finding.source_id !== undefined ? { source_id: finding.source_id } : {}),
-    ...(Object.hasOwn(finding, "late") ? { late: true } : {}),
   };
 }
 
 export function lateFindingAdmission(finding, label = "late finding") {
   const normalized = validateLateFindingShape(finding, label);
   const admitted =
-    normalized.admission_reason === "introduced-regression" ||
+    normalized.introduced_regression ||
     ["BLOCKER", "MAJOR"].includes(normalized.severity);
   if (!admitted) {
     error(
@@ -5141,7 +5133,10 @@ export function appendLateFindings(ledger, findings) {
   const admittedSourceIds = new Set();
   let nextId = issues.length + 1;
   for (const finding of findings) {
-    const admitted = lateFindingAdmission(finding);
+    const publicFinding = finding?.late === true
+      ? Object.fromEntries(Object.entries(finding).filter(([key]) => key !== "late"))
+      : finding;
+    const admitted = lateFindingAdmission(publicFinding);
     const rawLateText = admitted.raw_text;
     const sourceId =
       admitted.source_id ??
@@ -5159,16 +5154,12 @@ export function appendLateFindings(ledger, findings) {
     admittedSourceIds.add(sourceId);
     const rawText = rawLateText;
     nonBlank(rawText, `late finding ${sourceId}.raw_text`);
-    const attribution = nonBlank(
-      admitted.seat,
-      `late finding ${sourceId}.attribution`,
-    );
     const source = {
       source_id: sourceId,
       seat: admitted.seat,
-      source_ordinal: nextId,
+      source_ordinal: admitted.source_ordinal,
       raw_text: rawText,
-      attribution,
+      attribution: admitted.attribution,
       severity: admitted.severity,
       impact: nonBlank(admitted.impact ?? "Late finding makes approval unsafe.", `late finding ${sourceId}.impact`),
       recommendation: nonBlank(admitted.recommendation, `late finding ${sourceId}.recommendation`),

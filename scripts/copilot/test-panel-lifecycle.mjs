@@ -2237,90 +2237,92 @@ process.stdout.write("attacker-controlled timing\\n");
     () => validateFixScope({ latest_delta_paths: ["src/unrelated.js"], allowed_paths: ["src/panel.js"] }),
     /unrelated paths|new lifecycle/,
   );
+  const documentedLateFinding = (overrides = {}) => ({
+    severity: "high",
+    introduced_regression: false,
+    previously_missed: true,
+    category: "correctness",
+    source_id: "software:late-1",
+    source_ordinal: 1,
+    seat: "software",
+    attribution: "software",
+    raw_text: "An unsafe late finding.",
+    description: "An unsafe late finding.",
+    impact: "Approval is unsafe.",
+    recommendation: "Fix it.",
+    ...overrides,
+  });
   check(
     "late-finding schema publishes the required admission fields",
-    LATE_FINDING_SCHEMA.required.includes("admission_reason") &&
+    LATE_FINDING_SCHEMA.required.includes("introduced_regression") &&
+      LATE_FINDING_SCHEMA.required.includes("previously_missed") &&
+      LATE_FINDING_SCHEMA.required.includes("category") &&
       LATE_FINDING_SCHEMA.required.includes("seat") &&
-      LATE_FINDING_SCHEMA.text.includes("raw_text") &&
-      LATE_FINDING_SCHEMA.fix.includes("recommendation"),
+      LATE_FINDING_SCHEMA.required.includes("raw_text") &&
+      LATE_FINDING_SCHEMA.required.includes("recommendation"),
   );
   rejects(
-    "late findings reject the old flag and category aliases",
+    "late findings reject missing admission flags",
     () => lateFindingAdmission({
-      severity: "MAJOR",
-      seat: "software",
-      introduced_regression: true,
-      category: "correctness",
-      raw_text: "An unsafe late finding.",
-      impact: "Approval is unsafe.",
-      recommendation: "Fix it.",
+      ...documentedLateFinding(),
+      introduced_regression: false,
+      previously_missed: false,
     }),
-    /unknown field/,
+    /introduced_regression or previously_missed/,
   );
   check(
-    "late findings accept the documented description and fix spellings",
-    lateFindingAdmission({
-      admission_reason: "unsafe-merge-risk",
-      severity: "high",
-      seat: "software",
-      description: "An unsafe late finding.",
-      impact: "Approval is unsafe.",
-      fix: "Fix it.",
-    }).recommendation === "Fix it.",
+    "late findings accept the documented exact schema",
+    lateFindingAdmission(documentedLateFinding()).recommendation === "Fix it.",
   );
   rejects(
     "pre-existing late NIT is refused",
-    () => lateFindingAdmission({
-      admission_reason: "previously-missed-merge-risk",
+    () => lateFindingAdmission(documentedLateFinding({
       severity: "NIT",
-      seat: "software",
+      source_id: "software:late-2",
       raw_text: "A pre-existing style issue.",
+      description: "A pre-existing style issue.",
       impact: "It is not a merge risk.",
       recommendation: "Record it without reopening discovery.",
-    }),
+    })),
     /not admissible/,
   );
   check(
     "introduced late NIT is admitted as a non-discovery regression",
-    lateFindingAdmission({
-      admission_reason: "introduced-regression",
+    lateFindingAdmission(documentedLateFinding({
       severity: "NIT",
-      seat: "software",
+      introduced_regression: true,
+      previously_missed: false,
+      source_id: "software:late-3",
       raw_text: "A new style regression.",
+      description: "A new style regression.",
       impact: "The fix introduced a regression.",
       recommendation: "Correct the regression.",
-    }).late === true,
+    })).late === true,
   );
   check(
     "previously missed late MAJOR is admitted",
-    lateFindingAdmission({
-      admission_reason: "previously-missed-merge-risk",
+    lateFindingAdmission(documentedLateFinding({
       severity: "MAJOR",
-      seat: "software",
+      source_id: "software:late-4",
       raw_text: "A missed merge-risk issue.",
+      description: "A missed merge-risk issue.",
       impact: "Approval would be unsafe.",
       recommendation: "Fix the issue.",
-    }).late === true,
+    })).late === true,
   );
-  const appended = appendLateFindings(responseInput, [{
-    admission_reason: "previously-missed-merge-risk",
+  const appendedFinding = documentedLateFinding({
     severity: "MAJOR",
-    seat: "software",
+    source_id: "software:late-5",
     raw_text: "A late unsafe issue.",
+    description: "A late unsafe issue.",
     impact: "Approval would be unsafe.",
     recommendation: "Fix the issue.",
-  }]);
+  });
+  const appended = appendLateFindings(responseInput, [appendedFinding]);
   check("late issue receives the next stable R identifier", appended.issues.at(-1).id === "R5");
   rejects(
     "re-admitting the same late source is refused",
-    () => appendLateFindings(appended, [{
-      admission_reason: "previously-missed-merge-risk",
-      severity: "MAJOR",
-      seat: "software",
-      raw_text: "A late unsafe issue.",
-      impact: "Approval would be unsafe.",
-      recommendation: "Fix the issue.",
-    }]),
+    () => appendLateFindings(appended, [appendedFinding]),
     /already exists/,
   );
   const metrics = calculateMetrics({
@@ -2717,10 +2719,16 @@ process.stdout.write("attacker-controlled timing\\n");
           verified_issue_statuses: verificationStatuses,
           late_findings: seat === "software"
             ? [{
-                admission_reason: "introduced-regression",
                 severity: "MAJOR",
+                introduced_regression: true,
+                previously_missed: false,
+                category: "correctness",
+                source_id: "software:late-blocking",
+                source_ordinal: 1,
                 seat: "software",
+                attribution: "software",
                 raw_text: "A late blocking regression.",
+                description: "A late blocking regression.",
                 impact: "The current candidate is unsafe.",
                 recommendation: "Fix the regression.",
               }]
@@ -2744,10 +2752,16 @@ process.stdout.write("attacker-controlled timing\\n");
         verified_issue_statuses: verificationStatuses,
         late_findings: seat === "software"
           ? [{
-              admission_reason: "introduced-regression",
               severity: "NIT",
+              introduced_regression: true,
+              previously_missed: false,
+              category: "correctness",
+              source_id: "software:late-nit",
+              source_ordinal: 1,
               seat: "software",
+              attribution: "software",
               raw_text: "A newly introduced NIT regression.",
+              description: "A newly introduced NIT regression.",
               impact: "The latest fix is not clean.",
               recommendation: "Correct the introduced regression.",
             }]
@@ -2771,11 +2785,16 @@ process.stdout.write("attacker-controlled timing\\n");
   const advanceResponseEnvelope = createResponseTemplate(advanceLedger);
   advanceResponseEnvelope.responses = responses;
   const lateSpec003Finding = {
-    admission_reason: "previously-missed-merge-risk",
-    source_id: "spec003:late-agentic",
-    seat: "agentic",
     severity: "MAJOR",
+    introduced_regression: false,
+    previously_missed: true,
+    category: "correctness",
+    source_id: "spec003:late-agentic",
+    source_ordinal: 1,
+    seat: "agentic",
+    attribution: "agentic",
     raw_text: "Active Spec 003 instructions still require retired panels.",
+    description: "Active Spec 003 instructions still require retired panels.",
     impact: "Operators can dispatch the wrong roster.",
     recommendation: "Replace fixed-count instructions with the selected roster.",
   };
@@ -3867,11 +3886,16 @@ process.stdout.write("attacker-controlled timing\\n");
       fix: "Complete and verify the source mapping fix.",
     }];
     blockedVerificationResults.results[0].late_findings = [{
-      admission_reason: "previously-missed-merge-risk",
-      source_id: "spec003:cli-late",
-      seat: verificationRoster[0],
       severity: "high",
+      introduced_regression: false,
+      previously_missed: true,
+      category: "correctness",
+      source_id: "spec003:cli-late",
+      source_ordinal: 1,
+      seat: verificationRoster[0],
+      attribution: verificationRoster[0],
       raw_text: "Spec 003 still names the retired panel roster.",
+      description: "Spec 003 still names the retired panel roster.",
       impact: "The next fix path must be admitted to the ledger.",
       recommendation: "Use the selected roster in the active instructions.",
     }];
