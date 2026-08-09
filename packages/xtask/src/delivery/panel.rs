@@ -39,6 +39,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::Write,
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
 
@@ -1328,9 +1329,19 @@ fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
 
 fn publish_record_set_no_replace(candidate: &CandidateDir, files: &[RecordFile]) -> Result<()> {
     let panel_dir = candidate.panel_dir();
-    fs::create_dir_all(&panel_dir).map_err(|error| {
-        DeliveryError::environment(format!("cannot create candidate panel directory: {error}"))
-    })?;
+    if !panel_dir.exists() {
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        match builder.create(&panel_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(DeliveryError::environment(format!(
+                    "cannot create candidate panel directory: {error}"
+                )));
+            }
+        }
+    }
     for (name, bytes) in files {
         write_panel_file_no_replace(&panel_dir.join(name), bytes, "panel record")?;
     }
