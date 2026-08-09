@@ -245,10 +245,11 @@ emitted-action coverage.
 ## Operator loop: prove the plane works
 
 This is the loop that distinguishes a live control plane from a sealed wave. Its exact
-operator activation positive remains W6 acceptance after T221, but it consumes the Network
-production path already required before T220. Until the accepted external Network
-contract/work-item amendment assigns and lands that path plus all four double-opt-in cases,
-T220 fails closed and this loop is unreachable.
+operator activation positive remains W6 acceptance after T221. T220 first requires the
+accepted external Network contract/work-item amendment to remove every current-facing sole
+Network-opt-in path and retain T336-T355 plus all four double-opt-in cases as authoritative
+W6 work. T604 then consumes their merged implementation. A stale sole-opt-in contract makes
+T220 fail closed; an unimplemented T336-T355 row remains expected before W6 starts.
 
 ### Story 1 - declare and reconcile
 
@@ -280,11 +281,11 @@ TPM state-Volume preservation,
 and proves `Volume/acceptance-state`, `Network/acceptance-net`, and unrelated resources remain
 ready, identity-stable, intact, and unrecreated. The same candidate must also pass the
 no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` FR-075 continuity case. Guest
-runtime-effect acceptance is deferred specifically
-to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480; Guest emission, status, or
-refusal is not a positive Wave 5 result.
-This is a partial US1 production-plane checkpoint, not full US1 completion. The acceptance-set
-label does not reassign Network implementation from Wave 4. Full US1 completes only after
+runtime-effect acceptance remains distinct Wave 6
+`Provider/runtime-cloud-hypervisor` T384/T479/T480 work; Guest emission, status, or refusal
+cannot satisfy T604. This host leg is W6 T604 operator acceptance, not Wave 5 evidence. Wave 5
+retains only its production-plane prerequisites, the accepted double-opt-in contract
+migration, and the settled T336-T355 W6 ownership. Full US1 completes only after
 T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a real Cloud
 Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
 skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
@@ -632,18 +633,18 @@ may survive, and metrics carry no peer-identity label.
 passes separately through T479 on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
 `Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. T604 remains W6
-acceptance-only and consumes the Network implementation already required before T220.
+acceptance-only and consumes the Network implementation after authoritative T336-T355 merge.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
 Host/Network double opt-in. Before T220 freezes F, the accepted external Network
 contract/work-item amendment must require
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
-default both inputs false, assign the real emitter/controller/broker/net-VM implementation
-to pre-T220 owners, and pass all four Network/Host cases through that path. The current
-T336-T355 W6 assignment cannot satisfy the ordering and must be moved or replaced by the
-external manifest amendment. T219 revalidates the same ancestry before seal or merge.
-Historical sole opt-in cannot close T070, T071, T220, T219, T604, or T479. Do not change
-feature status to bypass that stop.
+default both inputs false, remove every current-facing sole Network-opt-in path, and
+regenerate the manifest with T336-T355 retained as authoritative W6 implementation under
+T221 and all four Network/Host production cases assigned there. T219 revalidates that
+migration and ownership before seal or merge. T604 and T479 later require the merged W6
+implementation and all four passing cases. Historical or current sole opt-in cannot close
+T070, T071, T220, T219, T604, or T479. Do not change feature status to bypass that stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an

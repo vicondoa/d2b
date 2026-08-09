@@ -1680,12 +1680,13 @@ that trait and owns the production implementation in
 `packages/d2bd/src/network_effect_adapter.rs`, with serialized post-T595 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
 broker operations and performs no direct host mutation. Current generated rows T336-T355
-place that work in W6, which cannot satisfy the final R9 requirement that the accepted
-double-opt-in migration, production path, and all four Network/Host cases precede T220. This
-is now an external contract/work-item-manifest blocker: the authoritative amendment must move
-or replace those owners before Wave 5 implementation can freeze. T604 remains W6
-acceptance-only and consumes the already landed path; T220, T219, T604, and T479 all refuse
-until the amendment and production evidence exist.
+place that work in W6, and final R9 preserves that ownership. The external
+contract/work-item-manifest blocker is narrower: before T220 freezes F, the accepted amendment
+must remove every current-facing sole Network-opt-in path, install the double-opt-in
+migration, and regenerate T336-T355 plus all four Network/Host production cases as W6 work
+under T221. T604 remains W6 acceptance-only after those rows merge and consumes the landed
+path. T220 and T219 refuse stale sole-opt-in contract or ownership state; T604 and T479 refuse
+missing W6 implementation or production evidence.
 
 ### 16.3 Credential Provider work is in progress, not complete
 

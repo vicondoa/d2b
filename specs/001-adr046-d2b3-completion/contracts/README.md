@@ -213,11 +213,11 @@ merge-target registration, merge eligibility, and merge.
     Network opt-in is nonconforming and non-authorizing.
     This one denied-east-west sample is not double-opt-in evidence. Before T220 freezes F,
     an accepted external Network contract/work-item amendment must land the double-opt-in
-    migration, assign the real adapter and production network-local path to pre-T220 owners,
-    and pass all four Network/Host cases. Current W6 rows T336-T355 cannot satisfy that
-    ordering and must be moved or replaced by the external manifest amendment. T070, T071,
-    T220, and T219 fail closed until those ancestors exist; no feature-local status can
-    unblock them. T604 remains W6 acceptance-only and consumes the landed implementation.
+    migration, remove every current-facing sole Network-opt-in path, and retain T336-T355
+    plus all four Network/Host production cases as W6 work under T221. T070, T071, T220, and
+    T219 fail closed until that migration and ownership are ancestors; no feature-local
+    status can unblock them. T604 remains W6 acceptance-only after T336-T355 merge and
+    consumes the landed implementation.
     Guest runtime-effect acceptance
     is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480;
     Guest emission, status, or refusal cannot

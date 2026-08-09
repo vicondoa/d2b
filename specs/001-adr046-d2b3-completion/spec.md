@@ -75,9 +75,13 @@ production watch, and leaves the mutation audit outbox without a production drai
 Existing RSS and watch fixtures exercise in-process services or a fixed fixture endpoint,
 not the published daemon boundary.
 
-The operator has approved the missing production wiring as Wave 5 work. It is not deferred
-to W6 or W7, and a readiness bit, direct `WatchService` call, fake endpoint, disabled audit
-callback, or test-only subject may not substitute for the real path. This is an explicit
+The operator has approved the missing production-plane wiring in FR-066 through FR-074 as
+Wave 5 work except for the settled Network implementation and operator-positive boundaries.
+T336-T355 retain the Network production path and four-case matrix in W6 under T221, and T604
+retains W6 activation/cleanup acceptance after those rows merge. Wave 5 must instead remove
+every current-facing sole Network-opt-in path and freeze the double-opt-in migration plus
+that W6 ownership. A readiness bit, direct `WatchService` call, fake endpoint, disabled audit
+callback, or test-only subject may not substitute for any real path. This is an explicit
 scope amendment to the feature artifacts, not a rewrite of the earlier historical evidence.
 It preserves ADR 0034 restart/adoption semantics, ADR 0046's Zone trust boundaries, D106's
 store boundary, and the daemon-only end state. No new ADR is required because this amendment
@@ -178,8 +182,8 @@ needed to satisfy the declared resources, and without performing a host cutover.
 claim the three-resource operator activation positive. The exact acceptance set is
 `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in Zone
 `acceptance`; no other resource may substitute for one of those three. T604 exercises that
-set as W6 acceptance after T221, consuming the double-opt-in production Network path and
-four-case matrix already required before T220. Full US1 completion occurs only
+set as W6 acceptance after T221 and merged authoritative T336-T355, consuming their
+double-opt-in production Network path and four-case matrix. Full US1 completion occurs only
 after that result and the Wave 6 `Provider/runtime-cloud-hypervisor` family supply positive
 runtime-effect acceptance for the declared Guest. Missing, skipped, status-only,
 fake-boundary, or refusal evidence leaves US1 incomplete.
@@ -212,14 +216,14 @@ adapter make the historical sole-opt-in result nonconforming and non-authorizing
 T071 cannot complete by ratifying it. The required contract is
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
 both inputs default false. Before T220 may freeze F, an accepted external versioned
-correction and migration must assign the production emitter/controller/broker/net-VM path to
-pre-T220 owners, that implementation must be an ancestor of F, and all four Network/Host
-combinations must pass through the actual path. Current W6 rows T336-T355 cannot satisfy this
-pre-T220 gate; the external work-item manifest must move or replace that ownership. T219
-revalidates the same gate before any seal or merge. T604 remains W6 acceptance-only and
-consumes the already landed implementation. A feature-local status, declaration-only
-fixture, fake effect port, historical W4 record, or sole Network opt-in cannot unblock any
-boundary.
+correction and migration must remove every current-facing sole Network-opt-in path and
+regenerate the work-item manifest with T336-T355 retained as authoritative W6 implementation
+under T221 and all four Network/Host combinations assigned there. T220 does not require or
+claim that later implementation or its results. T219 revalidates the same migration and
+ownership gate before any seal or merge. T604 remains W6 acceptance-only after T336-T355
+merge and consumes the already landed implementation. A feature-local status,
+declaration-only fixture, fake effect port, historical W4 record, stale sole Network opt-in,
+or pre-T220 reassignment of T336-T355 cannot unblock any boundary.
 
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
@@ -553,16 +557,17 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
   API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. The exact
   three-resource operator activation positive is not Wave 5 evidence: T604 runs in Wave 6
-  after T221 and consumes the Network implementation already required before T220, and
+  after T221 and merged authoritative T336-T355, and
   T479/T480 bind it to F6 together with the
   `Provider/runtime-cloud-hypervisor` Guest result. Actionable refusals remain separate
   negative cases and cannot satisfy either positive story.
   Independently, before T220 freezes F, the accepted external Network contract/work-item
-  amendment, the double-opt-in migration, the production emitter/controller/broker/net-VM
-  implementation, and enforcing results for all four Network/Host combinations MUST be
-  ancestors of F. Current W6 ownership of T336-T355 is not a satisfiable substitute; the
-  accepted amendment must assign the work to pre-T220 owners. T219 MUST revalidate the same
-  predicate before any seal or merge path. T604 remains W6 acceptance evidence and is not an
+  amendment and double-opt-in migration MUST be ancestors of F and MUST remove every
+  current-facing sole Network-opt-in contract path. The regenerated manifest MUST retain
+  T336-T355 as authoritative W6 implementation under T221 and assign all four Network/Host
+  combinations there. T219 MUST revalidate the same predicate before any seal or merge path.
+  Production implementation and four-case results remain W6 work and are not T220 or T219
+  evidence. T604 consumes the merged W6 implementation as acceptance evidence and is not an
   eighth Wave 5 evidence-profile member.
   Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and

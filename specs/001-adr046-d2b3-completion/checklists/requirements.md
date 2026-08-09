@@ -21,19 +21,22 @@
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
-- [x] Wave 5 Nix acceptance names exactly `Volume/acceptance-state`, `Network/acceptance-net`,
-  and `Device/acceptance-tpm`; each effect and production `Ready` projection is bound to that
-  same identity, while Guest runtime-effect acceptance is explicitly deferred to Wave 6
-  `Provider/runtime-cloud-hypervisor` T384/T479/T480
+- [x] Wave 6 T604 Nix acceptance, after T221 and merged T336-T355, names exactly
+  `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; each effect
+  and production `Ready` projection is bound to that same identity. Wave 5 retains only the
+  emitted-bundle, source-floor, and double-opt-in contract prerequisites, while Guest
+  runtime-effect acceptance remains distinct Wave 6 `Provider/runtime-cloud-hypervisor`
+  T384/T479/T480 work
 - [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
 - [x] The generated bijection maps every Version 2 identifier to exact schemas, fixtures, implementation owners, tasks, and enforcing gates; missing, duplicate, extra, ownerless, or stale rows block T589, T600, T604, and T220, and no feature-local encoding or historical count substitutes
 - [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
-- [x] T070/T071 preserve W4 history; T604/T479 remain blocked on the accepted
+- [x] T070/T071 preserve W4 history; T220/T219 require the accepted
   `effectiveEastWest = Network.spec.isolation.allowEastWest &&
-  d2b.site.allowUnsafeEastWest` migration, authoritative W6 T336-T355 production path under
-  T221, and all four real Network/Host cases
+  d2b.site.allowUnsafeEastWest` migration to remove every current-facing sole opt-in path and
+  retain T336-T355 plus all four cases as authoritative W6 work under T221; T604/T479 require
+  that W6 implementation and evidence after it merges
 - [x] T219 performs only externally authorized historical adjudication, emits an actionable
   external-disposition refusal, and offers no successor or second-request path
 
