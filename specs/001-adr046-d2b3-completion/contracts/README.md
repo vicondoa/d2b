@@ -270,3 +270,25 @@ post-merge seal, merge-target registration, and merge eligibility.
     `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping;
     T220 blocks release on missing or broken mappings. Recovery uses only the existing broker
     unit and preserves the daemon-only three-unit architecture.
+17. **Observed panel values are process metadata, not authentication.** Before prospective
+    Track A `make-records`, round-local `observed.json` contains exactly one entry for every
+    selected seat and no other seat. Every entry requires `provider`, `model`,
+    `reasoning_effort`, `context_tier`, `communication`, `agent_type`,
+    `agent_definition_sha256`, `run_id`, and `receipt_locator`. The fixed provider and
+    completion-bound dispatch binding supply the policy fields, the completion marker
+    supplies the staged definition digest, and the same-user integrator captures the run ID
+    and receipt locator from the actual selected Task result envelope. The record generator
+    validates those observations against the completed packet and requires unique run and
+    receipt values. This correlation evidence is not authentication, an authentication
+    proof, a security boundary, or proof that a particular definition executed.
+18. **A reviewed base cannot move into merge.** Every prospective `v3` merge requires
+    effective repository enforcement that atomically refuses base movement: either a merge
+    queue configured with that refusal or nonempty strict up-to-date required checks. The
+    operator checks the exact base OID before snapshot, after required checks, and immediately
+    before merge; repository enforcement closes the final race. A head-only match or
+    post-merge tree comparison is insufficient. Any base change makes the old validation,
+    selected-roster verification, snapshot, binding, records, attestation, and CI evidence
+    ineligible and requires their restart in Track A order. If the wave's sole request is
+    already consumed, replacement binding remains blocked until accepted external
+    disposition. This rule does not reorder request, records, attestation, merge, seal,
+    merge-target, or merge-eligibility and does not relax FR-036.

@@ -33,6 +33,17 @@ delivery request is never reclassified as a phase-plan round. Merge an attested 
 pull request without a post-attestation content change, then seal and run merge-target and
 merge-eligibility against the merged wave. Cut exactly one release at the end.
 
+For every prospective Track A close, `make-records` additionally consumes round-local
+`observed.json`. The integrator builds it from the actual selected Task result run IDs and
+receipt locators, the completion-bound dispatch binding, and the completion-bound staged
+agent-definition digests. Its values are same-user process metadata checked against the
+completed packet for correlation and uniqueness, not authentication or proof of which
+definition executed. Merge is separately fail-closed on base movement: effective `v3`
+repository rules must provide a merge queue with a base-change refusal or nonempty strict
+up-to-date required checks. A base move atomically refuses merge and requires the operator to
+restart validation, selected-roster verification, snapshot creation, and binding in Track A
+order. The post-merge tree comparison is defense in depth only.
+
 Wave 5 now includes an approved production-completion graph in addition to its 146 manifest
 items. The graph wires the store, policy, authenticated ComponentSession route, controller
 endpoint, watch fan-in, durable effect/adoption ledger, and mutation-audit drainer into one
@@ -444,6 +455,26 @@ wave unsealed; it never opens a second binding request for the same or a success
 The wave entry task refuses dispatch without its entry receipt, and the wave close task
 refuses advance unless the reviewed base is an ancestor of every implementation head and the
 final phase receipt still matches the selected tree and feature snapshot.
+
+Before `make-records`, the integrator creates one `observed.json` entry for every selected
+seat. Each entry has exactly `provider`, `model`, `reasoning_effort`, `context_tier`,
+`communication`, `agent_type`, `agent_definition_sha256`, `run_id`, and
+`receipt_locator`. The binding values and definition digest come from artifacts bound by the
+round completion marker; the run ID and receipt locator come from that seat's actual Task
+result envelope. These are same-user process observations validated against the packet. They
+are not an authentication proof, do not establish a security boundary, and cannot prove that
+the staged definition ran.
+
+Every prospective merge owner - T480, T556, and T561 - also requires effective `v3`
+protection that atomically refuses a base change: either a merge queue configured with that
+refusal or nonempty strict up-to-date required checks. The merge owner checks the exact base
+OID before snapshot, after required checks, and immediately before merge; GitHub enforcement
+closes the final race. If the base changes, the operator updates the integration branch and
+restarts validation, selected-roster verification, snapshot creation, and binding in the
+same Track A order. No post-merge check substitutes. When the wave's sole binding request was
+already consumed, the no-second-request rule blocks the replacement binding until an
+accepted external disposition exists. These R12 and R55 guards add no task, change no
+checkbox, and do not authorize any action while FR-036 remains open.
 
 Pipelining changes only whether the predecessor must already be merged. It never permits a
 successor to implement before the successor's own plan panel. The work panel and its binding
@@ -990,6 +1021,8 @@ history remain immutable.
 
 | Prose drift | Canon kept | Planning correction |
 | --- | --- | --- |
+| R12: The copyable Track A workflow called `make-records` without first creating its required round-local `observed.json`, and feature prose could be read as treating process provenance as authentication. | Committed `make-records.mjs` requires one observed entry per selected seat, compares dispatch fields with the completion-bound policy, compares the agent-definition digest with the completion-bound staged bytes, and treats unique run IDs and provider-scheme receipt locators as observed metadata. It cannot authenticate which definition executed. | Before `make-records`, create `observed.json` from the actual selected Task result run IDs and receipt locators plus completion-bound dispatch and definition digests. Require all nine fields and state that they are same-user process metadata for packet correlation and uniqueness, not an authentication proof. |
+| R55: The Track A workflow checked the PR base in a captured input and compared trees only after merge, but did not require an atomic base-change refusal. | `--match-head-commit` protects only the head, and a post-merge tree comparison detects rather than prevents a stale-base merge. | Require effective `v3` merge-queue base refusal or nonempty strict up-to-date required checks. Check the base OID throughout Track A and make GitHub refuse the final race. A base move requires a full validation, selected-roster verification, snapshot, and binding restart; after a consumed sole request, external disposition is required before replacement binding. |
 | The copyable Track A close ran `seal`, `merge-target`, and `merge-eligibility` before the protected PR merge, while prospective W6-W8 tasks required that pre-merge eligibility result. | Committed `seal_checked` refuses until every current-wave work item is `Merged`; `merge-target` consumes the resulting seal, and the current contributor contract places the protected PR merge before seal. | After final nonbinding approval, create the final snapshot and selection, issue the sole request, generate records, and attest. Then complete PR CI, capture the green merge-target input, merge the byte-identical tree, run `seal`, register the captured target, and run `merge-eligibility`. T480, T555/T556, and T565/T561 use that order without changing IDs or checkbox state. |
 | Earlier feature prose required T604 to prove a positive owned Guest effect in Wave 5. | Committed `packages/d2b-provider-system-core/src/ownership.rs` does not own Guest runtime effects, and the four Guest-capable runtime families are assigned to Wave 6 and absent at this Wave 5 base. The authoritative `ADR046-ch-001` validation already names real-KVM end-to-end Guest boot through `make test-host-integration`. | T604 remains acceptance-only in W6 after T221 and merged T336-T355 for exactly `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`. Full US1 acceptance is mechanically bounded to that operator result plus `Provider/runtime-cloud-hypervisor`: T384 owns the controller and authoritative real-KVM/guest-control integration obligation, T384-T390 own the exact family files, and T479/T480 require both exact-F6 candidate-bound records. Guest emission, ingestion, status, or an actionable refusal is not evidence. |
 | Earlier amendment prose treated W4 Network work as sufficient for the operator positive. | W4 landed the Provider trait and hermetic fake-port behavior, but the real production adapter is absent and current generated rows T336-T355 place the remaining network-local implementation after the W5 close. `NetworkEffectPort` is in the Provider crate, contrary to the generated destination. | Preserve W4 history and the destination drift, but do not accept sole Network opt-in as a close path. An accepted external Network contract/work-item amendment must remove every current-facing sole-opt-in path before T220 while retaining T336-T355 and all four Network/Host production cases as W6 work under T221. T604 stays W6 acceptance-only and consumes their merged result. |

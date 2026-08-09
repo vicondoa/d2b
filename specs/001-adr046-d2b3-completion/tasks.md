@@ -173,6 +173,29 @@ its request, findings, and records, issue no second binding request for any cand
 stop for an accepted external disposition. Feature-local successor guidance is
 non-authorizing and must not be used. Findings are never discarded or waived.
 
+Before T480, T555, or T565 runs `make-records`, the integrator MUST create round-local
+`observed.json` with one entry for every selected seat. Every entry has exactly `provider`,
+`model`, `reasoning_effort`, `context_tier`, `communication`, `agent_type`,
+`agent_definition_sha256`, `run_id`, and `receipt_locator`. The first six values use the
+completion-bound dispatch policy except for its fixed provider, the definition digest uses
+the completion-bound staged agent bytes, and the final two values come from that seat's
+actual Task result envelope. Reviewer self-report is ineligible. This is same-user process
+metadata validated against the packet for correlation and uniqueness, not authentication,
+an authentication proof, or proof that a particular definition executed.
+
+T480, T556, and T561 MUST require effective `v3` rules that atomically refuse a merge when
+the base changes: either a merge queue configured with that refusal or nonempty required
+checks with strict up-to-date enforcement. They verify the exact base OID before snapshot,
+after required checks, and immediately before merge, while repository enforcement closes the
+last race. A head-only match and a post-merge tree comparison are insufficient. On any base
+change, the operator updates the integration branch and restarts validation,
+selected-roster verification, snapshot creation, and binding in the existing Track A order.
+The old snapshot, records, attestation, and CI evidence are ineligible. If the wave's sole
+request was already consumed, no replacement binding may be established until an accepted
+external disposition permits it. These R12 and R55 requirements add no task ID, change no
+checkbox, preserve Track A order, and remain blocked with every other action while FR-036 is
+open.
+
 T589 owns the wave-scoped fail-closed implementation and table-driven coverage in
 `packages/xtask/src/delivery/{panel.rs,seal.rs,eligibility.rs,history_proof.rs,storage.rs}` for
 `adr046w5` and later users. W2-W4 cannot depend on code delivered in W5. T008 therefore owns

@@ -178,26 +178,84 @@ Enter only after the final nonbinding Discover-Fix-Verify lifecycle is unanimous
 and no content-changing fix remains. The PR may already exist as a draft because `snapshot`
 must bind its real number and head, but it stays unmergeable until the sole request, records,
 and attestation below are complete. The changelog fold and every generated artifact must
-already be part of the approved tree.
+already be part of the approved tree. The `v3` effective repository rules must provide either
+a merge queue that refuses a queued candidate when its bound base changes, or nonempty
+required status checks with strict up-to-date enforcement. A merely protected branch, a
+head-only `--match-head-commit` check, or the post-merge tree comparison below is not the
+preventive base guard.
+
+Immediately after the selected Task runs return, the same-user integrator must materialize
+`$ROUND/task-runs.json` directly from the Task result envelopes. It is an object keyed by
+every selected seat, with exactly `run_id` and `receipt_locator` for that seat. Do not copy
+either value from a reviewer verdict or invent a replacement. The workflow below combines
+those actual process values with the completion-bound dispatch binding and agent-definition
+digests to create `$ROUND/observed.json` before `make-records`.
 
 ```bash
 set -eu
 
+fail() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
 CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
 REPOSITORY="github.com/owner/repository"
+GITHUB_REPOSITORY="${REPOSITORY#github.com/}"
+TARGET_BRANCH="v3"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
-BASE_OID="$(git merge-base v3 HEAD)"
+git fetch origin "$TARGET_BRANCH"
+BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")"
+git merge-base --is-ancestor "$BASE_OID" HEAD ||
+  fail "HEAD is not based on current origin/$TARGET_BRANCH; rebase, validate, and rerun selected-roster verification"
 HEAD_REF="$(git symbolic-ref --short HEAD)"
 PR_NUMBER="$(gh pr view --json number --jq .number)"
-PROGRAM="ADR046"
-WAVE="W2"
-ROUND=".scratch/panel/<final-verification-round>"
+PROGRAM="${PROGRAM:-ADR046}"
+WAVE="${WAVE:?set WAVE to the current qualified wave}"
+ROUND="${ROUND:?set ROUND to the final verification round directory}"
+
+PR_IDENTITY="$(gh pr view "$PR_NUMBER" \
+  --json baseRefName,baseRefOid,headRefName,headRefOid)"
+HEAD_OID="$(git rev-parse HEAD)"
+jq -e \
+  --arg base_ref "$TARGET_BRANCH" \
+  --arg base_oid "$BASE_OID" \
+  --arg head_ref "$HEAD_REF" \
+  --arg head_oid "$HEAD_OID" '
+  .baseRefName == $base_ref and
+  .baseRefOid == $base_oid and
+  .headRefName == $head_ref and
+  .headRefOid == $head_oid
+' <<<"$PR_IDENTITY" ||
+  fail "PR identity or base changed; restart validation, selected-roster verification, snapshot, and binding"
+
+BRANCH_RULES="$(gh api \
+  "repos/$GITHUB_REPOSITORY/rules/branches/$TARGET_BRANCH")"
+MERGE_GUARD="$(
+  jq -er '
+    if any(.[]; .type == "merge_queue") then
+      "merge-queue"
+    elif any(.[];
+      .type == "required_status_checks" and
+      .parameters.strict_required_status_checks_policy == true and
+      ((.parameters.required_status_checks // []) | length) > 0
+    ) then
+      "strict-required-checks"
+    else
+      error("v3 lacks a merge queue or strict nonempty required status checks")
+    end
+  ' <<<"$BRANCH_RULES"
+)" || fail "configure an atomic base-change merge guard on v3 before binding"
 
 SELECTION="$ROUND/selection.json"
 LEDGER="$ROUND/discovery-ledger.json"
 RESPONSES="$ROUND/responses.json"
 VERIFICATION_RESULTS="$ROUND/verification-results.json"
 APPROVAL="$ROUND/approval.json"
+DISPATCH_BINDING="$ROUND/dispatch-binding.json"
+COMPLETION="$ROUND/.complete"
+TASK_RUNS="$ROUND/task-runs.json"
+OBSERVED="$ROUND/observed.json"
 
 jq -e '.approved == true' "$APPROVAL"
 
@@ -229,6 +287,79 @@ PANEL_REQUEST_RESULT="$("${X[@]}" panel-request \
   --state-dir "$STATE_DIR")"
 PANEL_REQUEST="$(printf '%s\n' "$PANEL_REQUEST_RESULT" | artifact_ref)"
 
+test -f "$TASK_RUNS" ||
+  fail "$TASK_RUNS is missing; capture actual selected Task run metadata"
+test "$(sha256sum "$DISPATCH_BINDING" | awk '{print $1}')" = \
+  "$(jq -er '.artifact_sha256["dispatch-binding.json"]' "$COMPLETION")" ||
+  fail "dispatch-binding.json is not bound by the round completion marker"
+while IFS= read -r seat; do
+  definition="agent-definitions/panel-$seat.agent.md"
+  test "$(sha256sum "$ROUND/$definition" | awk '{print $1}')" = \
+    "$(jq -er --arg definition "$definition" \
+      '.artifact_sha256[$definition]' "$COMPLETION")" ||
+    fail "$definition is not bound by the round completion marker"
+done < <(jq -er '.roster[]' "$SELECTION")
+
+jq -e -n \
+  --slurpfile selection "$SELECTION" \
+  --slurpfile dispatch "$DISPATCH_BINDING" \
+  --slurpfile completion "$COMPLETION" \
+  --slurpfile runs "$TASK_RUNS" '
+  ($selection[0]) as $selection |
+  ($dispatch[0]) as $dispatch |
+  ($completion[0]) as $completion |
+  ($runs[0]) as $runs |
+  if
+    $dispatch.roster != $selection.roster or
+    (($runs | keys | sort) != ($selection.roster | sort))
+  then
+    error("task run, dispatch binding, and selected rosters disagree")
+  elif
+    (($selection.roster | map($runs[.].run_id) | unique | length) !=
+      ($selection.roster | length)) or
+    (($selection.roster | map($runs[.].receipt_locator) | unique | length) !=
+      ($selection.roster | length))
+  then
+    error("selected Task run IDs and receipt locators must be unique")
+  else
+    [
+      $selection.roster[] as $seat |
+      ($dispatch.bindings[$seat]) as $binding |
+      ($runs[$seat]) as $run |
+      ($completion.artifact_sha256[
+        "agent-definitions/panel-\($seat).agent.md"
+      ]) as $definition_sha256 |
+      if
+        (($run | keys | sort) != ["receipt_locator", "run_id"]) or
+        (($run.run_id | type) != "string") or
+        ($run.run_id | length) == 0 or
+        (($run.receipt_locator | type) != "string") or
+        ($run.receipt_locator | startswith("github-copilot://") | not) or
+        (($definition_sha256 | type) != "string") or
+        ($definition_sha256 | test("^[0-9a-f]{64}$") | not)
+      then
+        error("invalid selected Task process metadata or definition digest for \($seat)")
+      else
+        {
+          key: $seat,
+          value: {
+            provider: "github-copilot",
+            model: $binding.model,
+            reasoning_effort: $binding.reasoning_effort,
+            context_tier: $binding.context_tier,
+            communication: $binding.communication,
+            agent_type: $binding.agent_type,
+            agent_definition_sha256: $definition_sha256,
+            run_id: $run.run_id,
+            receipt_locator: $run.receipt_locator
+          }
+        }
+      end
+    ] | from_entries
+  end
+' >"$OBSERVED.tmp"
+mv -- "$OBSERVED.tmp" "$OBSERVED"
+
 node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
   --selection "$SELECTION" \
   --ledger "$LEDGER" \
@@ -252,6 +383,9 @@ fi
 gh pr checks "$PR_NUMBER" --required --watch
 REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)"
 jq -e 'length > 0 and all(.state == "SUCCESS")' <<<"$REQUIRED_CHECKS"
+CURRENT_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)"
+test "$CURRENT_BASE_OID" = "$BASE_OID" ||
+  fail "v3 changed; do not merge - restart validation, selected-roster verification, snapshot, and binding"
 
 EVIDENCE_GITHUB_CI_RESULT="$("${X[@]}" validate-import \
   --snapshot "$SNAPSHOT" \
@@ -275,8 +409,15 @@ EVIDENCE_LOCAL_HOST="$(printf '%s\n' "$EVIDENCE_LOCAL_HOST_RESULT" | artifact_re
 # because it consumes the seal that can exist only after the PR merge.
 PR_STATE="$(gh pr view "$PR_NUMBER" \
   --json number,baseRefName,baseRefOid,headRefName,headRefOid)"
-HEAD_OID="$(git rev-parse HEAD)"
-jq -e --arg head "$HEAD_OID" '.headRefOid == $head' <<<"$PR_STATE"
+jq -e \
+  --arg base_ref "$TARGET_BRANCH" \
+  --arg base_oid "$BASE_OID" \
+  --arg head "$HEAD_OID" '
+  .baseRefName == $base_ref and
+  .baseRefOid == $base_oid and
+  .headRefOid == $head
+' <<<"$PR_STATE" ||
+  fail "PR base or head changed; restart validation, selected-roster verification, snapshot, and binding"
 MERGE_TARGET_INPUT="$(mktemp)"
 trap 'rm -f "$MERGE_TARGET_INPUT"' EXIT
 jq -n \
@@ -305,12 +446,28 @@ jq -n \
   }
 ' >"$MERGE_TARGET_INPUT"
 
-# This is the point of no return. The protected PR merge must preserve the
-# approved head tree and must complete before seal is attempted.
-gh pr merge "$PR_NUMBER" --merge --match-head-commit "$HEAD_OID"
+# This is the point of no return. GitHub's effective v3 rule is the preventive
+# base guard. The post-merge tree comparison is defense in depth, not the guard.
+if [ "$MERGE_GUARD" = "merge-queue" ]; then
+  gh pr merge "$PR_NUMBER" --match-head-commit "$HEAD_OID"
+  attempts=0
+  while [ "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = "OPEN" ]; do
+    current_base="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)"
+    if [ "$current_base" != "$BASE_OID" ]; then
+      gh pr merge "$PR_NUMBER" --disable-auto || true
+      fail "v3 changed while queued; restart validation, selected-roster verification, snapshot, and binding"
+    fi
+    attempts=$((attempts + 1))
+    test "$attempts" -lt 120 ||
+      fail "merge queue did not complete within the bounded wait"
+    sleep 5
+  done
+else
+  gh pr merge "$PR_NUMBER" --merge --match-head-commit "$HEAD_OID"
+fi
 test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = "MERGED"
 MERGE_COMMIT="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
-git fetch origin v3
+git fetch origin "$TARGET_BRANCH"
 test "$(git rev-parse "${MERGE_COMMIT}^{tree}")" = \
   "$(git rev-parse "${HEAD_OID}^{tree}")"
 
@@ -351,11 +508,30 @@ above still captures its emitted artifact reference and repeats the same valid r
 mapping.
 
 The order is deliberate: final nonbinding approval, final snapshot and selection, the sole
-request, records and attestation, protected PR checks, merge, seal, merge-target registration,
-and merge eligibility. `seal` refuses until every current-wave item is `Merged`; moving it
-before the PR merge recreates the cycle this workflow is designed to prevent. The
-merge-target input is captured from the green PR immediately before merge, then registered
-after the seal so the post-merge commands consume the exact pre-merge head and check state.
+request, observed process metadata, records and attestation, protected PR checks, merge,
+seal, merge-target registration, and merge eligibility. `seal` refuses until every
+current-wave item is `Merged`; moving it before the PR merge recreates the cycle this
+workflow is designed to prevent. The merge-target input is captured from the green PR
+immediately before merge, then registered after the seal so the post-merge commands consume
+the exact pre-merge head and check state.
+R12 and R55 do not reorder those stages and do not relax FR-036.
+
+Every seat in `observed.json` has exactly these required fields: `provider`, `model`,
+`reasoning_effort`, `context_tier`, `communication`, `agent_type`,
+`agent_definition_sha256`, `run_id`, and `receipt_locator`. The first six values come from
+the completion-bound dispatch policy except for the fixed `github-copilot` provider; the
+definition digest comes from the completion marker; and the final two values come from the
+actual selected Task result envelope. This is same-user process metadata validated against
+the completed packet for correlation and uniqueness. It is not authentication, an
+authentication proof, or evidence that a particular definition executed.
+
+If `v3` changes at any point after validation or selected-roster verification begins, the
+atomic repository rule must refuse the merge. The operator then updates the integration
+branch and restarts validation, selected-roster verification, snapshot creation, and
+candidate binding in the same Track A order. The old snapshot, records, attestation, and CI
+evidence are ineligible. If the old attempt already consumed the wave's sole binding request,
+the existing no-second-request rule requires an accepted external disposition before that
+restart can establish another binding; it never permits merging the stale attempt.
 
 `history-proof` is **not** a separate subcommand; it runs inside `merge-eligibility`.
 
