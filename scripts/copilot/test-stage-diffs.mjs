@@ -155,7 +155,9 @@ try {
       "incomplete packet retains canonical artifact content without .complete",
     ) &&
       stageSource.includes("canonicalFileNames") &&
-      stageSource.includes("canonicalContentDirectories"),
+      stageSource.includes("canonicalContentDirectories") &&
+      stageSource.includes("canonical top-level categories") &&
+      !stageSource.includes("scanDirectory"),
   );
 
   git(repo, "init", "--quiet");
@@ -610,6 +612,182 @@ try {
     deletedMarkerDiscovery.text,
   );
   rmSync(deletedMarkerPacket, { recursive: true, force: true });
+
+  const runUnmarkedPacketDiscovery = (name, populate) => {
+    const packet = join(repo, ".scratch", "panel", name);
+    const round = `unmarked${name.replace(/[^A-Za-z0-9]/g, "")}-r1`;
+    mkdirSync(packet, { recursive: true });
+    populate(packet);
+    const result = run(
+      repo,
+      stageArgs(
+        base,
+        base,
+        round,
+        selectionPath,
+        candidatePath,
+        discoveryRequestPath,
+      ),
+    );
+    rmSync(packet, { recursive: true, force: true });
+    rmSync(join(repo, ".scratch", "panel", round), {
+      recursive: true,
+      force: true,
+    });
+    return result;
+  };
+
+  const soleCanonicalFile = runUnmarkedPacketDiscovery(
+    "sole-canonical-file",
+    (packet) => writeFileSync(join(packet, "address.json"), "{}\n"),
+  );
+  check(
+    "a sole canonical file is a bounded packet remnant",
+    soleCanonicalFile.status === 2 &&
+      /Remaining canonical top-level categories \(1\): \[address\.json\]/.test(
+        soleCanonicalFile.text,
+      ),
+    soleCanonicalFile.text,
+  );
+
+  const nestedPacketArtifact = runUnmarkedPacketDiscovery(
+    "nested-packet-artifact",
+    (packet) => {
+      const notes = join(packet, "reviewer-notes");
+      mkdirSync(notes, { recursive: true });
+      writeFileSync(join(notes, "software.md"), "nested artifact\n");
+    },
+  );
+  check(
+    "a nested artifact is reported only by its canonical top-level directory",
+    nestedPacketArtifact.status === 2 &&
+      /Remaining canonical top-level categories \(1\): \[reviewer-notes\/\]/.test(
+        nestedPacketArtifact.text,
+      ) &&
+      !nestedPacketArtifact.text.includes("software.md"),
+    nestedPacketArtifact.text,
+  );
+
+  const emptyCanonicalDirectory = runUnmarkedPacketDiscovery(
+    "empty-canonical-directory",
+    (packet) => mkdirSync(join(packet, "verification"), { recursive: true }),
+  );
+  check(
+    "an empty canonical directory is a packet remnant",
+    emptyCanonicalDirectory.status === 2 &&
+      /Remaining canonical top-level categories \(1\): \[verification\/\]/.test(
+        emptyCanonicalDirectory.text,
+      ),
+    emptyCanonicalDirectory.text,
+  );
+
+  const handoffPacket = join(
+    repo,
+    ".scratch",
+    "panel",
+    "advance-verification-handoff",
+  );
+  const unrelatedDiscoveryPacket = join(
+    repo,
+    ".scratch",
+    "panel",
+    "unrelated-discovery",
+  );
+  mkdirSync(handoffPacket, { recursive: true });
+  writeJson(join(handoffPacket, "discovery-ledger.json"), {
+    artifact_kind: "d2b-panel/issue-ledger",
+  });
+  writeJson(join(handoffPacket, "responses.json"), {
+    artifact_kind: "d2b-panel/implementation-responses",
+  });
+  mkdirSync(unrelatedDiscoveryPacket, { recursive: true });
+  writeFileSync(join(unrelatedDiscoveryPacket, ".complete"), "unrelated\n");
+  const handoffDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "handoffdiscovery-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "a complete ledger-response handoff beside unrelated discovery does not block",
+    handoffDiscovery.status === 0 &&
+      existsSync(
+        join(repo, ".scratch", "panel", "handoffdiscovery-r1", ".complete"),
+      ),
+    handoffDiscovery.text,
+  );
+  rmSync(handoffPacket, { recursive: true, force: true });
+  rmSync(unrelatedDiscoveryPacket, { recursive: true, force: true });
+  rmSync(join(repo, ".scratch", "panel", "handoffdiscovery-r1"), {
+    recursive: true,
+    force: true,
+  });
+
+  for (const [name, otherName] of [
+    ["lone-ledger", "discovery-ledger.json"],
+    ["lone-responses", "responses.json"],
+  ]) {
+    const loneHandoff = runUnmarkedPacketDiscovery(name, (packet) =>
+      writeFileSync(join(packet, otherName), "{}\n"),
+    );
+    check(
+      `${otherName} without its handoff pair blocks discovery`,
+      loneHandoff.status === 2 &&
+        new RegExp(
+          `Remaining canonical top-level categories \\(1\\): \\[${otherName.replace(
+            ".",
+            "\\.",
+          )}\\]`,
+        ).test(loneHandoff.text),
+      loneHandoff.text,
+    );
+  }
+
+  const nestedNamesPacket = runUnmarkedPacketDiscovery(
+    "deep-wide-sensitive-names",
+    (packet) => {
+      let deep = join(packet, "agent-definitions");
+      mkdirSync(deep, { recursive: true });
+      for (let depth = 0; depth < 24; depth += 1) {
+        deep = join(deep, `deep-${depth}`);
+        mkdirSync(deep, { recursive: true });
+      }
+      writeFileSync(
+        join(deep, "sensitive-input-derived-secret-token.txt"),
+        "sensitive nested name\n",
+      );
+      const wide = join(packet, "reviewer-notes");
+      mkdirSync(wide, { recursive: true });
+      for (let index = 0; index < 256; index += 1) {
+        writeFileSync(
+          join(wide, `wide-sensitive-input-${index}.md`),
+          "nested artifact\n",
+        );
+      }
+    },
+  );
+  check(
+    "deep and wide nested names never enter packet diagnostics",
+    nestedNamesPacket.status === 2 &&
+      /Remaining canonical top-level categories \(2\): \[agent-definitions\/, reviewer-notes\/\]/.test(
+        nestedNamesPacket.text,
+      ) &&
+      !nestedNamesPacket.text.includes("sensitive-input-derived-secret-token") &&
+      !nestedNamesPacket.text.includes("wide-sensitive-input-"),
+    nestedNamesPacket.text,
+  );
+  check(
+    "packet remnant diagnostics remain bounded",
+    nestedNamesPacket.text.length < 2000 &&
+      !nestedNamesPacket.text.includes("deep-0") &&
+      !nestedNamesPacket.text.includes("wide-sensitive-input-"),
+    nestedNamesPacket.text,
+  );
 
   const emptyPacket = join(repo, ".scratch", "panel", "empty-packet");
   mkdirSync(emptyPacket, { recursive: true });

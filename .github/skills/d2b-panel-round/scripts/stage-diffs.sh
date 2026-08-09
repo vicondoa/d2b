@@ -613,31 +613,42 @@ const canonicalContentDirectories = new Set([
   "verdicts",
 ]);
 
+const advanceVerificationHandoffFiles = new Set([
+  "discovery-ledger.json",
+  "responses.json",
+]);
+
 const canonicalRemnants = (packet) => {
+  const entries = readdirSync(packet).filter((name) => name !== ".complete");
+  if (entries.length > MAX_DIRECTORY_ENTRIES) {
+    throw new Error(
+      `${packet}: packet has more than ${MAX_DIRECTORY_ENTRIES} top-level entries`,
+    );
+  }
+  const hasCompleteAdvanceVerificationHandoff =
+    entries.length === advanceVerificationHandoffFiles.size &&
+    [...advanceVerificationHandoffFiles].every((name) => {
+      if (!entries.includes(name)) return false;
+      try {
+        return lstatSync(path.join(packet, name)).isFile();
+      } catch {
+        return false;
+      }
+    });
   const remnants = [];
-  const scanDirectory = (directory, prefix) => {
-    for (const name of readdirSync(directory).sort()) {
-      const relative = `${prefix}/${name}`;
-      const absolute = path.join(directory, name);
-      const stat = lstatSync(absolute);
-      remnants.push(relative);
-      if (stat.isDirectory()) scanDirectory(absolute, relative);
+  for (const name of entries) {
+    if (
+      hasCompleteAdvanceVerificationHandoff &&
+      advanceVerificationHandoffFiles.has(name)
+    ) {
+      continue;
     }
-  };
-  for (const name of readdirSync(packet).sort()) {
-    if (name === ".complete") continue;
-    const absolute = path.join(packet, name);
     if (canonicalFileNames.has(name)) {
       remnants.push(name);
       continue;
     }
     if (!canonicalContentDirectories.has(name)) continue;
-    const stat = lstatSync(absolute);
-    if (!stat.isDirectory()) {
-      remnants.push(name);
-      continue;
-    }
-    scanDirectory(absolute, name);
+    remnants.push(`${name}/`);
   }
   return remnants.sort();
 };
@@ -962,7 +973,8 @@ for (const name of packets) {
       if (remnants.length > 0) {
         console.error(
           `${packet}: incomplete packet retains canonical artifact content without .complete; ` +
-            `refusing discovery. Remaining [${remnants.join(", ")}]`,
+            `refusing discovery. Remaining canonical top-level categories ` +
+            `(${remnants.length}): [${remnants.join(", ")}]`,
         );
         process.exit(1);
       }
