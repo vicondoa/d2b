@@ -544,8 +544,9 @@ to the same file are explicitly sequential.
   broker and guest becoming product workspace members, the independent
   workspace never becoming a root `-p` selector, and generated policy inputs
   neither becoming a crate nor breaking API fingerprint generation. Add the
-  closed exact shell-census assertion for every supported direct Cargo build
-  call site changed by T006: `tests/test-rust.sh`, `tests/static.sh`,
+  closed exact direct-build census assertion for every supported direct Cargo
+  build call site changed by T006: `Makefile` `heavy-gate-build`,
+  `tests/test-rust.sh`, `tests/static.sh`,
   `tests/cli-rust-native-common.sh`, `tests/tools/stub-no-socket.sh`,
   `tests/tools/heavy-gate-reexec.sh`, `tests/unit/gates/drift-check.sh`,
   `tests/unit/gates/performance-budgets.sh`,
@@ -565,7 +566,8 @@ to the same file are explicitly sequential.
   the pinned inventory lists with `--locked` root-lock package selection,
   creates no backup path, registers no restoring `EXIT` trap, and leaves the
   candidate clean under tracked, staged, and untracked assertions.
-- [ ] T013 [owner: spec003w0-cargo-gates] [files: tests/test-rust.sh,
+- [ ] T013 [owner: spec003w0-cargo-gates] [files: Makefile,
+  tests/test-rust.sh,
   tests/tools/assert-pinned-tests.sh,
   tests/tools/api-surface-input-fingerprint.sh,
   tests/static.sh,
@@ -593,7 +595,11 @@ to the same file are explicitly sequential.
   selectors to every T012-censused Cargo build. Preserve each call site's
   existing target directory, profile, skip or soft-fail policy, output
   consumer, and runtime phase; do not migrate a call to Bazel or otherwise
-  change runtime behavior assigned to a later task. Move the
+  change runtime behavior assigned to a later task. For `Makefile`
+  `heavy-gate-build`, preserve the quiet debug build, absolute
+  `HEAVY_GATE_TARGET_DIR`, workspace Cargo configuration, and runtime phase
+  while requiring literal
+  `--manifest-path packages/Cargo.toml --locked -p xtask --bin xtask`. Move the
   package deny, audit, and census onto the selected policy inputs; replace the
   nested broker-lock snapshot, restore function, scratch path, and `EXIT`
   trap with the two root-lock listings

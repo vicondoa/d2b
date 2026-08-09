@@ -47,8 +47,10 @@ valid baseline against committed `v3` behavior.
 **Checkpoint**: Baselines, inventories, and execution boundaries are recorded
 before any target implementation changes.
 
-**Panel Gate**: Run the ten-seat d2b plan panel. Do not begin Phase 3 until
-every seat signs off with no recommendations.
+**Historical Panel Gate (completed)**: The d2b plan panel ran under the
+then-current ten-seat process. Phase 3 began only after all ten seats signed
+off with no recommendations. This remains historical evidence and is not
+selected-roster lifecycle evidence.
 
 ---
 
@@ -82,8 +84,10 @@ passes, and achieve a warm median no greater than 50% of baseline.
 **Checkpoint**: Rust validation is independently complete, coverage-equivalent,
 resource-bounded, and at least twice as fast when warm.
 
-**Panel Gate**: Run the ten-seat d2b work panel on the integrated US1 diff.
-Do not begin Phase 4 until every seat signs off with no recommendations.
+**Historical Panel Gate (completed)**: The integrated US1 diff ran under the
+then-current ten-seat d2b work-panel process. Phase 4 began only after all ten
+seats signed off with no recommendations. This remains historical evidence and
+is not selected-roster lifecycle evidence.
 
 ---
 
@@ -117,8 +121,10 @@ median no greater than 50% of baseline.
 **Checkpoint**: Nix unit validation is independently complete, coverage
 equivalent, free of the Bash worker pool, and at least twice as fast when warm.
 
-**Panel Gate**: Run the ten-seat d2b work panel on the integrated US2 diff.
-Do not begin Phase 5 until every seat signs off with no recommendations.
+**Historical Panel Gate (completed)**: The integrated US2 diff ran under the
+then-current ten-seat d2b work-panel process. Phase 5 became eligible only
+after all ten seats signed off with no recommendations. This remains
+historical evidence and is not selected-roster lifecycle evidence.
 
 ---
 
@@ -153,8 +159,13 @@ regression.
 equivalent, free of the local Bash shard scheduler, and at least twice as fast
 when warm.
 
-**Panel Gate**: Run the ten-seat d2b work panel on the integrated US3 diff.
-Do not begin Phase 6 until every seat signs off with no recommendations.
+**Current Panel Gate**: Run one selected-roster Discover-Fix-Verify lifecycle
+on the integrated US3 candidate. Run one comprehensive discovery, record every
+actionable finding in one stable shared ledger, batch ledger-scoped fixes, and
+perform scoped verification against the fix delta and full candidate. Rerun
+selection after every fix delta and union it with the lifecycle roster, which
+may only widen. Do not begin Phase 6 until every selected seat signs off with
+zero recommendations (N/N).
 
 ---
 
@@ -183,8 +194,13 @@ recorded external contention.
 **Checkpoint**: All targets remain stable under default and constrained
 capacity without uncontrolled oversubscription.
 
-**Panel Gate**: Run the ten-seat d2b work panel on the integrated US4 diff.
-Do not begin Phase 7 until every seat signs off with no recommendations.
+**Current Panel Gate**: Run one selected-roster Discover-Fix-Verify lifecycle
+on the integrated US4 candidate. Run one comprehensive discovery, record every
+actionable finding in one stable shared ledger, batch ledger-scoped fixes, and
+perform scoped verification against the fix delta and full candidate. Rerun
+selection after every fix delta and union it with the lifecycle roster, which
+may only widen. Do not begin Phase 7 until every selected seat signs off with
+zero recommendations (N/N).
 
 ---
 
@@ -213,8 +229,13 @@ removed, combined, or reused operation.
 **Checkpoint**: The speedup is reproducible, reviewable, and ready for the
 d2b plan/work panel gate.
 
-**Panel Gate**: Run the ten-seat d2b work panel on the integrated US5 diff.
-The feature may advance to delivery only after unanimous sign-off.
+**Current Panel Gate**: Run one selected-roster Discover-Fix-Verify lifecycle
+on the integrated US5 candidate. Run one comprehensive discovery, record every
+actionable finding in one stable shared ledger, batch ledger-scoped fixes, and
+perform scoped verification against the fix delta and full candidate. Rerun
+selection after every fix delta and union it with the lifecycle roster, which
+may only widen. The feature may advance to delivery only after every selected
+seat signs off with zero recommendations (N/N).
 
 ---
 

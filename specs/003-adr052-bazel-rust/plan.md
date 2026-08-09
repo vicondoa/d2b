@@ -115,7 +115,7 @@ Layer-1 surfaces. No new top-level shell gate or Layer-1 job.
 | The initial amendment left the release workflow and two existing drift gates outside spec003w0. | The workspace merge changes their root-manifest, output, and cache assumptions. | spec003w0 updates `release-host-binaries.yml`, `flake-check-matrix-sync.sh`, and `ci-rust-cache-sync.sh`; neither gate is deleted. |
 | The release correction relied on the hosted runner's ambient Rust before initializing rust-cache. | `packages/rust-toolchain.toml` is the release compiler authority, and cache identity is valid only after that channel is active. | T021 tests and T023 implements pinned-channel installation and activation before rust-cache, exact `rustc` and `cargo` version assertions, and locked package/bin/default-feature/feature-selected release builds. |
 | API fingerprinting and changed-scope Clippy inferred crates and package selectors from top-level `packages/` directory names. | Only locked offline root metadata authoritatively relates product workspace member IDs, manifest paths, and Cargo package names. Independent workspaces and generated non-crate directories are not product packages. | T012 plants independent-workspace and `packages/policy-inputs` fixtures; T013 derives both consumers from metadata, uses a closed path classification, and refuses an unclassified package-root entry. |
-| The workspace correction covered the primary Rust gate and release workflow but omitted other supported Cargo build call sites. | Every build affected by T006 must be closed-censused, locked, and either use exact generic broker/guest exclusions or exact dedicated package/bin/default-feature/feature selectors. | T012/T013 own shell call sites, T018/T019 own Nix call sites, and T021/T023 own release. Selector-only corrections preserve current target directories, profiles, skip policy, output consumers, and runtime phase. |
+| The workspace correction covered the primary Rust gate and release workflow but omitted other supported Cargo build call sites, including `Makefile` `heavy-gate-build`. | Every build affected by T006 must be closed-censused, locked, and either use exact generic broker/guest exclusions or exact dedicated package/bin/default-feature/feature selectors. | T012/T013 own shell and Make call sites, T018/T019 own Nix call sites, and T021/T023 own release. Selector-only corrections preserve current target directories, profiles, skip policy, output consumers, and runtime phase. |
 | Only three contributor docs were scheduled for the spec003w0 workspace correction. | `CONTRIBUTING.md`, workflow guidance, critical-subsystem wording, and `policy_modules.rs` also encode the sibling-workspace shape. | Add all four to the future spec003w0 binding-doc scope. Do not edit dated ADR 0038; record that ADR 0054 governs the newer shape. |
 | ADR 0052 and its index/changelog summary still call accepted ADR 0054 proposed and retain the retired four-hub inventory. | ADR 0054 is accepted settled context. | Correct the ADR 0052 amendment-status paragraph, ADR index summary, and ADR 0054 changelog fragment with the spec003w0 documentation correction; leave ADR 0038 historical text unchanged. |
 | Slice ownership included module locks, hub locks, Nix pins, generated BUILD files, and coverage/query goldens. | Those artifacts are generator results shared by all slices. | Integrator alone commits them. Slices write scratch previews. Lock refresh follows the changed authority and always refreshes `MODULE.bazel.lock` last, then clean no-op checks. |
@@ -684,7 +684,7 @@ scope overlaps this ownership.
 
 | Slice | Owned files |
 | --- | --- |
-| `spec003w0-cargo-gates` | `tests/test-rust.sh`, `tests/tools/assert-pinned-tests.sh`, `tests/tools/api-surface-input-fingerprint.sh`, `tests/static.sh`, `tests/cli-rust-native-common.sh`, `tests/tools/stub-no-socket.sh`, `tests/tools/heavy-gate-reexec.sh`, `tests/unit/gates/drift-check.sh`, `tests/unit/gates/performance-budgets.sh`, `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`, `tests/integration/distro-matrix/ubuntu-2404-tier1.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/golden/pinned/kernel-canaries.txt`, `tests/golden/pinned/usbip-firewall-skeleton.txt`, `tests/golden/pinned/host-prepare-network.txt`, `tests/golden/pinned/broker-socket-acl.txt`, `tests/golden/pinned/broker-export-audit.txt` |
+| `spec003w0-cargo-gates` | `Makefile`, `tests/test-rust.sh`, `tests/tools/assert-pinned-tests.sh`, `tests/tools/api-surface-input-fingerprint.sh`, `tests/static.sh`, `tests/cli-rust-native-common.sh`, `tests/tools/stub-no-socket.sh`, `tests/tools/heavy-gate-reexec.sh`, `tests/unit/gates/drift-check.sh`, `tests/unit/gates/performance-budgets.sh`, `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`, `tests/integration/distro-matrix/ubuntu-2404-tier1.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/golden/pinned/kernel-canaries.txt`, `tests/golden/pinned/usbip-firewall-skeleton.txt`, `tests/golden/pinned/host-prepare-network.txt`, `tests/golden/pinned/broker-socket-acl.txt`, `tests/golden/pinned/broker-export-audit.txt` |
 | `spec003w0-bazel-generator` | `.bazelversion`, `.bazelrc`, `MODULE.bazel`, `BUILD.bazel`, `bazel/BUILD.bazel`, `bazel/defs.bzl`, `bazel/toolchains.bzl`, `bazel/rules/sandboxed_action.bzl`, `bazel/cargo/README.md`, `bazel/cargo/BUILD.bazel`, `bazel/cargo/cargo_bazel.bzl`, `packages/xtask/src/bazel.rs`, `packages/xtask/src/package_policy.rs`, `packages/xtask/src/bazel_yanked.rs`, `packages/xtask/src/schema.rs`, `packages/xtask/src/hermeticity.rs`, `packages/xtask/tests/bazel_foundation.rs`, `packages/xtask/tests/bazel_module_refresh.rs`, `packages/xtask/tests/package_policy_refusals.rs`, `packages/xtask/tests/bazel_action_network.rs` |
 | `spec003w0-runner-foundation` | `packages/d2b-bazel-runner/src/exec_handle.rs`, `packages/d2b-bazel-runner/src/bin/d2b-exec-probe.rs`, `packages/d2b-bazel-runner/tests/exec_handle.rs` |
 | `spec003w0-locator-foundation` | `packages/d2b-test-locator/src/mode.rs`, `packages/d2b-test-locator/tests/mode_selection.rs` |
@@ -710,6 +710,9 @@ gate guidance elsewhere in that file.
 The cargo-gate T012 use of `tests/unit/meta/ci-runner-regression.py` precedes
 the policy-CI T021 extension of that same regression file through the explicit
 T012 -> T013 -> T018 -> T019 -> T021 chain. They are never concurrent writers.
+The cargo-gate T013 update to `Makefile` precedes T029's integrator
+reconciliation through a transitive dependency, so those edits are also never
+concurrent.
 The release-workflow substep of `spec003w0-policy-ci` begins after the root
 workspace and gate target directories are stable. These are real dependencies,
 not parallel work. The binding-doc scope records that ADR 0054 governs the
@@ -995,9 +998,12 @@ All must be true:
 - generic Cargo and Nix build/test and Clippy contexts exclude broker and guest
   exactly, while each dedicated context retains its selectors;
 - the closed Cargo build-call-site census equals the supported T006-affected
-  shell, Nix, and release set with no missing or extra row; every row is locked
-  and carries its exact package/bin/default-feature/feature selection or its
-  exact generic broker/guest exclusions without changing the existing target
+  shell, Make, Nix, and release set with no missing or extra row; `Makefile`
+  `heavy-gate-build` carries exact
+  `--manifest-path packages/Cargo.toml --locked -p xtask --bin xtask`, every
+  other row is locked and carries its exact
+  package/bin/default-feature/feature selection or its exact generic
+  broker/guest exclusions, and no correction changes the existing target
   directory, profile, skip policy, output consumer, or runtime phase;
 - the exact four policy contexts and twelve native check wrappers exist, six
   per system;

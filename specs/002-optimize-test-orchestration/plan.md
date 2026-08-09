@@ -408,12 +408,21 @@ weakening an invariant.
 
 This plan uses strict phase ordering rather than pipelined dispatch.
 
-- Run the ten-seat plan panel before implementation begins.
-- After each integrated implementation phase, run a work panel, obtain
-  unanimous sign-off, then close that wave through the delivery tooling - PR,
-  merge, seal - before starting the next phase. Track A cannot defer merges:
-  the delivery gate refuses a wave's panel request while any prior wave is
-  unmerged, so one PR per wave is forced rather than chosen.
+- The plan gate and the US1 and US2 work gates are completed historical
+  ten-seat evidence. Retain those records as history; do not restate them as
+  selected-roster lifecycle evidence.
+- Each unfinished US3, US4, and US5 work gate uses one current selected-roster
+  Discover-Fix-Verify lifecycle. Run one comprehensive discovery over the full
+  candidate, record every actionable finding in one stable shared ledger,
+  batch ledger-scoped fixes, and perform scoped verification against the fix
+  delta and full candidate. Rerun selection after every fix delta and union it
+  with the lifecycle roster, which may only widen. The gate passes only when
+  every selected seat signs off with zero recommendations (N/N).
+- After each integrated unfinished implementation phase passes that work gate,
+  close the wave through the delivery tooling - PR, merge, seal - before
+  starting the next phase. Track A cannot defer merges: the delivery gate
+  refuses a wave's panel request while any prior wave is unmerged, so one PR
+  per wave is forced rather than chosen.
 - Use `( spec002w1 )` for Rust commits, `( spec002w2 )` for Nix unit commits,
   `( spec002w3 )` for flake commits, `( spec002w4 )` for resource-tuning
   commits, and `( spec002w5 )` for evidence and documentation commits.

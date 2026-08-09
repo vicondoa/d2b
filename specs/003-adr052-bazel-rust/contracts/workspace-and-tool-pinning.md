@@ -156,6 +156,7 @@ shapes. The generic selector has exactly the two exclusions above.
 | Stub smoke | `tests/tools/stub-no-socket.sh` | Separate product package/bin rows for `d2b/d2b` and `d2bd/d2bd` | T012 | T013 |
 | Drift helper | `tests/unit/gates/drift-check.sh` | Product package `xtask`, bin `xtask` | T012 | T013 |
 | Heavy-gate helper | `tests/tools/heavy-gate-reexec.sh` | Product package `xtask`, bin `xtask` | T012 | T013 |
+| Heavy-gate build | `Makefile` `heavy-gate-build` | Exact `--manifest-path packages/Cargo.toml --locked -p xtask --bin xtask` | T012 | T013 |
 | Performance | `tests/unit/gates/performance-budgets.sh` | Broker production | T012 | T013 |
 | Hardware | `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh` | Generic product, then broker production | T012 | T013 |
 | Distro | `tests/integration/distro-matrix/ubuntu-2404-tier1.sh` | Release-profile generic product, then release-profile broker production | T012 | T013 |
@@ -166,10 +167,11 @@ shapes. The generic selector has exactly the two exclusions above.
 | Nix guest | `flake.nix` `guestShellRunnerStatic` | Frozen guest real-libshpool from the root source and root lock | T018 | T019 |
 | Release | `.github/workflows/release-host-binaries.yml` | The six exact release rows below | T021 | T023 |
 
-T012's regression owns the exact non-release shell path set above and fails on
-a missing or extra call site, so a new direct `cargo build` under supported
-tests cannot bypass classification. T018 independently enforces the Nix rows,
-and T021 owns the release-workflow census and ordering. Selector tests plant
+T012's regression owns the exact non-release direct-build path set above and
+fails on a missing or extra call site, so a new direct `cargo build` under a
+supported Make or test entrypoint cannot bypass classification. T018
+independently enforces the Nix rows, and T021 owns the release-workflow census
+and ordering. Selector tests plant
 unlocked, implicit package/bin, wrong manifest, generic-includes-broker,
 generic-includes-guest, default-feature, missing-feature, and extra-feature
 variants.
