@@ -1025,7 +1025,8 @@ if (!existsSync(initOptionsJson)) {
       // The current roster is deliberately not mirrored as a second array.
       // make-records must consume the same lifecycle-selection artifact as
       // delivery rather than reintroducing a fixed helper roster.
-      if (!src.includes('readSelection(selectionPath)') ||
+      if (!src.includes('validateSelection(selectionArtifact.value)') ||
+          !src.includes('selectionArtifact.text') ||
           !src.includes('selection.roster') ||
           !src.includes("panel_format_version")) {
         // The last marker is checked below as a spelling guard. It is kept
