@@ -41,6 +41,15 @@ RELEASE_BINARY_SELECTORS = (
     ("d2b-host", "d2b-activation-helper", "packages/Cargo.toml"),
     ("d2b-priv-broker", "d2b-priv-broker", "packages/d2b-priv-broker/Cargo.toml"),
 )
+RELEASE_ASSET_NAMES = (
+    "d2b-{version}-x86_64-linux.tar.gz",
+    "d2b-activation-helper-{version}-x86_64-linux.tar.gz",
+    "d2b-priv-broker-{version}-x86_64-linux.tar.gz",
+    "d2b-unsafe-local-helper-{version}-x86_64-linux.tar.gz",
+    "d2b-wayland-proxy-{version}-x86_64-linux.tar.gz",
+    "d2bd-{version}-x86_64-linux.tar.gz",
+    "SHA256SUMS",
+)
 
 
 EXECUTION_MANIFEST_HARNESS = r"""
@@ -376,6 +385,69 @@ def move_workflow_step_before(
     return "".join(lines)
 
 
+def release_tag_fixture_result(
+    tag: dict[str, str] | None,
+    *,
+    expected_name: str,
+    expected_target: str,
+) -> str:
+    """Model the tag branch used by the publication retry fixture."""
+    if tag is None:
+        return "create"
+    if (
+        tag.get("type") != "tag"
+        or tag.get("target") != expected_target
+        or tag.get("name") != expected_name
+        or tag.get("subject") != expected_name
+    ):
+        return "reject"
+    return "adopt"
+
+
+def release_api_fixture_result(
+    release: dict[str, object] | None,
+    *,
+    expected_tag: str,
+    expected_target: str,
+    local_assets: dict[str, tuple[int, str]],
+) -> tuple[str, tuple[str, ...]]:
+    """Model release adoption, completion, and conflict decisions."""
+    if release is None:
+        return "create", tuple(sorted(local_assets))
+    if (
+        release.get("tag_name") != expected_tag
+        or release.get("target_commitish") != expected_target
+        or release.get("name") != expected_tag
+        or release.get("prerelease") is not False
+        or not isinstance(release.get("draft"), bool)
+    ):
+        return "reject", ()
+
+    expected_names = set(local_assets)
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        return "reject", ()
+    seen: set[str] = set()
+    missing: list[str] = []
+    for raw_asset in assets:
+        if not isinstance(raw_asset, dict):
+            return "reject", ()
+        name = raw_asset.get("name")
+        if not isinstance(name, str) or name not in expected_names or name in seen:
+            return "reject", ()
+        seen.add(name)
+        if raw_asset.get("state") != "uploaded":
+            return "reject", ()
+        expected_size, expected_digest = local_assets[name]
+        if raw_asset.get("size") != expected_size:
+            return "reject", ()
+        remote_digest = raw_asset.get("digest")
+        if remote_digest is not None and remote_digest != f"sha256:{expected_digest}":
+            return "reject", ()
+    missing.extend(sorted(expected_names - seen))
+    return ("complete" if release["draft"] else "adopt"), tuple(missing)
+
+
 def release_workflow_contract_violations(workflow: str) -> list[str]:
     violations: list[str] = []
     dispatch = workflow.split("permissions:", 1)[0]
@@ -436,6 +508,13 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
             '[ "$MERGED_V3_HEAD" = "$current_v3_head" ]',
             '[ "$SEALED_TREE" = "$current_v3_tree" ]',
             'git cat-file -e "$SEALED_TREE^{tree}"',
+            'tag_kind=$(git cat-file -t "$tag_ref"',
+            'tag_target=$(git rev-parse "$tag_ref^{commit}"',
+            "tag_header=$(git cat-file tag",
+            "tag_subject=$(git for-each-ref --format='%(subject)'",
+            'git fetch origin "$tag_ref:$tag_ref"',
+            "existing release tag",
+            "Existing annotated tag",
             "package_version",
             '[ "$package_version" = "$VERSION" ]',
             "nix/prebuilt.json",
@@ -503,6 +582,11 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
             "CHANGELOG.md",
             "flake_versions",
             "manifest_version",
+            'tag_kind=$(git cat-file -t "$tag_ref"',
+            'tag_target=$(git rev-parse "$tag_ref^{commit}"',
+            "tag_header=$(git cat-file tag",
+            "tag_subject=$(git for-each-ref --format='%(subject)'",
+            "Existing annotated tag",
         ]:
             if required not in build_verify_source:
                 violations.append(
@@ -658,8 +742,20 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
             '[ -n "$GITHUB_TOKEN" ]',
             "http.https://github.com/.extraheader",
             "AUTHORIZATION: bearer $GITHUB_TOKEN",
-            'git tag -a "v$VERSION" "$MERGED_V3_HEAD"',
-            'git push origin "v$VERSION"',
+            'tag_name="v$VERSION"',
+            'tag_ref="refs/tags/$tag_name"',
+            'git tag -a "$tag_name" "$MERGED_V3_HEAD" -m "$tag_name"',
+            'git push origin "$tag_name"',
+            "validate_tag()",
+            'git cat-file -t "$tag_ref"',
+            'git rev-parse "$tag_ref^{commit}"',
+            "git cat-file tag",
+            "%(subject)",
+            'git fetch origin "+$tag_ref:$tag_ref"',
+            "Existing annotated tag",
+            "conflicts with the validated merged HEAD or annotation",
+            'annotation." >&2\n    return 1',
+            "Tag push did not report success",
         ]:
             if required not in tag_step and required not in tag_source:
                 violations.append(f"annotated-tag push is missing executable `{required}`")
@@ -674,6 +770,39 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
             violations.append("annotated tag must be pushed before the GitHub release")
         if len(artifact_candidates) != 1 or tag_index <= artifact_candidates[0][0]:
             violations.append("release artifacts must be verified before annotated tag push")
+
+        if len(release_creation_candidates) == 1:
+            release_index, release_source = release_creation_candidates[0]
+            for required in [
+                "gh api --include",
+                "target_commitish",
+                '[ "$release_target" = "$MERGED_V3_HEAD" ] || reject_release_conflict',
+                "release_endpoint",
+                "release_exists=0",
+                "gh release create",
+                "--target \"$MERGED_V3_HEAD\"",
+                "--verify-tag",
+                "gh release upload",
+                "missing_assets",
+                "gh release edit",
+                "--draft=false",
+                "release_draft_state",
+                ".digest",
+                '[ "$remote_digest" = "sha256:$expected_digest" ]',
+                "conflicting size",
+                "conflicting digest",
+                "existing GitHub release conflicts",
+                "unexpected asset",
+                "duplicate asset identity",
+            ]:
+                if required not in release_source:
+                    violations.append(
+                        f"resumable release publication is missing executable `{required}`"
+                    )
+            if release_index <= tag_index:
+                violations.append(
+                    "release state comparison must happen after annotated tag adoption"
+                )
 
     return violations
 
@@ -2661,6 +2790,46 @@ wait
                 ),
                 "tag contents permission",
             ),
+            (
+                workflow.replace(
+                    'tag_target=$(git rev-parse "$tag_ref^{commit}" 2>/dev/null || true)',
+                    'tag_target=""',
+                    1,
+                ),
+                "exact existing tag adoption",
+            ),
+            (
+                workflow.replace(
+                    "              return 1\n",
+                    "              :\n",
+                    1,
+                ),
+                "conflicting tag rejection",
+            ),
+            (
+                workflow.replace(
+                    'gh release upload "$tag_name" "${missing_assets[@]}"',
+                    "true",
+                    1,
+                ),
+                "partial release completion",
+            ),
+            (
+                workflow.replace(
+                    '[ "$release_target" = "$MERGED_V3_HEAD" ] || reject_release_conflict',
+                    "true",
+                    1,
+                ),
+                "conflicting release rejection",
+            ),
+            (
+                workflow.replace(
+                    '[ "$remote_digest" = "sha256:$expected_digest" ] || {',
+                    "true || {",
+                    1,
+                ),
+                "conflicting asset rejection",
+            ),
         )
         for mutated, label in mutations:
             self.assertNotEqual(
@@ -2668,6 +2837,108 @@ wait
                 [],
                 msg=f"workflow mutation escaped the {label} regression check",
             )
+
+    def test_release_retry_tag_and_api_fixtures_are_fail_closed(self) -> None:
+        version = "9.8.7"
+        tag_name = f"v{version}"
+        merged_head = "a" * 40
+        self.assertEqual(
+            release_tag_fixture_result(
+                {
+                    "type": "tag",
+                    "target": merged_head,
+                    "name": tag_name,
+                    "subject": tag_name,
+                },
+                expected_name=tag_name,
+                expected_target=merged_head,
+            ),
+            "adopt",
+        )
+        for conflicting_tag in (
+            {
+                "type": "commit",
+                "target": merged_head,
+                "name": tag_name,
+                "subject": tag_name,
+            },
+            {
+                "type": "tag",
+                "target": "b" * 40,
+                "name": tag_name,
+                "subject": tag_name,
+            },
+            {
+                "type": "tag",
+                "target": merged_head,
+                "name": tag_name,
+                "subject": "wrong release",
+            },
+        ):
+            self.assertEqual(
+                release_tag_fixture_result(
+                    conflicting_tag,
+                    expected_name=tag_name,
+                    expected_target=merged_head,
+                ),
+                "reject",
+            )
+
+        asset_names = tuple(
+            template.format(version=version) for template in RELEASE_ASSET_NAMES
+        )
+        local_assets = {
+            name: (100 + index, f"{index + 1:064x}")
+            for index, name in enumerate(asset_names)
+        }
+        partial = {
+            "tag_name": tag_name,
+            "target_commitish": merged_head,
+            "name": tag_name,
+            "prerelease": False,
+            "draft": True,
+            "assets": [
+                {
+                    "name": asset_names[0],
+                    "state": "uploaded",
+                    "size": local_assets[asset_names[0]][0],
+                    "digest": f"sha256:{local_assets[asset_names[0]][1]}",
+                }
+            ],
+        }
+        outcome, missing = release_api_fixture_result(
+            partial,
+            expected_tag=tag_name,
+            expected_target=merged_head,
+            local_assets=local_assets,
+        )
+        self.assertEqual(outcome, "complete")
+        self.assertEqual(set(missing), set(asset_names[1:]))
+
+        conflicting_release = dict(partial)
+        conflicting_release["target_commitish"] = "c" * 40
+        self.assertEqual(
+            release_api_fixture_result(
+                conflicting_release,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
+        conflicting_asset = dict(partial)
+        conflicting_asset["assets"] = [
+            dict(partial["assets"][0], digest="sha256:" + "f" * 64)
+        ]
+        self.assertEqual(
+            release_api_fixture_result(
+                conflicting_asset,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
 
     def test_rust_aggregate_is_a_make_owned_keep_going_dag(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")

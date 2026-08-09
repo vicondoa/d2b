@@ -17,6 +17,27 @@ const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &[
 ];
 const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 const RUST_DRIVER: &str = "tests/test-rust.sh";
+const RELEASE_WORKFLOW: &str = ".github/workflows/release-host-binaries.yml";
+const RELEASE_BINARY_SELECTORS: &[(&str, &str, &str)] = &[
+    ("d2bd", "d2bd", "packages/Cargo.toml"),
+    ("d2b", "d2b", "packages/Cargo.toml"),
+    (
+        "d2b-wayland-proxy",
+        "d2b-wayland-proxy",
+        "packages/Cargo.toml",
+    ),
+    (
+        "d2b-unsafe-local-helper",
+        "d2b-unsafe-local-helper",
+        "packages/Cargo.toml",
+    ),
+    ("d2b-host", "d2b-activation-helper", "packages/Cargo.toml"),
+    (
+        "d2b-priv-broker",
+        "d2b-priv-broker",
+        "packages/d2b-priv-broker/Cargo.toml",
+    ),
+];
 const RUST_DAG_LEAVES: &[&str] = &[
     "test-rust-leaf-api-surface",
     "test-rust-leaf-main-workspace",
@@ -77,6 +98,49 @@ fn repo_root() -> PathBuf {
 
 fn read_repo_file(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).expect("read repo file")
+}
+
+fn release_build_block(workflow: &str) -> &str {
+    let start = workflow
+        .find("      - name: Build release binaries\n")
+        .expect("release build step");
+    let remainder = &workflow[start..];
+    let end = remainder
+        .find("      - uses: actions/upload-artifact")
+        .expect("release artifact upload step");
+    &remainder[..end]
+}
+
+fn release_workspace_violations(workflow: &str) -> Vec<String> {
+    let build = release_build_block(workflow);
+    let mut violations = Vec::new();
+    if build.matches("rustup run \"$PINNED\" cargo build").count() != RELEASE_BINARY_SELECTORS.len()
+    {
+        violations.push(
+            "release build must use the pinned cargo command for all six binaries".to_owned(),
+        );
+    }
+    for (package, binary, manifest) in RELEASE_BINARY_SELECTORS {
+        let selector = format!("--package {package} --bin {binary}");
+        if build.matches(&selector).count() != 1 {
+            violations.push(format!("release selector is not unique: {selector}"));
+        }
+        if !build.contains(&format!("--manifest-path {manifest}")) {
+            violations.push(format!(
+                "release selector has no governed manifest path: {selector}"
+            ));
+        }
+    }
+    if !build.contains("--locked") {
+        violations.push("release build must keep Cargo locked".to_owned());
+    }
+    if build.contains("--workspace")
+        || build.contains("--all-features")
+        || build.contains("--features")
+    {
+        violations.push("release build must not broaden the governed package scope".to_owned());
+    }
+    violations
 }
 
 fn git_tracked_files() -> Vec<String> {
@@ -1085,6 +1149,53 @@ fn heavy_gate_build_uses_the_locked_xtask_binary_manifest() {
         assert!(
             !violations.is_empty(),
             "removing {required} must invalidate heavy-gate-build"
+        );
+    }
+}
+
+#[test]
+fn release_workflow_keeps_exact_locked_workspace_selectors() {
+    let workflow = read_repo_file(RELEASE_WORKFLOW);
+    assert!(
+        release_workspace_violations(&workflow).is_empty(),
+        "release workflow workspace selectors drifted:\n{}",
+        release_workspace_violations(&workflow).join("\n")
+    );
+
+    let mutations = [
+        (
+            workflow.replace(
+                "rustup run \"$PINNED\" cargo build --release --locked",
+                "cargo build --release",
+            ),
+            "pinned cargo invocation",
+        ),
+        (
+            workflow.replace(
+                "--package d2bd --bin d2bd",
+                "--package d2bd --bin d2bd --features extra",
+            ),
+            "ordinary package selector",
+        ),
+        (
+            workflow.replace(
+                "--manifest-path packages/d2b-priv-broker/Cargo.toml",
+                "--manifest-path packages/Cargo.toml",
+            ),
+            "broker manifest selector",
+        ),
+        (
+            workflow.replace(
+                "--locked --manifest-path packages/Cargo.toml",
+                "--workspace --manifest-path packages/Cargo.toml",
+            ),
+            "workspace broadening",
+        ),
+    ];
+    for (mutated, label) in mutations {
+        assert!(
+            !release_workspace_violations(&mutated).is_empty(),
+            "release workspace policy missed {label} mutation"
         );
     }
 }

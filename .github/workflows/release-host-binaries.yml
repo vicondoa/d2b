@@ -81,9 +81,22 @@ jobs:
             echo "Publication blocked: current v3 HEAD does not have the sealed F8 tree." >&2
             exit 1
           }
-          if git ls-remote --exit-code --refs origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "Publication blocked: release tag v$VERSION already exists." >&2
-            exit 1
+          tag_name="v$VERSION"
+          tag_ref="refs/tags/$tag_name"
+          if git ls-remote --exit-code --refs origin "$tag_ref" >/dev/null 2>&1; then
+            git fetch origin "$tag_ref:$tag_ref"
+            tag_kind=$(git cat-file -t "$tag_ref" 2>/dev/null || true)
+            tag_target=$(git rev-parse "$tag_ref^{commit}" 2>/dev/null || true)
+            tag_header=$(git cat-file tag "$tag_ref" 2>/dev/null | sed -n 's/^tag //p' | head -1 || true)
+            tag_subject=$(git for-each-ref --format='%(subject)' "$tag_ref" 2>/dev/null || true)
+            if [ "$tag_kind" != "tag" ] \
+              || [ "$tag_target" != "$current_v3_head" ] \
+              || [ "$tag_header" != "$tag_name" ] \
+              || [ "$tag_subject" != "$tag_name" ]; then
+              echo "Publication blocked: existing release tag $tag_name conflicts with the validated merged HEAD or annotation." >&2
+              exit 1
+            fi
+            echo "Existing annotated tag $tag_name matches the validated merged HEAD and annotation; adopting it."
           fi
 
           for manifest in \
@@ -210,9 +223,22 @@ jobs:
             exit 1
           }
           git cat-file -e "$SEALED_TREE^{tree}"
-          if git ls-remote --exit-code --refs origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "Publication blocked: release tag v$VERSION already exists." >&2
-            exit 1
+          tag_name="v$VERSION"
+          tag_ref="refs/tags/$tag_name"
+          if git ls-remote --exit-code --refs origin "$tag_ref" >/dev/null 2>&1; then
+            git fetch origin "$tag_ref:$tag_ref"
+            tag_kind=$(git cat-file -t "$tag_ref" 2>/dev/null || true)
+            tag_target=$(git rev-parse "$tag_ref^{commit}" 2>/dev/null || true)
+            tag_header=$(git cat-file tag "$tag_ref" 2>/dev/null | sed -n 's/^tag //p' | head -1 || true)
+            tag_subject=$(git for-each-ref --format='%(subject)' "$tag_ref" 2>/dev/null || true)
+            if [ "$tag_kind" != "tag" ] \
+              || [ "$tag_target" != "$MERGED_V3_HEAD" ] \
+              || [ "$tag_header" != "$tag_name" ] \
+              || [ "$tag_subject" != "$tag_name" ]; then
+              echo "Publication blocked: existing release tag $tag_name conflicts with the validated merged HEAD or annotation." >&2
+              exit 1
+            fi
+            echo "Existing annotated tag $tag_name matches the validated merged HEAD and annotation; adopting it."
           fi
           for manifest in \
             packages/d2bd/Cargo.toml \
@@ -412,9 +438,22 @@ jobs:
             exit 1
           }
           git cat-file -e "$SEALED_TREE^{tree}"
-          if git ls-remote --exit-code --refs origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "Publication blocked: release tag v$VERSION already exists." >&2
-            exit 1
+          tag_name="v$VERSION"
+          tag_ref="refs/tags/$tag_name"
+          if git ls-remote --exit-code --refs origin "$tag_ref" >/dev/null 2>&1; then
+            git fetch origin "$tag_ref:$tag_ref"
+            tag_kind=$(git cat-file -t "$tag_ref" 2>/dev/null || true)
+            tag_target=$(git rev-parse "$tag_ref^{commit}" 2>/dev/null || true)
+            tag_header=$(git cat-file tag "$tag_ref" 2>/dev/null | sed -n 's/^tag //p' | head -1 || true)
+            tag_subject=$(git for-each-ref --format='%(subject)' "$tag_ref" 2>/dev/null || true)
+            if [ "$tag_kind" != "tag" ] \
+              || [ "$tag_target" != "$MERGED_V3_HEAD" ] \
+              || [ "$tag_header" != "$tag_name" ] \
+              || [ "$tag_subject" != "$tag_name" ]; then
+              echo "Publication blocked: existing release tag $tag_name conflicts with the validated merged HEAD or annotation." >&2
+              exit 1
+            fi
+            echo "Existing annotated tag $tag_name matches the validated merged HEAD and annotation; adopting it."
           fi
           for manifest in \
             packages/d2bd/Cargo.toml \
@@ -494,14 +533,15 @@ jobs:
             }
             die "missing changelog section for $version\n";
           ' CHANGELOG.md > release-notes.md
-      - name: Create annotated tag
+      - name: Create or adopt annotated tag
         env:
           GITHUB_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepublication-identity.outputs.version }}
           MERGED_V3_HEAD: ${{ needs.prepublication-identity.outputs.merged_v3_head }}
         run: |
+          bash -s <<'RELEASE_TAG_SCRIPT'
           # shellcheck shell=bash
-          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
+          # shellcheck disable=SC3011,SC3030,SC3040,SC3043,SC3054
           set -euo pipefail
           [ -n "$GITHUB_TOKEN" ] || {
             echo "Publication blocked: the contents:write job token is unavailable for tag push." >&2
@@ -511,18 +551,255 @@ jobs:
             "AUTHORIZATION: bearer $GITHUB_TOKEN"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$VERSION" "$MERGED_V3_HEAD" -m "v$VERSION"
-          git push origin "v$VERSION"
-      - name: Create GitHub release
+          tag_name="v$VERSION"
+          tag_ref="refs/tags/$tag_name"
+
+          validate_tag() {
+            local tag_kind tag_target tag_header tag_subject
+            tag_kind=$(git cat-file -t "$tag_ref" 2>/dev/null || true)
+            tag_target=$(git rev-parse "$tag_ref^{commit}" 2>/dev/null || true)
+            tag_header=$(git cat-file tag "$tag_ref" 2>/dev/null | sed -n 's/^tag //p' | head -1 || true)
+            tag_subject=$(git for-each-ref --format='%(subject)' "$tag_ref" 2>/dev/null || true)
+            if [ "$tag_kind" != "tag" ] \
+              || [ "$tag_target" != "$MERGED_V3_HEAD" ] \
+              || [ "$tag_header" != "$tag_name" ] \
+              || [ "$tag_subject" != "$tag_name" ]; then
+              echo "Publication blocked: existing release tag $tag_name conflicts with the validated merged HEAD or annotation." >&2
+              return 1
+            fi
+          }
+
+          if git ls-remote --exit-code --refs origin "$tag_ref" >/dev/null 2>&1; then
+            git fetch origin "+$tag_ref:$tag_ref"
+            validate_tag
+            echo "Existing annotated tag $tag_name matches the validated merged HEAD and annotation; adopting it."
+          else
+            git tag -a "$tag_name" "$MERGED_V3_HEAD" -m "$tag_name"
+            if ! git push origin "$tag_name"; then
+              echo "Tag push did not report success; checking the remote tag before failing." >&2
+              if ! git fetch origin "+$tag_ref:$tag_ref"; then
+                echo "Publication blocked: tag push failed and the remote tag is unavailable." >&2
+                exit 1
+              fi
+              validate_tag
+              echo "Remote tag $tag_name matches after the interrupted push; adopting it."
+            fi
+          fi
+          RELEASE_TAG_SCRIPT
+      - name: Create or complete GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepublication-identity.outputs.version }}
+          MERGED_V3_HEAD: ${{ needs.prepublication-identity.outputs.merged_v3_head }}
         run: |
+          bash -s <<'RELEASE_SCRIPT'
           # shellcheck shell=bash
-          # shellcheck disable=SC3011,SC3030,SC3040,SC3054
+          # shellcheck disable=SC3001,SC3011,SC3024,SC3030,SC3040,SC3043,SC3053,SC3054,SC3055
           set -euo pipefail
-          gh release create "v$VERSION" \
-            dist/*.tar.gz \
-            dist/SHA256SUMS \
-            --title "v$VERSION" \
-            --notes-file release-notes.md
+          tag_name="v$VERSION"
+          release_endpoint="repos/$GITHUB_REPOSITORY/releases/tags/$tag_name"
+          release_json=$(mktemp)
+          release_response=$(mktemp)
+          trap 'rm -f "$release_json" "$release_response"' EXIT
+
+          asset_names=(
+            "d2b-${VERSION}-x86_64-linux.tar.gz"
+            "d2b-activation-helper-${VERSION}-x86_64-linux.tar.gz"
+            "d2b-priv-broker-${VERSION}-x86_64-linux.tar.gz"
+            "d2b-unsafe-local-helper-${VERSION}-x86_64-linux.tar.gz"
+            "d2b-wayland-proxy-${VERSION}-x86_64-linux.tar.gz"
+            "d2bd-${VERSION}-x86_64-linux.tar.gz"
+            "SHA256SUMS"
+          )
+          asset_paths=()
+          for asset_name in "${asset_names[@]}"; do
+            asset_paths+=("dist/$asset_name")
+          done
+          release_draft_state=""
+
+          read_release() {
+            local gh_status http_status
+            : > "$release_response"
+            gh_status=0
+            gh api --include "$release_endpoint" > "$release_response" || gh_status=$?
+            http_status=$(awk 'NR == 1 { print $2; exit }' "$release_response")
+            case "$http_status" in
+              200)
+                [ "$gh_status" -eq 0 ] || {
+                  echo "Publication blocked: GitHub release lookup returned an inconsistent success response." >&2
+                  exit 1
+                }
+                awk '
+                  BEGIN { body = 0 }
+                  {
+                    sub(/\r$/, "")
+                    if (!body && $0 == "") {
+                      body = 1
+                      next
+                    }
+                    if (body) print
+                  }
+                ' "$release_response" > "$release_json"
+                jq -e 'type == "object"' "$release_json" >/dev/null || {
+                  echo "Publication blocked: GitHub release lookup did not return an object." >&2
+                  exit 1
+                }
+                release_exists=1
+                ;;
+              404)
+                release_exists=0
+                ;;
+              *)
+                echo "Publication blocked: GitHub release lookup returned HTTP ${http_status:-unknown}." >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          reject_release_conflict() {
+            echo "Publication blocked: existing GitHub release conflicts with the validated release identity." >&2
+            exit 1
+          }
+
+          validate_release_metadata() {
+            local release_tag release_target release_name release_prerelease release_draft
+            release_tag=$(jq -er '.tag_name | strings' "$release_json") || reject_release_conflict
+            release_target=$(jq -er '.target_commitish | strings' "$release_json" | tr '[:upper:]' '[:lower:]') \
+              || reject_release_conflict
+            release_name=$(jq -er '.name | strings' "$release_json") || reject_release_conflict
+            release_prerelease=$(
+              jq -er 'if (.prerelease | type) == "boolean" then (.prerelease | tostring) else error("not a boolean") end' \
+                "$release_json"
+            ) || reject_release_conflict
+            release_draft=$(
+              jq -er 'if (.draft | type) == "boolean" then (.draft | tostring) else error("not a boolean") end' \
+                "$release_json"
+            ) || reject_release_conflict
+            [ "$release_tag" = "$tag_name" ] || reject_release_conflict
+            [ "$release_target" = "$MERGED_V3_HEAD" ] || reject_release_conflict
+            [ "$release_name" = "$tag_name" ] || reject_release_conflict
+            [ "$release_prerelease" = "false" ] || reject_release_conflict
+            case "$release_draft" in
+              true|false) ;;
+              *) reject_release_conflict ;;
+            esac
+            release_draft_state="$release_draft"
+          }
+
+          asset_is_expected() {
+            case "$1" in
+              "d2b-${VERSION}-x86_64-linux.tar.gz" \
+                | "d2b-activation-helper-${VERSION}-x86_64-linux.tar.gz" \
+                | "d2b-priv-broker-${VERSION}-x86_64-linux.tar.gz" \
+                | "d2b-unsafe-local-helper-${VERSION}-x86_64-linux.tar.gz" \
+                | "d2b-wayland-proxy-${VERSION}-x86_64-linux.tar.gz" \
+                | "d2bd-${VERSION}-x86_64-linux.tar.gz" \
+                | SHA256SUMS)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          validate_release_assets() {
+            local asset_name asset_path expected_size expected_digest matching_assets matching_count
+            local remote_state remote_size remote_digest
+            missing_assets=()
+            while IFS= read -r asset_name; do
+              if ! asset_is_expected "$asset_name"; then
+                echo "Publication blocked: existing GitHub release has unexpected asset $asset_name." >&2
+                exit 1
+              fi
+            done < <(jq -r '.assets[]?.name // empty' "$release_json")
+
+            for index in "${!asset_names[@]}"; do
+              asset_name=${asset_names[$index]}
+              asset_path=${asset_paths[$index]}
+              expected_size=$(wc -c < "$asset_path" | tr -d '[:space:]')
+              expected_digest=$(sha256sum "$asset_path" | awk '{print $1}')
+              matching_assets=$(jq -c --arg name "$asset_name" \
+                '[.assets[]? | select(.name == $name)]' "$release_json")
+              matching_count=$(jq -r 'length' <<<"$matching_assets")
+              case "$matching_count" in
+                0)
+                  missing_assets+=("$asset_path")
+                  ;;
+                1)
+                  remote_state=$(jq -r '.[0].state // empty' <<<"$matching_assets")
+                  remote_size=$(jq -r '.[0].size // -1' <<<"$matching_assets")
+                  [ "$remote_state" = "uploaded" ] || {
+                    echo "Publication blocked: existing GitHub release asset $asset_name is not uploaded." >&2
+                    exit 1
+                  }
+                  [ "$remote_size" = "$expected_size" ] || {
+                    echo "Publication blocked: existing GitHub release asset $asset_name has a conflicting size." >&2
+                    exit 1
+                  }
+                  remote_digest=$(jq -r '.[0].digest // empty' <<<"$matching_assets" | tr '[:upper:]' '[:lower:]')
+                  if [ -n "$remote_digest" ]; then
+                    [ "$remote_digest" = "sha256:$expected_digest" ] || {
+                      echo "Publication blocked: existing GitHub release asset $asset_name has a conflicting digest." >&2
+                      exit 1
+                    }
+                  else
+                    echo "GitHub API did not provide a digest for existing asset $asset_name; accepting the exact size identity."
+                  fi
+                  ;;
+                *)
+                  echo "Publication blocked: existing GitHub release has duplicate asset identity for $asset_name." >&2
+                  exit 1
+                  ;;
+              esac
+            done
+          }
+
+          read_release
+          if [ "$release_exists" -eq 0 ]; then
+            if ! gh release create "$tag_name" \
+              "${asset_paths[@]}" \
+              --title "$tag_name" \
+              --notes-file release-notes.md \
+              --target "$MERGED_V3_HEAD" \
+              --verify-tag; then
+              echo "Release creation did not report success; checking for a partially created release." >&2
+              read_release
+              [ "$release_exists" -eq 1 ] || {
+                echo "Publication blocked: release creation failed and no GitHub release exists." >&2
+                exit 1
+              }
+            fi
+          fi
+
+          read_release
+          [ "$release_exists" -eq 1 ] || {
+            echo "Publication blocked: GitHub release is unavailable after tag publication." >&2
+            exit 1
+          }
+          validate_release_metadata
+          validate_release_assets
+          if [ "${#missing_assets[@]}" -gt 0 ]; then
+            gh release upload "$tag_name" "${missing_assets[@]}"
+          fi
+
+          read_release
+          validate_release_metadata
+          validate_release_assets
+          if [ "$release_draft_state" = "true" ]; then
+            gh release edit "$tag_name" --draft=false --verify-tag
+          fi
+
+          read_release
+          validate_release_metadata
+          [ "$release_draft_state" = "false" ] || {
+            echo "Publication blocked: GitHub release remains a draft after completion." >&2
+            exit 1
+          }
+          validate_release_assets
+          [ "${#missing_assets[@]}" -eq 0 ] || {
+            echo "Publication blocked: GitHub release is missing an expected asset after completion." >&2
+            exit 1
+          }
+          echo "GitHub release $tag_name matches the validated identity and has all expected assets."
+          RELEASE_SCRIPT
