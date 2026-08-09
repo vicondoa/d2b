@@ -177,7 +177,8 @@ fn compiler_derived_api_surface_is_pinned_and_enforcing() {
     assert!(workspace.contains("\"d2b-api-surface\""));
     assert!(driver.contains("tests/tools/api-surface-json.sh"));
     assert!(api_driver.contains("--document-private-items --document-hidden-items"));
-    assert!(api_driver.contains("--workspace --lib --no-deps"));
+    assert!(api_driver.contains("workspace_doc_args+=(--package \"$package_name\")"));
+    assert!(api_driver.contains("\"${workspace_doc_args[@]}\" --lib --no-deps"));
     assert!(policy_manifest.contains("public-api = { version = \"=0.52.0\""));
     assert!(policy_manifest.contains("rustdoc-types = \"=0.57.4\""));
     assert!(toolchain.contains("nightly-2026-02-16"));
