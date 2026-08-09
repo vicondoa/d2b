@@ -109,12 +109,19 @@ reviewed worktree before dispatch.
 
 The completion-bound packet carries the exact selected agent-definition bytes
 at `agent-definitions/panel-<seat>.agent.md`, their SHA-256 digests, and each
-seat's exact `context_tier`. These are process evidence for the round. The
-active phase contract is authoritative for output: discovery uses exactly
-`engineer`, `signoff`, `summary`, and `recommendations`, while verification
-adds required `verified_issue_statuses` and `late_findings`. Keeping the
-schemas distinct lets first discovery bootstrap the ledger before issue
-statuses exist.
+seat's exact `context_tier`. These are process evidence for the round. Each
+current `observed.json` seat entry carries `provider`, `model`,
+`reasoning_effort`, `context_tier`, `communication`, `agent_type`,
+`agent_definition_sha256`, `run_id`, and `receipt_locator`. The dispatch
+fields are checked against the completion-bound policy, and the definition
+digest is checked against the bound definition bytes. `run_id` and
+`receipt_locator` are same-user process metadata used for correlation and
+uniqueness. `observed.json` is not authentication and does not establish a
+security boundary. The active phase contract is authoritative for output:
+discovery uses exactly `engineer`, `signoff`, `summary`, and
+`recommendations`, while verification adds required
+`verified_issue_statuses` and `late_findings`. Keeping the schemas distinct
+lets first discovery bootstrap the ledger before issue statuses exist.
 
 One machine readable dispatch policy is the source for every seat's agent
 type, model, reasoning effort, context tier, and communication. Staging
@@ -224,14 +231,18 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   --candidate "$ROUND/current-candidate.json"
 ```
 
-The command atomically publishes `NEXT/discovery-ledger.json` and
-`NEXT/responses.json`. It validates lifecycle, selection digest, roster,
-candidate, ledger, response, and verification bindings; appends admitted late
-findings with stable contiguous `R` identifiers; carries a prior response only
-when every selected seat passed that issue; and resets every nonpassing issue
-and every new late issue to the canonical blank response. It rejects
-conflicting regeneration, duplicate late sources, candidate or selection
-mismatch, missing prior responses, and malformed verification statuses.
+The command publishes `NEXT/discovery-ledger.json` and
+`NEXT/responses.json` independently with create-or-compare semantics. A retry
+after a partial publication compares any existing file byte-for-byte and
+creates only a missing file; conflicting bytes fail. Consumers must require
+both files before using the continuation handoff. It validates lifecycle,
+selection digest, roster, candidate, ledger, response, and verification
+bindings; appends admitted late findings with stable contiguous `R`
+identifiers; carries a prior response only when every selected seat passed
+that issue; and resets every nonpassing issue and every new late issue to the
+canonical blank response. It rejects conflicting regeneration, duplicate late
+sources, candidate or selection mismatch, missing prior responses, and
+malformed verification statuses.
 
 After the command, fill the blank responses with complete implementation
 responses. Prepare a **fresh** self-verification artifact for the new
@@ -284,9 +295,18 @@ The lifecycle selection is the one roster authority:
 ```
 
 `stage-diffs.sh`, `make-records.mjs`, and xtask `panel-request` consume the
-same artifact. Current delivery request, record, attestation, and embedded
-seal panel objects carry `panel_format_version: 1`; legacy fixed-ten objects
-omit it. The workspace delivery schema remains version `2`.
+same artifact. Current completion packets use schema-version `4`, binding the
+selected agent definitions and the roster-projected dispatch policy.
+Schema-version `2` predecessors are readable only when their marker binds
+exactly either the historical base set without agent definitions or that same
+set plus every selected definition, and neither form contains
+`dispatch-binding.json`. Schema-version `3` predecessors bind exactly the
+historical set plus every selected definition and no dispatch binding. An
+arbitrary subset is never accepted; schema versions `2` and `3` are
+predecessor-only and newly staged packets use schema-version `4`. Current
+delivery request, record, attestation, and embedded seal panel objects carry
+`panel_format_version: 1`; legacy fixed-ten objects omit it. The workspace
+delivery schema remains version `2`.
 
 For Track A delivery, the lifecycle above is the nonbinding feedback phase.
 After unanimous approval and any content-changing fixes are complete, freeze

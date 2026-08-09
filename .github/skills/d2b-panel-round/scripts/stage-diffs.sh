@@ -300,7 +300,6 @@ const exactKeys = [
 ].sort();
 if (
   marker.artifact_kind !== "d2b-panel/stage-completion" ||
-  ![2, 3, 4].includes(marker.schema_version) ||
   marker.complete !== true ||
   !marker.artifact_sha256 ||
   !marker.artifact_bytes ||
@@ -308,6 +307,13 @@ if (
 ) {
   console.error(
     `${markerPath}: completion marker is not a supported canonical byte-bound marker`,
+  );
+  process.exit(1);
+}
+if (![2, 3, 4].includes(marker.schema_version)) {
+  console.error(
+    `${markerPath}: unsupported completion marker schema_version ` +
+    `${JSON.stringify(marker.schema_version)}; expected 2, 3, or current 4`,
   );
   process.exit(1);
 }
@@ -322,25 +328,43 @@ if (
   process.exit(1);
 }
 const actualNames = Object.keys(digests).sort();
-const compatibleExpectedNames = marker.schema_version === 2
-  ? expectedNames.filter(
-      (name) =>
-        !name.startsWith("agent-definitions/") &&
-        name !== "dispatch-binding.json",
-    )
+const withoutDefinitions = expectedNames.filter(
+  (name) =>
+    !name.startsWith("agent-definitions/") &&
+    name !== "dispatch-binding.json",
+);
+const withDefinitions = expectedNames.filter(
+  (name) => name !== "dispatch-binding.json",
+);
+const allowedSets = marker.schema_version === 2
+  ? [withoutDefinitions, withDefinitions]
   : marker.schema_version === 3
-    ? expectedNames.filter((name) => name !== "dispatch-binding.json")
-    : expectedNames;
-if (
-  marker.phase !== expectedPhase ||
-  ![2, 3, 4].includes(marker.schema_version) ||
-  compatibleExpectedNames.length !== actualNames.length ||
-  compatibleExpectedNames.some((name, index) => name !== actualNames[index])
-) {
-  const missing = compatibleExpectedNames.filter((name) => !actualNames.includes(name));
-  const extra = actualNames.filter((name) => !compatibleExpectedNames.includes(name));
+    ? [withDefinitions]
+    : [expectedNames];
+const matchesAllowedSet = (expected) =>
+  expected.length === actualNames.length &&
+  expected.every((name, index) => name === actualNames[index]);
+if (marker.phase !== expectedPhase) {
   console.error(
-    `${markerPath}: completion artifact set disagrees with phase and selected roster; ` +
+    `${markerPath}: completion marker phase ${JSON.stringify(marker.phase)} ` +
+    `does not match the expected ${JSON.stringify(expectedPhase)} phase`,
+  );
+  process.exit(1);
+}
+if (!allowedSets.some(matchesAllowedSet)) {
+  const schemaDescription = marker.schema_version === 2
+    ? "schema_version 2 requires exactly the historical base set, or that set plus every selected agent definition; it must not contain dispatch-binding.json"
+    : marker.schema_version === 3
+      ? "schema_version 3 requires the historical set plus every selected agent definition and must not contain dispatch-binding.json"
+      : "schema_version 4 requires the current set including every selected agent definition and dispatch-binding.json";
+  const expectedDescriptions = allowedSets
+    .map((names) => `[${names.join(", ")}]`)
+    .join(" or ");
+  const missing = allowedSets[0].filter((name) => !actualNames.includes(name));
+  const extra = actualNames.filter((name) => !allowedSets.some((names) => names.includes(name)));
+  console.error(
+    `${markerPath}: completion artifact set is invalid for ${schemaDescription}; ` +
+    `expected exactly ${expectedDescriptions}; ` +
     `missing [${missing.join(", ")}], extra [${extra.join(", ")}]`,
   );
   process.exit(1);
@@ -431,11 +455,17 @@ if (
   typeof marker !== "object" ||
   Array.isArray(marker) ||
   marker.artifact_kind !== "d2b-panel/stage-completion" ||
-  ![2, 3, 4].includes(marker.schema_version) ||
   marker.complete !== true
 ) {
   console.error(
     `${markerPath}: completion marker is not a supported canonical byte-bound marker`,
+  );
+  process.exit(1);
+}
+if (![2, 3, 4].includes(marker.schema_version)) {
+  console.error(
+    `${markerPath}: unsupported completion marker schema_version ` +
+    `${JSON.stringify(marker.schema_version)}; expected 2, 3, or current 4`,
   );
   process.exit(1);
 }
@@ -476,15 +506,235 @@ reject_completed_discovery_packet() {
   local panel_root="$1"
   local current_out="$2"
   local lifecycle_id="$3"
-  node --input-type=module - "$panel_root" "$current_out" "$lifecycle_id" <<'NODE'
+  node --input-type=module - \
+    "$panel_root" "$current_out" "$lifecycle_id" "$lifecycle_helper" <<'NODE'
+import crypto from "node:crypto";
 import path from "node:path";
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const panelRoot = process.argv[2];
 const currentOut = path.resolve(process.argv[3]);
 const lifecycle = process.argv[4];
+const lifecycleHelper = process.argv[5];
 const MAX_DIRECTORY_ENTRIES = 4096;
 const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_BOUND_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
+
+const readBounded = (file, label, maximum) => {
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.size > maximum) {
+    throw new Error(`${label} is not a bounded regular file`);
+  }
+  const bytes = readFileSync(file);
+  if (bytes.length > maximum) {
+    throw new Error(`${label} is oversized`);
+  }
+  return bytes;
+};
+
+const exactKeys = (value, expected) =>
+  value &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.keys(value).sort().join("\0") === [...expected].sort().join("\0");
+
+const canonicalNames = (phase, roster) => {
+  const common = [
+    "address.json",
+    "commits.txt",
+    "current-candidate.json",
+    "delta.diff",
+    "dispatch-prompt.txt",
+    "evidence.md",
+    "full.diff",
+    "review-request.md",
+    "selection.json",
+  ];
+  if (phase === "discovery") {
+    common.push("discovery-request.json");
+  } else if (phase === "verification") {
+    common.push(
+      "discovery-ledger.json",
+      "responses.json",
+      "self-verification.json",
+    );
+  } else {
+    throw new Error("unsupported packet phase");
+  }
+  for (const seat of roster) {
+    common.push(
+      `agent-definitions/panel-${seat}.agent.md`,
+      `reviewer-notes/${seat}.md`,
+    );
+    if (phase === "verification") {
+      common.push(`verification/${seat}.json`);
+    }
+  }
+  common.push("dispatch-binding.json");
+  return common.sort();
+};
+
+const sameNames = (left, right) =>
+  left.length === right.length &&
+  left.every((name, index) => name === right[index]);
+
+async function isFullyBoundDiscoveryPacket(packet, markerPath) {
+  try {
+    const { readSelectionTable, validateSelection } =
+      await import(pathToFileURL(lifecycleHelper).href);
+    const markerBytes = readBounded(
+      markerPath,
+      "completion marker",
+      MAX_COMPLETION_MARKER_BYTES,
+    );
+    const marker = JSON.parse(markerBytes.toString("utf8"));
+    const markerKeys = [
+      "artifact_bytes",
+      "artifact_kind",
+      "artifact_sha256",
+      "base",
+      "complete",
+      "delta_sha256",
+      "full_sha256",
+      "lifecycle_id",
+      "phase",
+      "previous_tip",
+      "round",
+      "schema_version",
+      "selection_sha256",
+      "tip",
+    ];
+    if (
+      !exactKeys(marker, markerKeys) ||
+      marker.artifact_kind !== "d2b-panel/stage-completion" ||
+      ![2, 3, 4].includes(marker.schema_version) ||
+      marker.complete !== true ||
+      marker.lifecycle_id !== lifecycle ||
+      marker.phase !== "discovery"
+    ) {
+      return false;
+    }
+    const digests = marker.artifact_sha256;
+    const sizes = marker.artifact_bytes;
+    if (
+      !digests ||
+      Array.isArray(digests) ||
+      typeof digests !== "object" ||
+      !sizes ||
+      Array.isArray(sizes) ||
+      typeof sizes !== "object" ||
+      Object.keys(digests).sort().join("\0") !==
+        Object.keys(sizes).sort().join("\0")
+    ) {
+      return false;
+    }
+    const selectionDigest = digests["selection.json"];
+    const selectionSize = sizes["selection.json"];
+    if (
+      typeof selectionDigest !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(selectionDigest) ||
+      !Number.isSafeInteger(selectionSize) ||
+      selectionSize < 0 ||
+      selectionSize > MAX_BOUND_ARTIFACT_BYTES
+    ) {
+      return false;
+    }
+    const selectionBytes = readBounded(
+      path.join(packet, "selection.json"),
+      "bound selection.json",
+      MAX_BOUND_ARTIFACT_BYTES,
+    );
+    if (
+      selectionBytes.length !== selectionSize ||
+      crypto.createHash("sha256").update(selectionBytes).digest("hex") !==
+        selectionDigest
+    ) {
+      return false;
+    }
+    const selection = JSON.parse(selectionBytes.toString("utf8"));
+    if (
+      !selection ||
+      typeof selection !== "object" ||
+      Array.isArray(selection) ||
+      selection.lifecycle_id !== lifecycle ||
+      selection.phase !== "discovery" ||
+      !Array.isArray(selection.roster) ||
+      selection.roster.length === 0 ||
+      selection.roster.some(
+        (seat) =>
+          typeof seat !== "string" ||
+          seat.length === 0 ||
+          seat.includes("/") ||
+          seat.includes("\\") ||
+          seat.includes("\0"),
+      ) ||
+      new Set(selection.roster).size !== selection.roster.length
+    ) {
+      return false;
+    }
+    validateSelection(selection, readSelectionTable());
+    const expectedNames = canonicalNames("discovery", selection.roster);
+    const withoutDefinitions = expectedNames.filter(
+      (name) =>
+        !name.startsWith("agent-definitions/") &&
+        name !== "dispatch-binding.json",
+    );
+    const withDefinitions = expectedNames.filter(
+      (name) => name !== "dispatch-binding.json",
+    );
+    const actualNames = Object.keys(digests).sort();
+    const allowedSets = marker.schema_version === 2
+      ? [withoutDefinitions, withDefinitions]
+      : marker.schema_version === 3
+        ? [withDefinitions]
+        : [expectedNames];
+    if (!allowedSets.some((names) => sameNames(names, actualNames))) {
+      return false;
+    }
+    for (const relative of actualNames) {
+      if (
+        relative.length === 0 ||
+        path.isAbsolute(relative) ||
+        relative.includes("\\") ||
+        relative.split("/").some((component) =>
+          component === "" || component === "." || component === ".."
+        ) ||
+        !/^[0-9a-f]{64}$/u.test(digests[relative]) ||
+        !Number.isSafeInteger(sizes[relative]) ||
+        sizes[relative] < 0
+      ) {
+        return false;
+      }
+      const maximum = relative.startsWith("agent-definitions/")
+        ? MAX_AGENT_DEFINITION_BYTES
+        : MAX_BOUND_ARTIFACT_BYTES;
+      if (sizes[relative] > maximum) return false;
+      const bytes = readBounded(
+        path.join(packet, relative),
+        `bound artifact ${relative}`,
+        maximum,
+      );
+      if (
+        bytes.length !== sizes[relative] ||
+        crypto.createHash("sha256").update(bytes).digest("hex") !==
+          digests[relative]
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 if (!existsSync(panelRoot)) process.exit(0);
 const rootStat = lstatSync(panelRoot);
 if (!rootStat.isDirectory()) {
@@ -512,41 +762,13 @@ for (const name of packets) {
   const markerPath = path.join(packet, ".complete");
   let markerStat;
   try {
-    markerStat = statSync(markerPath);
+    markerStat = lstatSync(markerPath);
   } catch (error) {
     if (error.code === "ENOENT") continue;
     throw error;
   }
   if (!markerStat.isFile()) continue;
-  if (markerStat.size > MAX_COMPLETION_MARKER_BYTES) {
-    console.error(
-      `${markerPath}: completion marker exceeds ${MAX_COMPLETION_MARKER_BYTES} bytes`,
-    );
-    process.exit(1);
-  }
-  const bytes = readFileSync(markerPath);
-  if (bytes.length > MAX_COMPLETION_MARKER_BYTES) {
-    console.error(
-      `${markerPath}: completion marker exceeds ${MAX_COMPLETION_MARKER_BYTES} bytes`,
-    );
-    process.exit(1);
-  }
-  let marker;
-  try {
-    marker = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    continue;
-  }
-  if (
-    marker &&
-    typeof marker === "object" &&
-    !Array.isArray(marker) &&
-    marker.complete === true &&
-    marker.artifact_kind === "d2b-panel/stage-completion" &&
-    [2, 3, 4].includes(marker.schema_version) &&
-    marker.lifecycle_id === lifecycle &&
-    marker.phase === "discovery"
-  ) {
+  if (await isFullyBoundDiscoveryPacket(packet, markerPath)) {
     console.error(
       `lifecycle "${lifecycle}" already has a completed discovery packet at ${packet}; ` +
         "discovery is exactly once by lifecycle identity, independent of round prefix",

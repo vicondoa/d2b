@@ -49,9 +49,14 @@ own relevance.
 The `agent_type` column is an exact dispatch binding, not a suggested role
 name. The selection table is the roster authority; use the selected seat key
 and its `panel-<seat>` dispatch type rather than maintaining a second mapping.
-Observed binding records carry `agent_type`, `model`, `reasoning_effort`, and
-`context_tier` as ordinary process metadata. They do not attest agent
-definition bytes or claim harness authority.
+Observed binding records carry `provider`, `model`, `reasoning_effort`,
+`context_tier`, `communication`, `agent_type`, `agent_definition_sha256`,
+`run_id`, and `receipt_locator` as same-user process metadata. The dispatch
+fields are checked against the completion-bound policy and the definition
+digest is checked against the bound definition bytes. `run_id` and
+`receipt_locator` are used for correlation and uniqueness. They do not
+authenticate a run, attest harness identity, or establish a security
+boundary.
 
 One machine readable dispatch policy supplies every seat's agent type, model,
 reasoning effort, context tier, and communication. Staging projects only the
@@ -142,6 +147,15 @@ Both consumers must refuse a candidate, selection schema, selection-table
 version, or ordered-roster mismatch. Records are current workspace
 schema-version `2` objects with `panel_format_version: 1`.
 
+Current completion packets use schema-version `4`, binding the selected agent
+definitions and roster-projected dispatch policy. Schema-version `2`
+predecessors are accepted only as exactly the historical base set without
+definitions or that same set plus every selected definition, and neither form
+contains `dispatch-binding.json`. Schema-version `3` requires exactly the
+definition-bound set without `dispatch-binding.json`. Missing, extra, or
+partial artifacts are never accepted; schema versions `2` and `3` are
+predecessor-only and new staging emits schema-version `4`.
+
 Staging materializes the supplied exact bytes for `selection.json`,
 `current-candidate.json`, `discovery-ledger.json`, `responses.json`, and
 `self-verification.json` when those artifacts are supplied. The discovery
@@ -173,8 +187,9 @@ evidence or reviewer notes require a new qualified round. The generated
 exists; an unmarked scratch directory is non-authoritative.
 
 For every later round, staging first requires the immediately preceding
-round's canonical schema-version 2 `.complete` packet and validates each
-bound artifact's recorded size and digest before reading the predecessor
+round's canonical schema-version `4` `.complete` packet, or an exact
+schema-version `2` or `3` predecessor packet during migration, and validates
+each bound artifact's recorded size and digest before reading the predecessor
 address, selection, or verdicts. Legacy packets are handled only by the
 explicit legacy-import path; they are not predecessors for current staging.
 Discovery is exactly once by lifecycle identity: completed discovery packets
@@ -214,8 +229,7 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 ```
 
 When approval is blocked, do not edit the immutable round ledger or copy its
-responses by hand. Promote the exact blocked handoff into one new immutable
-ledger/response family:
+responses by hand. Promote the exact blocked handoff into one new handoff:
 
 ```bash
 NEXT=.scratch/panel/<next-handoff>
@@ -223,18 +237,21 @@ NEXT=.scratch/panel/<next-handoff>
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
   "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
-  --candidate "$ROUND/current-candidate.json" --lifecycle <lifecycle-id>
+  --candidate "$ROUND/current-candidate.json"
 ```
 
 `advance-verification` validates the exact selection digest, lifecycle,
 candidate, roster, prior ledger, response envelope, and adapted verification
 bindings before publishing `NEXT/discovery-ledger.json` and
-`NEXT/responses.json` as one atomic directory. It appends admitted late
-findings with contiguous `R` identifiers and preserved source identity. Every
-issue that any selected seat did not pass receives a canonical blank response;
-passed issues retain their validated response, and every late issue starts
-blank. Fill those blanks with complete implementation responses, then rerun
-selection over the new candidate and fix delta. Write a fresh
+`NEXT/responses.json` independently with create-or-compare semantics. A retry
+after a partial publication compares any existing file byte-for-byte and
+creates only the missing file; conflicting bytes fail. Consumers must require
+both files before use. It appends admitted late findings with contiguous `R`
+identifiers and preserved source identity. Every issue that any selected seat
+did not pass receives a canonical blank response; passed issues retain their
+validated response, and every late issue starts blank. Fill those blanks with
+complete implementation responses, then rerun selection over the new
+candidate and fix delta. Write a fresh
 `$NEXT/self-verification.json` for that candidate; do not reuse the prior
 self-verification artifact. Then prepare verification and stage:
 
@@ -554,9 +571,12 @@ these fields:
 `introduced_regression` and `previously_missed` is true; and `category` is
 `correctness`, `security`, `data-loss`, or `reliability`. `signoff` is true if
 and only if `recommendations` is empty. Generate records only after every
-selected seat has a verdict and an observed binding containing provider,
-model, reasoning effort, `context_tier`, exact `agent_type`, run ID, and
-receipt locator:
+selected seat has a verdict and an observed binding containing `provider`,
+`model`, `reasoning_effort`, `context_tier`, `communication`, exact
+`agent_type`, `agent_definition_sha256`, `run_id`, and `receipt_locator`.
+These are same-user process metadata checked against the completion-bound
+dispatch policy and definition bytes, not authentication or a security
+boundary:
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \
@@ -574,7 +594,7 @@ path; no ledger or verification artifact is inferred from an alternate
 filename.
 The supplied selection, ledger, responses, verification-results, and approval
 paths must each be the matching file in the round directory. Before parsing,
-the helper reads the ordinary round files named by the schema-version 2
+the helper reads the ordinary round files named by the current schema-version 4
 `.complete` marker and checks their recorded size and SHA-256.
 
 The metrics command reads and validates the canonical ledger, response

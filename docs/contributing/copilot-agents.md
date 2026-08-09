@@ -244,15 +244,19 @@ from a parent worktree, or spawn a nested `copilot` CLI reviewer. If the
 current session registry cannot supply every selected exact agent definition,
 park and restart the session in the reviewed worktree before dispatch.
 
-Each current `observed.json` seat entry must contain the exact `agent_type` and
-`agent_definition_sha256` in addition to provider, model, reasoning effort,
-run ID, and receipt locator. `make-records.mjs` compares the type with the
-selected panel binding table and compares the digest with the matching
-immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by
-`.complete`. A wrong, missing, parent-worktree, or substituted definition
-fails closed. Legacy imported records remain readable through their explicit
-legacy path; that compatibility does not weaken current workspace-schema
-records.
+Each current `observed.json` seat entry must contain `provider`, `model`,
+`reasoning_effort`, `context_tier`, `communication`, `agent_type`,
+`agent_definition_sha256`, `run_id`, and `receipt_locator`. `make-records.mjs`
+compares the dispatch fields with the selected policy, compares the definition
+digest with the matching immutable
+`agent-definitions/panel-<seat>.agent.md` bytes bound by `.complete`, and
+checks run and receipt uniqueness and provider correlation. These are
+same-user process metadata checked against the completion-bound policy and
+definition bytes; `observed.json` is not authentication and does not
+establish a security boundary. A wrong, missing, parent-worktree, or
+substituted definition fails closed. Legacy imported records remain readable
+through their explicit legacy path; that compatibility does not weaken current
+workspace-schema records.
 
 The panel dispatch policy is one machine readable source for every seat's
 agent type, model, reasoning effort, context tier, and communication. Staging
@@ -358,6 +362,15 @@ closed unless `<prev-tip>` matches the previous recorded tip and every seat's
 prior verdict is available, so the incremental range and prior-finding
 instructions cannot be replaced by a free-form summary.
 
+Current completion packets use schema-version `4`, which binds the selected
+agent definitions and the roster-projected dispatch policy. Schema-version `2`
+predecessors are accepted only as one of two exact historical sets: the base
+set without agent definitions, or that same set plus every selected definition;
+neither contains `dispatch-binding.json`. Schema-version `3` requires exactly
+the definition-bound set without `dispatch-binding.json`. Missing, extra, or
+partial artifacts are never accepted, and schema versions `2` and `3` are
+predecessor-only. New staging emits schema-version `4`.
+
 If approval is blocked, preserve that immutable round and promote its exact
 handoff before dispatching fixes:
 
@@ -373,10 +386,14 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 Fill the canonical blank responses in `NEXT/responses.json`, rerun selection
 with the new fix delta, prepare verification from
 `NEXT/discovery-ledger.json` and `NEXT/responses.json`, and stage the new
-packet. The command is the only continuation path: it appends admitted late
-findings, resets issues with any nonpassing status, and refuses duplicate
-sources, missing responses, candidate or selection mismatches, malformed
-statuses, and conflicting output. Do not hand-copy findings or responses.
+packet. The command is the only continuation path: it publishes the ledger and
+response files independently with create-or-compare semantics. A retry after
+one file was published compares that file byte-for-byte and creates the
+missing file; conflicting bytes fail. Consumers must require both files before
+use. It appends admitted late findings, resets issues with any nonpassing
+status, and refuses duplicate sources, missing responses, candidate or
+selection mismatches, malformed statuses, and conflicting output. Do not
+hand-copy findings or responses.
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:

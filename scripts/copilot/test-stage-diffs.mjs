@@ -378,6 +378,8 @@ try {
       ),
   );
 
+  const savedFirstCompletionMarker = readFileSync(join(firstDir, ".complete"));
+  rmSync(join(firstDir, ".complete"));
   const alternateDiscoveryDir = join(
     repo,
     ".scratch",
@@ -385,11 +387,12 @@ try {
     "alternate-prefix-r1",
   );
   mkdirSync(alternateDiscoveryDir, { recursive: true });
-  cpSync(
-    join(firstDir, ".complete"),
+  writeFileSync(
     join(alternateDiscoveryDir, ".complete"),
+    savedFirstCompletionMarker,
   );
-  const alternatePrefixDiscovery = run(
+  chmodSync(join(alternateDiscoveryDir, ".complete"), 0o444);
+  const markerOnlyDiscovery = run(
     repo,
     stageArgs(
       base,
@@ -401,13 +404,51 @@ try {
     ),
   );
   check(
-    "a completed discovery under another round prefix is still rejected",
-    alternatePrefixDiscovery.status === 2 &&
-      /exactly once by lifecycle identity/.test(alternatePrefixDiscovery.text) &&
-      !existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
-    alternatePrefixDiscovery.text,
+    "a marker-only packet does not block discovery",
+    markerOnlyDiscovery.status === 0 &&
+      existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
+    markerOnlyDiscovery.text,
   );
   rmSync(alternateDiscoveryDir, { recursive: true, force: true });
+  rmSync(join(repo, ".scratch", "panel", "otherprefix-r1"), {
+    recursive: true,
+    force: true,
+  });
+  const validDiscoveryDir = join(
+    repo,
+    ".scratch",
+    "panel",
+    "valid-prefix-r1",
+  );
+  cpSync(firstDir, validDiscoveryDir, { recursive: true });
+  writeFileSync(
+    join(validDiscoveryDir, ".complete"),
+    savedFirstCompletionMarker,
+  );
+  chmodSync(join(validDiscoveryDir, ".complete"), 0o444);
+  const validPrefixDiscovery = run(
+    repo,
+    stageArgs(
+      base,
+      base,
+      "validprefix-r1",
+      selectionPath,
+      candidatePath,
+      discoveryRequestPath,
+    ),
+  );
+  check(
+    "a fully validated discovery packet still blocks a second discovery",
+    validPrefixDiscovery.status === 2 &&
+      /exactly once by lifecycle identity/.test(validPrefixDiscovery.text) &&
+      !existsSync(
+      join(repo, ".scratch", "panel", "validprefix-r1", ".complete"),
+      ),
+    validPrefixDiscovery.text,
+  );
+  rmSync(validDiscoveryDir, { recursive: true, force: true });
+  writeFileSync(join(firstDir, ".complete"), savedFirstCompletionMarker);
+  chmodSync(join(firstDir, ".complete"), 0o444);
 
   const reusedSecondDiscovery = run(
     repo,
@@ -689,7 +730,7 @@ try {
   const schema2Predecessor = verificationStage();
   const schema2OutputDir = join(repo, ".scratch", "panel", "spec001w1-r2");
   check(
-    "schema-2 predecessor exact old set upgrades to a schema-4 packet",
+    "schema-2 predecessor without definitions upgrades to a schema-4 packet",
     schema2Predecessor.status === 0 &&
       readJson(join(schema2OutputDir, ".complete")).schema_version === 4 &&
       existsSync(join(schema2OutputDir, "dispatch-binding.json")),
@@ -707,6 +748,103 @@ try {
       bytes,
     );
   }
+  restorePredecessorMarker();
+
+  const schema2WithDefinitionsMarker = readJson(predecessorMarker);
+  delete schema2WithDefinitionsMarker.artifact_sha256["dispatch-binding.json"];
+  delete schema2WithDefinitionsMarker.artifact_bytes["dispatch-binding.json"];
+  schema2WithDefinitionsMarker.schema_version = 2;
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, schema2WithDefinitionsMarker);
+  rmSync(join(firstDir, "dispatch-binding.json"));
+  const schema2WithDefinitions = verificationStage();
+  check(
+    "schema-2 predecessor with definitions and without dispatch binding upgrades",
+    schema2WithDefinitions.status === 0 &&
+      readJson(join(schema2OutputDir, ".complete")).schema_version === 4 &&
+      existsSync(join(schema2OutputDir, "dispatch-binding.json")),
+    schema2WithDefinitions.text,
+  );
+  rmSync(schema2OutputDir, { recursive: true, force: true });
+  writeFileSync(
+    join(firstDir, "dispatch-binding.json"),
+    predecessorDispatchBinding,
+  );
+  restorePredecessorMarker();
+
+  const schema2PartialDefinitions = readJson(predecessorMarker);
+  delete schema2PartialDefinitions.artifact_sha256[
+    `agent-definitions/panel-${firstRoster[0]}.agent.md`
+  ];
+  delete schema2PartialDefinitions.artifact_bytes[
+    `agent-definitions/panel-${firstRoster[0]}.agent.md`
+  ];
+  delete schema2PartialDefinitions.artifact_sha256["dispatch-binding.json"];
+  delete schema2PartialDefinitions.artifact_bytes["dispatch-binding.json"];
+  schema2PartialDefinitions.schema_version = 2;
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, schema2PartialDefinitions);
+  const partialSchema2 = verificationStage();
+  check(
+    "schema-2 partial definitions are rejected as an arbitrary subset",
+    partialSchema2.status === 2 &&
+      /schema_version 2 requires exactly|completion artifact set is invalid/.test(
+        partialSchema2.text,
+      ) &&
+      !existsSync(join(schema2OutputDir, ".complete")),
+    partialSchema2.text,
+  );
+  restorePredecessorMarker();
+
+  const schema3Marker = readJson(predecessorMarker);
+  delete schema3Marker.artifact_sha256["dispatch-binding.json"];
+  delete schema3Marker.artifact_bytes["dispatch-binding.json"];
+  schema3Marker.schema_version = 3;
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, schema3Marker);
+  rmSync(join(firstDir, "dispatch-binding.json"));
+  const schema3Predecessor = verificationStage();
+  check(
+    "schema-3 predecessor with definitions and without dispatch binding upgrades",
+    schema3Predecessor.status === 0 &&
+      readJson(join(schema2OutputDir, ".complete")).schema_version === 4 &&
+      existsSync(join(schema2OutputDir, "dispatch-binding.json")),
+    schema3Predecessor.text,
+  );
+  rmSync(schema2OutputDir, { recursive: true, force: true });
+  writeFileSync(
+    join(firstDir, "dispatch-binding.json"),
+    predecessorDispatchBinding,
+  );
+  restorePredecessorMarker();
+
+  const schema3MissingDefinition = readJson(predecessorMarker);
+  delete schema3MissingDefinition.artifact_sha256[
+    `agent-definitions/panel-${firstRoster[0]}.agent.md`
+  ];
+  delete schema3MissingDefinition.artifact_bytes[
+    `agent-definitions/panel-${firstRoster[0]}.agent.md`
+  ];
+  schema3MissingDefinition.schema_version = 3;
+  delete schema3MissingDefinition.artifact_sha256["dispatch-binding.json"];
+  delete schema3MissingDefinition.artifact_bytes["dispatch-binding.json"];
+  chmodSync(predecessorMarker, 0o644);
+  writeJson(predecessorMarker, schema3MissingDefinition);
+  rmSync(join(firstDir, "dispatch-binding.json"));
+  const missingSchema3Definition = verificationStage();
+  check(
+    "schema-3 missing definition is rejected as an arbitrary subset",
+    missingSchema3Definition.status === 2 &&
+      /schema_version 3 requires exactly|completion artifact set is invalid/.test(
+        missingSchema3Definition.text,
+      ) &&
+      !existsSync(join(schema2OutputDir, ".complete")),
+    missingSchema3Definition.text,
+  );
+  writeFileSync(
+    join(firstDir, "dispatch-binding.json"),
+    predecessorDispatchBinding,
+  );
   restorePredecessorMarker();
 
   const legacyMarker = readJson(predecessorMarker);
@@ -746,7 +884,7 @@ try {
   check(
     "later staging rejects an omitted completion artifact entry",
     omittedArtifact.status === 2 &&
-      /completion artifact set disagrees.*missing/.test(omittedArtifact.text) &&
+      /completion artifact set is invalid.*missing/.test(omittedArtifact.text) &&
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
     omittedArtifact.text,
   );
@@ -761,7 +899,7 @@ try {
   check(
     "later staging rejects an extra completion artifact entry",
     extraArtifact.status === 2 &&
-      /completion artifact set disagrees.*extra/.test(extraArtifact.text) &&
+      /completion artifact set is invalid.*extra/.test(extraArtifact.text) &&
       !existsSync(join(repo, ".scratch", "panel", "spec001w1-r2", ".complete")),
     extraArtifact.text,
   );

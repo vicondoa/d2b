@@ -173,6 +173,18 @@ for (const documentedPath of [
       documented.includes(literal),
     );
   }
+  const documentedLines = documented.split(/\r?\n/);
+  const unsupportedAdvanceLifecycle = documentedLines.some((line, index) =>
+    line.includes("advance-verification") &&
+    documentedLines
+      .slice(index, index + 8)
+      .join(" ")
+      .includes("--lifecycle <lifecycle-id>"),
+  );
+  check(
+    `${documentedPath.split("/").at(-1)} does not copy --lifecycle to advance-verification`,
+    !unsupportedAdvanceLifecycle,
+  );
 }
 
 function candidate(overrides = {}) {
@@ -2365,6 +2377,79 @@ try {
     nextPreparation.scope.latest_delta_paths.join(",") ===
       "specs/003-adr052-bazel-rust/plan.md",
   );
+  const secondLateFinding = {
+    ...lateSpec003Finding,
+    source_id: "spec003:late-build",
+    source_ordinal: 2,
+    raw_text: "A second late issue remains in the continued ledger.",
+    description: "A second late issue remains in the continued ledger.",
+    recommendation: "Resolve the second late issue.",
+  };
+  const prefixLedger = appendLateFindings(advanced.ledger, [secondLateFinding]);
+  const prefixResponses = createResponseTemplate(prefixLedger);
+  prefixResponses.responses = prefixResponses.responses.map((response) => ({
+    ...response,
+    disposition: "Fixed",
+    changed_surface: ["specs/003-adr052-bazel-rust/plan.md"],
+    justification: "The continued issue is fixed.",
+    evidence: "focused continuation test",
+  }));
+  const priorVerificationWithIntermediatePrefix = Object.fromEntries(
+    verificationSelection.selection.roster.map((seat) => [
+      seat,
+      {
+        engineer: seat,
+        signoff: true,
+        summary: "The prior ledger prefix was verified.",
+        verified_issue_statuses: Object.fromEntries(
+          prefixLedger.issues.slice(0, 5).map((issue) => [issue.id, "verified"]),
+        ),
+        late_findings: [],
+        recommendations: [],
+      },
+    ]),
+  );
+  check(
+    "prior verification accepts an intermediate contiguous prefix including a late issue",
+    prepareVerification({
+      selection: nextSelection.selection,
+      ledger: prefixLedger,
+      responses: prefixResponses,
+      self_verification: selfVerification,
+      current_candidate: nextCandidate,
+      prior_selection: verificationSelection.selection,
+      prior_verdicts: priorVerificationWithIntermediatePrefix,
+      latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+    }).requests.length === nextSelection.selection.roster.length,
+  );
+  const nonContiguousPrefixStatuses = Object.fromEntries(
+    prefixLedger.issues
+      .slice(0, 5)
+      .filter((_, index) => index !== 2)
+      .map((issue) => [issue.id, "verified"]),
+  );
+  rejects(
+    "prior verification rejects a non-contiguous same-sized prefix",
+    () => prepareVerification({
+      selection: nextSelection.selection,
+      ledger: prefixLedger,
+      responses: prefixResponses,
+      self_verification: selfVerification,
+      current_candidate: nextCandidate,
+      prior_selection: verificationSelection.selection,
+      prior_verdicts: Object.fromEntries(
+        verificationSelection.selection.roster.map((seat) => [
+          seat,
+          {
+            ...priorVerificationWithIntermediatePrefix[seat],
+            verified_issue_statuses: nonContiguousPrefixStatuses,
+          },
+        ]),
+      ),
+      latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+    }),
+    /prior-ledger prefix|cover each issue|missing|extra/,
+  );
   rejects(
     "advance rejects a duplicate late source identity",
     () => {
@@ -3239,6 +3324,27 @@ try {
       "advance-verification CLI compares an identical existing handoff",
       repeatedAdvanceVerification.status === 0,
       `${repeatedAdvanceVerification.stdout}${repeatedAdvanceVerification.stderr}`,
+    );
+    const unsupportedAdvanceLifecycle = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "advance-verification",
+      join(cliRound, "selection.json"),
+      join(cliRound, "discovery-ledger.json"),
+      join(cliRound, "responses.json"),
+      blockedVerificationResultsPath,
+      join(cliRoot, "unsupported-lifecycle-handoff"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+      "--lifecycle",
+      "spec004w1",
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "advance-verification CLI rejects its unsupported lifecycle flag",
+      unsupportedAdvanceLifecycle.status !== 0 &&
+        /does not recognize argument/.test(
+          `${unsupportedAdvanceLifecycle.stdout}${unsupportedAdvanceLifecycle.stderr}`,
+        ),
+      `${unsupportedAdvanceLifecycle.stdout}${unsupportedAdvanceLifecycle.stderr}`,
     );
     const conflictingAdvanceResultsPath = join(
       cliRoot,

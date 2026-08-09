@@ -49,6 +49,8 @@ function buildRound(mutate) {
   const dir = mkdtempSync(join(tmpdir(), "d2b-panel-"));
   mkdirSync(join(dir, "verdicts"), { recursive: true });
   mkdirSync(join(dir, "agent-definitions"), { recursive: true });
+  mkdirSync(join(dir, "reviewer-notes"), { recursive: true });
+  mkdirSync(join(dir, "verification"), { recursive: true });
   const agentDefinitions = Object.fromEntries(
     ROLES.map((role) => [
       role,
@@ -230,29 +232,65 @@ function buildRound(mutate) {
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
   writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
   writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
+  writeFileSync(join(dir, "self-verification.json"), stableStringify({
+    tests: ["fixture"],
+    lint: "passed",
+    formatting: "passed",
+    static_analysis: "passed",
+    build: "not applicable",
+    uncovered_areas: ["none"],
+    self_review: "passed",
+  }));
+  for (const [relativePath, contents] of Object.entries({
+    "commits.txt": "fixture commit\n",
+    "delta.diff": "fixture delta\n",
+    "dispatch-prompt.txt": "fixture dispatch\n",
+    "evidence.md": "# Fixture evidence\n",
+    "full.diff": "fixture full diff\n",
+    "review-request.md": "# Fixture request\n",
+  })) {
+    writeFileSync(join(dir, relativePath), contents);
+  }
   writeFileSync(join(dir, "observed.json"), stableStringify(state.observed));
   for (const [role, bytes] of Object.entries(agentDefinitions)) {
     writeFileSync(join(dir, "agent-definitions", `panel-${role}.agent.md`), bytes);
+    writeFileSync(join(dir, "reviewer-notes", `${role}.md`), `# Notes for ${role}\n`);
+    writeFileSync(
+      join(dir, "verification", `${role}.json`),
+      stableStringify({ seat: role, fixture: true }),
+    );
   }
   const artifactSha256 = {};
   const artifactBytes = {};
   for (const relativePath of [
     "address.json",
+    "commits.txt",
     "current-candidate.json",
+    "delta.diff",
+    "dispatch-prompt.txt",
+    "evidence.md",
+    "full.diff",
+    "review-request.md",
     "selection.json",
     "dispatch-binding.json",
     "discovery-ledger.json",
     "responses.json",
+    "self-verification.json",
   ]) {
     const bytes = readFileSync(join(dir, relativePath));
     artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
     artifactBytes[relativePath] = bytes.length;
   }
   for (const role of ROLES) {
-    const relativePath = `agent-definitions/panel-${role}.agent.md`;
-    const bytes = readFileSync(join(dir, relativePath));
-    artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
-    artifactBytes[relativePath] = bytes.length;
+    for (const relativePath of [
+      `agent-definitions/panel-${role}.agent.md`,
+      `reviewer-notes/${role}.md`,
+      `verification/${role}.json`,
+    ]) {
+      const bytes = readFileSync(join(dir, relativePath));
+      artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
+      artifactBytes[relativePath] = bytes.length;
+    }
   }
   writeFileSync(join(dir, ".complete"), stableStringify({
     artifact_kind: "d2b-panel/stage-completion",
@@ -422,6 +460,48 @@ console.log("make-records: approval and publication preflight");
       "approval is required before current records",
       missingApproval.code !== 0 &&
         /approval artifact|usage/.test(`${missingApproval.out}${missingApproval.err}`),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    const markerPath = join(dir, ".complete");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    delete marker.artifact_sha256["evidence.md"];
+    delete marker.artifact_bytes["evidence.md"];
+    writeFileSync(markerPath, stableStringify(marker));
+    const missingBoundArtifact = run(dir);
+    check(
+      "a current packet with a missing bound artifact entry is rejected",
+      missingBoundArtifact.code !== 0 &&
+        /exact current verification artifact set.*missing.*evidence\.md/.test(
+          `${missingBoundArtifact.out}${missingBoundArtifact.err}`,
+        ),
+      `${missingBoundArtifact.out}${missingBoundArtifact.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    const markerPath = join(dir, ".complete");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    marker.artifact_sha256["extra.txt"] = "0".repeat(64);
+    marker.artifact_bytes["extra.txt"] = 0;
+    writeFileSync(markerPath, stableStringify(marker));
+    const extraBoundArtifact = run(dir);
+    check(
+      "a current packet with an extra bound artifact entry is rejected",
+      extraBoundArtifact.code !== 0 &&
+        /exact current verification artifact set.*extra\.txt/.test(
+          `${extraBoundArtifact.out}${extraBoundArtifact.err}`,
+        ),
+      `${extraBoundArtifact.out}${extraBoundArtifact.err}`,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

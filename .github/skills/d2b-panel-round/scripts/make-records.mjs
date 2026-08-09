@@ -217,13 +217,18 @@ function readCompletionBoundArtifacts(roundDir) {
   ].sort();
   if (
     marker.artifact_kind !== "d2b-panel/stage-completion" ||
-    marker.schema_version !== 4 ||
     marker.complete !== true ||
     marker.phase !== "verification" ||
     Object.keys(marker).sort().join("\0") !== expectedKeys.join("\0")
   ) {
     throw new Error(
-      "completion marker must be the canonical schema-version 2 verification packet",
+      "completion marker is not the current canonical verification packet",
+    );
+  }
+  if (marker.schema_version !== 4) {
+    throw new Error(
+      `completion marker schema_version ${JSON.stringify(marker.schema_version)} ` +
+      "is predecessor-only; current records require schema-version 4",
     );
   }
   const digests = marker.artifact_sha256;
@@ -238,6 +243,86 @@ function readCompletionBoundArtifacts(roundDir) {
     Object.keys(digests).sort().join("\0") !== Object.keys(sizes).sort().join("\0")
   ) {
     throw new Error("completion marker artifact size and digest maps disagree");
+  }
+  const selectionBytes = readLimitedBytes(
+    join(roundDir, "selection.json"),
+    "completion-bound selection.json",
+    MAX_STAGED_ARTIFACT_BYTES,
+  );
+  const selectionDigest = digests["selection.json"];
+  const selectionSize = sizes["selection.json"];
+  if (
+    typeof selectionDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(selectionDigest) ||
+    !Number.isSafeInteger(selectionSize) ||
+    selectionSize < 0 ||
+    selectionSize > MAX_STAGED_ARTIFACT_BYTES ||
+    selectionBytes.length !== selectionSize ||
+    createHash("sha256").update(selectionBytes).digest("hex") !==
+      selectionDigest
+  ) {
+    throw new Error(
+      "completion-bound artifact selection.json has a different size or digest",
+    );
+  }
+  let selection;
+  try {
+    selection = JSON.parse(selectionBytes.toString("utf8"));
+  } catch (cause) {
+    throw new Error(`completion-bound selection.json is not valid JSON: ${cause.message}`);
+  }
+  if (
+    !selection ||
+    typeof selection !== "object" ||
+    Array.isArray(selection) ||
+    !Array.isArray(selection.roster) ||
+    selection.roster.length === 0 ||
+    selection.roster.some(
+      (seat) =>
+        typeof seat !== "string" ||
+        seat.length === 0 ||
+        seat.includes("/") ||
+        seat.includes("\\") ||
+        seat.includes("\0"),
+    ) ||
+    new Set(selection.roster).size !== selection.roster.length
+  ) {
+    throw new Error(
+      "completion-bound selection.json must declare a unique selected roster",
+    );
+  }
+  const expectedNames = [
+    "address.json",
+    "commits.txt",
+    "current-candidate.json",
+    "delta.diff",
+    "dispatch-binding.json",
+    "dispatch-prompt.txt",
+    "evidence.md",
+    "full.diff",
+    "review-request.md",
+    "selection.json",
+    "discovery-ledger.json",
+    "responses.json",
+    "self-verification.json",
+    ...selection.roster.flatMap((seat) => [
+      `agent-definitions/panel-${seat}.agent.md`,
+      `reviewer-notes/${seat}.md`,
+      `verification/${seat}.json`,
+    ]),
+  ].sort();
+  const actualNames = Object.keys(digests).sort();
+  if (
+    actualNames.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index])
+  ) {
+    const missing = expectedNames.filter((name) => !actualNames.includes(name));
+    const extra = actualNames.filter((name) => !expectedNames.includes(name));
+    throw new Error(
+      "completion marker schema_version 4 requires the exact current " +
+      "verification artifact set for the selected roster; " +
+      `missing [${missing.join(", ")}], extra [${extra.join(", ")}]`,
+    );
   }
   const artifacts = new Map();
   for (const relativePath of Object.keys(digests).sort()) {

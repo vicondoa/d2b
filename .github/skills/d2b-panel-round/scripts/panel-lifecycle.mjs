@@ -4219,11 +4219,17 @@ function validatePriorVerdict(verdict, seat, priorSelection, ledger) {
   } else {
     validateVerificationVerdict(verdict, label);
     const statusCount = Object.keys(verdict.verified_issue_statuses).length;
-    const requiredCount = ledger.issues.filter((issue) => issue.late !== true).length;
-    if (statusCount < requiredCount || statusCount > ledger.issues.length) {
+    const requiredPrefixLength = ledger.issues.reduce(
+      (length, issue, index) => issue.late === true ? length : index + 1,
+      0,
+    );
+    if (
+      statusCount < requiredPrefixLength ||
+      statusCount > ledger.issues.length
+    ) {
       error(
         `${label}.verified_issue_statuses must cover a prior-ledger prefix ` +
-        `between ${requiredCount} and ${ledger.issues.length} issues`,
+        `between ${requiredPrefixLength} and ${ledger.issues.length} issues`,
       );
     }
     const expectedIssues = ledger.issues.slice(0, statusCount);

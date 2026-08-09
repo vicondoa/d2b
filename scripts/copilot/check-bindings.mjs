@@ -32,6 +32,8 @@ const skillsDir = join(root, ".github", "skills");
 const adrSkill = join(skillsDir, "d2b-adr", "SKILL.md");
 const selectionTableJson = join(root, ".github", "skills", "d2b-panel-round", "selection-table.json");
 const dispatchPolicyJson = join(root, ".github", "skills", "d2b-panel-round", "dispatch-policy.json");
+const panelReviewDoc = join(root, "docs", "contributing", "panel-review.md");
+const copilotAgentsDoc = join(root, "docs", "contributing", "copilot-agents.md");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
 const tier0DashGate = join(root, "tests", "tools", "tier0-first-pass.sh");
 const dashPolicyTest = join(root, "packages", "d2b-contract-tests", "tests", "policy_dash_gate.rs");
@@ -1271,6 +1273,69 @@ function requireText(path, text, label = path) {
   const source = readFileSync(path, "utf8");
   if (!source.includes(text)) {
     fail(`${label} is missing required binding text: ${text}`);
+  }
+}
+
+// The continuation contract is spread across the operator-facing skill and
+// contributor docs. Keep the executable command, packet-version migration,
+// independent publication, and honest observed-binding boundary in lockstep.
+const panelContinuationDocs = [
+  ["d2b-panel-round", join(skillsDir, "d2b-panel-round", "SKILL.md")],
+  ["panel-review.md", panelReviewDoc],
+  ["copilot-agents.md", copilotAgentsDoc],
+];
+const observedBindingFields = [
+  "provider",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+  "agent_type",
+  "agent_definition_sha256",
+  "run_id",
+  "receipt_locator",
+];
+for (const [label, path] of panelContinuationDocs) {
+  if (!existsSync(path)) {
+    fail(`${label}: continuation documentation is missing.`);
+    continue;
+  }
+  const source = readFileSync(path, "utf8");
+  const normalizedSource = source.toLowerCase();
+  for (const field of observedBindingFields) {
+    if (!source.includes(`\`${field}\``)) {
+      fail(`${label}: observed binding documentation is missing ${field}.`);
+    }
+  }
+  for (const phrase of [
+    "same-user process metadata",
+    "not authentication",
+    "schema-version `2`",
+    "schema-version `3`",
+    "schema-version `4`",
+    "independently",
+    "both files before",
+  ]) {
+    if (!normalizedSource.includes(phrase.toLowerCase())) {
+      fail(`${label}: continuation documentation is missing required text: ${phrase}`);
+    }
+  }
+  if (/atomic (?:directory|ledger\/response|handoff)/i.test(source)) {
+    fail(
+      `${label}: continuation documentation still promises atomic ledger/response publication; ` +
+      "document independent per-file create-or-compare publication instead",
+    );
+  }
+  const lines = source.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const block = lines.slice(index, index + 8).join(" ");
+    if (line.includes("advance-verification") &&
+      block.includes("--lifecycle <lifecycle-id>")) {
+      fail(
+        `${label}: copyable advance-verification command carries unsupported ` +
+        "--lifecycle; retain that flag only on staging",
+      );
+    }
   }
 }
 

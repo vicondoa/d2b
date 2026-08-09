@@ -301,6 +301,51 @@ const CASES = [
     expectText: "must contain exactly one binding for every current",
   },
   {
+    name: "observed binding field documentation drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/d2b-panel-round/SKILL.md",
+        (text) => text.replaceAll("`receipt_locator`", "receipt locator"),
+      ),
+    expectExit: 1,
+    expectText: "observed binding documentation is missing receipt_locator",
+  },
+  {
+    name: "schema compatibility documentation drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => text.replace("Schema-version `3`", "schema version three"),
+      ),
+    expectExit: 1,
+    expectText: "panel-review.md: continuation documentation is missing required text: schema-version `3`",
+  },
+  {
+    name: "atomic continuation publication prose is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/copilot-agents.md",
+        (text) => `${text}\nThe ledger and response are one atomic directory.\n`,
+      ),
+    expectExit: 1,
+    expectText: "still promises atomic ledger/response publication",
+  },
+  {
+    name: "unsupported continuation lifecycle flag is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/d2b-panel-round/SKILL.md",
+        (text) =>
+          `${text}\n\`\`\`bash\nadvance-verification input output --lifecycle <lifecycle-id>\n\`\`\`\n`,
+      ),
+    expectExit: 1,
+    expectText: "copyable advance-verification command carries unsupported",
+  },
+  {
     name: "modified admitted Caveman blob is rejected",
     mutate: (dir) =>
       mutateFile(dir, "third_party/caveman/v1.10.0/LICENSE", (text) => `${text}x`),
