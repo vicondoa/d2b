@@ -845,20 +845,12 @@ Decision-selection progress and conflict both carry the same sealed durable sele
 decision, so fresh source/failure changes cannot erase or replace its degraded failure.
 Human/JSON output never renders any of those private digests or predecessor bytes.
 
-The independent two-edge restoration and two-edge prune audit fixtures plus the unchanged
-168-case broker registry preserve their exact ids and own only their literal caller,
-request, artifact, legacy backup/restoration publication, conflict, and no-write cases.
-They are supplemented, not replaced, by the mandatory read-independent 216-case
-durable-record/boundary registry and 88-case lifecycle registry in `data-model.md`. The 216
-cases own all nine boundaries for each listed amendment record class, including reservation,
-both release reasons, settlement, repair-resume, and continuity-repair
-pre/evidence/watermark/outcome. The 88 cases own aggregate storage and continuity-evidence
-limits, standing-reserve exhaustion and corruption taxonomy, cycle-unique capacity
-success/refusal/retry, malformed release/continuity prefixes, retention-anchor conflict,
-continuity evidence compaction and both permit seals, transport-loss resubmission,
-private-identifier/body canaries, and family shrinkage. The 156-case status registry and
-unchanged 168-case registry cannot substitute
-for either supplemental registry.
+Restoration, prune, durable-record, lifecycle, status, capacity, continuity, redaction,
+and shrinkage fixture membership is owned only by generated `VD2-SC002-REGISTRIES` and
+`VD2-SC002-TRACEABILITY` rows. This contract retains the stable owner and action names but
+copies no ids, counts, fixture bodies, or transition matrix. Every assigned fixture remains
+independently authored from production; missing, stale, runtime-derived, skipped, wrong-owner,
+non-ancestor, or failing coverage blocks the corresponding operation.
 
 An
 unaudited extra mutation instead returns the separate

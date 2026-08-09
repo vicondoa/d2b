@@ -59,16 +59,17 @@ artifact and requires a clean `git diff`, fail-closed.
   invocation, the operator must pass the existing
   public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker consumes that
   one-shot classification into one durably sealed nonfabricable handoff capability bound to
-  the complete intent and emits no authority token.   The source broker also pins one exact immutable broker-managed apply object from trusted
+  the complete intent and emits no authority token. The source broker also pins one exact
+  immutable broker-managed apply object from trusted
   installed-generation metadata. Only that object runs under `sudo`; it receives no flake
   URI, installable, stable-reference path, target executable, or caller-flake executable to
   reevaluate. The broker binds the accepted apply connection's direct peer pidfd and live
   executable store/NAR/digest identity to that pin, revalidates it before every mutation, and
-  refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests use the independent exact
-  registry in `quickstart.md`: six pre-first ids and 84 literal post-first ids over the
-  fourteen later members of the closed 15-edge set. Unknown, duplicate, missing, reordered,
-  or unvisited ids fail; the selected edge and all successors remain unexecuted. Every raw
-  apply-peer input in the complete fifteen-row registry remains absent from human, JSON,
+  refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests use only the independently
+  authored fixture membership assigned by generated `VD2-SC002-REGISTRIES` and
+  `VD2-SC002-TRACEABILITY`; missing, duplicate, stale, runtime-derived, skipped, or unvisited
+  coverage fails, and the selected edge and all successors remain unexecuted. Every raw
+  apply-peer input assigned by generated `VD2-SC002-REGISTRIES` remains absent from human, JSON,
   wire, error, log, span, metric, audit, panic, and `Debug` output. Correlation uses only the
   typed process-instance and executable-identity digests, and metrics
   carry no identity label. The connection-scoped pidfd and executable fds are never
@@ -80,13 +81,12 @@ artifact and requires a clean `git diff`, fail-closed.
   existing `d2b-priv-broker.service`, after both installed source peers negotiate numeric
   protocol 4 plus Hello `operation_catalogue_sha256` exactly equal to the
   `source-handoff-v1` operation-catalogue fingerprint; after durable
-  transfer it is the target broker. The accepted external disposition must atomically install
-  the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from
-  `data-model.md`, name its producer/installer and typed import/validation authorities, and
-  complete its manifest, installation, validation, and exact-C/Q import chain. Every role
-  occurs once under one disposition and source generation; `missing`, `duplicate`, `extra`,
-  `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` members refuse.
-  Committed protocol 4 has no
+  transfer it is the target broker. The accepted external disposition names the `SourceGenerationCompatibilityFloorV1`
+  producer/installer and typed import/validation owners. Canonical membership, receipts,
+  fixtures, poison registries, and transitions come only from generated
+  `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
+  `VD2-SC002-TRACEABILITY` rows. Missing, stale, wrong-owner, non-ancestor, or failing rows
+  refuse before source mutation. Committed protocol 4 has no
   handoff operation and omits the field or advertises a different catalogue fingerprint, so this feature remains
   blocked until that external floor is installed before migration. T592 consumes those source
   outputs read-only and owns only target-v5 adoption plus target artifacts. A
@@ -136,13 +136,11 @@ artifact and requires a clean `git diff`, fail-closed.
 
 `make test-drift` is clean; no artifact is hand-edited; no delivery record appears in
 `git status`; 4/2 passes while 3/1, mixed, 5/2, 4/3, and 5/3 fail at Rust, Nix, and daemon
-boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10
-coverage starts with a 3/1 source generation that has independently and atomically installed
-the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census from
-`data-model.md`, with every role once under one disposition and generation, while still
-missing the target-v5 operation. `Missing`, `duplicate`, `extra`, `empty`,
-`stale-generation`, `stale-digest`, and `cross-disposition` member poisons plus bare
-committed protocol 4 and mismatched source-peer fingerprints are refusal cases. The positive case executes the
+boundaries. Type-1 Nix evaluation pins the rebuild-reference grammar and bounds. Type-10 coverage consumes only the generated source-floor and registry rows assigned to
+T589, T592, T595, and T604; this contract copies no membership, count, fixture id, poison
+case, or transition list. Bare legacy negotiation, a source-peer mismatch, or any missing,
+stale, wrong-owner, non-ancestor, runtime-derived, skipped, or failing generated row is a
+refusal case. The positive case executes the
 parameterized target-closure entrypoint, proves the caller-flake executable runs only
 unprivileged and only validates/builds/stages/authorizes/submits, rejects zero-output and
 multi-output resolution, proves privileged apply uses only the separately pinned installed
@@ -153,9 +151,9 @@ completion. It requires atomic sole-pending selection, zero mutation on
 zero/multiple/concurrent/terminal refusals, durable zero-mutation proof before releasing a
 pre-mutation claim, and same-intent coordinator replay only after mutation. It binds the accepted
 connection's direct peer pidfd and executable identity to that pin, and refuses every identity
-transition in the six exact pre-first cases and all 84 exact post-first cases from the
-independent closed edge registry, with no persisted pidfd or later mutation. Every raw
-apply-peer input in the complete fifteen-row registry remains absent from every output
+transition assigned by the generated independent registry, with no persisted pidfd or later
+mutation. Every raw
+apply-peer input assigned by generated `VD2-SC002-REGISTRIES` remains absent from every output
 surface; only the typed process-instance and executable-identity digests are permitted and metrics carry
 no identity label. The positive case
 proves initial public-socket Admin classification, sealed durable capability,

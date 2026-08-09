@@ -245,8 +245,10 @@ emitted-action coverage.
 ## Operator loop: prove the plane works
 
 This is the loop that distinguishes a live control plane from a sealed wave. Its exact
-operator activation positive becomes runnable in W6 after T221 and T336-T355; before then it
-fails by design because the authoritative Network production path is not merged.
+operator activation positive remains W6 acceptance after T221, but it consumes the Network
+production path already required before T220. Until the accepted external Network
+contract/work-item amendment assigns and lands that path plus all four double-opt-in cases,
+T220 fails closed and this loop is unreachable.
 
 ### Story 1 - declare and reconcile
 
@@ -293,57 +295,20 @@ The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
 no fixed illustrative target.
 
 > **Blocked at this committed base.** The installed protocol-4 broker has no
-> host-generation handoff operation, and `d2b-priv-broker.service` executes the installed
-> generation's `brokerPackage`. The target closure cannot make its compatibility binary that
-> service's executable before profile publication. Do not run the migration or rollback
-> procedures below until an accepted external source-generation compatibility disposition
-> has been installed on the source 3/1 host. That prerequisite must make the installed
-> source daemon and broker negotiate numeric protocol 4 plus Hello
-> `operation_catalogue_sha256` exactly equal to the `source-handoff-v1` operation-catalogue
-> fingerprint, and must atomically install the exact nonempty 13-member
-> `SourceGenerationCompatibilityFloorV1` census from `data-model.md`. Every closed role occurs
-> once under one disposition and source generation; `missing`, `duplicate`, `extra`, `empty`,
-> `stale-generation`, `stale-digest`, and `cross-disposition` members refuse. The accepted
-> external disposition must name the producer/installer owner and the typed import/validation
-> authority. Do not continue until its immutable manifest, installation, validation, and
-> exact-C/Q import receipts form the accepted `SourceGenerationCompatibilityFloorV1`
-> append-only chain. T589 and T592 consume that object read-only and no feature task creates
-> or imports it. The separately accepted external
-> `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical encoding, complete
-> digest/domain/framing registry, strict source-floor schemas, and exact
-> `hash-vectors-v1.json` with 15 digest and four signature vectors. The 13 role/artifact
-> rows, 91 member poisons, five copied-issuer poisons, 26 issuer-authentication/capability
-> negatives, 21 hash-vector negatives, and 32 receipt/transition negatives are
-> independently pinned. A proof is authority only when its authority digest, key digest,
-> actual verifier key, signature domain, and signature all match the accepted disposition;
-> copying expected digests into a chain signed by another valid key refuses after enclosing
-> hashes and unaffected proofs validate and cannot produce private authority. The installed
-> source coordinator acquires the exact origin record under one exclusive OFD claim into one
-> nonserializable, non-clonable `ProtectedSourceFloorOrigin` without durable consumption.
-> The disposition-pinned validator consumes that process-local owner while creating private
-> `AuthenticatedSourceFloorIssuerProvenance`, then consumes the
-> intermediate by value to create the separate private
-> `ValidatedSourceGenerationCompatibilityFloor`; direct DTO decode, copied digest tuples,
-> serialization, clone/copy, concurrent origin replay, or a repeated validator call cannot
-> create another result. Durable consumption commits only with atomic durable dispatch
-> publication. Failure or owner death before publication permits exact-origin reacquisition
-> after proving no dispatch exists; restart after publication resumes without another mint.
-> Later handoff boundaries borrow and attenuate that one result and never revalidate
-> serialized floor evidence.
-> The source producer/installer and typed import/validation authority must conform to those
-> artifacts; they may not redefine them in the compatibility disposition. The source
-> broker's ordinary `serve` process under the existing
-> `d2b-priv-broker.socket`/`d2b-priv-broker.service` pair consume exactly one accepted
-> public-socket evidence fd, seal the typed authority, pin the target object, and pin one
-> exact broker-managed privileged apply executable from the installed source generation.
-> That immutable apply object, never an executable obtained from the caller's target flake,
-> durably resumes the coordinator and transfers it to the target broker. The accepted external
-> source-generation disposition owns that entire source set; T592 owns only target-v5
-> adoption and target artifacts. Bare committed protocol 4 or a source-peer catalogue
-> mismatch refuses. No target-only binary, new unit or override, child, mutating
-> entrypoint, daemon recovery owner, serialized credential, or root/provenance claim
-> substitutes. This quickstart claims no implementation of that prerequisite.
-
+> host-generation handoff operation, and the existing broker service cannot execute a
+> target-closure compatibility binary before profile publication. Do not run migration or
+> rollback until the accepted external compatibility disposition installs and validates
+> `SourceGenerationCompatibilityFloorV1` on the source generation.
+>
+> The source-floor schema, encoding, digest and signature rules, receipts, capability
+> transitions, fixtures, poison registries, and transition matrices are owned solely by
+> accepted Version 2 through `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
+> `VD2-SC002-TRACEABILITY`. T589 and T592 consume only their generated rows. A missing,
+> stale, non-ancestor, wrong-owner, or failing row blocks with remediation to accept Version 2,
+> regenerate traceability, and pass Gate 0. Do not infer any field, count, or command from
+> superseded feature-local prose. The accepted external disposition must name the source
+> producer/installer and typed import/validation owners; no feature task substitutes for them.
+>
 After that prerequisite is accepted and installed, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
 post-prerequisite operator contract named `host-generation-deploy-bootstrap-v1`, using the
@@ -549,48 +514,15 @@ settlement. A durable degraded settlement is nonterminal: after the named storag
 resubmitting the byte-identical artifact resumes the same operation and attempt and
 converges to restored without duplicate provenance.
 
-The unchanged 168-case broker registry owns only its literal caller, nineteen request-shape,
-artifact/binding, conflict, legacy backup/restoration publication, and no-write cases. The
-mandatory independent 216-case durable-record/boundary registry adds every listed
-amendment record class at every publication boundary, including reservation, both releases,
-settlement, repair-resume, and continuity-repair pre/evidence/watermark/outcome. The
-mandatory independent 88-case lifecycle registry adds aggregate and continuity-evidence
-limits, all five standing-reserve states, cycle-unique capacity success/refusal/retry,
-malformed-prefix hooks and poisons for both release machines and continuity ordering,
-retention-anchor conflict, continuity evidence export/compaction, continuity and permit
-seals, transport-response-loss recovery, private-identifier/body canaries, and shrinkage
-poisons. None of these three registries substitutes for another.
+Restoration, durable-record, lifecycle, status, audit-edge, capacity, continuity,
+redaction, and shrinkage fixture membership is owned only by generated
+`VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows. This quickstart copies no ids,
+counts, fixture contents, or transition matrix. Every assigned fixture remains independently
+authored from production and no registry substitutes for another. Missing, stale,
+runtime-derived, skipped, wrong-owner, non-ancestor, or failing coverage blocks the operation
+with the generated remediation.
 
-The broker-private linear `HostGenerationImmutableAuditBackupOwner` retains at most 256
-members and 16,777,216 encoded bytes per intent and at most 64 intents, 4,096 members, and
-268,435,456 bytes at the root. It reserves capacity before handoff, never prunes the current
-intent, and uses a checked durable clock epoch plus sealed typed prune op and immutable
-pre/outcome audit from day 30 through the hard day-90 deadline. A prune, bound, clock, or
-settlement failure is a typed actionable degraded result that blocks later mutation. An unaudited extra mutation instead
-reports `action: preserve-and-escalate-audit-integrity-incident`; the site security authority
-runs `host-generation-audit-integrity-escalation-v1`, preserves the coordinator and backup
-artifacts, and does not attempt restoration. Pointer and restoration conflicts similarly
-map to `host-generation-pointer-conflict-escalation-v1` and
-`host-generation-audit-restoration-conflict-escalation-v1`. None of these external
-procedures authorizes retry, copy, replace, delete, or force. There is no force flag,
-generic copy procedure, new unit, or daemon recovery owner.
-
-The host acceptance must race two authorization commands and two apply commands, inject an
-otherwise impossible two-pending-intent census, disconnect before and after the first
-mutation, and invoke apply after terminal completion. Exactly one contender may win only
-when one pending intent exists. Every refusal has zero selected and successor mutations, and
-post-mutation recovery resumes only the same durable intent. Hermetic Rust tests own tuple
-validation, exact human/JSON/error goldens, forbidden inspect and repair inputs, pointer
-selection, and the exact independent seven-member, 32-audit-member, 15-transition-edge
-rollback matrices. Their 156-case registry covers every missing and mismatched member, each
-changed transition edge, unaudited extra mutation, unauthenticated pointer, every repair
-restart/conflict/no-write case, and all four shrinkage meta-negatives, plus exact successful
-pointer-repair, repairable-absence, bounded audit-restoration, and integrity-incident
-goldens. The separate two-row restoration and two-row prune audit-edge fixtures plus the unchanged
-168-case broker registry prove their literal privileged restoration cases. The mandatory
-216-case record-boundary and 88-case lifecycle registries prove the supplemental
-publication, capacity, continuity, capability, taxonomy, and redaction obligations; neither
-the 156-case status registry nor the 168-case registry can substitute. The Type-1 Nix
+The Type-1 Nix
 case proves only
 rebuild-reference option grammar and cannot satisfy runtime recovery. The Type-10
 `host-generation-handoff.nix` VM test alone proves real broker service failure/restart,
@@ -682,101 +614,36 @@ persisted. Validation is the full cross-product: each of those six transitions i
 in a fresh run before the first mutation and, after exactly the first mutation and its audit
 become durable, immediately before each individual later mutation edge.
 
-The mutation-edge registry is closed and ordered:
+The mutation-edge, peer-transition, pre-start, unit-census, redaction, and source-floor
+fixture sets are resolved only through the accepted generated `VD2-SC002-REGISTRIES` and
+`VD2-SC002-TRACEABILITY` rows assigned to T589, T592, T595, and T604. This quickstart does
+not copy their ids, counts, ordering, or poison cases. The generated rows must name
+independently authored expectations and enforcing gates; missing, duplicate, stale,
+wrong-owner, non-ancestor, runtime-derived, skipped, or unvisited coverage fails closed.
 
-```text
-host-generation.source-bootstrap-publish
-host-generation.target-profile-publish
-host-generation.target-broker-service-transition
-host-generation.coordinator-transfer-to-target
-host-generation.target-daemon-service-transition
-host-generation.target-pointer-publish
-host-generation.target-reference-publish
-host-generation.target-pointer-repair
-host-generation.target-reference-repair
-host-generation.rollback-target-daemon-service
-host-generation.rollback-pointer-restore
-host-generation.rollback-reference-restore
-host-generation.rollback-profile-publish
-host-generation.rollback-source-broker-service
-host-generation.rollback-source-daemon-service
-```
-
-The six transition ids are `peer-exit`, `peer-exec`, `peer-pid-reuse`,
-`peer-start-identity-mismatch`, `peer-executable-identity-mismatch`, and
-`peer-identity-ambiguity`. The pre-first matrix has exactly six ids
-`apply-peer/pre-first/<transition>`. For every later edge, a fresh scenario executes the real
-required prefix through the first durable mutation and audit, then injects immediately before
-that named edge. Its id is `apply-peer/post-first/<edge>/<transition>`. The exact post-first
-set is therefore 14 later edge ids times six transition ids, or 84 cases; a literal
-independent expected-set fixture must match all 84 rather than deriving its expectation from
-production enumeration. A second independent fixture pins the 15 ordered mutation ids, and a
-third pins the closed post-first negative matrix. Every run proves the selected edge and all
-successors remain unexecuted while the durable prefix and first mutation audit are unchanged.
-Missing, extra, duplicate, unknown, reordered, dynamically omitted, or unvisited
-edge/transition cases, selected-edge mutation, successor mutation, durable-prefix change,
-or missing first audit fail the matrix.
-
-The post-first negative registry is exactly these 15 ids, independently literal in both the
-fixture and test constant:
-
-```text
-post-first-negative/missing-edge
-post-first-negative/duplicate-edge
-post-first-negative/unknown-edge
-post-first-negative/reordered-edge
-post-first-negative/empty-edge-set
-post-first-negative/missing-transition
-post-first-negative/duplicate-transition
-post-first-negative/unknown-transition
-post-first-negative/unvisited-case
-post-first-negative/dynamic-case-skipped
-post-first-negative/verification-hook-missing
-post-first-negative/selected-edge-mutated
-post-first-negative/successor-mutated
-post-first-negative/durable-prefix-changed
-post-first-negative/first-audit-missing
-```
-
-The exact fixture, literal constant, 15-edge fixture, 90-case fixture, three edge
-meta-poisons, and production enumerator are mutually read-independent. An empty set,
-runtime-derived count, skipped visit, or early failure cannot satisfy a negative.
-
-The separate literal `host-generation-pre-start-case-ids.txt` runs before the first mutation:
-one unprivileged positive, root refusal for bootstrap/stable-reference/rollback, apply
-without authorization, and apply before each source daemon/broker/Hello/catalogue/capability/
-target pin/apply pin/GC-root/coordinator/existing-unit prerequisite. All fifteen ids must run
-with zero mutation. The source-floor `poison-case-ids.txt` is the exact 91-line list printed
-in `data-model.md`; neither it nor the separately literal 90 apply-peer ids is formed by a
-runtime Cartesian product.
-
-Outside transient verifier-local kernel handles and bytes, every raw value in apply-peer
-admission and identity verification is forbidden in coordinator state,
-receipts/evidence, human, JSON, wire, error/`Display`, log, tracing event/span, metric
-name/label/value/exemplar, audit, panic, or `Debug` output. Persisted correlation contains
-only typed fixed domain-separated digests, and metrics carry no raw or digested peer-identity
-label or value. The exact fifteen-row literal canary registry in `data-model.md` injects
-pidfd number, PID, start identity, socket uid/gid, cgroup/proc paths, executable store path,
-derivation, NAR identity/hash, content digest, and device/inode/mount identity one at a time.
-Only that fixture and the test's private injection buffer are scan exclusions. Every
-literal must be absent from every captured surface while the expected class-specific
-correlation digests remain present where allowed. An empty, malformed,
-over-bound, mismatched, changed, unreadable, or nonexistent input exits 2 with the named
-remediation and runs no privileged command.
+Every apply connection still binds the live peer identity to the pinned apply object and
+revalidates it before each mutation. A selected refusal leaves that mutation and all
+successors unexecuted. Raw peer and executable identity remains absent from every observable
+surface; only typed fixed correlation digests explicitly authorized by the generated contract
+may survive, and metrics carry no peer-identity label.
 
 **Expected**: all three exact resources are ready through their owned effects; removal of
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
 passes separately through T479 on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
-`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. T604 does not run until
-T221 has gated and T336-T355 have merged the real Network production path in W6.
+`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. T604 remains W6
+acceptance-only and consumes the Network implementation already required before T220.
 
-This acceptance run fixes `isolation.allowEastWest = false`; it does not prove or introduce
-Host/Network double opt-in. The historical external Network specification remains sole-opt-in
-canon, but T479/T480 require the accepted migration to
+This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
+Host/Network double opt-in. Before T220 freezes F, the accepted external Network
+contract/work-item amendment must require
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
-both default false, plus all four cases through the real adapter and net-VM path. Historical
-sole opt-in cannot close T604 or T479. Do not change feature status to bypass that stop.
+default both inputs false, assign the real emitter/controller/broker/net-VM implementation
+to pre-T220 owners, and pass all four Network/Host cases through that path. The current
+T336-T355 W6 assignment cannot satisfy the ordering and must be moved or replaced by the
+external manifest amendment. T219 revalidates the same ancestry before seal or merge.
+Historical sole opt-in cannot close T070, T071, T220, T219, T604, or T479. Do not change
+feature status to bypass that stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an
@@ -821,12 +688,11 @@ d2b vm status acceptance-vm
 ```
 
 The host test repeats that exact census before VM start, after public start, after daemon
-restart/adoption, and after public stop. Its independent 27-id unit registry retains the
-positive/enumeration/empty/missing/service/socket/slice/path/timer/template/instance/
-malformed/skip cases and adds d2b target/template/instance plus microvm
-socket/slice/target/path/timer poisons. Every injected unit survives the sole `d2b.slice`
-exclusion and fails exact equality. A transient per-VM unit therefore cannot hide between
-lifecycle observations.
+restart/adoption, and after public stop. Its fixture membership comes only from T604's
+generated `VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows; this quickstart copies no
+ids or counts. Every assigned injected unit survives the sole `d2b.slice` exclusion and fails
+exact equality. Missing, runtime-derived, skipped, or unvisited coverage fails, so a transient
+per-VM unit cannot hide between lifecycle observations.
 
 To roll a successfully migrated host back to a prior validated configuration, set the prior
 values explicitly and run that target through the same broker-owned path:

@@ -49,7 +49,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, expose a typed durable `InspectOperation` method, and require exact replay-binding before same-ID observation/resumption | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Bind amended-plan reconciliation to one clean-base analysis and current selected-roster lifecycle, one `/d2b-spec-edit` batch that changes exactly T073-T218 plus T603 when every row is satisfied, one dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589. The editor receipt and Git history are the sole authority; T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Before T220 freezes F, install the hermetic exact-eight evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require the exact eight identifiers before T219 evaluates the accepted external disposition. | FR-072, SC-034 | W5 |
+| RA-14 | Bind amended-plan reconciliation to one clean-base analysis and current selected-roster lifecycle, one `/d2b-spec-edit` batch that changes exactly T073-T218 plus T603 when every row is satisfied, one dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589. The editor receipt and Git history are the sole authority; T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Before T220 freezes F, install the hermetic exact-seven Wave 5 evidence validator at panel-request/panel-attest/seal/merge-eligibility with all six negative classes; then require those seven identifiers before T219 evaluates the accepted external disposition. `operator-nix-activation-cleanup` remains T604-owned W6 evidence imported only by T479. | FR-072, SC-034 | W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
 | RA-16 | Under Constitution 2.2.0, add the two omitted closed-enum values with exact kebab-case Zone wire names, retain underscore spellings only for internal telemetry labels, complete T605 on its owned normative/test/API/reference artifacts, reconcile the T595 emitter and T599 consumers, then reconcile generated manifests/full drift at T220 so all coordinated artifacts and exact-candidate evidence land in the same Wave 5 PR | FR-072, SC-033, SC-034 | W5 |
 
@@ -181,11 +181,13 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 
   Before T219, no reconciled obligation
   remains open, T220 has converged and frozen clean exact F, C is an ancestor of F, and the
-  F/tree-bound evidence union contains exactly the eight closed validation identifiers, as
+  F/tree-bound evidence union contains exactly the seven closed Wave 5 validation
+  identifiers, as
   accepted by T589's pre-freeze validator that also guards panel-request, seal, and
   merge-eligibility and rejects missing, extra, duplicate, unknown, wrong-lane, and conflated
   fixtures.
-  T604's result appears only as `operator-nix-activation-cleanup`; the coordinated T605
+  T604's W6 result appears only as `operator-nix-activation-cleanup`, is imported by T479,
+  and is excluded from this union; the coordinated T605
   contract, T595 emitter, and T599 consumers appear only as
   `system-core-handler-contract`. Wave 5's retained request already consumed its binding
   surface. T219 performs no binding action; it may perform only a non-request

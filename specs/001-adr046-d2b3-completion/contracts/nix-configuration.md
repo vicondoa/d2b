@@ -32,7 +32,7 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Prove the exact-candidate positive operator path from a Nix declaration whose closed acceptance-resource identity set is exactly `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`, using each exact spec-pinned Provider/config fixture, through the emitted bundle and automatic startup/declaration/removal ingestion to durable reconciliation and that same identity's real owned effect plus production `Ready` projection. Then prove state-preserving Device cleanup with the ready, identity-stable, unrecreated acceptance Volume/Network and unrelated resources intact; refusal cases are separate. The acceptance set does not move Network implementation from Wave 4. Guest support objects are prerequisites only: Guest runtime-effect acceptance is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480, and Guest emission, ingestion, status, or refusal cannot satisfy this partial US1 production-plane checkpoint | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | W5 |
 | NIX-7 | The one carrier is compiler-only `d2b.zones.<zone>.audit`, emitted as the required top-level `audit` object in that Zone's `resource-bundle.json`, outside every ResourceSpec and the runtime-created empty `Zone.spec`. It carries exactly `retentionDays` (default 30, range 1-3650), `maxRecordsPerSegment` (default 65536, range 1-1000000), and `maxSegmentBytes` (default 67108864, range 1048576-1073741824). This breaking bundle-header change moves the accepted pair from `schemaVersion: 3` / `bundleVersion: 1` to `schemaVersion: 4` / `bundleVersion: 2`; v4 `contentHash` covers the canonical `{audit,resources}` object so an audit-only change creates a new generation identity. T592 owns the typed option, active crate-root `ZoneBundle`, retirement of the duplicate full envelope, compiler entry point and CLI tests, schema generator/output, digest reference, and focused tests; T595 wires the emitter and daemon; T220 coordinates generated artifacts, references, contract tests, and changelog treatment | FR-070, SC-032 | W5 |
-| NIX-8 | Upgrade an installed 3/1 host through the target closure's `system.build.d2bHostGenerationDeploy` entrypoint only after an accepted external compatibility floor is installed in the source generation. The parameterized procedure validates the exact flake/configuration grammar and 2048-byte composition, resolves exactly one target output, discards raw Nix stderr, and stops before public-socket authorization or `sudo` on failure; first migration never reads the absent stable reference. The caller-flake entrypoint runs only unprivileged and may validate, build, stage, authorize, and submit only. The accepted external floor names its producer/installer and typed import/validation authorities and atomically owns the exact nonempty 13-member `SourceGenerationCompatibilityFloorV1` census under the existing socket/service lifecycle; its manifest, installation, validation, and exact-C/Q import receipts must form the closed chain in `data-model.md`. Every role occurs once under one disposition and source generation, and `missing`, `duplicate`, `extra`, `empty`, `stale-generation`, `stale-digest`, or `cross-disposition` members refuse. Only after both peers match the exact `source-handoff-v1` fingerprint may the source daemon transfer exactly one accepted public-socket evidence fd; the source broker's ordinary `serve` process consumes it into the nonfabricable intent-bound capability, pins the target object and separately pins the immutable apply object from trusted installed-generation metadata, durably owns and reopens the coordinator across existing-unit restart, performs audited pre-transfer phases, and transfers ownership exactly once. Privileged apply invokes only that installed pinned object, receives no flake URI, reference, or target executable to reevaluate, and refuses target-output, apply-object, symlink, or GC-root substitution. Its accepted connection is bound by a direct connection-scoped peer pidfd and live executable store/NAR/digest identity to the pin; every identity transition refuses before the first mutation and every later mutation edge, no selected or successor mutation occurs, and no pidfd persists. Every raw apply-peer input in the complete fifteen-row registry remains absent from every output surface; only the typed process-instance and executable-identity correlation digests are permitted outside metrics, and metrics carry no identity. T592 consumes the external source set read-only and owns only protocol-5 target adoption, post-transfer behavior, and target-v5 schema/catalogue/fingerprint/snapshot/fixture outputs. The target broker requires exact-generation protocol-5 Hello while the daemon is unready, publishes d2b pointer/reference state durably before ingestion/readiness, and restores prior bytes or absence before rollback. Bare committed protocol 4 with the field absent, or a source-peer catalogue mismatch, refuses. No target-only bootstrap mode, synthetic starting image, new unit or override, child, entrypoint mutation, daemon recovery owner, serialized credential, daemon identity, euid 0, or provenance claim substitutes. T589 and downstream Wave 5 remain blocked until the external floor is accepted and installed | FR-070, SC-032 | W5 |
+| NIX-8 | Upgrade an installed 3/1 host only after the accepted external compatibility disposition installs `SourceGenerationCompatibilityFloorV1` through the existing broker socket/service lifecycle. The target-closure entrypoint remains unprivileged and may validate, build, stage, authorize, and submit one opaque intent; the installed source broker owns audited pre-transfer mutation and T592 owns target adoption after one durable coordinator transfer. Target/apply/GC-root/live-peer substitution, bare legacy negotiation, missing generated authority, and every unauthorized caller refuse before mutation. Source-floor schemas, receipts, fixtures, poison registries, and transitions are owned only by generated `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows. | FR-070, SC-032 | W5 |
 | NIX-9 | Declare required `d2b.site.hostGenerationRebuildRef` with no default. Its option type is `lib.types.strMatching "^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"` plus an assertion that the UTF-8 encoding is at most 2048 bytes. The grammar is exactly `<flake-ref>#<configuration-name>`: one ASCII `#`; a nonempty ASCII flake ref using only the listed characters; and a 1-64 byte configuration name beginning with an alphanumeric and continuing with alphanumerics, `_`, or `-`. The option description states that it is an opaque rebuild locator, provides no fixed target example, points to the parameterized validated quickstart, and makes missing, empty, 2049-byte, multiline, control-bearing, whitespace-bearing, selector-free, extra-`#`, empty-selector, slash/dot-selector, or overlong-selector values fail evaluation. Nix places the exact validated bytes only in the immutable target closure. The broker publishes `/etc/d2b/host-generation-rebuild-ref` atomically as a regular `root:d2bd` `0640` file, audits only the fixed digest, repairs only through the same typed operation, and restores the prior bytes or absence on rollback. Runtime output never includes the value or stable path | FR-070, SC-032 | W5 |
 
 ## Invariants
@@ -114,64 +114,15 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   ResourceSpec/ZoneSpec placement, and consumer-side silent defaulting. Production tests pin
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
-- Host activation positive coverage starts from an installed 3/1 generation whose accepted
-  external compatibility floor atomically provides the exact nonempty 13-member
-  `SourceGenerationCompatibilityFloorV1` census in `data-model.md`. Every role occurs exactly
-  once under one accepted disposition and source generation. Separate `missing`, `duplicate`,
-  `extra`, `empty`, `stale-generation`, `stale-digest`, and `cross-disposition` poison cases
-  refuse before fd transfer, authorization, or mutation. Separate negatives also start from bare
-  committed protocol 4 and from mismatched source-peer fingerprints and MUST refuse before
-  fd transfer, authorization, or mutation. The positive executes the documented parameterized
-  target-closure entrypoint with validated flake/configuration inputs and rejects empty,
-  malformed, over-bound, mismatched, or nonexistent inputs plus zero-output or multi-output
-  target resolution before public-socket authorization or `sudo`. It verifies the
-  caller-flake executable runs only for unprivileged `--authorize-handoff`; privileged
-  `--apply-authorized-handoff` invokes only the independently pinned installed apply object
-  with no URI, reference, target executable, intent selector, or authority token to
-  reevaluate. Race two authorizations and two apply connections, inject two pending intents,
-  disconnect before and after the first mutation, and invoke apply after completion. Require
-  atomic sole-pending selection, refusal of zero/multiple/concurrent/terminal selection with
-  zero mutation, pre-mutation claim release only after a durable zero-mutation proof, and
-  post-mutation replay of only the same intent through the same pinned apply object. The broker binds that accepted
-  connection's direct peer pidfd and live executable identity to the pin and rejects exit,
-  exec, PID reuse, start-identity mismatch, executable mismatch, or ambiguity before mutation
-  without persisting a pidfd. The expected set is the independent closed 15-edge and
-  six-transition registry in `quickstart.md`: six pre-first cases and exactly 84 literal
-  post-first cases across the fourteen later edge ids. Each must refuse before that edge or
-  any successor executes; an unknown, duplicate, missing, reordered, or unvisited id fails.
-  Every raw apply-peer input in the complete fifteen-row registry is absent from human,
-  JSON, wire, error, log, span, metric, audit, panic, and `Debug` output; only the typed
-  process-instance and executable-identity correlation digests are permitted outside
-  metrics, and metrics carry no peer identity. The
-  test also proves the sealed capability, no emitted authority token, and that
-  daemon identity/euid0 alone refuse. It verifies the entrypoint is
-  unprivileged validation/build/stage/authorization/request-only, the external source actor
-  selection,
-  capability-authorized broker-only audited
-  profile/service mutation, target broker activation before target daemon activation, daemon
-  Hello while unready, phase-attenuated authenticated publication request, and atomic broker publication
-  before ingestion/readiness. It injects crashes before
-  and after transition-intent durability, stock profile publication, broker service
-  transition, reference temporary-file sync/rename/directory sync, pointer publication,
-  daemon Hello/readiness, rollback intent, reference/pointer restoration, and stock rollback.
-  Every recovery path, including one where the entrypoint is killed, is resumed by the
-  broker-owned coordinator and restores matching complete generations and the prior
-  reference bytes or verified absence, with one logical ingestion/effect and no unaudited
-  profile/service/bootstrap/rollback or d2b artifact transition. It injects target broker
-  startup failure, target daemon startup/reconciliation failure, every installed source
-  compatibility-actor crash
-  boundary, and both sides of durable ownership transfer without a new unit. The same Type-10 test then
-  executes the documented
-  stable-reference-based entrypoint, rejects raw `nixos-rebuild` as the documented path,
-  executes the parameterized prior-target rollback procedure, rejects direct
-  entrypoint/daemon/Nix mutation and caller-claimed handoff authority, and proves malformed or
-  absent values fail without rendering their contents. Independent target-executable,
-  apply-object, installed-symlink, and GC-root substitutions refuse before mutation. T592's
-  evidence owns only target-v5 adoption and target artifacts; the source peer and source
-  artifact atomicity is evidence of the independently accepted external floor. The host case
-  also checks the complete loaded `d2b*`/`microvm*` unit namespace: a nonzero
-  `systemctl list-units --all` result fails before filtering, exactly canonical `d2b.slice`
-  is excluded, and the sorted remainder must contain exactly the three lifecycle units
-  `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service`. Separate
-  unexpected-slice and unexpected-service poison cases
-  survive that sole exclusion and fail exact equality.
+- Host activation positive coverage consumes only the generated `VD2-SC002-SOURCE-FLOOR`,
+  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows assigned to T589, T592,
+  T595, and T604. Those rows own source-floor membership, fixture ids, poison cases, counts,
+  and transition ordering; this contract does not copy them. The Type-10 positive runs the
+  parameterized target-closure entrypoint from an independently installed source floor,
+  proves unprivileged request-only entrypoint behavior, broker-only mutation, one durable
+  coordinator transfer, target-before-daemon activation, crash/rollback continuation, exact
+  target/apply/GC-root/live-peer pinning, and raw-identity redaction. Missing, stale,
+  wrong-owner, non-ancestor, runtime-derived, skipped, or failing generated coverage refuses
+  before mutation. The same host case fails on unit listing error, excludes only canonical
+  `d2b.slice`, and requires exactly `d2bd.service`, `d2b-priv-broker.socket`, and
+  `d2b-priv-broker.service` after the exclusion.

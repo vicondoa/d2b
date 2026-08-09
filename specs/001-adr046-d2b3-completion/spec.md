@@ -178,7 +178,8 @@ needed to satisfy the declared resources, and without performing a host cutover.
 claim the three-resource operator activation positive. The exact acceptance set is
 `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in Zone
 `acceptance`; no other resource may substitute for one of those three. T604 exercises that
-set in Wave 6 only after T221 gates authoritative T336-T355. Full US1 completion occurs only
+set as W6 acceptance after T221, consuming the double-opt-in production Network path and
+four-case matrix already required before T220. Full US1 completion occurs only
 after that result and the Wave 6 `Provider/runtime-cloud-hypervisor` family supply positive
 runtime-effect acceptance for the declared Guest. Missing, skipped, status-only,
 fake-boundary, or refusal evidence leaves US1 incomplete.
@@ -206,17 +207,19 @@ candidate generic net-VM system. The exact acceptance resources are:
 | `Device/acceptance-tpm` | `metadata.ownerRef = "Guest/acceptance-vm"`; `providerRef = "Provider/device-tpm"`; `deviceClass = "emulated"`; `arbitration = "exclusive"`; `maxConcurrentClaims = 1`; `inventory.selector = {}`; `provider = { schemaId = "device-tpm.d2bus.org/Device/spec"; schemaVersion = "1.0.0"; settings.logLevel = 20; }` | The production Device controller creates or adopts its controller-managed TPM state Volume, verifies its tamper marker, completes the mandatory pre-start flush, starts the broker-supervised long-lived swtpm Process, and publishes the typed TPM Endpoint. The universal resource phase and Provider phase are `Ready`, `status.update.state` is `Current`, and Device status reports `present = true` and `health = healthy`; a manually assigned phase, refusal, or fake worker is ineligible. |
 
 This single denied-east-west acceptance case does not establish Host/Network double opt-in.
-The untouched external `ADR-046-resources-network` remains the historical sole-opt-in canon,
-so T070 and T071 may only report that historical result. The required contract is
+The untouched external `ADR-046-resources-network` and committed absence of a production
+adapter make the historical sole-opt-in result nonconforming and non-authorizing. T070 and
+T071 cannot complete by ratifying it. The required contract is
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
-both inputs default false. T479 MUST NOT freeze F6 until an accepted external versioned
-correction and migration preserve that exact Host/site option as the second gate, the
-production implementation is an
-ancestor of final F6, and all four Network/Host combinations pass through the actual
-emitter/controller/production-effect/net-VM path. Preserving sole Network opt-in is not a
-prospective close path. T336-T355 remain authoritative W6 implementation prerequisites of
-T604 under T221; a feature-local status, declaration-only fixture, fake effect port, or
-historical W4 record cannot unblock T604 or T479.
+both inputs default false. Before T220 may freeze F, an accepted external versioned
+correction and migration must assign the production emitter/controller/broker/net-VM path to
+pre-T220 owners, that implementation must be an ancestor of F, and all four Network/Host
+combinations must pass through the actual path. Current W6 rows T336-T355 cannot satisfy this
+pre-T220 gate; the external work-item manifest must move or replace that ownership. T219
+revalidates the same gate before any seal or merge. T604 remains W6 acceptance-only and
+consumes the already landed implementation. A feature-local status, declaration-only
+fixture, fake effect port, historical W4 record, or sole Network opt-in cannot unblock any
+boundary.
 
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
@@ -517,288 +520,23 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `ResourceUpdateStatus` does not acquire a phase or status-code member. An unavailable or
   disabled audit owner, missing authoritative row, incomplete export, dropped record, or
   unbound record MUST fail closed.
-  Installed-host generation handoff is subject to the same broker-only, fail-closed audit
-  posture. The caller-flake target-closure deployment entrypoint MAY run only while
-  unprivileged, build and verify the complete closure, durably stage immutable transition
-  bytes, and submit one opaque intent. It MUST
-  NOT publish a profile, control a service, perform 3/1 bootstrap mutation, initiate
-  rollback, or select a path, unit, generation, command, or argv. Every system-profile,
-  broker/daemon service, bootstrap, d2b-state publication/repair, stock rollback, and
-  source-service restoration mutation MUST run through the capability-authorized typed target
-  broker after transfer or a source-generation-installed compatibility broker before
-  transfer and MUST have immutable
-  pre-mutation and outcome audit. Initial authorization MUST occur while the invoking operator is unprivileged through
-  the existing public-socket `SO_PEERCRED` plus `d2b`-group Admin classification. The broker
-  MUST then consume that one-shot classification into one durably sealed, non-serializable,
-  nonfabricable handoff capability bound to the complete staged intent. Every installed
-  source-broker phase before transfer and target-broker phase after transfer consumes that
-  capability or a broker-issued phase attenuation.
-  The apply command deliberately carries no intent selector and emits no authority token.
-  Therefore the installed source broker MUST enforce one durable nonterminal handoff intent
-  per source generation. Authorization takes the broker's exclusive coordinator lock and
-  refuses if any authorized, claimed, mutating, recovery-pending, or transfer-pending intent
-  already exists. Apply takes the same lock, selects only the one `authorized-pending`
-  intent, atomically changes it to `apply-claimed`, and binds that claim to the accepted
-  connection's kernel-derived peer pidfd and executable identity. Zero pending intents,
-  multiple pending intents, a second concurrent apply connection, a caller-supplied selector,
-  and any serialized token all refuse before mutation. The connection binding is
-  non-serializable and closes with the connection. A disconnect before the first mutation
-  may return the same intent to `authorized-pending` only after the broker proves zero
-  mutation ordinals and durably clears the claim. After a mutation, only coordinator replay
-  of that same intent may enter `recovery-pending` and accept a replacement connection from
-  the same pinned apply object after proving the old peer dead; an operator invocation never
-  selects or creates a replay target. Terminal completion or rollback leaves no pending
-  intent, and a later apply invocation refuses rather than reapplying or guessing.
-  Daemon uid/gid/generation, successful
-  Hello, broker-socket credentials, target-closure provenance, and effective uid 0 are
-  eligibility or integrity checks only and MUST NOT independently authorize any mutation.
-  No bootstrap unit or fourth root-visible service may exist.
+  Installed-host generation handoff remains broker-only and fail-closed. The target-closure
+  entrypoint runs unprivileged and may submit only an opaque intent after local lifecycle
+  authorization. Before ownership transfer, the installed source broker under the existing
+  `d2b-priv-broker.socket` and `d2b-priv-broker.service` owns the durable coordinator and
+  every privileged mutation; after one durable transfer, the target broker owns continuation.
+  No new unit, daemon-owned rollback path, caller-selected privileged executable, serialized
+  authority, or root/provenance shortcut is permitted. Target, apply-object, and live apply
+  peer identities are pinned and revalidated before every mutation; exit, exec, PID reuse,
+  mismatch, ambiguity, or recovery-owner uncertainty refuses before mutation.
 
-  Handoff inspection MUST serialize only the closed
-  `HostGenerationHandoffStatusV1` variants in `data-model.md`. State, phase, owner, action,
-  and successor arrays are one validated tuple: active/failed source recovery, active/failed
-  target recovery, active/failed transfer-pending, active/failed rollback, and completed or
-  rolled-back terminal variants cannot be cross-combined. The authenticated current-intent
-  pointer, not mtime, directory order, or caller input, selects the active or terminal
-  record. A failed transfer owner MUST project restart of only the existing broker service.
-  A rollback variant MUST NOT exist unless the full immutable prior
-  profile/service/pointer/reference tuple, every applied pre-mutation/outcome pair, and one
-  contiguous reverse plan validate; an incomplete proof is invalid coordinator state with
-  zero mutation. Inspect MUST use the exact five-line/seven-field valid projection and
-  exact error/exit contract from `data-model.md`. The seven rollback members, 32
-  pre-mutation/outcome audit members, and 15 transition edges MUST be independently pinned;
-  every member has missing and mismatch coverage, and unaudited extra mutation,
-  unauthenticated pointer, and four independent registry-shrinkage poisons MUST exit `4`
-  with zero mutation. Exact-empty pointer absence MUST be the sole exit-`3` `not-found`
-  census. Exactly one fully valid authenticated intent and complete matrix with only its
-  pointer absent MUST have its own exit-`4` `pointer-repair-required` inspect projection.
-  Competing, malformed, unauthenticated, orphaned, unknown, or incomplete censuses MUST be
-  invalid coordinator state. `action: repair-authorized-handoff` MUST map to the
-  selector-free unprivileged `--repair-authorized-handoff` command owned by T595. T592 MUST own typed
-  broker op `RepairHostGenerationCurrentIntentV1`, its public-socket Admin-only privilege
-  row, coordinator lock, and distinct immutable
-  `coordinator-pointer-repair/{pre-mutation,outcome}` audit pair. Launcher, workload, Zone,
-  unauthenticated, direct-broker, and root callers MUST be denied.
-
-  Clean pointer absence MUST return the existing exit-`3` not-found result without a write;
-  repairable absence MUST prove exactly one fully valid authenticated active or terminal
-  intent and a complete immutable matrix. Repair MUST file-sync an unnamed inode, direct-final link the
-  exact pointer no-replace, final-reopen, sync the parent, and sync the outcome audit.
-  Restart before link sees absence; restart after link accepts only absence or the exact
-  final; pre-only audit resumes; a complete pair replays with zero write; and a conflicting
-  final is preserved. Intent/generation selectors, path, token, root, extra positional, and
-  force inputs each MUST exit `2` with the exact repair refusal and zero mutation.
-
-  Missing or invalid immutable proof MUST report the bounded closed member and failure class
-  with `restore-immutable-audit-backup`. Broker-private
-  `HostGenerationImmutableAuditBackupOwner` MUST be a private linear, nonconstructible,
-  non-clonable, nonserializable, nonconvertible capability whose coordinator transfer
-  consumes the old wrapper. It MUST append authenticated backup members through the common
-  file-and-directory-durable publication protocol before covered mutation durability.
-  One intent MUST be bounded to 256 members and 16,777,216 encoded bytes, remain unprunable
-  while current, and the root MUST be bounded to 64 retained intents, 4,096 members, and
-  268,435,456 backup bytes with a durable reservation before handoff. The aggregate
-  publication root MUST additionally bound every reservation, retention anchor/watermark,
-  restoration body/provenance/settlement, and prune-audit class by record and byte count,
-  reserve capacity before every append, and block rather than overwrite or drop an audit
-  record. Existing append-only broker audit rotation and configured bounded retention own
-  exported root-operation audit lifecycle.
-
-  Nix activation MUST NOT create the privileged publication root directly. T592's typed
-  sealed `EnsureHostGenerationImmutablePublicationRootV1` broker phase MUST emit fixed
-  pre/outcome audit, create or reopen the mode-`0700` root, validate and sync it and its held
-  parent, and pass source/target first-run, second-run zero-write, and every creation-crash
-  boundary before broker descendant use. The accepted external source-generation installer
-  owns source ordering before `source-handoff-v1`; T595 owns target `host-broker.nix` ordering
-  before broker adoption and daemon start. The source installer remains an external
-  prerequisite and no new unit is permitted.
-
-  The effective replacement transition MUST bind one private fixed
-  `CLOCK_REALTIME+CLOCK_BOOTTIME` age anchor before replacement can become effective; replay
-  MUST use the same anchor and never resample after a crash. Same-boot age follows boot time
-  with at most 300 seconds of wall/boot skew. Unsafe forward discontinuity or changed-boot
-  ambiguity MUST quarantine age and block mutation. Replaced members become prune-eligible
-  at 30 trusted days and absent after 90 trusted days. The existing broker MUST run startup
-  and internal idle-wake catch-up without an Admin request, producing either audited prune or
-  typed fail-closed degradation. Pruning MUST use a private-field lifetime-bound permit with
-  no clone/copy/default/conversion/serde/accessor/reconstruction surface, a sealed typed
-  broker op,
-  immutable fixed-field pre/outcome audit, fd-relative durable unlink/census settlement, and
-  exactly-once restart replay. Prune/bound/clock/settlement failures MUST return a typed
-  redacted actionable report and block later mutation.
-
-  T595 MUST own the exact unprivileged
-  `--restore-immutable-audit-backup PATH [--json]` public-socket client, bounded no-follow
-  mode-`0600` input, exits, human/JSON goldens, and response-loss replay. T592 MUST own the
-  shared request/response DTO and `RestoreHostGenerationImmutableAuditMemberV1` broker
-  operation. Restoration MUST be admitted only from the consumed local public-socket
-  `Admin` capability; every other local role, root, `HostShutdown`, nonmember,
-  unauthenticated-local, direct-broker, and remote caller MUST be denied before coordinator
-  access, regardless of signature validity. The exact signed
-  `HostGenerationImmutableAuditRestorationV1` MUST bind domain, key, authority, member,
-  failure class, backup, predecessor, canonical member, and observed member. It MUST append
-  a durable fixed-field pre-mutation record before broker-private non-observable preparatory
-  signed evidence, digest/enum-only effective audit provenance/restored-member
-  supersession and matching outcome under the coordinator lock, without replacing any
-  mismatched, unauthenticated, or noncontiguous original. Private evidence alone MUST alter
-  no coordinator, audit view, census, or member. Only state-independent parsing/signature
-  work may precede the lock; coordinator,
-  backup, observed-state, and artifact bindings MUST be reopened and revalidated under lock
-  immediately before mutation. The shared response MUST use nested typed
-  completed/refused/pending/degraded variants with per-error class domains, derived actions
-  and settlement, total hierarchy/write/file-sync/link/reopen/directory-sync/
-  outcome-publication failure representation, and schema/wire rejection of every illegal
-  sibling/null cross-product. It MUST have no free-form broker-message fallback. A durable
-  degraded settlement is nonterminal: after the named storage repair, byte-identical
-  resubmission resumes the same operation id and append-only attempt and converges through a
-  repair-resume audit event to restored or already-restored. Every dispatch, repair audit, backup,
-  restoration-private-evidence/pre/provenance/outcome, and prune-audit publication MUST use
-  the one idempotent exact-final protocol and independently test hierarchy creation plus
-  every write/file-sync/link/final-reopen/parent/ancestor/final-directory-sync boundary,
-  conflict preservation, and per-record response-loss no-write replay. An unaudited extra mutation MUST instead report
-  `preserve-and-escalate-audit-integrity-incident` and MUST NOT advertise restoration. No
-  force, generic copy path, daemon recovery ownership, or new unit exists. Every preserve
-  action MUST map to the exact site-security external procedure named in
-  `contracts/operator-cli.md`; artifact acquisition MUST map to
-  `host-generation-immutable-audit-backup-acquisition-v1`. The exact 156-case status
-  registry MUST cover repair projections, inputs, absence classes, conflicts, crash
-  boundaries, second-run no-write replay, restoration diagnostics, and integrity escalation.
-  Separate two-row restoration and two-row prune audit-edge fixtures plus an independent
-  unchanged 168-case broker registry MUST cover only their literal role denial,
-  request-shape, artifact binding, legacy backup/restoration publication, append-only
-  supersession, conflict, and completed no-write cases. A separate read-independent
-  216-case durable-record/boundary registry MUST cover every listed amendment record class
-  at all nine publication boundaries, including reservation, both release reasons,
-  settlement, repair-resume, and continuity-repair pre/evidence/watermark/outcome. A separate
-  read-independent 88-case lifecycle registry MUST cover aggregate capacity and continuity
-  evidence limits, all five standing-reserve states and derived actions, cycle-unique
-  reservation success/refusal/retry, malformed-prefix hooks/poisons for both releases and
-  continuity, retention-anchor conflict, continuity evidence export/compaction and permit
-  compiler/API negatives, prune-permit negatives, transport-loss artifact resubmission,
-  private-identifier/body leakage canaries, and shrinkage poisons. The 156-case status registry,
-  unchanged 168-case registry, 216-case registry, and 88-case registry MUST NOT substitute
-  for one another.
-
-  **Installed 3/1 bootstrap prerequisite (unresolved and blocking):** committed protocol 4
-  has no host-generation handoff operation, and the installed
-  `d2b-priv-broker.service` executes the installed generation's `brokerPackage`. A target
-  closure therefore cannot make its compatibility binary the existing service's executable
-  before profile publication. No current executable actor can receive the accepted public
-  socket evidence, durably seal authority, own the coordinator, and survive an entrypoint
-  crash without using a new unit, runtime override, child supervisor, entrypoint mutation, or
-  daemon recovery owner. This feature does not claim otherwise. T589 and every downstream
-  Wave 5 implementation task MUST remain blocked until an accepted external source-generation
-  compatibility disposition lands and is installed before the migration under test. That
-  disposition MUST atomically install the exact nonempty 13-member
-  `SourceGenerationCompatibilityFloorV1` census in `data-model.md`: both source
-  daemon/broker peers, the source wire schema, privilege schema, operation catalogue,
-  `source-handoff-v1` catalogue fingerprint, compatibility disposition, capability/API
-  fingerprint, serialization snapshot, positive fixture, bare-protocol negative fixture,
-  cross-fingerprint negative fixture, and one immutable broker-managed source apply object.
-  Every member MUST bind the same accepted disposition and source generation. An absent,
-  duplicate, extra, empty, stale-generation, stale-digest, or cross-disposition member MUST
-  refuse before fd transfer, authorization, or mutation. The accepted external disposition
-  MUST name the concrete producer/installer owner and the concrete typed import/validation
-  authority defined by `SourceGenerationCompatibilityFloorV1` in `data-model.md`. That
-  external owner MUST emit the versioned manifest and atomically install it in the source
-  generation; the external validator MUST produce the chained installation, validation, and
-  exact-C/Q import receipts. The installed coordinator MUST acquire the one durable origin
-  record under a sole exclusive OFD claim into private nonserializable, non-clonable
-  `ProtectedSourceFloorOrigin` without durably consuming it. The claim MUST use one stable
-  preprovisioned regular root-owned mode-`0600` single-link lock inode beneath an anchored
-  nonreplaceable root-owned namespace. The parent MUST be opened no-follow and
-  `O_CLOEXEC`; the leaf MUST be opened `O_NOFOLLOW|O_CLOEXEC`, identity-checked before and
-  after `F_OFD_SETLK`, and never replaced, renamed, unlinked, duplicated, or transferred.
-  The same open file description MUST remain held through dispatch final reopen and every
-  parent/ancestor directory sync. Parent/leaf replacement and exec-leak tests MUST prove no
-  independently lockable inode, inherited claim, concurrent capability, or second dispatch.
-  The validator MUST consume that
-  process-local owner while authenticating
-  all four issuer proofs under disposition-selected keys into private
-  `AuthenticatedSourceFloorIssuerProvenance`, then consume the intermediate by value into
-  one private `ValidatedSourceGenerationCompatibilityFloor`. All three types have no public
-  construction, fields, accessors, serde, clone/copy/default, conversion, byte import, or
-  reconstruction from serialized evidence. Durable origin consumption MUST commit only in
-  the one file-and-directory-durable handoff dispatch record, which is also the consumption
-  marker; no split transaction exists. Claim,
-  authentication, semantic-validation, or final-capability
-  failure and pre-publication owner death MUST release the claim and permit exact-origin
-  reacquisition only after proving no durable dispatch exists; restart after publication
-  MUST resume that dispatch without another mint. Later handoff boundaries MUST borrow and
-  attenuate that one result and MUST NOT revalidate the serialized chain. Copied matching
-  authority/key digests signed by an unpinned key MUST produce neither result even when all
-  enclosing hashes and unaffected proofs are valid. T589 dispatch requires the final
-  `imported-for-exact-C/Q` transition and consumes only the validated-floor result read-only.
-  Origin copy/concurrent replay, repeated mint, and later serialized revalidation MUST
-  refuse. Fault injection after claim, authentication, semantic validation, final capability
-  creation, each dispatch hierarchy/write/file-sync/link/final-reopen/parent/ancestor/
-  final-directory-sync boundary, and durable
-  publication MUST prove `critical_section_max = 1`, no concurrent capabilities, no
-  permanent pre-publication consumption, exact-final no-write response-loss replay, and at
-  most one dispatch. The
-  exact five copied-proof, 26 issuer-authentication/capability, 21 hash-vector, 32
-  receipt/transition, 91 member-semantic, and four matrix-meta negative registries are
-  mutually read-independent from production. No T589-T605 task may
-  produce, repair, import, or self-accept a source-floor member or receipt. The separately
-  accepted external `ADR-046-validation-and-delivery` Version 2 amendment owns the canonical
-  encoding, `SourceGenerationIdentityV1`, complete digest/domain/framing and signature
-  registry, strict schemas, and checked-in vectors. The named compatibility authorities
-  implement and install that contract but MUST NOT redefine those repository artifacts.
-  The installed broker reached only through the existing
-  `d2b-priv-broker.socket` and `d2b-priv-broker.service` is the executable bootstrap actor.
-  Bare committed protocol 4 with the field absent, or either source peer advertising another
-  catalogue fingerprint, MUST refuse before fd transfer. Only after both peers match numeric
-  protocol 4 and that exact fingerprint may the installed daemon forward exactly one accepted public-socket
-  evidence fd. The installed broker MUST consume that fd into the nonfabricable intent-bound
-  capability, pin the target executable and GC root, and separately pin the exact immutable
-  broker-managed privileged apply object from trusted installed-source-generation metadata.
-  Only that installed object may execute under `sudo`; the caller-flake entrypoint never
-  does. The privileged actor receives no flake URI, installable, stable reference, target
-  executable, command, or argv to reevaluate. For every apply connection, the broker MUST
-  obtain a peer pidfd directly from the accepted socket, bind the live peer's start identity
-  and current executable store/NAR/digest identity to the apply-object pin, and revalidate
-  them immediately before each mutation. Exit, exec, PID reuse, mismatch, or ambiguity MUST
-  refuse before mutation. Tests MUST use the independent exact registry from
-  `quickstart.md`: six pre-first cases and all 84 literal post-first cases over the fourteen
-  later members of the closed 15-edge set. An unknown, duplicate, missing, reordered, or
-  unvisited id fails. Each case proves refusal before the selected mutation executes. The
-  already committed mutation
-  remains auditable; the refused edge and all successors have zero mutation count. The
-  connection-scoped pidfd and executable fds MUST close with the connection and MUST NOT be
-  serialized or persisted.
-  Raw apply-peer pidfd number, numeric PID/start identity, socket uid/gid, cgroup/proc path,
-  executable store path/derivation/NAR identity or hashes, and executable
-  device/inode/mount identity MUST never appear in human, JSON, wire, error, log, span,
-  metric, audit, panic, or `Debug` output. A surface that requires correlation may carry only
-  the typed fixed process-instance or executable-identity digest; every other class has no
-  digest projection. Metrics omit all peer identity rather than creating a digest label.
-  Every literal in the complete fifteen-row forbidden-value registry in `data-model.md` MUST
-  occur zero times on every captured surface. The source broker MUST durably own the
-  coordinator before mutation, reopen it from its ordinary `serve` startup after the
-  existing unit's `Restart=on-failure`, and transfer ownership exactly once to the
-  authenticated target broker. A serialized credential, token, fd number, daemon identity,
-  root execution, or target provenance is not authority. The external disposition MUST also
-  define how that compatibility floor reaches the source 3/1 generation; a target-only
-  implementation, synthetic test starting image, or prose assertion does not satisfy the
-  prerequisite.
-
-  After that prerequisite is accepted, the exact ordering is:
-  public-socket Admin authorization; exact source-peer protocol/catalogue negotiation;
-  durable intent and capability; source-generation compatibility-broker coordinator
-  ownership before the first mutation; exact target, apply-object, and apply-peer identity
-  revalidation before every mutation; stock profile publication; target
-  broker transition; durable coordinator ownership transfer to that target broker; target
-  daemon transition;
-  exact-generation protocol-5 Hello while unready; phase-attenuated authenticated publication
-  request; broker-durable pointer/reference publication and audit; daemon reopen and
-  ingestion; readiness. The broker-owned durable coordinator is the recovery owner before
-  any target daemon exists. Before ownership transfer, only the installed compatibility
-  broker under the existing service may reopen or roll back its own durable phase; after
-  transfer, the existing target `d2b-priv-broker.service` reopens the coordinator after broker restart and completes or
-  rolls back even when target daemon startup or reconciliation fails. `d2bd.service` may
-  report readiness and submit a capability attenuation, but it never owns or initiates the
-  rollback state machine. The entrypoint is never the recovery supervisor, and no new unit is
-  added.
+  All source-generation floor schemas, encodings, digests, receipts, capability transitions,
+  fixtures, poison registries, and handoff transition matrices are owned solely by accepted
+  Version 2 `ADR-046-validation-and-delivery` through `VD2-SC002-SOURCE-FLOOR`,
+  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589, T592, and T595 consume only
+  their generated ownership rows. A missing, stale, non-ancestor, wrong-owner, or failing row
+  blocks dispatch with remediation to accept Version 2, regenerate traceability, and pass
+  Gate 0. Feature-local field lists, counts, or transition copies are not authority.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -815,9 +553,17 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
   API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. The exact
   three-resource operator activation positive is not Wave 5 evidence: T604 runs in Wave 6
-  after T221 and authoritative T336-T355, and T479/T480 bind it to F6 together with the
+  after T221 and consumes the Network implementation already required before T220, and
+  T479/T480 bind it to F6 together with the
   `Provider/runtime-cloud-hypervisor` Guest result. Actionable refusals remain separate
   negative cases and cannot satisfy either positive story.
+  Independently, before T220 freezes F, the accepted external Network contract/work-item
+  amendment, the double-opt-in migration, the production emitter/controller/broker/net-VM
+  implementation, and enforcing results for all four Network/Host combinations MUST be
+  ancestors of F. Current W6 ownership of T336-T355 is not a satisfiable substitute; the
+  accepted amendment must assign the work to pre-T220 owners. T219 MUST revalidate the same
+  predicate before any seal or merge path. T604 remains W6 acceptance evidence and is not an
+  eighth Wave 5 evidence-profile member.
   Direct `WatchService` calls, fixed
   or fake endpoints, test-only subject injection, stale evidence from an older tree, and
   historical proof artifacts are not evidence for this gate. T220 MUST converge all slice and
@@ -1516,251 +1262,23 @@ carries the object verbatim rather than copying selected fields into the task ro
   resources, activate, and reach a fully ready state with no manual intervention beyond the
   activation itself.
 - **SC-002**: A newly declared resource becomes live within 2 seconds of activation for a
-  single-Zone declaration of 10 to 20 resources (for example one guest, a volume, a network,
-  and a device), and an operator observes progress rather than an opaque wait. Measure with one
-  monotonic clock. Start at the durable commit of the public deployment entrypoint's target
-  generation transition intent, immediately before any broker publication or daemon ingestion
-  for that generation. Stop only when both the real owned effect is observed and the production
-  operator watch/read model reports that resource `Ready`; use the later event. The interval
-  therefore includes broker/daemon handoff, automatic activation ingestion, durable resource
-  commit, controller dispatch, broker-mediated effect, status persistence, and operator
-  projection, while excluding Nix evaluation/build and profile staging completed before the
-  transition-intent commit. At least one production progress event MUST be observable strictly
-  after start and no later than stop. Every qualifying acceptance sample MUST be at or below
-  2,000 ms. This outer budget neither replaces nor sums the tighter FR-030 component budgets:
-  every applicable p95 component budget and this end-to-end ceiling MUST pass independently,
-  and passing either one cannot excuse failure of the other. T604 owns collection of this
-  measurement on proposed F6 without taking implementation ownership. Its host-acceptance leg emits exactly
-  one separately encoded `Sc002ActivationReceiptV1` referenced by the unchanged schema-v2
-  `EvidenceRecord` for `operator-nix-activation-cleanup`: schema version 1, kind
-  `sc002-activation-live`, encoded size at most 16,384 bytes, one `CLOCK_MONOTONIC` start
-  tick, and exactly one sample keyed by each of `Volume/acceptance-state`,
-  `Network/acceptance-net`, and `Device/acceptance-tpm`. Every sample repeats that key on its
-  effect, production `Ready`, selected-stop, and 1-32 progress observations; selected stop is
-  the later effect/Ready tick; checked elapsed nanoseconds equal stop minus start and are at
-  most 2,000,000,000; and progress falls strictly after start and no later than stop. The
-  receipt, unchanged outer `EvidenceRecord`, and its errors use fixed redacted `Debug` and
-  contain no free-form strings, host identity, path, command, argv, or log text. T589 owns one
-  validator used unchanged at import, durable reopen, panel-request/panel-attest, seal, and
-  merge-eligibility. T479 passes T604's external receipt as the explicit
-  `wave validate-import --sc002-receipt PATH` input. For this validation the importer rejects
-  caller-supplied `--locator`, opens the source once without following links, requires a
-  regular single-link file owned by the current effective uid with mode exactly `0600`, hashes
-  before decode, derives the locator, and publishes the exact bytes beneath the held candidate
-  dirfd. Candidate directories are current-effective-uid `0700`; the sidecar leaf is
-  current-effective-uid `0600`. Publication file-syncs an unnamed inode and capability-free
-  links that exact opened inode through a validated procfs fd directly to the final
-  no-replace name. It MUST NOT use `AT_EMPTY_PATH`, a linked temporary, or a
-  name-consuming publication rename. It MUST final-reopen the exact inode, sync the final
-  parent, then, before the ordinary `EvidenceRecord` may be published, `fsync` every held
-  ancestor directory fd through `sc002`, `evidence-sidecars`, and the candidate directory.
-  Creation, publication, and
-  cleanup MUST hold the same verified candidate-scoped exclusive OFD write lock through
-  parent `fsync`, the applicable census, and record publication or return. There is no second
-  cleanup lock or lock-free orphan path. The live importer retains that lock, so loser or
-  restart cleanup MUST NOT inspect or mutate its unnamed inode; restart cleanup begins only
-  after acquiring the released lock. Named temporary and quarantine namespaces are
-  legacy-observation-only, and current publication MUST NOT create them. Under the lock,
-  cleanup may once-open and verify a retained legacy name but MUST NOT rename, hardlink, or
-  unlink it: the OFD lock does not exclude a same-uid pathname replacer, and Linux has no
-  inode-qualified rename or unlink. The private candidate-namespace write owner exposes no
-  existing-name rename or unlink. Compile-fail/API-surface seals MUST reject every current
-  quarantine/retirement rename, existing-name unlink, and name-consuming cleanup hook;
-  historical rename states are observation fixtures only. Parent-boundary loss, source replacement, or
-  destination-reopen mismatch MUST return `sc002-namespace-write-ownership-unproven`,
-  preserve the complete name census, and permit no later link, rename, or unlink.
+  single-Zone declaration of 10 to 20 resources, with at least one production progress event
+  after the transition-intent commit and no later than the later of the real owned effect or
+  production `Ready` observation. Nix evaluation, build, and profile staging completed before
+  that durable start are excluded. The outer 2,000 ms ceiling and every applicable FR-030
+  component budget pass independently.
 
-  Unsupported `O_TMPFILE`, invalid procfs/mount identity, unsupported direct link, and a
-  foreign final MUST leave zero receipt leaf and zero `EvidenceRecord` mutation. A crash
-  before the link exposes no leaf; after the link, restart accepts only absence or the exact
-  complete final and completes durability. Exact replay after parent durability MUST perform
-  zero write. A destination replacement/inode mismatch injected after the importer links and
-  before its final reopen MUST refuse, preserve source and observed destination, and publish
-  zero `EvidenceRecord` mutation. The nine receipt-import cases are read-independent from
-  the 26 retained preimage/request-output cases in the exact 35-id direct-final publication
-  registry.
-
-  Before any payload or residue evidence copy, cleanup MUST direct-final publish and sync
-  the complete incident preimage. It may then copy only from the retained source fd into an
-  unnamed inode and direct-final publish immutable evidence; the source name remains in the
-  frozen recursive census. The retired subtree is read-only compatibility evidence. Its
-  historical retirement ids bind candidate/content/device/inode identity, and historical
-  `EEXIST`, 65th-leaf, 1,048,576-byte, and malformed-census states still validate, but the
-  current protocol creates no new retired member. Each incident MUST persist exactly one
-  closed `Sc002IncidentKindV1`:
-  `retirement-id-collision`, `retirement-census-exhausted`,
-  `retirement-census-invalid`, or `identity-ambiguity`. A collision id binds the separately
-  observed source and existing-destination identities. An exhausted-census id binds the
-  source identity, valid pre-add census digest, and current/prospective counts; an
-  invalid-census id binds the source identity and bounded observed-census digest. Census
-  incidents MUST NOT fabricate a second identity tuple. A valid census permits at most 64
-  leaves of at most 16,384 bytes each. An identity mismatch MUST not restore, rename,
-  hardlink, or unlink the suspect name. Instead, after the direct-final preimage, anchor, and
-  metadata are durable, it MUST copy exact bytes from the retained source fd into a new
-  unnamed inode, direct-final publish
-  `evidence-sidecars/sc002/incidents/payload/sha256/<incident-id>.bin`, and `fsync` the
-  payload plus every changed ancestor. The incident
-  digest uses the `identity-ambiguity` domain and binds the closed reopen stage plus ordered
-  before/after identity digests. All four kind-specific preimages and their bounded identity
-  and census sub-digests are exactly those in `data-model.md`. Historical stages `1` and `2`
-  remain decode-compatible; all new legacy named-source observation emits stage `3`.
-  The stage-`3` incident and metadata positive golden plus wrong/unknown/mismatched-stage
-  negatives are mandatory. In particular,
-  `CanonicalRetiredCensusV1` is the Version-1 `0x01` grammar with normal body tag `0x00`,
-  exact path/record length framing, unsigned-byte path ordering, the closed entry,
-  observation, and failure tag tables, the all-zero/`u64::MAX` unavailable tuple, and the
-  exact two-byte `0x01 0xff` whole-census over-bound sentinel; no implementation-defined
-  iteration order, errno, or partial over-bound prefix enters `C`. Raw inode identity is
-  never rendered. Every incident first creates one structured
-  `Sc002IncidentPreimageV1` carrying the parked triplet, content digest, and every applicable
-  collision, census/count, or ambiguity component as its complete write-ahead record. The
-  privilege-dropped target MUST have no effective capabilities. It MUST file-sync an unnamed
-  inode before capability-free linking that exact opened inode through a validated procfs fd
-  directly to the final no-replace name, sync that link's parent, and reopen the final
-  preimage before any
-  anchor, metadata, payload, residue, status, resolution, freeze, request, disposition, or
-  admission publication. A pre-link crash exposes no incident name; a post-link crash
-  exposes only a complete preimage and has the exact resumable/conflict classifier in
-  `data-model.md`. There is no named-partial fallback. The preimage, anchor, metadata, every
-  durable primary status or resolution, successor freeze, disposition request, signed
-  disposition, and admission record repeat that complete object byte-for-byte. A
-  verified-payload terminal requires an immutable preimage-complete anchor and metadata,
-  a same-identity reopen and file sync of the direct-final copied payload, and a contiguous append-only
-  status prefix beginning at `parked`, with every leaf, parent, and changed ancestor synced.
-  A replacement, nonidentical `EEXIST`, or post-copy identity mismatch is exactly
-  `recovery-resumable` when one metadata-bound continuation with the original legacy source
-  name still retained remains and otherwise
-  `recovery-irreconcilable`: every name is preserved and no parked status is published.
-  `ENOENT` for any original legacy source name is always irreconcilable and advances only
-  through authenticated evidence resolution. No `parked` or `mismatch-retained` terminal
-  census is valid unless every original legacy source name remains present at its frozen
-  locator. The authenticated resolution is separate and MUST NOT fabricate a terminal
-  cleanup census.
-  Inspect returns the stable id and closed cause in both variants. Recover is offered only
-  for the resumable variant. The irreconcilable variant advances only through an
-  authenticated disposition that either retains representable names as durable residue or
-  binds the frozen primary-evidence scope through a complete recursively enumerated census or
-  identity-bearing bounded-failure commitment outside that scope. The scanner uses one
-  total, injective recursive grammar for the twelve required root/root-instance pairs and
-  every absent, directory, regular-file, symlink, block-device, character-device, fifo,
-  socket, mount, or other observation. Unavailable state MUST map only to private denied
-  scope; every serialized all-zero `0xff` observation MUST refuse. The grammar binds raw path bytes, `st_uid`,
-  `st_gid`, `st_rdev`, and symlink-target identity only inside the typed commitment.
-  Admission-capable bounded failure embeds the complete stable ordered node sequence,
-  fixed root-instance, canonical failing-path digest, saturated counts, and equal
-  before/after recursive identities. Unreadable, unstable, depth-65, node-hard-ceiling, or
-  byte-hard-ceiling scope exposes null evidence plus
-  `restore-primary-evidence-coverage` and MUST deny request, apply, and admission until two
-  complete equal walks fit the hard ceiling. It MUST expose the bounded
-  `primary-evidence-coverage:<failure-class>:<root-class>` cause, render
-  `next-command: none`, and map only to the exact owner-run access, writer-quiescence, or
-  unrecognized-subtree relocation procedure in `data-model.md`. It MUST NOT advertise or
-  permit `sc002-disposition-request` until a later inspect proves complete coverage. The primary-evidence scope excludes every
-  resolution, resolution-evidence, successor-freeze, disposition-request, and disposition leaf, so a resolution digest never
-  contains itself. A raw `0x01 0xff` sentinel cannot authorize disposition or successor
-  admission. Missing, unknown, duplicate, noncontiguous, cross-kind, or mismatched incident
-  state blocks every close stage. Both nonterminal variants and terminal incidents block
-  record publication and every close stage, survive restart, and are never automatically
-  unlinked. Direct-final ordinary success or refusal requires both ephemeral namespaces
-  empty. A terminal legacy incident instead requires every original legacy source name to
-  remain at its frozen locator under the exact frozen retained-name census; neither it nor
-  a nonterminal variant claims the ordinary empty-census predicate. T589's
-  private `CandidateRetentionOwner` is a zero-mutation
-  recursive whole-scope retention guard, not deletion authority. Under the same lock it requires the
-  exact terminal request/reservation/panel/seal/eligibility/merge, incident, external-
-  reference, ephemeral, and bounded durable-census predicate in `data-model.md` to pass. It
-  must also prove that the canonical candidate root and all request, panel-record,
-  evidence-record, receipt, seal, eligibility, merge, incident preimage/anchor/metadata/
-  payload/residue/status, resolution-evidence/resolution, successor-freeze,
-  disposition-request, disposition, and successor-admission history remain immutable and
-  repeat the same complete kind-specific preimage. Verified orphans remain in the separately owned bounded
-  `evidence-sidecars/sc002/retired` subtree. No candidate descendant is automatically
-  unlinked, and the candidate root is never renamed, tombstoned, or deleted. Only after
-  durable publication and identity-preserving ordinary cleanup may the `EvidenceRecord` be
-  published.
-  An identical sidecar
-  left by a crash may be reopened and reused only after the complete
-  identity/hash/owner/mode check; a different existing leaf refuses. A failed operator record
-  remains importable without a receipt and remains
-  ineligible for close; a passing record requires exactly one matching receipt. T600 carries
-  the exact-candidate result; T602 and T219 reopen it. Unknown fields/enums, missing/duplicate/
-  unrelated samples, any effect/Ready identity disagreement, mixed selected-stop/progress identities, malformed or misordered ticks,
-  stale or wrong canonical outer `candidate_id`/`content_id`/`snapshot_sha256` triplet,
-  sidecar content-digest mismatch, a receipt on a failed record, progress-free
-  evidence, live-owner cleanup, parent-boundary loss, legacy source replacement,
-  destination-reopen mismatch, historical retirement-id collision, retirement-census
-  overflow or corruption, unexpected unbound ephemeral residue, unauthorized candidate-retention
-  cleanup, unknown or mismatched incident kind/status, a failed kind-specific incident-id
-  golden vector, any durable incident entry, or an over-budget sample fails
-  SC-002 and blocks evidence import, panel request, seal, merge eligibility, and merge.
-  The structured preimage path and kind-bearing anchor path are durable before metadata or
-  payload mutation and let
-  restart recover the closed kind without trusting conflicting anchor bytes. Every immutable
-  incident status persists the complete structured preimage, its immutable locator, and
-  kind-specific `incidentIdPreimageHex`; the separate CLI projection omits them. Resolution persists the same
-  structured preimage and all kind-specific components, the complete-census or
-  bounded-failure evidence kind, typed digest, derived
-  locator, and nullable failure cause. The canonical evidence bytes are leaf-and-ancestor
-  durable before resolution status. Successor admission reopens those exact bytes and
-  revalidates current scope identity, so a copied
-  over-bound commitment or any post-resolution primary change blocks admission.
-  Before signing, `sc002-disposition-request` derives one clean successor triplet from an
-  immutable snapshot, durably publishes `Sc002SuccessorFreezeV1`, and emits the exact
-  canonical unsigned authority request. Inspect output or a caller-written triplet is not a
-  signing request.   Before creating those candidate-internal records it validates the anchored output parent,
-  zero-effective-capability credentials, procfs fd directory, mount/filesystem, and
-  `O_TMPFILE`, then writes and file-syncs the unnamed output inode without creating a name.
-  Unsupported open or invalid environment refuses with zero freeze/request mutation. Only
-  after candidate-internal durability does it capability-free link that exact opened inode
-  through procfs directly to the final no-replace name, reopen it, and sync the parent.
-  Unsupported link is an ordinary replayable output failure with no output name and the
-  internal freeze/request retained. A pre-link crash exposes no output name; a post-link
-  crash exposes only the complete final. `AT_EMPTY_PATH`, linked temporaries,
-  create-and-unlink preflight, and name-consuming publication rename are forbidden.
-  `sc002-incident-apply` accepts only the
-  closed canonically encoded and Ed25519-authenticated
-  `Sc002IncidentDispositionV1` from `data-model.md`. It binds the incident, complete
-  structured preimage, parked triplet, successor freeze/request, distinct successor
-  triplet, exact accepted delivery-contract Version 2 digest, pinned
-  authority, and pinned key; the validator is private and consumed by value. Unknown,
-  missing, duplicate, reordered, noncanonical, unsigned, wrong-key, wrong-domain, stale,
-  replayed, or tampered disposition bytes and every post-signing successor substitution
-  refuse before any state transition. Apply and admission both rederive the same triplet
-  from the freeze-bound snapshot. Before T589
-  dispatch, a separate external amendment MUST bump accepted
-  `ADR-046-validation-and-delivery` from Version 1 to Version   2, normatively pin the five incident
-  commands, pre-signing successor freeze and authority request, closed incident-kind enum,
-  four kind-specific domain-separated incident-id
-  preimages and golden vectors, the complete retired-census and recursively enumerated
-  frozen-primary-evidence census grammars, complete and identity-bearing bounded-failure
-  vectors, persisted structured status preimage with every kind-specific component, the
-  distinct deterministic `Sc002IncidentCliStatusV1` JSON projection and
-  six-value remediation table, exact thirteen-line human projection, immutable incident anchor and metadata,
-  payload, resolution-evidence, successor-freeze, disposition-request, and append-only
-  status/resolution paths, separate
-  preimage/anchor/metadata/status/resolution/freeze/request/disposition/CLI schemas,
-  file-and-every-ancestor-directory durable publication/recovery protocol,
-  disposition/signature/schema/golden/negative contract, retirement identity,
-  private nonserializable sidecar-cleanup owner plus lifetime-bound existing-name namespace
-  write owner, bounded zero-mutation
-  candidate-retention owner, recursive whole-scope retention guard, and validator
-  authority. It also owns the shared
-  `tests/golden/delivery/sc002-domain-hash-vectors-v1.json` oracle, the exact 61 receipt,
-  73 malformed-census, and 35 direct-final publication negative registries, the
-  seventeen-row recovery
-  redaction registry including raw `st_uid`, `st_gid`, `st_rdev`, and symlink-target bytes,
-  the eight-vector recursive-census
-  oracle, nineteen-digest SC-002 oracle, and the no-raw-hash
-  receipt locator. The same Version
-  2 amendment owns the source-floor canonical JSON policy,
-  `SourceGenerationIdentityV1`, complete digest/domain/length-framing and signature registry,
-  strict schemas, checked-in golden vectors, private nonserializable authenticated issuer
-  provenance consumed into the private validated-floor result, copied-digest rejection, and
-  exact 32/26/21 negative registries; compatibility authorities implement but do not
-  redefine them. It must receive the parent ADR's
-  required approvals, regenerate the spec-set/work-item/implementation-graph artifacts, and
-  pass Gate 0 on a commit that is an ancestor of T589's base. T589 MUST NOT own or perform
-  that external amendment.
+  T604 collects the exact-F6 operator sample in W6 and emits only the evidence assigned to it
+  by accepted Version 2. T479 imports `operator-nix-activation-cleanup`; that identifier is not
+  a member of the Wave 5 exact-seven profile. The sole authority for receipt shape,
+  publication, incident handling, disposition, recovery, source-floor evidence, fixture and
+  poison registries, and traceability is accepted Version 2
+  `ADR-046-validation-and-delivery` plus generated `VD2-SC002-RECEIPT`,
+  `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`,
+  `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
+  `VD2-SC002-TRACEABILITY` rows. Until those rows are accepted, generated, ancestor-bound,
+  and passing Gate 0, every consumer fails closed. No feature-local field list, digest recipe,
+  fixture census, registry count, or transition matrix can satisfy SC-002.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
   framework-internal switches. Zero capabilities disappear silently: any deliberate

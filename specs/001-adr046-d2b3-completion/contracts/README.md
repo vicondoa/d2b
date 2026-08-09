@@ -209,20 +209,23 @@ merge-target registration, merge eligibility, and merge.
     and readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and
     `Device/acceptance-tpm`, then removes only the Device and proves its state-preserving
     cleanup without disturbing the ready, identity-stable, unrecreated acceptance
-    Volume/Network or unrelated resources. W4 history remains unchanged, but T336-T355 are
-    pulled forward before T604 to land the real adapter, double-opt-in migration, and
-    production network-local path.
-    This one denied-east-west sample is not double-opt-in evidence. The untouched external
-    Network specification remains sole-opt-in canon; W4 adjudication, T070, T071, and T220
-    require its accepted versioned correction/migration plus all four Network/Host cases, and
-    no feature-local status can unblock them.
+    Volume/Network or unrelated resources. W4 history remains byte-preserved but its sole
+    Network opt-in is nonconforming and non-authorizing.
+    This one denied-east-west sample is not double-opt-in evidence. Before T220 freezes F,
+    an accepted external Network contract/work-item amendment must land the double-opt-in
+    migration, assign the real adapter and production network-local path to pre-T220 owners,
+    and pass all four Network/Host cases. Current W6 rows T336-T355 cannot satisfy that
+    ordering and must be moved or replaced by the external manifest amendment. T070, T071,
+    T220, and T219 fail closed until those ancestors exist; no feature-local status can
+    unblock them. T604 remains W6 acceptance-only and consumes the landed implementation.
     Guest runtime-effect acceptance
     is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480;
     Guest emission, status, or refusal cannot
     satisfy this partial US1 production-plane checkpoint. Refusals are
     separate negative cases. The exact
-    candidate result is emitted once by T600 as
-    `operator-nix-activation-cleanup` and is required by T602 and T219.
+    candidate result is emitted once by T604 as
+    `operator-nix-activation-cleanup`, imported by T479 on exact F6, and excluded from the
+    Wave 5 T589/T600-T602 profile.
 13. **C1 is a coordinated unreleased-v3 correction.** Constitution 2.2.0 authorizes T605 to
     add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialized only
     as `system-core-host` and `system-core-user`; underscore spellings remain internal
@@ -235,10 +238,12 @@ merge-target registration, merge eligibility, and merge.
     remains pending.
 14. **Exact-candidate evidence and close are closed.** T220 converges every repository change
     before freezing F. T600 owns exactly `production-session-watch`,
-    `effect-replay-cleanup`, `audit-drain-replay`, `system-core-handler-contract`, and
-    `operator-nix-activation-cleanup`; T601 owns exactly
+    `effect-replay-cleanup`, `audit-drain-replay`, and `system-core-handler-contract`;
+    T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
-    `cli-reference-conformance`. T602 rejects any unknown, duplicate, missing, extra,
+    `cli-reference-conformance`. Those seven identifiers are the complete Wave 5 profile.
+    T604 separately owns W6 `operator-nix-activation-cleanup`, which T479 imports and which
+    cannot enter the Wave 5 profile. T602 rejects any unknown, duplicate, missing, extra,
     wrong-lane, or conflated identifier. Wave 5's retained `panel-request.json` has already
     consumed its binding surface. T219 performs no binding action and may perform
     only a non-request close action expressly authorized by an accepted external disposition
