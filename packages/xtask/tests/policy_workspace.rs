@@ -444,7 +444,8 @@ fn heavy_gate_build_violations(makefile: &str) -> Vec<String> {
         .next()
         .unwrap_or(block);
     for required in [
-        "--manifest-path packages/Cargo.toml",
+        "cd packages",
+        "--manifest-path Cargo.toml",
         "--locked",
         "-p xtask",
         "--bin xtask",
@@ -454,6 +455,14 @@ fn heavy_gate_build_violations(makefile: &str) -> Vec<String> {
                 "heavy-gate-build must use the governed xtask selector `{required}`"
             ));
         }
+    }
+    if !block.contains("@cd packages &&") {
+        violations.push("heavy-gate-build must execute Cargo from packages/".to_owned());
+    }
+    if block.contains("--manifest-path packages/Cargo.toml") {
+        violations.push(
+            "heavy-gate-build must keep the manifest path relative to packages/".to_owned(),
+        );
     }
     violations
 }
@@ -1059,7 +1068,8 @@ fn heavy_gate_build_uses_the_locked_xtask_binary_manifest() {
     );
 
     for required in [
-        "--manifest-path packages/Cargo.toml",
+        "cd packages",
+        "--manifest-path Cargo.toml",
         "--locked",
         "-p xtask",
         "--bin xtask",

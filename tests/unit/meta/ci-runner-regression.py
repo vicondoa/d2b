@@ -34,12 +34,12 @@ API_INPUT_FINGERPRINT = (
 )
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-host-binaries.yml"
 RELEASE_BINARY_SELECTORS = (
-    ("d2bd", "d2bd"),
-    ("d2b", "d2b"),
-    ("d2b-wayland-proxy", "d2b-wayland-proxy"),
-    ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper"),
-    ("d2b-host", "d2b-activation-helper"),
-    ("d2b-priv-broker", "d2b-priv-broker"),
+    ("d2bd", "d2bd", "packages/Cargo.toml"),
+    ("d2b", "d2b", "packages/Cargo.toml"),
+    ("d2b-wayland-proxy", "d2b-wayland-proxy", "packages/Cargo.toml"),
+    ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper", "packages/Cargo.toml"),
+    ("d2b-host", "d2b-activation-helper", "packages/Cargo.toml"),
+    ("d2b-priv-broker", "d2b-priv-broker", "packages/d2b-priv-broker/Cargo.toml"),
 )
 
 
@@ -295,6 +295,87 @@ def workflow_job_block(workflow: str, job_id: str) -> str:
     return workflow[match.start() : end]
 
 
+def workflow_step_blocks(job: str) -> list[str]:
+    """Return workflow steps without making assertions depend on step names."""
+    lines = job.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^      - ", line)
+    ]
+    return [
+        "\n".join(lines[start:end])
+        for start, end in zip(starts, starts[1:] + [len(lines)])
+    ]
+
+
+def workflow_step_run_source(step: str) -> str | None:
+    """Extract one step's literal run body, independent of its display name."""
+    lines = step.splitlines()
+    run_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.match(r"^        run:\s*", line)
+        ),
+        None,
+    )
+    if run_index is None:
+        return None
+    body = lines[run_index + 1 :]
+    return "\n".join(
+        line[10:] if line.startswith("          ") else line for line in body
+    )
+
+
+def workflow_shell_steps(job: str) -> list[tuple[int, str, str]]:
+    """Return (step index, step text, executable shell body) tuples."""
+    result: list[tuple[int, str, str]] = []
+    for index, step in enumerate(workflow_step_blocks(job)):
+        run_source = workflow_step_run_source(step)
+        if run_source is not None:
+            result.append((index, step, executable_shell_source(run_source)))
+    return result
+
+
+def cargo_build_blocks(source: str) -> list[str]:
+    """Split a release shell body at its explicitly pinned cargo commands."""
+    starts = list(
+        re.finditer(
+            r'(?m)^[ \t]*rustup run "\$PINNED" cargo build\b',
+            source,
+        )
+    )
+    return [
+        source[start.start() : (next_start.start() if next_start else len(source))]
+        for start, next_start in zip(starts, starts[1:] + [None])
+    ]
+
+
+def move_workflow_step_before(
+    workflow: str, step_marker: str, before_marker: str
+) -> str:
+    """Move one top-level workflow step for an ordering mutation fixture."""
+    lines = workflow.splitlines(keepends=True)
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^      - ", line)
+    ]
+    step_start = next(
+        index for index in starts if step_marker in lines[index]
+    )
+    step_end = next(
+        (index for index in starts if index > step_start),
+        len(lines),
+    )
+    step_lines = lines[step_start:step_end]
+    del lines[step_start:step_end]
+    before_start = next(index for index, line in enumerate(lines) if before_marker in line)
+    lines[before_start:before_start] = step_lines
+    return "".join(lines)
+
+
 def release_workflow_contract_violations(workflow: str) -> list[str]:
     violations: list[str] = []
     dispatch = workflow.split("permissions:", 1)[0]
@@ -308,8 +389,76 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
     if "gh pr create" in workflow or "release/prebuilt" in workflow:
         violations.append("release workflow must not repair the prebuilt manifest")
 
-    build = workflow_job_block(workflow, "build")
-    release = workflow_job_block(workflow, "release")
+    try:
+        identity = workflow_job_block(workflow, "prepublication-identity")
+        build = workflow_job_block(workflow, "build")
+        release = workflow_job_block(workflow, "release")
+    except AssertionError as error:
+        violations.append(str(error))
+        return violations
+
+    identity_steps = workflow_step_blocks(identity)
+    identity_runs = workflow_shell_steps(identity)
+    identity_checkout_indices = [
+        index
+        for index, step in enumerate(identity_steps)
+        if "actions/checkout@" in step
+    ]
+    if not identity_checkout_indices:
+        violations.append("prepublication identity has no checkout step")
+    else:
+        checkout_step = identity_steps[identity_checkout_indices[0]]
+        if "ref: v3" not in checkout_step:
+            violations.append("prepublication identity must begin from the trusted v3 checkout")
+        if "${{ inputs.merged_v3_head }}" in checkout_step:
+            violations.append("prepublication identity must not checkout the caller-selected ref")
+
+    identity_candidates = [
+        (index, step, source)
+        for index, step, source in identity_runs
+        if "git fetch origin v3 --no-tags --force" in source
+        and "GITHUB_OUTPUT" in source
+    ]
+    if len(identity_candidates) != 1:
+        violations.append("prepublication identity must have one executable validation step")
+        identity_index = None
+        identity_source = ""
+    else:
+        identity_index, _, identity_source = identity_candidates[0]
+        first_run = min((index for index, _, _ in identity_runs), default=None)
+        if first_run != identity_index:
+            violations.append("prepublication identity must validate before any shell step")
+        for required in [
+            "trusted_checkout_head",
+            "current_v3_head",
+            "current_v3_tree",
+            '[ "$trusted_checkout_head" = "$current_v3_head" ]',
+            '[ "$MERGED_V3_HEAD" = "$current_v3_head" ]',
+            '[ "$SEALED_TREE" = "$current_v3_tree" ]',
+            'git cat-file -e "$SEALED_TREE^{tree}"',
+            "package_version",
+            '[ "$package_version" = "$VERSION" ]',
+            "nix/prebuilt.json",
+            "CHANGELOG.md",
+            "flake_versions",
+            "printf 'merged_v3_head=%s\\n' \"$current_v3_head\"",
+            "printf 'sealed_tree=%s\\n' \"$current_v3_tree\"",
+            "printf 'v3_tree=%s\\n' \"$current_v3_tree\"",
+        ]:
+            if required not in identity_source:
+                violations.append(
+                    f"prepublication identity validation is missing executable `{required}`"
+                )
+
+    for required in [
+        "version: ${{ steps.identity.outputs.version }}",
+        "merged_v3_head: ${{ steps.identity.outputs.merged_v3_head }}",
+        "sealed_tree: ${{ steps.identity.outputs.sealed_tree }}",
+        "v3_tree: ${{ steps.identity.outputs.v3_tree }}",
+    ]:
+        if required not in identity:
+            violations.append(f"validated identity output is missing `{required}`")
+
     for job_name, block in (("build", build), ("release", release)):
         if "needs: [prepublication-identity" not in block:
             violations.append(f"{job_name} is not behind prepublication identity")
@@ -320,48 +469,212 @@ def release_workflow_contract_violations(workflow: str) -> list[str]:
             violations.append(f"{job_name} does not recheck the sealed tree")
         if "nix/prebuilt.json" not in block:
             violations.append(f"{job_name} does not recheck the prebuilt manifest")
+        if "${{ inputs." in block:
+            violations.append(f"{job_name} consumes caller inputs instead of validated outputs")
 
-    activation = build.find("Activate pinned Rust toolchain")
-    cache = build.find("Swatinem/rust-cache")
-    build_step = build.find("Build release binaries")
-    if activation < 0 or cache < 0 or build_step < 0:
+        output_prefix = "needs.prepublication-identity.outputs."
+        for required in [
+            f"ref: ${{{{ {output_prefix}merged_v3_head }}}}",
+            f"VERSION: ${{{{ {output_prefix}version }}}}",
+            f"host-binaries-${{{{ {output_prefix}version }}}}",
+            f"CURRENT_V3_TREE: ${{{{ {output_prefix}v3_tree }}}}",
+        ]:
+            if required not in block:
+                violations.append(f"{job_name} does not consume validated `{required}`")
+
+    build_steps = workflow_step_blocks(build)
+    build_runs = workflow_shell_steps(build)
+    build_verifications = [
+        (index, step, source)
+        for index, step, source in build_runs
+        if "git fetch origin v3 --no-tags --force" in source
+        and "MERGED_V3_HEAD" in source
+        and "SEALED_TREE" in source
+    ]
+    if len(build_verifications) != 1:
+        violations.append("release build must have one executable identity verification step")
+        build_verify_index = None
+        build_verify_source = ""
+    else:
+        build_verify_index, _, build_verify_source = build_verifications[0]
+        for required in [
+            "package_version",
+            '[ "$package_version" = "$VERSION" ]',
+            "CHANGELOG.md",
+            "flake_versions",
+            "manifest_version",
+        ]:
+            if required not in build_verify_source:
+                violations.append(
+                    f"release build identity verification is missing executable `{required}`"
+                )
+        if any(index < build_verify_index for index, _, _ in build_runs):
+            violations.append("release build executes a shell step before identity validation")
+
+    activation_candidates = [
+        (index, source)
+        for index, _, source in build_runs
+        if "rustup toolchain install" in source
+    ]
+    active_assertions = [
+        (index, source)
+        for index, _, source in build_runs
+        if "rustup show active-toolchain" in source
+    ]
+    build_candidates = [
+        (index, source)
+        for index, _, source in build_runs
+        if "cargo build" in source
+    ]
+    cache_indices = [
+        index
+        for index, step in enumerate(build_steps)
+        if "Swatinem/rust-cache@" in step
+    ]
+    if (
+        build_verify_index is None
+        or len(activation_candidates) != 1
+        or len(active_assertions) != 1
+        or len(build_candidates) != 1
+        or len(cache_indices) != 1
+    ):
         violations.append("release build ordering steps are incomplete")
-    elif not activation < cache < build_step:
-        violations.append("the pinned toolchain must be active before the cache and build")
-    if "Assert active Rust toolchain versions" not in build:
-        violations.append("release build must assert active toolchain versions")
+    else:
+        activation_index, activation_source = activation_candidates[0]
+        active_assertion_index, active_assertion_source = active_assertions[0]
+        build_index, build_source = build_candidates[0]
+        cache_index = cache_indices[0]
+        if not (
+            build_verify_index
+            < activation_index
+            < active_assertion_index
+            < cache_index
+            < build_index
+        ):
+            violations.append(
+                "identity validation, pinned toolchain, active assertion, cache, and build are out of order"
+            )
+        for required in [
+            "packages/rust-toolchain.toml",
+            "rustup toolchain install",
+            'rustup default "$PINNED"',
+        ]:
+            if required not in activation_source:
+                violations.append(
+                    f"release build toolchain activation is missing executable `{required}`"
+                )
+        for required in [
+            "rustup show active-toolchain",
+            'rustup run "$PINNED" cargo --version',
+            'rustup run "$PINNED" rustc --version',
+            "actual_cargo",
+            "actual_rustc",
+        ]:
+            if required not in active_assertion_source:
+                violations.append(
+                    f"release build toolchain assertion is missing executable `{required}`"
+                )
+        if build_source.count('rustup run "$PINNED" cargo build') != len(
+            RELEASE_BINARY_SELECTORS
+        ):
+            violations.append("every release build must invoke cargo through the pinned toolchain")
 
-    build_commands = build[build_step:] if build_step >= 0 else ""
-    command_blocks: list[str] = []
-    for package_name, binary_name in RELEASE_BINARY_SELECTORS:
-        selector = f"--package {package_name} --bin {binary_name}"
-        if build_commands.count(selector) != 1:
-            violations.append(f"release selector is not unique: {selector}")
-            continue
-        position = build_commands.find(selector)
-        command_start = build_commands.rfind("cargo build", 0, position)
-        command_end = build_commands.find("\n          cargo build", position)
-        if command_start < 0:
-            violations.append(f"release selector has no cargo build: {selector}")
-            continue
-        if command_end < 0:
-            command_end = len(build_commands)
-        command_blocks.append(build_commands[command_start:command_end])
-    if len(command_blocks) == len(RELEASE_BINARY_SELECTORS):
-        for block in command_blocks:
-            if "--locked" not in block:
-                violations.append("every release cargo build must use --locked")
-        ordinary_blocks = command_blocks[:-1]
-        if any("--no-default-features" in block for block in ordinary_blocks):
-            violations.append("ordinary release packages must retain default features")
-        if "--no-default-features" not in command_blocks[-1]:
-            violations.append("the broker release build must disable default features")
+        command_blocks = cargo_build_blocks(build_source)
+        if len(command_blocks) != len(RELEASE_BINARY_SELECTORS):
+            violations.append("release build does not have exactly six pinned cargo commands")
+        for package_name, binary_name, manifest_path in RELEASE_BINARY_SELECTORS:
+            selector = f"--package {package_name} --bin {binary_name}"
+            matches = [block for block in command_blocks if selector in block]
+            if len(matches) != 1:
+                violations.append(f"release selector is not unique: {selector}")
+                continue
+            block = matches[0]
+            if "--release" not in block or "--locked" not in block:
+                violations.append(f"release selector is missing release/locked mode: {selector}")
+            if f"--manifest-path {manifest_path}" not in block:
+                violations.append(
+                    f"release selector has the wrong manifest path: {selector}"
+                )
+            if re.search(r"(?<![A-Za-z0-9_-])--(?:all-)?features(?:[ =]|$)", block):
+                violations.append(f"release selector enables an extra feature: {selector}")
+            if package_name == "d2b-priv-broker":
+                if "--no-default-features" not in block:
+                    violations.append(f"broker release selector enables default features: {selector}")
+            elif "--no-default-features" in block:
+                violations.append(f"ordinary release selector disables default features: {selector}")
 
-    tag = release.find("Create annotated tag")
-    artifact_check = release.find("Verify release identity and artifacts")
-    release_creation = release.find("Create GitHub release")
-    if not artifact_check < tag < release_creation:
-        violations.append("release artifacts must be verified before tag and release")
+    release_steps = workflow_step_blocks(release)
+    release_runs = workflow_shell_steps(release)
+    release_verifications = [
+        (index, step, source)
+        for index, step, source in release_runs
+        if "git fetch origin v3 --no-tags --force" in source
+        and "MERGED_V3_HEAD" in source
+        and "SEALED_TREE" in source
+    ]
+    if len(release_verifications) != 1:
+        violations.append("release publication must have one executable identity verification step")
+        release_verify_index = None
+        release_verify_source = ""
+    else:
+        release_verify_index, _, release_verify_source = release_verifications[0]
+        for required in [
+            "package_version",
+            '[ "$package_version" = "$VERSION" ]',
+            "CHANGELOG.md",
+            "flake_versions",
+            "manifest_version",
+        ]:
+            if required not in release_verify_source:
+                violations.append(
+                    f"release publication identity verification is missing executable `{required}`"
+                )
+        if any(index < release_verify_index for index, _, _ in release_runs):
+            violations.append("release publication executes a shell step before identity validation")
+
+    tag_candidates = [
+        (index, step, source)
+        for index, step, source in release_runs
+        if "git tag -a" in source and "git push" in source
+    ]
+    release_creation_candidates = [
+        (index, source)
+        for index, _, source in release_runs
+        if "gh release create" in source
+    ]
+    artifact_candidates = [
+        (index, source)
+        for index, _, source in release_runs
+        if "sha256sum --check --strict SHA256SUMS" in source
+    ]
+    if len(tag_candidates) != 1:
+        violations.append("release publication must have one executable annotated-tag push")
+    else:
+        tag_index, tag_step, tag_source = tag_candidates[0]
+        if "contents: write" not in release:
+            violations.append("release tag push job must grant contents:write")
+        for required in [
+            "GITHUB_TOKEN: ${{ github.token }}",
+            '[ -n "$GITHUB_TOKEN" ]',
+            "http.https://github.com/.extraheader",
+            "AUTHORIZATION: bearer $GITHUB_TOKEN",
+            'git tag -a "v$VERSION" "$MERGED_V3_HEAD"',
+            'git push origin "v$VERSION"',
+        ]:
+            if required not in tag_step and required not in tag_source:
+                violations.append(f"annotated-tag push is missing executable `{required}`")
+        if (
+            release_verify_index is not None
+            and (tag_index <= release_verify_index)
+        ):
+            violations.append("annotated tag must be created after release identity verification")
+        if len(release_creation_candidates) != 1:
+            violations.append("release publication must have one executable GitHub release step")
+        elif tag_index >= release_creation_candidates[0][0]:
+            violations.append("annotated tag must be pushed before the GitHub release")
+        if len(artifact_candidates) != 1 or tag_index <= artifact_candidates[0][0]:
+            violations.append("release artifacts must be verified before annotated tag push")
+
     return violations
 
 
@@ -2244,6 +2557,17 @@ wait
             [],
         )
 
+        renamed_step = workflow.replace(
+            "      - name: Activate pinned Rust toolchain",
+            "      - name: Toolchain setup",
+            1,
+        )
+        self.assertEqual(
+            release_workflow_contract_violations(renamed_step),
+            [],
+            "release policy must inspect executable step contents rather than names",
+        )
+
         mutations = (
             (
                 workflow.replace("workflow_dispatch:", "workflow_manual:", 1),
@@ -2251,11 +2575,34 @@ wait
             ),
             (
                 workflow.replace(
-                    "      - name: Activate pinned Rust toolchain",
-                    "      - name: Cache before toolchain activation",
+                    'rustup run "$PINNED" cargo build',
+                    "cargo build",
                     1,
                 ),
-                "toolchain ordering",
+                "ambient toolchain",
+            ),
+            (
+                move_workflow_step_before(
+                    workflow,
+                    "Swatinem/rust-cache@",
+                    "      - name: Activate pinned Rust toolchain",
+                ),
+                "cache before toolchain",
+            ),
+            (
+                workflow.replace(
+                    '[ "$package_version" = "$VERSION" ]',
+                    '[ "$package_version" = "$EXPECTED_VERSION" ]',
+                ),
+                "missing version assertion",
+            ),
+            (
+                workflow.replace(
+                    "--package d2bd --bin d2bd",
+                    "--package d2bd --bin d2bd --features extra",
+                    1,
+                ),
+                "extra feature",
             ),
             (
                 workflow.replace(
@@ -2284,11 +2631,35 @@ wait
             ),
             (
                 workflow.replace(
-                    "cargo build --release --locked --manifest-path",
-                    "cargo build --release --manifest-path",
+                    "--manifest-path packages/Cargo.toml",
+                    "--manifest-path packages/other/Cargo.toml",
                     1,
                 ),
-                "locked build",
+                "manifest path",
+            ),
+            (
+                workflow.replace(
+                    "ref: v3",
+                    "ref: ${{ inputs.merged_v3_head }}",
+                    1,
+                ),
+                "unvalidated ref execution",
+            ),
+            (
+                workflow.replace(
+                    "GITHUB_TOKEN: ${{ github.token }}",
+                    "",
+                    1,
+                ),
+                "tag authentication",
+            ),
+            (
+                workflow.replace(
+                    "      contents: write",
+                    "      contents: read",
+                    1,
+                ),
+                "tag contents permission",
             ),
         )
         for mutated, label in mutations:
