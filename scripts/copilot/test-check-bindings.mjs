@@ -369,6 +369,34 @@ const CASES = [
     expectText: "panel verification output extension changed",
   },
   {
+    name: "integrator staging before finalized evidence and notes is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/d2b-integrator.agent.md",
+        (text) => text.replace(
+          "Complete both before invoking `stage-diffs.sh`",
+          "Complete both after invoking `stage-diffs.sh`",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "immutable staging instruction is missing pre-staging input order guidance",
+  },
+  {
+    name: "integrator edits after the completion marker are rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/d2b-integrator.agent.md",
+        (text) => text.replace(
+          "do not edit, replace,",
+          "may edit and replace,",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "immutable staging instruction is missing immutable completion boundary guidance",
+  },
+  {
     name: "non-owner direct feature write claim is rejected",
     mutate: (dir) =>
       mutateFile(

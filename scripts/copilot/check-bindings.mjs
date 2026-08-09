@@ -1329,6 +1329,66 @@ for (const [label, path] of [
   }
 }
 
+// The integrator must order reviewer-input preparation before staging and
+// preserve the completion marker as the skill's byte-binding boundary. Check
+// both sides so weakening either the canonical contract or its operator-facing
+// instruction fails closed.
+const normalizedPromptText = (text) => text.replace(/\s+/g, " ").trim();
+const immutableStagingRequirements = [
+  {
+    label: "finalized validation evidence",
+    canonical:
+      "Finalize the non-empty validation evidence before staging and pass it with the required `--evidence` argument.",
+    integrator:
+      "Finalize the non-empty validation evidence before staging and pass it with the required `--evidence` argument.",
+  },
+  {
+    label: "finalized reviewer notes",
+    canonical:
+      "To supply integrator-authored notes, finalize them before staging and pass `--reviewer-notes-dir`;",
+    integrator:
+      "Finalize the complete selected-roster reviewer-note set before staging and pass it with `--reviewer-notes-dir`.",
+  },
+  {
+    label: "pre-staging input order",
+    canonical: "Stage the candidate with the same lifecycle and selection:",
+    integrator: "Complete both before invoking `stage-diffs.sh`",
+  },
+  {
+    label: "immutable completion boundary",
+    canonical:
+      "Once `.complete` exists, the round is immutable: do not edit, replace, delete, or backfill a staged artifact.",
+    integrator:
+      "Once `.complete` exists, the round is immutable: do not edit, replace, delete, or backfill a staged artifact.",
+  },
+  {
+    label: "changed-input restaging",
+    canonical: "changed evidence or reviewer notes require a new qualified round.",
+    integrator: "changed evidence or reviewer notes require a new qualified round.",
+  },
+];
+const integratorAgent = agents.get("d2b-integrator");
+if (!existsSync(panelSkill)) {
+  fail("d2b-panel-round: immutable staging contract is missing.");
+} else if (!integratorAgent) {
+  fail("d2b-integrator: immutable staging guidance cannot be checked.");
+} else {
+  const canonical = normalizedPromptText(readFileSync(panelSkill, "utf8"));
+  const integrator = normalizedPromptText(integratorAgent.text);
+  for (const requirement of immutableStagingRequirements) {
+    if (!canonical.includes(normalizedPromptText(requirement.canonical))) {
+      fail(
+        `d2b-panel-round: immutable staging contract is missing ${requirement.label} guidance.`,
+      );
+    }
+    if (!integrator.includes(normalizedPromptText(requirement.integrator))) {
+      fail(
+        `d2b-integrator: immutable staging instruction is missing ${requirement.label} guidance.`,
+      );
+    }
+  }
+}
+
 for (const [skill, marker] of Object.entries(SPECKIT_ROUTE_MARKERS)) {
   const path = join(skillsDir, skill, "SKILL.md");
   if (!existsSync(path)) {

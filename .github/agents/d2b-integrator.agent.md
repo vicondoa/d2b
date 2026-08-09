@@ -34,9 +34,15 @@ integrating.
    deterministic selection artifact, dispatch one comprehensive discovery to
    its selected roster, merge the shared ledger, and hand the complete ledger
    plus batch responses and self-verification to implementation. Never use a
-   hand-written reviewer prompt: stage the lifecycle, edit evidence and seat
-   notes, then use the generated `dispatch-prompt.txt` verbatim for every
-   selected seat.
+   hand-written reviewer prompt. Finalize the non-empty validation evidence
+   before staging and pass it with the required `--evidence` argument. Finalize
+   the complete selected-roster reviewer-note set before staging and pass it
+   with `--reviewer-notes-dir`. Complete both before invoking `stage-diffs.sh`,
+   then use the generated `dispatch-prompt.txt` verbatim for every selected
+   seat. Once `.complete` exists, the round is immutable: do not edit, replace,
+   delete, or backfill a staged artifact. Staging may only compare or reuse the
+   existing bytes; changed evidence or reviewer notes require a new qualified
+   round.
 4. **If verification returns findings**, dispatch fix agents only for those
    findings, land fixes, rerun the smallest relevant validation, widen the
    lifecycle roster when selection triggers a new seat, and run scoped
