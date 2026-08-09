@@ -25,7 +25,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   adaptVerificationVerdict,
   createApprovalArtifact,
-  readSelection,
+  validateSelection,
   validateSelectionCandidate,
   validateSelectionAgainstTable,
   validateLedger,
@@ -45,9 +45,15 @@ const ARTIFACT_KIND = "d2b-delivery/panel-receipt";
 const SCHEMA_VERSION = 2;
 const PANEL_FORMAT_VERSION = 1;
 const MAX_RECOMMENDATIONS = 64;
-// Reviewer-authored free text is the only unbounded input on the sealing path.
+// Reviewer-authored free text is bounded before it reaches a generated record.
 const MAX_SUMMARY_CHARS = 4000;
 const MAX_RECOMMENDATION_CHARS = 4000;
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_STAGED_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
+const MAX_POST_STAGE_JSON_BYTES = 16 * 1024 * 1024;
+const MAX_VERDICT_BYTES = 512 * 1024;
+const MAX_ARTIFACT_PATH_CHARS = 1024;
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -60,45 +66,131 @@ function usage() {
   );
 }
 
-const dir = process.argv[2];
-const selectionIndex = process.argv.indexOf("--selection");
-const ledgerIndex = process.argv.indexOf("--ledger");
-const responsesIndex = process.argv.indexOf("--responses");
-const verificationResultsIndex = process.argv.indexOf("--verification-results");
-const approvalIndex = process.argv.indexOf("--approval");
-const selectionPath = selectionIndex >= 0 ? process.argv[selectionIndex + 1] : undefined;
-const ledgerPath = ledgerIndex >= 0 ? process.argv[ledgerIndex + 1] : undefined;
-const responsesPath = responsesIndex >= 0 ? process.argv[responsesIndex + 1] : undefined;
-const verificationResultsPath =
-  verificationResultsIndex >= 0
-    ? process.argv[verificationResultsIndex + 1]
-    : undefined;
-const approvalPath = approvalIndex >= 0 ? process.argv[approvalIndex + 1] : undefined;
-if (
-  !dir ||
-  selectionIndex < 0 ||
-  !selectionPath ||
-  ledgerIndex < 0 ||
-  !ledgerPath ||
-  responsesIndex < 0 ||
-  !responsesPath ||
-  verificationResultsIndex < 0 ||
-  !verificationResultsPath ||
-  approvalIndex < 0 ||
-  !approvalPath ||
-  selectionPath.startsWith("--") ||
-  ledgerPath.startsWith("--") ||
-  responsesPath.startsWith("--") ||
-  verificationResultsPath.startsWith("--") ||
-  approvalPath.startsWith("--")
-) {
+const REQUIRED_FLAGS = new Map([
+  ["--selection", "selectionPath"],
+  ["--ledger", "ledgerPath"],
+  ["--responses", "responsesPath"],
+  ["--verification-results", "verificationResultsPath"],
+  ["--approval", "approvalPath"],
+]);
+
+function parseArguments(argv) {
+  let roundDir;
+  const values = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (REQUIRED_FLAGS.has(argument)) {
+      const key = REQUIRED_FLAGS.get(argument);
+      if (Object.hasOwn(values, key)) {
+        throw new Error(`option ${argument} may be supplied only once`);
+      }
+      const value = argv[index + 1];
+      if (
+        value === undefined ||
+        value.length === 0 ||
+        value.startsWith("-")
+      ) {
+        throw new Error(`option ${argument} requires one value`);
+      }
+      values[key] = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) {
+      throw new Error(`unknown option "${argument}"`);
+    }
+    if (roundDir !== undefined) {
+      throw new Error(`unexpected positional argument "${argument}"`);
+    }
+    if (argument.length === 0) {
+      throw new Error("round directory positional must not be empty");
+    }
+    roundDir = argument;
+  }
+  if (roundDir === undefined) {
+    throw new Error("exactly one round directory positional is required");
+  }
+  for (const [flag, key] of REQUIRED_FLAGS) {
+    if (!Object.hasOwn(values, key)) {
+      throw new Error(`missing required option ${flag}`);
+    }
+  }
+  return { dir: roundDir, ...values };
+}
+
+let parsedArguments;
+try {
+  parsedArguments = parseArguments(process.argv.slice(2));
+} catch (cause) {
   console.error(usage());
+  console.error(`error: ${cause.message}`);
   process.exit(2);
+}
+
+const {
+  dir,
+  selectionPath,
+  ledgerPath,
+  responsesPath,
+  verificationResultsPath,
+  approvalPath,
+} = parsedArguments;
+
+function readLimitedBytes(path, label, maxBytes) {
+  const bytes = readFileSync(path);
+  if (bytes.length > maxBytes) {
+    throw new Error(`${label} exceeds ${maxBytes} bytes`);
+  }
+  return bytes;
+}
+
+function parseJsonBytes(bytes, path, label) {
+  try {
+    const text = bytes.toString("utf8");
+    return {
+      bytes,
+      text,
+      value: JSON.parse(text),
+    };
+  } catch (cause) {
+    throw new Error(`invalid ${label} at ${path}: ${cause.message}`);
+  }
+}
+
+function readPostStageJson(path, label, maxBytes = MAX_POST_STAGE_JSON_BYTES) {
+  let bytes;
+  try {
+    bytes = readLimitedBytes(path, label, maxBytes);
+  } catch (cause) {
+    if (cause.code === "ENOENT") {
+      fail(`missing ${label} at ${path}`);
+    } else {
+      fail(`cannot read ${label} bytes at ${path}: ${cause.message}`);
+    }
+    return { bytes: null, text: "", value: null };
+  }
+  try {
+    return parseJsonBytes(bytes, path, label);
+  } catch (cause) {
+    fail(cause.message);
+    return { bytes, text: bytes.toString("utf8"), value: null };
+  }
+}
+
+function stagedArtifactLimit(relativePath) {
+  return relativePath.startsWith("agent-definitions/")
+    ? MAX_AGENT_DEFINITION_BYTES
+    : MAX_STAGED_ARTIFACT_BYTES;
 }
 
 function readCompletionBoundArtifacts(roundDir) {
   const markerPath = join(roundDir, ".complete");
-  const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  const markerBytes = readLimitedBytes(
+    markerPath,
+    "completion marker",
+    MAX_COMPLETION_MARKER_BYTES,
+  );
+  const marker = JSON.parse(markerBytes.toString("utf8"));
   const expectedKeys = [
     "artifact_bytes",
     "artifact_kind",
@@ -143,11 +235,14 @@ function readCompletionBoundArtifacts(roundDir) {
   for (const relativePath of Object.keys(digests).sort()) {
     if (
       relativePath.length === 0 ||
+      relativePath.length > MAX_ARTIFACT_PATH_CHARS ||
       relativePath.startsWith("/") ||
-      relativePath.split("/").includes("..") ||
+      relativePath.includes("\\") ||
+      relativePath.split("/").some((component) => component === "" || component === "." || component === "..") ||
       !/^[0-9a-f]{64}$/u.test(digests[relativePath]) ||
       !Number.isSafeInteger(sizes[relativePath]) ||
-      sizes[relativePath] < 0
+      sizes[relativePath] < 0 ||
+      sizes[relativePath] > stagedArtifactLimit(relativePath)
     ) {
       throw new Error(`completion marker has an invalid artifact binding for ${relativePath}`);
     }
@@ -155,7 +250,11 @@ function readCompletionBoundArtifacts(roundDir) {
     if (path !== roundDir && !path.startsWith(`${roundDir}/`)) {
       throw new Error(`completion marker artifact escapes the round directory: ${relativePath}`);
     }
-    const bytes = readFileSync(path);
+    const bytes = readLimitedBytes(
+      path,
+      `completion-bound artifact ${relativePath}`,
+      stagedArtifactLimit(relativePath),
+    );
     const digest = createHash("sha256").update(bytes).digest("hex");
     if (digest !== digests[relativePath] || bytes.length !== sizes[relativePath]) {
       throw new Error(
@@ -169,24 +268,11 @@ function readCompletionBoundArtifacts(roundDir) {
 
 function canonicalRoundPath(roundDir, supplied, name) {
   const expected = join(roundDir, name);
-  if (resolve(supplied) !== expected) {
+  if (typeof supplied !== "string" || resolve(supplied) !== expected) {
     throw new Error(`${name} must use the canonical round-local path ${expected}`);
   }
   return expected;
 }
-
-const readJson = (path, label) => {
-  if (!existsSync(path)) {
-    fail(`missing ${label} at ${path}`);
-    return null;
-  }
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch (cause) {
-    fail(`invalid ${label} at ${path}: ${cause.message}`);
-    return null;
-  }
-};
 
 const roundDir = resolve(dir);
 let boundArtifacts;
@@ -219,56 +305,66 @@ const boundJson = (relativePath, label) => {
   const bytes = boundArtifacts.artifacts.get(relativePath);
   if (!bytes) {
     fail(`completion marker does not bind ${relativePath}`);
-    return null;
+    return { bytes: null, text: "", value: null };
   }
   try {
-    return JSON.parse(bytes.toString("utf8"));
+    return parseJsonBytes(
+      bytes,
+      join(roundDir, relativePath),
+      label,
+    );
   } catch (cause) {
-    fail(`invalid ${label} at ${join(roundDir, relativePath)}: ${cause.message}`);
-    return null;
+    fail(cause.message);
+    return { bytes, text: bytes.toString("utf8"), value: null };
   }
 };
-const boundBytes = (relativePath) => boundArtifacts.artifacts.get(relativePath);
-const address = boundJson("address.json", "round address");
-const candidate = boundJson("current-candidate.json", "current candidate address");
-const observed = readJson(join(roundDir, "observed.json"), "observed binding table");
-const approval = readJson(approvalCanonicalPath, "approval artifact");
-let approvalBytes = "";
-try {
-  approvalBytes = readFileSync(approvalCanonicalPath, "utf8");
-} catch (cause) {
-  fail(`cannot read approval bytes at ${approvalCanonicalPath}: ${cause.message}`);
-}
-let discoveryLedgerBytes = "";
-const discoveryLedger = boundJson("discovery-ledger.json", "immutable discovery ledger");
-const readBytes = (path, label) => {
-  if (!existsSync(path)) {
-    fail(`missing ${label} at ${path}`);
-    return "";
-  }
-  try {
-    return readFileSync(path, "utf8");
-  } catch (cause) {
-    fail(`cannot read ${label} bytes at ${path}: ${cause.message}`);
-    return "";
-  }
-};
-const responsesBytes = boundBytes("responses.json")?.toString("utf8") ?? "";
-const verificationResultsBytes = readBytes(
+const addressArtifact = boundJson("address.json", "round address");
+const candidateArtifact = boundJson("current-candidate.json", "current candidate address");
+const selectionArtifact = boundJson("selection.json", "lifecycle selection");
+const discoveryLedgerArtifact = boundJson(
+  "discovery-ledger.json",
+  "immutable discovery ledger",
+);
+const responsesArtifact = boundJson("responses.json", "implementation responses");
+const observedArtifact = readPostStageJson(
+  join(roundDir, "observed.json"),
+  "observed binding table",
+);
+const approvalArtifact = readPostStageJson(approvalCanonicalPath, "approval artifact");
+const verificationResultsArtifact = readPostStageJson(
   verificationResultsCanonicalPath,
   "adapted verification results",
 );
-const responses = boundJson("responses.json", "implementation responses");
-const verificationResults = readJson(
-  verificationResultsCanonicalPath,
-  "adapted verification results",
-);
-discoveryLedgerBytes = boundBytes("discovery-ledger.json")?.toString("utf8") ?? "";
+const address = addressArtifact.value;
+const candidate = candidateArtifact.value;
+const observed = observedArtifact.value;
+const approval = approvalArtifact.value;
+const approvalBytes = approvalArtifact.text;
+const discoveryLedger = discoveryLedgerArtifact.value;
+const discoveryLedgerBytes = discoveryLedgerArtifact.text;
+const responses = responsesArtifact.value;
+const responsesBytes = responsesArtifact.text;
+const verificationResults = verificationResultsArtifact.value;
+const verificationResultsBytes = verificationResultsArtifact.text;
 let selection = null;
-try {
-  selection = readSelection(selectionPath);
-} catch (cause) {
-  fail(`invalid lifecycle selection at ${selectionCanonicalPath}: ${cause.message}`);
+if (selectionArtifact.value !== null) {
+  try {
+    selection = validateSelection(selectionArtifact.value);
+  } catch (cause) {
+    fail(`invalid lifecycle selection at ${selectionCanonicalPath}: ${cause.message}`);
+  }
+}
+if (
+  selection &&
+  (
+    boundArtifacts.marker.lifecycle_id !== selection.lifecycle_id ||
+    boundArtifacts.marker.selection_sha256 !== sha256(selectionArtifact.text)
+  )
+) {
+  fail(
+    "immutable panel completion marker does not bind the current verification " +
+    "lifecycle and selection",
+  );
 }
 
 if (errors.length) {
@@ -287,11 +383,7 @@ try {
 }
 
 let selectionBytes;
-try {
-  selectionBytes = boundBytes("selection.json")?.toString("utf8") ?? "";
-} catch (cause) {
-  fail(`cannot read lifecycle selection bytes at ${selectionCanonicalPath}: ${cause.message}`);
-}
+selectionBytes = selectionArtifact.text;
 if (errors.length) {
   for (const message of errors) console.error(`error: ${message}`);
   process.exit(1);
@@ -445,6 +537,37 @@ for (const seat of roster) {
     fail(`observed.json has no entry for selected seat "${seat}"`);
   }
 }
+const stagedDefinitionDigests = {};
+for (const seat of roster) {
+  const relativePath = `agent-definitions/panel-${seat}.agent.md`;
+  const bytes = boundArtifacts.artifacts.get(relativePath);
+  const expectedDigest = boundArtifacts.marker.artifact_sha256?.[relativePath];
+  const expectedBytes = boundArtifacts.marker.artifact_bytes?.[relativePath];
+  if (!Buffer.isBuffer(bytes)) {
+    fail(
+      `immutable panel completion marker has no staged agent definition for ${seat}`,
+    );
+    continue;
+  }
+  if (
+    typeof expectedDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(expectedDigest) ||
+    expectedBytes !== bytes.length
+  ) {
+    fail(
+      `immutable panel completion marker has an invalid binding for ${relativePath}`,
+    );
+    continue;
+  }
+  const actualDigest = createHash("sha256").update(bytes).digest("hex");
+  if (actualDigest !== expectedDigest) {
+    fail(
+      `staged agent definition digest for ${seat} does not match .complete`,
+    );
+    continue;
+  }
+  stagedDefinitionDigests[seat] = actualDigest;
+}
 const seenRunIds = new Set();
 const seenReceipts = new Set();
 const records = [];
@@ -476,10 +599,12 @@ function renderRecommendation(recommendation) {
 
 for (const role of roster) {
   if (!present.includes(role)) continue;
-  const verdict = readJson(
+  const verdictArtifact = readPostStageJson(
     join(verdictDir, `${role}.json`),
     `verdict for ${role}`,
+    MAX_VERDICT_BYTES,
   );
+  const verdict = verdictArtifact.value;
   if (!verdict) continue;
   if (verdict.engineer !== role) {
     fail(
@@ -557,6 +682,7 @@ for (const role of roster) {
     "reasoning_effort",
     "context_tier",
     "agent_type",
+    "agent_definition_sha256",
     "run_id",
     "receipt_locator",
   ]) {
@@ -572,6 +698,29 @@ for (const role of roster) {
     fail(
       `observed.json ${role}: agent_type "${observedBinding.agent_type}" does not ` +
       `match the selected binding "${expectedAgentType}"`,
+    );
+  }
+  if (observedBinding.context_tier !== "default") {
+    fail(
+      `observed.json ${role}: context_tier must be exactly "default"; ` +
+      `found "${observedBinding.context_tier}"`,
+    );
+  }
+  if (
+    typeof observedBinding.agent_definition_sha256 === "string" &&
+    !/^[0-9a-f]{64}$/u.test(observedBinding.agent_definition_sha256)
+  ) {
+    fail(
+      `observed.json ${role}: agent_definition_sha256 must be a 64-character hexadecimal SHA-256`,
+    );
+  }
+  if (
+    stagedDefinitionDigests[role] === undefined ||
+    observedBinding.agent_definition_sha256 !== stagedDefinitionDigests[role]
+  ) {
+    fail(
+      `observed.json ${role}: agent definition digest does not match the immutable ` +
+      `staged agent-definitions/panel-${role}.agent.md digest`,
     );
   }
   const currentBinding =
@@ -694,7 +843,8 @@ try {
 } catch (cause) {
   fail(
     `record set publication stopped before replacement: ` +
-    `${cause.message}.`,
+    `${cause.message}. Retry only after restoring the exact byte-identical ` +
+    `record family for the same inputs, or use a new qualified round.`,
   );
 }
 if (errors.length) {

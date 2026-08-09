@@ -48,6 +48,19 @@ const check = (name, ok, detail) => {
 function buildRound(mutate) {
   const dir = mkdtempSync(join(tmpdir(), "d2b-panel-"));
   mkdirSync(join(dir, "verdicts"), { recursive: true });
+  mkdirSync(join(dir, "agent-definitions"), { recursive: true });
+  const agentDefinitions = Object.fromEntries(
+    ROLES.map((role) => [
+      role,
+      Buffer.from(`# synthetic definition for panel-${role}\n`, "utf8"),
+    ]),
+  );
+  const agentDefinitionDigests = Object.fromEntries(
+    Object.entries(agentDefinitions).map(([role, bytes]) => [
+      role,
+      sha256(bytes.toString("utf8")),
+    ]),
+  );
 
   const state = {
     address: {
@@ -128,6 +141,7 @@ function buildRound(mutate) {
         reasoning_effort: "xhigh",
         agent_type: `panel-${r}`,
         context_tier: "default",
+        agent_definition_sha256: agentDefinitionDigests[r],
         run_id: `run-${i}`,
         receipt_locator: `github-copilot://receipt/${i}`,
       }];
@@ -201,6 +215,9 @@ function buildRound(mutate) {
   writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
   writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
   writeFileSync(join(dir, "observed.json"), stableStringify(state.observed));
+  for (const [role, bytes] of Object.entries(agentDefinitions)) {
+    writeFileSync(join(dir, "agent-definitions", `panel-${role}.agent.md`), bytes);
+  }
   const artifactSha256 = {};
   const artifactBytes = {};
   for (const relativePath of [
@@ -210,6 +227,12 @@ function buildRound(mutate) {
     "discovery-ledger.json",
     "responses.json",
   ]) {
+    const bytes = readFileSync(join(dir, relativePath));
+    artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
+    artifactBytes[relativePath] = bytes.length;
+  }
+  for (const role of ROLES) {
+    const relativePath = `agent-definitions/panel-${role}.agent.md`;
     const bytes = readFileSync(join(dir, relativePath));
     artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
     artifactBytes[relativePath] = bytes.length;
@@ -236,30 +259,37 @@ function buildRound(mutate) {
   return dir;
 }
 
-function run(dir, selectionPath = join(dir, "selection.json")) {
+function runArgs(args) {
   try {
     const stdout = execFileSync(
       "node",
-      [
-        script,
-        dir,
-        "--selection",
-        selectionPath,
-        "--ledger",
-        join(dir, "discovery-ledger.json"),
-        "--responses",
-        join(dir, "responses.json"),
-        "--verification-results",
-        join(dir, "verification-results.json"),
-        "--approval",
-        join(dir, "approval.json"),
-      ],
+      [script, ...args],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     return { code: 0, out: stdout, err: "" };
   } catch (e) {
     return { code: e.status ?? 1, out: e.stdout ?? "", err: e.stderr ?? "" };
   }
+}
+
+function argsFor(dir, selectionPath = join(dir, "selection.json")) {
+  return [
+    dir,
+    "--selection",
+    selectionPath,
+    "--ledger",
+    join(dir, "discovery-ledger.json"),
+    "--responses",
+    join(dir, "responses.json"),
+    "--verification-results",
+    join(dir, "verification-results.json"),
+    "--approval",
+    join(dir, "approval.json"),
+  ];
+}
+
+function run(dir, selectionPath = join(dir, "selection.json")) {
+  return runArgs(argsFor(dir, selectionPath));
 }
 
 // A case that must be REJECTED, and whose message must name the cause.
@@ -293,6 +323,47 @@ console.log("make-records: the happy path");
       check("the record carries the candidate address", rec.candidate_id === "c".repeat(64));
       check("the record carries current panel format version", rec.panel_format_version === 1);
       check("the record digests the verdict", typeof rec.output_sha256 === "string" && rec.output_sha256.length === 64);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log("make-records: strict CLI parsing");
+{
+  const dir = buildRound();
+  try {
+    const valid = argsFor(dir);
+    const cases = [
+      ["an unknown flag is rejected", [...valid, "--unknown"], /unknown option/],
+      [
+        "a duplicate flag is rejected",
+        [...valid, "--selection", join(dir, "selection.json")],
+        /may be supplied only once/,
+      ],
+      [
+        "a missing flag value is rejected",
+        valid.slice(0, -1),
+        /option --approval requires one value/,
+      ],
+      [
+        "a surplus positional is rejected",
+        [valid[0], "extra", ...valid.slice(1)],
+        /unexpected positional argument/,
+      ],
+      [
+        "a missing round directory is rejected",
+        valid.slice(1),
+        /exactly one round directory positional/,
+      ],
+    ];
+    for (const [name, args, expected] of cases) {
+      const result = runArgs(args);
+      check(
+        name,
+        result.code === 2 && expected.test(`${result.out}${result.err}`),
+        `code=${result.code} output=${result.out}${result.err}`,
+      );
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -383,6 +454,9 @@ console.log("make-records: approval and publication preflight");
       first.code === 0 &&
         conflict.code !== 0 &&
         /conflicting generated record bytes/.test(`${conflict.out}${conflict.err}`) &&
+        /exact byte-identical record family.*same inputs.*new qualified round/.test(
+          `${conflict.out}${conflict.err}`,
+        ) &&
         readFileSync(recordPath, "utf8") !== before,
       `first=${first.code} conflict=${conflict.code} output=${conflict.out}${conflict.err}`,
     );
@@ -482,6 +556,16 @@ rejects(
   "a missing context tier is not defaulted",
   (s) => { delete s.observed.product.context_tier; },
   /context_tier/i,
+);
+rejects(
+  "a non-default context tier is rejected",
+  (s) => { s.observed.product.context_tier = "long_context"; },
+  /context_tier.*default/i,
+);
+rejects(
+  "an observed agent definition digest must match the staged packet",
+  (s) => { s.observed.agentic.agent_definition_sha256 = "0".repeat(64); },
+  /agent definition digest|agent_definition_sha256/i,
 );
 {
   const dir = buildRound();
