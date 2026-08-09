@@ -242,19 +242,29 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 
 `advance-verification` validates the exact selection digest, lifecycle,
 candidate, roster, prior ledger, response envelope, and adapted verification
-bindings before publishing three per-file create-or-compare artifacts:
-`NEXT/discovery-ledger.json`, `NEXT/responses.json`, and
-`NEXT/handoff.json`. It publishes the ledger and responses independently, then
-publishes `handoff.json` last as completeness evidence. A retry after a
-partial publication compares every existing file byte-for-byte and creates
-only missing files; conflicting bytes fail. Consumers must require all three files before
-use. This marker is not an atomic transaction and is not a
-security proof. It appends admitted late findings with contiguous `R`
-identifiers and preserved source identity. Every issue that any selected seat
-did not pass receives a canonical blank response; passed issues retain their
-validated response, and every late issue starts blank. Fill those blanks with
-complete implementation responses, then rerun selection over the new
-candidate and fix delta. Write a fresh
+bindings before publishing only the immutable
+`NEXT/discovery-ledger.json` and blank `NEXT/responses.json` by independent
+per-file create-or-compare. It publishes those files independently. A retry
+compares every existing file byte-for-byte
+and creates only missing files; conflicting bytes fail. It appends admitted
+late findings with contiguous `R` identifiers and preserved source identity.
+Copy the blank response template to a distinct completed-response file, fill
+every response there, and publish the finalized handoff marker last:
+
+```bash
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+```
+
+Never edit `NEXT/responses.json` after `advance-verification`, and never edit
+the ledger or completed responses after `finalize-handoff` has published
+`handoff.json`. The finalized marker is completeness evidence, not an atomic
+transaction or a security proof. It binds the exact ledger and completed
+response bytes. The finalized continuation requires all three files before
+use: the ledger, completed responses, and `handoff.json`. Write a fresh
 `$NEXT/self-verification.json` for that candidate; do not reuse the prior
 self-verification artifact. Then prepare verification and stage:
 
@@ -267,17 +277,20 @@ NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
-  "$NEXT/responses.json" "$NEXT/self-verification.json" "$NEXT/verification" \
+  "$NEXT/responses-completed.json" "$NEXT/self-verification.json" "$NEXT/verification" \
   --candidate "$CURRENT_CANDIDATE" \
   --prior-selection "$ROUND/selection.json" \
-  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA"
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
 
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <next-round-id> \
   --lifecycle <lifecycle-id> \
   --selection "$NEXT_SELECTION" \
   --candidate "$CURRENT_CANDIDATE" \
-  --ledger "$NEXT/discovery-ledger.json" --responses "$NEXT/responses.json" \
+  --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
   --self-verification "$NEXT/self-verification.json" \
   --verification-dir "$NEXT/verification" \
   --evidence <finalized-evidence.md> \

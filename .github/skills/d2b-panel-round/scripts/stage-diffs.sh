@@ -6,7 +6,7 @@
 #                  [--lifecycle <lifecycle-id>] [--discovery-request PATH]
 #                  --evidence PATH [--reviewer-notes-dir PATH]
 #                  [--ledger PATH] [--responses PATH] [--self-verification PATH]
-#                  [--verification-dir PATH] [--approval PATH]
+#                  [--handoff PATH] [--verification-dir PATH] [--approval PATH]
 #
 # <base>      branch base commit or ref
 # <prev-tip>  commit the previous round reviewed; pass <base> for round 1
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> --evidence PATH [--reviewer-notes-dir PATH] [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> --evidence PATH [--reviewer-notes-dir PATH] [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--handoff PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
   exit 2
 fi
 
@@ -37,6 +37,7 @@ evidence_path=""
 reviewer_notes_dir=""
 ledger_path=""
 responses_path=""
+handoff_path=""
 self_verification_path=""
 verification_dir=""
 approval_path=""
@@ -84,6 +85,11 @@ while [ "$#" -gt 0 ]; do
     --responses)
       [ "$#" -ge 2 ] || { echo "--responses requires a path" >&2; exit 2; }
       responses_path="$2"
+      shift 2
+      ;;
+    --handoff)
+      [ "$#" -ge 2 ] || { echo "--handoff requires a path" >&2; exit 2; }
+      handoff_path="$2"
       shift 2
       ;;
     --self-verification)
@@ -169,6 +175,7 @@ staged_dispatch_binding_path="$out/dispatch-binding.json"
 staged_discovery_request_path="$out/discovery-request.json"
 staged_ledger_path="$out/discovery-ledger.json"
 staged_responses_path="$out/responses.json"
+staged_handoff_path="$out/handoff.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
@@ -181,6 +188,7 @@ display_staged_dispatch_binding_path="$staged_dispatch_binding_path"
 display_staged_discovery_request_path="$staged_discovery_request_path"
 display_staged_ledger_path="$staged_ledger_path"
 display_staged_responses_path="$staged_responses_path"
+display_staged_handoff_path="$staged_handoff_path"
 display_staged_self_verification_path="$staged_self_verification_path"
 display_staged_approval_path="$staged_approval_path"
 display_staged_verification_dir="$staged_verification_dir"
@@ -195,6 +203,7 @@ staged_dispatch_binding_path="$out/dispatch-binding.json"
 staged_discovery_request_path="$out/discovery-request.json"
 staged_ledger_path="$out/discovery-ledger.json"
 staged_responses_path="$out/responses.json"
+staged_handoff_path="$out/handoff.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
@@ -203,6 +212,7 @@ staged_agent_definitions_dir="$out/agent-definitions"
 canonical_artifact_names() {
   local artifact_phase="$1"
   local artifact_roster="$2"
+  local include_handoff="${3:-false}"
   printf '%s\n' \
     "address.json" \
     "commits.txt" \
@@ -221,6 +231,9 @@ canonical_artifact_names() {
       "discovery-ledger.json" \
       "responses.json" \
       "self-verification.json"
+    if [ "$include_handoff" = "true" ]; then
+      printf '%s\n' "handoff.json"
+    fi
   else
     echo "unknown panel phase for canonical artifact names: $artifact_phase" >&2
     return 2
@@ -558,7 +571,7 @@ const exactKeys = (value, expected) =>
   !Array.isArray(value) &&
   Object.keys(value).sort().join("\0") === [...expected].sort().join("\0");
 
-const canonicalNames = (phase, roster) => {
+const canonicalNames = (phase, roster, includeHandoff = false) => {
   const common = [
     "address.json",
     "commits.txt",
@@ -578,6 +591,7 @@ const canonicalNames = (phase, roster) => {
       "responses.json",
       "self-verification.json",
     );
+    if (includeHandoff) common.push("handoff.json");
   } else {
     throw new Error("unsupported packet phase");
   }
@@ -614,6 +628,7 @@ const canonicalFileNames = new Set([
   "metrics.json",
   "review-request.md",
   "responses.json",
+  "responses-completed.json",
   "self-verification.json",
   "selection.json",
   "verification-results.json",
@@ -626,11 +641,24 @@ const canonicalContentDirectories = new Set([
   "verdicts",
 ]);
 
-const continuationHandoffFiles = new Set([
+const relevantTopLevelNames = new Set([
+  ".complete",
+  ...canonicalFileNames,
+  ...canonicalContentDirectories,
   "handoff.json",
   "discovery-ledger.json",
   "responses.json",
 ]);
+
+const entryKind = (directory, entry) => {
+  if (entry.isFile()) return "file";
+  if (entry.isDirectory()) return "directory";
+  if (!relevantTopLevelNames.has(entry.name)) return "other";
+  const stat = lstatSync(path.join(directory, entry.name));
+  if (stat.isFile()) return "file";
+  if (stat.isDirectory()) return "directory";
+  return "other";
+};
 
 const scanTopLevel = (directory) => {
   const result = {
@@ -639,9 +667,11 @@ const scanTopLevel = (directory) => {
     handoff: false,
     ledger: false,
     responses: false,
+    completedResponses: false,
     handoffRegular: false,
     ledgerRegular: false,
     responsesRegular: false,
+    completedResponsesRegular: false,
     canonicalFiles: 0,
     canonicalDirectories: 0,
   };
@@ -653,7 +683,8 @@ const scanTopLevel = (directory) => {
       if (result.total > MAX_DIRECTORY_ENTRIES) {
         failScan("top-level-entry-limit", result.total);
       }
-      const regular = entry.isFile();
+      const kind = entryKind(directory, entry);
+      const regular = kind === "file";
       if (entry.name === ".complete") {
         result.complete = true;
       } else if (entry.name === "handoff.json") {
@@ -665,6 +696,9 @@ const scanTopLevel = (directory) => {
       } else if (entry.name === "responses.json") {
         result.responses = true;
         result.responsesRegular = regular;
+      } else if (entry.name === "responses-completed.json") {
+        result.completedResponses = true;
+        result.completedResponsesRegular = regular;
       } else if (canonicalFileNames.has(entry.name)) {
         result.canonicalFiles += 1;
       } else if (canonicalContentDirectories.has(entry.name)) {
@@ -682,7 +716,11 @@ const scanTopLevel = (directory) => {
 };
 
 async function validateCompletedPacket(packet, markerPath) {
-  const { readSelectionTable, validateSelection } =
+  const {
+    readSelectionTable,
+    validateAdvanceVerificationHandoff,
+    validateSelection,
+  } =
     await import(pathToFileURL(lifecycleHelper).href);
   const assert = (condition, message) => {
     if (!condition) throw new Error(message);
@@ -825,49 +863,52 @@ async function validateCompletedPacket(packet, markerPath) {
     artifacts.set(relative, bytes);
   }
 
-  const expectedNames = canonicalNames(
+  const selectedRoster = (() => {
+    const bytes = artifacts.get("selection.json");
+    assert(bytes, "completion packet has no bound selection.json");
+    let value;
+    try {
+      value = JSON.parse(bytes.toString("utf8"));
+    } catch (error) {
+      throw new Error(`bound selection.json is not valid JSON: ${error.message}`);
+    }
+    assert(
+      value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Array.isArray(value.roster) &&
+        value.roster.length > 0 &&
+        value.roster.every(
+          (seat) =>
+            typeof seat === "string" &&
+            seat.length > 0 &&
+            !seat.includes("/") &&
+            !seat.includes("\\") &&
+            !seat.includes("\0"),
+        ) &&
+        new Set(value.roster).size === value.roster.length,
+      "bound selection.json has an invalid selected roster",
+    );
+    try {
+      validateSelection(value, readSelectionTable());
+    } catch (error) {
+      throw new Error(`bound selection.json is invalid: ${error.message}`);
+    }
+    assert(
+      value.lifecycle_id === marker.lifecycle_id,
+      "bound selection.json lifecycle_id disagrees with the completion marker",
+    );
+    assert(
+      value.phase === marker.phase,
+      "bound selection.json phase disagrees with the completion marker",
+    );
+    return value.roster;
+  })();
+  const expectedNames = canonicalNames(marker.phase, selectedRoster);
+  const expectedNamesWithHandoff = canonicalNames(
     marker.phase,
-    (() => {
-      const bytes = artifacts.get("selection.json");
-      assert(bytes, "completion packet has no bound selection.json");
-      let value;
-      try {
-        value = JSON.parse(bytes.toString("utf8"));
-      } catch (error) {
-        throw new Error(`bound selection.json is not valid JSON: ${error.message}`);
-      }
-      assert(
-        value &&
-          typeof value === "object" &&
-          !Array.isArray(value) &&
-          Array.isArray(value.roster) &&
-          value.roster.length > 0 &&
-          value.roster.every(
-            (seat) =>
-              typeof seat === "string" &&
-              seat.length > 0 &&
-              !seat.includes("/") &&
-              !seat.includes("\\") &&
-              !seat.includes("\0"),
-          ) &&
-          new Set(value.roster).size === value.roster.length,
-        "bound selection.json has an invalid selected roster",
-      );
-      try {
-        validateSelection(value, readSelectionTable());
-      } catch (error) {
-        throw new Error(`bound selection.json is invalid: ${error.message}`);
-      }
-      assert(
-        value.lifecycle_id === marker.lifecycle_id,
-        "bound selection.json lifecycle_id disagrees with the completion marker",
-      );
-      assert(
-        value.phase === marker.phase,
-        "bound selection.json phase disagrees with the completion marker",
-      );
-      return value.roster;
-    })(),
+    selectedRoster,
+    true,
   );
   const withoutDefinitions = expectedNames.filter(
     (name) =>
@@ -881,7 +922,12 @@ async function validateCompletedPacket(packet, markerPath) {
     ? [withoutDefinitions, withDefinitions]
     : marker.schema_version === 3
       ? [withDefinitions]
-      : [expectedNames];
+      : [
+          expectedNames,
+          ...(marker.phase === "verification"
+            ? [expectedNamesWithHandoff]
+            : []),
+        ];
   assert(
     allowedSets.some((names) => sameNames(names, actualNames)),
     `completion artifact set is invalid for schema_version ${marker.schema_version}`,
@@ -963,6 +1009,23 @@ async function validateCompletedPacket(packet, markerPath) {
       fullActualDigest === address.full_sha256,
     "completion packet full_sha256 does not match full.diff",
   );
+  if (actualNames.includes("handoff.json")) {
+    assert(
+      marker.phase === "verification",
+      "completion packet handoff.json is only valid for verification packets",
+    );
+    try {
+      validateAdvanceVerificationHandoff(
+        readArtifactJson("handoff.json", "bound handoff.json"),
+        {
+          ledger_bytes: artifacts.get("discovery-ledger.json"),
+          responses_bytes: artifacts.get("responses.json"),
+        },
+      );
+    } catch (error) {
+      throw new Error(`bound handoff.json is invalid: ${error.message}`);
+    }
+  }
 
   return marker.phase === "discovery" && marker.lifecycle_id === lifecycle;
 }
@@ -982,15 +1045,35 @@ async function readContinuationHandoff(packet) {
       MAX_BOUND_ARTIFACT_BYTES,
     );
     const responsesBytes = readBounded(
-      path.join(packet, "responses.json"),
-      "continuation handoff responses",
+      path.join(packet, "responses-completed.json"),
+      "continuation handoff completed responses",
       MAX_BOUND_ARTIFACT_BYTES,
     );
+    const blankResponsePath = path.join(packet, "responses.json");
+    const blankResponseBytes = existsSync(blankResponsePath)
+      ? readBounded(
+          blankResponsePath,
+          "continuation handoff blank responses",
+          MAX_BOUND_ARTIFACT_BYTES,
+        )
+      : undefined;
     const marker = JSON.parse(markerBytes.toString("utf8"));
     validateAdvanceVerificationHandoff(marker, {
       ledger_bytes: ledgerBytes,
       responses_bytes: responsesBytes,
     });
+    if (blankResponseBytes !== undefined) {
+      const { createResponseTemplate } =
+        await import(pathToFileURL(lifecycleHelper).href);
+      const ledger = JSON.parse(ledgerBytes.toString("utf8"));
+      const blankResponses = JSON.parse(blankResponseBytes.toString("utf8"));
+      if (
+        JSON.stringify(blankResponses) !==
+        JSON.stringify(createResponseTemplate(ledger))
+      ) {
+        failScan("invalid-handoff", 1);
+      }
+    }
     return marker;
   } catch {
     failScan("invalid-handoff", 1);
@@ -1016,12 +1099,15 @@ try {
       if (packetCount > MAX_DIRECTORY_ENTRIES) {
         failScan("panel-root-entry-limit", packetCount);
       }
-      if (!entry.isDirectory()) continue;
+      let packetIsDirectory = entry.isDirectory();
+      if (!packetIsDirectory && !entry.isFile()) {
+        packetIsDirectory = lstatSync(path.join(panelRoot, entry.name)).isDirectory();
+      }
+      if (!packetIsDirectory) continue;
       const packet = path.join(panelRoot, entry.name);
       if (path.resolve(packet) === currentOut) continue;
 
       const state = scanTopLevel(packet);
-      if (state.total === 1 && state.complete) continue;
 
       if (state.complete) {
         const markerPath = path.join(packet, ".complete");
@@ -1047,15 +1133,21 @@ try {
       }
 
       const continuationCount =
-        Number(state.handoff) + Number(state.ledger) + Number(state.responses);
+        Number(state.handoff) +
+        Number(state.ledger) +
+        Number(state.responses) +
+        Number(state.completedResponses);
       const completeHandoff =
-        state.total === continuationHandoffFiles.size &&
         state.handoff &&
         state.ledger &&
-        state.responses &&
+        state.completedResponses &&
         state.handoffRegular &&
         state.ledgerRegular &&
-        state.responsesRegular;
+        state.completedResponsesRegular &&
+        ((state.total === 3 && !state.responses) ||
+          (state.total === 4 &&
+            state.responses &&
+            state.responsesRegular));
       if (completeHandoff) {
         const marker = await readContinuationHandoff(packet);
         if (marker.lifecycle_id === lifecycle) {
@@ -1064,12 +1156,20 @@ try {
         continue;
       }
       if (
+        state.handoff &&
+        state.ledger &&
+        (state.responses || state.completedResponses) &&
+        !completeHandoff
+      ) {
+        failScan("damaged-handoff", continuationCount);
+      }
+      if (
         !state.handoff &&
         state.ledger &&
         state.responses &&
         state.total === 2
       ) {
-        failScan("damaged-handoff", 2);
+        failScan("damaged-handoff", continuationCount);
       }
       if (continuationCount > 0) {
         failScan("partial-handoff", continuationCount);
@@ -1223,6 +1323,10 @@ if [ "$phase" = "discovery" ] && [ -z "$discovery_request_path" ]; then
   echo "--discovery-request is required before a discovery round can be marked complete" >&2
   exit 2
 fi
+if [ "$phase" = "discovery" ] && [ -n "$handoff_path" ]; then
+  echo "--handoff is valid only for verification continuation staging" >&2
+  exit 2
+fi
 if [ "$phase" = "verification" ]; then
   if [ -z "$previous_selection_path" ]; then
     echo "verification staging requires a recorded prior selection and verdict directory" >&2
@@ -1291,10 +1395,33 @@ process.stdout.write([selection.phase, selection.roster.join(",")].join("\t"));
     exit 2
   }
   IFS=$'\t' read -r previous_phase previous_roster <<<"$previous_selection_meta"
+  previous_has_handoff="$(
+    node --input-type=module - "$op_previous_dir/.complete" <<'NODE'
+import { readFileSync, statSync } from "node:fs";
+const path = process.argv[2];
+const stat = statSync(path);
+if (!stat.isFile() || stat.size > 256 * 1024) {
+  throw new Error("completion marker is not bounded");
+}
+const marker = JSON.parse(readFileSync(path, "utf8"));
+process.stdout.write(
+  marker.artifact_sha256 &&
+  Object.hasOwn(marker.artifact_sha256, "handoff.json")
+    ? "true"
+    : "false",
+);
+NODE
+  )" || {
+    echo "previous review completion marker is unreadable" >&2
+    exit 2
+  }
   previous_canonical_artifacts=()
   while IFS= read -r artifact_name; do
     previous_canonical_artifacts+=("$artifact_name")
-  done < <(canonical_artifact_names "$previous_phase" "$previous_roster")
+  done < <(
+    canonical_artifact_names "$previous_phase" "$previous_roster" \
+      "$previous_has_handoff"
+  )
   if ! validate_bound_completion \
     "$op_previous_dir/.complete" "$previous_phase" \
     "${previous_canonical_artifacts[@]}"; then
@@ -1400,7 +1527,10 @@ done
 canonical_artifacts=()
 while IFS= read -r artifact_name; do
   canonical_artifacts+=("$artifact_name")
-done < <(canonical_artifact_names "$phase" "$selected_roster")
+done < <(
+  canonical_artifact_names "$phase" "$selected_roster" \
+    "$([ "$phase" = "verification" ] && [ -n "$handoff_path" ] && echo true || echo false)"
+)
 
 reuse_existing=false
 existing_completion_schema=""
@@ -1444,27 +1574,39 @@ fi
 if [ -n "$reviewer_notes_dir" ]; then
   if ! node --input-type=module - \
     "$reviewer_notes_dir" "$selected_roster" <<'NODE'
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, opendirSync } from "node:fs";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
-let files;
+const files = [];
 try {
-  files = readdirSync(source)
-    .sort()
-    .map((name) => ({
-      name,
-      size: statSync(`${source}/${name}`).size,
-    }));
+  const directory = opendirSync(source);
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      if (files.length >= selected.length) {
+        throw new Error("reviewer-notes directory exceeds its entry limit");
+      }
+      const stat = lstatSync(`${source}/${entry.name}`);
+      files.push({ name: entry.name, size: stat.size, regular: stat.isFile() });
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (error) {
+      if (error.code !== "ERR_DIR_CLOSED") throw error;
+    }
+  }
 } catch (error) {
   console.error(`missing or unreadable finalized reviewer-notes directory: ${source}: ${error.message}`);
   process.exit(1);
 }
+files.sort((left, right) => left.name.localeCompare(right.name));
 const expected = selected.map((seat) => `${seat}.md`).sort();
 const actual = files.map((entry) => entry.name);
 if (
   files.length !== expected.length ||
   actual.some((name, index) => name !== expected[index]) ||
-  files.some((entry) => entry.size === 0)
+  files.some((entry) => !entry.regular || entry.size === 0)
 ) {
   console.error(
     `finalized reviewer-notes directory must contain exactly one regular Markdown file per selected seat; ` +
@@ -1481,17 +1623,22 @@ fi
 readable_json_file() {
   local path="$1"
   local label="$2"
-  if [ ! -f "$path" ] || [ ! -r "$path" ]; then
-    echo "missing or unreadable supplied $label: $path" >&2
-    exit 2
-  fi
-  if ! node --input-type=module - "$path" <<'NODE'
-import { readFileSync } from "node:fs";
-const path = process.argv[2];
+  if ! node --input-type=module - "$path" "$label" <<'NODE'
+import { lstatSync, readFileSync } from "node:fs";
+import { TextDecoder } from "node:util";
+const [path, label] = process.argv.slice(2);
 try {
-  JSON.parse(readFileSync(path, "utf8"));
+  const maximum = 64 * 1024 * 1024;
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.size > maximum) {
+    throw new Error("not a bounded regular file");
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maximum) throw new Error("oversized");
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  JSON.parse(text);
 } catch (error) {
-  console.error(`${path}: supplied JSON artifact is not readable: ${error.message}`);
+  console.error(`${path}: supplied ${label} is not readable: ${error.message}`);
   process.exit(1);
 }
 NODE
@@ -1500,30 +1647,99 @@ NODE
   fi
 }
 
+validate_handoff_binding() {
+    node --input-type=module - \
+      "$handoff_path" "$ledger_path" "$responses_path" "$lifecycle_helper" <<'NODE'
+import { lstatSync, readFileSync } from "node:fs";
+import { TextDecoder } from "node:util";
+import { pathToFileURL } from "node:url";
+
+const [handoffPath, ledgerPath, responsesPath, helperPath] =
+    process.argv.slice(2);
+const readBoundedJson = (path, label, maximum) => {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > maximum) {
+      throw new Error(`${label} is not a bounded regular file`);
+    }
+    const bytes = readFileSync(path);
+    if (bytes.length > maximum) {
+      throw new Error(`${label} is oversized`);
+    }
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { bytes, value: JSON.parse(text) };
+};
+const handoff = readBoundedJson(
+    handoffPath,
+    "continuation handoff marker",
+    256 * 1024,
+);
+const ledger = readBoundedJson(
+    ledgerPath,
+    "continuation handoff ledger",
+    64 * 1024 * 1024,
+);
+const responses = readBoundedJson(
+    responsesPath,
+    "continuation handoff responses",
+    64 * 1024 * 1024,
+);
+const { validateAdvanceVerificationHandoff } =
+    await import(pathToFileURL(helperPath).href);
+validateAdvanceVerificationHandoff(handoff.value, {
+    ledger: ledger.value,
+    responses: responses.value,
+    ledger_bytes: ledger.bytes,
+    responses_bytes: responses.bytes,
+});
+NODE
+}
+
 if [ "$phase" = "discovery" ]; then
-  readable_json_file "$discovery_request_path" "discovery request"
+    readable_json_file "$discovery_request_path" "discovery request"
 else
-  readable_json_file "$ledger_path" "discovery ledger"
-  readable_json_file "$responses_path" "implementation responses"
-  readable_json_file "$self_verification_path" "self-verification"
+    readable_json_file "$ledger_path" "discovery ledger"
+    readable_json_file "$responses_path" "implementation responses"
+    readable_json_file "$self_verification_path" "self-verification"
+    if [ -n "$handoff_path" ]; then
+      if ! validate_handoff_binding; then
+        echo "supplied continuation handoff does not bind the exact ledger and completed responses" >&2
+        exit 2
+      fi
+    fi
   if ! node --input-type=module - \
     "$verification_dir" "$selected_roster" <<'NODE'
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, opendirSync, readFileSync } from "node:fs";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
-let entries;
+const entries = [];
 try {
-  entries = readdirSync(source)
-    .sort()
-    .map((name) => {
-      const path = `${source}/${name}`;
-      const stat = statSync(path);
-      return { name, bytes: readFileSync(path), regular: stat.isFile() };
-    });
+    const directory = opendirSync(source);
+    try {
+      let entry;
+      while ((entry = directory.readSync()) !== null) {
+        if (entries.length >= selected.length) {
+          throw new Error("verification request directory exceeds its entry limit");
+        }
+        const path = `${source}/${entry.name}`;
+        const stat = lstatSync(path);
+        entries.push({
+          name: entry.name,
+          bytes: readFileSync(path),
+          regular: stat.isFile(),
+        });
+      }
+    } finally {
+      try {
+        directory.closeSync();
+      } catch (error) {
+        if (error.code !== "ERR_DIR_CLOSED") throw error;
+      }
+    }
 } catch (error) {
-  console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
-  process.exit(1);
+    console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
+    process.exit(1);
 }
+entries.sort((left, right) => left.name.localeCompare(right.name));
 const expected = selected.map((seat) => `${seat}.json`).sort();
 const actual = entries.map((entry) => entry.name);
 if (
@@ -1572,7 +1788,7 @@ fi
 
 for path_value in "$candidate_path" "$discovery_request_path" "$evidence_path" \
   "$reviewer_notes_dir" "$ledger_path" "$responses_path" \
-  "$self_verification_path" "$verification_dir" "$approval_path"; do
+  "$handoff_path" "$self_verification_path" "$verification_dir" "$approval_path"; do
   if [[ "$path_value" == *\"* || "$path_value" == *\\* || "$path_value" == *$'\n'* ]]; then
     echo "artifact path contains JSON control characters: $path_value" >&2
     exit 2
@@ -1648,6 +1864,9 @@ if [ "$reuse_existing" = true ]; then
       "$staged_verification_dir"; do
       require_reused_path "$required_path" || exit 2
     done
+    if [ -n "$handoff_path" ]; then
+      require_reused_path "$staged_handoff_path" || exit 2
+    fi
   fi
   for seat in "${panel_seats[@]}"; do
     if [ "$existing_completion_schema" = "3" ] || \
@@ -1709,15 +1928,44 @@ publish_directory() {
   local destination="$2"
   local selected="$3"
   node --input-type=module -e '
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  opendirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  renameSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 const [source, destination, selectedText] = process.argv.slice(1);
 const expectedNames = selectedText.split(",").filter(Boolean).map((seat) => `${seat}.json`).sort();
-const entries = readdirSync(source).sort();
+const streamNames = (path, maximum) => {
+  const directory = opendirSync(path);
+  const names = [];
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      if (names.length >= maximum) {
+        throw new Error(`directory exceeds its ${maximum} entry limit`);
+      }
+      names.push(entry.name);
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (error) {
+      if (error.code !== "ERR_DIR_CLOSED") throw error;
+    }
+  }
+  return names.sort();
+};
+const entries = streamNames(source, expectedNames.length + 1);
 if (
   entries.length !== expectedNames.length ||
   entries.some((name, index) => name !== expectedNames[index]) ||
-  entries.some((name) => !statSync(join(source, name)).isFile())
+  entries.some((name) => !lstatSync(join(source, name)).isFile())
 ) {
   throw new Error(
     `verification request directory must contain exactly one regular JSON file per selected seat; ` +
@@ -1726,7 +1974,7 @@ if (
 }
 const expected = new Map(entries.map((name) => [name, readFileSync(join(source, name))]));
 const compare = (path) => {
-  const actualNames = readdirSync(path).sort();
+  const actualNames = streamNames(path, expectedNames.length + 1);
   if (
     actualNames.length !== expectedNames.length ||
     actualNames.some((name, index) => name !== expectedNames[index])
@@ -1741,7 +1989,7 @@ const compare = (path) => {
 };
 mkdirSync(dirname(destination), { recursive: true });
 if (existsSync(destination)) {
-  if (!statSync(destination).isDirectory()) {
+  if (!lstatSync(destination).isDirectory()) {
     throw new Error(`existing artifact family at ${destination} is not a directory`);
   }
   compare(destination);
@@ -2000,6 +2248,10 @@ if [ -n "$responses_path" ]; then
   materialize_exact "$responses_path" "$staged_responses_path" \
     "implementation responses"
 fi
+if [ -n "$handoff_path" ]; then
+  materialize_exact "$handoff_path" "$staged_handoff_path" \
+    "finalized continuation handoff"
+fi
 if [ -n "$self_verification_path" ]; then
   materialize_exact "$self_verification_path" "$staged_self_verification_path" \
     "self-verification"
@@ -2053,11 +2305,17 @@ fi
 if ! node --input-type=module - \
   "$phase" "$lifecycle" "$staged_selection_path" "$staged_candidate_path" \
   "$staged_discovery_request_path" "$staged_ledger_path" \
-  "$staged_responses_path" "$staged_self_verification_path" \
+  "$staged_responses_path" "$handoff_path" \
+  "$staged_self_verification_path" \
   "$staged_verification_dir" \
   "$previous_selection_path" "$op_previous_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  lstatSync,
+  opendirSync,
+  readFileSync,
+} from "node:fs";
+import { TextDecoder } from "node:util";
 import { pathToFileURL } from "node:url";
 
 const [
@@ -2068,6 +2326,7 @@ const [
   discoveryRequestPath,
   ledgerPath,
   responsesPath,
+  handoffPath,
   selfVerificationPath,
   verificationDir,
   previousSelectionPath,
@@ -2076,8 +2335,11 @@ const [
 ] = process.argv.slice(2);
 const { validateStagedRoundArtifacts } =
   await import(pathToFileURL(helperPath).href);
+const readBytes = (path) => readFileSync(path);
 const readJson = (path, label = "staged panel artifact") =>
-  JSON.parse(readFileSync(path, "utf8"));
+  JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(readBytes(path)),
+  );
 const selection = readJson(selectionPath);
 const artifacts = {
   phase,
@@ -2088,16 +2350,40 @@ const artifacts = {
 if (phase === "discovery") {
   artifacts.discovery_request = readJson(discoveryRequestPath);
 } else {
+  const ledgerBytes = readBytes(ledgerPath);
+  const responsesBytes = readBytes(responsesPath);
   artifacts.ledger = readJson(ledgerPath);
   artifacts.responses = readJson(responsesPath);
+  if (handoffPath) {
+    artifacts.handoff = readJson(handoffPath);
+  }
   artifacts.self_verification = readJson(selfVerificationPath);
-  const entries = readdirSync(verificationDir)
-    .sort()
-    .map((name) => ({
-      name,
-      bytes: readFileSync(`${verificationDir}/${name}`),
-      regular: statSync(`${verificationDir}/${name}`).isFile(),
-    }));
+  const directory = opendirSync(verificationDir);
+  const entries = [];
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      if (entries.length >= selection.roster.length) {
+        throw new Error("staged verification request directory exceeds its entry limit");
+      }
+      let regular = entry.isFile();
+      if (!regular && !entry.isDirectory()) {
+        regular = lstatSync(`${verificationDir}/${entry.name}`).isFile();
+      }
+      entries.push({
+        name: entry.name,
+        bytes: readBytes(`${verificationDir}/${entry.name}`),
+        regular,
+      });
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (error) {
+      if (error.code !== "ERR_DIR_CLOSED") throw error;
+    }
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name));
   const expectedNames = selection.roster.map((seat) => `${seat}.json`).sort();
   const actualNames = entries.map((entry) => entry.name);
   if (
@@ -2118,6 +2404,10 @@ if (phase === "discovery") {
   );
 }
 const validationOptions = {};
+if (phase === "verification" && handoffPath) {
+  validationOptions.ledger_bytes = readBytes(ledgerPath);
+  validationOptions.responses_bytes = readBytes(responsesPath);
+}
 if (phase === "verification" && previousSelectionPath) {
   const priorSelection = readJson(previousSelectionPath);
   validationOptions.prior_selection = priorSelection;
@@ -2206,12 +2496,16 @@ done
 discovery_request_path="$staged_discovery_request_path"
 ledger_path="$staged_ledger_path"
 responses_path="$staged_responses_path"
+if [ -n "$handoff_path" ]; then
+  handoff_path="$staged_handoff_path"
+fi
 self_verification_path="$staged_self_verification_path"
 verification_dir="$staged_verification_dir"
 approval_path="$staged_approval_path"
 display_discovery_request_path="$display_staged_discovery_request_path"
 display_ledger_path="$display_staged_ledger_path"
 display_responses_path="$display_staged_responses_path"
+display_handoff_path="$display_staged_handoff_path"
 display_self_verification_path="$display_staged_self_verification_path"
 display_verification_dir="$display_staged_verification_dir"
 display_approval_path="$display_staged_approval_path"
@@ -2319,7 +2613,12 @@ $(if [ "$phase" = "discovery" ]; then
 else
   printf '%s\n' \
   "- Immutable discovery ledger: \`$display_ledger_path\`" \
-  "- Implementation responses: \`$display_responses_path\`" \
+  "- Implementation responses: \`$display_responses_path\`"
+  if [ -n "$handoff_path" ]; then
+    printf '%s\n' \
+      "- Finalized continuation handoff: \`$display_handoff_path\`"
+  fi
+  printf '%s\n' \
   "- Self-verification: \`$display_self_verification_path\`" \
   "- Verification requests: \`$display_verification_dir/<your-seat>.json\`" \
   "- Approval output after verdict collection: \`$display_approval_path\`"

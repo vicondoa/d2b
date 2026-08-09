@@ -388,18 +388,60 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   --candidate "$ROUND/current-candidate.json"
 ```
 
-Fill the canonical blank responses in `NEXT/responses.json`, rerun selection
-with the new fix delta, prepare verification from
-`NEXT/discovery-ledger.json` and `NEXT/responses.json`, and stage the new
-packet. The command is the only continuation path: it publishes the ledger and
-response files independently with create-or-compare semantics, then publishes
-`NEXT/handoff.json` last as completeness evidence. A retry after a partial
-publication compares every existing file byte-for-byte and creates only the
-missing files; conflicting bytes fail. Consumers must require all three files before
-use. It appends admitted late findings, resets issues with any nonpassing
-status, and refuses duplicate sources, missing responses, candidate or
-selection mismatches, malformed statuses, and conflicting output. Do not
-hand-copy findings or responses.
+The command publishes only the immutable `NEXT/discovery-ledger.json` and
+blank `NEXT/responses.json` independently with create-or-compare semantics.
+It publishes those files independently. A retry after a partial publication
+compares every existing file byte-for-byte
+and creates only missing files; conflicting bytes fail. It appends admitted
+late findings and refuses duplicate sources, missing responses, candidate or
+selection mismatches, malformed statuses, and conflicting output. Copy the
+blank response template to a distinct completed-response file, fill every
+response there, and finalize the handoff:
+
+```bash
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+```
+
+`handoff.json` is published last as completeness evidence. It binds the exact
+ledger and completed-response bytes, but it is not an atomic transaction or a
+security proof. The finalized continuation requires all three files before use:
+the ledger, completed responses, and `handoff.json`. Never edit the blank
+template, ledger, or completed responses after finalization. Rerun selection
+with the new fix delta, prepare
+verification from `NEXT/discovery-ledger.json` and
+`NEXT/responses-completed.json`, and stage the new packet with the finalized
+handoff. Do not hand-copy findings or responses.
+
+The continuation verification command must pass
+`--handoff "$NEXT/handoff.json"`; discovery-first verification remains
+possible without that flag when no advanced handoff exists.
+
+```bash
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/self-verification.json" \
+  "$NEXT/verification" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
+
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> \
+  --selection "$NEXT_SELECTION" --candidate "$CURRENT_CANDIDATE" \
+  --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
+  --self-verification "$NEXT/self-verification.json" \
+  --verification-dir "$NEXT/verification" \
+  --lifecycle <lifecycle-id> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:

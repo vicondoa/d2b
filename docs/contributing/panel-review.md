@@ -235,24 +235,34 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   --candidate "$ROUND/current-candidate.json"
 ```
 
-The command publishes three per-file create-or-compare artifacts:
-`NEXT/discovery-ledger.json`, `NEXT/responses.json`, and `NEXT/handoff.json`.
-It publishes the ledger and responses independently, then publishes
-`handoff.json` last as completeness evidence. A retry after a partial
-publication compares every existing file byte-for-byte and creates only
-missing files; conflicting bytes fail. Consumers must require all three files before
-using the continuation handoff. The marker is not an atomic transaction
-and is not a security proof. The command validates lifecycle, selection
-digest, roster, candidate, ledger, response, and verification bindings;
-appends admitted late findings with stable contiguous `R` identifiers; carries
-a prior response only when every selected seat passed that issue; and resets
-every nonpassing issue and every new late issue to the canonical blank
-response. It rejects conflicting regeneration, duplicate late
-sources, candidate or selection mismatch, missing prior responses, and
-malformed verification statuses.
+The command publishes only the immutable
+`NEXT/discovery-ledger.json` and blank `NEXT/responses.json` by independent
+per-file create-or-compare. It publishes those files independently. A retry
+after a partial publication compares every
+existing file byte-for-byte and creates only missing files; conflicting bytes
+fail. The command validates lifecycle, selection digest, roster, candidate,
+ledger, response, and verification bindings; appends admitted late findings
+with stable contiguous `R` identifiers; and rejects conflicting regeneration,
+duplicate late sources, candidate or selection mismatch, missing prior
+responses, and malformed verification statuses.
 
-After the command, fill the blank responses with complete implementation
-responses. Prepare a **fresh** self-verification artifact for the new
+Copy the blank template to a distinct completed-response file, fill every
+response there, and finalize the handoff:
+
+```bash
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+```
+
+`handoff.json` is published last and is completeness evidence. It binds the
+exact ledger and completed-response bytes, but it is not an atomic transaction
+or a security proof. Never edit `NEXT/responses.json`, the ledger, or the
+completed responses after finalization. The finalized continuation requires all three files before
+use: the ledger, completed responses, and `handoff.json`.
+Prepare a **fresh** self-verification artifact for the new
 candidate and fix delta; never reuse `$ROUND/self-verification.json` for the
 continuation. Then rerun selection with the new fix delta, prepare
 verification from the new ledger and response envelope, and stage the new
@@ -267,15 +277,18 @@ NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs
 
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
-  "$NEXT/responses.json" "$NEXT_SELF_VERIFICATION" "$NEXT/verification" \
+  "$NEXT/responses-completed.json" "$NEXT_SELF_VERIFICATION" "$NEXT/verification" \
   --candidate "$CURRENT_CANDIDATE" \
   --prior-selection "$ROUND/selection.json" \
-  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA"
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
 
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <next-round-id> --selection "$NEXT_SELECTION" \
   --candidate "$CURRENT_CANDIDATE" \
-  --ledger "$NEXT/discovery-ledger.json" --responses "$NEXT/responses.json" \
+  --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
   --self-verification "$NEXT_SELF_VERIFICATION" \
   --verification-dir "$NEXT/verification" \
   --lifecycle <lifecycle-id> \

@@ -16,6 +16,7 @@ import {
   createVerificationResultArtifact,
   continueLegacyImport,
   evaluateApproval,
+  finalizeHandoff,
   importLegacyRound,
   lateFindingAdmission,
   LATE_FINDING_SCHEMA,
@@ -41,6 +42,7 @@ import {
   validateVerificationResults,
   writeVerificationArtifacts,
   writeAdvanceVerification,
+  writeFinalizeHandoff,
   validateAdvanceVerificationHandoff,
   writeDirectoryCreateOrCompare,
   writeCreateOrCompare,
@@ -162,6 +164,8 @@ const documentedHandoffLiterals = [
   '--ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json"',
   '--verification-results "$ROUND/verification-results.json"',
   '--approval "$ROUND/approval.json"',
+  'finalize-handoff "$NEXT/discovery-ledger.json"',
+  '"$NEXT/responses-completed.json" "$NEXT/handoff.json"',
 ];
 for (const documentedPath of [
   join(REPOSITORY_ROOT, ".github", "skills", "d2b-panel-round", "SKILL.md"),
@@ -2229,16 +2233,17 @@ try {
     advanced.responses.responses.map((response) => [response.issue_id, response]),
   );
   check(
-    "advance carries passed responses and blanks every nonpassing or late issue",
-    advancedResponseById.get("R1").disposition === "Fixed" &&
-      advancedResponseById.get("R2").disposition === null &&
-      advancedResponseById.get("R5").disposition === null &&
-      advanced.reset_issue_ids.join(",") === "R2,R5",
+    "advance publishes a blank response template for every issue",
+    [...advancedResponseById.values()].every(
+      (response) => response.disposition === null,
+    ) &&
+      advanced.carried_issue_ids.length === 0 &&
+      advanced.reset_issue_ids.join(",") === "R1,R2,R3,R4,R5",
   );
   const advanceOutput = join(root, "advance-handoff");
   const publishedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
   const firstAdvanceBytes = Object.fromEntries(
-    ["discovery-ledger.json", "responses.json", "handoff.json"].map((name) => [
+    ["discovery-ledger.json", "responses.json"].map((name) => [
       name,
       readFileSync(join(advanceOutput, name)),
     ]),
@@ -2250,59 +2255,32 @@ try {
       readFileSync(join(advanceOutput, name)),
     ]),
   );
-  const advanceLedgerBytes = readFileSync(
-    join(advanceOutput, "discovery-ledger.json"),
-  );
-  const advanceResponseBytes = readFileSync(
-    join(advanceOutput, "responses.json"),
-  );
-  const advanceHandoff = JSON.parse(
-    readFileSync(join(advanceOutput, "handoff.json"), "utf8"),
-  );
   check(
-    "advance publishes ledger and responses independently then marks completeness",
+    "advance publishes only the ledger and blank responses independently",
     publishedAdvance.publication.ledger.created === true &&
       publishedAdvance.publication.responses.created === true &&
-      publishedAdvance.publication.handoff.created === true &&
       repeatedAdvance.publication.ledger.created === false &&
       repeatedAdvance.publication.responses.created === false &&
-      repeatedAdvance.publication.handoff.created === false &&
       Object.keys(firstAdvanceBytes).every((name) =>
-        firstAdvanceBytes[name].equals(repeatedAdvanceBytes[name]),
+      firstAdvanceBytes[name].equals(repeatedAdvanceBytes[name]),
       ) &&
       readdirSync(advanceOutput).sort().join(",") ===
-        "discovery-ledger.json,handoff.json,responses.json",
-  );
-  check(
-    "handoff binds the exact continuation envelopes and candidate address",
-    advanceHandoff.artifact_kind === "d2b-panel/continuation-handoff" &&
-      advanceHandoff.schema_version === 1 &&
-      advanceHandoff.lifecycle_id === advanced.ledger.lifecycle_id &&
-      advanceHandoff.program === advanced.ledger.program &&
-      advanceHandoff.wave === advanced.ledger.wave &&
-      advanceHandoff.candidate_id === advanced.ledger.candidate_id &&
-      advanceHandoff.content_id === advanced.ledger.content_id &&
-      advanceHandoff.snapshot_sha256 === advanced.ledger.snapshot_sha256 &&
-      advanceHandoff.ledger_sha256 === sha256(advanceLedgerBytes) &&
-      advanceHandoff.ledger_bytes === advanceLedgerBytes.length &&
-      advanceHandoff.responses_sha256 === sha256(advanceResponseBytes) &&
-      advanceHandoff.responses_bytes === advanceResponseBytes.length &&
-      validateAdvanceVerificationHandoff(advanceHandoff, {
-        ledger_bytes: advanceLedgerBytes,
-        responses_bytes: advanceResponseBytes,
-      }).marker.artifact_kind === advanceHandoff.artifact_kind,
+      "discovery-ledger.json,responses.json" &&
+      !existsSync(join(advanceOutput, "handoff.json")),
   );
   rmSync(join(advanceOutput, "responses.json"));
   const partialAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
   check(
-    "advance compares existing files, recreates a missing response, and rechecks the marker",
+    "advance compares existing files and recreates only a missing response",
     partialAdvance.publication.ledger.created === false &&
       partialAdvance.publication.responses.created === true &&
-      partialAdvance.publication.handoff.created === false &&
       readdirSync(advanceOutput).sort().join(",") ===
-        "discovery-ledger.json,handoff.json,responses.json",
+      "discovery-ledger.json,responses.json",
   );
   const completedResponses = JSON.parse(stableStringify(advanced.responses));
+  const priorResponseById = new Map(
+    responses.map((response) => [response.issue_id, response]),
+  );
   completedResponses.responses = completedResponses.responses.map((response) =>
     response.issue_id === "R2"
       ? {
@@ -2320,7 +2298,147 @@ try {
             justification: "The active instructions now use the selected roster.",
             evidence: "Spec 003 instruction audit",
           }
-        : response
+          : priorResponseById.get(response.issue_id)
+  );
+  const completedResponsesPath = join(advanceOutput, "responses-completed.json");
+  writeFileSync(completedResponsesPath, stableStringify(completedResponses));
+  const completedResponseBytes = readFileSync(completedResponsesPath);
+  const advanceLedgerBytes = readFileSync(
+    join(advanceOutput, "discovery-ledger.json"),
+  );
+  rejects(
+    "finalize-handoff refuses the blank response template",
+    () => finalizeHandoff({
+      discovery_ledger: advanced.ledger,
+      discovery_ledger_bytes: advanceLedgerBytes,
+      completed_responses: advanced.responses,
+      completed_responses_bytes: readFileSync(join(advanceOutput, "responses.json")),
+    }),
+    /disposition|completed implementation responses/,
+  );
+  const finalizedHandoffPath = join(advanceOutput, "handoff.json");
+  const finalized = writeFinalizeHandoff(finalizedHandoffPath, {
+    discovery_ledger: advanced.ledger,
+    discovery_ledger_bytes: advanceLedgerBytes,
+    completed_responses: completedResponses,
+    completed_responses_bytes: completedResponseBytes,
+  });
+  const advanceHandoff = JSON.parse(
+    readFileSync(finalizedHandoffPath, "utf8"),
+  );
+  check(
+    "finalize-handoff binds exact completed response bytes and candidate address",
+    finalized.publication.created === true &&
+      advanceHandoff.artifact_kind === "d2b-panel/continuation-handoff" &&
+      advanceHandoff.schema_version === 1 &&
+      advanceHandoff.lifecycle_id === advanced.ledger.lifecycle_id &&
+      advanceHandoff.program === advanced.ledger.program &&
+      advanceHandoff.wave === advanced.ledger.wave &&
+      advanceHandoff.candidate_id === advanced.ledger.candidate_id &&
+      advanceHandoff.content_id === advanced.ledger.content_id &&
+      advanceHandoff.snapshot_sha256 === advanced.ledger.snapshot_sha256 &&
+      advanceHandoff.ledger_sha256 === sha256(advanceLedgerBytes) &&
+      advanceHandoff.ledger_bytes === advanceLedgerBytes.length &&
+      advanceHandoff.responses_sha256 === sha256(completedResponseBytes) &&
+      advanceHandoff.responses_bytes === completedResponseBytes.length &&
+      validateAdvanceVerificationHandoff(advanceHandoff, {
+          ledger: advanced.ledger,
+          responses: completedResponses,
+          ledger_bytes: advanceLedgerBytes,
+          responses_bytes: completedResponseBytes,
+      }).marker.artifact_kind === advanceHandoff.artifact_kind,
+  );
+  const repeatedFinalize = writeFinalizeHandoff(finalizedHandoffPath, {
+    discovery_ledger: advanced.ledger,
+    discovery_ledger_bytes: advanceLedgerBytes,
+    completed_responses: completedResponses,
+    completed_responses_bytes: completedResponseBytes,
+  });
+  check(
+    "finalize-handoff identical retry compares without replacement",
+    repeatedFinalize.publication.created === false,
+  );
+  const staleResponseBytes = Buffer.from(
+    stableStringify({
+      ...completedResponses,
+      responses: completedResponses.responses.map((response) =>
+          response.issue_id === "R2"
+            ? { ...response, evidence: "mutated after finalization" }
+            : response,
+      ),
+    }),
+  );
+  rejects(
+    "a finalized handoff rejects stale completed-response bytes",
+    () => validateAdvanceVerificationHandoff(advanceHandoff, {
+      ledger: advanced.ledger,
+      responses: completedResponses,
+      ledger_bytes: advanceLedgerBytes,
+      responses_bytes: staleResponseBytes,
+    }),
+    /does not match the continuation handoff marker/,
+  );
+  rejects(
+    "a finalized handoff rejects an optional ledger object mismatch",
+    () => validateAdvanceVerificationHandoff(advanceHandoff, {
+      ledger: { ...advanced.ledger, wave: "spec999w1" },
+      ledger_bytes: advanceLedgerBytes,
+      responses_bytes: completedResponseBytes,
+    }),
+    /supplied ledger disagrees/,
+  );
+  rejects(
+    "a finalized handoff rejects an optional response object mismatch",
+    () => validateAdvanceVerificationHandoff(advanceHandoff, {
+      responses: {
+        ...completedResponses,
+        lifecycle_id: "other-lifecycle",
+      },
+      ledger_bytes: advanceLedgerBytes,
+      responses_bytes: completedResponseBytes,
+    }),
+    /supplied responses disagree/,
+  );
+  const malformedBoundBytes = Buffer.from("{not-json\n");
+  const malformedMarker = {
+    ...advanceHandoff,
+    responses_sha256: sha256(malformedBoundBytes),
+    responses_bytes: malformedBoundBytes.length,
+  };
+  rejects(
+    "a finalized handoff parses malformed marker-bound response bytes",
+    () => validateAdvanceVerificationHandoff(malformedMarker, {
+      ledger_bytes: advanceLedgerBytes,
+      responses_bytes: malformedBoundBytes,
+    }),
+    /not valid JSON/,
+  );
+  const missingMarker = { ...advanceHandoff };
+  delete missingMarker.responses_sha256;
+  rejects(
+    "a handoff missing its response marker binding is refused",
+    () => validateAdvanceVerificationHandoff(missingMarker, {
+      ledger_bytes: advanceLedgerBytes,
+      responses_bytes: completedResponseBytes,
+    }),
+    /unexpected schema|responses_sha256/,
+  );
+  const conflictingCompletedResponses = JSON.parse(
+    stableStringify(completedResponses),
+  );
+  conflictingCompletedResponses.responses[0].evidence =
+    "different completed response";
+  rejects(
+    "finalize-handoff refuses a conflicting retry",
+    () => writeFinalizeHandoff(finalizedHandoffPath, {
+      discovery_ledger: advanced.ledger,
+      discovery_ledger_bytes: advanceLedgerBytes,
+      completed_responses: conflictingCompletedResponses,
+      completed_responses_bytes: Buffer.from(
+          stableStringify(conflictingCompletedResponses),
+      ),
+    }),
+    /conflicting generated bytes/,
   );
   check(
     "a completed late response exposes the Spec 003 fix path to scope validation",
@@ -2420,6 +2538,9 @@ try {
     prior_selection: verificationSelection.selection,
     prior_verdicts: nextPriorVerdicts,
     latest_delta_paths: ["specs/003-adr052-bazel-rust/plan.md"],
+    handoff: advanceHandoff,
+    discovery_ledger_bytes: advanceLedgerBytes,
+    responses_bytes: completedResponseBytes,
   });
   check(
     "advance output feeds rerun selection and verification preparation",
@@ -3348,14 +3469,17 @@ try {
       readFileSync(join(cliAdvanceDirectory, "responses.json"), "utf8"),
     );
     check(
-      "advance-verification CLI publishes the blocked handoff",
+      "advance-verification CLI publishes only the blocked ledger and blank responses",
       advanceVerificationResult.status === 0 &&
         advancedCliLedger.issues.at(-1).id === "R2" &&
         advancedCliLedger.sources.at(-1).source_id === "spec003:cli-late" &&
         advancedCliResponses.responses.find((response) => response.issue_id === "R1")
           .disposition === null &&
+        advancedCliResponses.responses.every(
+          (response) => response.disposition === null,
+        ) &&
         readdirSync(cliAdvanceDirectory).sort().join(",") ===
-          "discovery-ledger.json,handoff.json,responses.json",
+          "discovery-ledger.json,responses.json",
       `${advanceVerificationResult.stdout}${advanceVerificationResult.stderr}`,
     );
     const repeatedAdvanceVerification = spawnSync("node", [
@@ -3370,10 +3494,146 @@ try {
       join(cliRound, "current-candidate.json"),
     ], { cwd: cliRoot, encoding: "utf8" });
     check(
-      "advance-verification CLI compares an identical existing handoff",
+      "advance-verification CLI compares an identical blank publication",
       repeatedAdvanceVerification.status === 0,
       `${repeatedAdvanceVerification.stdout}${repeatedAdvanceVerification.stderr}`,
     );
+    const cliCompletedResponses = JSON.parse(
+      stableStringify(advancedCliResponses),
+    );
+    cliCompletedResponses.responses = cliCompletedResponses.responses.map(
+      (response) => ({
+        ...response,
+        disposition: "Fixed",
+        changed_surface: ["src/panel.js"],
+        justification: "The continuation response is complete.",
+        evidence: "focused continuation test",
+      }),
+    );
+    const cliCompletedResponsesPath = join(
+      cliAdvanceDirectory,
+      "responses-completed.json",
+    );
+    writeFileSync(
+      cliCompletedResponsesPath,
+      stableStringify(cliCompletedResponses),
+    );
+    const cliHandoffPath = join(cliAdvanceDirectory, "handoff.json");
+    const finalizeHandoffResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "finalize-handoff",
+      join(cliAdvanceDirectory, "discovery-ledger.json"),
+      cliCompletedResponsesPath,
+      cliHandoffPath,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "finalize-handoff CLI publishes a marker only after completed responses",
+      finalizeHandoffResult.status === 0 &&
+        JSON.parse(readFileSync(cliHandoffPath, "utf8")).responses_sha256 ===
+          sha256(readFileSync(cliCompletedResponsesPath, "utf8")) &&
+        readdirSync(cliAdvanceDirectory).sort().join(",") ===
+          "discovery-ledger.json,handoff.json,responses-completed.json,responses.json",
+      `${finalizeHandoffResult.stdout}${finalizeHandoffResult.stderr}`,
+    );
+    const blankFinalizeResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "finalize-handoff",
+      join(cliAdvanceDirectory, "discovery-ledger.json"),
+      join(cliAdvanceDirectory, "responses.json"),
+      join(cliRoot, "blank-handoff.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "finalize-handoff CLI rejects the blank template as completed responses",
+      blankFinalizeResult.status !== 0 &&
+        /disposition|completed implementation responses/.test(
+          `${blankFinalizeResult.stdout}${blankFinalizeResult.stderr}`,
+        ),
+      `${blankFinalizeResult.stdout}${blankFinalizeResult.stderr}`,
+    );
+    const finalizeUnknownFlag = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "finalize-handoff",
+      join(cliAdvanceDirectory, "discovery-ledger.json"),
+      cliCompletedResponsesPath,
+      join(cliRoot, "strict-handoff.json"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "finalize-handoff CLI rejects unsupported flags",
+      finalizeUnknownFlag.status !== 0 &&
+        /does not recognize argument/.test(
+          `${finalizeUnknownFlag.stdout}${finalizeUnknownFlag.stderr}`,
+        ),
+    );
+    const continuationVerificationRequests = join(
+      cliRoot,
+      "continuation-verification-requests",
+    );
+    const continuationVerificationResult = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "verification",
+      join(cliRound, "selection.json"),
+      join(cliAdvanceDirectory, "discovery-ledger.json"),
+      cliCompletedResponsesPath,
+      cliSelf,
+      continuationVerificationRequests,
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+      "--prior-selection",
+      join(cliFirstRound, "selection.json"),
+      "--prior-verdicts",
+      join(cliFirstRound, "verdicts"),
+      "--delta",
+      cliDelta,
+      "--handoff",
+      cliHandoffPath,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "verification CLI validates an explicit finalized handoff",
+      continuationVerificationResult.status === 0 &&
+        existsSync(join(continuationVerificationRequests, "software.json")),
+      `${continuationVerificationResult.stdout}${continuationVerificationResult.stderr}`,
+    );
+    const savedCompletedResponsesBytes = readFileSync(
+      cliCompletedResponsesPath,
+    );
+    const staleCompletedResponses = JSON.parse(
+      savedCompletedResponsesBytes.toString("utf8"),
+    );
+    staleCompletedResponses.responses[0].evidence =
+      "mutated after finalized handoff";
+    writeFileSync(
+      cliCompletedResponsesPath,
+      stableStringify(staleCompletedResponses),
+    );
+    const staleContinuationVerification = spawnSync("node", [
+      LIFECYCLE_CLI,
+      "verification",
+      join(cliRound, "selection.json"),
+      join(cliAdvanceDirectory, "discovery-ledger.json"),
+      cliCompletedResponsesPath,
+      cliSelf,
+      join(cliRoot, "stale-continuation-verification"),
+      "--candidate",
+      join(cliRound, "current-candidate.json"),
+      "--prior-selection",
+      join(cliFirstRound, "selection.json"),
+      "--prior-verdicts",
+      join(cliFirstRound, "verdicts"),
+      "--delta",
+      cliDelta,
+      "--handoff",
+      cliHandoffPath,
+    ], { cwd: cliRoot, encoding: "utf8" });
+    check(
+      "verification CLI rejects stale completed-response bytes",
+      staleContinuationVerification.status !== 0 &&
+        /does not match the continuation handoff marker/.test(
+          `${staleContinuationVerification.stdout}${staleContinuationVerification.stderr}`,
+        ),
+    );
+    writeFileSync(cliCompletedResponsesPath, savedCompletedResponsesBytes);
     const unsupportedAdvanceLifecycle = spawnSync("node", [
       LIFECYCLE_CLI,
       "advance-verification",

@@ -15,8 +15,8 @@ import {
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  opendirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -200,6 +200,27 @@ function readRegularFile(path, options = {}) {
   return bytes;
 }
 
+function streamDirectoryNames(path, maxEntries, label) {
+  const directory = opendirSync(path);
+  const names = [];
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      names.push(entry.name);
+      if (names.length > maxEntries) {
+        error(`${label} has more than ${maxEntries} entries`);
+      }
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (cause) {
+      if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+    }
+  }
+  return sortUtf8(names);
+}
+
 export function readFileNoFollow(path, options = {}) {
   const bytes = readRegularFile(path, options);
   return options.encoding ? bytes.toString(options.encoding) : bytes;
@@ -253,10 +274,7 @@ export function readDirectoryNoFollow(path, options = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     error(`${label} aggregate byte limit is malformed`);
   }
-  const names = sortUtf8(readdirSync(path));
-  if (names.length > maxEntries) {
-    error(`${label} has more than ${maxEntries} entries`);
-  }
+  const names = streamDirectoryNames(path, maxEntries, label);
   requireExactDirectoryNames(
     names,
     expectedDirectoryNames(options.expectedNames, label),
@@ -295,20 +313,14 @@ export function listDirectoryNamesNoFollow(path, label = path, options = {}) {
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
     error(`${label} entry limit is malformed`);
   }
-  const names = sortUtf8(readdirSync(path));
-  if (names.length > maxEntries) {
-    error(`${label} has more than ${maxEntries} entries`);
-  }
-  return names;
+  return streamDirectoryNames(path, maxEntries, label);
 }
 
 function readJsonWithBytes(path, label = path) {
   try {
-    const bytes = readFileNoFollow(path, {
-      encoding: "utf8",
-      label,
-    });
-    return { value: JSON.parse(bytes), bytes };
+    const bytes = readFileNoFollow(path, { label });
+    const text = artifactText(bytes, label);
+    return { value: JSON.parse(text), bytes: text };
   } catch (cause) {
     if (cause.code === "ENOENT") {
       error(`missing ${label} at ${path}`);
@@ -2011,19 +2023,7 @@ function validateAdaptedDiscoveryShape(results) {
 }
 
 function validateExactJsonBytes(bytes, value, label) {
-  if (typeof bytes !== "string" || bytes.length === 0) {
-    error(`${label} requires exact JSON bytes`);
-  }
-  let decoded;
-  try {
-    decoded = JSON.parse(bytes);
-  } catch (cause) {
-    error(`${label} bytes are not valid JSON: ${cause.message}`);
-  }
-  if (stableStringify(decoded) !== stableStringify(value)) {
-    error(`${label} object disagrees with the exact JSON bytes`);
-  }
-  return bytes;
+  return exactArtifactBytes(bytes, value, label);
 }
 
 function exactSelectionBytes(selection, bytes, label) {
@@ -3540,6 +3540,30 @@ export function validateStagedRoundArtifacts(input, options = {}) {
   validateLedger(ledger, { table, selection });
   validateResponses(ledger, input.responses);
   validateSelfVerification(input.self_verification ?? input.selfVerification);
+  if (input.handoff !== undefined) {
+    const ledgerBytes =
+      options.ledger_bytes ??
+      options.ledgerBytes ??
+      input.ledger_bytes ??
+      input.ledgerBytes;
+    const responseBytes =
+      options.responses_bytes ??
+      options.responsesBytes ??
+      input.responses_bytes ??
+      input.responsesBytes;
+    if (ledgerBytes === undefined || responseBytes === undefined) {
+      error(
+        "staged verification artifacts with a handoff require exact ledger and response bytes",
+      );
+    }
+    validateAdvanceVerificationHandoff(input.handoff, {
+      ledger,
+      responses: input.responses,
+      ledger_bytes: ledgerBytes,
+      responses_bytes: responseBytes,
+      table,
+    });
+  }
   const verificationRequests =
     input.verification_requests ?? input.verificationRequests;
   if (!verificationRequests) {
@@ -3770,17 +3794,6 @@ export function appendLateFindings(ledger, findings) {
   };
 }
 
-function canonicalResponseBlank(issueId) {
-  return {
-    issue_id: issueId,
-    disposition: null,
-    changed_surface: [],
-    justification: "",
-    evidence: "",
-    verified_factual_status: null,
-  };
-}
-
 function validateResponseHandoff(ledger, envelope) {
   validateResponseEnvelope(ledger, envelope);
   if (!Array.isArray(envelope.responses)) {
@@ -3847,6 +3860,18 @@ function validateResponseHandoff(ledger, envelope) {
   return envelope;
 }
 
+function validateCompletedResponseEnvelope(ledger, envelope) {
+  validateResponseEnvelope(ledger, envelope);
+  const responses = validateResponses(ledger, envelope);
+  if (responses.some((response) => response.disposition === null)) {
+    error(
+      "completed implementation responses must provide a disposition for every " +
+      "ledger issue",
+    );
+  }
+  return envelope;
+}
+
 function artifactByteLength(bytes, label) {
   if (typeof bytes === "string") {
     if (bytes.length === 0) error(`${label} requires exact JSON bytes`);
@@ -3869,14 +3894,17 @@ function artifactText(bytes, label) {
   }
 }
 
-function exactArtifactBytes(bytes, value, label) {
+function parseArtifactJson(bytes, label) {
   const text = artifactText(bytes, label);
-  let decoded;
   try {
-    decoded = JSON.parse(text);
+    return JSON.parse(text);
   } catch (cause) {
     error(`${label} bytes are not valid JSON: ${cause.message}`);
   }
+}
+
+function exactArtifactBytes(bytes, value, label) {
+  const decoded = parseArtifactJson(bytes, label);
   if (stableStringify(decoded) !== stableStringify(value)) {
     error(`${label} object disagrees with its exact JSON bytes`);
   }
@@ -3969,18 +3997,38 @@ export function validateAdvanceVerificationHandoff(marker, options = {}) {
     "continuation handoff responses",
   );
 
-  let ledger;
-  let responses;
-  try {
-    ledger = options.ledger ??
-      JSON.parse(artifactText(suppliedLedgerBytes, "continuation handoff discovery ledger"));
-    responses = options.responses ??
-      JSON.parse(artifactText(suppliedResponseBytes, "continuation handoff responses"));
-  } catch (cause) {
-    error(`continuation handoff artifact JSON is malformed: ${cause.message}`);
+  const ledger = parseArtifactJson(
+    suppliedLedgerBytes,
+    "continuation handoff discovery ledger",
+  );
+  const responses = parseArtifactJson(
+    suppliedResponseBytes,
+    "continuation handoff responses",
+  );
+  const optionalLedger =
+    Object.hasOwn(options, "ledger") ? options.ledger : options.discovery_ledger;
+  const optionalResponses =
+    Object.hasOwn(options, "responses") ? options.responses : options.response;
+  if (
+    (Object.hasOwn(options, "ledger") ||
+      Object.hasOwn(options, "discovery_ledger")) &&
+    stableStringify(optionalLedger) !== stableStringify(ledger)
+  ) {
+    error(
+      "continuation handoff supplied ledger disagrees with its marker-bound bytes",
+    );
+  }
+  if (
+    (Object.hasOwn(options, "responses") ||
+      Object.hasOwn(options, "response")) &&
+    stableStringify(optionalResponses) !== stableStringify(responses)
+  ) {
+    error(
+      "continuation handoff supplied responses disagree with its marker-bound bytes",
+    );
   }
   validateLedger(ledger, { table: options.table });
-  validateResponseHandoff(ledger, responses);
+  validateCompletedResponseEnvelope(ledger, responses);
   for (const key of [
     "lifecycle_id",
     "program",
@@ -4015,7 +4063,7 @@ export function createContinuationHandoff(input, options = {}) {
   exactArtifactBytes(ledgerBytes, ledger, "continuation handoff ledger");
   exactArtifactBytes(responseBytes, responses, "continuation handoff responses");
   validateLedger(ledger, { table: options.table });
-  validateResponseHandoff(ledger, responses);
+  validateCompletedResponseEnvelope(ledger, responses);
   const marker = sortedObject({
     artifact_kind: CONTINUATION_HANDOFF_ARTIFACT,
     schema_version: CONTINUATION_HANDOFF_SCHEMA_VERSION,
@@ -4113,7 +4161,7 @@ export function advanceVerification(input, options = {}) {
     responses,
     "advance-verification responses",
   );
-  const priorResponses = validateResponses(ledger, responses);
+  validateResponses(ledger, responses);
   validateResponseEnvelope(ledger, responses);
 
   const verificationResults =
@@ -4166,34 +4214,12 @@ export function advanceVerification(input, options = {}) {
   });
   validateLedger(nextLedger);
 
-  const priorByIssue = new Map(
-    priorResponses.map((response) => [response.issue_id, response]),
-  );
-  const statusByIssue = new Map(
-    ledger.issues.map((issue) => [
-      issue.id,
-      verification.every((result) =>
-        PASSING_VERIFICATION_STATUSES.has(
-          statusName(result.verified_issue_statuses[issue.id]),
-        )),
-    ]),
-  );
+  // The next response envelope is deliberately a blank template. Completed
+  // responses are a separate operator-owned artifact and are finalized before
+  // any continuation consumer accepts the handoff marker.
   const carriedIssueIds = [];
-  const resetIssueIds = [];
-  const template = createResponseTemplate(nextLedger);
-  template.responses = nextLedger.issues.map((issue) => {
-    if (!statusByIssue.has(issue.id) || statusByIssue.get(issue.id) !== true) {
-      resetIssueIds.push(issue.id);
-      return canonicalResponseBlank(issue.id);
-    }
-    const response = priorByIssue.get(issue.id);
-    if (!response) {
-      error(`advance-verification has no prior response for ${issue.id}`);
-    }
-    carriedIssueIds.push(issue.id);
-    return response;
-  });
-  const nextResponses = sortedObject(template);
+  const resetIssueIds = nextLedger.issues.map((issue) => issue.id);
+  const nextResponses = createResponseTemplate(nextLedger);
   validateResponseHandoff(nextLedger, nextResponses);
   return {
     ledger: nextLedger,
@@ -4216,22 +4242,71 @@ export function writeAdvanceVerification(outputDir, input, options = {}) {
       advanced.responses,
     ),
   };
-  const handoff = createContinuationHandoff({
-    ledger: advanced.ledger,
-    ledger_bytes: publication.ledger.bytes,
-    responses: advanced.responses,
-    responses_bytes: publication.responses.bytes,
-  }, options);
-  publication.handoff = writeCreateOrCompare(
-    join(outputDir, "handoff.json"),
-    handoff,
-  );
   return {
     ...advanced,
     publication,
     ledger_path: join(outputDir, "discovery-ledger.json"),
     responses_path: join(outputDir, "responses.json"),
-    handoff_path: join(outputDir, "handoff.json"),
+  };
+}
+
+export function finalizeHandoff(input, options = {}) {
+  if (!isPlainObject(input)) error("finalize-handoff input must be an object");
+  const ledger =
+    input.discovery_ledger ??
+    input.discoveryLedger ??
+    input.ledger;
+  if (!ledger) {
+    error("finalize-handoff requires the exact continuation ledger");
+  }
+  const ledgerBytes =
+    input.discovery_ledger_bytes ??
+    input.discoveryLedgerBytes ??
+    input.ledger_bytes ??
+    stableStringify(ledger);
+  exactArtifactBytes(ledgerBytes, ledger, "finalize-handoff ledger");
+  validateLedger(ledger, { table: options.table });
+
+  const responses =
+    input.completed_responses ??
+    input.completedResponses ??
+    input.responses;
+  if (!responses) {
+    error("finalize-handoff requires completed implementation responses");
+  }
+  const responseBytes =
+    input.completed_responses_bytes ??
+    input.completedResponsesBytes ??
+    input.responses_bytes ??
+    input.response_bytes ??
+    stableStringify(responses);
+  exactArtifactBytes(
+    responseBytes,
+    responses,
+    "finalize-handoff completed responses",
+  );
+  validateCompletedResponseEnvelope(ledger, responses);
+
+  const handoff = createContinuationHandoff({
+    ledger,
+    ledger_bytes: ledgerBytes,
+    responses,
+    responses_bytes: responseBytes,
+  }, options);
+  return {
+    ledger,
+    responses,
+    handoff,
+  };
+}
+
+export function writeFinalizeHandoff(path, input, options = {}) {
+  const finalized = finalizeHandoff(input, options);
+  const publication = writeCreateOrCompare(path, finalized.handoff);
+  return {
+    ...finalized,
+    publication,
+    handoff_path: path,
   };
 }
 
@@ -4542,6 +4617,33 @@ export function prepareVerification(input, options = {}) {
     discoveryLedger,
   );
   const responses = validateResponses(discoveryLedger, input.responses);
+  const handoff =
+    input.handoff ??
+    input.continuation_handoff ??
+    input.continuationHandoff;
+  if (handoff !== undefined) {
+    const ledgerBytes =
+      input.discovery_ledger_bytes ??
+      input.discoveryLedgerBytes ??
+      input.ledger_bytes ??
+      input.ledgerBytes;
+    const responseBytes =
+      input.responses_bytes ??
+      input.responseBytes ??
+      input.response_bytes;
+    if (ledgerBytes === undefined || responseBytes === undefined) {
+      error(
+        "verification preparation with a handoff requires exact ledger and completed-response bytes",
+      );
+    }
+    validateAdvanceVerificationHandoff(handoff, {
+      ledger: discoveryLedger,
+      responses: input.responses,
+      ledger_bytes: ledgerBytes,
+      responses_bytes: responseBytes,
+      table,
+    });
+  }
   const selfVerification = validateSelfVerification(
     input.self_verification ?? input.selfVerification,
   );
@@ -6087,7 +6189,7 @@ function usage() {
     "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json> --candidate PATH",
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
     "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
-    "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH",
+    "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH [--handoff PATH]",
     "  panel-lifecycle.mjs advance-verification <selection.json> <ledger.json> <responses.json> <verification-results.json> <output-dir> --candidate PATH",
     "  panel-lifecycle.mjs approval <selection.json> <ledger.json> <responses.json> <verification-results.json> <output.json> --candidate PATH",
     "    approval exit codes: 0 approved; 3 valid but blocked; 2 invalid invocation or input",
@@ -6253,6 +6355,7 @@ async function main(argv) {
           "--previous-selection": "prior_selection",
           "--prior-verdicts": "prior_verdicts",
           "--delta": "delta",
+          "--handoff": "handoff",
         },
       );
       const [
@@ -6263,13 +6366,16 @@ async function main(argv) {
         outputDir,
       ] = parsed.positionals;
       const selection = readSelection(selectionPath);
-      const ledger = readJson(ledgerPath, "issue ledger");
-      const responses = readJson(responsesPath, "implementation responses");
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(responsesPath, "implementation responses");
       const selfVerification = readJson(selfVerificationPath, "self-verification");
       const candidatePath = parsed.values.candidate;
       const priorPath = parsed.values.prior_selection;
       const priorVerdictsPath = parsed.values.prior_verdicts;
       const deltaPath = parsed.values.delta;
+      const handoffPath = parsed.values.handoff;
       if (!candidatePath || !priorPath || !priorVerdictsPath || !deltaPath) {
         error(
           "verification requires --candidate, --prior-selection, --prior-verdicts, and --delta",
@@ -6291,6 +6397,16 @@ async function main(argv) {
           expectedNames: priorSelection.roster.map((seat) => `${seat}.json`),
         }),
         actual_delta_paths: actualDeltaPaths,
+        ...(handoffPath
+          ? {
+              handoff: readJsonWithBytes(
+                handoffPath,
+                "continuation handoff marker",
+              ).value,
+              discovery_ledger_bytes: ledgerBytes,
+              responses_bytes: responseBytes,
+            }
+          : {}),
       });
       console.log(`wrote ${result.written.length} verification artifacts to ${outputDir}`);
       return;
@@ -6335,8 +6451,32 @@ async function main(argv) {
         current_candidate: readJson(candidatePath, "current candidate"),
       });
       console.log(
-        `wrote next ledger, response envelope, and handoff marker to ${outputDir}`,
+        `wrote next ledger and blank response envelope to ${outputDir}`,
       );
+      return;
+    }
+    if (command === "finalize-handoff") {
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        3,
+      );
+      const [ledgerPath, completedResponsesPath, handoffPath] =
+        parsed.positionals;
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "continuation ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(
+          completedResponsesPath,
+          "completed implementation responses",
+        );
+      writeFinalizeHandoff(handoffPath, {
+        discovery_ledger: ledger,
+        discovery_ledger_bytes: ledgerBytes,
+        completed_responses: responses,
+        completed_responses_bytes: responseBytes,
+      });
+      console.log(handoffPath);
       return;
     }
     if (command === "adapt-verification") {

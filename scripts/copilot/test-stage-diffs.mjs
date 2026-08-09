@@ -18,6 +18,7 @@ import {
 import { createHash } from "node:crypto";
 import {
   createVerificationResultArtifact,
+  writeFinalizeHandoff,
   stableStringify,
   writeAdvanceVerification,
 } from "../../.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs";
@@ -167,6 +168,8 @@ try {
     "discovery incrementally scans bounded packet entries",
     stageSource.includes("opendirSync") &&
       stageSource.includes("readSync()") &&
+      stageSource.includes("lstatSync(path.join(directory, entry.name))") &&
+      stageSource.includes("entryKind") &&
       stageSource.includes("canonicalFileNames") &&
       stageSource.includes("canonicalContentDirectories") &&
       stageSource.includes('failScan("canonical-remnant"') &&
@@ -486,9 +489,12 @@ try {
     ),
   );
   check(
-    "a marker-only packet does not block discovery",
-    markerOnlyDiscovery.status === 0 &&
-      existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
+    "a marker-only packet fails closed",
+    markerOnlyDiscovery.status === 2 &&
+      /category=invalid-completion-packet count=1/.test(
+        markerOnlyDiscovery.text,
+      ) &&
+      !existsSync(join(repo, ".scratch", "panel", "otherprefix-r1", ".complete")),
     markerOnlyDiscovery.text,
   );
   rmSync(alternateDiscoveryDir, { recursive: true, force: true });
@@ -1057,14 +1063,98 @@ try {
     realHandoffDir,
     realHandoffInput,
   );
+  const continuationLedgerPath = join(
+    realHandoffDir,
+    "discovery-ledger.json",
+  );
+  const continuationBlankResponsesPath = join(realHandoffDir, "responses.json");
+  const continuationCompletedResponsesPath = join(
+    realHandoffDir,
+    "responses-completed.json",
+  );
+  cpSync(continuationBlankResponsesPath, continuationCompletedResponsesPath);
+  const continuationCompletedResponses = readJson(
+    continuationCompletedResponsesPath,
+  );
+  continuationCompletedResponses.responses = continuationCompletedResponses.responses.map(
+    (response) => ({
+      ...response,
+      disposition: "Fixed",
+      changed_surface: ["Makefile"],
+      justification: "The continuation response is complete.",
+      evidence: "focused continuation test",
+    }),
+  );
+  writeJson(
+    continuationCompletedResponsesPath,
+    continuationCompletedResponses,
+  );
+  const continuationHandoffPath = join(realHandoffDir, "handoff.json");
+  const finalizedContinuation = writeFinalizeHandoff(continuationHandoffPath, {
+    discovery_ledger: readJson(continuationLedgerPath),
+    discovery_ledger_bytes: readFileSync(continuationLedgerPath, "utf8"),
+    completed_responses: continuationCompletedResponses,
+    completed_responses_bytes: readFileSync(
+      continuationCompletedResponsesPath,
+      "utf8",
+    ),
+  });
   check(
-    "real advance output publishes and byte-identically retries all three files",
-    firstHandoffPublication.publication.handoff.created === true &&
+    "advance output publishes two files and finalization publishes the marker last",
+    firstHandoffPublication.publication.ledger.created === true &&
+      firstHandoffPublication.publication.responses.created === true &&
       secondHandoffPublication.publication.ledger.created === false &&
       secondHandoffPublication.publication.responses.created === false &&
-      secondHandoffPublication.publication.handoff.created === false &&
+      finalizedContinuation.publication.created === true &&
       readdirSync(realHandoffDir).sort().join(",") ===
-        "discovery-ledger.json,handoff.json,responses.json",
+        "discovery-ledger.json,handoff.json,responses-completed.json,responses.json",
+  );
+  check(
+    "finalized continuation retry compares the marker",
+    writeFinalizeHandoff(continuationHandoffPath, {
+      discovery_ledger: readJson(continuationLedgerPath),
+      discovery_ledger_bytes: readFileSync(continuationLedgerPath, "utf8"),
+      completed_responses: continuationCompletedResponses,
+      completed_responses_bytes: readFileSync(
+        continuationCompletedResponsesPath,
+        "utf8",
+      ),
+    }).publication.created === false &&
+      secondHandoffPublication.publication.ledger.created === false &&
+      secondHandoffPublication.publication.responses.created === false,
+  );
+  const continuationVerificationDir = join(
+    repo,
+    "continuation-verification-requests",
+  );
+  const continuationVerificationProcess = spawnSync("node", [
+    lifecycleScript,
+    "verification",
+    currentSelectionPath,
+    continuationLedgerPath,
+    continuationCompletedResponsesPath,
+    stagedSelfVerification,
+    continuationVerificationDir,
+    "--candidate",
+    currentCandidatePath,
+    "--prior-selection",
+    selectionPath,
+    "--prior-verdicts",
+    join(firstDir, "verdicts"),
+    "--delta",
+    deltaPath,
+    "--handoff",
+    continuationHandoffPath,
+  ], { cwd: repo, encoding: "utf8" });
+  const continuationVerificationPreparation = {
+    status: continuationVerificationProcess.status,
+    text: `${continuationVerificationProcess.stdout || ""}${continuationVerificationProcess.stderr || ""}`,
+  };
+  check(
+    "verification preparation validates and consumes the explicit handoff",
+    continuationVerificationPreparation.status === 0 &&
+      existsSync(join(continuationVerificationDir, "software.json")),
+    continuationVerificationPreparation.text,
   );
 
   const unrelatedCandidatePath = join(repo, "unrelated-candidate.json");
@@ -1110,6 +1200,7 @@ try {
     request,
     lifecycle,
     mutate,
+    options = {},
   ) => {
     const packet = join(repo, ".scratch", "panel", name);
     const round = `${name.replace(/[^A-Za-z0-9]/g, "")}-r1`;
@@ -1119,6 +1210,7 @@ try {
       return run(
         repo,
         stageArgs(base, base, round, selection, candidate, request, lifecycle),
+        options,
       );
     } finally {
       rmSync(packet, { recursive: true, force: true });
@@ -1170,13 +1262,31 @@ try {
     unrelatedCandidatePath,
     unrelatedRequestPath,
     "spec002w1",
-    (packet) => rmSync(join(packet, "handoff.json")),
+    (packet) => {
+      rmSync(join(packet, "handoff.json"));
+      rmSync(join(packet, "responses-completed.json"));
+    },
   );
   check(
     "an unmarked ledger-response pair is damaged packet state",
     unmarkedPair.status === 2 &&
       /category=damaged-handoff count=2/.test(unmarkedPair.text),
     unmarkedPair.text,
+  );
+
+  const missingFinalizedMarker = runRealHandoffDiscovery(
+    "missing-finalized-marker",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    (packet) => rmSync(join(packet, "handoff.json")),
+  );
+  check(
+    "a completed response pair without its finalized marker fails closed",
+    missingFinalizedMarker.status === 2 &&
+      /category=partial-handoff count=3/.test(missingFinalizedMarker.text),
+    missingFinalizedMarker.text,
   );
 
   const malformedMarker = runRealHandoffDiscovery(
@@ -1261,7 +1371,10 @@ try {
     unrelatedCandidatePath,
     unrelatedRequestPath,
     "spec002w1",
-    (packet) => rmSync(join(packet, "responses.json")),
+    (packet) => {
+      rmSync(join(packet, "responses.json"));
+      rmSync(join(packet, "responses-completed.json"));
+    },
   );
   check(
     "partial handoff files fail closed",
@@ -1303,7 +1416,25 @@ try {
   );
   rmSync(overLimitPacket, { recursive: true, force: true });
 
-  rmSync(realHandoffDir, { recursive: true, force: true });
+  const dtUnknownShim = join(repo, "dt-unknown.cjs");
+  writeFileSync(
+    dtUnknownShim,
+    "const { Dirent } = require('node:fs'); Dirent.prototype.isFile = () => false; Dirent.prototype.isDirectory = () => false;\n",
+  );
+  const dtUnknownDiscovery = runRealHandoffDiscovery(
+    "dt-unknown-fallback",
+    unrelatedSelectionPath,
+    unrelatedCandidatePath,
+    unrelatedRequestPath,
+    "spec002w1",
+    undefined,
+    { env: { NODE_OPTIONS: `--require ${dtUnknownShim}` } },
+  );
+  check(
+    "DT_UNKNOWN simulation uses lstat fallback for relevant entries",
+    dtUnknownDiscovery.status === 0,
+    dtUnknownDiscovery.text,
+  );
 
   console.log("stage-diffs: later review");
   const predecessorMarker = join(firstDir, ".complete");
@@ -1333,13 +1464,15 @@ try {
       "--candidate",
       currentCandidatePath,
       "--ledger",
-      stagedLedger,
+      continuationLedgerPath,
       "--responses",
-      stagedResponses,
+      continuationCompletedResponsesPath,
+      "--handoff",
+      continuationHandoffPath,
       "--self-verification",
       stagedSelfVerification,
       "--verification-dir",
-      verificationSourceDir,
+      continuationVerificationDir,
     ]);
   rmSync(predecessorMarker);
   const missingPredecessor = run(repo, [
@@ -1351,13 +1484,15 @@ try {
     "--candidate",
     currentCandidatePath,
     "--ledger",
-    stagedLedger,
+    continuationLedgerPath,
     "--responses",
-    stagedResponses,
+    continuationCompletedResponsesPath,
+    "--handoff",
+    continuationHandoffPath,
     "--self-verification",
     stagedSelfVerification,
     "--verification-dir",
-    verificationSourceDir,
+    continuationVerificationDir,
   ]);
   check(
     "later staging requires a canonical predecessor marker first",
@@ -1657,7 +1792,7 @@ try {
 
   const removedVerificationSeat = verificationRoster[0];
   const removedVerificationRequest = join(
-    verificationSourceDir,
+    continuationVerificationDir,
     `${removedVerificationSeat}.json`,
   );
   const removedVerificationBytes = readFileSync(removedVerificationRequest);
@@ -1688,13 +1823,15 @@ try {
     "--candidate",
     currentCandidatePath,
     "--ledger",
-    stagedLedger,
+    continuationLedgerPath,
     "--responses",
-    stagedResponses,
+    continuationCompletedResponsesPath,
+    "--handoff",
+    continuationHandoffPath,
     "--self-verification",
     stagedSelfVerification,
     "--verification-dir",
-    verificationSourceDir,
+    continuationVerificationDir,
   ]);
   check(
     "verification staging compares base-to-tip full paths",
@@ -1712,13 +1849,15 @@ try {
     "--candidate",
     currentCandidatePath,
     "--ledger",
-    stagedLedger,
+    continuationLedgerPath,
     "--responses",
-    stagedResponses,
+    continuationCompletedResponsesPath,
+    "--handoff",
+    continuationHandoffPath,
     "--self-verification",
     stagedSelfVerification,
     "--verification-dir",
-    verificationSourceDir,
+    continuationVerificationDir,
   ]);
   check("later review stages successfully", second.status === 0, second.text);
   const secondDir = join(repo, ".scratch", "panel", "spec001w1-r2");
@@ -1730,6 +1869,13 @@ try {
       secondRequest.includes("Approval output after verdict collection:"),
   );
   check(
+    "verification staging materializes and binds the finalized handoff",
+    readFileSync(join(secondDir, "handoff.json"), "utf8") ===
+      readFileSync(continuationHandoffPath, "utf8") &&
+      readJson(join(secondDir, ".complete")).artifact_sha256["handoff.json"] ===
+        digest(readFileSync(join(secondDir, "handoff.json"))),
+  );
+  check(
     "verification request documents the exact non-empty late-finding shape",
     secondRequest.includes("introduced_regression") &&
       secondRequest.includes("previously_missed") &&
@@ -1739,7 +1885,7 @@ try {
     "verification staging preserves each request exactly",
     verificationRoster.every((seat) =>
       readFileSync(join(secondDir, "verification", `${seat}.json`), "utf8") ===
-        readFileSync(join(verificationSourceDir, `${seat}.json`), "utf8"),
+        readFileSync(join(continuationVerificationDir, `${seat}.json`), "utf8"),
     ),
   );
 
