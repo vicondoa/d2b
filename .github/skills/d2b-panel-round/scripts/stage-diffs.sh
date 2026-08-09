@@ -170,6 +170,18 @@ staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
 staged_agent_definitions_dir="$out/agent-definitions"
+display_panel_root="$panel_root"
+display_out="$out"
+display_completion_marker="$completion_marker"
+display_staged_selection_path="$staged_selection_path"
+display_staged_candidate_path="$staged_candidate_path"
+display_staged_discovery_request_path="$staged_discovery_request_path"
+display_staged_ledger_path="$staged_ledger_path"
+display_staged_responses_path="$staged_responses_path"
+display_staged_self_verification_path="$staged_self_verification_path"
+display_staged_approval_path="$staged_approval_path"
+display_staged_verification_dir="$staged_verification_dir"
+display_staged_agent_definitions_dir="$staged_agent_definitions_dir"
 
 # Staged packets remain exact and untruncated. Bound aggregate logical bytes
 # across the entire packet root, including every lifecycle and incomplete
@@ -182,6 +194,98 @@ if ! [[ "$panel_root_max_bytes" =~ ^[1-9][0-9]*$ ]] ||
   echo "D2B_PANEL_LIFECYCLE_MAX_BYTES must be a positive integer no greater than $default_panel_root_max_bytes" >&2
   exit 2
 fi
+
+if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { ensureDirectoryNoFollow } =
+  await import(pathToFileURL(process.argv[2]).href);
+ensureDirectoryNoFollow(process.argv[1]);
+' "$display_panel_root" "$lifecycle_helper"; then
+  echo "could not create or inspect the panel packet root" >&2
+  exit 2
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock is required for serialized panel packet root reservation" >&2
+  exit 2
+fi
+if ! exec {panel_root_reservation_fd}<"$display_panel_root"; then
+  echo "could not open the panel packet root for reservation" >&2
+  exit 2
+fi
+if ! flock --exclusive "$panel_root_reservation_fd"; then
+  echo "could not acquire the panel packet root reservation" >&2
+  exit 2
+fi
+export D2B_PANEL_ROOT_FD="$panel_root_reservation_fd"
+if ! node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [panelRoot, descriptorText, helperPath] = process.argv.slice(1);
+const { verifyDirectoryReservationNoFollow } =
+  await import(pathToFileURL(helperPath).href);
+verifyDirectoryReservationNoFollow(panelRoot, Number(descriptorText));
+' "$display_panel_root" "$panel_root_reservation_fd" "$lifecycle_helper"; then
+  echo "panel packet root reservation identity verification failed" >&2
+  exit 2
+fi
+
+panel_root="/proc/self/fd/$panel_root_reservation_fd"
+out="$panel_root/$round"
+completion_marker="$out/.complete"
+staged_selection_path="$out/selection.json"
+staged_candidate_path="$out/current-candidate.json"
+staged_discovery_request_path="$out/discovery-request.json"
+staged_ledger_path="$out/discovery-ledger.json"
+staged_responses_path="$out/responses.json"
+staged_self_verification_path="$out/self-verification.json"
+staged_approval_path="$out/approval.json"
+staged_verification_dir="$out/verification"
+staged_agent_definitions_dir="$out/agent-definitions"
+
+bind_panel_root_path() {
+  local value="$1"
+  if [ -z "$value" ]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  local absolute
+  absolute="$(
+    node --input-type=module -e '
+import { resolve } from "node:path";
+process.stdout.write(resolve(process.argv[1], process.argv[2]));
+' "$root" "$value"
+  )"
+  case "$absolute" in
+    "$display_panel_root")
+      printf '%s\n' "$panel_root"
+      ;;
+    "$display_panel_root"/*)
+      printf '%s/%s\n' "$panel_root" "${absolute#"$display_panel_root/"}"
+      ;;
+    *)
+      printf '%s\n' "$value"
+      ;;
+  esac
+}
+
+verify_locked_panel_root() {
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { verifyDirectoryReservationNoFollow } =
+  await import(pathToFileURL(process.argv[3]).href);
+verifyDirectoryReservationNoFollow(process.argv[1], Number(process.argv[2]));
+' "$display_panel_root" "$panel_root_reservation_fd" "$lifecycle_helper"
+}
+
+selection_path="$(bind_panel_root_path "$selection_path")"
+candidate_path="$(bind_panel_root_path "$candidate_path")"
+discovery_request_path="$(bind_panel_root_path "$discovery_request_path")"
+evidence_path="$(bind_panel_root_path "$evidence_path")"
+reviewer_notes_dir="$(bind_panel_root_path "$reviewer_notes_dir")"
+ledger_path="$(bind_panel_root_path "$ledger_path")"
+responses_path="$(bind_panel_root_path "$responses_path")"
+self_verification_path="$(bind_panel_root_path "$self_verification_path")"
+verification_dir="$(bind_panel_root_path "$verification_dir")"
+approval_path="$(bind_panel_root_path "$approval_path")"
 
 validate_bound_completion() {
   local marker="$1"
@@ -280,7 +384,7 @@ NODE
 }
 
 partial_cleanup_hint() {
-  echo "partial pre-dispatch scratch directory is non-authoritative: $out" >&2
+  echo "partial pre-dispatch scratch directory is non-authoritative: $display_out" >&2
   echo "inspect its identity and contents before cleanup; do not recursively delete a path after an identity change" >&2
 }
 
@@ -376,6 +480,8 @@ NODE
 
 previous_round=""
 previous_dir=""
+display_previous_dir=""
+op_previous_dir=""
 previous_selection_path=""
 if [ "$round_number" -eq 1 ]; then
   if [ "$prev_sha" != "$base_sha" ]; then
@@ -386,14 +492,16 @@ if [ "$round_number" -eq 1 ]; then
   fi
 else
   previous_round="$wave-r$((round_number - 1))"
-  previous_dir="$root/.scratch/panel/$previous_round"
-  previous_address="$previous_dir/address.json"
+  display_previous_dir="$display_panel_root/$previous_round"
+  previous_dir="$display_previous_dir"
+  op_previous_dir="$panel_root/$previous_round"
+  previous_address="$op_previous_dir/address.json"
   if [ ! -f "$previous_address" ]; then
-    echo "missing previous review address: $previous_address" >&2
+    echo "missing previous review address: $display_previous_dir/address.json" >&2
     echo "stage reviews sequentially so the incremental range is derived from recorded evidence" >&2
     exit 2
   fi
-  if [ -f "$previous_dir/.complete" ]; then
+  if [ -f "$op_previous_dir/.complete" ]; then
     previous_completion_schema="$(
       node --input-type=module -e '
 import { pathToFileURL } from "node:url";
@@ -404,13 +512,13 @@ const value = JSON.parse(readFileNoFollow(process.argv[1], {
   label: "previous completion marker",
 }));
 process.stdout.write(String(value.schema_version ?? ""));
-' "$previous_dir/.complete" "$lifecycle_helper"
+' "$op_previous_dir/.complete" "$lifecycle_helper"
     )" || {
       echo "previous review has an unreadable completion marker" >&2
       exit 2
     }
     if [ "$previous_completion_schema" = "2" ] &&
-       ! validate_bound_completion "$previous_dir/.complete"; then
+       ! validate_bound_completion "$op_previous_dir/.complete"; then
       echo "previous review failed canonical completion validation" >&2
       exit 2
     fi
@@ -420,11 +528,11 @@ process.stdout.write(String(value.schema_version ?? ""));
   fi
   IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip _recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
   if [ "$recorded_round" != "$previous_round" ]; then
-    echo "$previous_address records round $recorded_round, expected $previous_round" >&2
+    echo "$display_previous_dir/address.json records round $recorded_round, expected $previous_round" >&2
     exit 2
   fi
   if [ "$recorded_lifecycle" != "$lifecycle" ]; then
-    echo "$previous_address records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
+    echo "$display_previous_dir/address.json records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
     exit 2
   fi
   if [ "$prev_sha" != "$recorded_tip" ]; then
@@ -434,13 +542,15 @@ process.stdout.write(String(value.schema_version ?? ""));
     echo "  supplied tip    $prev_sha" >&2
     exit 2
   fi
-  if [ -z "$recorded_selection" ] || [ ! -f "$recorded_selection" ]; then
+  if [ -z "$recorded_selection" ] ||
+     [ "$recorded_selection" != "$display_previous_dir/selection.json" ] ||
+     [ ! -f "$op_previous_dir/selection.json" ]; then
     echo "previous review does not record a readable lifecycle selection" >&2
     exit 2
   fi
-  previous_selection_path="$recorded_selection"
+  previous_selection_path="$op_previous_dir/selection.json"
   IFS=$'\t' read -r actual_recorded_selection_sha _recorded_selection_bytes \
-    <<<"$(secure_digest_size "$recorded_selection")"
+    <<<"$(secure_digest_size "$previous_selection_path")"
   if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
     echo "previous review selection bytes disagree with address.json" >&2
     exit 2
@@ -450,7 +560,7 @@ process.stdout.write(String(value.schema_version ?? ""));
 import { pathToFileURL } from "node:url";
 const { readSelection } = await import(pathToFileURL(process.argv[2]).href);
 process.stdout.write(readSelection(process.argv[1]).roster.join(","));
-' "$recorded_selection" "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+' "$previous_selection_path" "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
   )"
 fi
 
@@ -680,7 +790,7 @@ if [ "$round_number" -gt 1 ]; then
   for seat in "${panel_seats[@]}"; do
     case ",$previous_roster," in
       *,"$seat",*)
-        prior_verdict="$previous_dir/verdicts/$seat.json"
+        prior_verdict="$op_previous_dir/verdicts/$seat.json"
         if [ ! -s "$prior_verdict" ]; then
           echo "missing previous verdict for incumbent seat $seat: $prior_verdict" >&2
           echo "later reviews must give every incumbent seat its own prior verdict to verify" >&2
@@ -715,7 +825,7 @@ if [ -f "$out/address.json" ]; then
      [ "$existing_prev" != "$prev_sha" ] ||
      [ "$existing_tip" != "$tip" ] ||
      [ "$existing_phase" != "$phase" ] ||
-     [ "$existing_selection" != "$staged_selection_path" ] ||
+     [ "$existing_selection" != "$display_staged_selection_path" ] ||
      [ "$existing_selection_sha" != "$selection_sha256" ]; then
     echo "review address $round was already staged for different commits" >&2
     echo "use the next review id instead of changing evidence beneath an existing address" >&2
@@ -777,37 +887,6 @@ ensureDirectoryNoFollow(process.argv[1], { exclusive: true });
   round_directory_owned=true
 }
 
-node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { ensureDirectoryNoFollow } =
-  await import(pathToFileURL(process.argv[2]).href);
-ensureDirectoryNoFollow(process.argv[1]);
-' "$panel_root" "$lifecycle_helper"
-if ! command -v flock >/dev/null 2>&1; then
-  echo "flock is required for serialized panel packet root reservation" >&2
-  exit 2
-fi
-# Linux flock locks the open directory description, so one reservation covers
-# every quota calculation, temporary lifetime, and publication in this run.
-if ! exec {panel_root_reservation_fd}<"$panel_root"; then
-  echo "could not open the panel packet root for reservation" >&2
-  exit 2
-fi
-if ! flock --exclusive "$panel_root_reservation_fd"; then
-  echo "could not acquire the panel packet root reservation" >&2
-  exit 2
-fi
-if ! node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const [panelRoot, descriptorText, helperPath] = process.argv.slice(1);
-const { verifyDirectoryReservationNoFollow } =
-  await import(pathToFileURL(helperPath).href);
-verifyDirectoryReservationNoFollow(panelRoot, Number(descriptorText));
-' "$panel_root" "$panel_root_reservation_fd" "$lifecycle_helper"
-then
-  echo "panel packet root reservation identity verification failed" >&2
-  exit 2
-fi
 if ! enforce_panel_root_quota >/dev/null; then
   echo "panel packet root quota refused staging before round materialization" >&2
   exit 2
@@ -1137,7 +1216,7 @@ if ! node --input-type=module - \
   "$staged_discovery_request_path" "$staged_ledger_path" \
   "$staged_responses_path" "$staged_self_verification_path" \
   "$staged_verification_dir" \
-  "$previous_selection_path" "$previous_dir" \
+  "$previous_selection_path" "$op_previous_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
 import { pathToFileURL } from "node:url";
 
@@ -1225,7 +1304,7 @@ writeCreateOrCompare(path, {
   retentionRoot,
   maxBytes: Number(maxBytesText),
 });
-' "$out/address.json" "$round" "$lifecycle" "$staged_selection_path" "$base_sha" \
+' "$out/address.json" "$round" "$lifecycle" "$display_staged_selection_path" "$base_sha" \
   "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
   "$panel_root" "$panel_root_max_bytes"
@@ -1289,6 +1368,12 @@ responses_path="$staged_responses_path"
 self_verification_path="$staged_self_verification_path"
 verification_dir="$staged_verification_dir"
 approval_path="$staged_approval_path"
+display_discovery_request_path="$display_staged_discovery_request_path"
+display_ledger_path="$display_staged_ledger_path"
+display_responses_path="$display_staged_responses_path"
+display_self_verification_path="$display_staged_self_verification_path"
+display_verification_dir="$display_staged_verification_dir"
+display_approval_path="$display_staged_approval_path"
 
 emit_verdict_contract() {
   if [ "$phase" = "discovery" ]; then
@@ -1364,21 +1449,21 @@ with \`view\`; do not substitute a prose summary for them.
 
 ## Review address
 
-- Stage completion marker: \`$completion_marker\` (this request is usable only
+- Stage completion marker: \`$display_completion_marker\` (this request is usable only
   when that marker exists)
-- Delta to review: \`$out/delta.diff\`
+- Delta to review: \`$display_out/delta.diff\`
 - Delta range: \`$prev_sha..$tip\`
-- Full branch context: \`$out/full.diff\`
+- Full branch context: \`$display_out/full.diff\`
 - Full range: \`$base_sha..$tip\`
 - Phase: \`$phase\`
-- Lifecycle selection: \`$staged_selection_path\` (sha256 \`$selection_sha256\`)
-- Staged current candidate: \`$staged_candidate_path\`
+- Lifecycle selection: \`$display_staged_selection_path\` (sha256 \`$selection_sha256\`)
+- Staged current candidate: \`$display_staged_candidate_path\`
 - Bound panel agent definition:
-  \`$staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
-- Validation evidence and phase deliverable: \`$out/evidence.md\`
+  \`$display_staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
+- Validation evidence and phase deliverable: \`$display_out/evidence.md\`
   (sha256 \`$evidence_sha\`, bound by the completion marker)
-- Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
-- Commit list: \`$out/commits.txt\`
+- Seat-specific notes: \`$display_out/reviewer-notes/<your-seat>.md\`
+- Commit list: \`$display_out/commits.txt\`
 
 ## Generated lifecycle artifacts
 
@@ -1386,23 +1471,23 @@ The canonical generated artifacts for this phase are:
 
 $(if [ "$phase" = "discovery" ]; then
   printf '%s\n' \
-    "- Discovery request: \`$discovery_request_path\`"
+  "- Discovery request: \`$display_discovery_request_path\`"
 else
   printf '%s\n' \
-    "- Immutable discovery ledger: \`$ledger_path\`" \
-    "- Implementation responses: \`$responses_path\`" \
-    "- Self-verification: \`$self_verification_path\`" \
-    "- Verification requests: \`$verification_dir/<your-seat>.json\`" \
-    "- Approval output after verdict collection: \`$approval_path\`"
+  "- Immutable discovery ledger: \`$display_ledger_path\`" \
+  "- Implementation responses: \`$display_responses_path\`" \
+  "- Self-verification: \`$display_self_verification_path\`" \
+  "- Verification requests: \`$display_verification_dir/<your-seat>.json\`" \
+  "- Approval output after verdict collection: \`$display_approval_path\`"
 fi)
 
 ## Required review behaviour
 
-1. Read the full candidate in \`$out/full.diff\` in full. On discovery, this
+1. Read the full candidate in \`$display_out/full.diff\` in full. On discovery, this
    full candidate is the review target, not only the incremental delta. Report
    every reasonably discoverable actionable finding now; do not save
    observations for later rounds.
-2. Read the incremental delta in \`$out/delta.diff\` as well. On verification,
+2. Read the incremental delta in \`$display_out/delta.diff\` as well. On verification,
    review it for resolution, regressions, and unsafe late BLOCKER or MAJOR
    findings without reopening comprehensive discovery.
 3. Read the validation evidence and phase deliverable. Missing or insufficient
@@ -1451,9 +1536,9 @@ fi
 
 {
 cat <<MD
-Use this dispatch prompt only when the stage completion marker exists at $completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying.
+Use this dispatch prompt only when the stage completion marker exists at $display_completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying.
 
-This is the $phase phase. Read and follow the complete immutable review request at $out/review-request.md. Use view to read every artifact it names, including the bound panel agent definition at $staged_agent_definitions_dir/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
+This is the $phase phase. Read and follow the complete immutable review request at $display_out/review-request.md. Use view to read every artifact it names, including the bound panel agent definition at $display_staged_agent_definitions_dir/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
 
 Required $phase verdict contract:
 
@@ -1491,6 +1576,10 @@ done
 
 if ! enforce_panel_root_quota >/dev/null; then
   echo "panel packet root quota refused completion; .complete will not be written" >&2
+  exit 2
+fi
+if ! verify_locked_panel_root; then
+  echo "panel packet root pathname no longer names the locked identity; .complete will not be written" >&2
   exit 2
 fi
 
@@ -1544,10 +1633,10 @@ const { chmodFileNoFollow } =
 chmodFileNoFollow(process.argv[1], 0o444);
 ' "$completion_marker" "$lifecycle_helper"
 
-echo "staged $out"
+echo "staged $display_out"
 echo "  tip          $tip"
 echo "  delta        $prev_sha..$tip  ($delta_sha)"
 echo "  full         $base_sha..$tip  ($full_sha)"
 echo
-echo "Finalized evidence and reviewer notes are byte-bound by $completion_marker."
-echo "Dispatch every seat with the exact contents of $out/dispatch-prompt.txt."
+echo "Finalized evidence and reviewer notes are byte-bound by $display_completion_marker."
+echo "Dispatch every seat with the exact contents of $display_out/dispatch-prompt.txt."

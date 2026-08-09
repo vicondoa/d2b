@@ -433,6 +433,23 @@ fs.readSync = (...args) => {
   reads += 1;
   return originalReadSync(...args);
 };
+const originalReadDirectorySync = fs.readdirSync;
+let fullDirectoryReads = 0;
+fs.readdirSync = (...args) => {
+  fullDirectoryReads += 1;
+  return originalReadDirectorySync(...args);
+};
+const originalOpenDirectorySync = fs.opendirSync;
+let streamedDirectoryReads = 0;
+fs.opendirSync = (...args) => {
+  const directory = originalOpenDirectorySync(...args);
+  const originalReadDirectory = directory.readSync.bind(directory);
+  directory.readSync = (...readArgs) => {
+    streamedDirectoryReads += 1;
+    return originalReadDirectory(...readArgs);
+  };
+  return directory;
+};
 syncBuiltinESMExports();
 try {
   process.argv[1] = "";
@@ -444,9 +461,20 @@ try {
     expectedNames: JSON.parse(expectedNamesJson),
     maxBytes: Number(maxBytesText),
   });
-  console.log(JSON.stringify({ accepted: true, reads }));
+  console.log(JSON.stringify({
+    accepted: true,
+    reads,
+    fullDirectoryReads,
+    streamedDirectoryReads,
+  }));
 } catch (cause) {
-  console.log(JSON.stringify({ accepted: false, reads, message: cause.message }));
+  console.log(JSON.stringify({
+   accepted: false,
+   reads,
+   fullDirectoryReads,
+   streamedDirectoryReads,
+   message: cause.message,
+  }));
 }
 `;
   const result = spawnSync(
@@ -1631,6 +1659,8 @@ process.stdout.write("attacker-controlled timing\\n");
     "aggregate directory rejection occurs before any record read",
     aggregateInstrumented.accepted === false &&
       aggregateInstrumented.reads === 0 &&
+      aggregateInstrumented.fullDirectoryReads === 0 &&
+      aggregateInstrumented.streamedDirectoryReads <= 3 &&
       /aggregate bytes 5.*limit 4/.test(aggregateInstrumented.message),
     JSON.stringify(aggregateInstrumented),
   );
@@ -1645,9 +1675,53 @@ process.stdout.write("attacker-controlled timing\\n");
     "unexpected directory names are rejected before any record read",
     namesInstrumented.accepted === false &&
       namesInstrumented.reads === 0 &&
-      /incomplete or has extra entries/.test(namesInstrumented.message) &&
+      namesInstrumented.fullDirectoryReads === 0 &&
+      namesInstrumented.streamedDirectoryReads <= 3 &&
+      /incomplete or has extra entries|more than 2 entries/.test(namesInstrumented.message) &&
       /unexpected\.json/.test(namesInstrumented.message),
     JSON.stringify(namesInstrumented),
+  );
+  const emptyEntryRoot = join(root, "empty-entry-root");
+  mkdirSync(emptyEntryRoot);
+  for (let index = 0; index < 4; index += 1) {
+    writeFileSync(join(emptyEntryRoot, `empty-${index}.txt`), "");
+  }
+  rejects(
+    "root accounting bounds adversarial zero-byte entries",
+    () => directoryTreeUsageNoFollow(emptyEntryRoot, {
+      maxBytes: 100,
+      maxEntries: 3,
+      maxDepth: 4,
+    }),
+    /more than 3 entries|entry quota/,
+  );
+  const countedEntryRoot = join(root, "counted-entry-root");
+  mkdirSync(join(countedEntryRoot, "nested"), { recursive: true });
+  writeFileSync(join(countedEntryRoot, "nested", "empty.txt"), "");
+  const countedEntries = directoryTreeUsageNoFollow(countedEntryRoot, {
+    maxBytes: 100,
+    maxEntries: 4,
+    maxDepth: 4,
+  });
+  check(
+    "root accounting counts directories and zero-byte files",
+    countedEntries.bytes === 0 && countedEntries.entries === 2,
+  );
+  const deepEntryRoot = join(root, "deep-entry-root");
+  let deepPath = deepEntryRoot;
+  mkdirSync(deepPath);
+  for (let index = 0; index < 6; index += 1) {
+    deepPath = join(deepPath, `level-${index}`);
+    mkdirSync(deepPath);
+  }
+  rejects(
+    "root accounting bounds adversarial directory depth",
+    () => directoryTreeUsageNoFollow(deepEntryRoot, {
+      maxBytes: 100,
+      maxEntries: 100,
+      maxDepth: 3,
+    }),
+    /depth limit/,
   );
 
   const exactQuotaRoot = join(root, "exact-quota");
@@ -2130,25 +2204,99 @@ process.stdout.write("attacker-controlled timing\\n");
   const verificationStatuses = Object.fromEntries(
     responseInput.issues.map((issue) => [issue.id, "resolved"]),
   );
-  const actualVerificationVerdict = adaptVerificationVerdict({
+  const verificationIssueIds = responseInput.issues.map((issue) => issue.id);
+  const canonicalVerificationVerdict = {
     engineer: "software",
     signoff: true,
     summary: "All ledger issues were verified.",
-    issue_statuses: verificationStatuses,
+    verified_issue_statuses: verificationStatuses,
+    late_findings: [],
     recommendations: [],
-  }, { issue_ids: responseInput.issues.map((issue) => issue.id) });
+  };
+  const actualVerificationVerdict = adaptVerificationVerdict(
+    canonicalVerificationVerdict,
+    { issue_ids: verificationIssueIds },
+  );
   check(
     "actual verdict JSON adapts to explicit verification status",
     actualVerificationVerdict.verified_issue_statuses.R1 === "resolved" &&
       actualVerificationVerdict.signoff === true,
   );
+  const malformedCurrentVerificationVerdicts = [
+    [
+      "missing late_findings",
+      (() => {
+        const value = { ...canonicalVerificationVerdict };
+        delete value.late_findings;
+        return value;
+      })(),
+      /fields/,
+    ],
+    [
+      "seat alias",
+      (() => {
+        const { engineer, ...value } = canonicalVerificationVerdict;
+        return { ...value, seat: engineer };
+      })(),
+      /fields/,
+    ],
+    [
+      "issue_statuses alias",
+      (() => {
+        const { verified_issue_statuses, ...value } = canonicalVerificationVerdict;
+        return { ...value, issue_statuses: verified_issue_statuses };
+      })(),
+      /fields/,
+    ],
+    [
+      "missing verified_issue_statuses default",
+      (() => {
+        const { verified_issue_statuses, ...value } = canonicalVerificationVerdict;
+        return value;
+      })(),
+      /fields/,
+    ],
+    [
+      "missing summary default",
+      (() => {
+        const { summary, ...value } = canonicalVerificationVerdict;
+        return value;
+      })(),
+      /fields/,
+    ],
+    [
+      "extra top-level field",
+      { ...canonicalVerificationVerdict, complete: true },
+      /fields/,
+    ],
+    [
+      "non-array late_findings",
+      { ...canonicalVerificationVerdict, late_findings: undefined },
+      /late_findings/,
+    ],
+  ];
+  for (const [name, malformed, pattern] of malformedCurrentVerificationVerdicts) {
+    rejects(
+      `malformed current verification verdict (${name}) is refused`,
+      () => adaptVerificationVerdict(malformed, { issue_ids: verificationIssueIds }),
+      pattern,
+    );
+  }
+  rejects(
+    "verification status aliases are refused without ledger issue ids",
+    () => adaptVerificationVerdict({
+      ...canonicalVerificationVerdict,
+      verified_issue_statuses: [],
+    }),
+    /verified_issue_statuses/,
+  );
   rejects(
     "a current verification recommendation must use the strict object shape",
     () => adaptVerificationVerdict({
-      ...actualVerificationVerdict,
+      ...canonicalVerificationVerdict,
       signoff: false,
       recommendations: ["Fix the unresolved issue."],
-    }, { issue_ids: responseInput.issues.map((issue) => issue.id) }),
+    }, { issue_ids: verificationIssueIds }),
     /recommendations\[0\].*object/,
   );
   const malformedVerificationResults = allVerificationResults(
@@ -2178,7 +2326,8 @@ process.stdout.write("attacker-controlled timing\\n");
       engineer: seat,
       signoff: true,
       summary: "All ledger issues were verified.",
-      issue_statuses: verificationStatuses,
+      verified_issue_statuses: verificationStatuses,
+      late_findings: [],
       recommendations: [],
     }));
   duplicateVerificationVerdicts.push({ ...duplicateVerificationVerdicts[0] });
@@ -2869,7 +3018,7 @@ process.stdout.write("attacker-controlled timing\\n");
     check(
       "adapt-discovery refuses an unselected verdict filename",
       unselectedDiscovery.status !== 0 &&
-        /unselected seat/.test(
+        /unselected seat|more than .* entries/.test(
           `${unselectedDiscovery.stdout}${unselectedDiscovery.stderr}`,
         ),
     );
@@ -3095,7 +3244,8 @@ process.stdout.write("attacker-controlled timing\\n");
         engineer: seat,
         signoff: true,
         summary: "Verification passed.",
-        issue_statuses: Object.fromEntries(ledgerIssues.map((issue) => [issue.id, "resolved"])),
+        verified_issue_statuses: Object.fromEntries(ledgerIssues.map((issue) => [issue.id, "resolved"])),
+        late_findings: [],
         recommendations: [],
       }));
     }
@@ -3548,7 +3698,7 @@ console.log("panel lifecycle: legacy continuation");
     rejects(
       "legacy directory rejects non-fixed-ten names before parsing records",
       () => importLegacyRound(legacyDir, { candidate: legacyCandidate }),
-      /incomplete or has extra entries.*unexpected\.json/,
+      /incomplete or has extra entries|more than 10 entries/,
     );
     rmSync(join(legacyDir, "records", "unexpected.json"));
     writeFileSync(

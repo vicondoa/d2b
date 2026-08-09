@@ -14,13 +14,14 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -348,6 +349,7 @@ try {
     hardlinkedSelection.text,
   );
   rmSync(selectionHardlink);
+  const boundedRootBytes = retainedBytes(join(repo, ".scratch", "panel"));
   const boundedPacket = run(repo, [
     base,
     base,
@@ -359,16 +361,18 @@ try {
     "--discovery-request",
     discoveryRequestPath,
   ], {
-    env: { D2B_PANEL_LIFECYCLE_MAX_BYTES: "1" },
+    env: { D2B_PANEL_LIFECYCLE_MAX_BYTES: String(boundedRootBytes + 1) },
   });
   check(
-    "staging preserves exact packets and removes an over-quota owned packet",
-    boundedPacket.status === 2 &&
+    "staging preserves an over-quota incomplete owned packet",
+    boundedPacket.status !== 0 &&
       /exact-packet quota/.test(boundedPacket.text) &&
       /status:.*migration:.*prune:/.test(boundedPacket.text) &&
       /no existing packet was deleted/.test(boundedPacket.text) &&
       !/rm -rf/.test(boundedPacket.text) &&
-      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")),
+      existsSync(join(repo, ".scratch", "panel", "spec001w1-r1")) &&
+      !existsSync(join(repo, ".scratch", "panel", "spec001w1-r1", ".complete")) &&
+      /preserved the incomplete staging directory/.test(boundedPacket.text),
     boundedPacket.text,
   );
   rmSync(join(repo, ".scratch", "panel", "spec001w1-r1"), {
@@ -428,6 +432,65 @@ try {
     incompleteQuota.text,
   );
   rmSync(incompletePacket, { recursive: true });
+
+  const identitySwapBin = join(repo, "identity-swap-bin");
+  mkdirSync(identitySwapBin);
+  const identitySwapMarker = join(repo, "identity-swap.marker");
+  const identitySwapRoot = join(repo, ".scratch", "panel");
+  const identitySwapMovedRoot = `${identitySwapRoot}-moved`;
+  const realGit = execFileSync("bash", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).trim();
+  const identitySwapGit = join(identitySwapBin, "git");
+  writeFileSync(
+    identitySwapGit,
+    `#!/bin/sh
+if [ "$1" = "--no-pager" ] && [ "$2" = "diff" ] && [ ! -e "$D2B_IDENTITY_SWAP_MARKER" ]; then
+  touch "$D2B_IDENTITY_SWAP_MARKER"
+  mv "$D2B_IDENTITY_PANEL_ROOT" "$D2B_IDENTITY_PANEL_ROOT-moved"
+  mkdir "$D2B_IDENTITY_PANEL_ROOT"
+fi
+exec "$D2B_REAL_GIT" "$@"
+`,
+  );
+  chmodSync(identitySwapGit, 0o755);
+  const swappedIdentity = run(repo, [
+    base,
+    base,
+    "identityswap-r1",
+    "--lifecycle",
+    "spec001w1",
+    "--selection",
+    selectionPath,
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ], {
+    env: {
+      D2B_IDENTITY_PANEL_ROOT: identitySwapRoot,
+      D2B_IDENTITY_SWAP_MARKER: identitySwapMarker,
+      D2B_REAL_GIT: realGit,
+      PATH: `${identitySwapBin}:${process.env.PATH}`,
+    },
+  });
+  check(
+    "pathname replacement after reservation fails closed without redirecting publication",
+    swappedIdentity.status === 2 &&
+      /pathname no longer names the locked identity/.test(swappedIdentity.text) &&
+      existsSync(identitySwapRoot) &&
+      existsSync(identitySwapMovedRoot) &&
+      existsSync(join(identitySwapMovedRoot, "identityswap-r1")) &&
+      !existsSync(join(identitySwapMovedRoot, "identityswap-r1", ".complete")) &&
+      !existsSync(join(identitySwapRoot, "identityswap-r1", ".complete")),
+    swappedIdentity.text,
+  );
+  rmSync(join(identitySwapMovedRoot, "identityswap-r1"), {
+    recursive: true,
+    force: true,
+  });
+  rmSync(identitySwapRoot, { recursive: true, force: true });
+  renameSync(identitySwapMovedRoot, identitySwapRoot);
 
   const concurrentArgs = (round) => [
     base,
@@ -559,6 +622,31 @@ try {
     firstAddress.lifecycle_id === "spec001w1",
   );
   check("first review records its selection digest", typeof firstAddress.selection_sha256 === "string");
+  const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
+  const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
+  check(
+    "canonical review paths use stable display paths",
+    !JSON.stringify(firstAddress).includes("/proc/self/fd/") &&
+      !firstRequest.includes("/proc/self/fd/") &&
+      !firstDispatch.includes("/proc/self/fd/") &&
+      firstAddress.selection_path === join(firstDir, "selection.json"),
+  );
+  const relativeSelectionReuse = run(repo, [
+    base,
+    base,
+    "spec001w1-r1",
+    "--selection",
+    relative(repo, join(firstDir, "selection.json")),
+    "--candidate",
+    candidatePath,
+    "--discovery-request",
+    discoveryRequestPath,
+  ]);
+  check(
+    "relative panel-root inputs are descriptor-bound during reuse",
+    relativeSelectionReuse.status === 0,
+    relativeSelectionReuse.text,
+  );
   check(
     "completion binds every reviewer-visible evidence packet",
     firstCompletion.schema_version === 2 &&
@@ -612,8 +700,6 @@ try {
         sourceDiscoveryRequest.validation_evidence.length + 1,
   );
   check("first review writes its completion marker last", existsSync(join(firstDir, ".complete")));
-  const firstRequest = readFileSync(join(firstDir, "review-request.md"), "utf8");
-  const firstDispatch = readFileSync(join(firstDir, "dispatch-prompt.txt"), "utf8");
   check(
     "request names the exact delta range",
     firstRequest.includes(`Delta range: \`${base}..${firstTip}\``),

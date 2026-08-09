@@ -20,8 +20,8 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  opendirSync,
   readSync,
-  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
@@ -180,6 +180,9 @@ const FILE_READ_FLAGS =
   fsConstants.O_CLOEXEC;
 // Linux UAPI value: __O_TMPFILE | O_DIRECTORY. Node does not expose it.
 const O_TMPFILE = 0x410000;
+const MAX_DIRECTORY_ENTRIES = 4096;
+const MAX_DIRECTORY_TREE_ENTRIES = 100000;
+const MAX_DIRECTORY_TREE_DEPTH = 64;
 
 function procFdPath(fd, name = undefined) {
   return name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`;
@@ -223,6 +226,28 @@ function absoluteComponents(path, label) {
   return components;
 }
 
+function descriptorPath(path, label) {
+  const match = /^\/proc\/self\/fd\/([0-9]+)(?:\/(.*))?$/u.exec(path);
+  if (!match) return undefined;
+  if (process.env.D2B_PANEL_ROOT_FD !== match[1]) {
+    error(`${label} descriptor path is not bound to the locked panel root`);
+  }
+  const fd = Number(match[1]);
+  if (!Number.isSafeInteger(fd) || fd < 0) {
+    error(`${label} descriptor path has an invalid descriptor`);
+  }
+  const suffix = match[2] ?? "";
+  const components = suffix === "" ? [] : suffix.split("/");
+  if (
+    components.some((component) =>
+      component === "" || component === "." || component === "..")
+  ) {
+    error(`${label} descriptor path is not normalized`);
+  }
+  verifyDirectoryDescriptor(fd, `${label} descriptor root`);
+  return { fd, components };
+}
+
 /*
  * Node does not expose openat2. Walk one component at a time from a pinned
  * root descriptor and address each child through the trusted procfs handle.
@@ -231,13 +256,21 @@ function absoluteComponents(path, label) {
  * harmless: later access remains on the inode that was opened and verified.
  */
 function openAnchoredParent(path, label, { create = false } = {}) {
-  const components = absoluteComponents(path, label);
-  const leaf = components.pop();
+  const descriptor = descriptorPath(path, label);
+  const components = descriptor
+    ? [...descriptor.components]
+    : absoluteComponents(path, label);
+  const leaf = components.pop() ?? ".";
   const openedNames = [];
   const fds = [];
   try {
-    let current = openSync("/", DIRECTORY_OPEN_FLAGS);
-    fds.push(current);
+    let current;
+    if (descriptor === undefined) {
+      current = openSync("/", DIRECTORY_OPEN_FLAGS);
+      fds.push(current);
+    } else {
+      current = descriptor.fd;
+    }
     for (const component of components) {
       let child;
       try {
@@ -259,14 +292,23 @@ function openAnchoredParent(path, label, { create = false } = {}) {
       current = child;
     }
     return {
-      parentFd: fds.at(-1),
+      parentFd: descriptor === undefined
+        ? fds.at(-1)
+        : (fds.at(-1) ?? descriptor.fd),
       leaf,
       verify: () => {
-        for (let index = 1; index < fds.length; index += 1) {
+        if (descriptor !== undefined) {
+          verifyDirectoryDescriptor(descriptor.fd, `${label} descriptor root`);
+        }
+        const firstChild = descriptor === undefined ? 1 : 0;
+        for (let index = firstChild; index < fds.length; index += 1) {
           const stat = verifyDirectoryDescriptor(fds[index], `${label} parent`);
+          const parentFd = index === firstChild
+            ? (descriptor?.fd ?? fds[index - 1])
+            : fds[index - 1];
           verifyNamedIdentity(
-            fds[index - 1],
-            openedNames[index - 1],
+            parentFd,
+            openedNames[index - firstChild],
             stat,
             `${label} parent`,
           );
@@ -389,10 +431,30 @@ function openDirectoryAt(parentFd, name, label) {
   return { fd, stat };
 }
 
-function directoryNames(fd) {
-  return readdirSync(procFdPath(fd), { withFileTypes: true })
-    .map((entry) => entry.name)
-    .sort();
+function directoryNames(fd, options = {}) {
+  const label = options.label ?? "directory";
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+    error(`${label} entry limit is malformed`);
+  }
+  const directory = opendirSync(procFdPath(fd), { bufferSize: 32 });
+  const names = [];
+  try {
+    for (;;) {
+      const entry = directory.readSync();
+      if (entry === null) break;
+      names.push(entry.name);
+      if (names.length > maxEntries) {
+        error(
+          `${label} has more than ${maxEntries} entries; found ` +
+          `[${names.sort().join(", ")}]`,
+        );
+      }
+    }
+  } finally {
+    directory.closeSync();
+  }
+  return names.sort();
 }
 
 function expectedDirectoryNames(value, label) {
@@ -406,6 +468,11 @@ function expectedDirectoryNames(value, label) {
   const names = [...value].sort();
   if (new Set(names).size !== names.length) {
     error(`${label} expected entry names must be unique`);
+  }
+  if (names.length > MAX_DIRECTORY_ENTRIES) {
+    error(
+      `${label} expected entry names exceed the ${MAX_DIRECTORY_ENTRIES} entry limit`,
+    );
   }
   return names;
 }
@@ -436,72 +503,134 @@ function retainedQuotaError(scope, bytes, maxBytes) {
   );
 }
 
-function addDirectoryTreeUsage(directory, label, usage, maxBytes) {
-  const names = directoryNames(directory.fd);
-  for (const name of names) {
-    let childDirectory;
-    try {
-      childDirectory = openDirectoryAt(
-        directory.fd,
-        name,
-        `${label}/${name}`,
-      );
-    } catch (cause) {
-      if (cause.code !== "ENOTDIR") throw cause;
-    }
-    if (childDirectory !== undefined) {
-      usage.entries += 1;
-      if (!Number.isSafeInteger(usage.entries)) {
-        error(`${label} has too many entries to account safely`);
-      }
-      try {
-        addDirectoryTreeUsage(
-          childDirectory,
-          `${label}/${name}`,
-          usage,
-          maxBytes,
-        );
-        verifyNamedIdentity(
-          directory.fd,
-          name,
-          childDirectory.stat,
-          `${label}/${name}`,
-        );
-      } finally {
-        closeSync(childDirectory.fd);
-      }
-      continue;
-    }
+function retainedEntryQuotaError(scope, entries, maxEntries) {
+  error(
+    `${scope} retained entries ${entries} exceed the aggregate entry quota ` +
+    `${maxEntries}; status: inspect retained packet entries; migration: archive ` +
+    "and verify required immutable packets before changing retention; prune: " +
+    "remove only exact, operator-confirmed obsolete round paths; no existing " +
+    "packet was deleted",
+  );
+}
 
-    let fd;
-    try {
-      fd = openSync(procFdPath(directory.fd, name), FILE_READ_FLAGS);
-      const stat = verifyRegularDescriptor(
-        fd,
-        directory.fd,
-        name,
-        `${label}/${name}`,
+function addDirectoryTreeUsage(
+  directory,
+  label,
+  usage,
+  maxBytes,
+  maxEntries,
+  maxDepth,
+) {
+  const stack = [{
+    directory,
+    label,
+    depth: 0,
+    owned: false,
+    names: undefined,
+    index: 0,
+    parent: undefined,
+    parentName: undefined,
+  }];
+  try {
+    while (stack.length > 0) {
+      const current = stack.at(-1);
+      if (current.names === undefined) {
+        current.names = directoryNames(current.directory.fd, {
+          label: current.label,
+          maxEntries: maxEntries - usage.entries,
+        });
+      }
+      if (current.index < current.names.length) {
+        const name = current.names[current.index];
+        current.index += 1;
+        const entryLabel = `${current.label}/${name}`;
+        let childDirectory;
+        try {
+          childDirectory = openDirectoryAt(
+            current.directory.fd,
+            name,
+            entryLabel,
+          );
+        } catch (cause) {
+          if (cause.code !== "ENOTDIR") throw cause;
+        }
+        if (childDirectory !== undefined) {
+          usage.entries += 1;
+          if (usage.entries > maxEntries) {
+            closeSync(childDirectory.fd);
+            retainedEntryQuotaError(label, usage.entries, maxEntries);
+          }
+          if (current.depth >= maxDepth) {
+            closeSync(childDirectory.fd);
+            error(
+              `${entryLabel} exceeds the aggregate directory depth limit ` +
+              `${maxDepth}`,
+            );
+          }
+          stack.push({
+            directory: childDirectory,
+            label: entryLabel,
+            depth: current.depth + 1,
+            owned: true,
+            names: undefined,
+            index: 0,
+            parent: current.directory,
+            parentName: name,
+          });
+          continue;
+        }
+
+        let fd;
+        try {
+          fd = openSync(procFdPath(current.directory.fd, name), FILE_READ_FLAGS);
+          const stat = verifyRegularDescriptor(
+            fd,
+            current.directory.fd,
+            name,
+            entryLabel,
+          );
+          usage.entries += 1;
+          if (usage.entries > maxEntries) {
+            retainedEntryQuotaError(label, usage.entries, maxEntries);
+          }
+          usage.bytes += stat.size;
+          if (usage.bytes > maxBytes) {
+            retainedQuotaError(label, usage.bytes, maxBytes);
+          }
+        } finally {
+          if (fd !== undefined) closeSync(fd);
+        }
+        continue;
+      }
+
+      const afterNames = directoryNames(current.directory.fd, {
+        label: current.label,
+        maxEntries: current.names.length,
+      });
+      const afterStat = verifyDirectoryDescriptor(
+        current.directory.fd,
+        current.label,
       );
-      usage.entries += 1;
-      if (!Number.isSafeInteger(usage.entries)) {
-        error(`${label} has too many entries to account safely`);
+      if (
+        !sameIdentity(afterStat, current.directory.stat) ||
+        current.names.length !== afterNames.length ||
+        current.names.some((name, index) => name !== afterNames[index])
+      ) {
+        error(`${current.label} changed while its retained bytes were being accounted`);
       }
-      usage.bytes += stat.size;
-      if (usage.bytes > maxBytes) {
-        retainedQuotaError(label, usage.bytes, maxBytes);
+      stack.pop();
+      if (current.parent !== undefined) {
+        verifyNamedIdentity(
+          current.parent.fd,
+          current.parentName,
+          current.directory.stat,
+          current.label,
+        );
       }
-    } finally {
-      if (fd !== undefined) closeSync(fd);
+      if (current.owned) closeSync(current.directory.fd);
     }
-  }
-  const afterNames = directoryNames(directory.fd);
-  const afterStat = verifyDirectoryDescriptor(directory.fd, label);
-  if (
-    !sameIdentity(afterStat, directory.stat) ||
-    names.length !== afterNames.length ||
-    names.some((name, index) => name !== afterNames[index])
-  ) {
-    error(`${label} changed while its retained bytes were being accounted`);
+  } finally {
+    closeAll(stack.filter((item) => item.owned).map((item) => item.directory.fd));
   }
 }
 
@@ -510,6 +639,14 @@ export function directoryTreeUsageNoFollow(path, options = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     error("directory-tree byte quota is malformed");
   }
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_TREE_ENTRIES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+    error("directory-tree entry quota is malformed");
+  }
+  const maxDepth = options.maxDepth ?? MAX_DIRECTORY_TREE_DEPTH;
+  if (!Number.isSafeInteger(maxDepth) || maxDepth < 0) {
+    error("directory-tree depth quota is malformed");
+  }
   const label = options.label ?? path;
   const parent = openAnchoredParent(path, label);
   let directory;
@@ -517,7 +654,14 @@ export function directoryTreeUsageNoFollow(path, options = {}) {
     parent.verify();
     directory = openDirectoryAt(parent.parentFd, parent.leaf, label);
     const usage = { bytes: 0n, entries: 0 };
-    addDirectoryTreeUsage(directory, label, usage, BigInt(maxBytes));
+    addDirectoryTreeUsage(
+      directory,
+      label,
+      usage,
+      BigInt(maxBytes),
+      maxEntries,
+      maxDepth,
+    );
     verifyNamedIdentity(parent.parentFd, parent.leaf, directory.stat, label);
     parent.verify();
     return { bytes: Number(usage.bytes), entries: usage.entries };
@@ -621,7 +765,13 @@ function readDirectoryAt(parentFd, name, label, options = {}) {
       error(`${label} aggregate byte limit is malformed`);
     }
     const expectedNames = expectedDirectoryNames(options.expectedNames, label);
-    const names = directoryNames(directory.fd);
+    const entryLimit = expectedNames?.length ??
+      options.maxEntries ??
+      MAX_DIRECTORY_ENTRIES;
+    const names = directoryNames(directory.fd, {
+      label,
+      maxEntries: entryLimit,
+    });
     requireExactDirectoryNames(names, expectedNames, label);
 
     let plannedBytes = 0n;
@@ -649,7 +799,10 @@ function readDirectoryAt(parentFd, name, label, options = {}) {
       }
     }
 
-    const plannedNames = directoryNames(directory.fd);
+    const plannedNames = directoryNames(directory.fd, {
+      label,
+      maxEntries: names.length,
+    });
     const plannedStat = verifyDirectoryDescriptor(directory.fd, label);
     verifyNamedIdentity(parentFd, name, plannedStat, label);
     if (
@@ -687,7 +840,10 @@ function readDirectoryAt(parentFd, name, label, options = {}) {
       }
       return { name: entry.name, bytes };
     });
-    const afterNames = directoryNames(directory.fd);
+    const afterNames = directoryNames(directory.fd, {
+      label,
+      maxEntries: expectedNames?.length ?? names.length,
+    });
     const afterStat = verifyDirectoryDescriptor(directory.fd, label);
     verifyNamedIdentity(parentFd, name, afterStat, label);
     if (
@@ -929,13 +1085,13 @@ export function pathKindNoFollow(path, label = path) {
   }
 }
 
-export function listDirectoryNamesNoFollow(path, label = path) {
+export function listDirectoryNamesNoFollow(path, label = path, options = {}) {
   const parent = openAnchoredParent(path, label);
   let directory;
   try {
     parent.verify();
     directory = openDirectoryAt(parent.parentFd, parent.leaf, label);
-    const names = directoryNames(directory.fd);
+    const names = directoryNames(directory.fd, { ...options, label });
     const after = verifyDirectoryDescriptor(directory.fd, label);
     verifyNamedIdentity(parent.parentFd, parent.leaf, after, label);
     parent.verify();
@@ -1303,6 +1459,11 @@ export function writeDirectoryCreateOrCompare(
     expected.set(name, entry.bytes);
   }
   const expectedNames = [...expected.keys()].sort();
+  if (expectedNames.length > MAX_DIRECTORY_ENTRIES) {
+    error(
+      `directory publication contains more than ${MAX_DIRECTORY_ENTRIES} entries`,
+    );
+  }
   const parent = openAnchoredParent(directory, "artifact family", { create: true });
   const temporary = `.${parent.leaf}.stage-${process.pid}-${temporaryCounter += 1}`;
   let staged;
@@ -1350,7 +1511,10 @@ export function writeDirectoryCreateOrCompare(
       retentionUsage(options, "artifact family", directory);
     }
     fsyncSync(staged.fd);
-    const stagedNames = directoryNames(staged.fd);
+    const stagedNames = directoryNames(staged.fd, {
+      label: "staged artifact family",
+      maxEntries: expectedNames.length,
+    });
     if (
       stagedNames.length !== expectedNames.length ||
       stagedNames.some((name, index) => name !== expectedNames[index])
@@ -2956,7 +3120,7 @@ function verdictEntries(input) {
 
 function validateActualVerdict(verdict, label = "verdict") {
   if (!isPlainObject(verdict)) error(`${label} must be a JSON object`);
-  const seat = verdict.engineer ?? verdict.seat;
+  const seat = verdict.engineer;
   nonBlank(seat, `${label}.engineer`);
   if (typeof verdict.signoff !== "boolean") {
     error(`${label}.signoff must be a boolean`);
@@ -2986,9 +3150,33 @@ const DISCOVERY_VERDICT_KEYS = [
   "recommendations",
 ];
 
+const VERIFICATION_VERDICT_KEYS = [
+  "engineer",
+  "signoff",
+  "summary",
+  "verified_issue_statuses",
+  "late_findings",
+  "recommendations",
+];
+
 function validateDiscoveryVerdict(verdict, label = "discovery verdict") {
   assertExactKeys(verdict, DISCOVERY_VERDICT_KEYS, label);
   return validateActualVerdict(verdict, label);
+}
+
+function validateVerificationVerdict(
+  verdict,
+  label = "verification verdict",
+) {
+  assertExactKeys(verdict, VERIFICATION_VERDICT_KEYS, label);
+  const seat = validateActualVerdict(verdict, label);
+  if (!isPlainObject(verdict.verified_issue_statuses)) {
+    error(`${label}.verified_issue_statuses must be an object`);
+  }
+  if (!Array.isArray(verdict.late_findings)) {
+    error(`${label}.late_findings must be an array`);
+  }
+  return seat;
 }
 
 const CURRENT_RECOMMENDATION_KEYS = [
@@ -3223,26 +3411,43 @@ export function validateDiscoveryResultArtifact(artifact, options = {}) {
 }
 
 export function adaptVerificationVerdict(verdict, options = {}) {
-  const seat = validateActualVerdict(verdict, "verification verdict");
+  const seat = validateVerificationVerdict(verdict);
   const expectedSeat = options.seat ?? seat;
   if (seat !== expectedSeat) {
     error(`verification verdict engineer "${seat}" disagrees with selected seat "${expectedSeat}"`);
   }
-  const statuses = verdict.verified_issue_statuses ??
-    verdict.issue_statuses ??
-    verdict.verification_statuses;
-  if (options.issue_ids && statuses === undefined) {
-    error(`verification verdict ${seat} must contain exact per-issue verification status`);
+  const statuses = verdict.verified_issue_statuses;
+  if (options.issue_ids !== undefined) {
+    if (
+      !Array.isArray(options.issue_ids) ||
+      options.issue_ids.some((issueId) => typeof issueId !== "string")
+    ) {
+      error("verification verdict issue_ids must be an array of strings");
+    }
+    if (!isPlainObject(statuses)) {
+      error(`verification verdict ${seat}.verified_issue_statuses must be an object`);
+    }
+    const expected = [...new Set(options.issue_ids)].sort();
+    const actual = Object.keys(statuses).sort();
+    if (
+      actual.length !== expected.length ||
+      actual.some((issueId, index) => issueId !== expected[index])
+    ) {
+      error(
+        `verification verdict ${seat}.verified_issue_statuses must cover ` +
+        "each issue exactly once",
+      );
+    }
   }
   return {
     seat,
     complete: true,
     summary: verdict.summary,
     signoff: verdict.signoff,
-    verified_issue_statuses: statuses ?? {},
+    verified_issue_statuses: statuses,
     blocking_recommendations: verdict.recommendations,
     recommendations: verdict.recommendations,
-    late_findings: verdict.late_findings ?? [],
+    late_findings: verdict.late_findings,
   };
 }
 
@@ -4828,12 +5033,24 @@ export function validateVerificationResults(selection, results, options = {}) {
   validateLedger(ledger);
   validateMonotonicRoster(ledger.roster, selection.roster, table);
   const rawEntries = verificationEntries(results);
-  const actualVerdicts = rawEntries.length > 0 &&
-    rawEntries.every(([, result]) =>
-      isPlainObject(result) &&
-      Object.hasOwn(result, "engineer") &&
-      !Object.hasOwn(result, "complete"),
+  const currentVerdictEntries = rawEntries.filter(([, result]) =>
+    isPlainObject(result) && Object.hasOwn(result, "engineer"),
+  );
+  if (
+    currentVerdictEntries.length > 0 &&
+    currentVerdictEntries.length !== rawEntries.length
+  ) {
+    error("verification results must not mix current verdict JSON with verification result shapes");
+  }
+  if (
+    currentVerdictEntries.some(([, result]) => Object.hasOwn(result, "complete"))
+  ) {
+    error(
+      "current verification verdicts must use exactly the six canonical top-level fields",
     );
+  }
+  const actualVerdicts = currentVerdictEntries.length === rawEntries.length &&
+    rawEntries.length > 0;
   const adapted = actualVerdicts
     ? Object.fromEntries(
         adaptVerificationResults(results, {
@@ -4841,15 +5058,6 @@ export function validateVerificationResults(selection, results, options = {}) {
         }).map((result) => [result.seat, result]),
       )
     : results;
-  if (
-    rawEntries.some(([, result]) =>
-      isPlainObject(result) &&
-      Object.hasOwn(result, "engineer") &&
-      !Object.hasOwn(result, "complete"),
-    ) !== actualVerdicts
-  ) {
-    error("verification results must not mix actual verdict JSON with verification result shapes");
-  }
   const expected = new Set(selection.roster);
   const seen = new Set();
   const normalized = [];
@@ -4862,6 +5070,11 @@ export function validateVerificationResults(selection, results, options = {}) {
     }
     if (typeof result.signoff !== "boolean") {
       error(`verification result for ${seat} must explicitly set signoff`);
+    }
+    if (Object.hasOwn(result, "engineer")) {
+      error(
+        `current verification verdict for ${seat} must use exactly the six canonical top-level fields`,
+      );
     }
     if (!Array.isArray(result.recommendations)) {
       error(`verification result for ${seat} must explicitly contain recommendations`);
@@ -4879,15 +5092,22 @@ export function validateVerificationResults(selection, results, options = {}) {
     if (result.signoff !== (recommendations.length === 0)) {
       error(`verification result for ${seat} signoff must equal recommendations.isEmpty`);
     }
-    const statuses = result.verified_issue_statuses ??
-      result.issue_statuses ??
-      result.verification_statuses;
+    if (!Object.hasOwn(result, "verified_issue_statuses")) {
+      error(
+        `verification result for ${seat} must explicitly contain ` +
+        "verified_issue_statuses",
+      );
+    }
+    const statuses = result.verified_issue_statuses;
     const verifiedIssueStatuses = exactIssueStatuses(
       ledger,
       statuses,
       `verification ${seat}.verified_issue_statuses`,
     );
-    const late = (result.late_findings ?? []).map(lateFindingAdmission);
+    if (!Object.hasOwn(result, "late_findings") || !Array.isArray(result.late_findings)) {
+      error(`verification result for ${seat} must explicitly contain late_findings`);
+    }
+    const late = result.late_findings.map(lateFindingAdmission);
     normalized.push({
       seat,
       complete: true,
@@ -4896,7 +5116,7 @@ export function validateVerificationResults(selection, results, options = {}) {
       verified_issue_statuses: verifiedIssueStatuses,
       blocking_recommendations: recommendations,
       late_findings: late,
-      summary: nonBlank(result.summary ?? "Verification complete.", `verification ${seat}.summary`),
+      summary: nonBlank(result.summary, `verification ${seat}.summary`),
     });
   }
   for (const seat of selection.roster) {
@@ -4909,7 +5129,9 @@ export function validateVerificationResults(selection, results, options = {}) {
 
 function normalizePriorVerdicts(input, priorSelection) {
   const verdicts = typeof input === "string"
-    ? readJsonDirectory(input, "prior verdicts")
+    ? readJsonDirectory(input, "prior verdicts", {
+        expectedNames: priorSelection.roster.map((seat) => `${seat}.json`),
+      })
     : input;
   if (!isPlainObject(verdicts)) {
     error("verification preparation prior verdicts must be an object keyed by seat");
@@ -4929,7 +5151,7 @@ function normalizePriorVerdicts(input, priorSelection) {
     if (!isPlainObject(verdict)) {
       error(`verification preparation prior verdict for ${seat} must be an object`);
     }
-    const declaredSeat = verdict.engineer ?? verdict.seat;
+    const declaredSeat = verdict.engineer;
     if (declaredSeat !== seat) {
       error(
         `verification preparation prior verdict ${seat} declares seat "${declaredSeat}"`,
@@ -6206,14 +6428,14 @@ function validateSelectedVerdictDirectory(verdicts, selection, label) {
   }
   const declaredSeats = new Set();
   for (const seat of actual) {
-    const declared = verdicts[seat]?.engineer ?? verdicts[seat]?.seat;
+    const declared = verdicts[seat]?.engineer;
     if (declaredSeats.has(declared)) {
       error(`${label} directory contains duplicate declared seat "${declared}"`);
     }
     declaredSeats.add(declared);
   }
   for (const seat of actual) {
-    const declared = verdicts[seat]?.engineer ?? verdicts[seat]?.seat;
+    const declared = verdicts[seat]?.engineer;
     if (declared !== seat) {
       error(
         `${label} ${seat}.json declares seat "${declared}"; ` +
@@ -6229,7 +6451,11 @@ function validateSelectedVerdictDirectory(verdicts, selection, label) {
 }
 
 function selectedVerdictDirectoryNames(path, selection, label) {
-  const names = listDirectoryNamesNoFollow(path, `${label} directory`);
+  const names = listDirectoryNamesNoFollow(
+    path,
+    `${label} directory`,
+    { maxEntries: selection.roster.length },
+  );
   const expected = new Set(selection.roster);
   const actual = new Set();
   for (const name of names) {
@@ -6441,6 +6667,7 @@ async function main(argv) {
           "verification requires --candidate, --prior-selection, --prior-verdicts, and --delta",
         );
       }
+      const priorSelection = readSelection(priorPath);
       const delta = readJson(deltaPath, "actual fix delta");
       const actualDeltaPaths = Array.isArray(delta)
         ? delta
@@ -6451,8 +6678,10 @@ async function main(argv) {
         responses,
         self_verification: selfVerification,
         current_candidate: readJson(candidatePath, "current candidate"),
-        prior_selection: readSelection(priorPath),
-        prior_verdicts: readJsonDirectory(priorVerdictsPath, "prior verdicts"),
+        prior_selection: priorSelection,
+        prior_verdicts: readJsonDirectory(priorVerdictsPath, "prior verdicts", {
+          expectedNames: priorSelection.roster.map((seat) => `${seat}.json`),
+        }),
         actual_delta_paths: actualDeltaPaths,
       });
       console.log(`wrote ${result.written.length} verification artifacts to ${argv[5]}`);
