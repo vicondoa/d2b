@@ -80,7 +80,8 @@ authority.
 All provider implementation remains manifest-backed and comes only from generated authority.
 Manifest-backed dependencies are named by exact `workItemId`; T aliases and numeric T ranges
 are never dependency identities. The closed local tasks coordinate across those
-implementations but own no provider implementation row.
+implementations but own no provider implementation row. The exact machine-readable contract
+below is the sole feature authority for cross-provider acceptance coordination.
 
 ```json
 {
@@ -147,8 +148,7 @@ implementations but own no provider implementation row.
       "ADR046-vl-011",
       "ADR046-vl-012",
       "ADR046-vl-013"
-    ],
-    "T479": ["ADR046-process-002"]
+    ]
   },
   "required_manifest_dependency_queries": {
     "T479": {
@@ -157,7 +157,8 @@ implementations but own no provider implementation row.
       "project": "id",
       "project_semantics": "workItemId",
       "expected_count": 258,
-      "cardinality": "exact"
+      "cardinality": "exact",
+      "complete_for_task": true
     }
   },
   "shared_file_order": {
@@ -602,9 +603,9 @@ four Network/Host cases to that W6 group. A feature-local matrix, single-opt-in 
 declaration-only fixture, fake adapter, or evidence from the old env surface cannot resolve
 the conflict. The retired Wave 5 plan remains read-only evidence. T221 requires the accepted migration
 and regenerated double-opt-in contract on the exact fetched Wave 6 base, and T480 revalidates
-the production cases at close. Active local T604 coordinates acceptance over the
-manifest-backed implementation; no feature-local status correction can unblock any
-boundary.
+the production cases at close. Generated authority owns provider implementation; the exact
+machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
+over it. No feature-local status correction can unblock any boundary.
 
 ### Group `wi:core-config-hub:w4` (1 items)
 
@@ -636,8 +637,9 @@ Network result is nonconforming. T221 requires the accepted Network contract/wor
 amendment to remove stale sole-opt-in contract paths and retain the production implementation
 plus four-case matrix in authoritative W6 work items `ADR046-nl-001` through
 `ADR046-nl-020`. Wave 5
-does not claim the prospective positive operator result. Current acceptance ownership
-resolves only from authoritative member specs and generated manifests after that exact set merges.
+does not claim the prospective positive operator result. Generated authority owns provider
+implementation after that exact set merges; the exact machine-readable T604/T479/T480 local
+contract owns cross-provider acceptance coordination.
 Guest runtime-effect acceptance
 remains fail-closed until Wave 6
 manifest-backed `ADR046-ch-001` completes and local T479/T480 accept its exact-F6 evidence.
@@ -1007,8 +1009,9 @@ retained candidate or delivery history.
 `ADR046-nl-020` remain
 authoritative W6 work and may start only after T221's W6 plan lifecycle passes. The launch
 set remains all 27 dossiers and all 258 work items, in 29 groups including
-process-provider integration and core-controller coordination. Prospective acceptance
-ownership resolves only from authoritative member specs and generated manifests.
+process-provider integration and core-controller coordination. Generated authority owns
+provider implementation; the exact machine-readable T604/T479/T480 local contract owns
+cross-provider acceptance coordination.
 
 - [ ] T221 [US2] W6 HISTORICAL-PREDECESSOR GUARD + PLAN PANEL + ENTRY - before any Wave 6
   implementation lane is dispatched, fetch `origin/v3` and require the exact resolved
@@ -1205,9 +1208,10 @@ require
 remove every current-facing sole Network-opt-in path, and regenerate these rows with the
 production adapter, site-gate transport, schema migration, and all four real
 emitter/controller/broker/net-VM cases still assigned to W6. The amendment must not move or
-replace those exact workItemIds with retired Wave 5 owners. Active local T604 owns no Network
-implementation and consumes the merged generated result. T479 revalidates the
-implementation and evidence, and T480 rechecks them at close.
+replace those exact workItemIds with retired Wave 5 owners. Generated authority owns Network
+implementation. Under the exact machine-readable local contract, T604 consumes the merged
+result for cross-provider acceptance, T479 owns candidate execution and evidence, and T480
+revalidates the closed predicates.
 
 - [ ] T336 [P] [US2] `ADR046-nl-001` - preserve the landed `d2b-provider-network-local::controller::NetworkEffectPort`; implement the authoritative generated destination and typed broker adapter with no direct host mutation (adapt/create)
 - [ ] T337 [US2] `ADR046-nl-002` - Broker wire contract and broker/core adapter operation table for `DeletePersistentTap` (adapt)
@@ -1305,7 +1309,7 @@ implementation and evidence, and T480 rechecks them at close.
 
 ### Group `wi:ADR-046-provider-runtime-cloud-hypervisor` (7 items)
 
-- [ ] T384 [P] [US2] `ADR046-ch-001` - complete manifest object. Its generated authority includes `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, only that check's discovery/build recipe in `Makefile`, and the manifest-required end-to-end real-KVM/guest-control validation through exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`
+- [ ] T384 [P] [US2] `ADR046-ch-001` - complete manifest object. Generated authority owns this Provider implementation and provider-specific validation surface: `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, only that check's discovery/build recipe in `Makefile`, and the manifest-required end-to-end real-KVM/guest-control validation through exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`
 - [ ] T385 [US2] `ADR046-ch-002` - `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` (replace)
 - [ ] T386 [US2] `ADR046-ch-003` - `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs` (adapt)
 - [ ] T387 [US2] `ADR046-ch-004` - `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter) (adapt)
@@ -1444,9 +1448,11 @@ implementation and evidence, and T480 rechecks them at close.
 - [ ] T478 [US2] `ADR046-core-002` - `packages/d2b-core-controller/tests/system_core_coordination.rs` (adapt)
 
 - [ ] T479 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 CONVERGE + FREEZE + OPERATOR/GUEST ACCEPTANCE - depends on local T604 and T221,
-  `ADR046-process-002`, every exact W6 workItemId selected by
-  `required_manifest_dependency_queries.T479`, and every prospective acceptance object named
-  by authoritative member specs and generated manifests. Derive the exact set from those authorities and reject
+  plus every exact W6 workItemId selected by `required_manifest_dependency_queries.T479`.
+  That exact graph query is T479's complete and only manifest dependency set; no member is
+  duplicated in `required_manifest_dependencies`. Generated authority supplies provider
+  implementation only; this machine-readable local contract owns cross-provider acceptance
+  coordination. Reject
   missing, extra, duplicate, unchecked, or unreachable rows. Reinvoke the production
   historical-predecessor guard, converge and freeze clean F6, invoke T604's owned operator
   validator against exact F6, then run the Cloud Hypervisor and daemon-restart host cases
@@ -1922,7 +1928,7 @@ agents share a working tree or a `packages/target/`:
 | W3 | 1 | **1** - strictly serial by design |
 | W4 | 6 | **6** |
 | W5 | historical only | Retired rows remain inside explicit read-only compatibility blocks |
-| W6 | authoritative manifest and acceptance groups | Concurrency resolves from authoritative member specs and generated manifests |
+| W6 | generated provider groups plus local acceptance coordination | Provider implementation concurrency resolves from generated authority; cross-provider acceptance coordination remains with the exact machine-readable T604/T479/T480 local contract |
 | W7 | 5 | **5** |
 
 Worktree setup per slice (cut from the wave integration branch, never from `v3`):
@@ -2009,7 +2015,7 @@ wave entry criteria**.
 | W3 | 1 | Strictly serial by design; every Provider dossier depends on it |
 | W4 | 6 | Five parallel member-spec groups plus `core-config-hub:w4`; all six start together |
 | W5 (`adr046w5`) | historical only | Retain the fenced completion graph as planning evidence; no Wave 5 task is dispatched |
-| W6 | authoritative manifest and acceptance groups | T221 gates implementation; later ownership resolves only from authoritative member specs and generated manifests |
+| W6 | generated provider groups plus local acceptance coordination | T221 gates implementation; generated authority owns provider implementation, while the exact machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination |
 | W7 | 5 | Five file-disjoint closing groups; all five start together |
 
 ### The 14 manifest file-overlap ordering constraints
@@ -2054,7 +2060,7 @@ T221. It must prove the fetched exact `origin/v3` base, accepted first-parent Co
 guard tests before the ordinary unanimous Wave 6 plan panel. The retained Wave 5 request is
 already consumed with zero attestations and no seal; the feature-owned record preserves that
 history. Final R9 keeps `ADR046-nl-001` through `ADR046-nl-020` as authoritative W6 implementation under T221, followed by
-authoritative acceptance and close gates.
+the exact machine-readable T604/T479/T480 local acceptance and close gates.
 
 ### Incremental value
 
@@ -2063,9 +2069,10 @@ Each user story is independently demonstrable:
 - **After historical `adr046w5`** - the only accepted output is the exact immutable merged
   boundary and retained no-seal state. Retired planning remains fenced. The exact generated
   Network workItemId set lands the
-  Network path prospectively in W6, and authoritative acceptance objects bind later results.
+  Network path prospectively in W6. The exact machine-readable T604/T479/T480 local contract
+  binds later cross-provider acceptance results.
 - **After W6** - full US1 completes only after T479/T480 accept exact-F6
-  authoritative operator activation/cleanup plus `Provider/runtime-cloud-hypervisor`
+  local-contract operator activation/cleanup plus `Provider/runtime-cloud-hypervisor`
   production-boundary evidence for the declared Guest's real Cloud Hypervisor process effect,
   authenticated guest-control session, and ready state;
   missing, skipped, status-only, fake-boundary, other-family, or refusal evidence leaves US1 incomplete.

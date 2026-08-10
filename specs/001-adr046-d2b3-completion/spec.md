@@ -200,9 +200,10 @@ needed to satisfy the declared resources, and without performing a host cutover.
 **Wave checkpoint**: Wave 5 is only a partial US1 production-plane checkpoint and does not
 claim the three-resource operator activation positive. The exact acceptance set is
 `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in Zone
-`acceptance`; no other resource may substitute for one of those three. The authoritative
-prospective acceptance row is the active feature-local T604 coordination/completion task; it
-authors and development-validates that set after T221 and the merged authoritative
+`acceptance`; no other resource may substitute for one of those three. Generated authority
+owns provider implementation. The exact machine-readable
+T604/T479/T480 local contract owns cross-provider acceptance coordination: T604 authors and
+development-validates that set after T221 and the merged authoritative
 `ADR046-nl-001` through `ADR046-nl-020` workItemId set, consuming its double-opt-in production
 Network path and four-case matrix. After exact F6 freezes, T479 invokes the T604-owned
 validator and emits the candidate-bound record. Full US1 completion occurs only after that
@@ -243,9 +244,9 @@ Network-opt-in path and retain `ADR046-nl-001` through `ADR046-nl-020` plus all 
 Network/Host combinations as W6 work.
 It requires the migration and ownership on
 the fetched Wave 6 base, and T480 revalidates them before every prospective close boundary.
-Manifest-backed provider implementation comes only from generated authority. Active local
-T604 coordinates acceptance after that exact workItemId set merges and owns no Network
-implementation. A feature-local status,
+Generated authority owns provider implementation. The exact machine-readable T604/T479/T480
+local contract owns cross-provider acceptance coordination after that exact workItemId set
+merges; it assigns no Network implementation to a local task. A feature-local status,
 declaration-only fixture, fake effect port, historical W4 record, stale sole Network opt-in,
 or reassignment of those exact workItemIds outside W6 cannot unblock any boundary.
 
@@ -592,8 +593,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   fixtures, poison registries, and handoff transition matrices are owned solely by accepted
   Version 2 `ADR-046-validation-and-delivery` through `VD2-SC002-SOURCE-FLOOR`,
   `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. Retired feature-local ownership has no
-  prospective effect. Current ownership resolves only from authoritative member specs and
-  generated manifests. Feature-local field lists, counts, or transition copies are not authority.
+  prospective effect. Current provider-implementation ownership resolves only from
+  authoritative member specs and generated manifests. Feature-local field lists, counts, or
+  transition copies are not authority.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -607,11 +609,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   UID-mismatch refusals; durable audit drain and restart replay; whole-process RSS and
   single-owner fan-in at 10,000 resources and 100 watches; current removal proofs; and
   reference documentation compared with emitted behavior. The former enum/list evidence was
-  planned but is absent from code canon; current ownership resolves only from authoritative
-  member specs and generated manifests. The exact three-resource operator activation positive
-  is not Wave 5 evidence: its authoritative prospective row follows T221 and the merged
-  `ADR046-nl-001` through `ADR046-nl-020` workItemId set, and
-  T479/T480 bind it to F6 together with the
+  planned but is absent from code canon; current provider-implementation ownership resolves
+  only from authoritative member specs and generated manifests. The exact three-resource
+  operator activation positive is not Wave 5 evidence. Generated authority owns the provider implementation that follows
+  T221 and the merged `ADR046-nl-001` through `ADR046-nl-020` workItemId set. The exact
+  machine-readable T604/T479/T480 local contract binds cross-provider acceptance to F6
+  together with the
   `Provider/runtime-cloud-hypervisor` Guest result. Actionable refusals remain separate
   negative cases and cannot satisfy either positive story.
   The historical Wave 5 plan assigned convergence and the following closed

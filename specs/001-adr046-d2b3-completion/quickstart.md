@@ -104,7 +104,9 @@ instructions, including multiline forms, and round-threshold deferral rules are 
 retired marker kinds are `RETIRED-READONLY`, `RETIRED-W5-VALIDATION`,
 `RETIRED-W5-EVIDENCE`, `RETIRED-W5-MANIFEST`, `RETIRED-W5-PLAN`, and
 `RETIRED-W5-CLI`; the validator additionally reserves exactly `STALE-PROSE-CHECK` for this
-self-check block. Every marker is a whole line with no payload.
+self-check block. Every marker is a whole line with no payload. Copy and run the complete
+block below from the repository root; it prints the actual and expected status for every
+planted case before reporting the feature scan.
 
 <!-- STALE-PROSE-CHECK-BEGIN -->
 
@@ -112,6 +114,10 @@ self-check block. Every marker is a whole line with no payload.
 set -eu
 
 FEATURE_DIR="specs/001-adr046-d2b3-completion"
+SELF_FILE="$FEATURE_DIR/quickstart.md"
+SELF_HEADING='### 1c. Reject actionable retired-phase prose'
+SELF_BEGIN='<!-- STALE-PROSE-CHECK-BEGIN -->'
+SELF_END='<!-- STALE-PROSE-CHECK-END -->'
 RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|605)'
 ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*[[:space:]]+(MUST[[:space:]]+)?(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b"
 REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b.{0,240}\\b${RETIRED}('s)?\\b"
@@ -122,13 +128,32 @@ PHASE_ACTION="(?s)\\b${PHASE}\\b[[:space:]]+(MUST[[:space:]]+)?(own|add|check|ha
 PHASE_REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b[^.!?\\n]{0,40}\\b(after|for|in)\\b[[:space:]]+\\b${PHASE}\\b"
 
 check_fences() {
-  awk -v file="$1" '
+  input="$1"
+  logical_file="${2:-$1}"
+  awk \
+    -v file="$logical_file" \
+    -v self_file="$SELF_FILE" \
+    -v self_heading="$SELF_HEADING" '
+    file == self_file { source[FNR] = $0 }
+    file == self_file && /^### / { last_heading = $0 }
     stack[depth] == "STALE-PROSE-CHECK" &&
-      $0 !~ /^[[:space:]]*<!-- STALE-PROSE-CHECK-END -->[[:space:]]*$/ { next }
+      $0 !~ /^[[:space:]]*<!-- STALE-PROSE-CHECK-(BEGIN|END) -->[[:space:]]*$/ { next }
     /^[[:space:]]*<!-- (RETIRED-(READONLY|W5-VALIDATION|W5-EVIDENCE|W5-MANIFEST|W5-PLAN|W5-CLI)|STALE-PROSE-CHECK)-BEGIN -->[[:space:]]*$/ {
       kind = $0
       sub(/^[[:space:]]*<!-- /, "", kind)
       sub(/-BEGIN -->[[:space:]]*$/, "", kind)
+      if (kind == "STALE-PROSE-CHECK") {
+        if (file != self_file || self_begin_count != 0) {
+          fatal = 46
+          exit fatal
+        }
+        if (last_heading != self_heading) {
+          fatal = 47
+          exit fatal
+        }
+        self_begin_count += 1
+        self_begin_line = FNR
+      }
       for (i = 1; i <= depth; i += 1) {
         if (stack[i] == kind) {
           fatal = 45
@@ -143,6 +168,18 @@ check_fences() {
       kind = $0
       sub(/^[[:space:]]*<!-- /, "", kind)
       sub(/-END -->[[:space:]]*$/, "", kind)
+      if (kind == "STALE-PROSE-CHECK") {
+        if (file != self_file || self_begin_count != 1 || self_end_count != 0) {
+          fatal = 46
+          exit fatal
+        }
+        if (last_heading != self_heading) {
+          fatal = 47
+          exit fatal
+        }
+        self_end_count += 1
+        self_end_line = FNR
+      }
       if (depth == 0) {
         fatal = 42
         exit fatal
@@ -163,92 +200,139 @@ check_fences() {
     END {
       if (fatal != 0) exit fatal
       if (depth != 0) exit 44
+      if (file == self_file) {
+        if (self_begin_count != 1 || self_end_count != 1) exit 46
+        if (self_begin_line >= self_end_line) exit 47
+        if (source[self_begin_line + 1] !~ /^[[:space:]]*$/) exit 47
+        if (source[self_begin_line + 2] != "```bash") exit 47
+        if (source[self_end_line - 1] !~ /^[[:space:]]*$/) exit 47
+        if (source[self_end_line - 2] != "```") exit 47
+      }
     }
-  ' "$1"
+  ' "$input"
 }
 
-# Planted positive and negative fence cases.
+# Planted positive and negative fence cases. Each helper reads its case on stdin.
+expect_fence_case() {
+  label="$1"
+  expected="$2"
+  logical_file="$3"
+  set +e
+  check_fences - "$logical_file" >/dev/null 2>&1
+  actual="$?"
+  set -e
+  printf 'fence-case %s expected=%s actual=%s\n' "$label" "$expected" "$actual"
+  test "$actual" -eq "$expected"
+}
+
 printf '%s\n' \
   '<!-- RETIRED-READONLY-BEGIN -->' \
   'read-only bytes' \
   '<!-- RETIRED-READONLY-END -->' |
-  check_fences - >/dev/null
-if printf '%s\n' '<!-- RETIRED-READONLY-BEGIN -->' | check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' '<!-- RETIRED-READONLY-END -->' | check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case balanced 0 -
+printf '%s\n' '<!-- RETIRED-READONLY-BEGIN -->' |
+  expect_fence_case unmatched-begin 44 -
+printf '%s\n' '<!-- RETIRED-READONLY-END -->' |
+  expect_fence_case unmatched-end 42 -
+printf '%s\n' \
   '<!-- RETIRED-READONLY-BEGIN -->' \
   '<!-- RETIRED-W5-PLAN-BEGIN -->' \
   '<!-- RETIRED-READONLY-END -->' \
   '<!-- RETIRED-W5-PLAN-END -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case nested-mismatch 43 -
+printf '%s\n' \
   '<!-- RETIRED-READONLY-BEGIN --><!-- RETIRED-READONLY-BEGIN -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case duplicate-inline 45 -
+printf '%s\n' \
   '<!-- RETIRED-READONLY-BEGIN -->' \
   '<!-- RETIRED-READONLY-BEGIN -->' \
   '<!-- RETIRED-READONLY-END -->' \
   '<!-- RETIRED-READONLY-END -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case duplicate-nested 45 -
+printf '%s\n' \
   'prefix <!-- RETIRED-READONLY-BEGIN -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case text-before-begin 45 -
+printf '%s\n' \
   '<!-- RETIRED-READONLY-END --> suffix' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case text-after-end 45 -
+printf '%s\n' \
   '<!-- ACTIVE-BEGIN -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case invented-active 45 -
+printf '%s\n' \
   '<!-- RETIRED-INVENTED-BEGIN -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case invented-retired 45 -
+printf '%s\n' \
   '<!-- RETIRED-READONLY-BEGIN: payload -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
-if printf '%s\n' \
+  expect_fence_case begin-payload 45 -
+printf '%s\n' \
   '<!-- RETIRED-READONLY-END: payload -->' |
-  check_fences - >/dev/null; then
-  exit 1
-fi
+  expect_fence_case end-payload 45 -
+printf '%s\n' \
+  "$SELF_HEADING" \
+  "$SELF_BEGIN" \
+  '' \
+  '```bash' \
+  'echo planted-self-check' \
+  '```' \
+  '' \
+  "$SELF_END" |
+  expect_fence_case self-fence-balanced 0 "$SELF_FILE"
+printf '%s\n' \
+  "$SELF_HEADING" \
+  "$SELF_BEGIN" \
+  '' \
+  '```bash' \
+  'echo first' \
+  '```' \
+  '' \
+  "$SELF_END" \
+  "$SELF_BEGIN" \
+  '' \
+  '```bash' \
+  'echo duplicate' \
+  '```' \
+  '' \
+  "$SELF_END" |
+  expect_fence_case duplicate-self-fence 46 "$SELF_FILE"
+printf '%s\n' "$SELF_BEGIN" "$SELF_END" |
+  expect_fence_case other-file-self-fence 46 "$FEATURE_DIR/spec.md"
+printf '%s\n' "$SELF_HEADING" "$SELF_END" "$SELF_BEGIN" |
+  expect_fence_case reversed-self-fence 46 "$SELF_FILE"
+printf '%s\n' \
+  "$SELF_HEADING" \
+  "$SELF_BEGIN" \
+  '```bash' \
+  '```' \
+  '' \
+  "$SELF_END" |
+  expect_fence_case misplaced-self-fence 47 "$SELF_FILE"
 
 # Planted identifier-free retired-phase action negatives.
-printf '%s\n' 'Wave 5 implementation runs validation' |
-  rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null
-printf '%s\n' 'measure results after retired measurement' |
-  rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null
-if printf '%s\n' 'Wave 5 evidence remains read-only' |
-  rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null; then
-  exit 1
-fi
+expect_phase_case() {
+  label="$1"
+  expected="$2"
+  text="$3"
+  set +e
+  printf '%s\n' "$text" |
+    rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null
+  actual="$?"
+  set -e
+  printf 'phase-case %s expected=%s actual=%s\n' "$label" "$expected" "$actual"
+  test "$actual" -eq "$expected"
+}
+
+expect_phase_case forward-action 0 'Wave 5 implementation runs validation'
+expect_phase_case reverse-action 0 'measure results after retired measurement'
+expect_phase_case read-only-control 1 'Wave 5 evidence remains read-only'
 
 # Validate every file independently before filtering fenced history.
 while IFS= read -r -d '' file; do
-  check_fences "$file" >/dev/null
+  check_fences "$file" "$file" >/dev/null
 done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0)
 
 current_hits="$(
   while IFS= read -r -d '' file; do
-    check_fences "$file"
+    check_fences "$file" "$file"
   done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0) |
     rg -n -U -i \
       "$ACTION|$REVERSE|$EDGE|$ANY_RETIRED|$PHASE_ACTION|$PHASE_REVERSE" || true
@@ -257,6 +341,7 @@ test -z "$current_hits" || {
   printf '%s\n' "$current_hits"
   exit 1
 }
+printf 'feature-scan retired-action-and-fence-policy=passed\n'
 
 ! rg -n -i \
   'round nine.*\bMAY\b|eight panel rounds.*\bMAY\b|^## Standing obligations$' \
