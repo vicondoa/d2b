@@ -843,7 +843,8 @@ mod tests {
 
     #[test]
     fn committed_constitution_matches_the_historical_predecessor_policy() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest_dir
             .parent()
             .and_then(Path::parent)
             .expect("xtask lives under packages/");
