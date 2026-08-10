@@ -6,7 +6,7 @@
 | Parent | ADR 0046 |
 | Status | Accepted |
 | Version | 4 |
-| Baseline | `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` |
+| Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-network-local` crate, `d2b-host` IfName/nftables/bridge/routes modules |
 | Depends on | `ADR-046-resources-network`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-volume`, `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-current-code-migration-map` |

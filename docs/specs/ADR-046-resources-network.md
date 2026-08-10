@@ -6,7 +6,7 @@
 | Parent | ADR 0046 |
 | Status | Accepted |
 | Version | 3 |
-| Baseline | `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` |
+| Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-network-local`, `d2b-contracts` network types, Nix network emitter |
 | Depends on | `ADR-046-resource-object-model`, `ADR-046-primitive-resource-composition`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-terminology-and-identities` |
