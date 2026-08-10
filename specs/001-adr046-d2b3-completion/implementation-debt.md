@@ -45,6 +45,15 @@ historical; these local tasks own only prospective implementation and validation
 committed tree has Version 1 of the delivery specification and no generated Version 2
 traceability pair, so debt closure cannot cite such an artifact.
 
+The current foundation close must also remove four production peer-identity environment
+overrides (`D2BD_TEST_PEER_UID`, `D2BD_TEST_PEER_GID`,
+`D2BD_TEST_PEER_USERNAME`, `D2BD_TEST_PEER_GROUPS`) in favor of real accepted-socket
+`SO_PEERCRED`; route filesystem, network, and system-manager mutation through typed broker
+ops; enforce generated ResourceType Nix schemas; migrate legacy TPM state before first
+ensure; arbitrate scarce backing Host-globally; couple privileged success to transactional
+durable audit; redact forbidden identity; bound telemetry retention; and close metric
+descriptor/label domains. Existing ADR/code canon wins if a dossier still says otherwise.
+
 ---
 
 ## 0. Wave 2 delivery claim, stated precisely

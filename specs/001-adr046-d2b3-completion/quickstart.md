@@ -65,9 +65,127 @@ cargo test --manifest-path packages/Cargo.toml -p xtask \
   delivery::work_item_state::tests
 ```
 
+Before snapshot or panel dispatch, prove that the focused guard is nonempty and has no
+ignored or skipped result, then collect the required Gate 0, policy, Layer-1 development, and
+heavy-gate evidence:
+
+```bash
+set -euo pipefail
+
+FOCUSED_LIST="$(
+  cargo test --manifest-path packages/Cargo.toml -p xtask \
+    delivery::work_item_state::tests -- --list
+)"
+FOCUSED_COUNT="$(
+  printf '%s\n' "$FOCUSED_LIST" |
+    awk '/: test$/ { count += 1 } END { print count + 0 }'
+)"
+test "$FOCUSED_COUNT" -gt 0
+
+IGNORED_LIST="$(
+  cargo test --manifest-path packages/Cargo.toml -p xtask \
+    delivery::work_item_state::tests -- --list --ignored
+)"
+IGNORED_COUNT="$(
+  printf '%s\n' "$IGNORED_LIST" |
+    awk '/: test$/ { count += 1 } END { print count + 0 }'
+)"
+test "$IGNORED_COUNT" -eq 0
+
+FOCUSED_RESULT="$(
+  cargo test --manifest-path packages/Cargo.toml -p xtask \
+    delivery::work_item_state::tests -- --nocapture 2>&1
+)"
+printf '%s\n' "$FOCUSED_RESULT"
+printf '%s\n' "$FOCUSED_RESULT" |
+  grep -E 'test result: ok\..* 0 ignored'
+! printf '%s\n' "$FOCUSED_RESULT" | grep -Ei '(^|[^a-z])(skip|skipped)($|[^a-z])'
+
+make test-drift
+make test-policy
+
+for REQUIRED_JOB in test-flake test-nix-unit test-runtime-ledger; do
+  jq -e --arg job "$REQUIRED_JOB" \
+    '[.local.phases[].jobs[]] | index($job) != null' \
+    tests/layer1-jobs.json
+done
+make test-unit
+
+cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- \
+  heavy-gate -- true
+```
+
+The entry evidence records the exact focused nonzero test count, zero ignored count, zero
+skip matches, and exit status 0 for every command above. `make test-drift` is the Gate 0
+mechanical evidence. `make test-unit` is eligible only while the checked Layer-1 manifest
+contains and executes `test-flake`, `test-nix-unit`, and `test-runtime-ledger`.
+
+Derive and assert the pre-dispatch census from the current graph, work-item state, and local
+task contract rather than copying counts from prose:
+
+```bash
+node <<'NODE'
+const fs = require("fs");
+const assert = require("assert/strict");
+
+const graph = JSON.parse(
+  fs.readFileSync("docs/specs/ADR-046-implementation-graph.json", "utf8"),
+);
+const workItems = JSON.parse(
+  fs.readFileSync("docs/specs/ADR-046-work-items.json", "utf8"),
+);
+const tasks = fs.readFileSync(
+  "specs/001-adr046-d2b3-completion/tasks.md",
+  "utf8",
+);
+const match = tasks.match(
+  /```json\n(\{\n  "artifact_kind": "d2b-feature-local-task-contract"[\s\S]*?\n\})\n```/,
+);
+assert(match, "feature-local task contract must exist");
+const local = JSON.parse(match[1]);
+
+const w6 = graph.nodes.filter(
+  (node) => node.kind === "work-item" && node.wave === "W6",
+);
+assert.equal(w6.length, 258);
+assert.equal(new Set(w6.map((node) => node.parallelGroup)).size, 29);
+assert.equal(local.task_ids.length, 7);
+assert.equal(258 + local.task_ids.length, 265);
+
+const firstReady = local.task_ids.filter((id) => {
+  const dependencies = local.required_local_dependencies[id] || [];
+  return dependencies.every((dependency) => dependency === "T221");
+});
+assert.deepEqual(firstReady, ["T606"]);
+
+const stateById = new Map(
+  workItems.items.map((item) => [item.workItemId, item.implementationState]),
+);
+assert(
+  w6.every((node) => stateById.get(node.id) === "Planned"),
+  "no manifest implementation group may be launched before T221",
+);
+assert.deepEqual(
+  [...local.unchecked_task_ids].sort(),
+  [...local.task_ids].sort(),
+  "all seven local tasks must remain unchecked before T221",
+);
+
+console.log(JSON.stringify({
+  manifestWorkItems: w6.length,
+  manifestGroups: new Set(w6.map((node) => node.parallelGroup)).size,
+  localTasks: local.task_ids.length,
+  postEntryRecords: w6.length + local.task_ids.length,
+  firstReadyLocalTask: firstReady,
+  launchedImplementationGroupsBeforeT221: 0,
+}));
+NODE
+```
+
 Create the Wave 6 entry snapshot through the production delivery command, using
-`BASE_OID` as the exact base and the current draft Wave 6 PR. The snapshot command must
-match candidate
+`BASE_OID` as the exact base and the current draft Wave 6 PR. The production historical-
+predecessor guard validates the following retained W5 identities inside predecessor state:
+candidate
 `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
 snapshot identity `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
 head `19b77dad63060bcadd41f1ef800978d2c53cc030`, retained request digest
@@ -75,7 +193,10 @@ head `19b77dad63060bcadd41f1ef800978d2c53cc030`, retained request digest
 no seal, and every retained evidence filename and digest in `data-model.md`. It must also
 identify the accepted first-parent integration commit after the Wave 5 merge whose tree
 contains the exact generic Constitution 3.1.0 bytes. A missing, extra, or changed entry stops
-here.
+here. These are not W6 output identities. The W6 snapshot command emits distinct new
+`candidate_id`, `content_id`, and `snapshot_sha256` values bound to the current W6 base,
+head, pull request, graph, and feature content. Equality between a W6 output identity and any
+retained W5 identity is a failure, not a success condition.
 
 ```bash
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"

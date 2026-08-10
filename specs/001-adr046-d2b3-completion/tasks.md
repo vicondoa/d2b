@@ -257,6 +257,10 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-provider-system-core/tests/",
       "packages/d2b-provider-system-core/integration/",
       "packages/d2b-provider-system-core/README.md",
+      "packages/d2bd/src/admission.rs",
+      "packages/d2bd/tests/common/mod.rs",
+      "packages/d2bd/tests/peer_admission_real.rs",
+      "packages/d2b/tests/common/mod.rs",
       "packages/d2b/src/context.rs",
       "packages/d2b/src/zone.rs",
       "nixos-modules/options-zones.nix"
@@ -274,6 +278,9 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-core-controller/src/export_import.rs",
       "packages/d2b-core-controller/src/export_import_projection.rs",
       "packages/d2b-core-controller/src/authority.rs",
+      "packages/d2bd/src/volume_effect_adapter.rs",
+      "packages/d2bd/src/network_effect_adapter.rs",
+      "packages/d2bd/src/system_manager_effect_adapter.rs",
       "packages/d2b-provider/src/share_adapter.rs"
     ],
     "T609": [
@@ -283,6 +290,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-audit/src/record_types.rs",
       "packages/d2b-audit/src/sink.rs",
       "packages/d2b-audit/src/export.rs",
+      "packages/d2b-resource-store-redb/src/audit.rs",
+      "packages/d2b-resource-store-redb/tests/transactional_audit.rs",
       "packages/d2b-telemetry/src/trace_context.rs",
       "packages/d2b-telemetry/src/audit_hash.rs",
       "packages/d2b-telemetry/src/emitter.rs",
@@ -1144,6 +1153,15 @@ Generated authority owns provider implementation; the expanded machine-readable 
 contract owns foundation adoption and cross-provider acceptance coordination without
 changing retained W5 state.
 
+**Code-canon reconciliation rule:** existing accepted ADR decisions and committed passing
+code win over drifted Provider-dossier prose. Every affected dossier lane must identify its
+drift before source changes, preserve the code-canon invariant, implement against the
+T606-T609 foundation boundary, and record the discrepancy in its handoff to the integrator.
+A lane is not complete while its implementation follows contradictory sole-opt-in, direct
+host-mutation, caller-supplied identity, unbounded telemetry, non-durable audit, or non-
+Host-global ownership prose. This rule corrects implementation choice; it does not edit or
+silently reinterpret the external dossier.
+
 - [ ] T221 [US2] W6 HISTORICAL-PREDECESSOR GUARD + PLAN PANEL + ENTRY - before any Wave 6
   implementation lane is dispatched, fetch `origin/v3` and require the exact resolved
   `refs/remotes/origin/v3` commit as the clean entry base. Create the Wave 6 entry snapshot
@@ -1165,9 +1183,25 @@ changing retained W5 state.
     delivery::work_item_state::tests
   ```
 
-  Then confirm Gate 0 passed, destinations are uncontended, the stack is proposed against
-  that exact base, the heavy-gate semaphore is available, and the fast hermetic suite is
-  green. Run `/d2b-panel-round plan` against the exact base, entry snapshot, and current
+  Before snapshot or panel dispatch, execute the exact evidence block in `quickstart.md`.
+  It must derive a focused test count greater than zero, derive zero ignored tests, execute
+  the focused suite with zero skip markers, run `make test-drift` as Gate 0 mechanical
+  evidence, run `make test-policy`, run `make test-unit` while the Layer-1 manifest includes
+  `test-flake`, `test-nix-unit`, and `test-runtime-ledger`, and acquire/release the production
+  heavy-gate with a successful `true` child. Each command must exit 0 and its result must be
+  retained in T221 entry evidence.
+
+  Run the exact machine-derived pre-dispatch census in `quickstart.md`. It must prove 258 W6
+  work-item nodes, 29 W6 work-item groups, seven local contract tasks, 265 post-entry records,
+  first ready local set exactly `[T606]`, every manifest W6 item still Planned, every local
+  task unchecked, and zero launched implementation groups before T221. A prose count, empty
+  query, or hand-maintained list is ineligible.
+
+  Then confirm destinations are uncontended and the stack is proposed against that exact
+  base. The guard validates the retained W5 candidate/snapshot/head identities only inside
+  predecessor state. The new W6 snapshot must emit distinct candidate/content/snapshot
+  identities; equality with a retained W5 identity refuses. Run `/d2b-panel-round plan`
+  against the exact base, new entry snapshot, and current
   feature snapshot. Require one record for every selected seat, N/N sign-off, and zero
   recommendations. The selection uses the current thirteen-seat role domain and may only
   widen over fix deltas. Any base, constitution, retained-state, evidence, feature, or guard
@@ -1214,12 +1248,21 @@ changing retained W5 state.
   checkboxes, delivery records, or evidence. Implement only the dedicated Zone, CLI
   context/zone projection, system-core Host/User, bootstrap, and Zone-option destinations
   assigned by the local task contract; consume T606's shared registrations unchanged.
+  Delete every production read of `D2BD_TEST_PEER_UID`, `D2BD_TEST_PEER_GID`,
+  `D2BD_TEST_PEER_USERNAME`, and `D2BD_TEST_PEER_GROUPS`. Tests may not inject a caller-
+  selected peer identity through environment variables or a parallel production constructor.
+  Admission must derive pid/uid/gid from `SO_PEERCRED` on the accepted AF_UNIX socket and
+  resolve supplementary groups from that kernel-derived uid through the fixed local
+  classifier.
 
   **Done when** Host and User reconcilers are production-reachable; bootstrap reconciles
   Host/User before Process Provider launch; Zone self-resource and CLI discovery/get/list/
   status traverse the authenticated production route; no test-only adapter can satisfy
-  readiness; focused contract/core/system-core/CLI tests, `make test-nix-unit`,
-  `make test-policy`, and the enabled fixture-contract coverage pass.
+  readiness; a source check reports zero `D2BD_TEST_PEER_*` names under
+  `packages/d2bd/src`; real-socket tests prove allowed and denied `SO_PEERCRED` identities,
+  supplementary-group classification, disconnected-peer refusal, and inability to substitute
+  uid/gid/username/groups; and focused contract/core/system-core/CLI tests,
+  `make test-nix-unit`, `make test-policy`, and enabled fixture-contract coverage pass.
 
 ### Group `feature-local:w6-storage-authority-foundations` (1 task)
 
@@ -1229,27 +1272,49 @@ changing retained W5 state.
   `ADR046-zone-control-020`, and `ADR046-zone-control-024` as current W6 work without
   changing retained W5 history. Own the dedicated Volume contracts, volume-local
   layout/store-view/swtpm implementation, Volume Nix compiler, export/import projection, and
-  Core Host-global authority files assigned by the local task contract.
+  Core Host-global authority files assigned by the local task contract. Every filesystem,
+  network, and system-manager host mutation must cross a closed typed broker operation;
+  Providers and Core controllers receive no raw host path, free-form systemd property,
+  interface name, command, or ambient mutation handle. Generated ResourceType Nix options and
+  emitted JSON must reject unknown fields, wrong types, missing required fields, invalid
+  owner/provider references, and schema/version mismatch at eval or build time. Before the
+  first TPM ensure, the migration path must inventory and bind any legacy swtpm state and
+  identity marker to the exact Device/Volume owner; missing, replaced, ambiguous, or
+  foreign-owned legacy state fails closed and is never silently initialized or wiped.
 
   **Done when** Volume effects use opaque typed broker operations and expose no raw host path;
-  Host-global claims reject cross-Zone collisions before effects; external-NIC cross-Zone
-  bridge multiplexing fails closed; marker, adoption, cleanup, and authority ordering tests
-  pass; and focused Cargo tests plus executed `make test-integration` pass. A declaration-only
-  fixture is not execution evidence.
+  source/dependency policy proves Provider and controller code has no direct filesystem,
+  network, or system-manager mutation path; strict generated ResourceType Nix positive and
+  planted-negative validation passes; Host-global ownership rejects cross-Zone physical
+  device, external NIC, fixed listener, store writer, and conflicting service claims before
+  effects; external-NIC cross-Zone bridge multiplexing fails closed; TPM migration proves
+  preserve/adopt/refuse ordering before first ensure; marker, adoption, cleanup, and authority
+  ordering tests pass; and focused Cargo tests plus executed `make test-integration` pass. A
+  declaration-only fixture is not execution evidence.
 
 ### Group `feature-local:w6-audit-telemetry-foundations` (1 task)
 
 - [ ] T609 [US2] **PROSPECTIVELY COMPLETE AUDIT AND TELEMETRY FOUNDATIONS.**
   Depends on T606. Adopt `ADR046-audit-001` and `ADR046-telem-001` as current W6
   work without modifying retained W5 state. Own only the `d2b-audit` and `d2b-telemetry`
-  foundation files assigned by the local task contract.
+  foundation files assigned by the local task contract. A privileged mutation may report
+  success only when its audit row is appended in the mutation's transactional durability
+  boundary and the required data and parent-directory synchronization has completed. Audit,
+  errors, logs, spans, metrics, support output, and `Debug` must reject raw resource names,
+  Zone/Host/User identities, paths, argv, environment, sockets, PIDs, credentials, handles,
+  peer claims, and attacker-authored text. Telemetry rings, queues, retry state, and retained
+  diagnostic output must carry explicit byte/count/age bounds and deterministic drop/prune
+  behavior. Every metric descriptor and every label value must come from the closed
+  descriptor/semantic-domain registry; resource-derived or free-form label keys and values
+  are forbidden.
 
   **Done when** audit records are hash-chained, redacted, append-only, rotated, and pruned;
-  privileged records are never rate-limited and failed durable audit denies completion;
-  telemetry remains lossy and cannot become authorization or audit authority; forbidden path,
-  argv, socket, credential, identity, and resource-name canaries are absent; retention,
-  restart, failed-write, redaction, and concurrency tests pass; and focused Cargo tests plus
-  `make test-policy` pass.
+  transaction abort, audit append failure, file sync failure, and parent sync failure all
+  prove zero privileged success; privileged records are never rate-limited; telemetry remains
+  bounded, lossy, and unable to become authorization or audit authority; forbidden-identity
+  canaries are absent from every observable surface; descriptor inventory and closed-label
+  planted negatives pass; retention, saturation, restart, failed-write, redaction, and
+  concurrency tests pass; and focused Cargo tests plus `make test-policy` pass.
 
 ### Staged Wave 6 launch census
 

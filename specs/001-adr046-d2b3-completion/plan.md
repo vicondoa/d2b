@@ -399,6 +399,14 @@ The first post-entry ready set is exactly `{T606}`. The next is exactly
 all 29 manifest groups as simultaneously launchable. The manifest count stays 258; the
 complete post-entry census is 265 work records and 36 groups. T221 remains a separate gate.
 
+Existing accepted ADR decisions and committed passing code are the implementation canon when
+a Provider dossier drifts. T606 freezes that boundary for shared contracts. T607-T609 and
+every affected dossier lane must reconcile to real `SO_PEERCRED`, broker-only typed host
+effects, strict generated ResourceType validation, migration-before-ensure for legacy TPM
+state, Host-global scarce-resource ownership, transactional privileged audit, forbidden-
+identity redaction, bounded telemetry, and closed metric descriptors. Contradictory dossier
+prose is recorded in the lane handoff and never implemented as an alternative.
+
 The closed local ownership map is:
 
 | Local task | Owned files or evidence surface | Mechanically checkable boundary |

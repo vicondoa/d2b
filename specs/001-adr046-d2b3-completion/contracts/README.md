@@ -162,6 +162,15 @@ feature-content correction invalidates that binding. It remains discovery eviden
 entry pass. T221 requires a replacement snapshot, selection, and unanimous result. Passing
 T221 authorizes T606 only.
 
+The predecessor guard validates the retained W5 candidate, embedded snapshot, head, request,
+evidence inventory, zero-attestation state, and absent seal inside the predecessor record.
+The W6 snapshot emits distinct new candidate/content/snapshot identities from the current W6
+material. It must not equal a retained W5 identity. Before that snapshot, T221 runs the exact
+quickstart evidence block: nonempty focused guard enumeration, zero ignored/skipped results,
+`make test-drift`, `make test-policy`, `make test-unit` with flake/nix-unit/runtime-ledger
+membership, heavy-gate acquisition, and the machine-derived 258/29/7/265 launch census with
+T606 as the only first-ready local task and zero implementation groups launched.
+
 The same production guard runs at Wave 6 snapshot/entry and is rechecked at panel request,
 seal, and merge eligibility. Missing, extra, partial, changed, unfetched, non-first-parent,
 non-ancestor, or substituted state refuses with remediation to restore the exact retained

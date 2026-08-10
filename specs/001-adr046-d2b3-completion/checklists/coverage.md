@@ -129,7 +129,19 @@ Are requirements present for each scenario class, or explicitly excluded?
   `operator-nix-activation-cleanup` validator scope while leaving both candidate record
   emission and candidate-bound FR-075 solely to T479, with T480 revalidating both?
 - [x] CHK057 Is every retired Wave 5 task occurrence confined to an explicit read-only fence,
-  with no feature-local prospective ownership?
+  while T607-T609 adopt only prospective implementation obligations outside the fence without
+  mutating historical state?
+- [x] CHK058 Does T221 validate retained W5 identities inside predecessor state while requiring
+  distinct newly emitted W6 snapshot identities and full focused/drift/policy/unit/heavy-gate
+  evidence before panel dispatch?
+- [x] CHK059 Is the pre-dispatch census machine-derived and closed over 258 manifest nodes,
+  29 manifest groups, seven local tasks, 265 post-entry records, T606-only first readiness,
+  and zero launched implementation groups?
+- [x] CHK060 Do T607-T609 close real SO_PEERCRED admission, broker-only host mutations,
+  strict generated Nix validation, legacy TPM migration, Host-global authority,
+  transactional privileged audit, redaction, bounded telemetry, and descriptor closure?
+- [x] CHK061 Does every affected Provider lane follow accepted ADR/code canon over drifted
+  dossier prose and require reconciliation before completion?
 
 ## Notes
 

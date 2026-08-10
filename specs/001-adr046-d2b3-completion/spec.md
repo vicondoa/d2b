@@ -1318,6 +1318,14 @@ The boundary is explicit so that a delegated obligation is never mistaken for a 
 | Field-level shape, validation, and state machine of each of the 19 ResourceTypes | The six owning resource specs | **Delegated.** The types are `Zone`, `ZoneLink`, `Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `ResourceExport`, `ResourceImport`, `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`, `Endpoint`, `Volume`, `Network`, `Device`, `Credential`. FR-001 through FR-009 apply to all of them uniformly. |
 | Per-Provider behavior for all 27 Provider dossiers | The 27 dossier specs | **Delegated.** FR-010 through FR-015 apply to every Provider uniformly. |
 | Controller algorithms, admission, dependency ordering | `core-controllers`, `resource-reconciliation` | **Delegated.** |
+
+Delegation does not invert the repository's code-canon rule. When dossier prose conflicts
+with an accepted ADR or committed passing code, the ADR/code invariant wins and the affected
+W6 lane must record the drift and reconcile its implementation before completion. In
+particular, no lane may retain caller-selected peer identity, direct Provider host mutation,
+weak ResourceType validation, silent TPM state reinitialization, Zone-local treatment of a
+Host-global backing, nontransactional privileged audit success, unbounded telemetry, or
+open-ended metric labels because stale prose describes it.
 | Cutover phase mechanics, disposition matrix, the three reset scopes (Full Zone, Provider, Guest) | `reset-and-cutover` | **Delegated**, except the operator-facing guarantees stated in FR-020 through FR-024 and FR-043. |
 | Wire formats, schemas, generated artifacts | Owning specs plus generated `docs/reference/schemas/v3/` | **Delegated**, enforced by FR-031. |
 | Threat model, telemetry retention, streamline scope, remaining feasibility spikes | `security-and-threat-model`, `telemetry-audit-and-support`, `streamline`, `feasibility-and-spikes` | **Delegated** to their owning specs and to the wave that implements them, per FR-019. |

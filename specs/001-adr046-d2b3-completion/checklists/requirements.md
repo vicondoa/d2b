@@ -47,6 +47,17 @@
 - [x] Generic Constitution 3.1.0 contains no ADR-046 detail; FR-036 and the exact feature-owned
   validator/tooling contract preserve the immutable W0-W5 history, authorize no recovery
   or reconstructed seal, and make T221 the next executable gate
+- [x] T221 distinguishes retained W5 predecessor identities from newly emitted W6 snapshot
+  identities and requires nonempty/no-ignore/no-skip focused guard evidence, drift, policy,
+  unit, flake, nix-unit, runtime-ledger, and heavy-gate evidence before panel dispatch
+- [x] The machine-derived launch census proves 258 manifest nodes, 29 manifest groups, seven
+  local tasks, 265 post-entry records, first ready task T606 only, and no pre-T221 launch
+- [x] T607-T609 bind real peer identity, broker-only host effects, strict generated
+  ResourceType validation, TPM migration-before-ensure, Host-global authority,
+  transactionally durable privileged audit, forbidden-identity redaction, bounded telemetry,
+  and closed metric descriptors to mechanically checkable completion evidence
+- [x] Existing accepted ADRs and committed passing code override drifted Provider prose, and
+  each affected dossier lane must reconcile the implementation before completion
 
 ## Feature Readiness
 
