@@ -490,8 +490,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
   },
   "local_to_manifest_shared_writer_handoffs": {
     "derivation_source": "current candidate docs/specs/ADR-046-work-items.json destination fields plus docs/specs/ADR-046-implementation-graph.json W6 nodes",
-    "work_items_sha256": "117ed5b7bdfc183f217c9ad67631655f2d87a79f7683c0ddc75c38427a8a0cdd",
-    "implementation_graph_sha256": "bd749c4345de7b9da0c1d05d35b7a573dca05fa3f233bb8d2ffadded6b9679cf",
+    "work_items_sha256": "d2665b18e72f7c9cff3c62a336d7626e4e7576b99c7f9b04790ea24c6b9c61f0",
+    "implementation_graph_sha256": "9adc167e7c81e04e11b70b05025dfea4c8c5fb18f2bae88d488d66808af99064",
     "completeness_rule": "expand current manifest destination path expressions; every intersection with a T606-T609 owned path must appear in exactly one ordered handoff, every order endpoint must resolve, and every T606 scaffold root must map to exactly one W6 manifest group",
     "handoffs": [
       {
