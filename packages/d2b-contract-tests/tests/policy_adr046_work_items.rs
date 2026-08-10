@@ -22,6 +22,7 @@ const SPEC_SET: &str = "docs/specs/ADR-046-spec-set.json";
 const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
 const GRAPH_JSON: &str = "docs/specs/ADR-046-implementation-graph.json";
 const GRAPH_MD: &str = "docs/specs/ADR-046-implementation-graph.md";
+const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 
 /// The normative member count, per `docs/specs/README.md`.
 const EXPECTED_MEMBERS: usize = 55;
@@ -687,6 +688,116 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
     (spec_set, work_items, declared)
 }
 
+fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
+    let mut findings = Vec::new();
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut blocks = BTreeMap::new();
+    let mut retired_depth = 0usize;
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-BEGIN -->") {
+            retired_depth += 1;
+        } else if trimmed.starts_with("<!-- RETIRED-") && trimmed.ends_with("-END -->") {
+            retired_depth = retired_depth.saturating_sub(1);
+        }
+
+        if line.starts_with("- [")
+            && line.contains("FEATURE-LOCAL COORDINATION/COMPLETION")
+            && let Some(id) = line.split_whitespace().find(|token| {
+                token.starts_with('T') && token[1..].chars().all(|c| c.is_ascii_digit())
+            })
+        {
+            let start = index;
+            index += 1;
+            while index < lines.len() && !lines[index].starts_with("- [") {
+                index += 1;
+            }
+            let block = lines[start..index].join("\n");
+            if blocks
+                .insert(id.to_owned(), (line.to_owned(), block, retired_depth))
+                .is_some()
+            {
+                findings.push(format!(
+                    "feature-local task {id} is declared more than once"
+                ));
+            }
+            continue;
+        }
+        index += 1;
+    }
+
+    let expected = ["T479", "T480", "T604"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let actual = blocks.keys().cloned().collect::<BTreeSet<_>>();
+    if actual != expected {
+        findings.push(format!(
+            "feature-local task set must be exactly {expected:?}, got {actual:?}"
+        ));
+    }
+
+    let requirements = BTreeMap::from([
+        (
+            "T604",
+            [
+                "T221",
+                "T222",
+                "T227",
+                "T423",
+                "T336-T355",
+                "T310-T322",
+                "T458-T470",
+                "operator-nix-activation-cleanup",
+                "T479",
+            ]
+            .as_slice(),
+        ),
+        (
+            "T479",
+            [
+                "T604",
+                "T221",
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance",
+            ]
+            .as_slice(),
+        ),
+        (
+            "T480",
+            [
+                "T479",
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance",
+            ]
+            .as_slice(),
+        ),
+    ]);
+    for (id, required) in requirements {
+        let Some((heading, block, depth)) = blocks.get(id) else {
+            continue;
+        };
+        if !heading.starts_with("- [ ]") {
+            findings.push(format!("feature-local task {id} must remain unchecked"));
+        }
+        if *depth != 0 {
+            findings.push(format!(
+                "feature-local task {id} must not be inside a retired fence"
+            ));
+        }
+        for literal in required {
+            if !block.contains(literal) {
+                findings.push(format!(
+                    "feature-local task {id} is missing required contract literal `{literal}`"
+                ));
+            }
+        }
+    }
+    findings
+}
+
 #[test]
 fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     let (spec_set, work_items, declared) = real_tree();
@@ -710,6 +821,16 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     let mut census: BTreeMap<&str, usize> = BTreeMap::new();
     for item in declared.values().flatten() {
         *census.entry(item.form).or_default() += 1;
+    }
+
+    #[test]
+    fn feature_local_coordination_tasks_are_closed_and_authoritative() {
+        let findings = check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS));
+        assert!(
+            findings.is_empty(),
+            "feature-local coordination task policy failed:\n{}",
+            findings.join("\n")
+        );
     }
     assert_eq!(
         census,

@@ -967,40 +967,54 @@ mod tests {
 
     #[test]
     fn historical_mutation_guard_is_wired_to_every_mutating_delivery_command() {
-        for (source, exact_call) in [
+        for (source, exact_call, publication) in [
             (
                 include_str!("snapshot.rs"),
                 "reject_adr046_w5_mutation(&material,\"snapshot\")",
+                "letcandidate=root.candidate(",
             ),
             (
                 include_str!("evidence.rs"),
                 "reject_adr046_w5_mutation(&supplied.material,\"evidenceimport\")",
+                "letcandidate=root.existing_candidate(",
             ),
             (
                 include_str!("panel.rs"),
                 "reject_adr046_w5_mutation(&snapshot.material,\"panelrequest\")",
+                "matchselection_path{",
             ),
             (
                 include_str!("panel.rs"),
                 "reject_adr046_w5_mutation(&snapshot.material,\"panelattestation\")",
+                "attest(&candidate,&snapshot,&records_dir)",
             ),
             (
                 include_str!("seal.rs"),
                 "reject_adr046_w5_mutation(&snapshot.material,\"seal\")",
+                "seal_checked(&state,&candidate,&snapshot,&repository_roots)",
             ),
             (
                 include_str!("eligibility.rs"),
                 "reject_adr046_w5_mutation(&seal.material,\"mergetargetcapture\")",
+                "capture(&candidate,target)",
             ),
             (
                 include_str!("eligibility.rs"),
                 "reject_adr046_w5_mutation(&seal.material,\"mergeeligibility\")",
+                "evaluate_checked(&state,&candidate,&seal,&target,&repository_roots)",
             ),
         ] {
             let compact = source.split_whitespace().collect::<String>();
+            let guard = compact
+                .find(exact_call)
+                .unwrap_or_else(|| panic!("missing exact historical mutation guard {exact_call}"));
+            let publish = compact[guard..]
+                .find(publication)
+                .map(|offset| guard + offset)
+                .unwrap_or_else(|| panic!("missing publication marker {publication}"));
             assert!(
-                compact.contains(exact_call),
-                "missing exact historical mutation guard call {exact_call}"
+                guard < publish,
+                "historical mutation guard {exact_call} must precede {publication}"
             );
         }
     }
