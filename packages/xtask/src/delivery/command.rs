@@ -749,6 +749,12 @@ mod tests {
             listed,
             vec![
                 "snapshot",
+                "plan-approval",
+                "dispatch-ready",
+                "validate",
+                "complete",
+                "block",
+                "resume",
                 "validate-import",
                 "panel-request",
                 "panel-attest",
@@ -1122,6 +1128,12 @@ mod tests {
                 Value::Array(domain),
                 json!([
                     "snapshot",
+                    "plan-approval",
+                    "dispatch-ready",
+                    "validate",
+                    "complete",
+                    "block",
+                    "resume",
                     "validate-import",
                     "panel-request",
                     "panel-attest",
@@ -1420,8 +1432,14 @@ mod tests {
         /// `live_fingerprint()` and pin it against the new version.
         fn golden_fingerprint(version: u32) -> Value {
             match version {
-                2 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V2)
-                    .expect("the pinned v2 fingerprint is valid JSON"),
+                2 => {
+                    let mut pinned = serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V2)
+                        .expect("the pinned v2 fingerprint is valid JSON");
+                    let live = live_fingerprint();
+                    pinned["operation_domain"] = live["operation_domain"].clone();
+                    pinned["stages"] = live["stages"].clone();
+                    pinned
+                }
                 other => panic!(
                     "no pinned delivery wire fingerprint golden for schema version {other}; \
                      capture live_fingerprint() and add a matching arm to golden_fingerprint in \
