@@ -955,7 +955,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "6399690a2ae427cdbcc9dff56a47be782fe6e3f925ff40983506edfefd84e05d",
+      "sha256" : "7e5dd78936a56911387e93be04b75b65dc32217bf155c93ddcb94fffce8cf13d",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Accepted",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
