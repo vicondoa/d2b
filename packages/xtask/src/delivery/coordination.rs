@@ -3496,7 +3496,8 @@ mod tests {
 
     #[test]
     fn committed_graph_prerequisites_use_dependent_to_prerequisite_direction() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let manifest_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest_root
             .parent()
             .and_then(Path::parent)
             .expect("repository root");
@@ -3534,7 +3535,8 @@ mod tests {
 
     #[test]
     fn readiness_compiles_t604_dependencies_and_shared_writer_handoffs() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let manifest_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest_root
             .parent()
             .and_then(Path::parent)
             .expect("repository root");
