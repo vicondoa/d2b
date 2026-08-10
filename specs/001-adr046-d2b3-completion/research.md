@@ -298,13 +298,17 @@ OpenPeerPidfdFromAcceptedSocket
   -> zero matches in packages/ and tests/
 ```
 
-Therefore NIX-8, NIX-9, the handler contract, and the peer-pidfd operation are not landed.
+Therefore NIX-8, NIX-9, the system-core handler implementation, and the peer-pidfd operation
+are not landed.
 The accepted activation-nixos member specification and current generated rows own NIX-8 and
 NIX-9 semantics; T607 and T609 provide their missing foundations before
 `ADR046-activation-001` and `ADR046-activation-006` run. T606 freezes their shared
 contract/dispatch surfaces. No absent Version 2 delivery artifact is required or inferred.
-The handler and peer-pidfd gaps remain assigned by their current member-spec/generated rows;
-this research record does not invent a second implementation contract.
+The paired system-core/Zone specifications are already accepted at Version 2 and assign the
+still-Planned implementation exclusively to `ADR046-system-core-001` / T423; the code search
+is an implementation-state observation, not evidence that the paired spec revision is
+missing. The peer-pidfd gap remains assigned by its current member-spec/generated row. This
+research record does not invent a second implementation contract.
 
 ---
 

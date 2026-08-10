@@ -81,6 +81,10 @@ cargo run --manifest-path packages/Cargo.toml -p xtask -- \
   --entry-prepare true
 ```
 
+For ADR046 W6, snapshot tooling auto-derives the canonical dependency/file-overlap graph from
+the candidate's committed implementation graph plus the feature-local foundation and handoff
+contracts. Do not pass manual `--edge` data or maintain a parallel edge list.
+
 The first call is the only step that creates the empty external import surfaces. A repeat
 with the same discovered candidate compares them byte-for-byte and refuses drift. After it
 succeeds, execute the eight required commands through an external recorder. The recorder,
@@ -100,219 +104,50 @@ heavy-gate-acquire
 predispatch-census
 ```
 
-The first seven commands execute the following argv through that recorder. The recorder
-binds every record to the discovered W6 working-tree OID and records exit status, timing,
-stdout/stderr SHA-256, output bytes, and the focused discovered/ignored/skip counts where
-applicable:
+The first seven command identities use repository-owned closed profiles. Invoke each public
+profile stage through the external recorder:
 
 ```bash
-set -euo pipefail
-
-FOCUSED_LIST="$(
-  cargo test --manifest-path packages/Cargo.toml -p xtask \
-    delivery::work_item_state::tests -- --list
-)"
-FOCUSED_COUNT="$(
-  printf '%s\n' "$FOCUSED_LIST" |
-    awk '/: test$/ { count += 1 } END { print count + 0 }'
-)"
-test "$FOCUSED_COUNT" -gt 0
-
-IGNORED_LIST="$(
-  cargo test --manifest-path packages/Cargo.toml -p xtask \
-    delivery::work_item_state::tests -- --list --ignored
-)"
-IGNORED_COUNT="$(
-  printf '%s\n' "$IGNORED_LIST" |
-    awk '/: test$/ { count += 1 } END { print count + 0 }'
-)"
-test "$IGNORED_COUNT" -eq 0
-
-FOCUSED_RESULT="$(
-  cargo test --manifest-path packages/Cargo.toml -p xtask \
-    delivery::work_item_state::tests -- --nocapture 2>&1
-)"
-printf '%s\n' "$FOCUSED_RESULT"
-printf '%s\n' "$FOCUSED_RESULT" |
-  grep -E 'test result: ok\..* 0 ignored'
-! printf '%s\n' "$FOCUSED_RESULT" | grep -Ei '(^|[^a-z])(skip|skipped)($|[^a-z])'
-
-make test-drift
-make test-policy
-
-for REQUIRED_JOB in test-flake test-nix-unit test-runtime-ledger; do
-  jq -e --arg job "$REQUIRED_JOB" \
-    '[.local.phases[].jobs[]] | index($job) != null' \
-    tests/layer1-jobs.json
+for COMMAND_PROFILE in \
+  focused-guard-list \
+  focused-guard-ignored-list \
+  focused-guard-run \
+  gate0-test-drift \
+  test-policy \
+  test-unit \
+  heavy-gate-acquire
+do
+  cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- \
+    delivery wave run-command-profile \
+    --profile "$COMMAND_PROFILE" \
+    "${SNAPSHOT_ARGS[@]}"
 done
-make test-unit
-
-cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- \
-  heavy-gate -- true
 ```
 
-The entry evidence records the exact focused nonzero test count, zero ignored count, zero
-skip matches, and exit status 0 for every command above. `make test-drift` is the Gate 0
-mechanical evidence. `make test-unit` is eligible only while the checked Layer-1 manifest
-contains and executes `test-flake`, `test-nix-unit`, and `test-runtime-ledger`.
+The production profile table in `tasks.md` owns the exact argv. The profile runner refuses a
+caller-supplied replacement. It records a nonzero focused discovery count, zero ignored/skip
+counts, and exit status 0. The `test-unit` profile first proves the checked Layer-1 manifest
+contains `test-flake`, `test-nix-unit`, and `test-runtime-ledger`, then executes the
+repository-owned target. `gate0-test-drift` remains the Gate 0 mechanical evidence.
 Reviewer self-report, terminal scrollback, or a prose PASS is ineligible. Raw output stays
 outside Git. Do not edit the recorder's JSON to make a failed command success-shaped.
 
-Execute the following census through the same external recorder under command identity
-`predispatch-census`. It derives the ledger state, graph, task contract, group foundations,
-and writer-handoff pins rather than copying counts from prose:
+Execute the repository-owned census profile through the same external recorder under command
+identity `predispatch-census`:
 
 ```bash
-node <<'NODE'
-const fs = require("fs");
-const crypto = require("crypto");
-const path = require("path");
-const assert = require("assert/strict");
-
-const graphBytes = fs.readFileSync(
-  "docs/specs/ADR-046-implementation-graph.json",
-);
-const workItemBytes = fs.readFileSync("docs/specs/ADR-046-work-items.json");
-const graph = JSON.parse(graphBytes);
-const workItems = JSON.parse(workItemBytes);
-const ledgerPath = process.env.D2B_W6_DISPATCH_LEDGER;
-assert(ledgerPath, "set D2B_W6_DISPATCH_LEDGER to the external ledger");
-assert(path.isAbsolute(ledgerPath));
-assert(
-  !ledgerPath.startsWith(process.cwd() + "/"),
-  "dispatch ledger must be outside the git working tree",
-);
-const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
-const tasks = fs.readFileSync(
-  "specs/001-adr046-d2b3-completion/tasks.md",
-  "utf8",
-);
-const match = tasks.match(
-  /```json\n(\{\n  "artifact_kind": "d2b-feature-local-task-contract"[\s\S]*?\n\})\n```/,
-);
-assert(match, "feature-local task contract must exist");
-const local = JSON.parse(match[1]);
-const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
-assert.equal(
-  sha256(workItemBytes),
-  local.local_to_manifest_shared_writer_handoffs.work_items_sha256,
-);
-assert.equal(
-  sha256(graphBytes),
-  local.local_to_manifest_shared_writer_handoffs.implementation_graph_sha256,
-);
-
-const w6 = graph.nodes.filter(
-  (node) => node.kind === "work-item" && node.wave === "W6",
-);
-assert.equal(graph.nodes.length, 600);
-assert.equal(graph.edges.length, 1962);
-assert.equal(workItems.items.length, 545);
-assert.equal(w6.length, 258);
-const manifestGroups = new Set(w6.map((node) => node.parallelGroup));
-assert.equal(manifestGroups.size, 29);
-assert.equal(local.task_ids.length, 7);
-assert.equal(258 + local.task_ids.length, 265);
-assert.deepEqual(
-  [...new Set(Object.keys(local.manifest_group_foundations))].sort(),
-  [...manifestGroups].sort(),
-  "all 29 manifest groups must have an exact foundation mapping",
-);
-for (const foundations of Object.values(local.manifest_group_foundations)) {
-  assert.deepEqual(foundations, ["T606", "T607", "T608", "T609"]);
-}
-const knownHandoffOwners = new Set([
-  ...local.task_ids,
-  ...w6.map((node) => node.id),
-]);
-for (const handoff of local.local_to_manifest_shared_writer_handoffs.handoffs) {
-  assert(handoff.paths.length > 0);
-  assert(handoff.order.length > 1);
-  for (const owner of handoff.order) {
-    assert(knownHandoffOwners.has(owner), `unknown handoff owner ${owner}`);
-  }
-}
-for (const group of Object.values(
-  local.local_to_manifest_shared_writer_handoffs.scaffold_handoffs
-)) {
-  assert(manifestGroups.has(group), `unknown scaffold handoff group ${group}`);
-}
-
-assert.equal(ledger.artifact_kind, local.dispatch_ledger_contract.artifact_kind);
-assert.equal(ledger.schema_version, local.dispatch_ledger_contract.schema_version);
-const requiredGroups = new Set([
-  ...manifestGroups,
-  ...local.dispatch_ledger_contract.local_group_ids,
-]);
-assert.equal(requiredGroups.size, 36);
-assert.deepEqual(
-  [...new Set(ledger.entries.map((entry) => entry.group))].sort(),
-  [...requiredGroups].sort(),
-  "dispatch ledger must contain exactly the 36 closed groups",
-);
-for (const entry of ledger.entries) {
-  for (const field of local.dispatch_ledger_contract.entry_required_fields) {
-    assert(Object.hasOwn(entry, field), `${entry.group} missing ${field}`);
-  }
-  assert(local.dispatch_ledger_contract.states.includes(entry.state));
-  if (entry.state === "NotLaunched") {
-    assert.equal(entry.dispatchId, null);
-    assert.deepEqual(entry.completionEvidenceIds, []);
-  }
-}
-const launched = ledger.entries.filter((entry) => entry.state !== "NotLaunched");
-assert.deepEqual(
-  launched,
-  [],
-  "derive pre-T221 launch state from the external ledger and require none",
-);
-
-const firstReady = local.task_ids.filter((id) => {
-  const dependencies = local.required_local_dependencies[id] || [];
-  return dependencies.every((dependency) => {
-    if (dependency === "T221") return true;
-    const groupByTask = {
-      T606: "feature-local:w6-shared-prep",
-      T607: "feature-local:w6-core-control-foundations",
-      T608: "feature-local:w6-storage-authority-foundations",
-      T609: "feature-local:w6-audit-telemetry-foundations",
-      T604: "feature-local:w6-operator-acceptance",
-      T479: "feature-local:w6-converge",
-      T480: "feature-local:w6-close",
-    };
-    const entry = ledger.entries.find((item) => item.group === groupByTask[dependency]);
-    return entry && entry.state === "Completed";
-  });
-});
-assert.deepEqual(firstReady, ["T606"]);
-
-const stateById = new Map(
-  workItems.items.map((item) => [item.workItemId, item.implementationState]),
-);
-assert(
-  w6.every((node) => stateById.get(node.id) === "Planned"),
-  "manifest state census must remain Planned before T221; launch state comes from the ledger",
-);
-assert.deepEqual(
-  [...local.unchecked_task_ids].sort(),
-  [...local.task_ids].sort(),
-  "all seven local tasks must remain unchecked before T221",
-);
-
-console.log(JSON.stringify({
-  graphNodes: graph.nodes.length,
-  graphEdges: graph.edges.length,
-  manifestWorkItemTotal: workItems.items.length,
-  manifestWorkItems: w6.length,
-  manifestGroups: new Set(w6.map((node) => node.parallelGroup)).size,
-  localTasks: local.task_ids.length,
-  postEntryRecords: w6.length + local.task_ids.length,
-  firstReadyLocalTask: firstReady,
-  launchedImplementationGroupsBeforeT221: launched.length,
-  dispatchLedger: ledgerPath,
-}));
-NODE
+cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave run-command-profile \
+  --profile predispatch-census \
+  "${SNAPSHOT_ARGS[@]}"
 ```
+
+The production profile invokes the repository-owned `delivery wave entry-census` runner. It
+validates the canonical auto-derived 600-node/1962-edge graph, 545 manifest items, 258 W6
+items, 29 manifest groups, seven local tasks, 36 ledger groups, 265 post-entry records,
+foundation map, one-path-one-order handoffs, exact SHA pins, all-Planned manifest entry
+state, all-unchecked local entry state, and T606-only first readiness. Do not replace it with
+an inline script or caller-authored count.
 
 After the recorder writes all eight strict JSON records, rerun entry preparation with one
 repeated `--command-evidence PATH` per closed command identity. This call fresh-fetches and
@@ -383,50 +218,43 @@ This feature edit invalidates that binding. Generate new identities; do not reus
 them. A passing replacement T221 result authorizes T606 only.
 
 After the replacement selected roster returns unanimous signoff with zero recommendations,
-write one external plan-approval receipt matching `plan_approval_receipt_contract` in
-`tasks.md`. The writer must create a same-directory temporary file, write canonical JSON,
-fsync the file, rename it over the destination, and fsync the parent directory. The receipt's
-durable-write evidence digest binds the recorder result for that sequence.
-`featurePlanMaterialSha256` uses the contract's status-normalized plan-material digest, so
-later status-only projections do not change it. Validate the receipt before changing T221
-status or dispatching T606:
+use the production writer. It consumes the entry snapshot and entry-plan selection, the
+completion-bound lifecycle approval, and exactly one seat record for every selected roster
+seat. It writes the complete receipt schema, including `lifecycleApproval` and `seatRecords`,
+using same-directory temp/write/fsync/rename/parent-fsync durability:
 
 ```bash
-node <<'NODE'
-const fs = require("fs");
-const path = require("path");
-const assert = require("assert/strict");
+export D2B_W6_PLAN_APPROVAL_RECEIPT="$ENTRY_STATE_DIR/plan-approval.json"
+ENTRY_SNAPSHOT_PATH="$STATE_DIR/ADR046/adr046w6/<entry-candidate-id>/snapshot.json"
+ENTRY_SELECTION_PATH="<completion-bound-entry-plan-selection.json>"
+LIFECYCLE_APPROVAL_PATH="<completion-bound-lifecycle-approval.json>"
+SEAT_RECORD_DIR="<completion-bound-entry-plan-seat-record-directory>"
 
-const receiptPath = process.env.D2B_W6_PLAN_APPROVAL_RECEIPT;
-assert(receiptPath, "set D2B_W6_PLAN_APPROVAL_RECEIPT");
-assert(path.isAbsolute(receiptPath));
-assert(!receiptPath.startsWith(process.cwd() + "/"));
+SEAT_RECORD_ARGS=()
+while IFS= read -r SEAT_RECORD_PATH; do
+  SEAT_RECORD_ARGS+=(--seat-record "$SEAT_RECORD_PATH")
+done < <(find "$SEAT_RECORD_DIR" -maxdepth 1 -type f -name '*.json' -print | LC_ALL=C sort)
 
-const tasks = fs.readFileSync(
-  "specs/001-adr046-d2b3-completion/tasks.md",
-  "utf8",
-);
-const local = JSON.parse(tasks.match(
-  /```json\n(\{\n  "artifact_kind": "d2b-feature-local-task-contract"[\s\S]*?\n\})\n```/,
-)[1]);
-const contract = local.plan_approval_receipt_contract;
-const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave entry-plan-approval write \
+  --snapshot "$ENTRY_SNAPSHOT_PATH" \
+  --selection "$ENTRY_SELECTION_PATH" \
+  --lifecycle-approval "$LIFECYCLE_APPROVAL_PATH" \
+  "${SEAT_RECORD_ARGS[@]}" \
+  --receipt "$D2B_W6_PLAN_APPROVAL_RECEIPT" \
+  --state-dir "$STATE_DIR"
 
-assert.equal(receipt.artifactKind, contract.artifact_kind);
-assert.equal(receipt.schemaVersion, contract.schema_version);
-for (const field of contract.required_fields) {
-  assert(Object.hasOwn(receipt, field), `receipt missing ${field}`);
-}
-for (const [field, value] of Object.entries(contract.required_values)) {
-  assert.deepEqual(receipt[field], value);
-}
-assert.equal(receipt.signoffCount, receipt.selectedRoster.length);
-assert(receipt.selectedRoster.length > 0);
-assert.match(receipt.durableWriteEvidenceSha256, /^[0-9a-f]{64}$/);
-console.log("durable-plan-approval-receipt=valid");
-NODE
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave entry-plan-approval verify \
+  --snapshot "$ENTRY_SNAPSHOT_PATH" \
+  --selection "$ENTRY_SELECTION_PATH" \
+  --receipt "$D2B_W6_PLAN_APPROVAL_RECEIPT" \
+  --state-dir "$STATE_DIR"
 ```
 
+Replace angle-bracket values only with paths emitted by the production entry lifecycle; do
+not construct or edit approval/seat JSON. `featurePlanMaterialSha256` uses the typed
+status-normalized material digest, so only classified status projections normalize.
 The structured command records, dispatch ledger, observed run metadata, and durable plan
 receipt provide candidate correlation, completeness, uniqueness, and crash-safe process
 state. They are not authentication, proof of reviewer identity, or a security boundary.
@@ -728,7 +556,57 @@ and every group `NotLaunched`, its dependency computation yields T606 only. Afte
 `Completed`, it yields T607, T608, and T609. Every manifest group requires all four through
 `manifest_group_foundations` plus graph prerequisites. The 258 manifest work items are only
 the manifest body; four foundation groups and three acceptance/close groups make 36
-post-entry groups and 265 active post-entry work records.
+post-entry groups and 265 active post-entry work records. Before each dispatch cycle, use the
+public `delivery wave ready-set` stage. It reads the external ledger, canonical auto-derived
+graph, foundation/commit records, and repository-owned filesystem-capacity probe. It admits
+only the canonical maximal ready-group prefix whose declared reservations leave at least
+10 GiB free on the integration-worktree filesystem. Insufficient-capacity groups remain
+unlaunched and receive a typed disk-capacity blocker; never dispatch every logically ready
+group or a fixed agent count without this probe.
+
+Use only public lifecycle writers for group state. `ready-set` returns the capacity-admitted
+groups; `dispatch-transition` durably moves each selected group to `Dispatched`. After the
+group's exact candidate evidence passes, `completion-record write` creates the
+candidate-bound record and the transition writer may move it to `Completed`. Do not edit the
+ledger, checkbox, or completion JSON directly:
+
+```bash
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave ready-set \
+  --snapshot "$SNAPSHOT" \
+  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR"
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave dispatch-transition \
+  --snapshot "$SNAPSHOT" \
+  --group "$GROUP" \
+  --to Dispatched \
+  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --state-dir "$STATE_DIR"
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave completion-record write \
+  --snapshot "$SNAPSHOT" \
+  --group "$GROUP" \
+  --completion-evidence "$COMPLETION_EVIDENCE_SET" \
+  --record "$COMPLETION_RECORD" \
+  --state-dir "$STATE_DIR"
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave dispatch-transition \
+  --snapshot "$SNAPSHOT" \
+  --group "$GROUP" \
+  --to Completed \
+  --completion-record "$COMPLETION_RECORD" \
+  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --state-dir "$STATE_DIR"
+```
+
+`Completed` is not `Merged`. Only the post-merge production `accepted-commit write` stage
+validates the exact commit/tree and integration ancestry and permits the Merged/checkbox
+projection.
 
 ### 3. Inner loop while implementing
 
@@ -887,7 +765,8 @@ if jq -e 'any(.[]; .type == "merge_queue")' \
     fail "the merge queue check is not required by effective strict v3 protection"
 fi
 
-SELECTION="$ROUND/selection.json"
+FINAL_PLAN_SELECTION="$ROUND/selection.json"
+WORK_SELECTION="$ROUND/work-selection.json"
 LEDGER="$ROUND/discovery-ledger.json"
 RESPONSES="$ROUND/responses.json"
 VERIFICATION_RESULTS="$ROUND/verification-results.json"
@@ -928,11 +807,18 @@ jq -e --slurpfile snapshot "$STATE_DIR/$SNAPSHOT" '
   .candidate_id == $snapshot[0].candidate_id and
   .content_id == $snapshot[0].content_id and
   .snapshot_sha256 == $snapshot[0].snapshot_sha256
-' "$SELECTION"
+' "$FINAL_PLAN_SELECTION"
+
+"${X[@]}" binding-work-selection \
+  --snapshot "$SNAPSHOT" \
+  --plan-selection "$FINAL_PLAN_SELECTION" \
+  --output "$WORK_SELECTION" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR"
 
 PANEL_REQUEST_RESULT="$("${X[@]}" panel-request \
   --snapshot "$SNAPSHOT" \
-  --selection "$SELECTION" \
+  --selection "$WORK_SELECTION" \
   --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR")"
 PANEL_REQUEST="$(printf '%s\n' "$PANEL_REQUEST_RESULT" | artifact_ref)"
@@ -948,10 +834,10 @@ while IFS= read -r seat; do
     "$(jq -er --arg definition "$definition" \
       '.artifact_sha256[$definition]' "$COMPLETION")" ||
     fail "$definition is not bound by the round completion marker"
-done < <(jq -er '.roster[]' "$SELECTION")
+done < <(jq -er '.roster[]' "$WORK_SELECTION")
 
 jq -e -n \
-  --slurpfile selection "$SELECTION" \
+  --slurpfile selection "$WORK_SELECTION" \
   --slurpfile dispatch "$DISPATCH_BINDING" \
   --slurpfile completion "$COMPLETION" \
   --slurpfile runs "$TASK_RUNS" '
@@ -1011,7 +897,7 @@ jq -e -n \
 mv -- "$OBSERVED.tmp" "$OBSERVED"
 
 node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
-  --selection "$SELECTION" \
+  --selection "$WORK_SELECTION" \
   --ledger "$LEDGER" \
   --responses "$RESPONSES" \
   --verification-results "$VERIFICATION_RESULTS" \
@@ -1124,6 +1010,16 @@ git fetch origin "$TARGET_BRANCH"
 test "$(git rev-parse "${MERGE_COMMIT}^{tree}")" = \
   "$(git rev-parse "${HEAD_OID}^{tree}")"
 
+COMPLETION_RECORD_DIR="$STATE_DIR/ADR046/adr046w6/group-completion"
+ACCEPTED_COMMIT_RESULT="$("${X[@]}" accepted-commit write \
+  --snapshot "$SNAPSHOT" \
+  --merge-commit "$MERGE_COMMIT" \
+  --completion-record-directory "$COMPLETION_RECORD_DIR" \
+  --dispatch-ledger "$D2B_W6_DISPATCH_LEDGER" \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --state-dir "$STATE_DIR")"
+ACCEPTED_COMMIT="$(printf '%s\n' "$ACCEPTED_COMMIT_RESULT" | artifact_ref)"
+
 SEAL_RESULT="$("${X[@]}" seal \
   --snapshot "$SNAPSHOT" \
   --repo "$REPOSITORY=$CHECKOUT_ROOT" \
@@ -1137,9 +1033,11 @@ MERGE_TARGET_RESULT="$("${X[@]}" merge-target \
   --state-dir "$STATE_DIR")"
 MERGE_TARGET="$(printf '%s\n' "$MERGE_TARGET_RESULT" | artifact_ref)"
 
-MERGE_ELIGIBILITY_RESULT="$("${X[@]}" merge-eligibility \
+MERGE_ELIGIBILITY_RESULT="$("${X[@]}" merge-eligibility-evaluate-and-record \
   --seal "$SEAL" \
   --target "$MERGE_TARGET" \
+  --accepted-commit "$ACCEPTED_COMMIT" \
+  --record "$STATE_DIR/ADR046/adr046w6/merge-eligibility-evaluation.json" \
   --repo "$REPOSITORY=$CHECKOUT_ROOT" \
   --state-dir "$STATE_DIR")"
 MERGE_ELIGIBILITY="$(printf '%s\n' "$MERGE_ELIGIBILITY_RESULT" | artifact_ref)"
@@ -1150,6 +1048,7 @@ printf '%s\n' \
   "$EVIDENCE_LOCAL_HOST" \
   "$PANEL_REQUEST" \
   "$PANEL_RECORDS" \
+  "$ACCEPTED_COMMIT" \
   "$SEAL" \
   "$MERGE_TARGET" \
   "$MERGE_ELIGIBILITY"
@@ -1160,13 +1059,15 @@ through `--snapshot`, so the delivery CLI has no separate `--evidence` option. E
 above still captures its emitted artifact reference and repeats the same valid repository
 mapping.
 
-The order is deliberate: final nonbinding approval, final snapshot and selection, the sole
-request, observed process metadata, records and attestation, protected PR checks, merge,
-seal, merge-target registration, and merge eligibility. `seal` refuses until every
-current-wave item is `Merged`; moving it before the PR merge recreates the cycle this
-workflow is designed to prevent. The merge-target input is captured from the green PR
-immediately before merge, then registered after the seal so the post-merge commands consume
-the exact pre-merge head and check state.
+The order is deliberate: distinct final-plan approval, final F6 snapshot, distinct
+binding-work selection, the sole request, observed process metadata, records and attestation,
+protected PR checks, merge, accepted-commit recording and Completed-to-Merged projection,
+seal, merge-target registration, then merge-eligibility evaluation and durable recording.
+`seal` refuses until accepted-commit records project every current-wave item to Merged;
+moving it before the PR merge recreates the cycle this workflow is designed to prevent.
+The merge-target input is captured from the green PR immediately before merge, then
+registered after the seal so post-merge commands consume the exact pre-merge head/check
+state. Eligibility success is never pre-created.
 R12 and R55 do not reorder those stages. The Wave 5 historical disposition does not relax
 them for Wave 6.
 

@@ -131,6 +131,15 @@ is read-only historical planning evidence and is not reconstructed.
 
 <!-- RETIRED-READONLY-END -->
 
+**Current system-core state**: commit
+`ee1a1b47293dd93f65ca23e916e3ac2918931b76` has already accepted both paired normative
+specifications at Version 2 and assigned their implementation, tests, API snapshots, and
+reference reconciliation exclusively to W6 `ADR046-system-core-001` / T423. The committed
+Rust enum and production status path still lack `SystemCoreHost`/`SystemCoreUser` and the
+mandatory exactly-one pair, so the work item remains `Planned`; no feature prose may claim
+the implementation landed. T423 implements the accepted Version 2 contract and does not bump
+those specs again.
+
 ## Clarifications
 
 ### Session 2026-07-29

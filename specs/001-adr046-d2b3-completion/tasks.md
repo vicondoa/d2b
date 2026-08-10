@@ -188,7 +188,9 @@ below is the sole feature authority for cross-provider acceptance coordination.
     ],
     "T479": [
       "operator-nix-activation-cleanup",
-      "w6-cloud-hypervisor-guest-acceptance"
+      "w6-cloud-hypervisor-guest-acceptance",
+      "w6-final-cargo-locks",
+      "w6-changelog-fold"
     ],
     "T480": [
       "w6-binding-panel-unanimous",
@@ -331,6 +333,23 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "heavy-gate-acquire",
       "predispatch-census"
     ],
+    "profile_runner": "delivery wave run-command-profile --profile <closed-id>",
+    "command_profiles": {
+      "focused-guard-list": ["cargo", "test", "--manifest-path", "packages/Cargo.toml", "-p", "xtask", "delivery::work_item_state::tests", "--", "--list"],
+      "focused-guard-ignored-list": ["cargo", "test", "--manifest-path", "packages/Cargo.toml", "-p", "xtask", "delivery::work_item_state::tests", "--", "--list", "--ignored"],
+      "focused-guard-run": ["cargo", "test", "--manifest-path", "packages/Cargo.toml", "-p", "xtask", "delivery::work_item_state::tests", "--", "--nocapture"],
+      "gate0-test-drift": ["make", "test-drift"],
+      "test-policy": ["make", "test-policy"],
+      "test-unit": ["make", "test-unit"],
+      "heavy-gate-acquire": ["cargo", "run", "--quiet", "--manifest-path", "packages/Cargo.toml", "-p", "xtask", "--", "heavy-gate", "--", "true"],
+      "predispatch-census": ["cargo", "run", "--quiet", "--manifest-path", "packages/Cargo.toml", "-p", "xtask", "--", "delivery", "wave", "entry-census", "--program", "ADR046", "--wave", "adr046w6"]
+    },
+    "layer1_membership_for_test_unit": [
+      "test-flake",
+      "test-nix-unit",
+      "test-runtime-ledger"
+    ],
+    "argv_rule": "production profile runner owns argv; evidence argv must exactly equal the selected closed profile and caller-supplied replacement argv is refused",
     "focused_fields": ["discoveredTests", "ignoredTests", "skipMatches"],
     "result_values": ["passed", "failed"],
     "raw_output_persisted_in_git": false,
@@ -343,6 +362,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
     "artifact_kind": "d2b-feature-local/plan-approval",
     "schema_version": 1,
     "required_fields": [
+      "artifactKind",
+      "schemaVersion",
       "program",
       "wave",
       "entryBaseOid",
@@ -358,7 +379,9 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "recommendationCount",
       "result",
       "durableWriteEvidenceSha256",
-      "approvedAtUnix"
+      "approvedAtUnix",
+      "lifecycleApproval",
+      "seatRecords"
     ],
     "required_values": {
       "program": "ADR046",
@@ -366,6 +389,24 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "recommendationCount": 0,
       "result": "approved"
     },
+    "lifecycle_approval_fields": [
+      "artifactKind",
+      "schemaVersion",
+      "lifecycleId",
+      "phase",
+      "candidateId",
+      "contentId",
+      "snapshotSha256",
+      "selectionSha256",
+      "approved"
+    ],
+    "lifecycle_approval_required_values": {
+      "phase": "plan",
+      "approved": true
+    },
+    "seat_record_rule": "seatRecords is an exact key map for selectedRoster; every value is candidate/selection-bound, has signoff true, recommendations [], and carries its completion-bound recordSha256",
+    "production_writer": "delivery wave entry-plan-approval write",
+    "production_verifier": "delivery wave entry-plan-approval verify",
     "feature_plan_material_digest": "SHA-256 over the ordered FEATURE_DIR files with only entry_plan_invalidation_policy.status_only_updates normalized to fixed placeholders; requirements, machine contract, dependencies, ownership, validation, readiness, census, and guards remain byte-significant",
     "durable_write": [
       "create same-directory temporary file",
@@ -376,6 +417,147 @@ below is the sole feature authority for cross-provider acceptance coordination.
     ],
     "correlation_only": true,
     "not_authentication": true
+  },
+  "selection_stage_contract": {
+    "entry": {
+      "snapshot": "entry snapshot produced by ordinary snapshot after entry preparation",
+      "selectionStage": "entry-plan",
+      "approval": "plan_approval_receipt_contract",
+      "authorizes": ["feature-local:w6-shared-prep"],
+      "cannot_substitute": ["final-plan", "binding-work"]
+    },
+    "final_plan": {
+      "snapshot": "distinct frozen F6 snapshot after all implementation and exact-candidate validation",
+      "selectionStage": "final-plan",
+      "approval": "unanimous nonbinding Discover-Fix-Verify plan lifecycle",
+      "authorizes": ["binding-work selection creation"],
+      "cannot_reuse": ["entry snapshot", "entry-plan selection or seat records"]
+    },
+    "binding_work": {
+      "snapshot": "the unchanged frozen F6 snapshot approved by final-plan",
+      "selectionStage": "binding-work",
+      "approval": "exactly one candidate-bound work selection and panel request",
+      "cannot_reuse": ["entry-plan selection", "final-plan selection artifact"],
+      "content_change_after_selection": "terminally invalidates the candidate"
+    }
+  },
+  "public_lifecycle_stages": [
+    "entry-prepare",
+    "command-profile-run",
+    "entry-census",
+    "entry-snapshot",
+    "entry-plan-approval-write",
+    "entry-plan-approval-verify",
+    "dispatch-transition",
+    "completion-record-write",
+    "accepted-commit-write",
+    "ready-set",
+    "final-snapshot",
+    "final-plan-selection",
+    "binding-work-selection",
+    "merge-eligibility-evaluate-and-record"
+  ],
+  "candidate_completion_and_commit_contract": {
+    "completion_artifact_kind": "d2b-feature-local/group-completion",
+    "accepted_commit_artifact_kind": "d2b-feature-local/accepted-commit",
+    "schema_version": 1,
+    "completion_required_fields": [
+      "group",
+      "candidateId",
+      "contentId",
+      "snapshotSha256",
+      "headOid",
+      "completionEvidenceIds",
+      "completionEvidenceSetSha256",
+      "completedAtUnix"
+    ],
+    "accepted_commit_required_fields": [
+      "group",
+      "candidateId",
+      "contentId",
+      "snapshotSha256",
+      "acceptedCommitOid",
+      "acceptedTreeOid",
+      "integrationHeadOid",
+      "completionRecordSha256",
+      "acceptedAtUnix"
+    ],
+    "binding": "completion and accepted-commit records bind the same candidate/group and the accepted commit/tree must be the byte-identical reviewed group result in integration ancestry",
+    "completed_to_merged_projection": "Completed is pre-merge only; project Merged and check the feature task row only after the production accepted-commit writer validates the completion record, exact commit/tree, and integration ancestry",
+    "checkbox_is_authority": false
+  },
+  "canonical_graph_derivation_contract": {
+    "source": "docs/specs/ADR-046-implementation-graph.json from the candidate checkout",
+    "mode": "automatic for ADR046 Wave 6 entry, final, panel, seal, and eligibility material",
+    "manual_edge_flags_allowed": false,
+    "derived_inputs": [
+      "all W6 graph nodes",
+      "all typed W6 dependency and file-overlap edges",
+      "29 parallel groups",
+      "manifest_group_foundations",
+      "local completion dependencies",
+      "local-to-manifest writer handoffs"
+    ],
+    "candidate_binding": "canonical sorted derived graph bytes are a typed material-digest input"
+  },
+  "typed_plan_material_digest_contract": {
+    "domain": "d2b-feature-local-plan-material-v1",
+    "ordered_input_types": [
+      "feature normative artifact bytes",
+      "feature machine-contract bytes",
+      "canonical auto-derived graph bytes",
+      "work-item manifest bytes",
+      "shared-writer handoff bytes",
+      "command-profile bytes"
+    ],
+    "status_only_types": [
+      "task checkbox token",
+      "ledger state projection",
+      "evidence digest/byte-count/locator projection",
+      "dispatch/validation/merge/seal timestamp projection"
+    ],
+    "normalization": "normalize only parsed fields classified as status_only_types to typed fixed sentinels; never replace free-form text and never normalize requirements, dependencies, owners, destinations, validation, handoffs, command profiles, graph, selection stages, or guard predicates"
+  },
+  "merge_eligibility_record_contract": {
+    "artifact_kind": "d2b-delivery/merge-eligibility-evaluation",
+    "schema_version": 1,
+    "required_fields": [
+      "candidateId",
+      "contentId",
+      "snapshotSha256",
+      "sealSha256",
+      "mergeTargetSha256",
+      "evaluatedAtUnix",
+      "eligible",
+      "evaluationSha256"
+    ],
+    "writer_order": "evaluate every eligibility predicate first, then durably write the immutable result; no pre-created success record",
+    "required_result": {"eligible": true},
+    "completion_evidence_id": "w6-merge-eligibility"
+  },
+  "disk_capacity_ready_set_contract": {
+    "probe": "repository-owned filesystem-capacity probe at the integration worktree filesystem",
+    "minimum_free_after_reservation_bytes": 10737418240,
+    "group_reservation_source": "closed per-group disk reservation table emitted by the dispatch-ledger writer",
+    "selection_order": "canonical ready-group order filtered by graph/foundation readiness, then admit a maximal prefix whose summed reservations retain the minimum free floor",
+    "insufficient_capacity": "leave group NotLaunched and record Blocked with disk-capacity remediation; never launch a fixed number of agents"
+  },
+  "changelog_contract": {
+    "required_for": [
+      "T606",
+      "T607",
+      "T608",
+      "T609",
+      "every manifest group that changes code, schema, option, CLI, behavior, security posture, or migration"
+    ],
+    "fragment_rule": "each concurrent group owns a unique changelog.d/spec001w6-<canonical-group>.md fragment; no slice edits CHANGELOG.md",
+    "required_content": [
+      "operator-visible Added/Changed/Removed/Security result",
+      "migration or explicit no-migration statement",
+      "breaking schema/option/CLI treatment",
+      "system-core paired-spec Version 2 implementation status when T423 lands"
+    ],
+    "final_owner": "T479 runs changelog-fold before freezing F6; T480 proves folded release treatment and no unowned fragment drift"
   },
   "entry_plan_invalidation_policy": {
     "boundary": "first Dispatched transition in the external dispatch ledger",
@@ -465,6 +647,18 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "ADR046-vl-013"
     ]
   },
+  "t604_manifest_dependency_readiness": {
+    "source": "required_manifest_dependencies.T604 resolved through canonical auto-derived graph",
+    "requirements": [
+      "every listed workItemId resolves exactly once",
+      "every owning manifest group is Completed in the external ledger",
+      "every owning group has a candidate-bound completion record",
+      "every completion record has a matching production accepted-commit record in integration ancestry",
+      "every accepted commit is an ancestor of the T604 candidate head",
+      "all four local foundations are Merged through accepted-commit projection"
+    ],
+    "checkbox_or_manifest_planned_state_alone_is_sufficient": false
+  },
   "required_manifest_dependency_queries": {
     "T479": {
       "artifact": "docs/specs/ADR-046-implementation-graph.json",
@@ -478,10 +672,10 @@ below is the sole feature authority for cross-provider acceptance coordination.
   },
   "shared_file_order": {
     "Makefile": ["T606", "ADR046-ch-001", "T604"],
-    "packages/Cargo.toml": ["T606"],
-    "packages/Cargo.lock": ["T606"],
-    "packages/d2b-priv-broker/Cargo.toml": ["T606"],
-    "packages/d2b-priv-broker/Cargo.lock": ["T606"],
+    "packages/Cargo.toml": ["T606", "T479"],
+    "packages/Cargo.lock": ["T606", "T479"],
+    "packages/d2b-priv-broker/Cargo.toml": ["T606", "T479"],
+    "packages/d2b-priv-broker/Cargo.lock": ["T606", "T479"],
     "flake.nix": ["T606"],
     "packages/d2b-contracts/src/broker_wire.rs": ["T606"],
     "packages/d2b-priv-broker/src/runtime.rs": ["T606"],
@@ -490,9 +684,10 @@ below is the sole feature authority for cross-provider acceptance coordination.
   },
   "local_to_manifest_shared_writer_handoffs": {
     "derivation_source": "current candidate docs/specs/ADR-046-work-items.json destination fields plus docs/specs/ADR-046-implementation-graph.json W6 nodes",
-    "work_items_sha256": "d2665b18e72f7c9cff3c62a336d7626e4e7576b99c7f9b04790ea24c6b9c61f0",
-    "implementation_graph_sha256": "9adc167e7c81e04e11b70b05025dfea4c8c5fb18f2bae88d488d66808af99064",
-    "completeness_rule": "expand current manifest destination path expressions; every intersection with a T606-T609 owned path must appear in exactly one ordered handoff, every order endpoint must resolve, and every T606 scaffold root must map to exactly one W6 manifest group",
+    "work_items_sha256": "aac0b8ffb75a8450217b37df7e14b0bbeae567cf1d6489c1cd83b46aa8a42c43",
+    "implementation_graph_sha256": "12b709cbd3d847313ce59005c4ca073e04a4ea82ba3f99c80c1772b7fc2709cc",
+    "sha_pins_status": "pending final source/generated sibling regeneration; T221 entry and every dispatch remain blocked until d2b-spec-edit replaces both placeholders with measured final digests",
+    "completeness_rule": "expand current manifest destination path expressions; every local/shared path or owned prefix appears in exactly one path order, every order is nonempty and deterministic, every endpoint resolves, every T606 scaffold root maps to exactly one W6 manifest group, volume-local has one complete topological order, T609/broker audit paths have one order each, and both Cargo locks terminate at T479",
     "handoffs": [
       {
         "surface": "shared broker contract, privilege, runtime, dispatch, and module registration",
@@ -506,9 +701,7 @@ below is the sole feature authority for cross-provider acceptance coordination.
           "packages/d2b-priv-broker/src/runtime.rs",
           "packages/d2b-priv-broker/src/ops/mod.rs",
           "packages/d2bd/src/lib.rs",
-          "packages/d2bd/src/wire.rs",
-          "packages/d2b/src/dispatch.rs",
-          "packages/d2b/src/lib.rs"
+          "packages/d2bd/src/wire.rs"
         ],
         "order": [
           "T606",
@@ -529,6 +722,16 @@ below is the sole feature authority for cross-provider acceptance coordination.
           "ADR046-activation-001",
           "ADR046-transport-unix-006"
         ]
+      },
+      {
+        "surface": "workspace manifests and final Cargo lock ownership",
+        "paths": [
+          "packages/Cargo.toml",
+          "packages/Cargo.lock",
+          "packages/d2b-priv-broker/Cargo.toml",
+          "packages/d2b-priv-broker/Cargo.lock"
+        ],
+        "order": ["T606", "T479"]
       },
       {
         "surface": "flake and site options",
@@ -573,6 +776,26 @@ below is the sole feature authority for cross-provider acceptance coordination.
         "order": ["T608", "ADR046-vvfs-006"]
       },
       {
+        "surface": "volume-local implementation root",
+        "paths": ["packages/d2b-provider-volume-local/"],
+        "order": [
+          "T608",
+          "ADR046-vl-001",
+          "ADR046-vl-002",
+          "ADR046-vl-009",
+          "ADR046-vl-010",
+          "ADR046-vl-003",
+          "ADR046-vl-005",
+          "ADR046-vl-011",
+          "ADR046-vl-012",
+          "ADR046-vl-004",
+          "ADR046-vl-006",
+          "ADR046-vl-007",
+          "ADR046-vl-013",
+          "ADR046-vl-008"
+        ]
+      },
+      {
         "surface": "shared ResourceType option module",
         "paths": ["nixos-modules/options-resources.nix"],
         "order": [
@@ -602,6 +825,19 @@ below is the sole feature authority for cross-provider acceptance coordination.
         "surface": "production resource runtime audit wiring",
         "paths": ["packages/d2bd/src/resource_runtime.rs"],
         "order": ["T609", "ADR046-system-core-001"]
+      },
+      {
+        "surface": "T609 single-owner production audit wiring",
+        "paths": [
+          "packages/d2b-audit/",
+          "packages/d2b-resource-store-redb/src/audit.rs",
+          "packages/d2b-resource-store-redb/tests/transactional_audit.rs",
+          "packages/d2bd/src/daemon_audit.rs",
+          "packages/d2b-core-controller/src/authz_audit.rs",
+          "packages/d2b-bus/src/audit.rs",
+          "packages/d2b-session/src/audit.rs"
+        ],
+        "order": ["T609"]
       }
     ],
     "scaffold_handoffs": {
@@ -659,7 +895,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-provider-shell-terminal/",
       "packages/d2b-provider-transport-azure-relay/",
       "packages/d2b-provider-transport-unix/",
-      "packages/d2b-provider-transport-vsock/"
+      "packages/d2b-provider-transport-vsock/",
+      "changelog.d/spec001w6-T606.md"
     ],
     "T607": [
       "packages/d2b-contracts/src/v3/zone.rs",
@@ -675,7 +912,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b/tests/common/mod.rs",
       "packages/d2b/src/context.rs",
       "packages/d2b/src/zone.rs",
-      "nixos-modules/options-zones.nix"
+      "nixos-modules/options-zones.nix",
+      "changelog.d/spec001w6-T607.md"
     ],
     "T608": [
       "packages/d2b-contracts/src/v3/volume.rs",
@@ -704,7 +942,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2bd/src/volume_effect_adapter.rs",
       "packages/d2bd/src/network_effect_adapter.rs",
       "packages/d2bd/src/system_manager_effect_adapter.rs",
-      "packages/d2b-provider/src/share_adapter.rs"
+      "packages/d2b-provider/src/share_adapter.rs",
+      "changelog.d/spec001w6-T608.md"
     ],
     "T609": [
       "packages/d2b-audit/src/hash_chain.rs",
@@ -726,7 +965,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "packages/d2b-telemetry/src/emitter.rs",
       "packages/d2b-telemetry/src/meter_registry.rs",
       "packages/d2b-telemetry/src/metric_label_policy.rs",
-      "packages/d2b-telemetry/src/redaction_guard.rs"
+      "packages/d2b-telemetry/src/redaction_guard.rs",
+      "changelog.d/spec001w6-T609.md"
     ],
     "T604": [
       "packages/d2b-contract-tests/tests/resource_operator_activation.rs",
@@ -737,6 +977,13 @@ below is the sole feature authority for cross-provider acceptance coordination.
       "tests/golden/delivery/host-generation-unit-census-case-ids.txt",
       "Makefile",
       "changelog.d/operator-resource-activation.md"
+    ],
+    "T479": [
+      "CHANGELOG.md",
+      "packages/Cargo.toml",
+      "packages/Cargo.lock",
+      "packages/d2b-priv-broker/Cargo.toml",
+      "packages/d2b-priv-broker/Cargo.lock"
     ]
   },
   "case_id_fixture_paths": [
@@ -1592,6 +1839,15 @@ host-mutation, caller-supplied identity, unbounded telemetry, non-durable audit,
 Host-global ownership prose. This rule corrects implementation choice; it does not edit or
 silently reinterpret the external dossier.
 
+**Changelog completion rule:** T606-T609 and every manifest group that changes code, schema,
+options, CLI, behavior, security posture, or migration owns a unique
+`changelog.d/spec001w6-<canonical-group>.md` fragment. Each fragment states operator-visible
+Added/Changed/Removed/Security behavior, migration or explicit no-migration treatment, and
+any breaking schema/option/CLI effect. T479 is the final `CHANGELOG.md` and Cargo-lock owner:
+it runs `changelog-fold`, verifies paired system-core Version 2 release treatment, and
+revalidates both workspace locks before F6. T480 rejects an unowned/unfolded fragment or
+post-freeze changelog/lock change.
+
 - [ ] T221 [US2] W6 HISTORICAL-PREDECESSOR GUARD + PLAN PANEL + ENTRY - before any Wave 6
   implementation lane is dispatched, fetch `origin/v3` and require the exact resolved
   `refs/remotes/origin/v3` commit as the clean entry base. Create the Wave 6 entry snapshot
@@ -2023,6 +2279,11 @@ T480 revalidates the closed predicates.
   This is a closed feature-local coordination/completion task, not a generated work-item.
   Depends on local entry gate T221 and every exact workItemId in
   `required_manifest_dependencies.T604` above. It must complete before local T479.
+  It is Ready only when the canonical graph resolves every listed ID, every owning manifest
+  group is ledger `Completed`, each has a candidate-bound completion record plus matching
+  accepted-commit record in the integration ancestry, and T606-T609 have projected to Merged
+  through that same record path. A checked row, Planned/Merged prose, or Completed ledger
+  state without an accepted commit is insufficient.
   `ADR046-ch-001 -> T604` serializes their distinct W6 `Makefile` acceptance-recipe edits.
 
   Sole owned files are
@@ -2142,6 +2403,12 @@ T480 revalidates the closed predicates.
 
 ### Group `wi:ADR-046-provider-system-core` (1 items)
 
+The paired provider-system-core and resources-zone-control specifications are already
+Accepted Version 2 at `ee1a1b47293dd93f65ca23e916e3ac2918931b76`. The generated work
+item and committed Rust implementation remain `Planned`/absent for the two enum variants,
+mandatory exactly-one handler pair, emitter/consumer path, focused tests, and API snapshots.
+T423 implements that accepted contract; it does not version the specs again.
+
 - [ ] T423 [US2] `ADR046-system-core-001` - complete manifest object; depends on
   `ADR046-provider-001`, `ADR046-core-001`, `ADR046-zone-control-001`, `ADR046-cli-009`,
   `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`,
@@ -2237,8 +2504,10 @@ T480 revalidates the closed predicates.
   That exact graph query is T479's complete and only manifest dependency set; no member is
   duplicated in `required_manifest_dependencies`. Generated authority supplies provider
   implementation only; this machine-readable local contract owns cross-provider acceptance
-  coordination. Reject
-  missing, extra, duplicate, unchecked, or unreachable rows. Reinvoke the production
+  coordination. Reject missing, extra, duplicate, unchecked, or unreachable rows. Every
+  required group must be ledger `Completed` with a candidate-bound completion record and a
+  matching accepted-commit record whose exact commit/tree is in the integration ancestry;
+  Completed or a checked task without that accepted commit is not Merged. Reinvoke the production
   historical-predecessor guard, converge and freeze clean F6, invoke T604's owned operator
   validator against exact F6, then run the Cloud Hypervisor and daemon-restart host cases
   together once on that same F6. Emit exactly one
@@ -2246,8 +2515,10 @@ T480 revalidates the closed predicates.
   `w6-cloud-hypervisor-guest-acceptance` record containing both Guest and FR-075 results,
   bound to F6 and its tree, and retain F6 only when both pass. T479 is the sole
   candidate-bound FR-075 executor/evidence owner and issues no binding request, attestation,
-  or seal.
-- [ ] T480 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 SINGLE BINDING WORK GATE + MERGE - depends on T479 including its exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records. Require HEAD and tree to equal clean F6; revalidate T221's exact-base unanimous plan-panel receipt, reviewed feature snapshot, accepted first-parent generic Constitution 3.1.0 integration ancestry, and exact retained Wave 5 inventory; and require the reviewed entry base to be an ancestor of every W6 implementation head. Reinvoke the production historical-predecessor guard and both closed acceptance predicates before panel request, merge, post-merge seal, and merge eligibility; missing, extra, changed, wrong-family, fake-boundary, skipped, empty, stale, or wrong-candidate evidence refuses each boundary. T480's work panel is not a substitute. Against F6, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F6 and returns to T479 before any binding panel request. Route the defect through scoped fixes, convergence, validation, and both acceptance lanes, then iterate delta/full-context `/d2b-panel-round plan` phase reviews until the replacement provisional candidate has N/N sign-off for the selected lifecycle roster with zero recommendations. Only that final candidate may receive W6's exactly one binding `/d2b-panel-round work` request: create the final snapshot and candidate-bound selection, issue the sole panel request, run `make-records`, and panel-attest N/N for the selected roster. Then require the already-open PR to preserve that exact head, wait for required CI, import the final evidence, capture the green merge-target input, and merge through the protected PR flow. The merge MUST preserve the successful candidate's tree byte-for-byte. Only after the merge may T480 seal the wave, register the captured merge target, and pass merge eligibility. A nonunanimous binding result permanently fails the W6 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator scope escalation; findings are not waived. From binding panel request through disposition, the final candidate and its tree are immutable. After the post-merge close passes, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue. The one-time predecessor disposition never substitutes for these Wave 6 gates.
+  or seal. It runs `changelog-fold`, verifies the expanded changelog contract, and creates the
+  distinct final F6 snapshot through canonical graph auto-derivation. The entry snapshot and
+  entry-plan selection are ineligible at this stage.
+- [ ] T480 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 SINGLE BINDING WORK GATE + MERGE - depends on T479 including its exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records. Require HEAD and tree to equal clean F6; revalidate T221's exact-base unanimous plan-panel receipt, reviewed feature snapshot, accepted first-parent generic Constitution 3.1.0 integration ancestry, and exact retained Wave 5 inventory; and require the reviewed entry base to be an ancestor of every W6 implementation head. Reinvoke the production historical-predecessor guard and both closed acceptance predicates before panel request, merge, post-merge seal, and merge eligibility; missing, extra, changed, wrong-family, fake-boundary, skipped, empty, stale, or wrong-candidate evidence refuses each boundary. T480's work panel is not a substitute. Against F6, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F6 and returns to T479 before any binding panel request. Route the defect through scoped fixes, convergence, validation, and both acceptance lanes, then create a new `final-plan` selection against T479's final F6 snapshot and iterate delta/full-context `/d2b-panel-round plan` phase reviews until that selection has N/N sign-off with zero recommendations. The entry-plan selection and seat records cannot substitute. Only the unchanged approved F6 may receive a distinct `binding-work` selection and W6's exactly one binding `/d2b-panel-round work` request; neither the entry-plan nor final-plan selection artifact may be reused. Issue the sole panel request, run `make-records`, and panel-attest N/N for the binding-work roster. Then require the already-open PR to preserve that exact head, wait for required CI, import the final evidence, capture the green merge-target input, and merge through the protected PR flow. The merge MUST preserve the successful candidate's tree byte-for-byte. Only after the merge may T480 seal the wave and register the captured merge target. Evaluate merge eligibility completely and only then durably write the candidate-bound `w6-merge-eligibility` evaluation record; a pre-created eligibility success is forbidden. The production accepted-commit writer then records the merged commit/tree, after which Completed groups may project to Merged and task checkboxes may change. A nonunanimous binding result permanently fails the W6 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator scope escalation; findings are not waived. From binding panel request through disposition, the final candidate and its tree are immutable. After the post-merge close passes, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue. The one-time predecessor disposition never substitutes for these Wave 6 gates.
 
 **Checkpoint**: W6 converged, panelled, merged to `v3`, sealed, rebased, and cleaned up.
 Full US1 completion is placed here, specifically after T479/T480 accept

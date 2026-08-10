@@ -187,6 +187,25 @@ status-only checkbox/completion/evidence/dispatch/merge/seal projections derived
 ledger do not invalidate it and cannot change plan authority. A later material change blocks
 affected groups until replacement plan material and approval receipt are accepted.
 
+The production entry-plan approval writer owns the complete strict receipt. In addition to
+entry/base/material/selection/ledger/evidence digests and unanimous counts, it embeds the
+completion-bound `lifecycleApproval` object and an exact `seatRecords` map for the selected
+roster; every seat is signed off with zero recommendations. The production writer and
+verifier, not a hand-authored JSON file, perform durable creation and validation. These
+records remain correlation/completeness evidence rather than authentication.
+
+Entry-plan selection, final-plan selection, and binding-work selection are non-interchangeable.
+Final F6 uses a distinct snapshot and final-plan selection. Its unchanged candidate receives
+a separate exactly-once binding-work selection. Every completed group needs a candidate-bound
+completion record and accepted-commit record before it projects to Merged. Merge eligibility
+is recorded only after evaluation succeeds.
+
+Candidate material auto-derives the canonical graph and hashes typed normative, machine-
+contract, graph, work-item, handoff, and command-profile inputs. Only parsed fields classified
+as status projections normalize to fixed sentinels; free-form text and every requirement,
+dependency, owner, destination, validation, handoff, profile, graph, selection stage, and
+guard remain byte-significant.
+
 The same production guard runs at Wave 6 snapshot/entry and is rechecked at panel request,
 seal, and merge eligibility. Missing, extra, partial, changed, unfetched, non-first-parent,
 non-ancestor, or substituted state refuses with remediation to restore the exact retained
