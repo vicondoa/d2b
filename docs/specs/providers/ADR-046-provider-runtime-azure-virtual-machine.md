@@ -5,12 +5,44 @@
 | Spec ID | `ADR-046-provider-runtime-azure-virtual-machine` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 3 |
+| Version | 4 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-runtime-azure-virtual-machine` crate owner, Guest contracts, Nix integration |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-primitive-resource-composition`, `ADR-046-componentsession-and-bus`, `ADR-046-resources-credential`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-network`, `ADR-046-nix-configuration`, `ADR-046-components-processes-and-sandbox`, `ADR-046-telemetry-audit-and-support`, `ADR-046-zone-routing`, `ADR-046-provider-state` |
-| Supersedes | Current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads |
+| Supersedes | Version 3 audit/telemetry fields where corrected below; current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads |
+
+## Prospective Wave 6 authority correction
+
+Version 4 consumes Version 3 of
+`ADR-046-telemetry-audit-and-support`:
+
+- The Provider emits bounded diagnostics and identity-free telemetry only. Core
+  operation/resource/session owners and typed effect boundaries emit
+  authoritative audit. Privileged effect intent is durable before release and
+  completion is durable exactly once; no effect audit is informational or
+  best-effort.
+- No observable metric, span, log, diagnostic, status detail, audit/export, or
+  support field contains raw Zone/Guest/resource/cloud-account identity,
+  ResourceRef, operation/credential/LRO/session handle, credential or
+  credential-derived value, ARM locator/URI, cgroup/unit/invocation field, or
+  raw operation/trace/span ID. Required joins use only central
+  record-specific typed domain-separated correlation digests.
+- The Provider selects exact metric rows from the single
+  `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`. It owns no descriptor,
+  inventory, label domain, aggregation scope, or bucket list. Identity-free
+  gauges are merge-safe Provider-process aggregates only, never per Guest,
+  operation, Credential, or lease.
+- Metric/trace/log retention uses both byte bounds and the fixed
+  60/300/120-second age ceilings. Emitter/export failure updates only bounded
+  closed diagnostics and never changes an ARM, Credential, bootstrap, or
+  reconcile operation.
+- Every admitted span ends exactly once on success, denial, invalid input,
+  timeout, cancellation, panic boundary, retention/queue eviction, and export
+  failure.
+- Benchmark evidence is produced separately from exported metrics.
+- Audit segment pruning is outside this Provider and remains blocked until all
+  required export destinations durably acknowledge the exact segment.
 
 ---
 
@@ -98,8 +130,8 @@ packages/d2b-provider-runtime-azure-virtual-machine/
       admission.rs           # typed PSK admission service (receives sealed PSK via
                              # GrantBootstrapAdmission from controller over internal bus)
     credential.rs            # ARM credential acquisition via enrolled KK session
-    telemetry.rs             # d2b-telemetry lightweight emitter + OTEL span helpers
-    audit.rs                 # authoritative audit record emission
+    telemetry.rs             # central-registry emitter selection + complete span helpers
+    diagnostics.rs           # bounded non-authoritative closed diagnostics
     error.rs                 # AzureVmError enum; bounded/redacted ProviderError mapping
     config.rs                # Provider spec.config schema struct
     schema.rs                # Guest spec.provider.settings schema struct + serde validation
@@ -892,9 +924,10 @@ reads it from IMDS; VM agent clears it on use.
 
 **Finalizer**: cleared only after ARM deletion LRO confirms success or 404-absent.
 Ambiguity keeps finalizer open; sets condition `DeletionAmbiguous`. Core's
-Deleted phase and row removal follow finalizer release. Audit record
-(`azure-vm-deleted`) is appended by the audit subsystem after the durable store
-commit (core deletion contract); it is NOT part of the store transaction.
+Deleted phase and row removal follow finalizer release. Core commits the
+generic `ResourceMutation` recovery row with deletion, then replays segment/
+export completion exactly once. Until completion the operation remains
+`CommittedPendingAudit`; the Provider writes no deletion audit event.
 
 ---
 
@@ -931,7 +964,7 @@ Controller (gateway Guest)              Azure VM agent
     │  controller validates PSK match (single-use)
     │
     │  bootstrap-svc registers s_i in Zone identity registry
-    │  bootstrap-svc emits bootstrap-enrollment-complete audit event
+    │  session authority emits its durable SessionConnect enrollment record
     │  controller clears admission token; writes enrollment record (sealed)
     │
     │── subsequent KK sessions (Noise_KK_25519_ChaChaPoly_SHA256) ──────────►│
@@ -979,7 +1012,7 @@ Neither supports `host-system` placement for ARM credential delivery.
 
 | Method | Credential | Notes |
 | --- | --- | --- |
-| `AcquireToken(audience, leaseHandle)` | `armCredentialRef` | ARM token; enrolled KK; zeroized after ARM call via `AzureEffectPort` |
+| `AcquireToken(audience, lease_capability)` | `armCredentialRef` | The single-owner typed capability stays inside the enrolled KK session; ARM token is zeroized after the call via `AzureEffectPort`; no handle is serialized or observed |
 
 ---
 
@@ -1100,8 +1133,8 @@ This Provider declares no relay credential reference in `spec.config`.
 
 ### Guest.status extensions
 
-Azure VM-specific ARM/session phase and opaque non-authorizing operation or
-enrollment digests live only in `status.provider.details` with `providerRef:
+Azure VM-specific closed ARM/session phase observations live only in
+`status.provider.details` with `providerRef:
 Provider/runtime-azure-virtual-machine`, qualified `schemaId`
 (`runtime-azure-virtual-machine.d2bus.org/Guest/status`), `schemaVersion`, and
 `observedProviderGeneration`. Guest runtime readiness, capabilities, observed
@@ -1133,13 +1166,14 @@ status:
     observedProviderGeneration: 1
     details:
       providerPhase: Ready
-      guestIdentityDigest: sha256:<hex-of-enrolled-noise-static-pubkey>
-      azureOperationHandleDigest: sha256:<bounded-hex>
+      armOperationState: complete
+      enrollmentState: enrolled
 ```
 
 No ARM resource ID path, ARM resource URI, cloud subscription/tenant IDs,
-poll URLs, PSK material, Noise key material, or raw operation handles appear in
-status.
+poll URLs, PSK material, Noise key material, raw identity, ResourceRef,
+operation/Credential/LRO/session handle or handle-derived digest,
+cgroup/unit/invocation field, or correlation digest appears in status.
 
 ### Currency and expedited reconcile (D091/D090)
 
@@ -1195,38 +1229,49 @@ subscription/tenant IDs, or ARM resource URIs.
 
 ### Audit events
 
-All pre-operation records are committed before the operation they describe.
-The deletion audit record is appended after the durable store commit.
+The Provider does not author an Azure-specific audit schema. It supplies typed
+closed outcomes to the existing authoritative owners:
 
-| Event code | Durability | Payload fields |
-| --- | --- | --- |
-| `azure-vm-provisioning-started` | informational | `zone`, `guestRef`, `operationId`, `region`, `subscriptionId` |
-| `azure-vm-provisioning-complete` | durable | `zone`, `guestRef`, `operationId`, `result`, `errorCode?` |
-| `azure-vm-psk-issued` | durable | `zone`, `guestRef`, `operationId`, `pskDigest: sha256(<psk-bytes>)` |
-| `azure-vm-bootstrap-enrollment-complete` | durable-privileged | `zone`, `guestRef`, `operationId`, `enrolledKeyDigest: sha256(<pubkey-hex>)` |
-| `azure-vm-adopted` | durable | `zone`, `guestRef`, `operationId` |
-| `azure-vm-reconfigured` | durable | `zone`, `guestRef`, `operationId`, `changedFields: [field-names-only]` |
-| `azure-vm-draining` | informational | `zone`, `guestRef`, `operationId` |
-| `azure-vm-deleted` | durable | `zone`, `guestRef`, `operationId`, `result: success/partial/ambiguous` |
+| Action | Authoritative owner and record |
+| --- | --- |
+| Guest desired-state mutation/adoption/deletion | Core Resource API `ResourceMutation` |
+| ARM or other typed external effect release/completion | Core operation/effect journal's typed effect record, with durable intent before release and exactly-once completion; host-privileged effects remain broker-owned `BrokerEffect` |
+| IKpsk2/KK bootstrap admission and enrollment | Session authority `SessionConnect` |
+| Credential admission | Credential service authoritative record |
 
-**Invariants:** no ARM token bytes, PSK plaintext, Noise private key, ARM
-resource URI, ARM error body, subscription ID, tenant ID, or cloud endpoint
-URL in any payload field. `pskDigest` is sha256 of PSK bytes, not the PSK itself.
+The Provider-local diagnostic accumulator may count only closed
+`provision`, `bootstrap`, `adopt`, `reconfigure`, `drain`, and `delete` event
+classes with closed outcomes. It contains no raw identity, ResourceRef,
+operation/Credential/LRO/session handle, Credential or key-derived digest,
+cloud/account/region identifier, locator, changed-field list,
+cgroup/unit/invocation field, or free-form error. It is never audit authority.
+No authoritative effect audit is informational, lossy, rate-limited, or
+best-effort.
 
 ### OTEL metrics
 
+Every row below is an exact required row in the central
+`METRIC_DESCRIPTOR_REGISTRY`, not a Provider-local descriptor.
+
 | Metric | Kind | Labels | Notes |
 | --- | --- | --- | --- |
-| `d2b_azure_vm_provision_total` | Counter | `result`, `error_code` | Closed label values only |
-| `d2b_azure_vm_bootstrap_total` | Counter | `result` | - |
-| `d2b_azure_vm_lro_poll_total` | Counter | `op_class`, `result` | `op_class` from closed operation table |
+| `d2b_azure_vm_provision_total` | Counter | `outcome={ok,denied,timeout,error}` | Closed label values only |
+| `d2b_azure_vm_bootstrap_total` | Counter | `outcome={ok,denied,timeout,error}` | - |
+| `d2b_azure_vm_lro_poll_total` | Counter | `operation={create,update,delete}`, `outcome={ok,requeue,timeout,error}` | Closed operation table |
 | `d2b_azure_vm_reconcile_duration_ms` | Histogram | `phase` | `phase` from closed providerPhase table |
-| `d2b_azure_vm_credential_acquire_total` | Counter | `result` | ARM credential only |
-| `d2b_azure_vm_active_guests` | Gauge | - | Count of Ready Azure VM Guests |
-| `d2b_telemetry_drop_total` | Counter | `subsystem: azure-vm` | Dropped frames |
+| `d2b_azure_vm_credential_acquire_total` | Counter | `outcome={ok,denied,unavailable,error}` | ARM Credential admission |
+| `d2b_azure_vm_guests` | Gauge | `phase` (process aggregate, collector merge `sum`) | Aggregate Guest count by closed phase |
 
 No VM name, resource group, subscription ID, tenant ID, ARM resource ID, ARM
-URI, or OpaqueAzureRef value appears in any label.
+URI, OpaqueAzureRef, identity, ResourceRef, handle, Credential,
+cgroup/unit/invocation field, or correlation digest appears in any label or
+Resource attribute. No per-Guest/operation/Credential/lease gauge exists.
+
+Metric, trace, and log queues enforce the central 60/300/120-second age
+ceilings. Provider spans use typed central correlation newtypes and end exactly
+once on every terminal path. Telemetry failure changes only the fixed bounded
+diagnostic accumulator and never changes ARM/Credential/bootstrap/reconcile
+behavior.
 
 ---
 
@@ -1508,11 +1553,11 @@ d2b.zones.dev.resources.corp-vm = {
 | Dependency/owner | ADR046-azure-vm-003; ADR-046-telemetry-audit-and-support |
 | Current source | `d2bd/src/metrics.rs` (production-reachable) |
 | Reuse action | adapt |
-| Destination | `src/{telemetry.rs,audit.rs}` |
-| Detailed design | Closed metric labels; OTEL span attributes; audit durability classes; `azure-vm-deleted` appended post-commit; no ARM URI, ARM resource ID, or cloud endpoint in any telemetry surface Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt audit shape; replace Prometheus with d2b-telemetry emitter. |
-| Integration | Controller/error paths call telemetry and audit emitters after status commits; d2b-telemetry consumes the metrics/spans and policy_observability enforces redaction. |
+| Destination | `src/{telemetry.rs,diagnostics.rs}`; central descriptor rows in `d2b-contracts` |
+| Detailed design | Select exact central metric rows; emit complete typed-digest spans; enforce per-signal age/byte retention; keep only the closed bounded diagnostic accumulator; and strip identity, refs, handles, credentials, cloud/account locators, and cgroup/unit/invocation fields. Telemetry failure never changes the observed operation. The Provider supplies typed outcomes to core/session/Credential/effect audit owners and writes no authoritative audit. Privileged effect audit remains durable exactly once and never best-effort. Primary reuse disposition: `adapt`. |
+| Integration | Controller/error paths call identity-free telemetry/diagnostics after status commits; authoritative boundary owners independently journal typed outcomes |
 | Data migration | No metrics/audit data migration; new OTEL/audit surfaces start at v3 cutover and the old Prometheus registry is retired. |
-| Validation | `tests/error_redaction.rs`; `d2b-contract-tests/tests/policy_observability.rs` updated |
+| Validation | Error/identity/handle/credential/cgroup/unit canaries; exact central registry/no local descriptors; aggregate gauges only; per-signal retention; complete trace lifecycle; emitter failure isolation; authoritative owner audit exactly-once tests |
 | Removal proof | `d2bd/src/metrics.rs` hand-rolled registry removed after observability-otel Provider integration |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1563,13 +1608,14 @@ Run with `cargo test -p d2b-provider-runtime-azure-virtual-machine`.
 | File | Coverage |
 | --- | --- |
 | `tests/conformance.rs` | `d2b-provider-toolkit::conformance::check_provider_conformance`; descriptor; schema exports; `SandboxSpec` semantic class fields present; Endpoint ResourceType template includes `purpose` field; `Volume` absent from exported ResourceTypes (only `Guest` exported; Volume owned/reconciled by core/volume-local) |
-| `tests/lifecycle_hermetic.rs` | `FakeAzureEffectPort`; full non-blocking LRO state machine via `requeue-at`: `Absent → Provisioning → PskDelivering → Bootstrapping → Ready → Reconfiguring → Draining → Deleting → Finalized`; ARM 429 retry; ARM 409 → adoption; `ProvisionFailed`; `BootstrapFailed`; `DeletionAmbiguous` finalizer hold; post-commit audit append; controller as authorized `update-status` writer; `FakeAzureEffectPort` never exposes ARM poll URL to assertions |
+| `tests/lifecycle_hermetic.rs` | `FakeAzureEffectPort`; full non-blocking LRO state machine via `requeue-at`; ARM 429 retry; ARM 409 adoption; failure/ambiguity finalizer hold; core-owned immutable audit recovery row and exactly-once completion; Provider cannot author audit; `FakeAzureEffectPort` never exposes ARM poll URL |
 | `tests/bootstrap_hermetic.rs` | PSK single-use; sealed PSK ciphertext in Volume (plaintext never in Volume); `GrantBootstrapAdmission` single-session delivery; IKpsk2 snow 0.10 vectors; PSK expiry; tampered IKpsk2 rejected; enrollment record sealed; bootstrap-svc mount of controller Volume rejected with `volume-domain-mismatch`; bootstrap-svc receives only its own `admission` view dirfd |
 | `tests/credential_hermetic.rs` | Fake enrolled KK; `AcquireToken` → token bytes via `AzureEffectPort` only; token bytes absent from status/audit/OTEL; zeroized after ARM call; no ambient fallback fires |
 | `tests/idempotency.rs` | Deterministic request ID derivation; same input → same ID; `AzureOperationHandle` opaque (no URL leaked); ARM 409 → adoption; restart recovery (handle present → `poll_lro`; handle absent → `get_vm_state`); finalizer held through ambiguity |
-| `tests/error_redaction.rs` | Canary bytes: ARM error body, ARM token, PSK plaintext, enrolled Noise pubkey, ARM poll URL, ARM resource URI. Must not appear in `Guest.status`, audit records, OTEL attributes, metric labels, or log lines. Hard test error on any match. |
+| `tests/error_redaction.rs` | Canary bytes cover ARM error/token/PSK/key/URI plus raw Zone/Guest/resource/cloud-account identity, ResourceRef, operation/Credential/LRO/session handle, cgroup/unit/invocation field, and raw trace/span ID. None appears in status detail, audit/export, OTEL, logs, diagnostics, errors, support, or Debug output. |
 | `tests/schema_validation.rs` | `spec.config` JSON Schema; `spec.provider.settings` JSON Schema; OpaqueAzureRef charset; `adminUser` charset; `diskSku` closed enum; `dataDisks` LUN uniqueness; no `sshCredentialRef` field accepted; no Volume refs in `dataDisks`; `systemArtifactId=null`; `azureTags` `d2b:*` prefix rejection; the controller declares exactly one guest-local sealed recovery Volume (`storageNeed: secret`, `sealingCredentialRef` set) round-trip: guest-local placement is manifest-frozen and expressed by `source.executionRef` = gateway Guest, layout `ownerRef: User/<name>` (numeric UID string rejected), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`, `quotaBytes`/`quota.maxBytes`/`quota.maxInodes`/`source.settings.sourcePolicyId` present and nonzero; the bootstrap-svc declares no state Volume; `sensitivityClass: private`; `persistenceClass: persistent`; `persistenceClass: ephemeral` rejected; zero `quota.maxBytes`/`quota.maxInodes`/`quotaBytes` rejected; host-backed placement rejected (`guest-local-required`) |
 | `tests/fault_injection.rs` | ARM 429 → retry + succeed; ARM 503 persistent → `ProvisionFailed`; PSK first expiry → retry; PSK second expiry → `BootstrapFailed`; ARM credential unavailable → `CredentialUnavailable`; enrollment PSK replay rejected; controller restart mid-LRO → handle recovery |
+| `tests/telemetry_authority.rs` | Exact central metric rows and no local descriptors; merge-safe aggregate gauges only; per-signal retention; complete span lifecycle; emitter/export failure never changes ARM/Credential/bootstrap/reconcile outcome; Provider diagnostics cannot satisfy authoritative audit |
 
 ### integration/ layout and boundaries
 

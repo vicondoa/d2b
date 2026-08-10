@@ -5,12 +5,44 @@
 | Spec ID | `ADR-046-provider-shell-terminal` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-shell-terminal`, Zone core-controller (ProviderDeployment/Process reconcile), Nix resource compiler |
 | Depends on | `ADR-046-decision-register`, `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging`, `ADR-046-primitive-resource-composition`, `ADR-046-provider-state`, `ADR-046-componentsession-and-bus`, `ADR-046-core-controllers`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration`, `ADR-046-zone-routing` |
-| Supersedes | v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`) |
+| Supersedes | Version 2 audit/telemetry fields where corrected below; v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`) |
+
+## Prospective Wave 6 authority correction
+
+Version 3 consumes Version 3 of
+`ADR-046-telemetry-audit-and-support`:
+
+- The Provider emits bounded diagnostic observations only. Resource API,
+  ComponentSession admission, and typed effect boundaries own authoritative
+  audit. Privileged effect audit is durable exactly once and never
+  best-effort.
+- Metrics, traces, logs, diagnostics, errors, status detail, support, and
+  audit/export contain no raw Zone/pool/session/resource/user/process identity,
+  ResourceRef, attach/supervisor/session/PTY handle, Credential or
+  credential-derived value, terminal data, path, PID/pidfd,
+  cgroup/unit/invocation field, or raw operation/trace/span ID. A required join
+  uses only a central record-specific typed domain-separated correlation
+  digest.
+- Metrics select exact rows from the single
+  `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`; the Provider defines no local
+  descriptor, label domain, aggregation scope, or bucket list.
+- Per-pool, per-session, per-attach, per-ring, per-process, and per-user gauges
+  are forbidden without identity. Because identity is intentionally absent,
+  shell gauges are merge-safe Provider-process aggregates only.
+- Metric/trace/log buffering enforces both byte bounds and the fixed
+  60/300/120-second age ceilings. Emitter/export failure updates only bounded
+  closed diagnostics and never changes shell/session/attach/kill behavior.
+- Every admitted span ends exactly once on success, denial, stale generation,
+  invalid input, timeout, cancellation, panic boundary, retention/queue
+  eviction, and export failure.
+- Benchmark evidence is separate from exported metrics, and audit pruning
+  remains blocked until every required export acknowledgement is durable and
+  exact.
 
 ## Scope
 
@@ -78,7 +110,7 @@ The canonical crate layout follows D012 and D059.
 
 | Path | Requirement | Purpose |
 | --- | --- | --- |
-| `packages/d2b-provider-shell-terminal/src/` | Required | Provider controller, supervisor runtime, routing, audit, telemetry, error, schema, and support modules. |
+| `packages/d2b-provider-shell-terminal/src/` | Required | Provider controller, supervisor runtime, routing, bounded diagnostics, central-registry telemetry, error, schema, and support modules. |
 | `packages/d2b-provider-shell-terminal/tests/` | Required | Hermetic Rust tests for schema, routing, stale-generation rejection, ring semantics, redaction, and policy checks. |
 | `packages/d2b-provider-shell-terminal/integration/` | Required | Repository-driven integration fixtures for Host and Guest placement and restart-adoption coverage. |
 | `packages/d2b-provider-shell-terminal/README.md` | Required | Provider overview and build or test entry point. |
@@ -306,8 +338,10 @@ with `PoolSpecFrozenByChildSessions`.
 8. Count `activeSessions` and `attachedSessions`.
 9. Compute remaining capacity.
 10. Publish `status.isolationPosture` from the execution target.
-11. If the pool targets a Host with `isolationPosture=none`, emit the warning condition
-    and a pool-scoped audit event, but keep the pool eligible for local admin use.
+11. If the pool targets a Host with `isolationPosture=none`, emit the warning
+    condition and bounded local `isolation-warning` diagnostic, but keep the
+    pool eligible for local admin use. Core audits the status mutation; the
+    Provider does not write a separate event.
 12. Never create a supervisor `Process`; a pool is capacity-only.
 13. Write common `status.phase`, `status.detail`, and conditions.
 14. On validation failure, set `status.phase=Failed` for permanent schema issues or
@@ -519,7 +553,8 @@ single-flight priority lane.
 9. Compute or increment `status.supervisorGeneration`.
 10. Register the d2b-bus route keyed by Zone, service, target session ref, stream or
     method, schema fingerprint, and `status.supervisorGeneration`.
-11. Publish `status.supervisorRef`, ring metrics, and attach count.
+11. Publish `status.supervisorRef`, bounded ring status, and attach count;
+    telemetry exports only Provider-process aggregate gauges/counters.
 12. If the login shell exits cleanly, set `status.phase=Succeeded` and
     `status.detail.kind=ExitedCleanly`.
 13. If the login shell exits nonzero, or the supervisor crashes, set `status.phase=Failed`
@@ -1210,17 +1245,18 @@ pools.
 
 | Rule | Requirement |
 | --- | --- |
-| isolation posture warning | If `spec.executionRef` targets `Host/<name>` and the Host reports `isolationPosture=none`, the pool must set `status.detail.kind=IsolationPostureWarning`, set the `IsolationPostureWarning` condition true, and emit a pool-scoped audit event. |
+| isolation posture warning | If `spec.executionRef` targets `Host/<name>` and the Host reports `isolationPosture=none`, the pool must set `status.detail.kind=IsolationPostureWarning`, set the `IsolationPostureWarning` condition true, and increment the bounded `isolation-warning` diagnostic; core audits the status mutation. |
 | user domain only | All Host session supervisors run in `domain=user` under `Provider/system-systemd`, never as a disguised system-domain process. |
 | same-UID rule | The supervisor must run as exactly the UID named by `spec.userRef`; the provider verifies this before spawn or adopt. |
 | relay denial | Relay-authenticated identities are denied all user-domain Host shell access under SR-3. |
-| no isolation claim | Host shell status and audit must describe the posture as `none`; no wording may imply a sandbox boundary. |
+| no isolation claim | Host shell status and broker-owned `ProcessEffect` audit must describe the posture as `none`; no wording may imply a sandbox boundary. |
 | no fallback | There is no SSH, no direct host exec, and no bypass path around `Provider/system-systemd`. |
 
-The pool-scoped audit event for Host posture warning is emitted when the pool first becomes
-ready and every time the posture changes from `isolated` to `none`. The event must use a
-redacted resource UID digest and posture enum only; it must not include usernames,
-resource names, paths, or process identifiers.
+The bounded `isolation-warning` diagnostic increments when the pool first
+becomes ready and whenever posture changes from `isolated` to `none`. It stores
+only the closed event/outcome count. Core's generic mutation record and the
+broker-owned process effect remain authoritative and use only their typed
+record-specific correlation digests.
 
 ## Guest-specific rules
 
@@ -1362,21 +1398,25 @@ The Nix compiler must reject:
 
 ## OTEL / audit / telemetry
 
-Telemetry is closed-label, redacted, and resource-name-free. `d2b.zone` is an OTEL
-resource attribute, not a metric label.
+Telemetry is closed-label, identity-free, and redacted. Resource attributes
+contain only fixed semantic/build classes.
 
 ### Metrics
 
+Every row below is an exact required row in the central
+`METRIC_DESCRIPTOR_REGISTRY`, not a Provider-local descriptor.
+
 | Metric name | Type | Label set | Description |
 | --- | --- | --- | --- |
-| `d2b_shell_pool_sessions` | Gauge | `execution_kind={host,guest}` | Current active session count across one pool. |
-| `d2b_shell_pool_attached_sessions` | Gauge | `execution_kind={host,guest}` | Current attached-session count across one pool. |
-| `d2b_shell_session_attach_count` | Gauge | `execution_kind={host,guest}` | Current attach count for one session, exported without session name or user identity. |
-| `d2b_shell_session_ring_bytes` | Gauge | `execution_kind={host,guest}` | Current ring fill bytes. |
-| `d2b_shell_session_ring_evicted_bytes_total` | Counter | `execution_kind={host,guest}` | Total bytes evicted from session rings. |
-| `d2b_shell_reconcile_total` | Counter | `resource_kind={pool,session}`, `outcome={success,retryable_error,terminal_error}` | Reconcile loop outcomes. |
-| `d2b_shell_attach_total` | Counter | `execution_kind={host,guest}`, `outcome={success,stale_generation,capacity_denied,auth_denied,terminal}` | Attach attempts. |
-| `d2b_shell_kill_total` | Counter | `execution_kind={host,guest}`, `outcome={success,stale_generation,auth_denied,terminal}` | Kill attempts. |
+| `d2b_shell_sessions` | Gauge | `execution_kind={host,guest}`, `state={active,attached}`; process aggregate, collector merge `sum` | Aggregate sessions across all pools owned by the Provider process. |
+| `d2b_shell_ring_bytes` | Gauge | `execution_kind={host,guest}`; process aggregate, collector merge `sum` | Aggregate retained ring bytes across all sessions owned by the Provider process. |
+| `d2b_shell_ring_evicted_bytes_total` | Counter | `execution_kind={host,guest}` | Total bytes evicted from all session rings. |
+| `d2b_shell_reconcile_total` | Counter | `resource_type={shell_pool,shell_session}`, `outcome={ok,requeue,error}` | Reconcile loop outcomes. |
+| `d2b_shell_attach_total` | Counter | `execution_kind={host,guest}`, `outcome={ok,stale,quota,denied,terminal,error}` | Attach attempts. |
+| `d2b_shell_kill_total` | Counter | `execution_kind={host,guest}`, `outcome={ok,stale,denied,terminal,error}` | Kill attempts. |
+
+There is no per-pool/session/attach/ring/process/user gauge. A descriptor that
+differs from the central row is rejected.
 
 ### Spans
 
@@ -1388,18 +1428,26 @@ resource attribute, not a metric label.
 | `shell.kill` | `execution.kind`, `outcome` | No terminal bytes, session names, or PIDs. |
 | `shell.adopt` | `execution.kind`, `outcome` | No raw InvocationID values, cgroup paths, or unit names. |
 
-### Audit events
+Every admitted span uses only typed trace/span correlation newtypes and ends
+exactly once on all terminal paths, including stale-generation refusal,
+timeout, cancellation, panic boundary, retention/queue eviction, and exporter
+failure.
 
-| Event type | When emitted | Permitted fields |
-| --- | --- | --- |
-| `shell-pool-created` | Pool first reaches readiness | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `isolation_posture` |
-| `shell-session-open` | A new session is created by `OpenSession` | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `result` |
-| `shell-session-attach` | An attach stream is successfully opened | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `result` |
-| `shell-session-detach` | A detach or detach-all completes | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `result`, `detach_scope={self,all}` |
-| `shell-session-kill` | A kill request completes | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `result` |
-| `shell-session-closed` | The login shell exits and the session becomes terminal | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `result={clean-exit,nonzero-exit,killed}` |
-| `shell-supervisor-degraded` | Supervisor identity or routing becomes unsafe | `zone_uid_digest`, `resource_uid_digest`, `execution_kind`, `result={lost,ambiguous}` |
-| `shell-pool-isolation-warning` | A Host pool reports `isolationPosture=none` | `zone_uid_digest`, `resource_uid_digest`, `execution_kind=host`, `isolation_posture=none` |
+### Audit and bounded diagnostics
+
+This Provider does not author a shell-specific audit schema:
+
+| Action | Authoritative owner and record |
+| --- | --- |
+| Pool/session create/update/delete | Core Resource API `ResourceMutation` |
+| Open/attach/detach/kill admission | ComponentSession/bus `SessionConnect` or `RouteAdmission` |
+| Supervisor launch/stop/adopt/quarantine | Process/effect owner `ProcessEffect` and, for a privileged host effect, broker-owned durable exactly-once `BrokerEffect` |
+
+The Provider-local fixed accumulator may count only closed `pool-reconcile`,
+`session-reconcile`, `open`, `attach`, `detach`, `kill`, `close`, `adopt`, and
+`isolation-warning` event classes with closed outcomes. It carries no identity,
+digest, handle, terminal data, or free-form detail and is never authoritative
+audit.
 
 ### NEVER in any observable surface
 
@@ -1412,12 +1460,22 @@ records:
 - environment values
 - filesystem paths
 - PIDs
+- pidfds
+- cgroup fields
 - unit names
+- invocation IDs
 - usernames
 - session names
 - socket paths
 - opaque attach or supervisor handles
-- raw InvocationID values
+- ResourceRefs
+- Credentials or credential-derived values
+- raw operation/trace/span IDs
+- correlation digests in metrics or Resource attributes
+
+Metric/trace/log queues enforce the central 60/300/120-second age ceilings.
+Telemetry failure changes only the fixed bounded diagnostic accumulator and
+never changes the shell/session operation.
 
 ## Async reconcile patterns
 
@@ -1612,14 +1670,14 @@ per-test advisory threshold.
 ### ADR046-sterm-011
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Audit and telemetry area; owned by shell-terminal audit/telemetry modules. |
+| Dependency/owner | Telemetry/diagnostics area; authoritative audit remains with resource/session/effect owners. |
 | Current source | None - net-new v3 closed-label/redacted observability for shell-terminal; legacy shell paths must not leak names, paths, PIDs, or terminal bytes. |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-shell-terminal/src/{audit,telemetry}.rs` |
-| Detailed design | Implement closed-label metrics, redacted spans, and audit events with no usernames, session names, paths, or terminal bytes. Primary reuse disposition: `create`. Preserved source-plan detail: net-new redacted observability. |
-| Integration | Reconcile, OpenSession, Attach, Detach, Kill, terminal exit, degradation, and Host posture warnings emit only digest/enum surfaces consumed by audit and OTEL collectors. Integration path: `packages/d2b-provider-shell-terminal/integration/support-redaction/`. |
+| Destination | `packages/d2b-provider-shell-terminal/src/{telemetry,diagnostics}.rs`; central descriptor rows in `d2b-contracts` |
+| Detailed design | Select exact central metric rows, export only merge-safe aggregate gauges, emit complete typed-digest spans, enforce per-signal age/byte retention, and keep only the closed bounded Provider diagnostic accumulator. Strip identity, ResourceRefs, handles, credentials, terminal data, paths, PIDs/pidfds, and cgroup/unit/invocation fields. Telemetry failure never changes shell/session behavior. The Provider supplies typed outcomes to resource/session/effect audit owners and writes no authoritative audit. Privileged effect audit remains durable exactly once and never best-effort. Primary reuse disposition: `create`. |
+| Integration | Reconcile, OpenSession, Attach, Detach, Kill, terminal exit, degradation, and Host posture warnings feed identity-free telemetry/diagnostics; resource/session/effect boundaries independently emit authoritative records. Integration path: `packages/d2b-provider-shell-terminal/integration/support-redaction/`. |
 | Data migration | Full d2b 3.0 reset; no v2 audit/telemetry state import. |
-| Validation | `packages/d2b-provider-shell-terminal/tests/redaction.rs` |
+| Validation | Redaction canaries; exact central registry/no local descriptor; merge-safe aggregate gauges only; per-signal retention; complete span lifecycle; emitter failure isolation; Provider diagnostics cannot satisfy authoritative audit |
 | Removal proof | None - net-new observability surface; legacy paths must be removed or adapted to pass redaction tests. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1827,7 +1885,7 @@ status:
 | two candidate supervisors match one session | adoption | Session `Degraded` with `SupervisorAmbiguity`. | Delete the session and clean foreign processes. |
 | client uses stale generation | supervisor method admission | Request rejected with `StaleSessionGeneration`. | Refresh session info and reattach. |
 | pool attach capacity exhausted | attach admission | Session remains `Ready`; attach denied. | Detach another session or raise pool limit. |
-| Host posture becomes none | pool reconcile | Pool remains `Ready` with warning detail and audit event. | Acknowledge the warning or migrate to a Guest pool. |
+| Host posture becomes none | pool reconcile | Pool remains `Ready` with warning detail and bounded diagnostic; core owns authoritative mutation audit. | Acknowledge the warning or migrate to a Guest pool. |
 
 ## Appendix D: normative checklist
 
@@ -1841,8 +1899,11 @@ status:
 8. All attach or kill requests carry `status.supervisorGeneration`.
 9. All shell verbs require `Role/shell-admin` or a Zone-admin superset.
 10. Relay-authenticated Host user-domain access is denied.
-11. Host pools surface `isolationPosture=none` warnings in status and audit.
+11. Host pools surface `isolationPosture=none` warnings in status; core
+    mutation and broker process-effect audit remain authoritative.
 12. Guest pools require `allowedDomains` to contain `user` and require `defaultUserRef`.
-13. Metrics, logs, spans, and audit records exclude names, usernames, PIDs, paths, and terminal bytes.
+13. Metrics, logs, spans, diagnostics, and audit/export exclude raw identity,
+    ResourceRefs, handles, Credentials, PIDs/pidfds, cgroup/unit/invocation
+    fields, paths, and terminal bytes.
 14. No SSH or direct-host fallback exists.
 15. The provider crate contains `src/tests/integration/README.md`.

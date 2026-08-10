@@ -5,12 +5,42 @@
 | Spec ID | `ADR-046-provider-transport-azure-relay` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `packages/d2b-provider-transport-azure-relay/` |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-componentsession-and-bus`, `ADR-046-zone-routing`, `ADR-046-resources-credential`, `ADR-046-provider-model-and-packaging`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
-| Supersedes | `d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface |
+| Supersedes | Version 1 audit/telemetry fields where corrected below; `d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface |
+
+## Prospective Wave 6 authority correction
+
+Version 2 consumes the telemetry/audit authority from Version 3 of
+`ADR-046-telemetry-audit-and-support`:
+
+- The Provider emits bounded diagnostic observations only. It does not append
+  authoritative audit. Session admission, Resource API, Credential service,
+  and typed effect boundaries emit the authoritative records they own.
+  Privileged effect audit is durable exactly once and never best-effort.
+- Diagnostic, OTEL, log, error, support, and audit/export output contains no
+  raw Zone/ZoneLink/resource/external-account identity, ResourceRef, relay
+  namespace/entity, handle, credential or credential-derived value,
+  cgroup/unit/invocation field, locator, or raw trace/span/operation ID. A
+  required join uses only the central record-specific typed domain-separated
+  correlation digest.
+- Metric emission selects exact rows from the one
+  `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`; this Provider owns no local
+  descriptor, label domain, gauge scope, or bucket list. Identity-free gauges
+  are merge-safe process aggregates only.
+- Metric/trace/log frames retain the central 60/300/120-second age ceilings in
+  addition to byte bounds. Emitter/export failure updates only bounded closed
+  diagnostics and never changes a relay, Credential, or session operation.
+- Every relay span ends exactly once on success, denial, invalid input,
+  timeout, cancellation, panic boundary, retention/queue eviction, and
+  exporter failure.
+- Relay performance targets are proved only by dedicated benchmark evidence;
+  exported metrics are not acceptance evidence.
+- Audit segment pruning is outside this Provider and remains gated by durable
+  acknowledgement from every required export destination.
 
 ## Purpose
 
@@ -117,8 +147,8 @@ packages/d2b-provider-transport-azure-relay/
     transport_settings.rs
     reconnect.rs
     backpressure.rs
-    metrics.rs
-    audit.rs
+    telemetry.rs
+    diagnostics.rs
   tests/
     transport_settings_schema.rs
     transport_credentials.rs
@@ -563,8 +593,10 @@ Responsibilities:
 - Returns typed `RelayTransportObservation` values to the core-controller
   child Zone's core-controller ZoneLink handler; that child-local handler is the
   sole `update-status` writer on the ZoneLink resource.
-- Emits OTEL metrics and spans (see §OTEL).
-- Emits audit records for authentication events (see §Audit).
+- Emits OTEL metrics/spans through exact central registry rows and bounded
+  diagnostics (see OTEL telemetry).
+- Supplies typed outcomes to the owning Credential/session/resource/effect
+  boundary; it does not write authoritative audit.
 
 The listener service does **not**:
 
@@ -1213,36 +1245,29 @@ Error observation fields:
 
 ---
 
-## Audit
+## Audit and bounded diagnostics
 
-Provider audit covers **carriage authentication and health observations only**.
-It is **separate from resource audit** (which is owned by core). Resource
-lifecycle events (ZoneLink state transitions, session generation, reconnect
-decisions, idempotency outcomes) appear in the core resource audit trail, not
-here. Provider audit records are appended through the Zone runtime's audit log
-interface; appends are not atomic with Zone resource state in redb.
+This Provider has no authoritative audit writer. Its fixed diagnostic
+accumulator may record only closed event/outcome pairs:
 
-| Audit kind | Fields | Trigger |
-| --- | --- | --- |
-| `relay-carriage-auth-success` | `zone`, `zoneLinkName`, `relayNamespaceId`, `relayEntityId`, `correlationId` | Azure Relay WebSocket authenticated successfully (carriage only; no Noise KK outcome here) |
-| `relay-carriage-auth-failed` | `zone`, `zoneLinkName`, `relayNamespaceId`, `relayEntityId`, `reason`, `correlationId` | Azure Relay returned auth failure; bounded `reason` code |
-| `relay-carriage-closed` | `zone`, `zoneLinkName`, `relayNamespaceId`, `relayEntityId`, `reason`, `correlationId` | WebSocket closed; bounded `reason` code |
-| `relay-credential-acquired` | `zone`, `zoneLinkName`, `credentialRefDigest`, `leaseHandle`, `operationClass`, `correlationId` | Credential successfully acquired; only bounded opaque digests, never ref names or token bytes |
-| `relay-credential-failed` | `zone`, `zoneLinkName`, `credentialRefDigest`, `reason`, `correlationId` | Credential acquisition failed; bounded reason code; no ref name or token material |
+| Event class | Outcome domain |
+| --- | --- |
+| `relay-carriage-auth` | `ok`, `denied`, `timeout`, `error` |
+| `relay-carriage-close` | `ok`, `remote`, `timeout`, `error` |
+| `relay-credential-acquire` | `ok`, `denied`, `unavailable`, `error` |
+| `relay-reconnect` | `ok`, `abandoned`, `timeout`, `error` |
 
-Rules:
+The accumulator has no field for Zone/ZoneLink, relay namespace/entity,
+ResourceRef, lease/stream/session handle, Credential, external account,
+correlation digest, locator, cgroup/unit/invocation data, or provider error
+text. It is diagnostics, may be lossy within the central fixed bound, and
+cannot establish what happened.
 
-- Audit records **never** contain token bytes, SAS values, connection strings,
-  bearer tokens, private keys, or any credential material.
-- `leaseHandle` is the opaque bounded handle from
-  `Credential.status.credential.leaseHandle`, not a token.
-- `reason` fields use stable bounded codes, not provider-internal diagnostics.
-- `relayNamespaceId` and `relayEntityId` are non-secret identifiers.
-- `correlationId` links audit records to OTEL spans without carrying span payload.
-- Noise IKpsk2 bootstrap and enrolled KK outcomes, enrollment commit and
-  invalidation, session generation, and resource state transitions
-  (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`) are recorded
-  in the core resource audit trail, not here.
+Authoritative records are written exactly once by the boundary that decides or
+releases the action: Credential service for Credential admission, session
+admission for IKpsk2/KK results, Resource API/core for ZoneLink state, and the
+typed effect boundary for privileged effects. The Provider is only a subject
+of those records. No authoritative record is best-effort or Provider-local.
 
 ---
 
@@ -1250,30 +1275,27 @@ Rules:
 
 ### Metrics
 
-All metric labels are closed semantic sets. No label carries Zone/resource
-identity, credential bytes, relay token shapes, private key fragments,
-connection-string substrings, store paths, or internal provider diagnostics.
-Zone identity remains in the bounded `d2b.zone` OTEL resource attribute.
+Every row below is an exact required row in the central
+`METRIC_DESCRIPTOR_REGISTRY`, not a Provider-local table. No label or Resource
+attribute carries identity, handle, Credential, relay/account identifier,
+correlation digest, locator, cgroup/unit/invocation field, or provider
+diagnostic text.
 
 | Metric name | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `d2b_relay_transport_connect_total` | Counter | `outcome` (`success`/`failed`), `error_code` | Relay WebSocket connect attempts |
-| `d2b_relay_transport_disconnect_total` | Counter | `reason` (stable bounded code) | Relay WebSocket disconnects |
-| `d2b_relay_transport_reconnect_total` | Counter | `outcome` | Reconnect attempts |
+| `d2b_relay_transport_connect_total` | Counter | `outcome={ok,denied,timeout,error}` | Relay WebSocket connect attempts |
+| `d2b_relay_transport_disconnect_total` | Counter | `outcome={ok,remote,timeout,error}` | Relay WebSocket disconnects |
+| `d2b_relay_transport_reconnect_total` | Counter | `outcome={ok,abandoned,timeout,error}` | Reconnect attempts |
 | `d2b_relay_transport_session_seconds` | Histogram | (none) | Duration of relay WebSocket sessions |
 | `d2b_relay_transport_bytes_sent_total` | Counter | (none) | Bytes sent over relay (post-encryption; opaque payload size) |
 | `d2b_relay_transport_bytes_received_total` | Counter | (none) | Bytes received over relay |
 | `d2b_relay_transport_frames_sent_total` | Counter | (none) | Frames sent |
 | `d2b_relay_transport_frames_received_total` | Counter | (none) | Frames received |
-| `d2b_relay_transport_send_queue_bytes` | Gauge | (none) | Current outbound frame queue depth (bytes) |
-| `d2b_relay_transport_credential_expiry_seconds` | Gauge | (none) | Seconds until listener credential expiry; 0 when no active lease |
+| `d2b_relay_transport_send_queue_bytes` | Gauge | (none; process aggregate, collector merge `sum`) | Total current outbound queue bytes across the Provider process |
 | `d2b_relay_transport_backpressure_events_total` | Counter | (none) | Times outbound send blocked on WebSocket write backpressure |
 
-Permitted label keys: `outcome`, `reason`, `error_code`. Their values are
-closed semantic codes.
-
-Forbidden label keys: namespace FQDN, entity name, relay region, credential ref,
-token shape, connection string, or any credential material.
+No per-ZoneLink/session/lease/credential gauge exists. Emitter and collector
+reject a descriptor that differs from the central row.
 
 ### Traces
 
@@ -1285,16 +1307,22 @@ OTEL spans are emitted for:
   enrolled KK handshake and `ikpsk2.bootstrap` for the one-time IKpsk2
   bootstrap enrollment; no key material, PSK, or enrollment secret in
   attributes).
-- Credential acquisition requests (span: `credential.acquire`; carries only
-  `credentialRef` as an opaque ResourceRef string, never token bytes).
+- Credential acquisition requests (span: `credential.acquire`; carries only a
+  closed outcome, never a ResourceRef, handle, or token-derived value).
 - Reconnect cycles (span: `relay.reconnect`).
 
 Span attributes never include:
 - token bytes, SAS values, connection strings, bearer tokens;
-- relay namespace FQDN (only the non-secret `namespaceId` label);
-- relay region (operator-supplied; not emitted as OTEL attribute);
+- relay namespace/entity, region, external account, or other identity;
+- ResourceRef, handle, Credential, or correlation digest;
 - host paths, socket paths, or store paths;
+- cgroup/unit/invocation fields;
 - private key fragments or Noise key material.
+
+Each admitted span carries only the typed central trace/span correlation
+newtypes and ends exactly once on every terminal path. Telemetry emission or
+export failure changes only bounded diagnostics, never the relay/Credential/
+session operation.
 
 ---
 
@@ -1314,9 +1342,9 @@ I/O:
 - Both listener and sender are long-lived service processes that internally
   multiplex relay sessions; no per-session process spawn is required.
 
-Performance targets:
+Benchmark targets:
 
-| Metric | Target |
+| Benchmark measurement | Target |
 | --- | --- |
 | Relay WebSocket connect latency (P99, LAN) | < 300 ms |
 | Relay WebSocket connect latency (P99, cross-region) | < 2 s |
@@ -1325,7 +1353,10 @@ Performance targets:
 | Reconnect time from disconnect to Noise KK established (P99) | < 5 s |
 
 These targets inform the `connectTimeoutSeconds` default (30 s). They are
-not contractually enforced at the API level; they guide conformance test tuning.
+not contractually enforced at the API level. The benchmark harness records
+candidate-bound samples and the pass/fail result in dedicated evidence.
+Exported OTEL histograms are operational observations and cannot satisfy,
+waive, or fail any target.
 
 ---
 
@@ -1487,11 +1518,11 @@ download, or PATH scan.
 | Dependency/owner | ADR046-transport-relay-001 through ADR046-transport-relay-005; telemetry/audit owner |
 | Current source | `packages/d2bd/src/metrics.rs` (hand-rolled Prometheus; baseline) |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}` |
-| Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed semantic label sets with no Zone/resource-name-derived keys; retain Zone identity only in the `d2b.zone` OTEL resource attribute; never label secret bytes; provider audit covers **carriage authentication and health observations only** - Azure auth events, WebSocket lifecycle, credential acquisition outcomes - and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
-| Integration | `Provider/observability-otel` receives emitter ring frames; audit log via Zone runtime `d2b.audit.transport` category |
+| Destination | `packages/d2b-provider-transport-azure-relay/src/{telemetry.rs,diagnostics.rs}`; central descriptor rows in `d2b-contracts` |
+| Detailed design | Select exact central metric rows, emit complete typed-digest spans, enforce 60/300/120-second signal retention, and keep only the closed bounded Provider diagnostic accumulator. Strip every raw identity, ResourceRef, relay/account identifier, handle, Credential, cgroup/unit/invocation field, locator, and provider error. Telemetry failure never changes transport/Credential/session operations. This Provider writes no authoritative audit; owning Credential/session/resource/effect boundaries emit durable exactly-once records, with privileged effects never best-effort. |
+| Integration | `Provider/observability-otel` receives identity-free bounded emitter frames; authoritative boundary owners receive typed outcomes independently |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/metric_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and that a Zone-name canary never enters label values; `tests/fake_relay_transport.rs` asserts audit record fields against schema |
+| Validation | Credential/identity/handle/cgroup/unit redaction canaries; exact central registry rows and no local descriptors; no per-resource/session/lease gauges; per-signal retention; complete trace lifecycle; emitter failure isolation; boundary-owner audit tests prove Provider diagnostic events cannot satisfy authoritative audit |
 | Removal proof | N/A; new module |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1529,7 +1560,7 @@ wave:
 | `fake_relay_transport.rs` | `listener_accepts_sender_connection`, `framing_is_length_prefixed`, `send_receive_roundtrip_over_fake_relay`, `attachment_support_is_false`, `locality_is_remote`, `transport_descriptor_contract` | Named byte-stream contract; framing; transport descriptor |
 | `reconnect_open_transport.rs` | `websocket_starts_on_open_transport`, `websocket_closes_on_close_transport`, `observe_transport_reports_connect_result`, `reconnect_clears_generation`, `reconnect_triggers_new_kk` | Relay responds to CloseTransport/OpenTransport cycle; named stream closes on WebSocket loss |
 | `backpressure_credit.rs` | `slow_relay_stalls_credit`, `aggregate_queue_bounded`, `source_never_buffers_beyond_limit`, `backpressure_event_counter_increments` | Backpressure and credit invariants |
-| `metric_labels.rs` | `identity_keys_absent`, `zone_name_canary_absent`, `semantic_domains_closed`, `zone_resource_attribute_retained` | Structural metric-label policy; no Zone/resource identity labels; `d2b.zone` remains a resource attribute |
+| `metric_labels.rs` | `identity_keys_absent`, `zone_name_canary_absent`, `semantic_domains_closed`, `central_registry_exact`, `no_local_descriptors`, `aggregate_gauges_only` | Structural central metric policy; no raw identity in labels or Resource attributes |
 | `idempotency_key.rs` | `idempotency_key_carried_in_noise_record`, `idempotency_key_not_in_relay_frame_metadata`, `replay_at_relay_level_does_not_deduplicate`, `dedup_at_child_zone_resource_api` | Idempotency is child-Zone-owned; relay carries opaquely |
 | `listener_sender_conformance.rs` | `conformance_vectors_listener`, `conformance_vectors_sender`, `noise_kk_prologue_binds_exact_zonelink_spec`, `mismatched_enrolled_key_fails_closed`, `relay_identity_not_in_subject_context` | Named stream contract; exact canonical spec and sealed identity binding; relay identity exclusion |
 | `child_local_topology.rs` | `provider_and_zonelink_are_in_child_zone`, `child_zone_name_self_matches`, `parent_zone_is_compiler_only`, `parent_store_has_no_reciprocal_resources`, `transport_credentials_resolve_only_in_child` | K2 owns the exact-shape ZoneLink, selected Provider, and Credential refs; local-root is selected only as allocator and retains sealed route state; no cross-Zone ref or credential path |

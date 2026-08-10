@@ -5,12 +5,99 @@
 | Spec ID | `ADR-046-telemetry-audit-and-support` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-telemetry`, `d2b-audit`, `d2b-provider-observability-otel`, `d2b zone` CLI |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-store-redb`, `ADR-046-componentsession-and-bus`, `ADR-046-core-controllers`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging` |
-| Supersedes | Current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths |
+| Supersedes | Version 2 telemetry/audit authority where corrected below; current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths |
+
+## Prospective Wave 6 authority correction
+
+Version 3 is the prospective Wave 6 authority. The following rules supersede
+every later example or Provider dossier where the older text conflicts:
+
+1. A privileged effect has one authoritative audit owner. The broker or other
+   typed effect boundary durably commits an immutable audit intent before
+   releasing the effect and durably records completion exactly once by
+   `PrivilegedEffectAuditDigest`. This typed digest uses the
+   `d2b:audit:privileged-effect:v1` domain and binds the Zone partition,
+   operation digest, effect ordinal, and closed effect class. Privileged effect
+   audit is never rate-limited, lossy, informational, or best-effort. A
+   Provider-local ring is bounded diagnostics only and cannot satisfy this
+   rule.
+2. A required audit export is complete only after its configured destination
+   durably acknowledges the exact segment sequence and segment hash. A segment
+   is prune-eligible only after its retention floor has elapsed and every
+   required destination acknowledgement is durable. A missing, stale, or
+   mismatched acknowledgement blocks pruning and sets typed degraded health;
+   it never converts to a warning-and-prune path.
+3. OTEL metrics, traces, logs, authoritative audit and audit export, emitter
+   diagnostics, and telemetry summaries contain no raw Zone, resource,
+   subject, operation, trace, span, Provider instance, process, user, Host, or
+   Guest identity. They also contain no raw handle, ResourceRef, credential or
+   credential-derived value, PID/pidfd, cgroup field, systemd unit field,
+   invocation ID, locator, path, argv, or environment value. A join that is
+   required by this spec uses a closed Rust newtype with one fixed
+   domain-separated digest constructor. General strings and untyped
+   `sha256:<hex>` values are rejected. Metric labels and OTEL Resource
+   attributes never carry a correlation digest.
+4. Telemetry retention is bounded by bytes and age at every emitter ring,
+   collector queue, retry queue, forwarding queue, and import queue. The
+   non-widenable age ceilings are 60 seconds for metrics, 300 seconds for
+   traces, and 120 seconds for logs. An older frame is dropped before enqueue,
+   retry, forwarding, or export and is counted with closed reason
+   `retention_expired`.
+5. `d2b-contracts` owns one closed `METRIC_DESCRIPTOR_REGISTRY`. Each row fixes
+   the metric name, kind, aggregation scope, label keys, complete label value
+   domains, and histogram buckets. `METRIC_LABEL_POLICY` is a projection of
+   that registry, not a second authority. Emitters and the collector may
+   re-export the registry but may not define a Provider-local descriptor,
+   inventory, label domain, or bucket list.
+6. A gauge without an identity dimension is legal only when its registry row
+   defines a merge-safe aggregate over the complete stated scope. A gauge for
+   one resource, session, lease, queue, or component is forbidden when identity
+   is intentionally absent; use an aggregate count, a counter/histogram, or
+   bounded status instead.
+7. Every admitted span has one start and exactly one terminal transition.
+   Success, denial, validation failure, timeout, cancellation, panic boundary,
+   queue eviction, and exporter failure all end the span with a closed outcome.
+   Parent/child linkage uses only typed `TraceCorrelationDigest` and
+   `SpanCorrelationDigest` values derived with the
+   `d2b:trace-correlation:v1` and `d2b:span-correlation:v1` domains. Raw W3C
+   trace/span identifiers may exist only in transient transport memory and are
+   never exported or copied to audit.
+8. Telemetry emission is observational. An emitter failure never changes,
+   delays, retries, or fails the operation being observed. Each process keeps
+   only a fixed accumulator indexed by `(signal, closed failure reason)`, with
+   saturating count and last monotonic occurrence; it stores no payload,
+   identity, locator, or error string. This bounded accumulator remains
+   readable by doctor even when self-metric emission also fails.
+9. Performance acceptance uses dedicated benchmark evidence produced by the
+   benchmark harness. Exported histograms are operational observations and
+   cannot satisfy, waive, or fail an acceptance target.
+
+The correlation digest registry is closed:
+
+| Rust newtype | Domain | Allowed observable surface |
+| --- | --- | --- |
+| `OperationCorrelationDigest` | `d2b:audit:operation:v1` | audit and the matching operation span only |
+| `RecordCorrelationDigest` | `d2b:audit:record:v1` | audit envelope only |
+| `SubjectCorrelationDigest` | `d2b:audit:subject:v1` | authorization audit classes only |
+| `ResourceCorrelationDigest` | `d2b:audit:resource:v1` | resource/effect audit classes only |
+| `ExecutionCorrelationDigest` | `d2b:audit:execution:v1` | process/effect audit classes only |
+| `ProcessCorrelationDigest` | `d2b:audit:process:v1` | process-effect audit only |
+| `SessionCorrelationDigest` | `d2b:audit:session:v1` | session audit only |
+| `PeerCorrelationDigest` | `d2b:audit:peer:v1` | cross-Zone admission/share audit only |
+| `ConfigurationCorrelationDigest` | `d2b:audit:configuration:v1` | configuration-mutation audit only |
+| `PrivilegedEffectAuditDigest` | `d2b:audit:privileged-effect:v1` | privileged effect intent/completion audit only |
+| `TraceCorrelationDigest` | `d2b:trace-correlation:v1` | trace linkage and matching audit envelope only |
+| `SpanCorrelationDigest` | `d2b:span-correlation:v1` | trace linkage only |
+
+No public constructor accepts a pre-hashed string. Each newtype accepts only
+the authoritative typed inputs named by its record constructor, uses canonical
+encoding plus SHA-256, and cannot convert to another digest type. A digest is
+absent unless its allowed join is required.
 
 ## Terminology mapping: baseline names → v3 targets
 
@@ -24,12 +111,12 @@ baseline symbols named below.
 | `RealmPath` (`d2b-realm-core/src/realm.rs`) | Zone name (string, name of `Zone/<name>` self resource) | implemented-and-reachable |
 | `RealmId` (`d2b-realm-core/src/ids.rs`) | Component of Zone name | implemented-and-reachable |
 | `WorkloadId` (`d2b-realm-core/src/ids.rs`) | Opaque resource UID (for `Process`, `Guest`, or null) | implemented-and-reachable |
-| `NodeId` (`d2b-realm-core/src/ids.rs`) | Not retained as a standalone audit field; resolved through `Host/<name>` or `Guest/<name>` resource references | implemented-and-reachable |
-| `PrincipalId` (`d2b-realm-core/src/ids.rs`) | `subject_digest: sha256:<hex>` in v3 audit records | implemented-and-reachable |
-| `AuditEnvelope.realm: RealmPath` | `zone: <zone_name>` in v3 audit record | implemented-and-reachable |
-| `AuditEnvelope.node: NodeId` | Not a standalone field; execution context resolved from resource | implemented-and-reachable |
-| `AuditEnvelope.workload: WorkloadId` | Opaque resource UID (for Process under the operation, or null) | implemented-and-reachable |
-| `AuditEnvelope.principal: PrincipalId` | `subject_digest: sha256:<hex>` | implemented-and-reachable |
+| `NodeId` (`d2b-realm-core/src/ids.rs`) | No observable field; a required audit join uses only typed `ExecutionCorrelationDigest` | implemented-and-reachable |
+| `PrincipalId` (`d2b-realm-core/src/ids.rs`) | No raw field; a required authorization join uses only typed `SubjectCorrelationDigest` | implemented-and-reachable |
+| `AuditEnvelope.realm: RealmPath` | Selects the private Zone audit partition and is not serialized into an audit record or export | implemented-and-reachable |
+| `AuditEnvelope.node: NodeId` | No observable field | implemented-and-reachable |
+| `AuditEnvelope.workload: WorkloadId` | No observable field; a required audit join uses only typed `ResourceCorrelationDigest` | implemented-and-reachable |
+| `AuditEnvelope.principal: PrincipalId` | Typed `SubjectCorrelationDigest` only where the record class requires authorization correlation | implemented-and-reachable |
 | `AuditStreamKind::Daemon` | Zone-local audit stream (Zone runtime process) | implemented-and-reachable |
 | `AuditStreamKind::Gateway` | ZoneLink-boundary audit stream (gateway-backed realm → ZoneLink) | implemented-and-reachable |
 | `AuditStreamKind::RemoteNode` | RemoteZone audit stream (cross-Zone link) | implemented-and-reachable |
@@ -40,11 +127,11 @@ baseline symbols named below.
 | `WorkloadIdentity` / `WorkloadTarget` / `RealmTarget` (`d2b-core/src/workload_identity.rs`) | Zone self-resource reference `Zone/<zone_name>` | implemented-and-reachable |
 | `d2b.realms` Nix option (`nixos-modules/options-realms.nix`) | `d2b.zones` Nix option (ADR-only target) | generated-or-eval-contract |
 | `realm-controllers.json` bundle artifact | Zone runtime config (new generated artifact; existing file is retired) | generated-or-eval-contract |
-| `d2b_daemon_vm_*` metrics with `vm` label (`packages/d2bd/src/metrics.rs`) | `vm` label (VM name) removed from v3 metric labels; VM identity carried only in bounded OTEL resource attributes and permitted audit fields | implemented-and-reachable |
-| `vm.name`, `vm.env`, `vm.role` OTEL resource attributes (`nixos-modules/components/observability/{host,stack,guest}.nix`) | Preserved in v3 (advisory from edge collector; re-stamped at ingress boundary). Extended with `d2b.zone`, `d2b.provider`, `d2b.component` (ADR-only additions) | implemented-and-reachable |
+| `d2b_daemon_vm_*` metrics with `vm` label (`packages/d2bd/src/metrics.rs`) | Removed; no replacement identity label or OTEL Resource attribute | implemented-and-reachable |
+| `vm.name`, `vm.env`, `vm.role`, `host.name`, `d2b.zone` OTEL Resource attributes | Removed from v3 observable output; trusted identity remains routing/admission input only | implemented-and-reachable |
 | `d2b.observability.vmName` / `identityName` Nix options | `d2b.zones.<name>.observability.*` Nix options (ADR-only target) | generated-or-eval-contract |
 | `config_source = "realm-controllers"` tracing field (`d2b-priv-broker/src/runtime.rs`) | `config_source = "zone-config"` in v3 startup tracing | implemented-and-reachable |
-| `d2b-clipd/src/audit.rs::AuditEvent.source_realm`, `.destination_realm` | `source_zone`, `destination_zone` (cross-Zone clipboard audit) | implemented-and-reachable |
+| `d2b-clipd/src/audit.rs::AuditEvent.source_realm`, `.destination_realm` | Typed source/destination correlation digests only when the cross-Zone record class requires the join | implemented-and-reachable |
 | `kind = "unsafe-local"` workload (`nixos-modules/options-realms-workloads.nix:221,233`) | `Host/<name>` resource - user-only, **no isolation boundary**; reconciled by `Provider/system-core` with `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`; child processes use normal Process Providers; **not** a v3 Provider | implemented-and-reachable |
 | `UnsafeLocalWorkloadsJson` / `UnsafeLocalWorkload` / `UnsafeLocalLauncherItem` (`packages/d2b-core/src/unsafe_local_workloads.rs`) | `Host` resource spec serialized in the private bundle; `UnsafeLocalWorkload.identity.runtime_kind = "unsafe-local"` / `provider_id = "unsafe-local"` → `Provider/system-core` catalog entry | implemented-and-reachable |
 | `HelperRegistry` / `HelperConnection` / `dispatch_launch` (`packages/d2bd/src/unsafe_local_helper.rs`) | user-domain process supervision; `HelperRegistry::allowed_uids` → `defaultUserRef=User/<name>` constraint; v3 replaces with normal Process Provider supervisor ticket | implemented-and-reachable |
@@ -89,64 +176,45 @@ subsystems with no shared writer path.
 
 - OTEL telemetry is performance and health observability. It is best-effort,
   buffered, and lossy under back-pressure. No OTEL field carries event payload,
-  authorization decision text, resource spec/status bytes, argv, secrets, paths,
-  or subject names. OTEL data is exported through the `observability-otel`
-  Provider and is never an authz input.
+  authorization decision text, raw identity, ResourceRef, handle, credential,
+  resource spec/status bytes, cgroup/unit/invocation field, argv, secret, or
+  path. OTEL data is exported through the `observability-otel` Provider and is
+  never an authz input.
 - Authoritative audit is a durable tamper-evident record of security-relevant
-  decisions. Audit records must be committed before the operation they describe
-  completes. Audit is never a telemetry stream and never enters an OTEL
-  pipeline.
-- OTEL spans and audit records share an opaque `operation_id` / `correlation_id`
-  for cross-system joining. Neither direction carries the other's payload.
+  decisions. Every authoritative record is durable exactly once; privileged
+  effect intent commits before effect release. Audit is never a telemetry
+  stream and never enters an OTEL pipeline.
+- A required cross-system join uses the same record-specific typed
+  domain-separated correlation digest in the span and audit record. Raw
+  operation/trace/span IDs and general digest strings are forbidden. Neither
+  direction carries the other's payload.
 
 Both subsystems must fail safely and independently. OTEL unavailability never
 blocks mutations, reconciliation, or process launch. Audit unavailability for
-privileged records fails the operation closed; see durability class policy
-below.
+an authoritative record fails closed before commit/effect or returns the
+operation-bound pending state after commit; see durability policy below.
 
-## OTEL resource attributes
+## OTEL Resource attributes
 
-### Current baseline attribute set (implemented-and-reachable)
+The baseline allowlist containing `host.name`, `vm.env`, `vm.name`, `vm.role`,
+`source`, and `deployment.environment` is not adopted. Version 3 permits only
+fixed semantic/build attributes whose values do not identify an installation,
+Zone, resource, user, process instance, or external account:
 
-`packages/d2b-contract-tests/tests/policy_observability.rs::loki_native_otel_resource_attributes`
-enforces a closed allowlist:
-
-```
-deployment.environment, host.name, service.name, service.namespace,
-source, vm.env, vm.name, vm.role
-```
-
-Required keys: `service.name`, `vm.env`, `vm.name`, `vm.role`.
-
-These are stamped advisorily by each process/collector. The SigNoz OTel
-Collector re-stamps them authoritatively at the trusted ingress boundary
-(ADR 0026/0033 contract, preserved in v3).
-
-The current `vm.name` carries the VM name (from `d2b.vms.<vm>` in
-`d2b_daemon_vm_*` metrics and the Nix `identityName`/`vmName` Nix options).
-In v3, a VM (current `d2b.vms.<vm>`) whose execution is VM-backed becomes a
-`Guest/<name>` resource. VM names remain as advisory `vm.name` values because
-this is an OTEL resource attribute, not a metric label.
-
-### v3 target attribute additions (ADR-only)
-
-The v3 `d2b-telemetry` crate extends the allowlist with these additional keys:
-
-| Attribute | Source | Values |
+| Attribute | Value source | Value domain |
 | --- | --- | --- |
-| `d2b.zone` | Zone name string (matches `Zone/<name>` self resource name) | Advisory; re-stamped at ingress |
-| `d2b.provider` | Provider name (from closed Provider name catalog) | Provider processes only |
-| `d2b.component` | Component ID (from signed component descriptor) | Controller/service/worker only |
-| `service.version` | `CARGO_PKG_VERSION` | All processes |
+| `service.name` | compile-time component class | closed binary/service class |
+| `service.version` | `CARGO_PKG_VERSION` | bounded build version |
+| `d2b.provider` | signed Provider implementation class | closed catalog value, never `Provider.metadata.name` |
+| `d2b.component` | signed component type | `controller`, `service`, or `worker` |
 
-The existing `vm.name`/`vm.env`/`vm.role`/`host.name`/`service.name`
-keys are **preserved unchanged** in the v3 allowlist. No key is removed.
-No key outside the allowlist may be stamped by any v3 process; the
-`policy_observability.rs::loki_native_otel_resource_attributes` test is
-adapted to include the new keys.
-
-`d2b.zone` (Zone name) is allowed in resource attributes but **not** in
-metric label values; see cardinality rules below.
+`host.name`, `vm.env`, `vm.name`, `vm.role`, `source`, `d2b.zone`, ResourceRefs,
+UIDs, handles, cgroup/unit/invocation fields, and every correlation digest are
+forbidden OTEL Resource attributes. Trusted producer identity is still used
+internally to select the Binding, quota, and route, but the collector discards
+it before constructing observable OTEL data. The contract test parses the
+single allowlist exported from `d2b-contracts` and rejects an emitter or
+collector that adds a second list.
 
 ## Host resource (unsafe-local) posture requirements
 
@@ -238,8 +306,8 @@ The record carries `domain=user` and `no_isolation=true`:
     "provider":              "system-core-user",
     "domain":                "user",
     "no_isolation":          true,
-    "execution_ref_digest":  "sha256:<hex>",
-    "process_uid":           "<opaque uid>",
+    "execution_correlation_digest": "sha256:<typed-domain-separated-hex>",
+    "process_correlation_digest":   "sha256:<typed-domain-separated-hex>",
     "outcome":               "ok|error",
     "exit_class":            "exited|signaled|killed|null"
   }
@@ -271,23 +339,24 @@ audit records. It must not appear as a span attribute, log field, or metric labe
 OTEL resource attributes for Host processes:
 
 - `service.name`: fixed name for the system-core Provider (e.g., `d2b-provider-system-core`)
-- `d2b.zone`: Zone name (resource attribute; not a metric label)
 - `d2b.provider`: `system-core` (closed-set provider name)
-- `d2b.component`: controller/service component ID
+- `d2b.component`: `controller` or `service`
 
-No `vm.name`, no user name, no UID, no argv, no path appears in resource attributes or
-span attributes for Host processes.
+No Zone/VM/Host/resource/user/process identity, correlation digest, UID, argv,
+path, cgroup field, unit field, or invocation ID appears in Resource or span
+attributes for Host processes.
 
 ## Metrics
 
 ### Cardinality rules
 
-Every metric descriptor MUST use only fixed semantic label keys from the
-closed `METRIC_LABEL_POLICY` registry, and every value domain MUST be a closed
-enum or an explicitly bounded semantic classifier from this spec. Free-form
-resource identity is never a metric dimension. The structural policy lint
-rejects descriptor keys that are absent from the registry before inspecting
-any emitted value.
+Every metric descriptor MUST be the exact row selected by name from the closed
+`METRIC_DESCRIPTOR_REGISTRY` in `d2b-contracts`. Every label domain and bucket
+list comes from that row. `METRIC_LABEL_POLICY` is generated as the union
+projection of those rows and cannot admit a descriptor that the descriptor
+registry does not contain. Free-form resource identity is never a metric
+dimension. The structural policy lint rejects an unknown or non-identical
+descriptor before inspecting any emitted value.
 
 The exact label keys `vm`, `zone`, `zone_id`, and `zone_uid` are
 unconditionally forbidden. So are bare resource-kind identity keys such as
@@ -302,8 +371,7 @@ identifies a fixed implementation class, never `Provider.metadata.name`.
 The following values are also unconditionally forbidden in metric labels:
 
 - VM names, Zone names, Provider resource names, and all resource names
-  (`metadata.name` values) - these appear only in bounded OTEL resource
-  attributes
+  (`metadata.name` values); none moves to an OTEL Resource attribute
 - Zone/Provider/Process UIDs
 - Host/Guest/User/Volume/Network/Device names
 - Filesystem paths, socket paths, executable paths
@@ -311,22 +379,23 @@ The following values are also unconditionally forbidden in metric labels:
 - Status detail messages or outcome text beyond stable error codes
 - Subject names or principal identifiers
 - PID, pidfd, or cgroup path values
-- Operation IDs or correlation IDs (allowed in trace span attributes, not metric labels)
+- Raw operation, correlation, trace, or span IDs
 - Endpoint addresses, port numbers, or IP addresses
 - ResourceExport `exportKey` values, raw stream bytes, device serials, token
   values, and any path/device/socket locator
 
-Zone identity remains available as the bounded `d2b.zone` OTEL resource
-attribute. Removing identity labels MUST NOT remove that resource attribute or
-the Zone/resource identity fields permitted by the audit contract.
+No identity moves from a rejected label into an OTEL Resource attribute.
+Required audit joins use only the typed correlation digests allowed by the
+record schema and never become telemetry labels or Resource attributes.
 
 ### Collector ingress enforcement
 
-`METRIC_LABEL_POLICY` is both a descriptor registry and a runtime admission
-contract. The `observability-otel` collector MUST run one shared structural
+`METRIC_DESCRIPTOR_REGISTRY` is the descriptor authority and its
+`METRIC_LABEL_POLICY` projection is the runtime label admission contract. The
+`observability-otel` collector MUST run one shared structural
 validator over metrics from every ingress: compact frames on the Unix emitter,
 OTLP on the private Unix socket, OTLP forwarded over vsock, and the D096 import
-stream. Validation runs after bounded decode and trusted OTEL Resource stamping,
+stream. Validation runs after bounded decode and fixed semantic OTEL Resource stamping,
 but before SDK aggregation, queue insertion, batching, retry, or export. It
 parses descriptor labels plus every data-point and exemplar attribute map.
 
@@ -341,11 +410,11 @@ rejected OTLP frame cannot export its otherwise-valid siblings.
 Unix datagrams are dropped without a response. Stream ingress returns only
 `invalid-telemetry-frame`; three violations quarantine the connection for at
 most 30 seconds and set its credits to zero. Quarantine is in-memory, capped at
-64 connections per Binding, and retains only an opaque connection handle,
-expiry, ingress class, and the closed error class - not payload, rejected
-key/value, or producer/resource identity. Structural validation remains ahead
-of queue capacity during exporter backpressure; invalid frames never consume
-queue or retry capacity.
+64 connections per Binding, and retains only a non-exported local connection
+token, expiry, ingress class, and the closed error class - not payload,
+rejected key/value, or producer/resource identity. Structural validation
+remains ahead of queue capacity during exporter backpressure; invalid frames
+never consume queue or retry capacity.
 
 The collector reports only:
 
@@ -358,11 +427,11 @@ d2b_otel_ingress_policy_total{
 }
 ```
 
-These fixed domains are themselves registered by `METRIC_LABEL_POLICY`.
+These fixed domains are rows in `METRIC_DESCRIPTOR_REGISTRY`.
 `d2b_telemetry_drop_total` uses only the additional closed reasons
-`policy_violation` and `ingress_quarantine`. No metric, span, log, status,
-protocol error, or quarantine record echoes a forbidden key or value. Valid
-identity remains only in allow-listed OTEL Resource attributes. Authoritative
+`policy_violation`, `ingress_quarantine`, and `retention_expired`. No metric,
+span, log, status, protocol error, or quarantine record echoes a forbidden key
+or value. No identity is copied into OTEL Resource attributes. Authoritative
 audit remains a separate writer, payload, and export path.
 
 Note: the current `d2b_daemon_vm_*` metrics in `packages/d2bd/src/metrics.rs`
@@ -370,6 +439,10 @@ use `vm` labels with VM name values (e.g. labels `["vm", "state"]`,
 `["vm", "outcome"]`, `["vm", "vmm", "outcome"]`, `["vm", "reason"]`).
 These existing metrics are **not adopted into v3**. They are retained in d2bd
 only until that daemon is superseded; v3 metrics carry no resource-name labels.
+
+Every gauge in the tables below is an aggregate over the emitting process and
+declares `sum` as its collector merge operator unless another scope is stated.
+There is no per-resource gauge row.
 
 ### Standard instruments
 
@@ -386,7 +459,6 @@ daemon-level VM lifecycle, not a generic resource store.
 | `d2b_store_group_commit_size` | histogram | (none) | 1, 2, 4, 8, 16, 32, 64 |
 | `d2b_store_conflict_total` | counter | `resource_type` | - |
 | `d2b_store_watch_active` | gauge | (none) | - |
-| `d2b_store_revision` | gauge | (none) | - |
 | `d2b_store_compaction_duration_seconds` | histogram | `outcome={ok,error}` | 0.01, 0.05, 0.1, 0.5, 1.0, 5.0 |
 | `d2b_store_backup_duration_seconds` | histogram | `outcome={ok,error}` | 0.1, 0.5, 1.0, 5.0, 10.0, 30.0 |
 | `d2b_store_queue_depth` | gauge | `queue={write,read}` | - |
@@ -466,7 +538,8 @@ Key current metrics that inform bucket design:
 
 `d2b_controller_hint_to_handler_seconds` measures the interval from durable
 store commit to the first instruction of the matching controller handler. The
-p95 hard target is ≤5 ms per ADR 0046.
+p95 benchmark target is <=5 ms per ADR 0046. The exported histogram does not
+prove that target.
 
 #### ResourceExport and ResourceImport controller (D096)
 
@@ -476,8 +549,8 @@ device identifiers, tokens, and `exportKey` values are forbidden labels.
 
 | Metric | Type | Labels | Buckets (s) |
 | --- | --- | --- | --- |
-| `d2b_resource_export_state` | gauge | `exported_type`, `arbitration={exclusive,shared,multiplexed}`, `state={advertised,ready,revoking,degraded}` | - |
-| `d2b_resource_import_state` | gauge | `projection_type`, `state={pending,reachable,bound,degraded,revoked}` | - |
+| `d2b_resource_exports` | gauge | `exported_type`, `arbitration={exclusive,shared,multiplexed}`, `state={advertised,ready,revoking,degraded}` | - |
+| `d2b_resource_imports` | gauge | `projection_type`, `state={pending,reachable,bound,degraded,revoked}` | - |
 | `d2b_resource_export_consumers` | gauge | `exported_type`, `state={active,pending}` | - |
 | `d2b_resource_share_lease_total` | counter | `operation={admit,revoke,reconnect}`, `arbitration`, `outcome={ok,denied,quota,timeout,cancel,revoked,error}` | - |
 
@@ -512,8 +585,9 @@ v3 replaces all `vm`-name labels with closed-set `provider` and `domain` labels:
 
 `d2b_process_launch_duration_seconds` measures from the instant the
 `Process` resource commits to `Ready` to the instant the first OS spawn
-call (clone3 or systemd unit start) is issued. The p95 hard target is
-≤20 ms per ADR 0046.
+call (clone3 or systemd unit start) is issued. The p95 benchmark target is
+<=20 ms per ADR 0046; dedicated benchmark evidence, not the exported
+histogram, proves it.
 
 Current `d2b_daemon_vm_shutdown_duration_seconds` maps to a new
 `d2b_process_stop_duration_seconds` histogram with labels
@@ -527,17 +601,19 @@ Target crates: individual Provider crates (ADR-only).
 | --- | --- | --- | --- |
 | `d2b_provider_reconcile_total` | counter | `resource_type`, `outcome={ok,requeue,conflict,error}` | - |
 | `d2b_provider_reconcile_duration_seconds` | histogram | `resource_type` | 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 2.0 |
-| `d2b_provider_component_phase` | gauge | `component_type={controller,service,worker}`, `phase={pending,ready,degraded,failed,unknown}` | - |
+| `d2b_provider_components` | gauge | `component_type={controller,service,worker}`, `phase={pending,ready,degraded,failed,unknown}` | - |
 
 #### Telemetry subsystem self-metrics
 
 | Metric | Type | Labels | Buckets |
 | --- | --- | --- | --- |
-| `d2b_telemetry_drop_total` | counter | `signal={metric,trace,log}`, `reason={buffer_full,export_error,policy_violation,ingress_quarantine}` | - |
-| `d2b_telemetry_export_total` | counter | `signal`, `outcome={ok,error}` | - |
+| `d2b_telemetry_drop_total` | counter | `signal={metric,trace,log}`, `reason={buffer_full,export_error,policy_violation,ingress_quarantine,retention_expired}` | - |
+| `d2b_telemetry_export_total` | counter | `signal`, `outcome={ok,error,dropped}` | - |
+| `d2b_telemetry_emitter_failure_total` | counter | `signal`, `reason={encode,policy,socket,buffer_full,retention_expired,exporter_error}` | - |
 | `d2b_otel_ingress_policy_total` | counter | `ingress={emitter_unix,otlp_unix,otlp_vsock,import_stream}`, `outcome={accepted,rejected,quarantined}`, `error_class={none,key_not_allowlisted,key_forbidden,key_suffix_forbidden,value_identity,malformed,oversize}` | - |
-| `d2b_audit_write_total` | counter | `record_class`, `outcome={ok,rate_limited,error}` | - |
-| `d2b_audit_drop_total` | counter | `record_class={privileged,unprivileged}` | - |
+| `d2b_otel_backpressured_bindings` | gauge | (none; process aggregate, collector merge `sum`) | - |
+| `d2b_otel_vsock_forwarders` | gauge | (none; process aggregate, collector merge `sum`) | - |
+| `d2b_audit_write_total` | counter | `record_class`, `outcome={ok,pending,error}` | - |
 
 ## Traces
 
@@ -554,30 +630,29 @@ Target crates: individual Provider crates (ADR-only).
 - serialized by `d2b-realm-codec-protobuf/src/lib.rs` (`encode_trace_context`,
   `decode_trace_context`) over the current constellation protobuf codec.
 
-v3 target: extract `TraceContext` unchanged to `d2b-telemetry`. Adapt the
-protobuf codec to the v3 resource API contract framing. The current
-`traceparent` field in `d2b-realm-core` (referenced from
-`packages/d2bd/src/usbip_reconcile_state.rs` and `typed_error.rs`) is
-preserved and extended to carry the OTEL W3C `traceparent` format.
-
-`TraceContext` is carried in every d2b-bus route request and every
-ComponentSession operation. The existing `AuditEnvelope.trace:
-Option<TraceContext>` field (implemented-and-reachable in
-`d2b-realm-core/src/audit.rs`) is preserved in v3 audit records.
+v3 does not export those raw fields. `d2b-telemetry` accepts a validated W3C
+`traceparent` only at a transport boundary, derives
+`TraceCorrelationDigest` and `SpanCorrelationDigest` through the fixed domains
+named by the Version 3 correction, and immediately discards the raw IDs after
+child derivation. The protobuf contract carries the typed digests, not
+printable caller-supplied trace/span strings. `TraceContext` is carried in
+every d2b-bus route request and ComponentSession operation only in that typed
+form.
 
 ### Span catalog
 
-Every span carries standard `SpanKind`, the `d2b.zone` resource attribute,
-an `outcome` attribute set at span end, and no path/name/argv/credential/
-PID attribute. `operation_id` and `correlation_id` are allowed as span
-attributes (they are opaque digests).
+Every span carries standard `SpanKind`, typed trace/span correlation digests,
+an `outcome` attribute set exactly once at span end, and no raw
+identity/path/handle/argv/credential/PID/cgroup/unit attribute. Where an
+operation join is required, the only permitted field is typed
+`OperationCorrelationDigest`.
 
 | Span name | Kind | Attributes | Notes |
 | --- | --- | --- | --- |
 | `d2b.store.write` | Internal | `kind`, `group_size`, `revision`, `outcome` | Per write transaction |
 | `d2b.store.read` | Internal | `op`, `resource_type`, `outcome` | Per read transaction |
 | `d2b.store.compaction` | Internal | `segments_removed`, `outcome` | |
-| `d2b.api.request` | Server | `verb`, `resource_type`, `operation_id`, `outcome` | |
+| `d2b.api.request` | Server | `verb`, `resource_type`, `operation_correlation_digest`, `outcome` | |
 | `d2b.api.watch.event` | Internal | `resource_type`, `event_kind`, `outcome` | |
 | `d2b.bus.route` | Client | `service`, `method`, `direction`, `outcome` | |
 | `d2b.session.handshake` | Server | `profile`, `purpose_class`, `outcome` | |
@@ -592,9 +667,9 @@ attributes (they are opaque digests).
 ### Trace context propagation
 
 Resource API requests entering via d2b-bus carry an incoming W3C `traceparent`
-header. The request creates a child span, stores the resulting `TraceContext`
-in the operation record (adapts existing `AuditEnvelope.trace` field in
-`d2b-realm-core/src/audit.rs`), and propagates it to:
+header in transient transport memory. Admission validates it, derives the
+typed correlation context, and creates a child span. The operation record
+stores only the typed digests and propagates them to:
 
 - the store write transaction span;
 - the post-commit controller hint;
@@ -606,6 +681,13 @@ A complete request-to-launch trace spans:
 
 Cross-Zone operations propagate trace context through `ZoneLink` cursor
 operations (adapts existing `d2b-realm-core/src/routing.rs` route propagation).
+Every stage opens its child only after admission and ends it on all control-flow
+exits. Cancellation ends the current child before cancellation acknowledgement;
+timeout ends it before requeue or refusal; panic boundaries end it with
+`internal`; queue/retention eviction ends it with `dropped`; exporter failure
+ends the export child without altering the observed operation. A lifecycle
+test rejects an orphan, duplicate end, missing terminal outcome, raw ID
+attribute, or child whose parent has not been admitted.
 
 ## Logs
 
@@ -632,8 +714,11 @@ match the renamed artifact.
 Forbidden log body content (extends current policies):
 
 - Raw provider error strings
-- Resource names, paths, PIDs, argv, or environment values
-- Credential bytes or digests in non-audit context
+- Zone/resource/subject/operation/trace/span identities, ResourceRefs, or
+  correlation digests
+- Handles, paths, PIDs/pidfds, cgroup/unit/invocation fields, argv, or
+  environment values
+- Credential bytes, credential references, handles, or derived values
 - Terminal bytes or Wayland buffer content
 - `RealmPath` or `WorkloadId` string values in log fields (old names not
   leaked into v3 log bodies)
@@ -655,10 +740,13 @@ The current `scrapeJournal` option in `nixos-modules/components/observability/ho
   leaves)
 - disabled by default in the Provider spec; requires explicit operator consent
 
-The collector applies a redaction filter before forwarding: drops `MESSAGE`
-bodies matching credential/secret/path patterns, drops `_CMDLINE`, `_EXE`,
-`INVOCATION_ID` fields. Retains `_SYSTEMD_CGROUP`, `PRIORITY`, `SYSLOG_IDENTIFIER`,
-and structured `KEY=VALUE` pairs from the declared allow-set.
+The collector may use cgroup/unit metadata transiently to select input, but
+applies a structural projection before forwarding. It drops `MESSAGE` bodies
+matching credential/secret/path/identity patterns and drops `_CMDLINE`, `_EXE`,
+`INVOCATION_ID`, `_SYSTEMD_CGROUP`, `_SYSTEMD_UNIT`, `_SYSTEMD_USER_UNIT`,
+`_PID`, `_UID`, and `_GID`. It retains only `PRIORITY`, a closed
+`SYSLOG_IDENTIFIER` component class, and structured pairs from the single
+identity-free allowlist.
 
 ## Private OTEL endpoints
 
@@ -678,10 +766,16 @@ Zone runtime, core-controller, and all other core processes use a
   substitute for the collector gate;
 - holds a bounded in-process ring (default 4 MiB metrics, 4 MiB traces, 2 MiB
   logs per process - configurable via the observability-otel Provider spec);
-- drops oldest frames on ring-full, incrementing `d2b_telemetry_drop_total`.
+- enforces the fixed per-signal age ceilings before ring admission and on each
+  drain/retry;
+- drops oldest frames on ring-full, increments
+  `d2b_telemetry_drop_total`, and records only the bounded closed diagnostic
+  accumulator from the Version 3 correction.
 
 No `opentelemetry_sdk` or `opentelemetry-otlp` dependency is added to any
-Zone/core crate.
+Zone/core crate. Encode, policy, socket, buffer, and retention failures are
+absorbed by the emitter and never alter the observed operation's result or
+latency-control path.
 
 `Provider/observability-otel` runs the full OTEL SDK with an OTLP/gRPC exporter
 as an **ordinary optional Process**. It:
@@ -1055,24 +1149,24 @@ adapted from the implementations above. Every record carries:
 ```json
 {
   "ts_ms":          1234567890123,
-  "schema_version": 1,
-  "zone":           "<zone_name>",
+  "schema_version": 2,
   "record_class":   "<class>",
-  "operation_id":   "<opaque>",
-  "correlation_id": "<opaque>",
-  "trace_id":       "<opaque or null>",
-  "source":         "<component>",
+  "operation_correlation_digest": "sha256:<typed-domain-separated-hex or null>",
+  "record_correlation_digest":    "sha256:<typed-domain-separated-hex or null>",
+  "trace_correlation_digest":     "sha256:<typed-domain-separated-hex or null>",
+  "source_class":    "<closed component class>",
   "prev_hash":      "sha256:<hex>",
   "record_hash":    "sha256:<hex>",
   "<class>_fields": { ... }
 }
 ```
 
-`zone` is the Zone name (baseline: `RealmPath` → target: Zone name).
-`operation_id` and `correlation_id` are the same opaque-digest types from
-`d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`), retained
-unchanged. `trace_id` is the `TraceContext.trace_id` field from
-`d2b-realm-core/src/trace_context.rs`, adapted to the v3 contract.
+The owning Zone selects a private storage partition and is not serialized.
+Each correlation field is a distinct non-interchangeable newtype. Its
+constructor binds one fixed domain plus the minimum canonical inputs required
+for that record-class join. Absence is preferred when no join is required.
+Raw IDs, a general digest helper, and caller-supplied digest strings are not
+accepted.
 
 #### ResourceMutation
 
@@ -1082,11 +1176,11 @@ unchanged. `trace_id` is the `TraceContext.trace_id` field from
   "resource_mutation_fields": {
     "verb":              "create|update-spec|update-status|update-metadata|update-finalizers|delete|use-credential|admin-credential",
     "resource_type":     "<closed catalog type>",
-    "resource_uid":      "<opaque uid>",
+    "resource_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "generation":        12,
     "expected_revision": 7,
     "resulting_revision":8,
-    "subject_digest":    "sha256:<hex>",
+    "subject_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "policy_revision":   3,
     "outcome":           "ok|conflict|denied|invalid|error",
     "error_code":        "<stable code or null>"
@@ -1094,19 +1188,20 @@ unchanged. `trace_id` is the `TraceContext.trace_id` field from
 }
 ```
 
-`subject_digest` is SHA-256 of the normalized canonical subject string from
-the v3 `AuthenticatedSubjectContext` (ADR-046-componentsession-and-bus); this
-replaces the current `PrincipalId` in `AuditEnvelope`. No resource name, spec
-bytes, or status bytes appear in this record.
+`subject_correlation_digest` is constructed only from the authoritative
+`AuthenticatedSubjectContext` through its record-specific domain. It cannot be
+constructed from a caller string. No raw Zone/resource/subject identity,
+resource name, spec bytes, or status bytes appear in this record.
 
 #### ResourceUpgrade (D091) and expedited reconcile (D090)
 
 An `assess_update`/`plan_upgrade`/`execute_upgrade` operation emits a
 `resource-upgrade` record; an authorized expedited (`waitForReconcile`) mutation
 is recorded via the existing `resource-mutation` record extended with an
-`expedited: true` flag and its `operation_id`. Neither carries spec/status bytes,
-secrets, or raw artifact paths - only bounded closed-enum currency/disruption
-values and opaque generation/digest IDs:
+`expedited: true` flag and the envelope's typed
+`operation_correlation_digest`. Neither carries spec/status bytes, secrets,
+raw artifact paths, raw identities, or general digest strings - only bounded
+closed-enum currency/disruption values and typed correlation fields:
 
 ```json
 {
@@ -1114,7 +1209,7 @@ values and opaque generation/digest IDs:
   "resource_upgrade_fields": {
     "verb":                 "assess|plan|execute",
     "resource_type":        "<closed catalog type>",
-    "resource_uid":         "<opaque uid>",
+    "resource_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "update_state":         "Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown",
     "disruption":           "None|Reload|Restart|Recycle|Replace",
     "preserve_state":       true,
@@ -1122,7 +1217,6 @@ values and opaque generation/digest IDs:
     "observed_generation":  11,
     "target_generation":    12,
     "affected_owned_count": 3,
-    "operation_id":         "<opaque>",
     "outcome":              "ok|blocked|conflict|denied|error",
     "error_code":           "<stable code or null>"
   }
@@ -1145,9 +1239,9 @@ labels (cardinality rules below).
   "rbac_change_fields": {
     "verb":           "create|update-spec|delete",
     "resource_type":  "Role|RoleBinding",
-    "resource_uid":   "<opaque uid>",
+    "resource_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "generation":     4,
-    "subject_digest": "sha256:<hex>",
+    "subject_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "policy_revision":3,
     "outcome":        "ok|denied|error"
   }
@@ -1164,10 +1258,10 @@ labels (cardinality rules below).
     "profile":            "NN|KK|IKpsk2",
     "purpose_class":      "local|enrolled|bootstrap",
     "transport_class":    "unix|vsock|zone_link",
-    "subject_digest":     "sha256:<hex>",
+    "subject_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "authz_decision":     "allowed|denied",
     "authz_revision":     7,
-    "session_gen_digest": "sha256:<hex>",
+    "session_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "outcome":            "ok|auth|policy|timeout|error",
     "error_code":         "<stable code or null>"
   }
@@ -1189,7 +1283,7 @@ streams recorded.
     "service":        "<closed catalog service name>",
     "method":         "<method name>",
     "direction":      "local|host|guest|zone_link",
-    "subject_digest": "sha256:<hex>",
+    "subject_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "authz_decision": "allowed|denied",
     "authz_revision": 7,
     "outcome":        "ok|denied|error"
@@ -1200,9 +1294,10 @@ streams recorded.
 #### ResourceShare (D096)
 
 ResourceExport/ResourceImport advertise/admit/revoke/reconnect decisions emit a
-bounded resource-share audit record. The event carries only the local Zone from
-the envelope, the peer Zone, a closed capability subset, and the outcome. It
-never carries payload bytes, paths, device identifiers, tokens, raw stream data,
+bounded resource-share audit record. The event carries only a typed peer
+correlation digest when a cross-record join is required, a closed capability
+subset, and the outcome. It never carries either raw Zone identity, payload
+bytes, paths, device identifiers, tokens, raw stream data,
 ResourceType/resource names, arbitration internals, or `exportKey`.
 
 ```json
@@ -1210,7 +1305,7 @@ ResourceType/resource names, arbitration internals, or `exportKey`.
   "record_class": "resource-share",
   "resource_share_fields": {
     "event":              "advertise|admit|revoke|reconnect",
-    "peer_zone":          "<zone_name>",
+    "peer_correlation_digest": "sha256:<typed-domain-separated-hex>",
     "capability_subset":  ["<closed capability>"],
     "outcome":            "ok|denied|quota|revoked|degraded|error"
   }
@@ -1224,9 +1319,10 @@ ResourceType/resource names, arbitration internals, or `exportKey`.
   "record_class": "broker-effect",
   "broker_effect_fields": {
     "op_class":                  "<stable broker op class>",
-    "subject_digest":            "sha256:<hex>",
-    "execution_context_digest":  "sha256:<hex>",
-    "resource_context_digest":   "sha256:<hex>",
+    "privileged_effect_audit_digest": "sha256:<typed-domain-separated-hex>",
+    "subject_correlation_digest":   "sha256:<typed-domain-separated-hex>",
+    "execution_correlation_digest": "sha256:<typed-domain-separated-hex>",
+    "resource_correlation_digest":  "sha256:<typed-domain-separated-hex>",
     "outcome":                   "ok|denied|error",
     "error_code":                "<stable code or null>"
   }
@@ -1236,9 +1332,9 @@ ResourceType/resource names, arbitration internals, or `exportKey`.
 Adapts existing `OpAuditRecord` from
 `packages/d2b-priv-broker/src/ops/audit_op.rs`. No raw paths, device
 identifiers, or broker operation arguments. Current `SwtpmDirAudit` fields
-(`base_dir_hash`, `result`, `mode`, `owner_uid`, `marker_result`) are
-preserved by encoding them into `resource_context_digest` plus a
-`swtpm_dir_fields` sub-object that carries the closed-set enums without paths.
+(`result`, `mode`, `marker_result`) are preserved as closed enums. Raw
+`base_dir_hash`, `owner_uid`, paths, handles, cgroup/unit fields, and operation
+arguments are forbidden.
 
 #### ProcessEffect
 
@@ -1250,8 +1346,8 @@ preserved by encoding them into `resource_context_digest` plus a
     "provider":              "minijail|systemd|system-core-user",
     "domain":                "system|user",
     "no_isolation":          false,
-    "execution_ref_digest":  "sha256:<hex>",
-    "process_uid":           "<opaque uid>",
+    "execution_correlation_digest": "sha256:<typed-domain-separated-hex>",
+    "process_correlation_digest":   "sha256:<typed-domain-separated-hex>",
     "outcome":               "ok|error",
     "exit_class":            "exited|signaled|killed|null"
   }
@@ -1306,13 +1402,17 @@ re-versioned in v3 with `zone: String` replacing `realm` and `node` dropped.
 
 | Class | Records | Durability | Failure policy |
 | --- | --- | --- | --- |
-| Privileged | ResourceMutation (RBAC verbs), RBACChange, SessionConnect (auth-failure/denial), ResourceShare (`admit`/`revoke`), StateReset | Durable before operation completes | Fail operation with `audit-unavailable` |
-| Standard | ResourceMutation (non-RBAC), RouteAdmission, ResourceShare (`advertise`/`reconnect`), ProcessEffect | Durable within bounded window | Log warning; metric increment; continue |
-| Best-effort | BrokerEffect (informational), telemetry-self records | Async append | Drop under rate-limit; no operation impact |
+| Privileged effect | Every `BrokerEffect` and any record releasing a typed privileged effect | Immutable intent durable before effect release; completion durable exactly once by `PrivilegedEffectAuditDigest` | Refuse before effect, or return operation-bound `CommittedPendingAudit` after a committed mutation; never report success or rollback |
+| Authoritative decision | `ResourceMutation`, `ResourceUpgrade`, `RBACChange`, `SessionConnect`, `RouteAdmission`, `ResourceShare`, `ProcessEffect`, `StateReset` | Durable exactly once before final success | Refuse or remain `CommittedPendingAudit`; retry observes the same recovery key |
+| Diagnostic | Provider/emitter health observations | Not an audit record; fixed bounded diagnostic accumulator or lossy telemetry only | Never changes the observed operation |
 
-Privileged records are never rate-limited. Unprivileged records follow the
-existing `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096` rate limit from
-`packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::Unprivileged` path).
+There is no best-effort authoritative audit class. No authoritative record is
+rate-limited or dropped. The predecessor
+`DEFAULT_AUDIT_WRITES_PER_SECOND`/`AuditWriteClass::Unprivileged` path may be
+used only by retired compatibility code and is not a v3 audit implementation.
+Every authoritative append has an immutable recovery key and duplicate replay
+returns the already-committed record rather than writing a second logical
+event.
 
 ### Segmentation and retention
 
@@ -1321,7 +1421,21 @@ Segments rotate at 64 MiB or UTC midnight (whichever first). Segment names:
 0045 v3 audit journal). Files are immutable after rotation. Default retention:
 30 days (adapts `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS = 14` from
 `packages/d2b-gateway-runtime/src/audit_jsonl.rs`; extended for the more
-authoritative Zone audit).
+authoritative Zone audit). Age alone never authorizes pruning.
+
+For each configured required export destination, the audit owner stores a
+durable `AuditExportAcknowledgement` containing destination class, segment
+sequence, segment hash, acknowledged terminal record hash, and acknowledgement
+time. All fields are closed or typed digests; no destination locator or Zone
+identity is exposed. Pruning is allowed only when the 30-day floor has elapsed,
+the segment is not current, hash-chain verification succeeds, and every
+required destination has a matching durable acknowledgement. Export disabled
+by configuration is not an acknowledgement and makes every segment
+non-pruneable. Once the retention floor elapses, the audit owner sets
+`audit-prune-blocked` with remediation to configure and complete a required
+export destination. An unavailable configured destination is not equivalent
+to disabled. Ack mismatch, missing ack, sync failure, or acknowledgement
+rollback leaves bytes untouched.
 
 ### Export
 
@@ -1335,7 +1449,11 @@ authoritative Zone audit).
 - Adapts `ExportBrokerAuditOk` response contract from
   `packages/d2b-priv-broker/tests/broker_export_audit.rs`.
 - Hash chain breaks reported inline in output stream.
-- No plaintext resource names, paths, argv, or credential bytes.
+- The service records an acknowledgement only after the destination confirms
+  the exact segment sequence/hash and the acknowledgement is file- and
+  directory-synced.
+- No raw identity, handle, ResourceRef, path, argv, credential, cgroup/unit
+  field, invocation ID, or destination locator.
 
 The canonical Role rule is:
 
@@ -1369,18 +1487,20 @@ v3 JSON envelope:
 
 ```json
 {
-  "zone":           "<name>",
   "zone_phase":     "Pending|Ready|Degraded|Failed|Unknown",
   "store_health":   { "phase": "…", "revision": 12345, "compaction_floor": 100, "watch_active": 3 },
   "controllers":    [{ "handler": "…", "phase": "…", "queue_depth": 0, "last_reconciled_at": "…" }],
   "providers":      [{ "provider": "…", "phase": "…", "component_phases": {} }],
   "process_counts": { "active": 4, "failed": 0 },
-  "audit":          { "phase": "ok|rate_limited|unavailable", "segments": 3, "drop_privileged": 0, "drop_total": 2 },
+  "audit":          { "phase": "ok|pending|prune_blocked|unavailable", "segments": 3, "pending": 0, "unacknowledged_segments": 0 },
   "telemetry":      { "phase": "ok|buffering|unavailable", "drop_total": 0 },
   "checks":         [{ "name": "…", "status": "ok|warn|error", "detail": "…" }],
   "summary":        { "ok": 12, "warn": 1, "error": 0 }
 }
 ```
+
+The selected Zone is request context and is not repeated in the diagnostic
+envelope.
 
 Named check set: `store-revision-monotonic`, `controller-all-ready`,
 `mandatory-providers-ready`, `audit-sink-healthy`, `otel-sink-reachable`,
@@ -1443,18 +1563,20 @@ When the per-Zone emitter socket (`emitter.sock`) is absent or the
 
 When the audit segment file cannot be opened or written:
 
-1. Privileged records: fail the operation with stable error code `audit-unavailable`.
-2. Standard records: log warning via `tracing::warn!`, increment
-   `d2b_audit_drop_total{record_class="standard"}`, continue.
-3. Best-effort records: increment counter, drop.
-4. Doctor: `audit: { "phase": "unavailable" }`.
-5. Rate-limited records: privileged records are never rate-limited (adapts
-   existing `AuditWriteClass::Privileged` invariant from
-   `packages/d2b-priv-broker/src/audit.rs`).
+1. Before a privileged effect or authoritative mutation commits, fail closed
+   with stable error code `audit-unavailable`; release no effect.
+2. After the mutation journal commit, return the same operation-bound
+   `CommittedPendingAudit`, leave publication blocked, and replay the immutable
+   audit recovery key. Never report rollback and never apply the effect twice.
+3. No authoritative record is dropped, rate-limited, or downgraded to a
+   warning. Provider/emitter diagnostics remain outside the audit sink.
+4. Doctor: `audit: { "phase": "unavailable" }` with only a closed reason and
+   pending-count aggregate.
 
 On audit file descriptor loss (rotation/restart): Zone runtime re-opens the
-segment file with `O_APPEND | O_CREAT` before the next write, mirroring the
-existing `packages/d2bd/src/daemon_audit.rs` file-open pattern.
+segment file with `O_APPEND | O_CREAT`, verifies the last durable recovery key,
+and resumes exactly-once replay before accepting the next success, mirroring
+the existing `packages/d2bd/src/daemon_audit.rs` file-open pattern.
 
 ### Zone store quarantined
 
@@ -1655,21 +1777,21 @@ typed conditions):
 ```
 
 **Cleanup stall detection**: if a scheduled Delete has not completed within
-30 minutes, condition `cleanup-stalled` is added with the resource name and
-stall duration. Zone phase remains `Degraded`. A `HealthCondition` audit record
-(best-effort durability class) is emitted with a closed-enum stall reason
-(`finalizer-holder-gone`, `controller-unresponsive`, `child-deletion-failed`).
+30 minutes, condition `cleanup-stalled` is added with a closed reason and
+bounded stalled-resource count, never a resource name. Zone phase remains
+`Degraded`. The bounded diagnostic accumulator records the closed reason
+(`finalizer-holder-gone`, `controller-unresponsive`, or
+`child-deletion-failed`); it is not an audit record.
 
 **Audit records for cleanup events**:
 
 | Event | Record class | Durability |
 | --- | --- | --- |
-| New generation accepted and staged | `ResourceMutation{event="generation-staged"}` | standard |
-| Generation atomically activated | `ResourceMutation{event="generation-activated", bundle_digest="sha256:..."}` | standard |
-| Generation rejected (validation failure) | `ResourceMutation{event="generation-rejected", reason="<enum>"}` | standard |
-| Config-removed resource Delete scheduled | `ResourceMutation{event="delete-scheduled", trigger="config-cleanup"}` | standard |
-| Config-removed resource Delete completed | `ResourceMutation{event="deleted", trigger="config-cleanup"}` | standard |
-| Cleanup stall detected | `HealthCondition{type="cleanup-stalled", reason="<enum>"}` | best-effort |
+| New generation accepted and staged | `ResourceMutation{event="generation-staged"}` | durable exactly once |
+| Generation atomically activated | `ResourceMutation{event="generation-activated", configuration_correlation_digest="sha256:..."}` | durable exactly once |
+| Generation rejected (validation failure) | `ResourceMutation{event="generation-rejected", reason="<enum>"}` | durable exactly once |
+| Config-removed resource Delete scheduled | `ResourceMutation{event="delete-scheduled", trigger="config-cleanup"}` | durable exactly once |
+| Config-removed resource Delete completed | `ResourceMutation{event="deleted", trigger="config-cleanup"}` | durable exactly once |
 
 No resource name, path, argv, or secret value appears in any cleanup audit
 field. The `reason` on `generation-rejected` uses only closed-enum values:
@@ -1689,19 +1811,25 @@ replaced generation receive Delete; resources present in both are reconciled.
 
 Adapt `packages/d2b-contract-tests/tests/policy_metrics.rs`:
 
-- Assert every metric declared in this spec is present in the closed
-  `METRIC_INVENTORY` table in its owning crate.
-- Parse every v3 `MetricDescriptor` and assert every label key/value domain is
-  present in the closed `METRIC_LABEL_POLICY` registry.
+- Assert every metric declared in this spec is one exact row in the single
+  `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`.
+- Reject every Provider/core-local descriptor or inventory authority. Parse
+  every emitter selection and require exact equality with the central row,
+  including kind, aggregation scope, labels, value domains, and buckets.
+- Derive `METRIC_LABEL_POLICY` from the descriptor registry and reject
+  independently authored label domains.
 - Assert the exact keys `vm`, `zone`, `zone_id`, and `zone_uid` are absent from
   every v3 descriptor.
 - Assert resource-name-derived keys are absent, including exact regression
   cases `credential_name`, `network`, `network_name`, and `link_name_hash`, and
   reject the structural suffixes `*_name`, `*_name_hash`, `*_name_digest`, and
   `*_uid`.
-- Feed a canary `metadata.name` value through every metric emitter fixture and
-  assert it is absent from every emitted label value while `d2b.zone` remains
-  present in the OTEL resource-attribute fixture.
+- Feed raw identity, handle, credential, cgroup/unit, and invocation canaries
+  through every metric emitter fixture and assert they are absent from labels
+  and OTEL Resource attributes.
+- Assert no gauge row has resource/session/lease/component scope without an
+  identity dimension; every identity-free gauge declares its complete
+  merge-safe aggregate scope and operator.
 - Assert `d2b_controller_hint_to_handler_seconds` bucket list includes a
   5 ms bucket (0.005).
 - Assert `d2b_process_launch_duration_seconds` bucket list includes a 20 ms
@@ -1723,9 +1851,9 @@ New test `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs`:
 - Assert `TraceContext` fields only accessed via the validated constructor
   `TraceContext::new`.
 - Assert no `format!("{}", ...)` of a `PathBuf` appears as a span attribute.
-- Assert the OTEL resource attribute initialization uses only the allowlist
-  from this spec (extends `loki_native_otel_resource_attributes` test from
-  `packages/d2b-contract-tests/tests/policy_observability.rs`).
+- Assert the OTEL Resource attribute initialization uses only the fixed
+  identity-free allowlist from this spec and rejects all baseline
+  host/VM/Zone/source fields.
 - Parse the metric descriptor registry structurally and fail any label key not
   declared by `METRIC_LABEL_POLICY`; grep-only checks are insufficient.
 - Assert `config_source = "realm-controllers"` string literal does not appear
@@ -1740,13 +1868,20 @@ New `packages/d2b-audit/tests/`:
   `record_hash` chain and truncation detection.
 - `audit_record_schema`: deserialize every record class from fixture JSON;
   verify `realm`, `node`, `workload_id` field names are absent (old baseline
-  names must not appear in v3 schema); verify `zone` is present.
+  names must not appear in v3 schema); verify raw `zone`, UID, ResourceRef,
+  operation, trace/span, handle, credential, cgroup/unit, and invocation fields
+  are absent and every present correlation digest has the exact record-specific
+  type/domain.
 - `audit_segment_rotation`: adapted from rotation logic tests in
   `packages/d2b-gateway-runtime/src/audit_jsonl.rs`.
-- `audit_rate_limit_privileged_never_dropped`: adapted from
-  `AuditWriteClass::Privileged` invariant in
-  `packages/d2b-priv-broker/src/audit.rs`.
-- `audit_unavailable_blocks_privileged`: verifies `audit-unavailable` error.
+- `privileged_effect_audit_exactly_once`: crash at every intent/effect/
+  completion boundary; prove one durable intent, at most one released effect,
+  one logical completion, and no best-effort/rate-limit path.
+- `audit_unavailable_blocks_privileged`: verifies `audit-unavailable` before
+  commit and `CommittedPendingAudit` after commit.
+- `audit_prune_requires_export_ack`: vary every destination, sequence/hash,
+  retention-floor, sync, restart, and acknowledgement-rollback condition;
+  bytes remain until all required acknowledgements match durably.
 
 ### Doctor contract tests
 
@@ -1800,14 +1935,19 @@ New `packages/d2b/tests/zone_support_bundle_contract.rs`:
 - Resource status snapshots contain no `spec` bytes and no `metadata.name`.
 - `bundle_completeness: "complete"` on healthy Zone; `"partial"` on quarantined.
 
-### Performance histogram tests
+### Performance benchmark evidence
 
 In the performance benchmark fixture (per ADR-046-resource-store-redb):
 
-- `hint_to_handler_latency`: drive 1000 committed resources; assert p95
-  `d2b_controller_hint_to_handler_seconds` ≤5 ms.
+- `hint_to_handler_latency`: drive 1000 committed resources; the harness writes
+  candidate-bound benchmark evidence from its own monotonic samples and asserts
+  p95 <=5 ms.
 - `commit_to_launch_latency`: drive 100 concurrent ready Process resources;
-  assert p95 `d2b_process_launch_duration_seconds` ≤20 ms.
+  the harness writes candidate-bound benchmark evidence from its own monotonic
+  samples and asserts p95 <=20 ms.
+- Exported `d2b_controller_hint_to_handler_seconds` and
+  `d2b_process_launch_duration_seconds` are not read by the benchmark and
+  cannot serve as pass/fail evidence.
 
 ### OTEL endpoint tests
 
@@ -1815,8 +1955,8 @@ New `packages/d2b-provider-observability-otel/tests/`:
 
 - `emitter_socket_receive`: lightweight emitter writes frames to the per-Zone
   datagram socket; Provider drains and forwards; assert spans arrive at the
-  mock OTLP sink with correct `d2b.zone` resource attribute and no forbidden
-  labels.
+  mock OTLP sink with only fixed identity-free Resource attributes and no
+  forbidden labels.
 - `ingress_metric_policy`: run one table-driven corpus through the Unix
   emitter, OTLP Unix, OTLP/vsock, and D096 import-stream adapters. Every adapter
   rejects exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`,
@@ -1834,6 +1974,16 @@ New `packages/d2b-provider-observability-otel/tests/`:
 - `emitter_ring_drop_on_overflow`: fill ring past capacity; assert
   `d2b_telemetry_drop_total` increments; assert Zone/controller health is
   `Degraded` (not `Failed`); assert Zone startup is not blocked.
+- `emitter_retention_is_per_signal_and_bounded`: fake time across the 60 s
+  metrics, 300 s traces, and 120 s logs ceilings at ring, queue, retry,
+  forwarding, and import boundaries; expired frames never export.
+- `emitter_failure_does_not_fail_observed_operation`: inject encode, policy,
+  socket, buffer, retention, and self-metric failure; assert the observed
+  result/ordering is unchanged and only the fixed diagnostic accumulator
+  changes.
+- `trace_lifecycle_is_complete`: every admitted span ends exactly once across
+  success, denial, invalid input, timeout, cancellation, panic boundary,
+  eviction, and exporter failure; no raw trace/span identity is exported.
 - `no_vm_label_in_metrics`: assert no emitted frame carries a label named
   `vm` with a resource-name value; assert old `d2b_daemon_vm_state` metric
   shape is absent from all v3 collectors.
@@ -1849,8 +1999,11 @@ New `packages/d2b-audit/tests/export_audit.rs` (adapts
 - Admin-only `audit-export` verb is enforced.
 - NDJSON output only.
 - Hash chain breaks reported inline.
-- No `realm`, `node`, `workload_id` field names in exported records.
-- No resource name, path, or argv appears in exported records.
+- No raw identity, handle, ResourceRef, credential, cgroup/unit/invocation
+  field, path, or argv appears in exported records.
+- A destination acknowledgement binds the exact segment sequence/hash and is
+  durable before prune eligibility; stdout export alone does not acknowledge a
+  required destination.
 
 ### Nix configuration and resource bundle tests
 
@@ -1951,9 +2104,9 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Current anchor | (1) `packages/d2bd/src/metrics.rs`: 16-metric hand-rolled Prometheus registry; `vm` name labels; `VM_START_BUCKETS_SECONDS`, `BROKER_REQUEST_BUCKETS_SECONDS`, `ACTIVATION_PHASE_BUCKETS_SECONDS`. (2) `packages/d2bd/src/daemon_audit.rs`: hash-chain JSONL; `DaemonEvent` variants; `VmStartRunnerExitReason`, `RunnerExitKind`, `VmShutdownProvider` enums. **No** `DaemonEvent` for unsafe-local launches - this is a gap documented in the ProcessEffect section. (3) `packages/d2b-priv-broker/src/audit.rs`: `AuditWriteClass`, `AuditDropSummary`, rate-limit, O_APPEND, rotation. (4) `packages/d2b-realm-core/src/audit.rs`: `AuditHash`, `AuditChainLink`, `AuditChainRecord{realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditEnvelope{realm, node, workload, principal}`, `AuditSinkHealth`. (5) `packages/d2b-realm-core/src/trace_context.rs`: `TraceContext{trace_id, span_id}`. (6) `packages/d2b-realm-core/src/ids.rs`: `RealmId`, `WorkloadId`, `NodeId`, `PrincipalId`, `OperationId`, `CorrelationId`. (7) `packages/d2b-gateway/src/audit.rs`: `GatewayAuditEvent`, `GatewayAuditKind`. (8) `packages/d2b-gateway-runtime/src/audit_jsonl.rs`: `JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS`. (9) `packages/d2b-priv-broker/src/ops/audit_op.rs`: `OpAuditRecord`, `SwtpmDirAudit`. (10) `packages/d2b-host/src/otel_host_bridge_argv.rs`, `packages/d2bd/src/otel_host_bridge_readiness.rs`. (11) `nixos-modules/components/observability/{host,stack,guest}.nix`: `scrapeJournal`, `identityName`/`vmName`, `vm.name`/`vm.env`/`vm.role` OTEL resource attributes, SigNoz stack. (12) `packages/d2b-contract-tests/tests/{policy_observability,policy_metrics,minijail_relay_otel}.rs`. (13) `packages/d2b/tests/{audit_contract,host_doctor_contract}.rs`. (14) `packages/d2b-priv-broker/tests/broker_export_audit.rs`. (15) **unsafe-local sources**: `packages/d2b-core/src/unsafe_local_workloads.rs` (`UnsafeLocalWorkloadsJson`, `UnsafeLocalWorkload`, `UnsafeLocalLauncherItem`, `UnsafeLocalExecItem`, `UnsafeLocalShellItem`, `UnsafeLocalShellPolicy`, `UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION`, `MAX_UNSAFE_LOCAL_WORKLOADS`); `packages/d2b-contracts/src/unsafe_local_wire.rs` (`HelperHello`, `HelperLaunchRequest`, `HelperShellRequest`, `HelperFailureCode`, `HelperScopeKind`, `DaemonToUnsafeLocalHelper`, `UnsafeLocalHelperToDaemon`); `packages/d2bd/src/unsafe_local_helper.rs` (`HelperRegistry`, `HelperConnection`, `dispatch_launch`, `allowed_uids`, `bind_helper_socket`); `packages/d2b-unsafe-local-helper/src/{main,protocol,runtime,systemd}.rs` (`HelperClient`, `ScopeRuntime`, `run_scope_supervisor`, `SystemdUserScopeManager`); `nixos-modules/options-realms-workloads.nix` (lines 221, 233-235, 264-275: `kind = "unsafe-local"`, null `stateDir`/`runDir`); `nixos-modules/unsafe-local-workloads-json.nix`; `nixos-modules/unsafe-local-helper.nix`. |
 | Evidence class | (1) Hand-rolled metrics: implemented-and-reachable (no OTEL SDK). (2-4) Audit JSONL/hash/rate-limit: implemented-and-reachable. (5-6) TraceContext/IDs: implemented-and-reachable. (7-9) Gateway/broker/op audit: implemented-and-reachable. (10) OtelHostBridge runner: implemented-and-reachable. (11) Nix OTEL pipeline: implemented-and-reachable for the v1 daemon; the v3 `observability-otel` Provider is ADR-only. (12-14) Tests: implemented-and-reachable. (15) unsafe-local: implemented-and-reachable; **gap**: no `DaemonEvent` for unsafe-local launch/stop in current daemon. |
-| Behavior retained | SHA-256 hash chain `prev_hash`/`record_hash`; O_APPEND JSONL segment files; privileged-never-dropped audit rate-limit invariant; `TraceContext` opaque bounded fields; SigNoz backend + OTEL Collector pipeline shape; `vm.name`/`vm.env`/`vm.role` OTEL resource attributes (advisory); journald scrape option; startup-tracing-avoids-host-path policy; `loki_native_otel_resource_attributes` closed allowlist; `broker_export_audit` admin-only / path-free / NDJSON contract; `UnsafeLocalWorkload` private-bundle-only argv/shell policy; `HelperRegistry::allowed_uids` per-UID isolation |
-| Required delta | Lightweight `BoundedEmitter` crate (no OTEL SDK in core); v3 metrics with no `vm`-name labels; traces with `d2b.zone`/`d2b.provider` resource attributes; v3 resource/RBAC/session/route/state-reset audit records; `zone` field replacing `realm: RealmPath` in all audit records; per-Zone emitter socket; `observability-otel` Provider (full OTEL SDK in its own Process only); `d2b zone doctor`/`support-bundle` CLI; performance histogram benchmarks; **user-only Host resource `isolationPosture: "none"` status field**; **ProcessEffect `no_isolation: true` for all user-only Host (unsafe-local successor) process launches and stops** (gap fill); **CLI/UI isolation warning for user-only Host only**; `isolation-posture-declared` doctor check |
-| Reuse path | Extract `TraceContext` + `AuditHash` + `AuditChainLink` to `d2b-telemetry` unchanged; copy hash-chain append/rate-limit/rotation logic from `daemon_audit.rs` and broker `audit.rs`; adapt `OpAuditRecord` BrokerEffect fields; copy Nix OTEL pipeline shape from `{host,stack,guest}.nix`; adapt `policy_observability`/`policy_metrics` tests; adapt `broker_export_audit` test scaffold; adapt `host_doctor_contract.rs` test harness; adapt `UnsafeLocalWorkload` private-bundle contract for Host resource spec |
+| Behavior retained | SHA-256 hash chain `prev_hash`/`record_hash`; O_APPEND JSONL segment files; privileged-never-dropped invariant; SigNoz backend + OTEL Collector pipeline shape; journald input selection with output redaction; startup-tracing-avoids-host-path policy; `broker_export_audit` admin-only / path-free / NDJSON contract; `UnsafeLocalWorkload` private-bundle-only argv/shell policy; `HelperRegistry::allowed_uids` per-UID isolation |
+| Required delta | Lightweight `BoundedEmitter` crate (no OTEL SDK in core); fixed per-signal byte/age retention; one descriptor/label registry in `d2b-contracts`; identity-free metrics and Resource attributes; complete typed-digest trace lifecycle; v3 resource/RBAC/session/route/state-reset audit records with no raw Zone/resource/subject/operation/trace identity; durable exactly-once privileged effect audit; durable export acknowledgements gating prune; per-Zone emitter socket; `observability-otel` Provider (full OTEL SDK in its own Process only); bounded emitter diagnostics that cannot fail observed operations; dedicated benchmark evidence; `d2b zone doctor`/`support-bundle` CLI; **user-only Host resource `isolationPosture: "none"` status field**; **ProcessEffect `no_isolation: true` for all user-only Host (unsafe-local successor) process launches and stops** (gap fill); **CLI/UI isolation warning for user-only Host only**; `isolation-posture-declared` doctor check |
+| Reuse path | Adapt `TraceContext` into typed domain-separated correlation context; extract `AuditHash` + `AuditChainLink`; copy hash-chain append/rotation logic but delete rate-limit/drop authority; adapt `OpAuditRecord` into durable exactly-once `BrokerEffect`; copy Nix OTEL pipeline shape while deleting identity attributes; adapt `policy_observability`/`policy_metrics` tests around the single registry; adapt `broker_export_audit` test scaffold with durable acknowledgement/prune gates; adapt `host_doctor_contract.rs` test harness; adapt `UnsafeLocalWorkload` private-bundle contract for Host resource spec |
 | Replacement/deletion | `d2bd/src/metrics.rs` hand-rolled registry removed only after OTEL SDK metrics reach parity in all covered paths; `otel_host_bridge_argv.rs` socat runner retired after `observability-otel` Provider delivers native OTLP/vsock; daemon/broker/gateway `*_audit.rs` JSONL writers retired per-component after `d2b-audit` sink achieves parity; `AuditStreamKind` renamed `Daemon→Zone`, `Gateway→ZoneLink`, `RemoteNode→RemoteZone` in `d2b-telemetry`; `AuditChainRecord{realm, node}` re-versioned to `{zone}` in `d2b-audit`; `d2b-unsafe-local-helper` binary and `DaemonToUnsafeLocalHelper` wire protocol retired after Process Provider supervisor ticket migration for Host resources |
 | Feasibility proof | `TraceContext` proven. Hash-chain JSONL proven in broker/daemon. Rate-limit/rotation proven in broker. `BoundedEmitter` datagram-socket pattern follows existing `otelRuntimeDir` ACL + socket design. OTEL SDK + Unix socket exporter proven in the v3 Nix OTEL pipeline (Provider-only). SigNoz stack operational. `broker_export_audit` path-free NDJSON proven. `host_doctor_contract` env-redirect scaffold proven |
 | Future owner | Work items below |
@@ -1968,11 +2121,11 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | W0/W1a; telemetry crate owner |
 | Current source | `packages/d2b-realm-core/src/trace_context.rs` (`TraceContext`, `MAX_TRACE_FIELD_LEN`); `packages/d2b-realm-core/src/audit.rs` (`AuditHash`, `AuditHashError`, `AuditChainLink`, `AuditChainRecord`); `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`); `packages/d2b-realm-codec-protobuf/src/lib.rs` (`encode_trace_context`, `decode_trace_context`); `packages/d2b-contract-tests/tests/policy_observability.rs::startup_tracing_avoids_host_path_fields` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,metric_label_policy.rs,redaction_guard.rs}` |
-| Detailed design | `d2b-telemetry` provides: (1) `TraceContext` / `AuditHash` / `AuditChainLink` extracted unchanged; (2) `BoundedEmitter`: `tracing`-subscriber layer that serializes span/metric events into compact frames and writes them over a private Unix datagram socket to the `observability-otel` Provider - no `opentelemetry_sdk` dependency; (3) the canonical closed `METRIC_LABEL_POLICY`, structural descriptor/data-point/exemplar validator, exact forbidden-key/suffix predicates, and non-serializable resource-identity canary matcher used by emitter defense in depth and the mandatory collector ingress gate; (4) `RedactionGuard` span wrapper that asserts the v3 resource attribute allowlist at span creation. No OTEL SDK in this crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged (`TraceContext`, `AuditHash`, `AuditChainLink`); adapt (`OperationId`/`CorrelationId` for v3 record contract); add bounded emitter. |
+| Destination | `packages/d2b-contracts/src/v3/telemetry_policy.rs`; `packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,metric_label_policy.rs,redaction_guard.rs}` |
+| Detailed design | `d2b-contracts` owns the sole closed `METRIC_DESCRIPTOR_REGISTRY`, including every descriptor, label domain, bucket list, and aggregation scope; `METRIC_LABEL_POLICY` is derived from it. `d2b-telemetry` re-exports that data and provides: (1) typed domain-separated trace/span/operation correlation contexts plus `AuditHash`/`AuditChainLink`; (2) `BoundedEmitter`, with fixed byte and 60/300/120-second per-signal age bounds, that serializes span/metric events and writes them over a private Unix datagram socket to the `observability-otel` Provider without `opentelemetry_sdk`; (3) structural descriptor/data-point/exemplar validation against the exact central row; (4) the fixed emitter-failure accumulator; and (5) `RedactionGuard` enforcing the identity-free Resource attribute allowlist and complete span lifecycle. No Provider/core crate defines a descriptor or label domain. Emitter failure never changes the observed operation. Primary reuse disposition: `adapt`. |
 | Integration | Every v3 core process initializes a `BoundedEmitter` pointing at `$ZONE_STATE/telemetry/emitter.sock`; v3 audit records use `AuditHash`/`AuditChainLink` from this crate |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | Unit test for `RedactionGuard` attribute gate; unit test for `BoundedEmitter` ring-full drop and FIFO drain; table tests for `METRIC_LABEL_POLICY` exact keys, suffixes, and `metadata.name`/UID/ResourceRef identity canaries; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = "realm-controllers"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml |
+| Validation | Unit tests for `RedactionGuard`, complete trace lifecycle, fixed per-signal age/byte retention, ring-full FIFO, and emitter failure isolation; structural proof that every emitter selects an exact central descriptor row and no local inventory exists; raw identity/handle/credential/cgroup/unit canaries; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = "realm-controllers"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml |
 | Removal proof | None - net-new; no prior owner to remove |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1986,10 +2139,10 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2bd/src/metrics.rs` (`MetricDescriptor`, `MetricKind`, `VM_START_BUCKETS_SECONDS`, `BROKER_REQUEST_BUCKETS_SECONDS`, `ACTIVATION_PHASE_BUCKETS_SECONDS` - for bucket pattern reference only; the `vm` labels are not reused) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/metrics.rs`, `packages/d2b-resource-store-redb/src/tracing.rs` |
-| Detailed design | Instrument the store actor, write/read/group-commit paths with the metric inventory from this spec via `d2b-telemetry` `BoundedEmitter`. Emit `d2b.store.*` spans. The p95 `d2b_store_write_duration_seconds` hard target (≤10 ms) feeds the benchmark fixture. No `vm` label; `resource_type` label only from closed catalog. No OTEL SDK in the store crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bucket boundary constants (rename; remove `vm` labels); replace hand-rolled `Registry` with `d2b-telemetry` `BoundedEmitter` meter API. |
+| Detailed design | Instrument the store actor, write/read/group-commit paths by selecting exact central descriptor rows through `d2b-telemetry` `BoundedEmitter`. Emit complete `d2b.store.*` spans. No `vm` label; `resource_type` label only from the closed catalog. No OTEL SDK in the store crate. The exported histogram is operational data only; the <=10 ms p95 target is measured and recorded separately by the benchmark harness. Primary reuse disposition: `adapt`. |
 | Integration | Store actor calls `d2b-telemetry` meter/tracer via `BoundedEmitter`; spans linked to API request spans via `TraceContext` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | p95 write ≤10 ms benchmark fixture; metric inventory policy test asserting no `vm` label; assert old `d2b_daemon_vm_state` shape absent |
+| Validation | Candidate-bound benchmark evidence asserts p95 write <=10 ms from harness samples; central descriptor selection test asserts no `vm` label and no local inventory; old `d2b_daemon_vm_state` shape absent |
 | Removal proof | Hand-rolled registry in `d2bd/src/metrics.rs` retained until daemon-level ADR 0046 cutover |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2020,10 +2173,10 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2bd/src/metrics.rs` (`BROKER_REQUEST_BUCKETS_SECONDS` for reference; `d2b_daemon_broker_request_duration_seconds` labels `["op"]` as a cardinality-safe example); `packages/d2b-realm-core/src/allocator_engine.rs` (field `trace: Option<TraceContext>` at line 873 - existing trace context wiring pattern) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/metrics.rs`, `packages/d2b-core-controller/src/tracing.rs` |
-| Detailed design | Emit `d2b.controller.hint` span at the instant the post-commit dispatcher fires; emit `d2b.controller.reconcile` child span at handler entry. Interval = p95 ≤5 ms target. `handler` label from closed set; no resource name labels. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bucket patterns; adapt trace-context-in-reconcile pattern from `allocator_engine.rs`. |
+| Detailed design | Emit `d2b.controller.hint` span at the instant the post-commit dispatcher fires; emit `d2b.controller.reconcile` child span at handler entry. Both spans end exactly once on every exit and use typed correlation context. `handler` label comes from the closed central row; no resource identity. The exported interval histogram is operational data only; the <=5 ms p95 target is measured separately by the benchmark harness. Primary reuse disposition: `adapt`. |
 | Integration | Post-commit dispatcher creates hint span; handler creates child reconcile span via `TraceContext` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | `hint_to_handler_latency` benchmark with p95 ≤5 ms assertion; closed `handler` label set gate |
+| Validation | `hint_to_handler_latency` candidate-bound benchmark evidence with p95 <=5 ms assertion; exact central `handler` descriptor row; complete trace lifecycle |
 | Removal proof | None - net-new; no prior owner to remove |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2037,10 +2190,10 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_start_duration_seconds` `VM_START_BUCKETS_SECONDS`; `d2b_daemon_vm_shutdown_duration_seconds` `VM_SHUTDOWN_BUCKETS_SECONDS`; `d2b_daemon_vm_shutdown_total` labels `["vm", "vmm", "outcome"]` - `vmm` = current `RunnerRole` → v3 `provider`); `packages/d2bd/src/supervisor/pidfd.rs` (pidfd adoption/launch call sites); `packages/d2b-contracts/src/broker_wire.rs::RunnerRole` (`CloudHypervisor`, `QemuMedia`, `OtelHostBridge` etc. → v3 `provider` label values) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-supervisor/src/metrics.rs`, `packages/d2b-provider-supervisor/src/tracing.rs` |
-| Detailed design | `d2b_process_launch_duration_seconds`: start = instant Process controller receives commit-to-Ready hint; end = first OS spawn call (clone3 or systemd unit start). This implements p95 ≤20 ms. `provider` label replaces `vmm`/`RunnerRole` with the closed set `{minijail,systemd}`. No `vm` name label. A separate `d2b_process_ready_duration_seconds` histogram covers launch-attempt → readiness signal (not a hard target). Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt launch histogram bucket constants; rename `vm` label to no label (process identity in resource attributes); rename `vmm`/`RunnerRole` → `provider` closed enum. |
+| Detailed design | `d2b_process_launch_duration_seconds`: start = instant Process controller receives commit-to-Ready hint; end = first OS spawn call (clone3 or systemd unit start). `provider` label replaces `vmm`/`RunnerRole` with the closed set `{minijail,systemd}`. No `vm` name label and no process identity in Resource attributes. A separate `d2b_process_ready_duration_seconds` histogram covers launch-attempt to readiness. Exported histograms are operational data; the <=20 ms p95 target is measured separately by the benchmark harness. Primary reuse disposition: `adapt`. |
 | Integration | Process Provider controller start handler → supervisor ticket delivery → first spawn call |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | `commit_to_launch_latency` benchmark with p95 ≤20 ms assertion; assert no `vm` label in process metrics; `vmm→provider` label rename gate |
+| Validation | `commit_to_launch_latency` candidate-bound benchmark evidence with p95 <=20 ms assertion; no `vm` label or identity Resource attribute; exact central `provider` descriptor row |
 | Removal proof | `d2b_daemon_vm_start_duration_seconds` (with `vm` label) retained in `d2bd/src/metrics.rs` until daemon-level ADR 0046 cutover |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2054,8 +2207,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `nixos-modules/components/observability/host.nix` (`otelRuntimeDir = "/run/d2b/otel"`, `hostEgressSocket`, ACL `setfacl` pattern, `scrapeJournal`, `hostCfg.identityName`); `nixos-modules/components/observability/stack.nix` (SigNoz stack, `ingressSources`, per-source `vmName`, `receiverGrpcPort`/`receiverHttpPort`, loopback binding, `cfg.signoz.listenPort`); `nixos-modules/components/observability/guest.nix` (`vm.name`/`vm.env`/`vm.role` identity stamping, guest collector); `packages/d2b-host/src/otel_host_bridge_argv.rs` (`OtelHostBridgeArgvInputs`; vsock forwarding); `packages/d2bd/src/otel_host_bridge_readiness.rs` (readiness gate pattern: `OtelHostBridgeReadiness::{Ready,Pending,Failed}`); `packages/d2b-core/src/processes.rs::ProcessRole::OtelHostBridge`; `packages/d2b-contracts/src/broker_wire.rs::RunnerRole::OtelHostBridge`; `packages/d2b-contract-tests/tests/{policy_observability.rs,minijail_relay_otel.rs}` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-observability-otel/src/`, `nixos-modules/components/observability/` (adapted files) |
-| Detailed design | `Provider/observability-otel` is an **ordinary optional non-bootstrap Process** (not counted toward the ≤64 MiB mandatory core aggregate). It owns: (1) per-Zone datagram receiver socket at `$ZONE_STATE/telemetry/emitter.sock` (drains frames from core emitters) and OTLP/gRPC Unix socket at `$ZONE_STATE/telemetry/otlp.sock`; (2) the full OTEL SDK with OTLP exporter - only this process links `opentelemetry_sdk`; (3) OTel Collector pipeline per Zone and per Host; (4) vsock OTLP forwarding to obs Zone (replaces socat-based `OtelHostBridgeArgvInputs`); (5) D096 import-stream ingest; (6) one structural `METRIC_LABEL_POLICY` gate shared by Unix emitter, OTLP Unix, OTLP/vsock, and import-stream metrics before aggregation, queueing, batching, retry, or export, with bounded non-echoing errors/quarantine/backpressure; (7) SigNoz stack Nix adapted from `stack.nix` with per-Zone `ingressSources` replacing per-VM `vmName`; (8) journald scrape (optional, disabled by default); (9) self-metrics endpoint. Trusted producer identity is stamped only into allow-listed OTEL Resource attributes; audit remains separate. Zone/controller startup does not wait for this Provider. If absent or unready, Zone health is `Degraded` (not `Failed`). Readiness: socket exists and first drain cycle completes successfully. `d2b.observability.host.identityName` option preserved; `vmName` in `ingressSources` populated from Zone name. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone naming); adapt `OtelHostBridgeArgvInputs` vsock forwarding to native OTLP/gRPC-over-vsock; adapt readiness gate pattern (`OtelHostBridgeReadiness::Ready` → Provider phase `Ready`); adapt `ingressSources` per-VM → per-Zone. |
-| Integration | Core process `BoundedEmitter` → `emitter.sock` → observability-otel collector → `otlp.sock` → vsock → obs Zone SigNoz; Zone startup independent of Provider readiness. The closed `METRIC_LABEL_POLICY` data (forbidden label keys, forbidden identity suffixes, allowed OTEL resource attributes) is single-sourced in the public neutral contract crate `d2b-contracts` and re-exported by both `d2b-telemetry` and this Provider, so the registry has exactly one definition; the Provider takes no direct `d2b-telemetry` or `d2b-audit` dependency. Emitter-side and ingress-side validators stay distinct because they check different things. |
+| Detailed design | `Provider/observability-otel` is an **ordinary optional non-bootstrap Process** (not counted toward the <=64 MiB mandatory core aggregate). It owns the per-Zone receivers, full OTEL SDK/exporter, SigNoz pipeline, native forwarding, import-stream ingest, journald input, and self-metrics. Every ingress validates the exact `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY` row before queueing. Every ring/queue/retry/forwarding path applies the 60/300/120-second metric/trace/log ceilings. Trusted producer identity selects routing/quota only and is removed before export; Resource attributes contain fixed semantic classes only. Spans use typed domain-separated correlation digests and end exactly once. Zone/controller startup does not wait for this Provider, and emitter/export failure never changes the observed operation. Primary reuse disposition: `adapt`. |
+| Integration | Core process `BoundedEmitter` -> `emitter.sock` -> observability-otel collector -> `otlp.sock` -> vsock -> obs Zone SigNoz; Zone startup independent of Provider readiness. The complete descriptor/label registry is single-sourced in `d2b-contracts` and re-exported by both `d2b-telemetry` and this Provider. The Provider takes no direct `d2b-telemetry` or `d2b-audit` dependency. |
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh |
 | Validation | `emitter_socket_receive`, `emitter_ring_drains_on_socket_available`, `emitter_ring_drop_on_overflow`, a table-driven `ingress_metric_policy` test covering all four `Ingress` variants of the one shared structural gate, `no_vm_label_in_metrics`, and `zone_startup_proceeds_without_provider` tests; adapted `policy_observability.rs` tests (retain `loki_native_otel_resource_attributes` and SigNoz-only backend assertions); adapted `minijail_relay_otel.rs` shape test for Provider-managed runner. The table is proven exhaustive by a wildcard-free `match` over `Ingress`, so a new variant fails the build rather than escaping coverage. Live `otlp_unix`, `otlp_vsock` and `import_stream` ingress adapters are not validated here: they require the OTLP exporter, the native OTLP-over-vsock path and D096 import ingest, and this item's own Removal proof retires the socat host bridge only after those land. |
 | Removal proof | `otel_host_bridge_argv.rs` socat runner and `otel_host_bridge_readiness.rs` retired after `observability-otel` Provider delivers native OTLP/vsock and passes conformance; `ProcessRole::OtelHostBridge` and `RunnerRole::OtelHostBridge` retired from `d2b-core/src/processes.rs` and `d2b-contracts/src/broker_wire.rs` after Provider migration |
@@ -2068,13 +2221,13 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Work item ID | `ADR046-audit-001` |
 | Dependency/owner | W0/W1a; audit crate owner |
-| Current source | `packages/d2b-realm-core/src/audit.rs` (`AuditHash::parse`, `AuditChainLink::new`/`verify`, `AuditChainRecord{stream: AuditStreamKind, realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditSinkHealth`, `AuditRetentionFloorStatus`); `packages/d2bd/src/daemon_audit.rs` (hash-chain append algorithm, `prev_hash`/`record_hash` SHA-256 pattern, daily segment files `daemon-events-YYYY-MM-DD.jsonl`, `DaemonEvent` additive contract); `packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::{Privileged,Unprivileged}`, `AuditDropSummary`, `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096`, O_APPEND CLOEXEC file open, `AuditDropWarningState`); `packages/d2b-gateway-runtime/src/audit_jsonl.rs` (`JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS = 14`, `prune_old` rotation algorithm); `packages/d2b-priv-broker/src/ops/audit_op.rs` (`OpAuditRecord`, `SwtpmDirAudit`, `SwtpmDirResult`, `SwtpmMarkerResult`); `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`, `PrincipalId` - `PrincipalId` becomes `subject_digest`); `packages/d2b/tests/audit_contract.rs`; `packages/d2b-priv-broker/tests/broker_export_audit.rs` |
+| Current source | `packages/d2b-realm-core/src/audit.rs` (`AuditHash::parse`, `AuditChainLink::new`/`verify`, `AuditChainRecord{stream: AuditStreamKind, realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditSinkHealth`, `AuditRetentionFloorStatus`); `packages/d2bd/src/daemon_audit.rs` (hash-chain append algorithm, `prev_hash`/`record_hash` SHA-256 pattern, daily segment files `daemon-events-YYYY-MM-DD.jsonl`, `DaemonEvent` additive contract); `packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::{Privileged,Unprivileged}`, `AuditDropSummary`, `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096`, O_APPEND CLOEXEC file open, `AuditDropWarningState`); `packages/d2b-gateway-runtime/src/audit_jsonl.rs` (`JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS = 14`, `prune_old` rotation algorithm); `packages/d2b-priv-broker/src/ops/audit_op.rs` (`OpAuditRecord`, `SwtpmDirAudit`, `SwtpmDirResult`, `SwtpmMarkerResult`); `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`, `PrincipalId` - predecessor inputs only; target output uses distinct typed correlation constructors); `packages/d2b/tests/audit_contract.rs`; `packages/d2b-priv-broker/tests/broker_export_audit.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-audit/src/{hash_chain.rs,segment.rs,rate_limit.rs,record_types.rs,sink.rs,export.rs}` |
-| Detailed design | `d2b-audit` provides: typed record structs per class; canonical serialization with `zone` replacing `realm: RealmPath`; SHA-256 hash chain (extracted from `daemon_audit.rs`); segment writer (O_APPEND CLOEXEC, 64 MiB / UTC-midnight rotation); 30-day compaction (adapts `prune_old` from `JsonlGatewayAudit`); `AuditWriteClass::{Privileged,Standard,BestEffort}` (extends current `{Privileged,Unprivileged}`); rate-limit with privileged-never-dropped invariant; export iterator with inline hash-break reporting. `AuditStreamKind` re-versioned: `Daemon→Zone`, `Gateway→ZoneLink`, `RemoteNode→RemoteZone`. `AuditChainRecord` re-versioned: `{zone: String}` replaces `{realm: RealmPath, node: NodeId}`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged: `AuditHash`, `AuditChainLink` from `d2b-realm-core/src/audit.rs`; copy hash-chain append algorithm from `daemon_audit.rs`; copy `AuditWriteClass`/rate-limit/rotation/prune from broker `audit.rs`; adapt `JsonlGatewayAudit` segment writer; adapt `OpAuditRecord` to `BrokerEffect` record class. |
+| Destination | `packages/d2b-audit/src/{hash_chain.rs,segment.rs,record_types.rs,sink.rs,export.rs,acknowledgement.rs}` |
+| Detailed design | `d2b-audit` provides typed record structs with no raw identities/handles/credentials/cgroup/unit fields; record-specific domain-separated correlation constructors; SHA-256 hash chain; O_APPEND/CLOEXEC segment writer with 64 MiB or UTC-midnight rotation; immutable exactly-once recovery keys; and export acknowledgements binding destination class, segment sequence/hash, and terminal record hash. Every authoritative record is durable exactly once. Every `BrokerEffect` is a privileged-effect record whose durable intent precedes effect release and whose completion is exactly once. No rate-limit, drop, `BestEffort`, or Provider-local authority exists. Thirty-day age is only one prune predicate; every required destination acknowledgement must also be durable and matching. Primary reuse disposition: `adapt`. |
 | Integration | Zone runtime, core-controller, Process Providers, broker effect bridge → `d2b-audit` sink; `d2b zone audit export` → export iterator |
 | Data migration | v3 bootstrap; existing daemon/broker JSONL files not migrated |
-| Validation | `audit_record_hash_chain`, `audit_record_schema` (no `realm`/`node` fields), `audit_segment_rotation`, `audit_rate_limit_privileged_never_dropped`, `audit_unavailable_blocks_privileged` |
+| Validation | `audit_record_hash_chain`; identity/handle/credential/cgroup/unit schema canaries; segment rotation; crash/restart/concurrency exactly-once privileged-effect matrix; unavailable/pending refusal; export acknowledgement mismatch/rollback; prune blocked until all required acknowledgements and retention floor hold |
 | Removal proof | `daemon_audit.rs`, broker `audit.rs`, `JsonlGatewayAudit` retired per-component after `d2b-audit` sink achieves parity |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2085,13 +2238,13 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Work item ID | `ADR046-audit-002` |
 | Dependency/owner | ADR046-audit-001 + ADR046-store-001; store/authz owner |
-| Current source | `packages/d2b-priv-broker/src/ops/audit_op.rs` (`OpAuditRecord` structural pattern - operation, peer_uid, decision, result fields); `packages/d2b-realm-core/src/audit.rs::AuditEnvelope{principal: PrincipalId, scope: AuthorizationScope, decision: AuthzDecision}` (principal → v3 `subject_digest`) |
+| Current source | `packages/d2b-priv-broker/src/ops/audit_op.rs` (`OpAuditRecord` structural pattern - operation, peer_uid, decision, result fields); `packages/d2b-realm-core/src/audit.rs::AuditEnvelope{principal: PrincipalId, scope: AuthorizationScope, decision: AuthzDecision}` (predecessor inputs only; target emits typed record-specific correlation digests) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/audit.rs`, `packages/d2b-core-controller/src/authz_audit.rs` |
-| Detailed design | `ResourceMutation` records emitted by the store actor inside the write transaction before commit returns. The audit sink must durably fsync the audit record before returning the commit success (privileged durability class). `RBACChange` emitted by the authz handler in the same write transaction. `subject_digest` = SHA-256 of normalized canonical subject string from v3 `AuthenticatedSubjectContext` (ADR-046-componentsession-and-bus). Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `OpAuditRecord` structural pattern for `ResourceMutation` / `RBACChange` record classes; adapt `PrincipalId` → `subject_digest` derivation. |
+| Detailed design | `ResourceMutation` records are committed by the store actor with an immutable audit recovery key before commit success. `RBACChange` uses the same authoritative path. Raw Zone/resource/subject/operation identity is absent; required joins use distinct record-specific correlation newtypes derived only from authoritative contexts. An audit append/export gap returns `CommittedPendingAudit` and same-ID replay observes rather than reapplies. Primary reuse disposition: `adapt`. |
 | Integration | Store write transaction → `d2b-audit` sink → fsync → commit result |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | Integration test: 100 mutations → verify hash-chained audit records with `zone` field, no `realm` field |
+| Validation | Integration test: 100 mutations verify hash-chained exactly-once audit, no raw Zone/resource/subject/operation identity, and stable same-ID pending/final replay |
 | Removal proof | None - net-new; no prior owner to remove |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2105,7 +2258,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b-gateway/src/audit.rs` (`GatewayAuditEvent`, `GatewayAuditKind::{DisplaySessionOpenAdmitted,DisplaySessionOpenDenied,DisplaySessionRunning,DisplaySessionClosed}`, `GatewayAudit` trait, `NoopGatewayAudit`); `packages/d2b-realm-core/src/audit.rs::AuditEnvelope{realm, principal, scope, decision, trace}` (fields adapted to v3 `SessionConnect` record class) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-session/src/audit.rs`, `packages/d2b-bus/src/audit.rs` |
-| Detailed design | `SessionConnect` records emitted at handshake completion. `GatewayAuditKind::DisplaySessionOpenAdmitted/Denied` → `event="connect"`, `authz_decision="allowed/denied"`. `GatewayAuditKind::DisplaySessionRunning` → informational `ProcessEffect`. `GatewayAuditKind::DisplaySessionClosed` → `event="close"`. `transport_class=zone_link` covers what the current `AuditStreamKind::Gateway` stream recorded for gateway-backed realm sessions. `RouteAdmission` records emitted at bus route resolution for denied routes. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `GatewayAudit` trait pattern for `SessionConnect` and `RouteAdmission` record classes; `NoopGatewayAudit` pattern reused for test sinks. |
+| Detailed design | Session authority emits durable exactly-once `SessionConnect` records at handshake terminal transitions; bus route resolution does the same for `RouteAdmission`. A running-process transition uses the owning process authority's durable `ProcessEffect`, never an informational Provider event. Records contain only closed fields and required typed domain-separated correlation digests, with no raw Zone/subject/session/trace identity. Primary reuse disposition: `adapt`. |
 | Integration | Session engine and bus router → `d2b-audit` sink |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Session connect/close/auth-failure audit tests; `GatewayAuditKind` → `SessionConnect` mapping test |
@@ -2122,10 +2275,10 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b/tests/audit_contract.rs` (`d2b audit --strict` returns 78; `auditResponse` relay; `authz-audit-requires-admin` denial; daemon-down exit 1 without bash fallback); `packages/d2b-priv-broker/tests/broker_export_audit.rs` (`export_audit_requires_admin_and_exports_op_audit_records`: admin-only, path-free, NDJSON `ExportBrokerAuditOk` shape, `peer_uid` field, `ApplyNftables` operation name in records) |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand); `packages/d2b/tests/zone_audit_contract.rs` |
-| Detailed design | `d2b zone audit export` opens segments read-only (shared flock), streams NDJSON to stdout, validates hash chain inline, reports breaks as inline error records, and invokes only `d2b.audit.v3.AuditService/Export` under the admin-only `audit-export` session verb (same `SO_PEERCRED`/Role check as current `ExportBrokerAuditOk`). The session grant provides no Zone resource authority. Assert no `realm`, `node`, `workload_id` fields in exported records. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt audit CLI contract test (daemon-down/exit behavior); adapt broker export test to new `zone` field and v3 record schema. |
+| Detailed design | `d2b zone audit export` opens segments read-only (shared flock), streams NDJSON, validates the hash chain inline, reports breaks as bounded inline error records, and invokes only `d2b.audit.v3.AuditService/Export` under the admin-only `audit-export` session verb. The grant provides no Zone resource authority. Export contains no raw identity/handle/credential/cgroup/unit/invocation/locator field. Stdout export is not a prune acknowledgement. A configured required destination must acknowledge the exact segment sequence/hash and terminal record hash, and that acknowledgement must be file- and directory-synced before prune eligibility. Primary reuse disposition: `adapt`. |
 | Integration | `d2b` CLI → ComponentSession `d2b.audit.v3.AuditService/Export` with `sessionVerbs=[audit-export]` → `d2b-audit` export iterator → stdout |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | `export_audit.rs`: admin-only, hash break inline, no old field names (`realm`/`node`/`workload_id`), no path/argv in output, exit 0 on clean chain |
+| Validation | `export_audit.rs`: admin-only, bounded hash break, raw-field canaries absent, exit 0 on clean chain; stdout does not acknowledge; missing/wrong/stale/unsynced destination acknowledgement blocks prune across restart |
 | Removal proof | `d2b audit` legacy command retained until `d2b zone audit export` covers all record classes |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2173,10 +2326,10 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `nixos-modules/components/observability/host.nix` (`scrapeJournal = hostCfg.scrapeJournal`, `journaldStorageDir = "/var/lib/d2b-host-otel-collector/journald"`, cgroup-path filtering pattern for host units) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-observability-otel/src/nix/journald.nix` (new Nix fragment) |
-| Detailed design | `d2b.zones.<name>.observability.journald.enable = false` (default). When enabled: journald receiver follows `z-<zone-id>/*` and `s-<execution-id>/*` cgroup filters. Collector applies redaction: drops `MESSAGE` credential/path patterns, `_CMDLINE`, `_EXE`, `INVOCATION_ID`. Current `scrapeJournal` host option is preserved unchanged. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt journald receiver config for per-Zone cgroup filter (`z-<zone-id>/*`, `s-<execution-id>/*`). |
+| Detailed design | `d2b.zones.<name>.observability.journald.enable = false` (default). When enabled, the receiver may use trusted cgroup/unit metadata only for internal selection. Before output it structurally removes every raw identity plus `_CMDLINE`, `_EXE`, `INVOCATION_ID`, `_SYSTEMD_CGROUP`, `_SYSTEMD_UNIT`, `_SYSTEMD_USER_UNIT`, `_PID`, `_UID`, and `_GID`, and drops credential/path-bearing messages. Current `scrapeJournal` host option remains an input switch, not permission to export those fields. Primary reuse disposition: `adapt`. |
 | Integration | `observability-otel` Provider Nix config → OTel Collector journald receiver → redaction filter → obs Zone |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | Nix eval test: filter expression set when enabled; test that `_CMDLINE` and `INVOCATION_ID` appear in drop list |
+| Validation | Nix eval test: filter expression set when enabled; test every identity/cgroup/unit/invocation field above is in the structural drop set and absent from mock OTLP output |
 | Removal proof | None - net-new; no prior owner to remove |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -2190,7 +2343,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (`loki_native_otel_resource_attributes` allowlist: `["deployment.environment","host.name","service.name","service.namespace","source","vm.env","vm.name","vm.role"]`; `tempo_stack_signoz_backend_and_collector` SigNoz-only assertion; `startup_tracing_avoids_host_path_fields` forbidden fields); `packages/d2b-contract-tests/tests/policy_metrics.rs` (`EXPECTED_METRICS` table parity with `docs/reference/daemon-metrics.md`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new); updated `policy_observability.rs`; updated `policy_metrics.rs` |
-| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add structural metric-label policy lint: parse every v3 `MetricDescriptor`, require each label key and value domain to exist in the closed `METRIC_LABEL_POLICY`, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `network`, `network_name`, and `link_name_hash`, reject resource-name-derived key suffixes `*_name`, `*_name_hash`, `*_name_digest`, and `*_uid`, and prove `metadata.name`, UID, ResourceRef, and resource-identity canaries never enter label values. Fixed semantic labels remain allowed only with closed domains. (4) Prove the observability Provider's Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream adapters all invoke that validator before queue/batch/export; assert whole-frame rejection, bounded non-echoing error classes/quarantine, and policy-before-capacity backpressure. (5) Assert the `d2b.zone` Resource attribute remains present and audit is unchanged. (6) Add bucket boundary gates for 5 ms and 20 ms. (7) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates. |
+| Detailed design | (1) Replace the baseline OTEL Resource allowlist with fixed `service.name`, `service.version`, `d2b.provider`, and `d2b.component` semantic/build classes; raw Host/VM/Zone/source/deployment fields are forbidden. (2) Scan all v3 instrumentation for raw identity, handle, credential, path/socket/argv/env, PID/pidfd, cgroup/unit/invocation, and raw trace/span fields. (3) Parse the one `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`; reject any local descriptor/inventory, label-domain or bucket authority, and any non-identical emitter selection. (4) Reject every per-resource/session/lease/component gauge without identity and require a merge-safe aggregate scope/operator for each identity-free gauge. (5) Prove all four ingress variants validate before queue/batch/export and apply per-signal age ceilings. (6) Prove complete span terminal coverage and bounded emitter diagnostics that cannot affect observed operations. (7) Keep the 5 ms and 20 ms bucket rows while requiring separate benchmark evidence for targets. (8) Retain the SigNoz-only backend and `config_source = "realm-controllers"` absence gates. Primary reuse disposition: `adapt`. |
 | Integration | Contract-tests run in workspace check and `make test-drift` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | These tests are their own validation artifact |
@@ -2454,10 +2607,10 @@ excluded or adapted.
 | --- | --- |
 | Work item ID | `ADR046-telem-011` |
 | Dependency/owner | ADR046-telem-009 + ADR046-telem-010 + ADR046-audit-001 + ADR046-store-001; core-controller owner |
-| Current source | `packages/d2bd/src/daemon_audit.rs` (hash-chain `ResourceMutation`-like append pattern - adapt for cleanup audit records); `packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::{Standard,Unprivileged}` - cleanup audit records use `Standard` durability); `packages/d2b-realm-core/src/audit.rs::AuditChainLink::new` (hash-chain append for cleanup audit records); `nixos-modules/manifest.nix` (prior-generation retention pattern in the current bundle contract) |
+| Current source | `packages/d2bd/src/daemon_audit.rs` (hash-chain `ResourceMutation`-like append pattern - adapt for cleanup audit records); `packages/d2b-realm-core/src/audit.rs::AuditChainLink::new` (hash-chain append for cleanup audit records); `nixos-modules/manifest.nix` (prior-generation retention pattern in the current bundle contract). The predecessor `AuditWriteClass::{Standard,Unprivileged}` path is not reused. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/{configuration.rs, ownership.rs}` |
-| Detailed design | (1) On new generation activation, every stored `managedBy=configuration` resource absent from the new configured set receives `deletionRequestedAt` plus `deletion-pending`; controller/API-managed resources are untouched. (2) Activation returns after durable intent queueing and does not wait for cleanup. (3) The ownership handler drives child-before-parent finalizers. (4) When finalizers clear, one atomic store transaction writes the `Deleted` revision/change event and removes the row and indexes. After commit, the audit subsystem appends `ResourceMutation{event="deleted", trigger="config-cleanup"}` from that revision using a dedup/exactly-once recovery key; audit append is not part of the store transaction. (5) Stall detection sets `cleanup-stalled` without force-removing finalizers. (6) Prior generations use count retention, default 3 and range 1..16, with no TTL. (7) Core sets `managedBy`/`configurationGeneration` in persisted resources; input bundles omit both. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt hash-chain append from `daemon_audit.rs` for `ResourceMutation{trigger="config-cleanup"}` records; adapt prior-generation retention window from `manifest.nix` pattern. |
+| Detailed design | (1) On new generation activation, every stored `managedBy=configuration` resource absent from the new configured set receives `deletionRequestedAt` plus `deletion-pending`; controller/API-managed resources are untouched. (2) Activation returns after durable intent queueing and does not wait for cleanup. (3) The ownership handler drives child-before-parent finalizers. (4) When finalizers clear, one atomic store transaction writes the `Deleted` revision/change event, immutable audit recovery row, and row/index removal. Segment append/export completion replays exactly once from that row; until durable completion the operation is `CommittedPendingAudit`, never success or rollback. (5) Stall detection sets `cleanup-stalled` without force-removing finalizers. (6) Prior generations use count retention, default 3 and range 1..16, with no TTL. (7) Core sets `managedBy`/`configurationGeneration` in persisted resources; input bundles omit both. Primary reuse disposition: `adapt`. |
 | Integration | `d2b-core-controller::configuration.rs` (generation activation); `d2b-core-controller::ownership.rs` (cleanup ordering and atomic final deletion); `d2b-audit` sink (cleanup audit records) |
 | Data migration | None - the `managedBy`/`configurationGeneration`/`deletionRequestedAt` fields are new; existing resources gain them on first v3 activation |
 | Validation | All tests in "Configuration-owned cleanup contract tests" subsection; additionally: `managedby_configuration_set_on_activated_resources`, `controller_created_resources_have_managedby_controller`, `absent_resource_receives_delete_on_new_generation`, `deletion_sets_deletionrequestedat_not_phase`, `final_deletion_is_atomic`, `cleanup_does_not_touch_controller_children`, `pending_cleanup_condition_set_on_zone`, `zone_is_degraded_not_failed_during_cleanup`, `pending_cleanup_cleared_after_deletion_completes`, `prior_generation_retained_count_based`, `rollback_schedules_delete_for_new_generation_resources`, `audit_segments_preserved_on_provider_delete`, `cleanup_stall_condition_set`, `generation_rejected_emits_audit_record` |
