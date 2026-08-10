@@ -6,7 +6,7 @@
 | Purpose | FR-034 historical evidence only |
 | Bounded by | FR-035, FR-036, FR-058 |
 | Status | Recorded, non-authorizing |
-| External prerequisite | Separate accepted Constitution Principle VI amendment under FR-036 |
+| External disposition | Generic Constitution historical-process rule plus the exact feature-owned FR-036 validator/tooling contract |
 
 ## 1. What this historical record contains
 

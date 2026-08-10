@@ -259,7 +259,7 @@ Constraints").
 | RK-3 | W6 is 258 items across 27 crates | Nearly half the program in one wave | The specs guarantee each Provider's hermetic suite compiles without any other Provider; exploit the five file-disjoint families |
 | RK-4 | Destructive validation on the daily driver | A bad cutover costs the working environment | FR-043 recovery-point attestation is the primary control; rehearse cutover phases on disposable Zone state first |
 | RK-5 | 33 of the current 48 DELETE/REPLACE census rows lack removal proofs | FR-023 requires one per removed path | Author proofs with the removing wave, not at W7 |
-| RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | FR-036 blocks continuation pending an external constitution amendment; if continuation is authorized, SC-021 forces the unwired surfaces to become reachable and re-tests them in anger |
+| RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | Constitution 3.1.0 supplies the generic historical-process disposition; the exact ADR-046 delivery validator/tooling contract bounds it through merged Wave 5. T221 must match the accepted first-parent generic-amendment lineage and immutable retained state before the ordinary prospective Wave 6 plan panel; SC-021 still forces live reachability |
 
 ---
 

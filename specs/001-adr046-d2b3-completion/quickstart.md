@@ -35,29 +35,66 @@ eval that follows the same path. A forgotten `git add` on a new module is the mo
 
 ### 1. Confirm entry criteria
 
-Entry first requires FR-036's separate accepted Principle VI constitution amendment to be an
-ancestor of the exact execution base. The feature-local W0/W1 historical record and W2-W4
-remedial receipts cannot satisfy it. After that external prerequisite, entry requires Gate 0
-passed, no unresolved contention flag on this wave's destination paths,
-the stack proposed against the exact named parent commit rather than a stale `v3`, a free
-heavy-gate semaphore, and a green fast hermetic suite. If the predecessor is not yet merged,
-implementation may start only after at least five of its selected-roster reviews return and
-integration is green on its converged tree. The candidate-bound selection uses the current
-thirteen-seat role domain and may only widen over fix deltas. Prior-wave `Merged` state is not entry evidence. It is checked at
-the successor's panel request, seal, and merge-eligibility boundary, after the successor
-rebases onto the merged predecessor.
+Constitution 3.1.0 supplies a generic historical-process disposition with no ADR-046 detail.
+This feature's exact delivery validator/tooling contract bounds it through merged Wave 5
+commit `177235ed37188b3be87525e7f016fb43401574c5`. It creates no Wave 5 seal and authorizes no
+Wave 5 recovery. For Wave 6, entry first requires the production historical-predecessor guard
+against the fetched exact `origin/v3` base. After that guard, entry requires Gate 0 passed, no
+unresolved contention flag on Wave 6 destinations, a free heavy-gate semaphore, and a green
+fast hermetic suite. The ordinary T221 selected roster uses the current thirteen-seat role
+domain and may only widen over fix deltas.
 
-### 1b. Reconcile `adr046w5` progress before implementation
+### 1b. Verify the Wave 5 to Wave 6 boundary
 
-At one clean base, validate the accepted FR-036 predecessor and exactly one T072 disposition,
-run cross-artifact analysis, and create one current selected-roster plan lifecycle for the
-complete feature snapshot. Audit T073-T218 against commits and delivery records. If any row
-is open, stop without changing a checkbox. If all rows are satisfied, submit one
-`/d2b-spec-edit` batch that checks exactly T073-T218 and T603, then create one dedicated
-checkbox-only commit. The editor batch receipt and that Git commit are the sole authority; do
-not create a validator, changelog fragment, scratch receipt, sidecar, digest chain, or custom
-resume state. Rerun analysis and a new selected-roster plan lifecycle on the changed commit
-and snapshot before T589.
+Do not run a Wave 5 recovery or close command. Fetch and bind the exact Wave 6 base, then run
+the focused guard tests:
+
+```bash
+set -eu
+
+REPOSITORY="github.com/vicondoa/d2b"
+CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
+TARGET_BRANCH="v3"
+git fetch origin "$TARGET_BRANCH"
+BASE_OID="$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH")"
+test "$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH")" = "$BASE_OID"
+git merge-base --is-ancestor \
+  177235ed37188b3be87525e7f016fb43401574c5 "$BASE_OID"
+
+cargo test --manifest-path packages/Cargo.toml -p xtask \
+  delivery::work_item_state::tests
+```
+
+Create the Wave 6 entry snapshot through the production delivery command, using
+`BASE_OID` as the exact base and the current draft Wave 6 PR. The snapshot command must
+match candidate
+`d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
+snapshot identity `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
+head `19b77dad63060bcadd41f1ef800978d2c53cc030`, retained request digest
+`15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`, zero attestations,
+no seal, and every retained evidence filename and digest in `data-model.md`. It must also
+identify the accepted first-parent integration commit after the Wave 5 merge whose tree
+contains the exact generic Constitution 3.1.0 bytes. A missing, extra, or changed entry stops
+here.
+
+```bash
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/d2b/delivery"
+PR_NUMBER="$(gh pr view --json number --jq .number)"
+HEAD_REF="$(git symbolic-ref --short HEAD)"
+
+cargo run --manifest-path packages/Cargo.toml -p xtask -- \
+  delivery wave snapshot \
+  --program ADR046 \
+  --wave adr046w6 \
+  --repo "$REPOSITORY=$CHECKOUT_ROOT" \
+  --base "$REPOSITORY=$BASE_OID" \
+  --pull-request "$REPOSITORY=$PR_NUMBER:$HEAD_REF" \
+  --state-dir "$STATE_DIR"
+```
+
+Only after that succeeds, run `/d2b-panel-round plan` against the exact base, entry snapshot,
+and current feature snapshot. T221 remains incomplete until every selected seat signs off
+with zero recommendations.
 
 ### 2. Launch every ready, file-disjoint slice together
 
@@ -72,26 +109,10 @@ git worktree add -b adr046-w2-routing    ../d2b-w2-routing    adr046-w2-integrat
 
 A ready slice left unlaunched without a recorded blocker fails wave entry.
 
-For `adr046w5`, the exact implementation and close chain is
-`T589 -> {T590,T591,T594}; T591 -> T592 -> T593 -> T605;
-{T590,T592,T594,T605} -> T595 -> {T596,T597,T598,T599} ->
-T220 -> F -> {T600,T601} -> T602 -> T219`.
-T595 may not start until both serialized branches and the other completion slices converge and consumes T605's
-`SystemCoreHost` and `SystemCoreUser` variants. T220 reconciles generated manifests and every
-remaining content change before F through exactly one nonbinding lifecycle and one stable
-discovery ledger. Every provisional candidate or fix reruns deterministic widen-only
-selection and scoped verification; comprehensive discovery runs once and is never rerun.
-T219 remains an external-disposition gate because Wave 5
-already consumed its binding request; it performs no binding action. Until the
-external delivery-contract/tooling owner lands the contract and typed validator for
-`Wave5RetainedRequestDispositionV1`, and that validator imports one record bound to the
-retained request and exact F, the actionable refusal is: `adr046w5 binding request already
-consumed; obtain an accepted external delivery-contract/tooling disposition naming the
-retained request, exact F, and one closed action`. `remain-blocked` stays blocked;
-`abandon-without-merge` cannot advance; and `recover-panel-without-new-request` still requires
-the complete unanimous selected-roster exact-F lifecycle from the current thirteen-seat role
-domain, with selection allowed only to widen over fix deltas, before seal or merge. The record creates no
-second request and is never panel sign-off or a constitutional waiver.
+`adr046w5` has no executable implementation or close chain in this guide. Its retained state
+is immutable history with zero attestations and no seal. T219 records that historical
+disposition. Start only Wave 6 work selected by the T221 plan result, and launch every ready,
+file-disjoint Wave 6 slice in the same coordination cycle.
 
 ### 3. Inner loop while implementing
 
@@ -105,22 +126,9 @@ make check                       # full PR-equivalent Layer-1 gate
 Read `tests/layer1-jobs.json` for the current enforcing-vs-advisory split rather than assuming
 it. An advisory result is not validation evidence.
 
-T605 alone regenerates compiler-derived public/private API snapshots, and only through the
-pin target. Its focused loop is:
-
-```bash
-make api-surface-pin
-make test-rust-api-surface
-D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
-```
-
-The result must prove `SystemCoreHost`/`SystemCoreUser` kebab-case round-trip, exactly one
-`Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`
-with `phase` and `lastReconciledAt`, duplicate/missing/wrong-name rejection,
-`ProviderLifecycle` non-substitution, current API snapshots, paired runtime reference text,
-and byte-identical generated Zone desired schema. T605 does not wait for T595/T599 and does
-not run the full drift gate. T595 owns the emitter, T599 owns downstream consumers, and T220
-reconciles integrator-owned generated spec manifests and runs `make test-drift` before F.
+The former T605/T595/T599/T220 Wave 5 loop is historical planning evidence. Do not rerun it to
+reconstruct Wave 5 completion. Wave 6 implementers run only the validation owned by their
+T221-selected tasks.
 
 ### 4. Heavy lanes, through the semaphore only
 
@@ -133,14 +141,9 @@ Never invoke an internal `heavy-lane-*` target directly - it fails closed by des
 
 ### 4b. Pre-panel gates (parallel, read-only)
 
-**`adr046w5` exception:** this subsection's `/d2b-panel-round work` instruction is forbidden
-for this wave because its binding request is already consumed. Its only panel work is T220's
-one nonbinding `/d2b-panel-round plan` lifecycle with one stable discovery ledger. For every
-provisional candidate or fix, rerun deterministic selection, widen but never reduce the
-roster, and run scoped verification with the ledger and full candidate. Run comprehensive
-discovery exactly once. These iterations create no delivery request, reservation,
-attestation, or seal. After T220 freezes F, run T600, T601, and T602, then stop for T219's
-accepted external disposition. Do not fall through to section 5.
+**Historical `adr046w5` boundary:** do not dispatch any Wave 5 panel lane or run any Wave 5
+delivery command. Its consumed request, zero attestations, and absent seal are immutable.
+Proceed here only for Wave 6 after T221 passes.
 
 Before any panel lane is dispatched, run both gates against **this wave scope**:
 
@@ -163,16 +166,13 @@ thirteen-seat role domain and are bound in its table to
 There is no separate dotted verification or review command.
 
 Clear every actionable content finding, at any severity, including constitution conflicts, before the
-binding panel request on an ordinary unconsumed wave. For `adr046w5`, a defect found here
-returns to T220, preserves its lifecycle and stable discovery ledger, reruns deterministic
-widen-only selection and scoped verification without comprehensive discovery, freezes a
-replacement F, reruns T600-T602, and stops again for the external disposition; no binding
-panel is invoked.
+binding panel request on an ordinary unconsumed wave. For Wave 6, a defect found here returns to convergence and requires a replacement candidate
+before the sole binding request.
 
 ### 5. Track A - approve, bind, merge, seal, and close
 
 This procedure applies only to a wave whose binding request has not been consumed.
-`adr046w5` MUST NOT execute any command in this subsection.
+The historical `adr046w5` state MUST NOT execute any command in this subsection.
 
 Enter only after the final nonbinding Discover-Fix-Verify lifecycle is unanimously approved
 and no content-changing fix remains. The PR may already exist as a draft because `snapshot`
@@ -543,7 +543,8 @@ current-wave item is `Merged`; moving it before the PR merge recreates the cycle
 workflow is designed to prevent. The merge-target input is captured from the green PR
 immediately before merge, then registered after the seal so the post-merge commands consume
 the exact pre-merge head and check state.
-R12 and R55 do not reorder those stages and do not relax FR-036.
+R12 and R55 do not reorder those stages. The Wave 5 historical disposition does not relax
+them for Wave 6.
 
 Every seat in `observed.json` has exactly these required fields: `provider`, `model`,
 `reasoning_effort`, `context_tier`, `communication`, `agent_type`,
@@ -573,11 +574,8 @@ together in one message. They take no heavy-gate slot, so all selected lanes run
 concurrently. They must not run tests or builds unless you explicitly ask a
 specific lane to.
 
-For ordinary waves, local/host validators may run against the snapshot while the final
-records are assembled. Required PR checks must be green and imported before merge. For
-`adr046w5`, T600/T601 evidence and T602's closed-set check complete, then execution stops
-before T219 until the accepted external disposition exists. They do not authorize another
-binding request.
+For prospective waves, local/host validators may run against the snapshot while the final
+records are assembled. Required PR checks must be green and imported before merge.
 
 ### 6. Rebase and clean up
 
@@ -603,15 +601,8 @@ proof passes, and required CI reruns regardless.
 ### If content changes after snapshotting
 
 Any content change before the binding panel request invalidates validation evidence: converge,
-re-snapshot, and rerun before requesting the panel. For `adr046w5`, the retained historical request already consumed the binding surface. F and
-its evidence identity do not receive a request, and no candidate receives another one through
-this feature. T220 may replace provisional candidates only during nonbinding
-pre-request phase convergence within its one lifecycle and stable discovery ledger, with
-deterministic widen-only reselection and scoped verification but no repeated comprehensive
-discovery. After T602, stop until an accepted external disposition
-preserves the consumed request and authorizes a specific non-request close action; never
-silently re-attest changed content, waive findings, or infer successor admission. Any
-authorized integration-lineage merge preserves F's tree.
+re-snapshot, and rerun before requesting the panel. The retained Wave 5 request is historical
+and is never re-attested, replaced, or used for successor admission.
 
 ### Recover an SC-002 sidecar incident
 
@@ -632,11 +623,11 @@ emitted-action coverage.
 ## Operator loop: prove the plane works
 
 This is the loop that distinguishes a live control plane from a sealed wave. Its exact
-operator activation positive remains W6 acceptance after T221. T220 first requires the
+operator activation positive remains W6 acceptance after T221. T221 first requires the
 accepted external Network contract/work-item amendment to remove every current-facing sole
 Network-opt-in path and retain T336-T355 plus all four double-opt-in cases as authoritative
 W6 work. T604 then consumes their merged implementation. A stale sole-opt-in contract makes
-T220 fail closed; an unimplemented T336-T355 row remains expected before W6 starts.
+T221 fail closed; an unimplemented T336-T355 row blocks T479.
 
 ### Story 1 - declare and reconcile
 
@@ -1023,15 +1014,16 @@ separately and cannot satisfy this positive proof. Guest passes through the dist
 acceptance-only and consumes the Network implementation after authoritative T336-T355 merge.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
-Host/Network double opt-in. Before T220 freezes F, the accepted external Network
-contract/work-item amendment must require
+Host/Network double opt-in. T221 requires the accepted Network contract/work-item amendment
+on the exact fetched Wave 6 base. It must require
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
 default both inputs false, remove every current-facing sole Network-opt-in path, and
 regenerate the manifest with T336-T355 retained as authoritative W6 implementation under
-T221 and all four Network/Host production cases assigned there. T219 revalidates that
-migration and ownership before seal or merge. T604 and T479 later require the merged W6
-implementation and all four passing cases. Historical or current sole opt-in cannot close
-T070, T071, T220, T219, T604, or T479. Do not change feature status to bypass that stop.
+T221 and all four Network/Host production cases assigned there. T480 revalidates that
+migration, implementation, and evidence before every Wave 6 close boundary. T604 and T479
+require the merged W6 implementation and all four passing cases. Historical or current sole
+opt-in cannot satisfy T221, T604, T479, or T480. Do not change feature status to bypass that
+stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an

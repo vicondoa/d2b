@@ -272,79 +272,58 @@ fixture census, registry count, or transition copy in this feature can satisfy t
 
 ---
 
-## 11. Retained Wave 5 request disposition
+## 11. Immutable Wave 5 historical predecessor
 
-The retained Wave 5 binding request can be dispositioned only by an external
-delivery-contract/tooling owner. That owner must land an accepted delivery-contract change
-and its typed validator outside this feature before T219 may import anything. The external
-record is evidence of allowed process, not panel sign-off and not a constitutional waiver.
-No in-feature task produces, installs, or validates the authority.
+The former actionable retained-request disposition model is superseded. Constitution 3.1.0
+supplies only the generic historical-process disposition. This feature and the exact delivery
+validator/tooling contract accept the following state only as closed ADR-046 history through merged Wave 5 commit
+`177235ed37188b3be87525e7f016fb43401574c5`:
 
-`Wave5RetainedRequestDispositionV1` contains exactly:
-
-| Field | Type and rule |
+| Attribute | Exact accepted value |
 | --- | --- |
-| `schemaVersion` | integer `1` |
-| `kind` | literal `adr046w5-retained-request-disposition` |
-| `program` | literal `ADR046` |
-| `wave` | literal `adr046w5` |
-| `authorityDispositionSha256` | digest of the accepted external authority artifact that authorizes this record; it is not a self-digest |
-| `authorityCommitOid` | full commit object id of the accepted external delivery-contract change |
-| `authorityTreeOid` | full tree object id of that change |
-| `validatorArtifactSha256` | digest of the installed external typed validator |
-| `deliveryContractVersion` | nonzero `u32` version accepted by the external change |
-| `toolingVersion` | nonzero `u32` validator/tooling version accepted by the external change |
-| `principleViAmendmentCommitOid` | full commit object id of the accepted FR-036 constitutional predecessor |
-| `t072DispositionSha256` | digest of the one accepted T072 historical/current remedial disposition |
-| `retainedCandidateId` | literal `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4` |
-| `retainedSnapshotSha256` | literal `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a` |
-| `retainedRequestSha256` | digest of the retained binding request envelope |
-| `retainedPanelRequestSha256` | digest of the byte-preserved `panel-request.json` |
-| `retainedAttestationCount` | integer `0` |
-| `retainedSealState` | literal `absent` |
-| `finalCandidateId` | exact F candidate id |
-| `finalCommitOid` | full commit object id of F |
-| `finalTreeOid` | full tree object id of F |
-| `closeAction` | one of `remain-blocked`, `abandon-without-merge`, or `recover-panel-without-new-request` |
-| `requestPolicy` | literal `no-second-request` |
-| `historyPolicy` | literal `preserve-retained-request-bytes` |
-| `panelPolicy` | literal `unanimous-selected-roster-exact-final-candidate`, using the current thirteen-seat role domain and widen-only fix deltas |
+| Delivery address | `adr046w5` |
+| Candidate | `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4` |
+| Embedded snapshot identity | `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a` |
+| `snapshot.json` SHA-256 | `dcf4d71a572bdf0766de557dde6b8ede7fd680eb9f85572238575d2ab5c82149` |
+| Head | `19b77dad63060bcadd41f1ef800978d2c53cc030` |
+| `panel-request.json` SHA-256 | `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7` |
+| Candidate root entries | exactly `evidence/`, `panel-request.json`, and `snapshot.json` |
+| Evidence root | exactly `evidence/local-host/` |
+| Evidence tree SHA-256 | `7deb84943d36962493422407ac74342fd598b2fea4970ea1a162942e25cfd33d` over the sorted `(local-host/<name>, file SHA-256)` manifest |
+| Attestations | `0` |
+| Seal | absent |
 
-The installed external validator is the sole import authority. It derives the Git and
-delivery-state identities, verifies the authority and prerequisite commits are ancestors of
-F, once-opens and hashes the retained request, compares every fixed field, rejects unknown
-fields or enum values, and emits one immutable import result bound to the disposition digest
-and F. A caller-supplied statement, feature-local receipt, phase-plan receipt, or self-named
-authority is ineligible.
+The exact `evidence/local-host/` inventory is:
 
-That `Wave5RetainedRequestDispositionImportV1` result contains exactly
-`schemaVersion = 1`, `kind = "adr046w5-retained-request-disposition-import"`,
-`recordSha256`, `authorityDispositionSha256`, `validatorArtifactSha256`,
-`finalCandidateId`, `finalCommitOid`, `finalTreeOid`, `closeAction`, and
-`verdict = "accepted"`. It is accepted only when every value equals the validated record;
-`recordSha256` is computed over that complete record and is not stored inside it.
+| File | SHA-256 |
+| --- | --- |
+| `check-inventory.json` | `785c51649f64bde6f4eff74468527b0702d0fafadf8dc6dc25eaee6a19f429fe` |
+| `redb-full-scale-proof.json` | `2a62cc326b790d4427e061ae0bd078fca5d612d33b6dcd2afc9f85cd9d2f843a` |
+| `redb-rss-spike-observation.json` | `937a9dc9082d96bb0e3662ba3f25c8c81810251587c91537eb80e6c0e403f4db` |
+| `resource-api-external-seals.json` | `9b3ce360d61d0494ec3ff677fc2527cf19d60cd190e40caf0d0f77dda14fef84` |
+| `resource-store-redb-seal-tests.json` | `9b9190f5d6a504b77e575f5e897abb19845512ade5a6287f9ee3c7b0ef913a30` |
+| `test-changelog.json` | `99be704ff0e630220b07d5d218e278646a4396dd04b16e0ad7b4e986ccdf4188` |
+| `test-drift.json` | `56d057624da3c74a2bff79851a4e43a0b989b996963223031793984c2201c9b9` |
+| `test-fixture-contracts.json` | `4a219d8ddb0f376a54072697c3e8cfa98d0918ea7d2eb0962f257407e73c6490` |
+| `test-flake.json` | `1c308adf388ad1c23b1e9135ed2791eadbec124ac3b84e313fac9b428070614f` |
+| `test-lint.json` | `ce4d6477c8e97817d34c4ca02f2ade7dd67f867f44b8d16aef207439e549db3c` |
+| `test-nix-unit.json` | `d2d7c5ae80dd8208ea63a2b44e365065630a7a58ac5ae4ce5da62155482d7d79` |
+| `test-policy.json` | `1a09ca7847d704fb0bcd5a44d11da91ce8ef1b1da2f8efddb9c6d789ac6835f4` |
+| `test-proofs.json` | `7486df6fdca37b631273bf2258dc7881b9bf99148f2ca5cfd6425def77f74c0a` |
+| `test-runtime-ledger.json` | `8af159ac146bc577d5d831b40ead290fcc74a78062c2d45cdde0011cb4d3c3ac` |
+| `test-rust-api-surface.json` | `6a5c25058ae63e6e805a01055d9b69a75929832e8644b68ec7d2b62c00ba718a` |
+| `test-rust.json` | `d5e5b5ca2074f347bd3ee18fa3d516f812769228373c048ba0875c5e93e4ea60` |
+| `tier0.json` | `cfdf94766f0814b53389c9f1a07db8b582e32fb2e26aa194742014586ba76317` |
 
-Disposition has these closed transitions:
+The Wave 6 production guard accepts no equivalent-looking substitute. It requires the exact
+fetched `origin/v3` base, the merged Wave 5 boundary, and the unique integration commit on
+that base's first-parent lineage after the boundary whose tree contains the exact accepted
+generic Constitution 3.1.0 bytes.
+It matches every root entry and digest above, rejects every extra or missing artifact, and is
+rechecked at Wave 6 snapshot/entry, panel request, seal, and merge eligibility.
 
-```text
-absent -> externally-accepted -> imported
-imported + remain-blocked -> blocked
-imported + abandon-without-merge -> abandoned-unmerged
-imported + recover-panel-without-new-request -> panel-pending
-panel-pending + exact unanimous selected-roster F-bound attestations -> panel-satisfied
-panel-satisfied -> seal-eligible -> merge-eligible -> merged-byte-identical-F
-panel-pending + completed/terminal panel with any missing role, recommendation,
-  disagreement, or stale binding
-  -> panel-refused
-```
-
-`blocked`, `abandoned-unmerged`, and `panel-refused` authorize no seal, merge, successor
-wave, or release. `recover-panel-without-new-request` authorizes only the externally defined
-recovery-attestation surface linked to the retained request; it creates no second request and
-cannot itself satisfy the panel. The validator requires a candidate-bound selection from the
-current thirteen-seat role domain, permits that selection only to widen over fix deltas,
-requires `signoff = true` iff recommendations are empty, and requires identical
-F/commit/tree/disposition bindings plus every constitutional predecessor. No action or field
-can encode `waived`, partial, force, reduced roster, stale-candidate attestation, or panel
-substitution. A content or history change after F, or any failed recovered panel, returns to
-external escalation rather than admitting another feature-local request.
+No transition leaves this historical state. There is no recovery action, second request,
+retroactive attestation, reconstructed seal, replacement candidate, or import record. T219
+records the historical disposition only. T221 consumes the production guard result before
+the ordinary prospective Wave 6 plan panel. The guard provides process-integrity and signoff
+tracking; it is not authentication and does not establish a security boundary.

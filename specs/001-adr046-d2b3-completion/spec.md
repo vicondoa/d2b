@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-29
 
-**Status**: Specification reconciled - plan approval pending
+**Status**: Specification reconciled - Wave 6 entry approval pending
 
 **Input**: User description: "I want to create a spec for finishing implementation of ADR-046 (docs/adr) - d2b 3.0. W0-W1 have been implemented and merged into the v3 branch. there are detailed specs for it in docs/specs."
 
@@ -49,16 +49,30 @@ sealed. The legacy-named `waiver-w0-w1.md` records that historical failure and i
 evidence only. It does not waive Constitution Principle VI, ratify the missing gates, or
 authorize W2 entry.
 
-**Open constitutional prerequisite**: before any ADR-046 phase may dispatch or resume
-implementation, run a convergence or finding-fix lane, request a work panel, seal, merge, or
-advance, a separate amendment to Constitution Principle VI must be accepted outside this
-feature root and committed on the integration lineage. That amendment must expressly address
-both the unpanelled and unsealed W0/W1 history and the already-dispatched W2-W5 work whose
-contemporaneous plan panels are unproven, and must state the conditions under which the
-program may continue. The accepted amendment commit must be an ancestor of the exact
-execution base. Feature-local historical and remedial records are evidence for that external
-decision; none is constitutional authorization. Until the amendment lands, this program is
-blocked after read-only planning and analysis.
+**Accepted constitutional disposition**: Constitution 3.1.0 now provides a generic
+historical-process disposition. This feature's exact delivery validator/tooling contract
+instantiates it once and only for ADR-046 history through merged Wave 5 commit
+`177235ed37188b3be87525e7f016fb43401574c5`, the missing W0/W1 panel receipts and seals, the
+unproven contemporaneous W2-W5 plan panels, and the exact retained Wave 5 state named in
+FR-036. This is a closed historical governance deviation, not a finding that those gates
+passed. The retained candidate, request, evidence, zero-attestation state, and absent seal
+remain immutable. No Wave 5 recovery, replacement candidate, second request, retroactive
+attestation, reconstructed seal, or actionable Wave 5 close is authorized.
+
+The disposition permits only prospective Wave 6 entry. Before any Wave 6 implementation
+dispatch, T221 must prove the fetched exact `origin/v3` entry base, the accepted first-parent
+integration commit carrying the exact generic Constitution 3.1.0 bytes after the Wave 5
+merge, the
+exact retained state and evidence inventory, and the focused delivery guard. It must then
+obtain the ordinary unanimous selected-roster plan result against that exact base and current
+feature snapshot with zero recommendations. Every prospective Wave 6 validation, binding
+panel, protected PR, seal, and merge gate remains unchanged.
+
+All later future-tense Wave 5 completion requirements and success criteria in this artifact
+are retained as historical design evidence. They are not executable recovery instructions,
+do not block T221, and are not claims that unchecked tasks or validation passed. The exact
+retained bytes, rather than a reconstructed ideal candidate, are the only Wave 5 input to
+prospective continuation.
 
 ### Approved Wave 5 production-completion amendment (2026-08-06)
 
@@ -219,9 +233,10 @@ both inputs default false. Before T220 may freeze F, an accepted external versio
 correction and migration must remove every current-facing sole Network-opt-in path and
 regenerate the work-item manifest with T336-T355 retained as authoritative W6 implementation
 under T221 and all four Network/Host combinations assigned there. T220 does not require or
-claim that later implementation or its results. T219 revalidates the same migration and
-ownership gate before any seal or merge. T604 remains W6 acceptance-only after T336-T355
-merge and consumes the already landed implementation. A feature-local status,
+claim that later implementation or its results. T221 requires the migration and ownership on
+the fetched Wave 6 base, and T480 revalidates them before every prospective close boundary.
+T604 remains W6 acceptance-only after T336-T355 merge and consumes the already landed
+implementation. A feature-local status,
 declaration-only fixture, fake effect port, historical W4 record, stale sole Network opt-in,
 or pre-T220 reassignment of T336-T355 cannot unblock any boundary.
 
@@ -577,7 +592,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   failure in one Zone MUST leave that Zone unpublished and visibly degraded while unrelated
   Zones continue, and a close failure MUST NOT silently drop later stores or their owners.
   Recovery and cleanup MUST retain ADR 0034's adopt-before-cleanup rule.
-- **FR-072**: Before T219 may begin, Wave 5 MUST hold exact-candidate evidence for all of the
+- **FR-072**: The retained Wave 5 history records exact-candidate evidence for all of the
   following: authenticated cross-Zone denial and same-Zone watch delivery through production
   boundaries; restart crash windows for effect replay/adoption and cleanup stale, zero, and
   UID-mismatch refusals; durable audit drain and restart replay; whole-process RSS and
@@ -594,8 +609,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   amendment and double-opt-in migration MUST be ancestors of F and MUST remove every
   current-facing sole Network-opt-in contract path. The regenerated manifest MUST retain
   T336-T355 as authoritative W6 implementation under T221 and assign all four Network/Host
-  combinations there. T219 MUST revalidate the same predicate before any seal or merge path.
-  Production implementation and four-case results remain W6 work and are not T220 or T219
+  combinations there. Production implementation and four-case results remain W6 work and are not T220
   evidence. T604 consumes the merged W6 implementation as acceptance evidence and is not an
   eighth Wave 5 evidence-profile member.
   Direct `WatchService` calls, fixed
@@ -619,24 +633,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   verification with the full stable ledger, responses, self-verification, fix delta, and full
   candidate. T220 MUST NOT rerun comprehensive discovery or create a successor lifecycle.
   Only unanimous scoped verification may freeze final F for T600-T602. This loop issues no
-  binding delivery request. Wave 5's retained
-  `panel-request.json` has already consumed its sole binding request. T219 performs no binding
-  action and remains non-authorizing until the external delivery-contract/tooling owner has
-  landed its contract and validator and that validator imports exactly one
-  `Wave5RetainedRequestDispositionV1` from `data-model.md`. The record preserves the request,
-  binds exact F, and selects only `remain-blocked`, `abandon-without-merge`, or
-  `recover-panel-without-new-request`. Only the final action can reach successful close, and
-  it authorizes no seal or merge until the complete selected-roster lifecycle from the
-  current thirteen-seat role domain independently returns unanimous F-bound sign-off with no
-  recommendations, with selection allowed only to widen over fix deltas. The disposition creates no second
-  request and cannot waive, reduce, replace, or satisfy a constitutional panel. A
-  retained-state fixture MUST run unanimous and finding-plus-rerun nonbinding phase sequences
-  and prove byte-identical delivery state with no reservation or request mutation. No
-  feature-local content, evidence identity, candidate, phase
-  panel, or replacement candidate may free or replace the request. The integrator MUST stop
-  with `adr046w5 binding request already consumed; obtain an accepted external
-  delivery-contract/tooling disposition naming the retained request, exact F, and one closed
-  action`; findings are never waived. T603 MUST use `/d2b-spec-edit` as the sole feature mutation surface. After the accepted FR-036 predecessor and one valid T072 disposition, analysis and a current selected-roster plan lifecycle bind clean base A and the complete feature snapshot. If every T073-T218 obligation is satisfied, one editor batch checks exactly those rows plus T603 and the integrator creates dedicated checkbox-only commit C. The editor receipt and C are the only authority; T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Any open row leaves all 147 boxes unchanged. Fresh analysis and a new selected-roster lifecycle bound to clean C and the changed snapshot are required before T589.
+  binding delivery request. Wave 5's retained `panel-request.json` consumed its sole binding
+  request with zero attestations and no seal. The exact delivery validator/tooling contract,
+  under the generic Constitution 3.1.0 disposition, accepts that state only as closed history
+  through merged Wave 5 commit
+  `177235ed37188b3be87525e7f016fb43401574c5`. T219 records that historical disposition and
+  performs no binding or close action. No retained-state fixture, current panel, replacement
+  candidate, second request, retroactive attestation, reconstructed seal, or recovery
+  transition may mutate or complete Wave 5. T603's historical planning and accounting text
+  remains evidence only and is not a prerequisite for the one-time Wave 6 predecessor
+  disposition. T221, not T219, is the next executable gate.
 
 - **FR-073**: D106 remains binding in the completed production path.
   `d2b-resource-store` and `d2b-resource-store-redb` MUST NOT deserialize, import, compile,
@@ -658,7 +664,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   contract tests, release treatment, and closed remediation actions that contain no executable
   Zone/operation-ID argv or free-form command text.
 - **FR-075**: The pre-ADR-046 operator lifecycle MUST remain functional on every exact
-  candidate that closes W2, W3, W4, W5, or W6. Before the corresponding work-panel request,
+  prospective candidate that closes W6. Historical W2-W5 results remain immutable evidence
+  and are not rerun or reconstructed. Before the W6 work-panel request,
   the candidate MUST enumerate and successfully build
   `vmChecks.x86_64-linux.daemon-restart-vm-survival` through the existing heavy-gated
   `make test-host-integration` target with no skip. The case MUST use the public `d2b vm`
@@ -684,8 +691,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   `d2b-unexpected.service`; both survive the sole `d2b.slice` exclusion and MUST fail exact
   equality. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
   cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
-  is limited to T220/T600 for W5 and T479 for W6. Historical T028/T035/T070 inspect retained
-  results only and MUST NOT rerun the target. T604 is the sole W6 source owner of the
+  is limited to T479 for W6. Historical T028/T035/T070 and retained Wave 5 evidence are read
+  only and MUST NOT rerun the target. T604 is the sole W6 source owner of the
   existing host VM case and its Makefile discovery/build recipe; every current or later close
   reuses that
   candidate-bound predicate. Passing evidence MUST name the enumerated and successfully built
@@ -866,7 +873,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   or merge before its predecessor has sealed at full unanimity and merged. This ordering
   constrains **exit** only. Pipelining may relax the predecessor-merge condition for
   implementation start under FR-048, but never relaxes the successor wave's own plan-review
-  gate; see FR-057.
+  gate; see FR-057. The exact ADR-046 delivery validator/tooling contract instantiates the
+  generic Constitution 3.1.0 disposition as exactly one historical predecessor exception:
+  for Wave 6 only, merged Wave 5 commit
+  `177235ed37188b3be87525e7f016fb43401574c5` replaces a Wave 5 seal as predecessor evidence.
+  It does not create that seal and does not weaken Wave 6's own prospective gates.
 - **FR-048**: A wave's implementation MAY begin before its predecessor's panel completes,
   provided at least five of the predecessor's selected-roster reviews have returned and the
   predecessor's integration tests pass on its converged tree. This permission does not apply
@@ -965,10 +976,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   requests). The record is evidence only. It MUST state that it does not waive Constitution
   Principle VI, cure the missing gates, authorize W2 entry, or permit any later phase to
   dispatch, resume, close, or advance.
-- **FR-035**: If the external constitutional prerequisite in FR-036 authorizes continuation,
-  sealed delivery MUST begin at W2. Every wave from W2 through W8 MUST then produce a complete
-  seal satisfying FR-026. The FR-034 historical record MUST NOT be extended, reused, or cited
-  as authorization or precedent for any wave.
+- **FR-035**: The feature-owned exact delivery validator/tooling contract applies the generic
+  Constitution 3.1.0 disposition to close the exact historical deviations through merged
+  Wave 5 without reconstructing missing evidence or a Wave 5 seal. Every prospective wave from W6
+  through W8 MUST produce its own complete seal satisfying FR-026. The FR-034 historical
+  record and the one-time Wave 5 predecessor disposition MUST NOT be extended, reused, or
+  cited as authorization or precedent for another program or wave.
 - **FR-058**: The FR-034 historical record's scope MUST be read narrowly, and covers **only the absence
   of the W0 and W1 seal artifacts** - the ten panel receipts and the seal record for those
   two waves. It MUST NOT be read as waiving any work item's own completion obligation. In
@@ -979,17 +992,32 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   MUST NOT be cited as evidence for any of them. More generally, a work item owned by a wave
   later than W1 is never covered by the record regardless of its current implementation
   state, and no work item is recorded as complete on the strength of the record alone.
-- **FR-036**: Before any phase may dispatch or resume implementation, run a convergence or
-  finding-fix lane, request a work panel, seal, merge, or advance, an explicit separate
-  amendment to Constitution Principle VI MUST be accepted and committed outside this feature
-  root. It MUST expressly disposition the W0/W1 missing panel and seal history and the
-  unproven contemporaneous W2-W5 plan panels, and it MUST state the conditions for program
-  continuation. Its commit MUST be an ancestor of the exact execution base. The FR-034
-  historical record, a current remedial plan panel, and a candidate-bound historical-entry
-  remediation record are evidence only and MUST NOT satisfy this prerequisite. Until it is
-  met, every implementation, resume, fix, work-panel, seal, merge, and advance boundary MUST
-  refuse.
-- **FR-057**: After FR-036's external constitutional prerequisite is satisfied, the program
+- **FR-036**: The generic Constitution 3.1.0 historical-process disposition contains no
+  ADR-046 identifier, wave, candidate, request, or hash. This feature and its exact delivery
+  validator/tooling contract bind only the ADR-046 history through merged Wave 5 commit
+  `177235ed37188b3be87525e7f016fb43401574c5`. The retained Wave 5 state MUST remain
+  candidate `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
+  snapshot identity `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
+  head `19b77dad63060bcadd41f1ef800978d2c53cc030`, retained `panel-request.json`
+  SHA-256 `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`,
+  the exact accepted evidence inventory and digests, zero attestations, and no seal. Those
+  bytes are immutable historical evidence. They MUST NOT be described as passed gates,
+  changed, supplemented, re-attested, replaced, recovered, or sealed.
+
+  Before T221 may dispatch any Wave 6 implementation, it MUST fetch `origin/v3` and use its
+  exact resolved commit as the entry base. The production historical-predecessor guard MUST
+  identify on that base's first-parent lineage, after the Wave 5 merge, the accepted
+  integration commit whose tree carries the exact generic Constitution 3.1.0 bytes; require that
+  commit and the Wave 5 merge to be ancestors of the Wave 6 base and head; and match the exact
+  retained candidate root, request, snapshot file, evidence inventory, and every digest.
+  Missing, extra, changed, partial, non-ancestor, non-first-parent, unfetched, or substituted
+  state MUST refuse. The focused delivery-guard validation MUST pass before the ordinary T221
+  plan lifecycle runs. T221 then MUST obtain unanimous sign-off from its exact selected
+  roster against that exact base and current feature snapshot with zero recommendations.
+  The production guard runs at the Wave 6 snapshot/entry boundary and again at panel request,
+  seal, and merge eligibility. It is process-integrity and signoff tracking, not
+  authentication or a security boundary.
+- **FR-057**: After FR-036's historical disposition is matched, the program
   MUST distinguish **entry evidence** from **exit evidence**, and
   MUST NOT treat a requirement for one as a requirement for the other. Entry evidence is what
   a wave needs in order to **start implementing**: Gate 0 has passed, its destination paths
@@ -998,13 +1026,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   Exit evidence is what a wave needs in order to be **delivered** - sealed and merged: every
   assigned work item recorded as merged, validation evidence imported for the exact snapshot,
   and unanimous selected-roster panel sign-off with zero outstanding recommendations against that
-  snapshot. For ordinary prospective pipelining after FR-036 is satisfied, a missing or
-  absent predecessor seal blocks the successor's **exit** and not its **entry**. This rule
-  does not make W0/W1's missing seals or W2-W5's late remediation non-blocking before the
-  external amendment. FR-025's prohibition on partial-wave advance therefore means a wave is never
+  snapshot. For ordinary prospective pipelining, a missing or absent predecessor seal blocks
+  the successor's **exit** and not its **entry**. The sole exception is ADR-046 Wave 6: the
+  exact delivery validator/tooling contract instantiates the generic Constitution 3.1.0
+  disposition with the merged Wave 5 boundary and retained immutable state, without creating
+  a Wave 5 seal. FR-025's prohibition on
+  partial-wave advance therefore means a wave is never
   *delivered* early and its evidence is never *accepted* early; it does not mean implementation
-  must wait. Once FR-036's external prerequisite is satisfied, this matches the delivery
-  contract's ordinary pipelined-start conditions restated in FR-048 through FR-050.
+  must wait. This matches the delivery contract's ordinary pipelined-start conditions
+  restated in FR-048 through FR-050 while keeping T221 and every prospective Wave 6 exit gate.
   W8 is the explicit exception: its T557 triage and T558 entry MUST wait for W7 seal, merge,
   and cleanup, then use the updated `v3` lineage.
 - **FR-044**: Every wave's work MUST land through pull requests opened against the
@@ -1411,14 +1441,14 @@ carries the object verbatim rather than copying selected fields into the task ro
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: At clean base A, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If all T073-T218 obligations have qualifying evidence, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records the exact checkbox-only change in dedicated commit C. The editor receipt and Git history are the sole authority. Any open row leaves all 147 boxes unchanged. T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Before T589, fresh analysis and a new selected-roster lifecycle must bind clean C and the changed snapshot. T219 additionally requires C to be an ancestor of final F and the exact seven T600/T601 evidence identifiers to bind F and its tree.
+- **SC-034**: At clean base A, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If all T073-T218 obligations have qualifying evidence, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records the exact checkbox-only change in dedicated commit C. The editor receipt and Git history are the sole authority. Any open row leaves all 147 boxes unchanged. T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Before T589, fresh analysis and a new selected-roster lifecycle must bind clean C and the changed snapshot. The exact delivery validator/tooling disposition does not claim that this historical accounting sequence completed; T219 records only the exact one-time Wave 5 disposition and no seal.
 
-- **SC-035**: Each exact W2-W6 close candidate has one candidate-bound passing FR-075 result
-  for `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and
-  built and no skip. W2-W4 carry the closed continuity result directly; W5 carries it only
-  inside `production-session-watch`; W6 carries it only inside
-  `w6-cloud-hypervisor-guest-acceptance`. The corresponding close task revalidates that result
-  before panel request, seal, merge eligibility, and merge.
+- **SC-035**: The exact W6 close candidate has one candidate-bound passing FR-075 result for
+  `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and built
+  and no skip. W2-W4 and Wave 5 retain their exact historical evidence without rerun or
+  reconstruction. W6 carries the prospective result only inside
+  `w6-cloud-hypervisor-guest-acceptance`, and T480 revalidates it before panel request, seal,
+  merge eligibility, and merge.
 
 #### Scale and footprint
 
@@ -1463,12 +1493,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   HEAD is 68 merged and 477 planned. Release also includes every item recorded for the
   terminal wave after W7 is sealed, merged, and cleaned up. The count is read from the
   manifest at release time and is not fixed at 545.
-- **SC-020**: Every wave from W2 through W8 carries a seal bound to its exact snapshot, with
-  unanimous selected-roster panel sign-off and zero outstanding recommendations. W0 and W1 carry a
-  written delivered-without-seal historical record, not a substitute seal or constitutional
-  waiver. The release is ineligible unless the separate FR-036 constitution amendment is an
-  ancestor of the release candidate and expressly permits continuation under the recorded
-  history.
+- **SC-020**: Every prospective wave from W6 through W8 carries a seal bound to its exact
+  snapshot, with unanimous selected-roster panel sign-off and zero outstanding
+  recommendations. W0/W1 and the retained Wave 5 state remain historical evidence, not
+  substitute seals. The release is ineligible unless the integration commit carrying the
+  accepted generic Constitution 3.1.0 disposition is on the release lineage and the exact
+  feature-owned Wave 5 predecessor guard passed at Wave 6 entry.
 - **SC-021**: Zero foundation surfaces remain deliberately unwired from production at
   release: the capabilities delivered in W0 and W1 are reachable through the operator
   surface rather than only through tests.
@@ -1487,10 +1517,12 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-026**: All seven remaining waves reach the integration lineage through a pull request
   whose gates passed first, with zero waves landing by direct push or by a gate-bypassing
   local merge, and zero intermediate versions published before 3.0.
-- **SC-027**: Every current wave seals at N/N unanimity for its selected roster and merges strictly after its predecessor
-  did, in 100 percent of waves. Zero waves issue a panel request while their predecessor is
-  unsealed, and zero waves panel against a snapshot that predates their post-merge rebase.
-  W8 begins neither triage nor entry until W7 seal, merge, and cleanup are complete.
+- **SC-027**: Every prospective wave seals at N/N unanimity for its selected roster and
+  merges strictly after its predecessor did. The sole historical predecessor exception is
+  ADR-046 Wave 6, whose T221 entry uses the exact merged Wave 5 boundary and immutable
+  retained state without claiming a Wave 5 seal. Wave 6's own panel, PR, seal, and
+  merge-eligibility gates remain complete. W8 begins neither triage nor entry until W7 seal,
+  merge, and cleanup are complete.
 - **SC-028**: Every current lifecycle completes one comprehensive discovery, one stable
   shared ledger, batched fixes and self-verification, and scoped verification. Zero findings
   become nonblocking because of a round count: pre-existing late MINOR and NIT observations
@@ -1510,22 +1542,18 @@ carries the object verbatim rather than copying selected fields into the task ro
   work-panel, seal, and merge-eligibility surfaces; it does not supersede the repository's
   per-wave phase gate. Every current wave uses the candidate-bound lifecycle selection
   artifact and requires every selected seat through discovery and verification. For
-  already-dispatched W2-W5,
-  the feature artifacts currently prove no contemporaneous plan-review receipt: historical
-  compliance remains unproven, a current remedial plan review is evidence only until FR-036's
-  external constitution amendment lands, and the later work panel cannot repair or substitute
-  for the missed historical gate. After that amendment, its stated conditions and the
-  feature-local gates apply together. Wave 5's post-editor T603 selected-roster lifecycle is
-  then the mandatory gate for resumed implementation after a valid T072 historical or
-  current remedial entry disposition. T072 may be checked only by an exact retained Wave 5
-  legacy plan-panel receipt bound
-  to the actual first-dispatch base and feature snapshot; no such receipt is claimed by this
-  specification. W6-W8 must pass their prospective plan gates before their first
-  implementation lane.
+  already-dispatched W2-W5, contemporaneous plan-review compliance remains unproven.
+  The exact delivery validator/tooling contract applies the generic Constitution 3.1.0
+  disposition to that fact only as closed history through merged Wave 5 commit
+  `177235ed37188b3be87525e7f016fb43401574c5`; it does not make a later work panel substitute
+  for a missed historical gate. T072 and the T603 planning sequence remain historical
+  evidence and are not executable recovery instructions. W6-W8 must pass their prospective
+  plan gates before their first implementation lane, beginning with the exact T221 gate.
 - The project constitution applies in full, in particular the audited-privilege boundary,
   the isolation-over-convenience rule, contract versioning, test-layer discipline, and the
   ban on internal process markers in shipped artifacts. The feature cannot amend or waive it;
-  FR-036 is therefore an external prerequisite rather than a feature-local exception.
+  FR-036 consumes the accepted generic Constitution 3.1.0 disposition and owns the exact
+  ADR-046 validator/tooling instantiation rather than placing specifics in the constitution.
 - Delivery proceeds in the specified wave order W2 through W8. Sealing and merging are
   strictly ordered and no partial-wave advance is permitted, but implementation start is
   pipelined; the entry-evidence versus exit-evidence distinction is stated in FR-057. The
@@ -1535,11 +1563,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   gate is evaluated against the final wave's snapshot, because gating earlier would release
   a candidate that a later wave still modifies.
 - Waves W0 and W1 are historically recorded as merged without the required panel receipts
-  and seals. Their binding panel cannot now be recreated against one canonical delivered
-  snapshot. All 14 assigned work items are independently recorded as `Merged`, but that fact
-  does not cure Principle VI or authorize W2. The legacy-named `waiver-w0-w1.md` is only the
-  FR-034 evidence record. Program continuation depends on the separate FR-036 constitution
-  amendment, and neither that file nor the W2-W5 late-remediation records may stand in for it.
+  and seals. Their binding panels cannot now be recreated against one canonical delivered
+  snapshot. The legacy-named `waiver-w0-w1.md` remains only the FR-034 evidence record. The
+  exact delivery validator/tooling contract applies the generic Constitution 3.1.0
+  disposition to those exact deviations together with the W2-W5 history through the merged
+  Wave 5 boundary. It does not authorize reconstruction or create missing seals.
 - FR-075 requires the pre-ADR-046 operator lifecycle to remain functional throughout W2
   through W6 and makes exact-candidate continuity evidence a wave-close gate. It is replaced
   only by the explicit cutover in W7 and removed under the release gate.
