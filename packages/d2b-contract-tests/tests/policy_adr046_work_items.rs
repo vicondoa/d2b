@@ -813,6 +813,12 @@ fn markdown_fence(line: &str) -> Option<(char, usize, &str)> {
     (length >= 3).then(|| (delimiter, length, &trimmed[length..]))
 }
 
+fn is_json_fence_info(info: &str) -> bool {
+    info.split_whitespace()
+        .next()
+        .is_some_and(|language| language.eq_ignore_ascii_case("json"))
+}
+
 fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
     let mut bodies = Vec::new();
     let mut body = String::new();
@@ -838,7 +844,7 @@ fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
                 body.push('\n');
             }
         } else if let Some((delimiter, length, info)) = markdown_fence(line) {
-            if info.trim() == "json" {
+            if is_json_fence_info(info) {
                 open_fence = Some((delimiter, length));
                 body.clear();
             }
@@ -1362,6 +1368,11 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     for (label, opening, closing) in [
         ("long backtick", "````json", "````"),
         ("tilde", "~~~ json", "~~~"),
+        (
+            "case-insensitive attributed",
+            "````` JSON contract=local",
+            "`````",
+        ),
     ] {
         let duplicate = format!(
             "{tasks}\n{opening}\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n{closing}\n"
