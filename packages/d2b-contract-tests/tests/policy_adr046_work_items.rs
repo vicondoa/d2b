@@ -688,17 +688,137 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
     (spec_set, work_items, declared)
 }
 
-fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
+fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
     let mut findings = Vec::new();
-    let contract = markdown
+    let contracts = markdown
         .split("```json")
         .skip(1)
         .filter_map(|tail| tail.split("```").next())
-        .find_map(|body| serde_json::from_str::<Value>(body).ok())
-        .filter(|value| value["artifact_kind"] == "d2b-feature-local-task-contract");
-    let Some(contract) = contract else {
+        .filter_map(|body| serde_json::from_str::<Value>(body).ok())
+        .filter(|value| value["artifact_kind"] == "d2b-feature-local-task-contract")
+        .collect::<Vec<_>>();
+    if contracts.len() != 1 {
+        return vec![format!(
+            "expected exactly one feature-local task contract, found {}",
+            contracts.len()
+        )];
+    }
+    let Some(contract) = contracts.into_iter().next() else {
         return vec!["feature-local task contract JSON block is missing".to_owned()];
     };
+
+    let mut t604_manifest = vec![
+        "ADR046-activation-001".to_owned(),
+        "ADR046-activation-006".to_owned(),
+        "ADR046-system-core-001".to_owned(),
+        "ADR046-ch-001".to_owned(),
+    ];
+    t604_manifest.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
+    t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
+    t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
+    let expected_contract = serde_json::json!({
+        "artifact_kind": "d2b-feature-local-task-contract",
+        "schema_version": 1,
+        "task_ids": ["T604", "T479", "T480"],
+        "unchecked_task_ids": ["T604", "T479", "T480"],
+        "outside_retired_fences": true,
+        "permitted_local_dependency_ids": ["T221", "T604", "T479", "T480"],
+        "required_local_dependencies": {
+            "T604": ["T221"],
+            "T479": ["T604", "T221"],
+            "T480": ["T479"]
+        },
+        "required_manifest_dependencies": {
+            "T604": t604_manifest,
+            "T479": []
+        },
+        "required_manifest_dependency_queries": {
+            "T479": {
+                "artifact": "docs/specs/ADR-046-implementation-graph.json",
+                "where": {"kind": "work-item", "wave": "W6"},
+                "project": "id",
+                "project_semantics": "workItemId",
+                "expected_count": 258,
+                "cardinality": "exact"
+            }
+        },
+        "shared_file_order": {
+            "Makefile": ["ADR046-ch-001", "T604"]
+        },
+        "owned_files": {
+            "T604": [
+                "packages/d2b-contract-tests/tests/resource_operator_activation.rs",
+                "packages/d2bd/tests/resource_operator_activation.rs",
+                "tests/host-integration/resource-operator-activation.nix",
+                "tests/host-integration/daemon-restart-vm-survival.nix",
+                "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+                "tests/golden/delivery/host-generation-unit-census-case-ids.txt",
+                "Makefile",
+                "changelog.d/operator-resource-activation.md"
+            ]
+        },
+        "case_id_fixture_paths": [
+            "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+            "tests/golden/delivery/host-generation-unit-census-case-ids.txt"
+        ],
+        "validator_identity_literals": {
+            "T604": ["operator-nix-activation-cleanup"]
+        },
+        "candidate_evidence_literals": {
+            "T479": [
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance"
+            ]
+        },
+        "t479_candidate_execution_order": [
+            "converge-f6",
+            "freeze-f6",
+            "invoke-t604-operator-validator",
+            "execute-t604-authored-daemon-restart-case-with-cloud-hypervisor-case",
+            "emit-both-candidate-records"
+        ],
+        "operator_acceptance": {
+            "validator_author": "T604",
+            "candidate_executor": "T479",
+            "candidate_evidence_owner": "T479",
+            "candidate_evidence_literal": "operator-nix-activation-cleanup",
+            "candidate_record_count": 1,
+            "t604_pre_f6_candidate_evidence_emission": false,
+            "close_revalidator": "T480"
+        },
+        "fr075": {
+            "case_author": "T604",
+            "candidate_executor": "T479",
+            "candidate_evidence_owner": "T479",
+            "candidate_evidence_literal": "w6-cloud-hypervisor-guest-acceptance",
+            "candidate_record_count": 1,
+            "t604_candidate_bound_evidence": false,
+            "close_revalidator": "T480"
+        }
+    });
+    if contract != expected_contract {
+        findings.push("feature-local task contract differs from the exact schema".to_owned());
+    }
+
+    let query_nodes = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .filter_map(|node| node["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    if query_nodes.len() != 258 {
+        findings.push(format!(
+            "feature-local T479 W6 query expected 258 rows, got {}",
+            query_nodes.len()
+        ));
+    }
+    let graph_ids = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node["id"].as_str())
+        .collect::<BTreeSet<_>>();
 
     let json_set = |path: &[&str]| -> BTreeSet<String> {
         let mut value = &contract;
@@ -755,10 +875,15 @@ fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
     if json_set(&["required_manifest_dependencies", "T604"]) != expected_t604_manifest {
         findings.push("feature-local T604 manifest dependency set is incorrect".to_owned());
     }
-    if json_set(&["required_manifest_dependencies", "T479"])
-        != BTreeSet::from(["ADR046-process-002".to_owned()])
-    {
+    if !json_set(&["required_manifest_dependencies", "T479"]).is_empty() {
         findings.push("feature-local T479 manifest dependency set is incorrect".to_owned());
+    }
+    for dependency in json_set(&["required_manifest_dependencies", "T604"]) {
+        if !graph_ids.contains(dependency.as_str()) {
+            findings.push(format!(
+                "feature-local T604 dependency `{dependency}` is absent from the graph"
+            ));
+        }
     }
     if contract["shared_file_order"]["Makefile"] != serde_json::json!(["ADR046-ch-001", "T604"]) {
         findings.push("feature-local Makefile ownership order is incorrect".to_owned());
@@ -962,11 +1087,61 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
 
 #[test]
 fn feature_local_coordination_tasks_are_closed_and_authoritative() {
-    let findings = check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS));
+    let findings =
+        check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS), &load(GRAPH_JSON));
     assert!(
         findings.is_empty(),
         "feature-local coordination task policy failed:\n{}",
         findings.join("\n")
+    );
+}
+
+#[test]
+fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
+    let tasks = read_repo_file(FEATURE_TASKS);
+    let graph = load(GRAPH_JSON);
+    for (from, to) in [
+        ("\"schema_version\": 1", "\"schema_version\": 2"),
+        (
+            "\"task_ids\": [\"T604\", \"T479\", \"T480\"]",
+            "\"task_ids\": [\"T479\", \"T480\"]",
+        ),
+        ("\"T604\": [\"T221\"]", "\"T604\": []"),
+        ("\"ADR046-ch-001\"", "\"ADR046-ch-999\""),
+        ("\"expected_count\": 258", "\"expected_count\": 257"),
+        (
+            "\"Makefile\": [\"ADR046-ch-001\", \"T604\"]",
+            "\"Makefile\": [\"T604\", \"ADR046-ch-001\"]",
+        ),
+        (
+            "\"candidate_record_count\": 1",
+            "\"candidate_record_count\": 2",
+        ),
+        (
+            "\"close_revalidator\": \"T480\"",
+            "\"close_revalidator\": \"T479\"",
+        ),
+        ("\"freeze-f6\"", "\"emit-before-freeze\""),
+        (
+            "\"t604_candidate_bound_evidence\": false",
+            "\"t604_candidate_bound_evidence\": true",
+        ),
+    ] {
+        assert!(tasks.contains(from), "mutation source missing: {from}");
+        let mutated = tasks.replacen(from, to, 1);
+        assert!(
+            !check_local_coordination_tasks(&mutated, &graph).is_empty(),
+            "mutation unexpectedly passed: {from} -> {to}"
+        );
+    }
+    let duplicated = tasks.replacen(
+        "```json\n{\n  \"artifact_kind\": \"d2b-feature-local-task-contract\"",
+        "```json\n{\n  \"artifact_kind\": \"d2b-feature-local-task-contract\"",
+        1,
+    ) + "\n```json\n{\"artifact_kind\":\"d2b-feature-local-task-contract\"}\n```\n";
+    assert!(
+        !check_local_coordination_tasks(&duplicated, &graph).is_empty(),
+        "duplicate local-task contract unexpectedly passed"
     );
 }
 
