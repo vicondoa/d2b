@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "acd74e4458c8dcb167fb952678ae24094b5b252cd197a2973ac81d0b89b26353";
+    "8bf4b7ce3137b8caa997ecdab083038f2ecfcca898f3364858359b6c9e970ef3";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
@@ -2031,61 +2031,60 @@ fn check_local_completion_contract(
             "must_be_absolute": true,
             "must_be_outside_git": true,
             "artifact_kind": "d2b-feature-local/plan-approval",
-            "schema_version": 1,
+            "schema_version": 2,
             "required_fields": [
                 "artifactKind",
                 "schemaVersion",
                 "program",
                 "wave",
                 "entryBaseOid",
-                "featurePlanMaterialSha256",
                 "entryCandidateId",
                 "entryContentId",
                 "entrySnapshotSha256",
                 "selectionSha256",
+                "panelApprovalSha256",
                 "dispatchLedgerSha256",
                 "commandEvidenceSetSha256",
-                "selectedRoster",
-                "signoffCount",
-                "recommendationCount",
-                "result",
-                "durableWriteEvidenceSha256",
                 "approvedAtUnix",
-                "lifecycleApproval",
-                "seatRecords"
             ],
             "required_values": {
                 "program": "ADR046",
-                "wave": "adr046w6",
-                "recommendationCount": 0,
-                "result": "approved"
+                "wave": "adr046w6"
             },
-            "lifecycle_approval_fields": [
-                "artifactKind",
-                "schemaVersion",
-                "lifecycleId",
-                "phase",
-                "candidateId",
-                "contentId",
-                "snapshotSha256",
+            "canonical_panel_approval": {
+                "artifactKind": "d2b-panel/approval",
+                "required_fields": [
+                    "artifact_kind",
+                    "schema_version",
+                    "program",
+                    "wave",
+                    "phase",
+                    "candidate_id",
+                    "content_id",
+                    "snapshot_sha256",
+                    "selection_sha256",
+                    "roster",
+                    "signoff_count",
+                    "recommendation_count",
+                    "approved"
+                ],
+                "required_values": {
+                    "phase": "verification",
+                    "recommendation_count": 0,
+                    "approved": true
+                },
+                "roster_rule": "roster equals the candidate-bound plan selection and signoff_count equals roster length"
+            },
+            "composite_material_binding": [
+                "snapshot candidate/content/snapshot identities and generated/dependency/contract fingerprints",
                 "selectionSha256",
-                "approved"
+                "panelApprovalSha256",
+                "dispatchLedgerSha256",
+                "commandEvidenceSetSha256"
             ],
-            "lifecycle_approval_required_values": {
-                "phase": "plan",
-                "approved": true
-            },
-            "seat_record_rule": "seatRecords is an exact key map for selectedRoster; every value is candidate/selection-bound, has signoff true, recommendations [], and carries its completion-bound recordSha256",
-            "production_writer": "delivery wave entry-plan-approval write",
-            "production_verifier": "delivery wave entry-plan-approval verify",
-            "feature_plan_material_digest": "SHA-256 over the ordered FEATURE_DIR files with only entry_plan_invalidation_policy.status_only_updates normalized to fixed placeholders; requirements, machine contract, dependencies, ownership, validation, readiness, census, and guards remain byte-significant",
-            "durable_write": [
-                "create same-directory temporary file",
-                "write canonical JSON",
-                "fsync temporary file",
-                "rename over target",
-                "fsync parent directory"
-            ],
+            "production_command": "delivery wave plan-approval --snapshot PATH --selection PATH --approval PATH --repo LOGICAL_ID=CHECKOUT_ROOT",
+            "source_schema_sha256": "362b243019d4322fc95660df426f0aca0e27185c7f23be434f975a860fd76547",
+            "durable_write": "owned by the existing plan-approval command's external-state writer",
             "correlation_only": true,
             "not_authentication": true
         }),
@@ -3455,7 +3454,9 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "\"artifact_kind\": \"d2b-feature-local/plan-approval\"",
             "\"artifact_kind\": \"d2b-feature-local/plan-approval-v2\"",
         ),
-        ("\"result\": \"approved\"", "\"result\": \"rejected\""),
+        ("\"schema_version\": 2", "\"schema_version\": 1"),
+        ("\"phase\": \"verification\"", "\"phase\": \"plan\""),
+        ("\"panelApprovalSha256\"", "\"panelApprovalDigest\""),
         (
             "\"status_only_updates_do_not_invalidate_after_first_dispatch\": true",
             "\"status_only_updates_do_not_invalidate_after_first_dispatch\": false",
@@ -3708,13 +3709,13 @@ fn feature_local_semantic_branches_reject_independent_mutations() {
     );
 
     let mut receipt_mutation = contract.clone();
-    receipt_mutation["plan_approval_receipt_contract"]["required_values"]["result"] =
-        serde_json::json!("rejected");
+    receipt_mutation["plan_approval_receipt_contract"]["canonical_panel_approval"]["required_values"]
+        ["phase"] = serde_json::json!("plan");
     findings.clear();
     check_local_completion_contract(&receipt_mutation, &graph, &manifest, &mut findings);
     assert!(
         !findings.is_empty(),
-        "a rejected plan-approval receipt schema unexpectedly passed"
+        "a non-verification canonical plan approval unexpectedly passed"
     );
 
     let mut handoff_mutation = contract.clone();
