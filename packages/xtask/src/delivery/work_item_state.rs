@@ -1461,6 +1461,78 @@ mod tests {
     }
 
     #[test]
+    fn historical_amendment_rejects_constitution_bytes_preexisting_at_the_boundary() {
+        let fixture = HistoricalFixture::new("historical-predecessor-preexisting-bytes");
+        let boundary_with_bytes = fixture.repository.head();
+        let mut policy = fixture.policy();
+        policy.predecessor_merge_oid = &boundary_with_bytes;
+        let error = fixture
+            .validate(&policy)
+            .expect_err("accepted bytes already present at the boundary must fail");
+        assert!(
+            error
+                .message()
+                .contains("pre-existed the exact Wave 5 boundary"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn historical_amendment_rejects_accepted_bytes_arriving_from_a_side_parent() {
+        let fixture = HistoricalFixture::new("historical-predecessor-side-parent");
+        let predecessor = fixture.predecessor_merge_oid.clone();
+        fixture.repository.git(&[
+            "checkout",
+            "--quiet",
+            "-B",
+            "main",
+            &predecessor,
+        ]);
+        fixture.repository.git(&[
+            "checkout",
+            "--quiet",
+            "-b",
+            "constitution-side",
+            &predecessor,
+        ]);
+        fixture
+            .repository
+            .write(CONSTITUTION_PATH, "constitution 3.1.0\n");
+        fixture.repository.commit("side-parent constitution");
+        fixture
+            .repository
+            .git(&["checkout", "--quiet", "main"]);
+        fixture.repository.write("main-only.txt", "main\n");
+        fixture.repository.commit("main integration work");
+        fixture.repository.git(&[
+            "merge",
+            "--quiet",
+            "--no-ff",
+            "--no-edit",
+            "constitution-side",
+        ]);
+        let merge = fixture.repository.head();
+        fixture
+            .repository
+            .git(&["update-ref", D2B_INTEGRATION_REF, &merge]);
+        let tree = git_rev_parse(&fixture.repository, "HEAD^{tree}");
+        let mut material = fixture.material.clone();
+        merge.clone_into(&mut material.repository_set[0].base_oid);
+        merge.clone_into(&mut material.repository_set[0].head_oid);
+        tree.clone_into(&mut material.repository_set[0].integration_tree_oid);
+        merge.clone_into(&mut material.repository_set[0].expected_pull_requests[0].head_oid);
+        let error = validate_historical_predecessor(
+            &fixture.policy(),
+            &fixture.state,
+            &material,
+            &fixture.roots,
+            true,
+        )
+        .expect_err("a side-parent amendment must fail");
+        assert!(error.message().contains("side-parent merge"), "{error}");
+    }
+
+    #[test]
     fn later_constitution_amendments_do_not_invalidate_the_accepted_predecessor() {
         let fixture = HistoricalFixture::new("historical-predecessor-later-constitution");
         fixture
