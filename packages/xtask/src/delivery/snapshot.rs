@@ -169,7 +169,7 @@ fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<Workflow
             &repository_roots,
             &request.command_evidence_paths,
         )?;
-        return WorkflowOutput::ok(WaveCommand::Snapshot).with_digests(&snapshot.digests());
+        return Ok(WorkflowOutput::ok(WaveCommand::Snapshot).with_digests(&snapshot.digests()));
     }
     if super::coordination::is_w6_entry_wave(&material) {
         super::coordination::require_entry_receipts(&material, &repository_roots)?;
