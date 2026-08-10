@@ -3493,4 +3493,56 @@ mod tests {
         assert_eq!(records.records, vec![record]);
         let _ = fs::remove_dir_all(directory);
     }
+
+    #[test]
+    fn committed_graph_prerequisites_use_dependent_to_prerequisite_direction() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repository root");
+        let graph: Value =
+            serde_json::from_slice(&fs::read(root.join(GRAPH_PATH)).expect("graph bytes"))
+                .expect("graph JSON");
+        let nodes = graph["nodes"].as_array().expect("nodes");
+        let groups = nodes
+            .iter()
+            .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+            .filter_map(|node| {
+                Some((
+                    node["id"].as_str()?.to_owned(),
+                    node["parallelGroup"].as_str()?.to_owned(),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let edge = graph["edges"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .find(|edge| {
+                edge["type"] == "work-item-depends-on"
+                    && groups
+                        .get(edge["from"].as_str().unwrap_or_default())
+                        .zip(groups.get(edge["to"].as_str().unwrap_or_default()))
+                        .is_some_and(|(from, to)| from != to)
+            })
+            .expect("cross-group dependency");
+        let prerequisites = graph_group_prerequisites(&root).expect("group prerequisites");
+        let from_group = groups[edge["from"].as_str().expect("from")].clone();
+        let to_group = groups[edge["to"].as_str().expect("to")].clone();
+        assert!(prerequisites[&from_group].contains(&to_group));
+    }
+
+    #[test]
+    fn readiness_compiles_t604_dependencies_and_shared_writer_handoffs() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repository root");
+        let barriers = readiness_group_barriers(&root).expect("readiness barriers");
+        let operator = barriers
+            .get("feature-local:w6-operator-acceptance")
+            .expect("T604 barriers");
+        assert!(operator.contains("feature-local:w6-core-control-foundations"));
+        assert!(operator.contains("wi:ADR-046-provider-runtime-cloud-hypervisor"));
+    }
 }

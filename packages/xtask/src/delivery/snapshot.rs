@@ -1843,6 +1843,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn canonical_wave_6_inputs_derive_graph_direction_and_fingerprints() {
+        let root = crate::delivery::storage::tests::repo_root();
+        let head = git_text(&root, &["rev-parse", "HEAD"]).expect("head");
+        let heads = BTreeMap::from([("github.com/vicondoa/d2b".to_owned(), (root.clone(), head))]);
+        let (edges, generated, dependencies, contracts) =
+            canonical_w6_inputs(&heads).expect("canonical Wave 6 inputs");
+        assert!(edges.len() > 300);
+        assert!(
+            edges
+                .iter()
+                .any(|edge| { edge.from == "ADR046-aca-001" && edge.to == "ADR046-aca-002" })
+        );
+        assert_eq!(generated.len(), 3);
+        assert_eq!(dependencies.len(), 2);
+        assert_eq!(contracts.len(), 1);
+    }
+
+    #[test]
     fn a_state_root_inside_the_repository_is_refused_by_the_entry_point() {
         let fixture = GitFixture::new("snapshot-external");
         let mut args = fixture.snapshot_args();
