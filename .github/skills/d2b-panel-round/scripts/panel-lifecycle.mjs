@@ -4168,7 +4168,7 @@ export function advanceVerification(input, options = {}) {
     responses,
     "advance-verification responses",
   );
-  const priorResponses = validateResponses(ledger, responses);
+  validateResponses(ledger, responses);
   validateResponseEnvelope(ledger, responses);
 
   const verificationResults =
@@ -4222,7 +4222,7 @@ export function advanceVerification(input, options = {}) {
   validateLedger(nextLedger);
 
   const priorByIssue = new Map(
-    priorResponses.map((response) => [response.issue_id, response]),
+    responses.responses.map((response) => [response.issue_id, response]),
   );
   const statusByIssue = new Map(
     ledger.issues.map((issue) => [

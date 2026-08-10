@@ -1290,10 +1290,12 @@ try {
     changed_surface: ["src/panel.js"],
     justification: "The source mapping is now validated.",
     evidence: "targeted Node test",
+    verified_factual_status: null,
   };
   const factual = {
     issue_id: "R2",
     disposition: "Invalid",
+    changed_surface: [],
     justification: "The report describes behavior that is not present.",
     verified_factual_status: "Verified against the full candidate.",
     evidence: "source inspection",
@@ -1301,11 +1303,13 @@ try {
   const minor = {
     issue_id: "R3",
     disposition: "Deferred",
+    changed_surface: [],
     justification: "This non-blocking cleanup is recorded for later.",
   };
   const nit = {
     issue_id: "R4",
     disposition: "Withdrawn",
+    changed_surface: [],
     justification: "The wording is already correct.",
     verified_factual_status: "Verified against the candidate.",
     evidence: "source inspection",
@@ -2247,6 +2251,16 @@ try {
     advancedResponseById.get("R4").disposition === "Withdrawn" &&
       advancedResponseById.get("R5").disposition === null,
   );
+  for (const issueId of advanced.carried_issue_ids) {
+    const prior = advanceResponseEnvelope.responses.find(
+      (response) => response.issue_id === issueId,
+    );
+    check(
+      `advance preserves carried response ${issueId} exactly`,
+      stableStringify(advancedResponseById.get(issueId)) ===
+        stableStringify(prior),
+    );
+  }
   const advanceOutput = join(root, "advance-handoff");
   const publishedAdvance = writeAdvanceVerification(advanceOutput, advanceInput);
   const firstAdvanceBytes = Object.fromEntries(
