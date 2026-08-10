@@ -21,25 +21,28 @@
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
-- [x] The authoritative Wave 6 Nix acceptance row, after T221 and the merged
-  `ADR046-nl-001` through `ADR046-nl-020` set, names exactly
+- [x] Generated authority owns Wave 6 provider implementation, including the merged
+  `ADR046-nl-001` through `ADR046-nl-020` set and manifest-backed `ADR046-ch-001`. The exact
+  machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
+  and names exactly
   `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; each effect
-  and production `Ready` projection is bound to that same identity. Host-generation and
-  system-core ownership resolve only from authoritative member specs/generated manifests, while Guest
-  runtime-effect acceptance remains distinct Wave 6 manifest-backed `ADR046-ch-001` plus
-  local T479/T480 work
+  and production `Ready` projection is bound to that same identity. Guest runtime-effect
+  acceptance remains the distinct T479/T480 coordination over the generated Cloud Hypervisor
+  implementation
 - [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
-- [x] Retired Wave 5 rows are read-only fenced history; prospective ownership resolves only
-  from authoritative member specs and generated manifests
+- [x] Retired Wave 5 rows are read-only fenced history. Prospective provider-implementation
+  ownership resolves only from authoritative member specs and generated manifests; the exact
+  machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
 - [x] Prospective host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
 - [x] Historical W2-W5 records are read-only. T221 requires the accepted
   `effectiveEastWest = Network.spec.isolation.allowEastWest &&
   d2b.site.allowUnsafeEastWest` migration to remove every current-facing sole opt-in path and
-  retain `ADR046-nl-001` through `ADR046-nl-020` plus all four cases as authoritative W6
-  work; current acceptance ownership
-  resolves from authoritative objects
+  retain `ADR046-nl-001` through `ADR046-nl-020` plus all four cases as
+  generated-authority-owned W6 provider implementation. The exact machine-readable
+  T604/T479/T480 local contract owns
+  cross-provider acceptance coordination over that generated implementation
 - [x] Generic Constitution 3.1.0 contains no ADR-046 detail; FR-036 and the exact feature-owned
   validator/tooling contract preserve the immutable W0-W5 history, authorize no recovery
   or reconstructed seal, and make T221 the next executable gate
