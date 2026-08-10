@@ -82,6 +82,12 @@ captured target when no --target is given.";
 pub enum WaveCommand {
     Help,
     Snapshot,
+    PlanApproval,
+    DispatchReady,
+    Validate,
+    Complete,
+    Block,
+    Resume,
     ValidateImport,
     PanelRequest,
     PanelAttest,
@@ -91,8 +97,14 @@ pub enum WaveCommand {
 }
 
 /// Every wave subcommand, in workflow order.
-pub const WAVE_COMMANDS: [WaveCommand; 8] = [
+pub const WAVE_COMMANDS: [WaveCommand; 14] = [
     WaveCommand::Snapshot,
+    WaveCommand::PlanApproval,
+    WaveCommand::DispatchReady,
+    WaveCommand::Validate,
+    WaveCommand::Complete,
+    WaveCommand::Block,
+    WaveCommand::Resume,
     WaveCommand::ValidateImport,
     WaveCommand::PanelRequest,
     WaveCommand::PanelAttest,
@@ -107,6 +119,12 @@ impl WaveCommand {
         match self {
             Self::Help => "help",
             Self::Snapshot => "snapshot",
+            Self::PlanApproval => "plan-approval",
+            Self::DispatchReady => "dispatch-ready",
+            Self::Validate => "validate",
+            Self::Complete => "complete",
+            Self::Block => "block",
+            Self::Resume => "resume",
             Self::ValidateImport => "validate-import",
             Self::PanelRequest => "panel-request",
             Self::PanelAttest => "panel-attest",
@@ -127,6 +145,9 @@ impl WaveCommand {
         match self {
             Self::Help => "ADR046-delivery-002",
             Self::Snapshot => "ADR046-delivery-002",
+            Self::PlanApproval => "T221",
+            Self::DispatchReady => "T606",
+            Self::Validate | Self::Complete | Self::Block | Self::Resume => "T606",
             Self::ValidateImport => "ADR046-delivery-003",
             Self::PanelRequest | Self::PanelAttest => "ADR046-delivery-005",
             Self::Seal | Self::MergeTarget | Self::MergeEligibility => "ADR046-delivery-006",
@@ -140,6 +161,18 @@ impl WaveCommand {
                 "Bind the wave's base and head commits, dependency graph, and repository set into \
                  one immutable candidate."
             }
+            Self::PlanApproval => {
+                "Create the durable unanimous T221 plan-approval receipt for the immutable entry snapshot."
+            }
+            Self::DispatchReady => {
+                "Dispatch exactly the currently Ready Wave 6 groups under candidate and plan guards."
+            }
+            Self::Validate => {
+                "Validate candidate-bound group evidence and advance one dispatched group."
+            }
+            Self::Complete => "Complete one validated group after accepted commit/tree evidence.",
+            Self::Block => "Record a durable blocker for one candidate-bound group.",
+            Self::Resume => "Resume one blocked group only under replacement approval.",
             Self::ValidateImport => {
                 "Import CI, local, and host validator command results as evidence addressed by \
                  candidate ID."
@@ -181,6 +214,36 @@ impl WaveCommand {
                  [--contract NAME=LOGICAL_ID:PATH] [--entry-prepare true|false] \
                  [--command-evidence PATH]... [--fetch-evidence PATH] [--state-dir DIR]"
             }
+            Self::PlanApproval => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave plan-approval \
+                 --snapshot PATH --selection PATH --lifecycle PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--state-dir DIR]"
+            }
+            Self::DispatchReady => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave dispatch-ready \
+                 --snapshot PATH [--selection PATH] [--dispatch-id ID] --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--state-dir DIR]"
+            }
+            Self::Validate => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate \
+                 --snapshot PATH --group GROUP --evidence PATH... --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--state-dir DIR]"
+            }
+            Self::Complete => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave complete \
+                 --snapshot PATH --group GROUP --evidence PATH... --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--state-dir DIR]"
+            }
+            Self::Block => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave block \
+                 --snapshot PATH --group GROUP --reason TEXT --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--state-dir DIR]"
+            }
+            Self::Resume => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave resume \
+                 --snapshot PATH --group GROUP --replacement-approved true \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
+            }
             Self::ValidateImport => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import --snapshot PATH --validation NAME \
                  --result passed|failed --repo LOGICAL_ID=CHECKOUT_ROOT \
@@ -214,6 +277,11 @@ impl WaveCommand {
         match self {
             Self::Help => &[],
             Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
+            Self::PlanApproval => &["--snapshot", "--selection", "--lifecycle", "--repo"],
+            Self::DispatchReady => &["--snapshot", "--repo"],
+            Self::Validate | Self::Complete => &["--snapshot", "--group", "--evidence", "--repo"],
+            Self::Block => &["--snapshot", "--group", "--reason", "--repo"],
+            Self::Resume => &["--snapshot", "--group", "--replacement-approved", "--repo"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
             Self::PanelRequest => &["--snapshot", "--selection", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
@@ -237,6 +305,12 @@ impl WaveCommand {
                 "--command-evidence",
                 "--fetch-evidence",
             ],
+            Self::PlanApproval
+            | Self::DispatchReady
+            | Self::Validate
+            | Self::Complete
+            | Self::Block
+            | Self::Resume => &["--state-dir"],
             Self::ValidateImport => &[
                 "--state-dir",
                 "--lane",
@@ -269,6 +343,12 @@ impl WaveCommand {
             self,
             Self::Help
                 | Self::Snapshot
+                | Self::PlanApproval
+                | Self::DispatchReady
+                | Self::Validate
+                | Self::Complete
+                | Self::Block
+                | Self::Resume
                 | Self::ValidateImport
                 | Self::PanelRequest
                 | Self::PanelAttest
@@ -518,6 +598,12 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
             Ok(output)
         }
         WaveCommand::Snapshot => super::snapshot::run(rest),
+        WaveCommand::PlanApproval => super::coordination::run_plan_approval(rest),
+        WaveCommand::DispatchReady => super::coordination::run_dispatch_ready(rest),
+        WaveCommand::Validate => super::coordination::run_validate(rest),
+        WaveCommand::Complete => super::coordination::run_complete(rest),
+        WaveCommand::Block => super::coordination::run_block(rest),
+        WaveCommand::Resume => super::coordination::run_resume(rest),
         WaveCommand::ValidateImport => super::evidence::run(rest),
         WaveCommand::PanelRequest => super::panel::run_request(rest),
         WaveCommand::PanelAttest => super::panel::run_attest(rest),

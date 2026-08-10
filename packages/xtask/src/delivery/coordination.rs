@@ -24,6 +24,8 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
+    thread,
+    time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -32,21 +34,25 @@ use serde_json::Value;
 
 use super::{
     DeliveryError, Result,
+    command::{CliOptions, WaveCommand, WorkflowOutput},
     model::{
         CandidateId, CandidateMaterial, PANEL_CURRENT_ROLES, PanelRole, PanelSelectionV1,
         SnapshotSha256, canonical_digest, qualified_wave_parts, sha256_bytes,
         validate_bounded_string, validate_hash, validate_identifier, validate_sha256,
     },
+    panel,
     storage::{MAX_JSON_BYTES, absolute_path, ensure_external_path},
 };
 
 pub const DISPATCH_LEDGER_ARTIFACT_KIND: &str = "d2b-feature-local/dispatch-ledger";
 pub const COMMAND_EVIDENCE_ARTIFACT_KIND: &str = "d2b-feature-local/command-evidence";
+pub const GROUP_EVIDENCE_ARTIFACT_KIND: &str = "d2b-feature-local/group-evidence";
 pub const PLAN_APPROVAL_ARTIFACT_KIND: &str = "d2b-feature-local/plan-approval";
 pub const FRESH_FETCH_ARTIFACT_KIND: &str = "d2b-feature-local/fresh-fetch";
 
 pub const DISPATCH_LEDGER_SCHEMA_VERSION: u32 = 1;
 pub const COMMAND_EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const GROUP_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 1;
 pub const FRESH_FETCH_SCHEMA_VERSION: u32 = 1;
 
@@ -299,6 +305,7 @@ pub struct FreshFetchEvidence {
     pub remote: String,
     pub ref_name: String,
     pub fetched_oid: String,
+    pub fetch_head_oid: String,
     pub command_id: String,
     pub argv: Vec<String>,
     pub started_at_unix: u64,
@@ -338,6 +345,12 @@ impl FreshFetchEvidence {
         if self.fetched_oid != expected_oid {
             return Err(DeliveryError::new(
                 "fresh-fetch evidence names a different fetched tip than the entry base",
+            ));
+        }
+        validate_hash(&self.fetch_head_oid, "FETCH_HEAD OID")?;
+        if self.fetch_head_oid != self.fetched_oid {
+            return Err(DeliveryError::new(
+                "fresh-fetch evidence FETCH_HEAD does not match the fetched tip",
             ));
         }
         let plain_fetch = self.argv
@@ -437,6 +450,12 @@ pub fn refresh_origin_v3(root: &Path) -> Result<FreshFetchEvidence> {
         ));
     }
     let fetched_oid = git_resolve_commit(root, "refs/remotes/origin/v3")?;
+    let fetch_head_oid = git_resolve_commit(root, "FETCH_HEAD")?;
+    if fetch_head_oid != fetched_oid {
+        return Err(DeliveryError::new(
+            "origin/v3 fetch updated a different FETCH_HEAD than the remote-tracking tip",
+        ));
+    }
     let evidence = FreshFetchEvidence {
         artifact_kind: FRESH_FETCH_ARTIFACT_KIND.to_owned(),
         schema_version: FRESH_FETCH_SCHEMA_VERSION,
@@ -444,6 +463,7 @@ pub fn refresh_origin_v3(root: &Path) -> Result<FreshFetchEvidence> {
         remote: "origin".to_owned(),
         ref_name: "v3".to_owned(),
         fetched_oid: fetched_oid.clone(),
+        fetch_head_oid,
         command_id: "git-fetch-origin-v3".to_owned(),
         argv: ["git", "fetch", "--no-tags", "origin", "v3"]
             .into_iter()
@@ -596,6 +616,8 @@ pub struct DispatchEntry {
 pub struct DispatchLedger {
     pub artifact_kind: String,
     pub schema_version: u32,
+    #[serde(default)]
+    pub revision: u64,
     pub entries: Vec<DispatchEntry>,
 }
 
@@ -764,7 +786,10 @@ impl DispatchLedger {
         plan_approved: bool,
         repository_root: &Path,
     ) -> Result<Vec<String>> {
-        let prerequisites = graph_group_prerequisites(repository_root)?;
+        let mut prerequisites = graph_group_prerequisites(repository_root)?;
+        for (group, barriers) in readiness_group_barriers(repository_root)? {
+            prerequisites.entry(group).or_default().extend(barriers);
+        }
         self.ready_groups_with_graph(plan_approved, &prerequisites)
     }
 
@@ -790,7 +815,7 @@ impl DispatchLedger {
                 continue;
             }
 
-            let is_ready = if group == "feature-local:w6-shared-prep" {
+            let base_ready = if group == "feature-local:w6-shared-prep" {
                 true
             } else if group == "feature-local:w6-core-control-foundations"
                 || group == "feature-local:w6-storage-authority-foundations"
@@ -820,6 +845,12 @@ impl DispatchLedger {
                         .flatten()
                         .all(|dependency| complete(dependency))
             };
+            let is_ready = base_ready
+                && graph_prerequisites
+                    .get(group)
+                    .into_iter()
+                    .flatten()
+                    .all(|dependency| complete(dependency));
             if is_ready {
                 ready.push(group.to_owned());
             }
@@ -889,12 +920,133 @@ pub fn graph_group_prerequisites(
         };
         if from_group != to_group {
             prerequisites
-                .entry(to_group.clone())
+                .entry(from_group.clone())
                 .or_default()
-                .insert(from_group.clone());
+                .insert(to_group.clone());
         }
     }
     Ok(prerequisites)
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadinessContract {
+    manifest_group_foundations: BTreeMap<String, Vec<String>>,
+    required_manifest_dependencies: BTreeMap<String, Vec<String>>,
+    local_to_manifest_shared_writer_handoffs: HandoffContract,
+}
+
+#[derive(Debug, Deserialize)]
+struct HandoffContract {
+    handoffs: Vec<Handoff>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Handoff {
+    order: Vec<String>,
+}
+
+fn readiness_contract(repository_root: &Path) -> Result<ReadinessContract> {
+    let text = fs::read_to_string(repository_root.join(TASKS_PATH))
+        .map_err(|_| DeliveryError::environment("cannot read the Wave 6 task contract"))?;
+    let start = text.find("```json\n").ok_or_else(|| {
+        DeliveryError::new("Wave 6 task contract has no machine-readable contract")
+    })? + "```json\n".len();
+    let end = text[start..]
+        .find("\n```")
+        .map(|offset| start + offset)
+        .ok_or_else(|| DeliveryError::new("Wave 6 task contract JSON is unterminated"))?;
+    serde_json::from_str(&text[start..end])
+        .map_err(|error| DeliveryError::new(format!("invalid Wave 6 task contract: {error}")))
+}
+
+fn readiness_group_barriers(repository_root: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let contract = readiness_contract(repository_root)?;
+    let graph = serde_json::from_slice::<Value>(
+        &fs::read(repository_root.join(GRAPH_PATH))
+            .map_err(|_| DeliveryError::environment("cannot read the implementation graph"))?,
+    )?;
+    let nodes = graph
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeliveryError::new("implementation graph has no nodes"))?;
+    let item_groups = nodes
+        .iter()
+        .filter(|node| node.get("kind").and_then(Value::as_str) == Some("work-item"))
+        .filter_map(|node| {
+            Some((
+                node.get("id")?.as_str()?.to_owned(),
+                node.get("parallelGroup")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let local_groups = BTreeMap::from([
+        ("T606", "feature-local:w6-shared-prep"),
+        ("T607", "feature-local:w6-core-control-foundations"),
+        ("T608", "feature-local:w6-storage-authority-foundations"),
+        ("T609", "feature-local:w6-audit-telemetry-foundations"),
+        ("T604", "feature-local:w6-operator-acceptance"),
+        ("T479", "feature-local:w6-converge"),
+        ("T480", "feature-local:w6-close"),
+    ]);
+    let group_for = |owner: &str| {
+        local_groups
+            .get(owner)
+            .copied()
+            .map(str::to_owned)
+            .or_else(|| item_groups.get(owner).cloned())
+            .ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "Wave 6 shared-writer handoff names unknown owner {owner}"
+                ))
+            })
+    };
+    let expected_manifest_groups = W6_MANIFEST_GROUPS.into_iter().collect::<BTreeSet<_>>();
+    let mut barriers = BTreeMap::<String, BTreeSet<String>>::new();
+    for (group, foundations) in &contract.manifest_group_foundations {
+        if !expected_manifest_groups.contains(group.as_str())
+            || foundations
+                != &["T606", "T607", "T608", "T609"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+        {
+            return Err(DeliveryError::new(
+                "Wave 6 manifest foundation mapping is not the exact four-foundation contract",
+            ));
+        }
+        for foundation in foundations {
+            barriers
+                .entry(group.clone())
+                .or_default()
+                .insert(group_for(foundation)?);
+        }
+    }
+    let t604_group = "feature-local:w6-operator-acceptance".to_owned();
+    for dependency in contract
+        .required_manifest_dependencies
+        .get("T604")
+        .ok_or_else(|| DeliveryError::new("Wave 6 contract has no T604 dependency query"))?
+    {
+        let group = item_groups.get(dependency).ok_or_else(|| {
+            DeliveryError::new(format!(
+                "T604 required manifest dependency {dependency} is absent from the graph"
+            ))
+        })?;
+        barriers
+            .entry(t604_group.clone())
+            .or_default()
+            .insert(group.clone());
+    }
+    for handoff in &contract.local_to_manifest_shared_writer_handoffs.handoffs {
+        for owners in handoff.order.windows(2) {
+            let before = group_for(&owners[0])?;
+            let after = group_for(&owners[1])?;
+            if before != after {
+                barriers.entry(after).or_default().insert(before);
+            }
+        }
+    }
+    Ok(barriers)
 }
 
 pub fn initial_ledger(candidate_id: &CandidateId, head_oid: &str) -> Result<DispatchLedger> {
@@ -915,6 +1067,7 @@ pub fn initial_ledger(candidate_id: &CandidateId, head_oid: &str) -> Result<Disp
     let ledger = DispatchLedger {
         artifact_kind: DISPATCH_LEDGER_ARTIFACT_KIND.to_owned(),
         schema_version: DISPATCH_LEDGER_SCHEMA_VERSION,
+        revision: 0,
         entries,
     };
     ledger.validate()?;
@@ -949,8 +1102,15 @@ pub fn create_or_compare_ledger(
         return Ok(ledger);
     }
     let ledger = initial_ledger(candidate_id, head_oid)?;
-    write_external_json_create(&path, &ledger)?;
-    Ok(ledger)
+    match write_external_json_create(&path, &ledger) {
+        Ok(()) => Ok(ledger),
+        Err(_error) if path.exists() => {
+            let existing = read_dispatch_ledger(&path, repository_roots)?;
+            existing.validate_for_candidate(candidate_id, head_oid)?;
+            Ok(existing)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn transition_local_state(current: DispatchState, next: DispatchState) -> Result<()> {
@@ -971,6 +1131,44 @@ pub fn transition_local_state(current: DispatchState, next: DispatchState) -> Re
             next.as_str()
         )))
     }
+}
+
+struct LedgerLock {
+    path: PathBuf,
+}
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn lock_ledger(path: &Path) -> Result<LedgerLock> {
+    let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+    for _ in 0..200 {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&lock_path)
+        {
+            Ok(file) => {
+                file.sync_all()?;
+                return Ok(LedgerLock { path: lock_path });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => {
+                return Err(DeliveryError::environment(
+                    "cannot acquire dispatch ledger lock",
+                ));
+            }
+        }
+    }
+    Err(DeliveryError::environment(
+        "dispatch ledger lock did not become available",
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -995,7 +1193,51 @@ pub fn update_group(
         .first()
         .map(|repository| repository.head_oid.as_str())
         .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository head"))?;
+    let expected_revision = read_dispatch_ledger(path, repository_roots)?.revision;
+    update_group_cas(
+        path,
+        material,
+        group,
+        next,
+        dispatch_id,
+        completion_evidence_ids,
+        blocker,
+        expected_revision,
+        repository_roots,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_group_cas(
+    path: &Path,
+    material: &CandidateMaterial,
+    group: &str,
+    next: DispatchState,
+    dispatch_id: Option<&str>,
+    completion_evidence_ids: &[String],
+    blocker: Option<&str>,
+    expected_revision: u64,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<DispatchLedger> {
+    if !is_wave6(material) {
+        return Err(DeliveryError::new(
+            "dispatch ledger updates are only available for Wave 6",
+        ));
+    }
+    let _lock = lock_ledger(path)?;
+    let digests = material.digests()?;
+    let head = material
+        .repository_set
+        .first()
+        .map(|repository| repository.head_oid.as_str())
+        .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository head"))?;
     let mut ledger = read_dispatch_ledger(path, repository_roots)?;
+    if ledger.revision != expected_revision {
+        return Err(DeliveryError::new(format!(
+            "dispatch ledger revision conflict: expected {expected_revision}, found {}",
+            ledger.revision
+        )));
+    }
     ledger.validate_for_candidate(&digests.candidate_id, head)?;
     let existing = ledger.entry(group)?.clone();
     if existing.state == next
@@ -1034,6 +1276,10 @@ pub fn update_group(
     entry.completion_evidence_ids = completion_evidence_ids.to_vec();
     entry.blocker = blocker.map(str::to_owned);
     entry.updated_at_unix = now_unix();
+    ledger.revision = ledger
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| DeliveryError::new("dispatch ledger revision overflowed"))?;
     ledger.validate_for_candidate(&digests.candidate_id, head)?;
     write_external_json_replace(path, &ledger, repository_roots)?;
     Ok(ledger)
@@ -1070,6 +1316,43 @@ pub fn block_group(
         Some(blocker),
         repository_roots,
     )
+}
+
+pub fn resume_group(
+    path: &Path,
+    material: &CandidateMaterial,
+    group: &str,
+    dispatch_id: &str,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<DispatchLedger> {
+    validate_identifier(dispatch_id, "dispatch identifier")?;
+    let _lock = lock_ledger(path)?;
+    let digests = material.digests()?;
+    let head = material
+        .repository_set
+        .first()
+        .map(|repository| repository.head_oid.as_str())
+        .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository head"))?;
+    let mut ledger = read_dispatch_ledger(path, repository_roots)?;
+    ledger.validate_for_candidate(&digests.candidate_id, head)?;
+    if ledger.entry(group)?.state != DispatchState::Blocked {
+        return Err(DeliveryError::new(
+            "replacement-approved resume requires a Blocked group",
+        ));
+    }
+    let entry = ledger.entry_mut(group)?;
+    entry.state = DispatchState::Dispatched;
+    entry.dispatch_id = Some(dispatch_id.to_owned());
+    entry.blocker = None;
+    entry.completion_evidence_ids.clear();
+    entry.updated_at_unix = now_unix();
+    ledger.revision = ledger
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| DeliveryError::new("dispatch ledger revision overflowed"))?;
+    ledger.validate_for_candidate(&digests.candidate_id, head)?;
+    write_external_json_replace(path, &ledger, repository_roots)?;
+    Ok(ledger)
 }
 
 pub fn dispatch_group(
@@ -1318,6 +1601,245 @@ pub fn write_command_evidence(
         return Ok(());
     }
     write_external_json_create(&path, record)
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupEvidenceRecord {
+    pub artifact_kind: String,
+    pub schema_version: u32,
+    pub program: String,
+    pub wave: String,
+    pub candidate_id: CandidateId,
+    pub content_id: super::model::ContentId,
+    pub snapshot_sha256: SnapshotSha256,
+    pub group: String,
+    pub evidence_id: String,
+    pub commit_oid: String,
+    pub tree_oid: String,
+    pub command_id: String,
+    pub argv: Vec<String>,
+    pub result: CommandResult,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+    pub output_bytes: u64,
+}
+
+impl GroupEvidenceRecord {
+    pub fn validate_shape(&self) -> Result<()> {
+        if self.artifact_kind != GROUP_EVIDENCE_ARTIFACT_KIND
+            || self.schema_version != GROUP_EVIDENCE_SCHEMA_VERSION
+        {
+            return Err(DeliveryError::new(
+                "group evidence has an unexpected artifact kind or schema version",
+            ));
+        }
+        if self.program != "ADR046" || !is_wave6_identity(&self.program, &self.wave) {
+            return Err(DeliveryError::new(
+                "group evidence must identify ADR046 Wave 6",
+            ));
+        }
+        validate_bounded_string(&self.group, "group evidence group")?;
+        if !W6_GROUPS.contains(&self.group.as_str()) {
+            return Err(DeliveryError::new(
+                "group evidence names a group outside the closed Wave 6 census",
+            ));
+        }
+        validate_identifier(&self.evidence_id, "group evidence identifier")?;
+        validate_hash(&self.commit_oid, "group evidence commit")?;
+        validate_hash(&self.tree_oid, "group evidence tree")?;
+        validate_identifier(&self.command_id, "group evidence command")?;
+        if self.argv.is_empty()
+            || self
+                .argv
+                .iter()
+                .any(|argument| argument.is_empty() || argument.chars().any(char::is_control))
+        {
+            return Err(DeliveryError::new(
+                "group evidence argv must be nonempty and control-free",
+            ));
+        }
+        validate_sha256(&self.stdout_sha256, "group evidence stdout digest")?;
+        validate_sha256(&self.stderr_sha256, "group evidence stderr digest")?;
+        if self.result != CommandResult::Passed {
+            return Err(DeliveryError::new(
+                "only passing group evidence can advance a delivery group",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_group_evidence(
+    record: &GroupEvidenceRecord,
+    material: &CandidateMaterial,
+    repository_root: &Path,
+) -> Result<()> {
+    record.validate_shape()?;
+    let digests = material.digests()?;
+    if record.candidate_id != digests.candidate_id
+        || record.content_id != digests.content_id
+        || record.snapshot_sha256 != digests.snapshot_sha256
+    {
+        return Err(DeliveryError::new(
+            "group evidence is bound to a different candidate snapshot",
+        ));
+    }
+    let repository = material
+        .repository_set
+        .first()
+        .ok_or_else(|| DeliveryError::new("group evidence material has no repository"))?;
+    if record.commit_oid != repository.head_oid
+        || record.tree_oid != repository.integration_tree_oid
+    {
+        return Err(DeliveryError::new(
+            "group evidence commit/tree does not match the candidate snapshot",
+        ));
+    }
+    let resolved_tree = git_resolve_commit_tree(repository_root, &record.commit_oid)?;
+    if resolved_tree != record.tree_oid {
+        return Err(DeliveryError::new(
+            "group evidence commit does not resolve to its accepted tree",
+        ));
+    }
+    Ok(())
+}
+
+fn git_resolve_commit_tree(root: &Path, commit: &str) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", &format!("{commit}^{{tree}}")])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .map_err(|_| DeliveryError::environment("cannot verify group evidence commit/tree"))?;
+    if !output.status.success() {
+        return Err(DeliveryError::new(
+            "group evidence commit is not present in the repository",
+        ));
+    }
+
+    pub const PLAN_LIFECYCLE_ARTIFACT_KIND: &str = "d2b-feature-local/plan-lifecycle";
+    pub const WORK_SELECTION_ARTIFACT_KIND: &str = "d2b-feature-local/work-selection";
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct PlanLifecycleResult {
+        pub artifact_kind: String,
+        pub schema_version: u32,
+        pub program: String,
+        pub wave: String,
+        pub candidate_id: CandidateId,
+        pub content_id: super::model::ContentId,
+        pub snapshot_sha256: SnapshotSha256,
+        pub selected_roster: Vec<String>,
+        pub signoff_count: u32,
+        pub recommendation_count: u32,
+        pub result: String,
+        pub durable_write_evidence_sha256: String,
+        pub seat_records: BTreeMap<String, Value>,
+    }
+
+    impl PlanLifecycleResult {
+        pub fn validate_for(&self, snapshot: &super::snapshot::WaveSnapshot) -> Result<()> {
+            if self.artifact_kind != PLAN_LIFECYCLE_ARTIFACT_KIND || self.schema_version != 1 {
+                return Err(DeliveryError::new(
+                    "plan lifecycle result has an unexpected artifact kind or schema version",
+                ));
+            }
+            if self.program != "ADR046" || self.wave != "adr046w6" {
+                return Err(DeliveryError::new(
+                    "plan lifecycle result must identify ADR046 Wave 6",
+                ));
+            }
+            if self.candidate_id != snapshot.candidate_id
+                || self.content_id != snapshot.content_id
+                || self.snapshot_sha256 != snapshot.snapshot_sha256
+            {
+                return Err(DeliveryError::new(
+                    "plan lifecycle result is bound to a different entry snapshot",
+                ));
+            }
+            validate_sha256(
+                &self.durable_write_evidence_sha256,
+                "plan lifecycle durable-write evidence",
+            )?;
+            if self.selected_roster.is_empty()
+                || self.signoff_count != self.selected_roster.len() as u32
+                || self.recommendation_count != 0
+                || self.result != "approved"
+            {
+                return Err(DeliveryError::new(
+                    "plan lifecycle result is not unanimous and recommendation-free",
+                ));
+            }
+            let expected = self.selected_roster.iter().collect::<BTreeSet<_>>();
+            let actual = self.seat_records.keys().collect::<BTreeSet<_>>();
+            if expected != actual
+                || self
+                    .seat_records
+                    .values()
+                    .any(|seat| seat.get("signoff").and_then(Value::as_bool) != Some(true))
+            {
+                return Err(DeliveryError::new(
+                    "plan lifecycle result per-seat records do not match unanimous selection",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct WorkSelection {
+        pub artifact_kind: String,
+        pub schema_version: u32,
+        pub program: String,
+        pub wave: String,
+        pub candidate_id: CandidateId,
+        pub content_id: super::model::ContentId,
+        pub snapshot_sha256: SnapshotSha256,
+        pub groups: Vec<String>,
+        pub selected_at_unix: u64,
+    }
+
+    impl WorkSelection {
+        pub fn validate_for(&self, material: &CandidateMaterial) -> Result<()> {
+            if self.artifact_kind != WORK_SELECTION_ARTIFACT_KIND || self.schema_version != 1 {
+                return Err(DeliveryError::new(
+                    "work selection has an unexpected artifact kind or schema version",
+                ));
+            }
+            let digests = material.digests()?;
+            if self.program != material.program
+                || self.wave != material.wave
+                || self.candidate_id != digests.candidate_id
+                || self.content_id != digests.content_id
+                || self.snapshot_sha256 != digests.snapshot_sha256
+            {
+                return Err(DeliveryError::new(
+                    "work selection is bound to a different final snapshot",
+                ));
+            }
+            let mut seen = BTreeSet::new();
+            for group in &self.groups {
+                if !W6_GROUPS.contains(&group.as_str()) || !seen.insert(group.as_str()) {
+                    return Err(DeliveryError::new(
+                        "work selection contains an unknown or repeated Wave 6 group",
+                    ));
+                }
+            }
+            if self.groups.is_empty() {
+                return Err(DeliveryError::new(
+                    "work selection must select at least one group",
+                ));
+            }
+            Ok(())
+        }
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_owned())
+        .map_err(|_| DeliveryError::environment("group evidence tree verification was not UTF-8"))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1611,19 +2133,115 @@ pub fn write_plan_approval(
     write_external_json_replace(&path, receipt, repository_roots)
 }
 
+pub fn create_plan_approval(
+    snapshot: &super::snapshot::WaveSnapshot,
+    selection_bytes: &[u8],
+    lifecycle_bytes: &[u8],
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<PlanApprovalReceipt> {
+    let selection: PanelSelectionV1 = serde_json::from_slice(selection_bytes)
+        .map_err(|error| DeliveryError::new(format!("invalid plan selection: {error}")))?;
+    selection.validate_for_snapshot(snapshot.program(), snapshot.wave(), &snapshot.digests())?;
+    let lifecycle: PlanLifecycleResult = serde_json::from_slice(lifecycle_bytes)
+        .map_err(|error| DeliveryError::new(format!("invalid plan lifecycle result: {error}")))?;
+    lifecycle.validate_for(snapshot)?;
+    let paths = W6Paths::from_environment(repository_roots)?;
+    let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
+    let head = snapshot
+        .material
+        .repository_set
+        .first()
+        .ok_or_else(|| DeliveryError::new("entry snapshot has no repository"))?
+        .head_oid
+        .as_str();
+    ledger.validate_for_candidate(&snapshot.candidate_id, head)?;
+    ledger.require_pre_t221_state()?;
+    let command_evidence = read_command_evidence(&paths.command_evidence_dir, repository_roots)?;
+    command_evidence.validate_t221(head)?;
+    let feature_root = feature_root(repository_roots)?;
+    let receipt = PlanApprovalReceipt {
+        artifact_kind: PLAN_APPROVAL_ARTIFACT_KIND.to_owned(),
+        schema_version: PLAN_APPROVAL_SCHEMA_VERSION,
+        program: "ADR046".to_owned(),
+        wave: "adr046w6".to_owned(),
+        entry_base_oid: snapshot
+            .material
+            .repository_set
+            .first()
+            .expect("repository was checked")
+            .base_oid
+            .clone(),
+        feature_plan_material_sha256: feature_plan_material_digest(&feature_root)?,
+        entry_candidate_id: snapshot.candidate_id.clone(),
+        entry_content_id: snapshot.content_id.clone(),
+        entry_snapshot_sha256: snapshot.snapshot_sha256.clone(),
+        selection_sha256: sha256_bytes(selection_bytes),
+        dispatch_ledger_sha256: ledger.material_digest()?,
+        command_evidence_set_sha256: command_evidence.digest().to_owned(),
+        selected_roster: selection
+            .roster
+            .iter()
+            .map(|role| role.as_str().to_owned())
+            .collect(),
+        signoff_count: lifecycle.signoff_count,
+        recommendation_count: lifecycle.recommendation_count,
+        result: lifecycle.result,
+        durable_write_evidence_sha256: lifecycle.durable_write_evidence_sha256,
+        approved_at_unix: now_unix(),
+        lifecycle_approval: Value::Bool(true),
+        seat_records: lifecycle.seat_records,
+    };
+    receipt.validate_for_with_selection_bytes(
+        &snapshot.material,
+        Some(&selection),
+        Some(selection_bytes),
+        &ledger,
+        &command_evidence,
+        &feature_root,
+        None,
+    )?;
+    write_plan_approval(&paths.plan_approval, &receipt, repository_roots)?;
+    Ok(receipt)
+}
+
 pub fn feature_plan_material_digest(feature_dir: &Path) -> Result<String> {
     let feature_dir = absolute_path(feature_dir)?;
     let mut files = Vec::new();
     collect_files(&feature_dir, &feature_dir, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
+    #[derive(Serialize)]
+    struct PlanMaterialFile {
+        path: String,
+        sha256: String,
+    }
+    #[derive(Serialize)]
+    struct PlanMaterialManifest {
+        artifact_kind: &'static str,
+        schema_version: u32,
+        files: Vec<PlanMaterialFile>,
+    }
     let mut material = Vec::new();
     for (relative, path) in files {
         let bytes = fs::read(&path)
             .map_err(|_| DeliveryError::environment("cannot read feature plan material"))?;
-        let normalized = normalize_status_only_updates(&bytes);
-        material.push((relative, normalized));
+        let normalized = if relative == "tasks.md" {
+            normalize_status_only_updates(&bytes)
+        } else {
+            bytes
+        };
+        material.push(PlanMaterialFile {
+            path: relative,
+            sha256: sha256_bytes(&normalized),
+        });
     }
-    canonical_digest(b"d2b-feature-local-plan-material-v1\0", &material)
+    canonical_digest(
+        b"d2b-feature-local-plan-material-v2\0",
+        &PlanMaterialManifest {
+            artifact_kind: "d2b-feature-local/plan-material",
+            schema_version: 1,
+            files: material,
+        },
+    )
 }
 
 fn collect_files(root: &Path, directory: &Path, output: &mut Vec<(String, PathBuf)>) -> Result<()> {
@@ -1661,11 +2279,27 @@ fn normalize_status_only_updates(bytes: &[u8]) -> Vec<u8> {
     };
     text.lines()
         .map(|line| {
-            let mut normalized = line.to_owned();
-            for marker in ["- [ ]", "- [x]", "- [X]"] {
-                normalized = normalized.replace(marker, "- [?]");
+            let trimmed = line.trim_start();
+            let is_task_status = trimmed.len() > 6
+                && trimmed.as_bytes().first() == Some(&b'-')
+                && trimmed.as_bytes().get(1) == Some(&b' ')
+                && trimmed.as_bytes().get(2) == Some(&b'[')
+                && matches!(trimmed.as_bytes().get(3), Some(b' ' | b'x' | b'X'))
+                && trimmed.as_bytes().get(4) == Some(&b']')
+                && trimmed.as_bytes().get(5) == Some(&b' ')
+                && trimmed.as_bytes().get(6) == Some(&b'T')
+                && trimmed
+                    .as_bytes()
+                    .get(7..)
+                    .is_some_and(|rest| rest.first().is_some_and(u8::is_ascii_digit));
+            if is_task_status {
+                let marker_start = line.find('[').unwrap_or_default();
+                let mut normalized = line.to_owned();
+                normalized.replace_range(marker_start..=marker_start + 2, "[?]");
+                normalized
+            } else {
+                line.to_owned()
             }
-            normalized
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1904,6 +2538,232 @@ pub fn require_close_receipts(
         }
     }
     Ok(ledger)
+}
+
+fn read_group_evidence_files(
+    paths: &[PathBuf],
+    material: &CandidateMaterial,
+    repository_root: &Path,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    group: &str,
+) -> Result<Vec<GroupEvidenceRecord>> {
+    if paths.is_empty() {
+        return Err(DeliveryError::usage(
+            "a transition requires at least one --evidence PATH",
+        ));
+    }
+    let mut records = Vec::new();
+    let mut ids = BTreeSet::new();
+    for path in paths {
+        let path = validate_external_file(path, repository_roots)?;
+        let bytes = read_external_json(&path, "group evidence")?;
+        let record: GroupEvidenceRecord = serde_json::from_slice(&bytes)
+            .map_err(|error| DeliveryError::new(format!("invalid group evidence: {error}")))?;
+        if record.group != group || !ids.insert(record.evidence_id.clone()) {
+            return Err(DeliveryError::new(
+                "group evidence paths must name one unique target group",
+            ));
+        }
+        validate_group_evidence(&record, material, repository_root)?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn stage_snapshot(
+    options: &mut CliOptions,
+) -> Result<(
+    super::storage::StateRoot,
+    BTreeMap<String, PathBuf>,
+    super::panel::SnapshotView,
+)> {
+    let snapshot_path = options.required_path("--snapshot")?;
+    let (state, roots) = panel::prepare_state_with_roots(options)?;
+    options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
+    let (_, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
+    Ok((state, roots, snapshot))
+}
+
+pub fn run_plan_approval(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let snapshot_path = options.required_path("--snapshot")?;
+    let selection_path = options.required_path("--selection")?;
+    let lifecycle_path = options.required_path("--lifecycle")?;
+    let (state, roots) = panel::prepare_state_with_roots(&mut options)?;
+    options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
+    let (_, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
+    let selection_path = absolute_path(&selection_path)?;
+    let lifecycle_path = absolute_path(&lifecycle_path)?;
+    let selection = read_external_json(&selection_path, "plan selection")?;
+    let lifecycle = read_external_json(&lifecycle_path, "plan lifecycle result")?;
+    let receipt =
+        create_plan_approval(&snapshot_to_wave(&snapshot), &selection, &lifecycle, &roots)?;
+    Ok(WorkflowOutput::ok(WaveCommand::PlanApproval).with_digests(&snapshot.digests()))
+}
+
+fn snapshot_to_wave(snapshot: &super::panel::SnapshotView) -> super::snapshot::WaveSnapshot {
+    super::snapshot::WaveSnapshot {
+        artifact_kind: super::model::SNAPSHOT_ARTIFACT_KIND.to_owned(),
+        schema_version: snapshot.schema_version,
+        content_id: snapshot.content_id.clone(),
+        candidate_id: snapshot.candidate_id.clone(),
+        snapshot_sha256: snapshot.snapshot_sha256.clone(),
+        material: snapshot.material.clone(),
+    }
+}
+
+pub fn run_dispatch_ready(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let snapshot_path = options.required_path("--snapshot")?;
+    let selection_path = options.optional_path("--selection")?;
+    let dispatch_id = options
+        .optional_string("--dispatch-id")?
+        .unwrap_or_else(|| format!("dispatch-{}", now_unix()));
+    let (state, roots) = panel::prepare_state_with_roots(&mut options)?;
+    options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
+    let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
+    if let Some(path) = selection_path {
+        let bytes = read_external_json(&absolute_path(&path)?, "work selection")?;
+        let selection: WorkSelection = serde_json::from_slice(&bytes)
+            .map_err(|error| DeliveryError::new(format!("invalid work selection: {error}")))?;
+        selection.validate_for(&snapshot.material)?;
+    }
+    let paths = W6Paths::from_environment(&roots)?;
+    let mut ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
+    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let root = roots
+        .get("github.com/vicondoa/d2b")
+        .or_else(|| roots.values().next())
+        .ok_or_else(|| DeliveryError::new("dispatch has no repository root"))?;
+    let ready = ledger.ready_groups_for_checkout(true, root)?;
+    if ready.is_empty() {
+        return Err(DeliveryError::new("no Wave 6 group is Ready for dispatch"));
+    }
+    for (index, group) in ready.iter().enumerate() {
+        let id = format!("{dispatch_id}-{index}");
+        ledger = update_group_cas(
+            &paths.ledger,
+            &snapshot.material,
+            group,
+            DispatchState::Dispatched,
+            Some(&id),
+            &[],
+            None,
+            ledger.revision,
+            &roots,
+        )?;
+    }
+    let _ = candidate;
+    Ok(WorkflowOutput::ok(WaveCommand::DispatchReady).with_digests(&snapshot.digests()))
+}
+
+pub fn run_validate(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let group = options.required_string("--group")?;
+    let evidence = options
+        .repeated_strings("--evidence")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let (state, roots, snapshot) = stage_snapshot(&mut options)?;
+    let root = roots
+        .get("github.com/vicondoa/d2b")
+        .or_else(|| roots.values().next())
+        .ok_or_else(|| DeliveryError::new("validation has no repository root"))?;
+    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let records = read_group_evidence_files(&evidence, &snapshot.material, root, &roots, &group)?;
+    let paths = W6Paths::from_environment(&roots)?;
+    let ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
+    let entry = ledger.entry(&group)?.clone();
+    let ids = records
+        .iter()
+        .map(|record| record.evidence_id.clone())
+        .collect::<Vec<_>>();
+    let updated = update_group_cas(
+        &paths.ledger,
+        &snapshot.material,
+        &group,
+        DispatchState::Validated,
+        entry.dispatch_id.as_deref(),
+        &ids,
+        None,
+        ledger.revision,
+        &roots,
+    )?;
+    let _ = (state, updated);
+    Ok(WorkflowOutput::ok(WaveCommand::Validate).with_digests(&snapshot.digests()))
+}
+
+pub fn run_complete(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let group = options.required_string("--group")?;
+    let evidence = options
+        .repeated_strings("--evidence")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let (_state, roots, snapshot) = stage_snapshot(&mut options)?;
+    let root = roots
+        .get("github.com/vicondoa/d2b")
+        .or_else(|| roots.values().next())
+        .ok_or_else(|| DeliveryError::new("completion has no repository root"))?;
+    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let records = read_group_evidence_files(&evidence, &snapshot.material, root, &roots, &group)?;
+    let paths = W6Paths::from_environment(&roots)?;
+    let ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
+    let entry = ledger.entry(&group)?.clone();
+    let ids = records
+        .iter()
+        .map(|record| record.evidence_id.clone())
+        .collect::<Vec<_>>();
+    update_group_cas(
+        &paths.ledger,
+        &snapshot.material,
+        &group,
+        DispatchState::Completed,
+        entry.dispatch_id.as_deref(),
+        &ids,
+        None,
+        ledger.revision,
+        &roots,
+    )?;
+    Ok(WorkflowOutput::ok(WaveCommand::Complete).with_digests(&snapshot.digests()))
+}
+
+pub fn run_block(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let group = options.required_string("--group")?;
+    let reason = options.required_string("--reason")?;
+    let (_state, roots, snapshot) = stage_snapshot(&mut options)?;
+    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let paths = W6Paths::from_environment(&roots)?;
+    block_group(&paths.ledger, &snapshot.material, &group, &reason, &roots)?;
+    Ok(WorkflowOutput::ok(WaveCommand::Block).with_digests(&snapshot.digests()))
+}
+
+pub fn run_resume(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let group = options.required_string("--group")?;
+    let replacement = options.required_string("--replacement-approved")?;
+    if replacement != "true" {
+        return Err(DeliveryError::usage(
+            "--replacement-approved must be true to resume a blocked group",
+        ));
+    }
+    let (_state, roots, snapshot) = stage_snapshot(&mut options)?;
+    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let paths = W6Paths::from_environment(&roots)?;
+    resume_group(
+        &paths.ledger,
+        &snapshot.material,
+        &group,
+        &format!("resume-{}", now_unix()),
+        &roots,
+    )?;
+    Ok(WorkflowOutput::ok(WaveCommand::Resume).with_digests(&snapshot.digests()))
 }
 
 fn feature_root(repository_roots: &BTreeMap<String, PathBuf>) -> Result<PathBuf> {
@@ -2181,6 +3041,7 @@ mod tests {
             remote: "origin".to_owned(),
             ref_name: "v3".to_owned(),
             fetched_oid: head.clone(),
+            fetch_head_oid: head.clone(),
             command_id: "git-fetch-origin-v3".to_owned(),
             argv: ["git", "fetch", "origin", "v3"]
                 .into_iter()

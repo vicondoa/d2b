@@ -43,15 +43,30 @@ use super::{
     model::{
         CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge,
         ExpectedPullRequest, Fingerprint, GitObjectFormat, RepositoryRecord,
-        SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes, validate_git_ref,
-        validate_identifier, validate_program_wave, validate_repo_relative_path,
-        validate_repository_id,
+        SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes,
+        validate_dependency_identifier, validate_git_ref, validate_identifier,
+        validate_program_wave, validate_repo_relative_path, validate_repository_id,
     },
     storage::{CandidateDir, MAX_ARTIFACT_BYTES, MAX_JSON_BYTES, SNAPSHOT_FILE, StateRoot},
 };
 
 /// Ref used for a repository whose head was not named explicitly.
 const DEFAULT_HEAD_REF: &str = "HEAD";
+const W6_GRAPH_PATH: &str = "docs/specs/ADR-046-implementation-graph.json";
+const W6_SPEC_SET_PATH: &str = "docs/specs/ADR-046-spec-set.json";
+const W6_WORK_ITEMS_PATH: &str = "docs/specs/ADR-046-work-items.json";
+const W6_FEATURE_TASKS_PATH: &str = "specs/001-adr046-d2b3-completion/tasks.md";
+const W6_CANONICAL_GENERATED: [(&str, &str); 3] = [
+    ("implementation-graph", W6_GRAPH_PATH),
+    ("spec-set", W6_SPEC_SET_PATH),
+    ("work-items", W6_WORK_ITEMS_PATH),
+];
+const W6_CANONICAL_DEPENDENCIES: [(&str, &str); 2] = [
+    ("cargo-lock", "packages/Cargo.lock"),
+    ("flake-lock", "flake.lock"),
+];
+const W6_CANONICAL_CONTRACTS: [(&str, &str); 1] =
+    [("feature-task-contract", W6_FEATURE_TASKS_PATH)];
 
 /// The immutable artifact `wave snapshot` writes.
 ///
@@ -137,16 +152,6 @@ fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<Workflow
         let roots = request.checkout_roots()?;
         roots
             .get("github.com/vicondoa/d2b")
-            .filter(|checkout| {
-                Command::new("git")
-                    .arg("-C")
-                    .arg(checkout)
-                    .args(["rev-parse", "--verify", "refs/remotes/origin/v3"])
-                    .env("GIT_OPTIONAL_LOCKS", "0")
-                    .output()
-                    .map(|output| output.status.success())
-                    .unwrap_or(false)
-            })
             .map(|checkout| super::coordination::refresh_origin_v3(checkout))
             .transpose()?
     } else {
@@ -526,15 +531,141 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
             })
             .collect()
     };
+    let supplied_generated = resolve_all(&request.generated_artifacts)?;
+    let supplied_dependencies = resolve_all(&request.dependency_fingerprints)?;
+    let supplied_contracts = resolve_all(&request.contract_fingerprints)?;
+    let (dependency_graph, generated_artifacts, dependency_fingerprints, contract_fingerprints) =
+        if super::coordination::is_wave6_identity(&request.program, &request.wave) {
+            let canonical = canonical_w6_inputs(&heads)?;
+            compare_w6_input("dependency graph", &request.dependency_graph, &canonical.0)?;
+            compare_w6_input("generated fingerprints", &supplied_generated, &canonical.1)?;
+            compare_w6_input(
+                "dependency fingerprints",
+                &supplied_dependencies,
+                &canonical.2,
+            )?;
+            compare_w6_input("contract fingerprints", &supplied_contracts, &canonical.3)?;
+            canonical
+        } else {
+            (
+                request.dependency_graph.clone(),
+                supplied_generated,
+                supplied_dependencies,
+                supplied_contracts,
+            )
+        };
     Ok(CandidateMaterial {
         program: request.program.clone(),
         wave: request.wave.clone(),
         repository_set,
-        dependency_graph: request.dependency_graph.clone(),
-        generated_artifacts: resolve_all(&request.generated_artifacts)?,
-        dependency_fingerprints: resolve_all(&request.dependency_fingerprints)?,
-        contract_fingerprints: resolve_all(&request.contract_fingerprints)?,
+        dependency_graph,
+        generated_artifacts,
+        dependency_fingerprints,
+        contract_fingerprints,
     })
+}
+
+fn compare_w6_input<T: Ord + Clone>(label: &str, supplied: &[T], canonical: &[T]) -> Result<()> {
+    if supplied.is_empty() {
+        return Ok(());
+    }
+    let mut supplied = supplied.to_vec();
+    let mut canonical = canonical.to_vec();
+    supplied.sort();
+    canonical.sort();
+    if supplied != canonical {
+        return Err(DeliveryError::new(format!(
+            "Wave 6 {label} do not exactly match the committed canonical discovery inputs"
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_w6_inputs(
+    heads: &BTreeMap<String, (PathBuf, String)>,
+) -> Result<(
+    Vec<DependencyEdge>,
+    Vec<Fingerprint>,
+    Vec<Fingerprint>,
+    Vec<Fingerprint>,
+)> {
+    let (root, head) = heads
+        .get("github.com/vicondoa/d2b")
+        .ok_or_else(|| DeliveryError::new("Wave 6 canonical inputs require the d2b repository"))?;
+    let graph_bytes = git_output(root, &["show", &format!("{head}:{W6_GRAPH_PATH}")])?;
+    let graph: serde_json::Value = serde_json::from_slice(&graph_bytes)?;
+    let nodes = graph
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DeliveryError::new("Wave 6 graph has no nodes array"))?;
+    let w6_nodes = nodes
+        .iter()
+        .filter(|node| {
+            node.get("kind").and_then(serde_json::Value::as_str) == Some("work-item")
+                && node.get("wave").and_then(serde_json::Value::as_str) == Some("W6")
+        })
+        .filter_map(|node| node.get("id").and_then(serde_json::Value::as_str))
+        .collect::<BTreeSet<_>>();
+    if w6_nodes.is_empty() {
+        return Err(DeliveryError::new(
+            "Wave 6 canonical graph has no work-item nodes",
+        ));
+    }
+    let mut dependency_graph = Vec::new();
+    for edge in graph
+        .get("edges")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DeliveryError::new("Wave 6 graph has no edges array"))?
+    {
+        let edge_type = edge
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if !matches!(edge_type, "work-item-depends-on" | "file-overlap-order") {
+            continue;
+        }
+        let from = edge
+            .get("from")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DeliveryError::new("Wave 6 graph edge has no from"))?;
+        let to = edge
+            .get("to")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DeliveryError::new("Wave 6 graph edge has no to"))?;
+        if !w6_nodes.contains(from) || !w6_nodes.contains(to) {
+            continue;
+        }
+        let canonical = DependencyEdge {
+            // The generated graph stores dependent -> prerequisite. Delivery
+            // material stores prerequisite -> dependent.
+            from: to.to_owned(),
+            to: from.to_owned(),
+        };
+        validate_dependency_identifier(&canonical.from, "canonical dependency source")?;
+        validate_dependency_identifier(&canonical.to, "canonical dependency target")?;
+        dependency_graph.push(canonical);
+    }
+    dependency_graph.sort();
+    dependency_graph.dedup();
+    let fingerprints = |definitions: &[(&str, &str)]| -> Result<Vec<Fingerprint>> {
+        definitions
+            .iter()
+            .map(|(name, path)| {
+                Ok(Fingerprint {
+                    name: (*name).to_owned(),
+                    repository: "github.com/vicondoa/d2b".to_owned(),
+                    path: (*path).to_owned(),
+                    sha256: object_digest(root, head, path)?,
+                })
+            })
+            .collect()
+    };
+    Ok((
+        dependency_graph,
+        fingerprints(&W6_CANONICAL_GENERATED)?,
+        fingerprints(&W6_CANONICAL_DEPENDENCIES)?,
+        fingerprints(&W6_CANONICAL_CONTRACTS)?,
+    ))
 }
 
 fn pull_request_inputs(values: Vec<String>) -> Result<BTreeMap<String, Vec<PullRequestInput>>> {
@@ -1125,10 +1256,7 @@ pub(crate) mod tests {
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let error = run_with_root(&request, &root)
             .expect_err("W6 entry must run the historical predecessor guard");
-        assert!(
-            error.message().contains("cannot resolve integration ref"),
-            "{error}"
-        );
+        assert!(error.message().contains("origin/v3 fetch"), "{error}");
         assert!(
             !root.path().join("spec001w6").exists(),
             "a failed entry guard must not publish a candidate"

@@ -319,13 +319,34 @@ pub struct DependencyEdge {
 
 impl DependencyEdge {
     pub fn validate(&self) -> Result<()> {
-        validate_identifier(&self.from, "dependency edge source")?;
-        validate_identifier(&self.to, "dependency edge target")?;
+        validate_dependency_identifier(&self.from, "dependency edge source")?;
+        validate_dependency_identifier(&self.to, "dependency edge target")?;
         if self.from == self.to {
             return Err(DeliveryError::new(format!(
                 "dependency edge {} depends on itself",
                 self.from
             )));
+        }
+
+        /// Graph node and local-group identifiers are copied from the committed
+        /// implementation graph. Unlike command and artifact names, they may retain
+        /// the graph's uppercase `ADR046` spelling and a `:` group separator.
+        pub fn validate_dependency_identifier(value: &str, label: &str) -> Result<()> {
+            if value.is_empty()
+                || value.len() > 256
+                || !value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                })
+                || !value
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+            {
+                return Err(DeliveryError::new(format!(
+                    "{label} must use ASCII letters, digits, '.', '_', '-' or ':'"
+                )));
+            }
+            Ok(())
         }
         Ok(())
     }
