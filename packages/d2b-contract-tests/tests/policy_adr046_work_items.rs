@@ -836,16 +836,7 @@ fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
             "T604",
             [
                 "T221",
-                "ADR046-activation-001",
-                "ADR046-activation-006",
-                "ADR046-system-core-001",
                 "ADR046-ch-001",
-                "ADR046-nl-001",
-                "ADR046-nl-020",
-                "ADR046-device-tpm-001",
-                "ADR046-device-tpm-013",
-                "ADR046-vl-001",
-                "ADR046-vl-013",
                 "operator-nix-activation-cleanup",
                 "T479",
             ]
