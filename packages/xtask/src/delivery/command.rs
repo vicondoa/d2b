@@ -178,7 +178,8 @@ impl WaveCommand {
                  --pull-request LOGICAL_ID=NUMBER:HEAD_REF [--head LOGICAL_ID=REVISION] \
                  [--edge FROM=TO] \
                  [--generated NAME=LOGICAL_ID:PATH] [--dependency NAME=LOGICAL_ID:PATH] \
-                 [--contract NAME=LOGICAL_ID:PATH] [--state-dir DIR]"
+                 [--contract NAME=LOGICAL_ID:PATH] [--entry-prepare true|false] \
+                 [--command-evidence PATH]... [--fetch-evidence PATH] [--state-dir DIR]"
             }
             Self::ValidateImport => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import --snapshot PATH --validation NAME \
@@ -232,6 +233,9 @@ impl WaveCommand {
                 "--generated",
                 "--dependency",
                 "--contract",
+                "--entry-prepare",
+                "--command-evidence",
+                "--fetch-evidence",
             ],
             Self::ValidateImport => &[
                 "--state-dir",

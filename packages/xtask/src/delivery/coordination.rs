@@ -16,7 +16,7 @@
 //! [`CandidateDir`].
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -1305,9 +1305,7 @@ pub fn write_command_evidence(
 ) -> Result<()> {
     record.validate()?;
     let directory = absolute_path(directory)?;
-    let roots = repository_roots.values().cloned().collect::<Vec<_>>();
-    ensure_external_path(&directory, &roots)?;
-    fs::create_dir_all(&directory)?;
+    prepare_command_evidence_directory(&directory, repository_roots)?;
     let path = directory.join(format!("{}.json", record.command_id));
     let bytes = serde_json::to_vec(record)?;
     if path.exists() {
@@ -1701,6 +1699,78 @@ pub fn require_entry_receipts(
     let feature_root = feature_root(repository_roots)?;
     let _ = feature_plan_material_digest(&feature_root)?;
     Ok((ledger, evidence))
+}
+
+/// Creates the pre-snapshot entry state without fabricating command results.
+///
+/// Discovery supplies the candidate address; the ledger is therefore created
+/// only after material discovery, while the command-evidence directory is
+/// created as an empty import surface. Supplied completed records are
+/// create-or-compared into that directory. The ordinary snapshot stage still
+/// requires the exact eight passing records before it writes `snapshot.json`.
+pub fn prepare_entry_artifacts(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    command_evidence_paths: &[PathBuf],
+) -> Result<DispatchLedger> {
+    if !is_wave6(material) {
+        return Err(DeliveryError::usage(
+            "entry preparation is only available for ADR046 Wave 6",
+        ));
+    }
+    let (ledger_path, command_evidence_dir) = W6Paths::entry_from_environment(repository_roots)?;
+    let digests = material.digests()?;
+    let head = material
+        .repository_set
+        .first()
+        .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository"))?
+        .head_oid
+        .as_str()
+        .to_owned();
+    let ledger =
+        create_or_compare_ledger(&ledger_path, &digests.candidate_id, &head, repository_roots)?;
+    ledger.require_pre_t221_state()?;
+    prepare_command_evidence_directory(&command_evidence_dir, repository_roots)?;
+    for source in command_evidence_paths {
+        let source = validate_external_file(source, repository_roots)?;
+        let bytes = read_external_json(&source, "command evidence import")?;
+        let record: CommandEvidenceRecord = serde_json::from_slice(&bytes).map_err(|error| {
+            DeliveryError::new(format!("invalid command evidence import: {error}"))
+        })?;
+        write_command_evidence(&command_evidence_dir, &record, repository_roots)?;
+    }
+    Ok(ledger)
+}
+
+pub fn prepare_command_evidence_directory(
+    directory: &Path,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let directory = absolute_path(directory)?;
+    let roots = repository_roots.values().cloned().collect::<Vec<_>>();
+    ensure_external_path(&directory, &roots)?;
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Err(
+            DeliveryError::new("command evidence import surface must be a regular directory"),
+        ),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(&directory).map_err(|_| {
+                DeliveryError::environment("cannot create command evidence import surface")
+            })?;
+            if let Some(parent) = directory.parent() {
+                File::open(parent)?.sync_all()?;
+            }
+            Ok(())
+        }
+        Err(_) => Err(DeliveryError::environment(
+            "cannot inspect command evidence import surface",
+        )),
+    }
 }
 
 pub fn require_plan_receipt(

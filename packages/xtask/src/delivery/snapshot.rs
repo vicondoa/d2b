@@ -162,6 +162,15 @@ fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<Workflow
         request.fetch_evidence.as_deref(),
         automatic_fetch.as_ref(),
     )?;
+    if request.entry_prepare {
+        let snapshot = WaveSnapshot::seal(material)?;
+        super::coordination::prepare_entry_artifacts(
+            &snapshot.material,
+            &repository_roots,
+            &request.command_evidence_paths,
+        )?;
+        return WorkflowOutput::ok(WaveCommand::Snapshot).with_digests(&snapshot.digests());
+    }
     if super::coordination::is_w6_entry_wave(&material) {
         super::coordination::require_entry_receipts(&material, &repository_roots)?;
     }
@@ -327,6 +336,8 @@ pub struct SnapshotRequest {
     contract_fingerprints: Vec<FingerprintInput>,
     state_dir: Option<PathBuf>,
     fetch_evidence: Option<PathBuf>,
+    entry_prepare: bool,
+    command_evidence_paths: Vec<PathBuf>,
 }
 
 impl SnapshotRequest {
@@ -346,7 +357,28 @@ impl SnapshotRequest {
         let fetch_evidence = options
             .optional_path("--fetch-evidence")?
             .or_else(|| std::env::var_os(super::coordination::FRESH_FETCH_ENV).map(PathBuf::from));
+        let entry_prepare = match options.optional_string("--entry-prepare")? {
+            None => false,
+            Some(value) if value == "true" => true,
+            Some(value) if value == "false" => false,
+            Some(_) => {
+                return Err(DeliveryError::usage(
+                    "--entry-prepare must be true or false",
+                ));
+            }
+        };
+        let command_evidence_paths = options
+            .repeated_strings("--command-evidence")
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
         options.finish()?;
+
+        if !entry_prepare && !command_evidence_paths.is_empty() {
+            return Err(DeliveryError::usage(
+                "--command-evidence requires --entry-prepare true",
+            ));
+        }
 
         validate_program_wave(&program, &wave)?;
 
@@ -398,6 +430,8 @@ impl SnapshotRequest {
             contract_fingerprints,
             state_dir,
             fetch_evidence,
+            entry_prepare,
+            command_evidence_paths,
         };
         request.ensure_fingerprint_repositories()?;
         Ok(request)
