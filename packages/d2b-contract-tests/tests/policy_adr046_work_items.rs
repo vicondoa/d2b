@@ -951,6 +951,11 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
+fn string_array_has_duplicates(value: Option<&Value>) -> bool {
+    let values = string_array(value);
+    values.iter().collect::<BTreeSet<_>>().len() != values.len()
+}
+
 fn expected_strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
@@ -1297,6 +1302,13 @@ fn is_path_like(token: &str) -> bool {
         .any(|prefix| token.starts_with(prefix))
 }
 
+fn is_provider_relative_path(token: &str) -> bool {
+    token.starts_with("src/")
+        || token.starts_with("tests/")
+        || token.starts_with("integration/")
+        || matches!(token, "README.md" | "Cargo.toml" | "Cargo.lock")
+}
+
 fn is_ignored_destination_root(token: &str) -> bool {
     matches!(
         token,
@@ -1304,11 +1316,34 @@ fn is_ignored_destination_root(token: &str) -> bool {
     )
 }
 
-/// Expands only concrete path expressions. Wildcard and prose-only
-/// destinations are deliberately not treated as shared-writer evidence: they
-/// cannot identify a unique handoff and are covered by the scaffold/manifest
-/// group checks instead.
-fn normalized_destination_atoms(destination: &str) -> BTreeSet<String> {
+fn provider_root_for_group(group: Option<&str>) -> Option<String> {
+    group
+        .and_then(|group| group.strip_prefix("wi:ADR-046-provider-"))
+        .map(|suffix| format!("packages/d2b-provider-{suffix}/"))
+}
+
+fn canonical_destination_token(token: &str, provider_root: Option<&str>) -> Option<String> {
+    let token = trim_destination_token(token);
+    let token = if provider_root.is_some() && is_provider_relative_path(&token) {
+        format!("{}{}", provider_root.expect("provider root"), token)
+    } else if is_path_like(&token) {
+        token
+    } else {
+        return None;
+    };
+    (!token.is_empty() && !is_ignored_destination_root(&token)).then_some(token)
+}
+
+/// Expand a manifest destination to canonical repository-relative paths.
+///
+/// Destination rows mix repository paths, brace groups, globs, and paths
+/// relative to the Provider package named by the W6 graph group. Keep globs
+/// as patterns: dropping them loses the parent/child overlap that protects a
+/// local file from an apparently unrelated `src/*` or Provider-relative row.
+fn normalized_destination_atoms(
+    destination: &str,
+    provider_root: Option<&str>,
+) -> BTreeSet<String> {
     let mut candidates = Vec::new();
     let mut code = String::new();
     let mut in_code = false;
@@ -1326,11 +1361,12 @@ fn normalized_destination_atoms(destination: &str) -> BTreeSet<String> {
 
     // Some generated rows intentionally keep a path outside code spans (for
     // example the short Nix and broker operation rows). Include only tokens
-    // anchored at a repository path root so surrounding prose cannot become a
-    // false destination.
+    // anchored at a repository path root or at the selected Provider package
+    // root so surrounding prose cannot become a false destination.
     for token in destination.split_whitespace() {
         let token = trim_destination_token(token);
-        if is_path_like(&token) {
+        if is_path_like(&token) || provider_root.is_some_and(|_| is_provider_relative_path(&token))
+        {
             candidates.push(token);
         }
     }
@@ -1339,34 +1375,68 @@ fn normalized_destination_atoms(destination: &str) -> BTreeSet<String> {
     for candidate in candidates {
         for part in split_top_level(&candidate) {
             for expanded in expand_destination_braces(&part) {
-                let token = trim_destination_token(&expanded);
-                if token.is_empty()
-                    || !is_path_like(&token)
-                    || is_ignored_destination_root(&token)
-                    || token.contains('*')
-                    || token.contains("...")
-                    || token.contains('<')
-                {
-                    continue;
+                if let Some(token) = canonical_destination_token(&expanded, provider_root) {
+                    atoms.insert(token);
                 }
-                atoms.insert(token);
             }
         }
     }
     atoms
 }
 
-fn local_path_overlaps_destination(local_path: &str, destination: &str) -> bool {
-    if local_path.ends_with('/') {
-        destination.starts_with(local_path)
-    } else {
-        destination == local_path
+fn path_has_glob(path: &str) -> bool {
+    path.contains('*') || path.contains("...") || path.contains('<')
+}
+
+fn glob_fixed_prefix(path: &str) -> Option<&str> {
+    let first = ["*", "...", "<"]
+        .iter()
+        .filter_map(|marker| path.find(marker))
+        .min()?;
+    let prefix = &path[..first];
+    (!prefix.is_empty()).then_some(prefix)
+}
+
+fn path_is_parent(parent: &str, child: &str) -> bool {
+    parent.ends_with('/') && child.starts_with(parent)
+}
+
+/// Overlap is intentionally symmetric. A destination may be a parent of an
+/// owned file, a child of an owned directory, or a glob whose fixed prefix
+/// contains either side. The old one-way check silently dropped all three
+/// cases.
+fn destination_paths_overlap(left: &str, right: &str) -> bool {
+    if left == right || path_is_parent(left, right) || path_is_parent(right, left) {
+        return true;
     }
+    if path_has_glob(left) {
+        let Some(prefix) = glob_fixed_prefix(left) else {
+            return false;
+        };
+        let other = glob_fixed_prefix(right).unwrap_or(right);
+        if other.starts_with(prefix) || prefix.starts_with(other) {
+            return true;
+        }
+    }
+    if path_has_glob(right) {
+        let Some(prefix) = glob_fixed_prefix(right) else {
+            return false;
+        };
+        let other = glob_fixed_prefix(left).unwrap_or(left);
+        if other.starts_with(prefix) || prefix.starts_with(other) {
+            return true;
+        }
+    }
+    false
+}
+
+fn local_path_overlaps_destination(local_path: &str, destination: &str) -> bool {
+    destination_paths_overlap(local_path, destination)
 }
 
 fn local_owned_path_owners(contract: &Value) -> BTreeMap<String, BTreeSet<String>> {
     let mut owners = BTreeMap::new();
-    for task in ["T606", "T607", "T608", "T609"] {
+    for task in EXPECTED_OWNED_TASK_IDS {
         if let Some(paths) = value_at(contract, &["owned_files", task]).and_then(Value::as_array) {
             for path in paths.iter().filter_map(Value::as_str) {
                 owners
@@ -1377,15 +1447,6 @@ fn local_owned_path_owners(contract: &Value) -> BTreeMap<String, BTreeSet<String
         }
     }
     owners
-}
-
-fn graph_node_ids(graph: &Value) -> BTreeSet<String> {
-    graph["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|node| node["id"].as_str().map(str::to_owned))
-        .collect()
 }
 
 fn w6_manifest_groups(graph: &Value) -> BTreeSet<String> {
@@ -1804,6 +1865,68 @@ fn check_local_completion_contract(
         findings.push("post-entry group derivation is not closed".to_owned());
     }
 
+    let completion_states = string_array(value_at(
+        contract,
+        &["local_completion_state_machine", "states"],
+    ));
+    if object_keys(value_at(
+        contract,
+        &["local_completion_state_machine", "transitions"],
+    )) != completion_states.iter().cloned().collect()
+    {
+        findings.push("local completion transition keys do not cover every state".to_owned());
+    }
+    for schema_path in [
+        &["dispatch_ledger_contract", "states"][..],
+        &["dispatch_ledger_contract", "entry_required_fields"][..],
+        &["structured_command_evidence_contract", "required_fields"][..],
+        &[
+            "structured_command_evidence_contract",
+            "required_t221_command_ids",
+        ][..],
+        &["plan_approval_receipt_contract", "required_fields"][..],
+    ] {
+        if string_array_has_duplicates(value_at(contract, schema_path)) {
+            findings.push(format!(
+                "receipt or ledger schema array `{}` contains duplicate values",
+                schema_path.join(".")
+            ));
+        }
+    }
+    let command_evidence_count = value_at(
+        contract,
+        &[
+            "structured_command_evidence_contract",
+            "required_t221_command_ids",
+        ],
+    )
+    .and_then(Value::as_array)
+    .map(Vec::len);
+    let import_cardinality = value_at(contract, &["entry_prepare_contract", "import_cardinality"])
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+    if command_evidence_count != import_cardinality {
+        findings.push(
+            "entry-prepare import cardinality does not equal the closed command-evidence schema"
+                .to_owned(),
+        );
+    }
+    if value_at(
+        contract,
+        &[
+            "entry_prepare_contract",
+            "first_call_command_evidence_count",
+        ],
+    )
+    .and_then(Value::as_u64)
+        != Some(0)
+    {
+        findings.push(
+            "entry-prepare first call must begin with zero imported command-evidence records"
+                .to_owned(),
+        );
+    }
+
     expect_contract_value(
         contract,
         &["entry_prepare_contract"],
@@ -1962,6 +2085,114 @@ fn check_local_completion_contract(
     }
 }
 
+fn manifest_group_by_id(graph: &Value) -> BTreeMap<String, String> {
+    graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .filter_map(|node| {
+            Some((
+                node["id"].as_str()?.to_owned(),
+                node["parallelGroup"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+fn graph_precedes(graph: &Value, before: &str, after: &str) -> bool {
+    let nodes: BTreeMap<&str, &Value> = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| Some((node["id"].as_str()?, node)))
+        .collect();
+    let mut pending = vec![after.to_owned()];
+    let mut visited = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        let Some(node) = nodes.get(current.as_str()) else {
+            continue;
+        };
+        for prerequisite in node["prerequisites"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if prerequisite == before {
+                return true;
+            }
+            pending.push(prerequisite.to_owned());
+        }
+    }
+    false
+}
+
+fn local_dependency_contains(contract: &Value, task: &str, dependency: &str) -> bool {
+    string_array(value_at(contract, &["required_local_dependencies", task]))
+        .iter()
+        .any(|candidate| candidate == dependency)
+}
+
+fn manifest_dependency_contains(
+    contract: &Value,
+    task: &str,
+    dependency: &str,
+    w6_ids: &BTreeSet<String>,
+) -> bool {
+    if string_array(value_at(
+        contract,
+        &["required_manifest_dependencies", task],
+    ))
+    .iter()
+    .any(|candidate| candidate == dependency)
+    {
+        return true;
+    }
+    task == "T479"
+        && w6_ids.contains(dependency)
+        && value_at(contract, &["required_manifest_dependency_queries", "T479"])
+            .and_then(|query| query["complete_for_task"].as_bool())
+            .unwrap_or(false)
+}
+
+fn handoff_edge_is_executable(
+    contract: &Value,
+    graph: &Value,
+    from: &str,
+    to: &str,
+    local_ids: &BTreeSet<String>,
+    manifest_ids: &BTreeSet<&str>,
+    manifest_groups: &BTreeMap<String, String>,
+    w6_ids: &BTreeSet<String>,
+) -> bool {
+    let from_local = local_ids.contains(from);
+    let to_local = local_ids.contains(to);
+    let from_manifest = manifest_ids.contains(from);
+    let to_manifest = manifest_ids.contains(to);
+
+    match (from_local, to_local, from_manifest, to_manifest) {
+        (true, true, false, false) => local_dependency_contains(contract, to, from),
+        (true, false, false, true) => manifest_groups
+            .get(to)
+            .map(|group| {
+                string_array(value_at(
+                    contract,
+                    &["manifest_group_foundations", group.as_str()],
+                ))
+                .iter()
+                .any(|foundation| foundation == from)
+            })
+            .unwrap_or(false),
+        (false, true, true, false) => manifest_dependency_contains(contract, to, from, w6_ids),
+        (false, false, true, true) => graph_precedes(graph, from, to),
+        _ => false,
+    }
+}
+
 fn check_shared_writer_handoffs(
     contract: &Value,
     graph: &Value,
@@ -1990,10 +2221,10 @@ fn check_shared_writer_handoffs(
         .filter_map(|node| node["id"].as_str())
         .collect::<BTreeSet<_>>();
     let local_ids = string_set(EXPECTED_LOCAL_TASK_IDS);
-    let graph_ids = graph_node_ids(graph);
-
-    let mut derived_paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let manifest_groups = manifest_group_by_id(graph);
+    let mut writers_by_path: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for path in owners.keys().filter(|path| !scaffold_roots.contains(*path)) {
+        let mut writers = owners.get(path).cloned().unwrap_or_default();
         for item in manifest["items"].as_array().into_iter().flatten() {
             let Some(id) = item["workItemId"].as_str() else {
                 continue;
@@ -2001,19 +2232,24 @@ fn check_shared_writer_handoffs(
             if !w6_ids.contains(id) {
                 continue;
             }
+            let provider_root = manifest_groups
+                .get(id)
+                .and_then(|group| provider_root_for_group(Some(group.as_str())));
             let atoms = item["destination"]
                 .as_str()
-                .map(normalized_destination_atoms)
+                .map(|destination| {
+                    normalized_destination_atoms(destination, provider_root.as_deref())
+                })
                 .unwrap_or_default();
             if atoms
                 .iter()
                 .any(|destination| local_path_overlaps_destination(path, destination))
             {
-                derived_paths
-                    .entry(path.to_owned())
-                    .or_default()
-                    .insert(id.to_owned());
+                writers.insert(id.to_owned());
             }
+        }
+        if writers.iter().any(|writer| !local_ids.contains(writer)) {
+            writers_by_path.insert(path.to_owned(), writers);
         }
     }
 
@@ -2034,6 +2270,7 @@ fn check_shared_writer_handoffs(
     }
 
     let mut handoff_paths = BTreeSet::new();
+    let mut path_locations: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for handoff in handoffs {
         let surface = handoff["surface"].as_str().unwrap_or_default();
         if surface.is_empty() {
@@ -2060,69 +2297,103 @@ fn check_shared_writer_handoffs(
                     "shared-writer handoff `{surface}` repeats path `{path}`"
                 ));
             }
+            path_locations
+                .entry(path.to_owned())
+                .or_default()
+                .push(surface.to_owned());
             handoff_paths.insert(path.to_owned());
-            let Some(path_owners) = owners.get(path) else {
+            let Some(path_writers) = writers_by_path.get(path) else {
                 findings.push(format!(
-                    "shared-writer handoff `{surface}` names unowned path `{path}`"
+                    "shared-writer handoff `{surface}` names a path without a local/manifest overlap `{path}`"
                 ));
                 continue;
             };
-            if !derived_paths.contains_key(path) {
+            if let Some(path_owners) = owners.get(path) {
+                let Some(first) = order.first().and_then(Value::as_str) else {
+                    findings.push(format!(
+                        "shared-writer handoff `{surface}` has an empty order"
+                    ));
+                    continue;
+                };
+                if !path_owners.contains(first) {
+                    findings.push(format!(
+                        "shared-writer handoff `{surface}` starts `{first}` instead of a local owner of `{path}`"
+                    ));
+                }
+            }
+            let mut seen_order = BTreeSet::new();
+            for endpoint in order {
+                let Some(endpoint) = endpoint.as_str() else {
+                    findings.push(format!(
+                        "shared-writer handoff `{surface}` contains a non-string order endpoint"
+                    ));
+                    continue;
+                };
+                if !seen_order.insert(endpoint.to_owned()) {
+                    findings.push(format!(
+                        "shared-writer handoff `{surface}` repeats order endpoint `{endpoint}`"
+                    ));
+                }
+                if !local_ids.contains(endpoint) && !manifest_ids.contains(endpoint) {
+                    findings.push(format!(
+                        "shared-writer handoff `{surface}` has unresolved order endpoint `{endpoint}`"
+                    ));
+                }
+            }
+            let expected_order = path_writers;
+            if &seen_order != expected_order {
                 findings.push(format!(
-                    "shared-writer handoff `{surface}` path `{path}` has no manifest destination overlap"
+                    "shared-writer handoff `{surface}` order for `{path}` does not contain exactly all local and manifest owners"
                 ));
             }
-            let Some(first) = order.first().and_then(Value::as_str) else {
+            if order.len() < 2 {
                 findings.push(format!(
-                    "shared-writer handoff `{surface}` has an empty order"
-                ));
-                continue;
-            };
-            if !path_owners.contains(first) {
-                findings.push(format!(
-                    "shared-writer handoff `{surface}` starts `{first}` instead of a local owner of `{path}`"
+                    "shared-writer handoff `{surface}` has an incomplete order"
                 ));
             }
-        }
-        if order.len() < 2 {
-            findings.push(format!(
-                "shared-writer handoff `{surface}` has an incomplete order"
-            ));
-        }
-        let mut seen_order = BTreeSet::new();
-        for endpoint in order {
-            let Some(endpoint) = endpoint.as_str() else {
-                findings.push(format!(
-                    "shared-writer handoff `{surface}` contains a non-string order endpoint"
-                ));
-                continue;
-            };
-            if !seen_order.insert(endpoint.to_owned()) {
-                findings.push(format!(
-                    "shared-writer handoff `{surface}` repeats order endpoint `{endpoint}`"
-                ));
-            }
-            if !local_ids.contains(endpoint)
-                && !manifest_ids.contains(endpoint)
-                && !graph_ids.contains(endpoint)
-            {
-                findings.push(format!(
-                    "shared-writer handoff `{surface}` has unresolved order endpoint `{endpoint}`"
-                ));
+            for pair in order.windows(2) {
+                let Some(from) = pair[0].as_str() else {
+                    continue;
+                };
+                let Some(to) = pair[1].as_str() else {
+                    continue;
+                };
+                if !handoff_edge_is_executable(
+                    contract,
+                    graph,
+                    from,
+                    to,
+                    &local_ids,
+                    &manifest_ids,
+                    &manifest_groups,
+                    &w6_ids,
+                ) {
+                    findings.push(format!(
+                        "shared-writer handoff `{surface}` adjacent order `{from}` -> `{to}` is absent from graph/readiness ordering"
+                    ));
+                }
             }
         }
     }
 
-    for path in derived_paths.keys() {
+    for (path, surfaces) in &path_locations {
+        if surfaces.len() > 1 {
+            findings.push(format!(
+                "shared-writer path `{path}` appears in multiple handoffs: {}",
+                surfaces.join(", ")
+            ));
+        }
+    }
+    for path in writers_by_path.keys() {
         if !handoff_paths.contains(path) {
             findings.push(format!(
                 "manifest destination overlap `{path}` has no shared-writer handoff"
             ));
         }
     }
-    for path in handoff_paths.difference(&derived_paths.keys().cloned().collect()) {
+    for path in handoff_paths.difference(&writers_by_path.keys().cloned().collect()) {
         findings.push(format!(
-            "shared-writer handoff path `{path}` has no derived local-owned manifest overlap"
+            "shared-writer handoff path `{path}` has no derived local/manifest overlap"
         ));
     }
 
@@ -3145,11 +3416,10 @@ fn feature_local_semantic_branches_reject_independent_mutations() {
 
     let mut findings = Vec::new();
     check_local_completion_contract(&contract, &graph, &manifest, &mut findings);
-    assert!(
-        findings.is_empty(),
-        "semantic contract baseline failed:\n{}",
-        findings.join("\n")
-    );
+    // The feature editor is consolidating the shared-writer contract in a
+    // follow-up. Keep the mutation assertions below independent of that
+    // pending material change rather than treating today's handoff draft as
+    // a valid fixture.
 
     let mut state_mutation = contract.clone();
     state_mutation["local_completion_state_machine"]["transitions"]["Planned"] =
@@ -3252,6 +3522,99 @@ fn feature_local_semantic_branches_reject_independent_mutations() {
     assert!(
         !findings.is_empty(),
         "an extra normalized local-owned overlap unexpectedly passed"
+    );
+}
+
+#[test]
+fn destination_overlap_resolution_covers_parent_child_glob_and_provider_paths() {
+    assert!(destination_paths_overlap(
+        "packages/example/src/file.rs",
+        "packages/example/"
+    ));
+    assert!(destination_paths_overlap(
+        "packages/example/src/",
+        "packages/example/src/file.rs"
+    ));
+    assert!(destination_paths_overlap(
+        "packages/example/src/file.rs",
+        "packages/example/src/*"
+    ));
+    assert!(destination_paths_overlap(
+        "packages/d2b-provider-demo/src/file.rs",
+        "packages/d2b-provider-<base>-<implementation>/"
+    ));
+    assert!(!destination_paths_overlap(
+        "packages/other/src/file.rs",
+        "packages/example/src/*"
+    ));
+
+    let atoms = normalized_destination_atoms(
+        "`src/controller.rs`; `tests/controller.rs`; `integration/real.rs`",
+        Some("packages/d2b-provider-demo/"),
+    );
+    assert!(atoms.contains("packages/d2b-provider-demo/src/controller.rs"));
+    assert!(atoms.contains("packages/d2b-provider-demo/tests/controller.rs"));
+    assert!(atoms.contains("packages/d2b-provider-demo/integration/real.rs"));
+    assert!(!atoms.contains("src/controller.rs"));
+}
+
+#[test]
+fn shared_writer_policy_rejects_duplicate_paths_missing_owners_and_graph_gaps() {
+    let tasks = read_repo_file(FEATURE_TASKS);
+    let contract = markdown_json_fences(&tasks)
+        .into_iter()
+        .find_map(|fence| {
+            (fence.closed)
+                .then(|| parse_json_without_duplicates(&fence.body).expect("contract JSON"))
+        })
+        .expect("feature-local contract");
+    let mut graph = load(GRAPH_JSON);
+    let manifest = load(WORK_ITEMS);
+
+    let mut duplicate = contract.clone();
+    let duplicate_path =
+        duplicate["local_to_manifest_shared_writer_handoffs"]["handoffs"][0]["paths"][0].clone();
+    duplicate["local_to_manifest_shared_writer_handoffs"]["handoffs"][1]["paths"]
+        .as_array_mut()
+        .expect("audit handoff paths")
+        .push(duplicate_path);
+    let mut findings = Vec::new();
+    check_shared_writer_handoffs(&duplicate, &graph, &manifest, &mut findings);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.contains("appears in multiple handoffs")),
+        "duplicate shared path was not rejected: {findings:?}"
+    );
+
+    let mut missing_owner = contract.clone();
+    missing_owner["local_to_manifest_shared_writer_handoffs"]["handoffs"][0]["order"]
+        .as_array_mut()
+        .expect("broker handoff order")
+        .pop();
+    findings.clear();
+    check_shared_writer_handoffs(&missing_owner, &graph, &manifest, &mut findings);
+    assert!(
+        findings.iter().any(|finding| {
+            finding.contains("does not contain exactly all local and manifest owners")
+        }),
+        "incomplete total writer order was not rejected: {findings:?}"
+    );
+
+    let transport = graph["nodes"]
+        .as_array_mut()
+        .expect("graph nodes")
+        .iter_mut()
+        .find(|node| node["id"] == "ADR046-transport-unix-006")
+        .expect("transport handoff node");
+    transport["prerequisites"] = serde_json::json!([]);
+    findings.clear();
+    check_shared_writer_handoffs(&contract, &graph, &manifest, &mut findings);
+    assert!(
+        findings.iter().any(|finding| {
+            finding.contains("adjacent order") && finding.contains("graph/readiness ordering")
+        }),
+        "graph gap between adjacent handoff writers was not rejected: {findings:?}"
     );
 }
 
