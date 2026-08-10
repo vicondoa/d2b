@@ -795,25 +795,48 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
     (spec_set, work_items, declared)
 }
 
+fn markdown_json_fences(markdown: &str) -> Vec<String> {
+    let mut bodies = Vec::new();
+    let mut body = String::new();
+    let mut in_json_fence = false;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_json_fence {
+            if trimmed
+                .strip_prefix("```")
+                .is_some_and(|info| info.trim() == "json")
+            {
+                in_json_fence = true;
+                body.clear();
+            }
+        } else if trimmed == "```" {
+            bodies.push(std::mem::take(&mut body));
+            in_json_fence = false;
+        } else {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if in_json_fence {
+        bodies.push(body);
+    }
+
+    bodies
+}
+
 fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
     let mut findings = Vec::new();
     let mut contracts = Vec::new();
-    for body in markdown
-        .split("```json")
-        .skip(1)
-        .filter_map(|tail| tail.split("```").next())
-    {
-        let claims_local_contract = body.contains("d2b-feature-local-task-contract");
-        match parse_json_without_duplicates(body) {
+    for body in markdown_json_fences(markdown) {
+        match parse_json_without_duplicates(&body) {
             Ok(value) if value["artifact_kind"] == "d2b-feature-local-task-contract" => {
                 contracts.push(value);
             }
-            Ok(_) if claims_local_contract => findings
-                .push("claimed feature-local task contract has the wrong artifact kind".to_owned()),
-            Err(error) if claims_local_contract => findings.push(format!(
-                "claimed feature-local task contract is invalid: {error}"
-            )),
-            Ok(_) | Err(_) => {}
+            Ok(_) => {}
+            Err(error) => {
+                findings.push(format!("JSON task contract fence is invalid: {error}"));
+            }
         }
     }
     if contracts.len() != 1 {
@@ -883,6 +906,11 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         "validator_identity_literals": {
             "T604": ["operator-nix-activation-cleanup"]
         },
+        "acceptance_resource_identities": [
+            "Volume/acceptance-state",
+            "Network/acceptance-net",
+            "Device/acceptance-tpm"
+        ],
         "candidate_evidence_literals": {
             "T479": [
                 "operator-nix-activation-cleanup",
@@ -1244,6 +1272,7 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "\"t604_candidate_bound_evidence\": false",
             "\"t604_candidate_bound_evidence\": true",
         ),
+        ("\"Volume/acceptance-state\"", "\"Volume/acceptance-other\""),
     ] {
         assert!(tasks.contains(from), "mutation source missing: {from}");
         let mutated = tasks.replacen(from, to, 1);
@@ -1276,6 +1305,26 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     assert!(
         !check_local_coordination_tasks(&malformed, &graph).is_empty(),
         "malformed competing local-task contract unexpectedly passed"
+    );
+    let spaced_fence = tasks.replacen("```json", "``` json", 1)
+        + "\n``` json\n{\"artifact_kind\":\"d2b-feature-local-task-contract\"}\n```\n";
+    assert!(
+        !check_local_coordination_tasks(&spaced_fence, &graph).is_empty(),
+        "spaced duplicate local-task contract unexpectedly passed"
+    );
+    let escaped_kind = format!(
+        "{tasks}\n```json\n{{\"artifact_kind\":\"d2b-feature-local-task-\\u0063ontract\"}}\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&escaped_kind, &graph).is_empty(),
+        "escaped duplicate local-task contract unexpectedly passed"
+    );
+    let malformed_escaped_kind = format!(
+        "{tasks}\n``` json\n{{\"artifact_kind\":\"d2b-feature-local-task-\\u0063ontract\",\n```\n"
+    );
+    assert!(
+        !check_local_coordination_tasks(&malformed_escaped_kind, &graph).is_empty(),
+        "malformed escaped competing local-task contract unexpectedly passed"
     );
 }
 

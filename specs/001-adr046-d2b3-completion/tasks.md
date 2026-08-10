@@ -180,6 +180,11 @@ below is the sole feature authority for cross-provider acceptance coordination.
     "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
     "tests/golden/delivery/host-generation-unit-census-case-ids.txt"
   ],
+  "acceptance_resource_identities": [
+    "Volume/acceptance-state",
+    "Network/acceptance-net",
+    "Device/acceptance-tpm"
+  ],
   "validator_identity_literals": {
     "T604": ["operator-nix-activation-cleanup"]
   },
@@ -2088,7 +2093,7 @@ deliverables.
 605 tasks: 18 pre-wave/process hygiene tasks (4 panel-model migration, 4 pipelined-wave
 migration), 531 initial-scope work items, 18 wave entry/gate/merge tasks for W2-W7, 5 for the terminal wave,
 4 added at W5/W7 by the earlier analysis remediation, 15 added to Wave 5 by the approved
-production-completion amendment, 1 retired feature-local acceptance task, 1 retired
+production-completion amendment, 1 active unchecked feature-local acceptance task, 1 retired
 feature-editor reconciliation task, and 12 for
 the release.
 The 531 primary work-item tasks preserve the exact items that were `Planned` at program
