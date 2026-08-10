@@ -75,7 +75,7 @@ definition.
 | Initial program scope | 531 | items that were `Planned` when primary tasks were generated |
 | Merged | 68 | current manifest at `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` |
 | Planned | 477 | current manifest remainder of the initial 531 |
-| Graph nodes / edges | 600 / 1960 | 55 + 545 |
+| Graph nodes / edges | 600 / 1962 | 55 + 545 |
 | Max topological rank | 22 | |
 | Feature task rows | 609 | `tasks.md`, including four prospective W6 foundation tasks |
 | Parallel feature task rows | 101 | T607-T609 add three `[P]` foundations to the prior 98 |

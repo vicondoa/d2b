@@ -206,7 +206,7 @@ const w6 = graph.nodes.filter(
   (node) => node.kind === "work-item" && node.wave === "W6",
 );
 assert.equal(graph.nodes.length, 600);
-assert.equal(graph.edges.length, 1960);
+assert.equal(graph.edges.length, 1962);
 assert.equal(workItems.items.length, 545);
 assert.equal(w6.length, 258);
 const manifestGroups = new Set(w6.map((node) => node.parallelGroup));
