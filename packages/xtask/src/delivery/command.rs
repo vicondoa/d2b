@@ -239,22 +239,22 @@ impl WaveCommand {
             }
             Self::Validate => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate \
-                 --snapshot PATH --group GROUP --evidence PATH... --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 --snapshot PATH --group GROUP --evidence PATH... [--selection PATH] --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
             }
             Self::Complete => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave complete \
-                 --snapshot PATH --group GROUP --evidence PATH... --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 --snapshot PATH --group GROUP --evidence PATH... [--selection PATH] --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
             }
             Self::Block => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave block \
-                 --snapshot PATH --group GROUP --reason TEXT --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 --snapshot PATH --group GROUP --reason TEXT [--selection PATH] --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
             }
             Self::Resume => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave resume \
-                 --snapshot PATH --group GROUP --replacement-approved true \
+                 --snapshot PATH --group GROUP --replacement-approved true --replacement-approval PATH [--selection PATH] \
                  --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
             }
             Self::RunCommandProfile => {
@@ -302,7 +302,13 @@ impl WaveCommand {
             Self::DispatchReady => &["--snapshot", "--repo"],
             Self::Validate | Self::Complete => &["--snapshot", "--group", "--evidence", "--repo"],
             Self::Block => &["--snapshot", "--group", "--reason", "--repo"],
-            Self::Resume => &["--snapshot", "--group", "--replacement-approved", "--repo"],
+            Self::Resume => &[
+                "--snapshot",
+                "--group",
+                "--replacement-approved",
+                "--replacement-approval",
+                "--repo",
+            ],
             Self::RunCommandProfile => &["--profile", "--repo"],
             Self::EntryCensus => &["--repo"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
@@ -333,7 +339,7 @@ impl WaveCommand {
             | Self::Validate
             | Self::Complete
             | Self::Block
-            | Self::Resume => &["--state-dir"],
+            | Self::Resume => &["--state-dir", "--selection"],
             Self::RunCommandProfile | Self::EntryCensus => &[
                 "--program",
                 "--wave",

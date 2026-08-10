@@ -2752,6 +2752,60 @@ fn stage_snapshot(
     Ok((state, roots, snapshot))
 }
 
+fn validate_work_selection_path(
+    path: Option<&Path>,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<bool> {
+    let Some(path) = path else {
+        return Ok(false);
+    };
+    let bytes = read_external_json(
+        &validate_external_file(path, repository_roots)?,
+        "work selection",
+    )?;
+    let selection: WorkSelection = serde_json::from_slice(&bytes)
+        .map_err(|error| DeliveryError::new(format!("invalid work selection: {error}")))?;
+    selection.validate_for(material)?;
+    Ok(true)
+}
+
+fn require_transition_approval(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    final_selection: bool,
+) -> Result<()> {
+    let paths = W6Paths::from_environment(repository_roots)?;
+    let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
+    let digests = material.digests()?;
+    let current_candidate = ledger
+        .entries
+        .first()
+        .map(|entry| entry.candidate_id.as_str())
+        .unwrap_or_default();
+    if current_candidate == digests.candidate_id.as_str() {
+        require_plan_receipt(material, repository_roots, None, None)?;
+        return Ok(());
+    }
+    if !final_selection {
+        return Err(DeliveryError::new(
+            "a later final snapshot requires a separate candidate-bound work selection",
+        ));
+    }
+    let receipt = read_plan_approval(&paths.plan_approval, repository_roots)?;
+    let head = ledger
+        .entries
+        .first()
+        .ok_or_else(|| DeliveryError::new("dispatch ledger has no entries"))?
+        .head_oid
+        .as_str();
+    ledger.validate_for_candidate(&receipt.entry_candidate_id, head)?;
+    let evidence = read_command_evidence(&paths.command_evidence_dir, repository_roots)?;
+    evidence.validate_t221(head)?;
+    let feature_root = feature_root(repository_roots)?;
+    receipt.validate_for_close(&ledger, &evidence, &feature_root, None)
+}
+
 pub fn run_plan_approval(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let snapshot_path = options.required_path("--snapshot")?;
@@ -2792,15 +2846,11 @@ pub fn run_dispatch_ready(args: &[String]) -> Result<WorkflowOutput> {
     options.finish()?;
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
-    if let Some(path) = selection_path {
-        let bytes = read_external_json(&absolute_path(&path)?, "work selection")?;
-        let selection: WorkSelection = serde_json::from_slice(&bytes)
-            .map_err(|error| DeliveryError::new(format!("invalid work selection: {error}")))?;
-        selection.validate_for(&snapshot.material)?;
-    }
+    let final_selection =
+        validate_work_selection_path(selection_path.as_deref(), &snapshot.material, &roots)?;
     let paths = W6Paths::from_environment(&roots)?;
     let mut ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
-    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    require_transition_approval(&snapshot.material, &roots, final_selection)?;
     let root = roots
         .get("github.com/vicondoa/d2b")
         .or_else(|| roots.values().next())
@@ -2830,6 +2880,7 @@ pub fn run_dispatch_ready(args: &[String]) -> Result<WorkflowOutput> {
 pub fn run_validate(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let group = options.required_string("--group")?;
+    let selection_path = options.optional_path("--selection")?;
     let evidence = options
         .repeated_strings("--evidence")
         .into_iter()
@@ -2840,7 +2891,9 @@ pub fn run_validate(args: &[String]) -> Result<WorkflowOutput> {
         .get("github.com/vicondoa/d2b")
         .or_else(|| roots.values().next())
         .ok_or_else(|| DeliveryError::new("validation has no repository root"))?;
-    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let final_selection =
+        validate_work_selection_path(selection_path.as_deref(), &snapshot.material, &roots)?;
+    require_transition_approval(&snapshot.material, &roots, final_selection)?;
     let records = read_group_evidence_files(&evidence, &snapshot.material, root, &roots, &group)?;
     let paths = W6Paths::from_environment(&roots)?;
     let ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
@@ -2867,6 +2920,7 @@ pub fn run_validate(args: &[String]) -> Result<WorkflowOutput> {
 pub fn run_complete(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let group = options.required_string("--group")?;
+    let selection_path = options.optional_path("--selection")?;
     let evidence = options
         .repeated_strings("--evidence")
         .into_iter()
@@ -2877,7 +2931,9 @@ pub fn run_complete(args: &[String]) -> Result<WorkflowOutput> {
         .get("github.com/vicondoa/d2b")
         .or_else(|| roots.values().next())
         .ok_or_else(|| DeliveryError::new("completion has no repository root"))?;
-    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let final_selection =
+        validate_work_selection_path(selection_path.as_deref(), &snapshot.material, &roots)?;
+    require_transition_approval(&snapshot.material, &roots, final_selection)?;
     let records = read_group_evidence_files(&evidence, &snapshot.material, root, &roots, &group)?;
     let paths = W6Paths::from_environment(&roots)?;
     let ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
@@ -2904,8 +2960,11 @@ pub fn run_block(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let group = options.required_string("--group")?;
     let reason = options.required_string("--reason")?;
+    let selection_path = options.optional_path("--selection")?;
     let (_state, roots, snapshot) = stage_snapshot(&mut options)?;
-    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let final_selection =
+        validate_work_selection_path(selection_path.as_deref(), &snapshot.material, &roots)?;
+    require_transition_approval(&snapshot.material, &roots, final_selection)?;
     let paths = W6Paths::from_environment(&roots)?;
     block_group(&paths.ledger, &snapshot.material, &group, &reason, &roots)?;
     Ok(WorkflowOutput::ok(WaveCommand::Block).with_digests(&snapshot.digests()))
@@ -2915,14 +2974,35 @@ pub fn run_resume(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let group = options.required_string("--group")?;
     let replacement = options.required_string("--replacement-approved")?;
+    let replacement_approval = options.required_path("--replacement-approval")?;
+    let selection_path = options.optional_path("--selection")?;
     if replacement != "true" {
         return Err(DeliveryError::usage(
             "--replacement-approved must be true to resume a blocked group",
         ));
     }
     let (_state, roots, snapshot) = stage_snapshot(&mut options)?;
-    require_plan_receipt(&snapshot.material, &roots, None, None)?;
+    let final_selection =
+        validate_work_selection_path(selection_path.as_deref(), &snapshot.material, &roots)?;
+    require_transition_approval(&snapshot.material, &roots, final_selection)?;
     let paths = W6Paths::from_environment(&roots)?;
+    let replacement_approval = read_plan_approval(&replacement_approval, &roots)?;
+    let ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
+    if replacement_approval.entry_candidate_id
+        != ledger
+            .entries
+            .first()
+            .ok_or_else(|| DeliveryError::new("dispatch ledger has no entries"))?
+            .candidate_id
+            .as_str()
+    {
+        return Err(DeliveryError::new(
+            "replacement approval is bound to a different dispatch candidate",
+        ));
+    }
+    let evidence = read_command_evidence(&paths.command_evidence_dir, &roots)?;
+    let feature_root = feature_root(&roots)?;
+    replacement_approval.validate_for_close(&ledger, &evidence, &feature_root, None)?;
     resume_group(
         &paths.ledger,
         &snapshot.material,
