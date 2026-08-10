@@ -1,9 +1,34 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 2.1.0 -> 3.0.0 (this amendment); 1.0.0 -> 2.0.0 (prior, same day)
-Rationale: MAJOR. Principle VI replaces repeated discovery and delayed
-LOW/MEDIUM deferral with the accepted ADR 0055 Discover-Fix-Verify lifecycle.
+Version change: 3.0.0 -> 3.1.0
+Rationale: MINOR. Principle VI gains a narrow, one-time historical
+disposition for the already-merged ADR-046 delivery history while preserving
+every prospective panel, validation, delivery, and merge gate.
+
+Amendment 3.1.0 (2026-08-09): ADR-046 historical gate disposition
+- Principle VI expressly dispositions the missing W0/W1 panel receipts and
+  seals and the unproven contemporaneous W2-W5 plan panels through the exact
+  merged Wave 5 boundary at `177235ed37188b3be87525e7f016fb43401574c5`.
+- The disposition also closes the retained Wave 5 candidate
+  `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
+  snapshot `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
+  head `19b77dad63060bcadd41f1ef800978d2c53cc030`, and retained
+  `panel-request.json` SHA-256
+  `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`
+  as immutable historical state with one consumed request, zero attestations,
+  and no seal.
+- For ADR-046 W6 predecessor checks only, merged Wave 5 boundary
+  `177235ed37188b3be87525e7f016fb43401574c5` is the one-time historical
+  predecessor disposition. It is not a reconstructed seal and authorizes no
+  Wave 5 recovery or second binding request.
+- Every post-boundary ADR-046 action requires this amendment's merge commit to
+  be an ancestor of the exact execution base. W6 additionally requires the
+  ordinary exact-base unanimous T221 entry plan panel and every remaining
+  prospective gate.
+- Rationale: missing historical evidence cannot be recreated truthfully. A
+  closed, commit-bound disposition preserves that fact while restoring strict
+  forward enforcement.
 
 Amendment 3.0.0 (2026-08-08): Selected-roster Discover-Fix-Verify
 - Principle VI replaces the operative fixed roster with the versioned
@@ -65,15 +90,20 @@ Amendment 2.0.0 (2026-07-29): Pipelined dispatch
 
 Modified principles:
 - IV. Contract-Driven Compatibility (expanded in 2.2.0)
-- VI. Panel-Gated Multi-Phase Work (redefined)
+- VI. Panel-Gated Multi-Phase Work (redefined in 3.0.0; expanded in 3.1.0)
 Added sections: none
 Removed sections: none
 
 Templates and artifacts requiring follow-up:
-- specs/001-adr046-d2b3-completion/ - the open Wave 5 contract defect may now
-  be corrected through one approved `/d2b-spec-edit` batch that assigns the
-  contract, schema, docs, generated artifacts, implementation, and tests to the
-  same coordinated change. Its analysis and plan panel must be rerun.
+- specs/001-adr046-d2b3-completion/ - after this amendment lands on `v3`,
+  rerun the exact-base W6 entry plan panel required by T221. The feature
+  artifacts remain evidence of the formerly open prerequisite and are not
+  rewritten by this constitution-only amendment.
+- packages/xtask/src/delivery/ and its existing unit-test surface - DISCHARGED
+  in this amendment by the exact one-time Wave 5 predecessor validator and its
+  positive and planted-negative coverage.
+- changelog.d/ - DISCHARGED by the marker-free amendment fragment shipped with
+  this change.
 - specs/001-adr046-d2b3-completion/spec.md - FR-025 and FR-036 restated for the
   pipeline; new FRs added for the strict panel/seal/merge ordering. DISCHARGED:
   FR-056 through FR-059 landed, FR-025 was narrowed to exit, and FR-057 states
@@ -256,6 +286,47 @@ BLOCKER or MAJOR findings. A pre-existing MINOR or NIT observation discovered
 after the comprehensive discovery remains non-blocking history. There is no
 round-count threshold and no later transition from blocking to non-blocking.
 
+**ADR-046 historical disposition.** The delivery history for
+`specs/001-adr046-d2b3-completion` through merged `v3` commit
+`177235ed37188b3be87525e7f016fb43401574c5` contains three nonconforming
+evidence classes:
+
+1. W0/W1 lack the panel receipts and seals required by this principle.
+2. Contemporaneous W2-W5 plan-panel evidence is unproven.
+3. Wave 5 retained candidate
+   `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4`,
+   snapshot `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a`,
+   head `19b77dad63060bcadd41f1ef800978d2c53cc030`, and retained
+   `panel-request.json` SHA-256
+   `15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7`
+   consumed its sole binding request with zero attestations and no seal before
+   the later Wave 5 tree merged at
+   `177235ed37188b3be87525e7f016fb43401574c5`.
+
+Those facts are accepted as closed historical governance deviations for those
+exact bytes and identifiers only. They MUST NOT be described as gates that
+passed, reconstructed through retroactive attestations, replaced with current
+reviews, or used as precedent for another program or wave. The retained
+candidate, request, imported evidence, and missing attestation and seal state
+remain immutable. No Wave 5 recovery action, replacement candidate, second
+binding request, attestation, or reconstructed seal is authorized.
+
+For ADR-046 W6 predecessor checks only, merged Wave 5 boundary
+`177235ed37188b3be87525e7f016fb43401574c5` is the one-time historical
+predecessor disposition. Delivery tooling MUST match the exact retained Wave 5
+candidate, snapshot, head, consumed request, and merged boundary above and
+MUST reject every partial, missing, additional, or mismatched state. This
+treatment records a historical exception; it does not create a Wave 5 seal.
+
+Before any post-boundary ADR-046 implementation, resume, fix, panel, seal,
+merge, or advance action, the merge commit carrying this amendment MUST be an
+ancestor of the exact execution base. W6 begins only after rebasing onto that
+lineage and passing the ordinary T221 unanimous selected-roster entry plan
+panel against the exact base and current feature snapshot with zero
+recommendations. Every later implementation, validation, Discover-Fix-Verify,
+binding request, attestation, protected PR merge, seal, and merge-eligibility
+requirement remains unchanged.
+
 Rationale: convergence comes from comprehensive discovery and scoped
 verification, not fatigue after an arbitrary number of open-ended rounds. The
 project's own history includes a panel catching 11 HIGH findings that
@@ -343,4 +414,4 @@ described in the amendment procedure above. The version, ratification date,
 and last-amended date are recorded in the footer and MUST be updated
 together in any amending change.
 
-**Version**: 3.0.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-08-08
+**Version**: 3.1.0 | **Ratified**: 2026-07-29 | **Last Amended**: 2026-08-09

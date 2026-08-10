@@ -256,6 +256,11 @@ fn seal_checked(
         &snapshot.material,
         repository_roots,
     )?;
+    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+        candidate,
+        &snapshot.material,
+        repository_roots,
+    )?;
     seal(candidate, snapshot)
 }
 

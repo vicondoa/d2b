@@ -234,6 +234,11 @@ pub(crate) fn evaluate_checked(
 ) -> Result<WorkflowOutput> {
     super::work_item_state::require_current_wave_merged(&seal.material, repository_roots)?;
     super::work_item_state::require_prior_waves_merged_for_exit(&seal.material, repository_roots)?;
+    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+        candidate,
+        &seal.material,
+        repository_roots,
+    )?;
     evaluate(candidate, seal, target)
 }
 

@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -10,12 +11,49 @@ use serde::Deserialize;
 
 use super::{
     DeliveryError, Result,
-    model::{CandidateMaterial, MAX_WAVE_ORDINAL, RepositoryRecord, qualified_wave_parts},
-    storage::MAX_JSON_BYTES,
+    model::{
+        CandidateId, CandidateMaterial, MAX_WAVE_ORDINAL, RepositoryRecord, qualified_wave_parts,
+        sha256_bytes,
+    },
+    storage::{CandidateDir, MAX_JSON_BYTES, PANEL_REQUEST_FILE, SNAPSHOT_FILE},
 };
 
 const GRAPH_PATH: &str = "docs/specs/ADR-046-implementation-graph.json";
 const WORK_ITEMS_PATH: &str = "docs/specs/ADR-046-work-items.json";
+const CONSTITUTION_PATH: &str = ".specify/memory/constitution.md";
+
+const ADR046_W5_RETAINED_WAVE: &str = "adr046w5";
+const ADR046_W5_RETAINED_CANDIDATE: &str =
+    "d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4";
+const ADR046_W5_RETAINED_REQUEST_SHA256: &str =
+    "15f49657490410f0fb5530513144c7c2392f567b211eb630551f3110b94633f7";
+const ADR046_W5_RETAINED_SNAPSHOT_FILE_SHA256: &str =
+    "dcf4d71a572bdf0766de557dde6b8ede7fd680eb9f85572238575d2ab5c82149";
+const ADR046_W5_MERGED_BOUNDARY: &str = "177235ed37188b3be87525e7f016fb43401574c5";
+const ADR046_FR036_CONSTITUTION_SHA256: &str =
+    "82ba409d89ec7b4b41d74cd87b0f52b5dcc4c8c6a110ea1a0fcb3b0f1f24b02e";
+const D2B_REPOSITORY_ID: &str = "github.com/vicondoa/d2b";
+
+struct HistoricalPredecessorPolicy<'a> {
+    repository_id: &'a str,
+    retained_wave: &'a str,
+    retained_candidate_id: &'a str,
+    retained_request_sha256: &'a str,
+    retained_snapshot_file_sha256: &'a str,
+    predecessor_merge_oid: &'a str,
+    constitution_sha256: &'a str,
+}
+
+const ADR046_W6_HISTORICAL_POLICY: HistoricalPredecessorPolicy<'static> =
+    HistoricalPredecessorPolicy {
+        repository_id: D2B_REPOSITORY_ID,
+        retained_wave: ADR046_W5_RETAINED_WAVE,
+        retained_candidate_id: ADR046_W5_RETAINED_CANDIDATE,
+        retained_request_sha256: ADR046_W5_RETAINED_REQUEST_SHA256,
+        retained_snapshot_file_sha256: ADR046_W5_RETAINED_SNAPSHOT_FILE_SHA256,
+        predecessor_merge_oid: ADR046_W5_MERGED_BOUNDARY,
+        constitution_sha256: ADR046_FR036_CONSTITUTION_SHA256,
+    };
 
 #[derive(Deserialize)]
 struct GraphView {
@@ -77,6 +115,196 @@ pub fn require_prior_waves_merged_for_exit(
     }
     let (graph, work_items) = load_bound_state(material, repository_roots)?;
     validate_state(&material.wave, Gate::Exit, &graph, &work_items)
+}
+
+/// Validates the one-time ADR-046 Wave 5 historical predecessor disposition.
+///
+/// The ordinary work-item gate proves that every prior item is marked
+/// `Merged`. ADR-046 Wave 6 additionally inherits a known historical delivery
+/// exception: the retained Wave 5 request consumed its binding slot with zero
+/// attestations and no seal before a later tree merged. The constitution
+/// accepts exactly that state, not any equivalent-looking substitute.
+///
+/// This check is re-run at panel request, seal, and merge eligibility. It
+/// binds the exact retained candidate bytes, rejects any added panel or seal
+/// state, proves the Wave 6 base and head descend from the merged Wave 5
+/// boundary, and pins the amended constitution bytes at the candidate base.
+pub fn require_adr046_w6_historical_predecessor_for_exit(
+    candidate: &CandidateDir,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    if !is_adr046_w6(material) {
+        return Ok(());
+    }
+    validate_historical_predecessor(
+        &ADR046_W6_HISTORICAL_POLICY,
+        candidate,
+        material,
+        repository_roots,
+    )
+}
+
+fn is_adr046_w6(material: &CandidateMaterial) -> bool {
+    matches!(
+        (material.program.as_str(), material.wave.as_str()),
+        ("ADR046", "W6") | ("ADR046", "adr046w6") | ("SPEC001", "spec001w6")
+    )
+}
+
+fn validate_historical_predecessor(
+    policy: &HistoricalPredecessorPolicy<'_>,
+    candidate: &CandidateDir,
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let repository = material
+        .repository_set
+        .iter()
+        .filter(|repository| repository.id == policy.repository_id)
+        .collect::<Vec<_>>();
+    let [repository] = repository.as_slice() else {
+        return Err(DeliveryError::new(format!(
+            "ADR-046 Wave 6 historical predecessor validation requires exactly one `{}` repository record",
+            policy.repository_id
+        )));
+    };
+    let root = repository_roots.get(policy.repository_id).ok_or_else(|| {
+        DeliveryError::new(format!(
+            "ADR-046 Wave 6 historical predecessor validation has no checkout for `{}`",
+            policy.repository_id
+        ))
+    })?;
+
+    for (label, descendant) in [
+        ("base commit", repository.base_oid.as_str()),
+        ("head commit", repository.head_oid.as_str()),
+    ] {
+        require_commit_ancestor(root, policy.predecessor_merge_oid, descendant, label)?;
+    }
+
+    let constitution = read_tree_object(
+        root,
+        policy.repository_id,
+        &repository.base_oid,
+        CONSTITUTION_PATH,
+    )?
+    .ok_or_else(|| {
+        DeliveryError::new(format!(
+            "ADR-046 Wave 6 base commit does not contain {CONSTITUTION_PATH}"
+        ))
+    })?;
+    let constitution_sha256 = sha256_bytes(&constitution);
+    if constitution_sha256 != policy.constitution_sha256 {
+        return Err(DeliveryError::new(format!(
+            "ADR-046 Wave 6 base commit has the wrong FR-036 constitution bytes: expected {}, got {constitution_sha256}",
+            policy.constitution_sha256
+        )));
+    }
+
+    let state_root = candidate
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| DeliveryError::new("candidate path has no delivery state root"))?;
+    let retained = state_root
+        .join(policy.retained_wave)
+        .join(policy.retained_candidate_id);
+    let metadata = fs::symlink_metadata(&retained).map_err(|error| {
+        DeliveryError::new(format!(
+            "ADR-046 Wave 5 retained candidate is missing: {error}"
+        ))
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(DeliveryError::new(
+            "ADR-046 Wave 5 retained candidate is not a real directory",
+        ));
+    }
+
+    let mut entries = BTreeSet::new();
+    for entry in fs::read_dir(&retained).map_err(|error| {
+        DeliveryError::new(format!(
+            "cannot enumerate ADR-046 Wave 5 retained candidate: {error}"
+        ))
+    })? {
+        let name = entry
+            .map_err(|error| {
+                DeliveryError::new(format!(
+                    "cannot enumerate ADR-046 Wave 5 retained candidate: {error}"
+                ))
+            })?
+            .file_name()
+            .into_string()
+            .map_err(|_| {
+                DeliveryError::new("ADR-046 Wave 5 retained candidate contains a non-UTF-8 entry")
+            })?;
+        entries.insert(name);
+    }
+    let expected = ["evidence", PANEL_REQUEST_FILE, SNAPSHOT_FILE]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if entries != expected {
+        return Err(DeliveryError::new(format!(
+            "ADR-046 Wave 5 retained candidate entries differ from the accepted historical state: expected {expected:?}, got {entries:?}"
+        )));
+    }
+
+    require_file_digest(
+        &retained.join(PANEL_REQUEST_FILE),
+        policy.retained_request_sha256,
+        "retained panel request",
+    )?;
+    require_file_digest(
+        &retained.join(SNAPSHOT_FILE),
+        policy.retained_snapshot_file_sha256,
+        "retained snapshot",
+    )
+}
+
+fn require_file_digest(path: &Path, expected: &str, label: &str) -> Result<()> {
+    let bytes = fs::read(path)
+        .map_err(|error| DeliveryError::new(format!("cannot read {label}: {error}")))?;
+    if bytes.len() > MAX_JSON_BYTES {
+        return Err(DeliveryError::new(format!(
+            "{label} exceeds the delivery JSON size limit"
+        )));
+    }
+    let actual = sha256_bytes(&bytes);
+    if actual != expected {
+        return Err(DeliveryError::new(format!(
+            "{label} digest mismatch: expected {expected}, got {actual}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_commit_ancestor(
+    root: &Path,
+    ancestor: &str,
+    descendant: &str,
+    label: &str,
+) -> Result<()> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .output()
+        .map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot verify ADR-046 Wave 5 merge ancestry: {error}"
+            ))
+        })?;
+    match output.status.code() {
+        Some(0) => Ok(()),
+        Some(1) => Err(DeliveryError::new(format!(
+            "ADR-046 Wave 6 {label} does not descend from merged Wave 5 boundary {ancestor}"
+        ))),
+        _ => Err(DeliveryError::environment(format!(
+            "cannot verify ADR-046 Wave 5 merge ancestry: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
+    }
 }
 
 /// Rejects sealing a wave while any item in that wave remains Planned.
@@ -207,7 +435,16 @@ fn read_tree_file(
     repository: &RepositoryRecord,
     path: &str,
 ) -> Result<Option<Vec<u8>>> {
-    let object = format!("{}:{path}", repository.integration_tree_oid);
+    read_tree_object(root, &repository.id, &repository.integration_tree_oid, path)
+}
+
+fn read_tree_object(
+    root: &Path,
+    repository_id: &str,
+    oid: &str,
+    path: &str,
+) -> Result<Option<Vec<u8>>> {
+    let object = format!("{oid}:{path}");
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -215,8 +452,7 @@ fn read_tree_file(
         .output()
         .map_err(|error| {
             DeliveryError::environment(format!(
-                "cannot read delivery work-item state from repository {}: {error}",
-                repository.id
+                "cannot read delivery work-item state from repository {repository_id}: {error}"
             ))
         })?;
     if !output.status.success() {
@@ -224,8 +460,7 @@ fn read_tree_file(
     }
     if output.stdout.len() > MAX_JSON_BYTES {
         return Err(DeliveryError::new(format!(
-            "{path} in repository {} exceeds the delivery JSON size limit",
-            repository.id
+            "{path} in repository {repository_id} exceeds the delivery JSON size limit"
         )));
     }
     Ok(Some(output.stdout))
@@ -252,6 +487,7 @@ fn wave_number(wave: &str) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delivery::{snapshot::tests::GitFixture, storage::StateRoot};
 
     /// Wave ordering is what enforces "wave N+1 waits for wave N to merge", so
     /// both wave forms must yield the same ordinal. The legacy arm is asserted
@@ -383,6 +619,239 @@ mod tests {
         let rebased_tree = work_items("Merged", "Merged");
         validate_state("W1", Gate::Exit, &graph(), &rebased_tree)
             .expect("after rebasing past the predecessor merge the wave exit gate passes");
+    }
+
+    const RETAINED_REQUEST_BYTES: &[u8] = br#"{"roles":["software","test"]}"#;
+    const RETAINED_SNAPSHOT_BYTES: &[u8] = br#"{"snapshot":"retained"}"#;
+
+    struct HistoricalFixture {
+        repository: GitFixture,
+        state: StateRoot,
+        current: CandidateDir,
+        material: CandidateMaterial,
+        roots: BTreeMap<String, PathBuf>,
+        retained_candidate_id: String,
+        request_sha256: String,
+        snapshot_sha256: String,
+        predecessor_merge_oid: String,
+        constitution_sha256: String,
+    }
+
+    impl HistoricalFixture {
+        fn new(label: &str) -> Self {
+            let repository = GitFixture::new(label);
+            let predecessor_merge_oid = repository.head();
+            repository.write(CONSTITUTION_PATH, "constitution 3.1.0\n");
+            repository.commit("constitution amendment");
+            let current_oid = repository.head();
+            let integration_tree_oid = git_rev_parse(&repository, "HEAD^{tree}");
+
+            let mut material = crate::delivery::model::fixtures::material();
+            "SPEC001".clone_into(&mut material.program);
+            "spec001w6".clone_into(&mut material.wave);
+            let record = &mut material.repository_set[0];
+            D2B_REPOSITORY_ID.clone_into(&mut record.id);
+            current_oid.clone_into(&mut record.base_oid);
+            current_oid.clone_into(&mut record.head_oid);
+            integration_tree_oid.clone_into(&mut record.integration_tree_oid);
+            current_oid.clone_into(&mut record.expected_pull_requests[0].head_oid);
+
+            let roots = BTreeMap::from([(D2B_REPOSITORY_ID.to_owned(), repository.repo())]);
+            let state = StateRoot::for_tests(&repository.state()).expect("state root");
+            let current_id = CandidateId::parse(&"a".repeat(64)).expect("current candidate id");
+            let current = state
+                .candidate("spec001w6", &current_id)
+                .expect("current candidate");
+
+            let retained_candidate_id = "b".repeat(64);
+            let retained_id =
+                CandidateId::parse(&retained_candidate_id).expect("retained candidate id");
+            let retained = state
+                .candidate(ADR046_W5_RETAINED_WAVE, &retained_id)
+                .expect("retained candidate");
+            fs::create_dir(retained.path().join("evidence")).expect("retained evidence directory");
+            retained
+                .write_bytes(PANEL_REQUEST_FILE, RETAINED_REQUEST_BYTES)
+                .expect("retained request");
+            retained
+                .write_bytes(SNAPSHOT_FILE, RETAINED_SNAPSHOT_BYTES)
+                .expect("retained snapshot");
+
+            Self {
+                repository,
+                state,
+                current,
+                material,
+                roots,
+                retained_candidate_id,
+                request_sha256: sha256_bytes(RETAINED_REQUEST_BYTES),
+                snapshot_sha256: sha256_bytes(RETAINED_SNAPSHOT_BYTES),
+                predecessor_merge_oid,
+                constitution_sha256: sha256_bytes(b"constitution 3.1.0\n"),
+            }
+        }
+
+        fn policy(&self) -> HistoricalPredecessorPolicy<'_> {
+            HistoricalPredecessorPolicy {
+                repository_id: D2B_REPOSITORY_ID,
+                retained_wave: ADR046_W5_RETAINED_WAVE,
+                retained_candidate_id: &self.retained_candidate_id,
+                retained_request_sha256: &self.request_sha256,
+                retained_snapshot_file_sha256: &self.snapshot_sha256,
+                predecessor_merge_oid: &self.predecessor_merge_oid,
+                constitution_sha256: &self.constitution_sha256,
+            }
+        }
+
+        fn retained(&self) -> CandidateDir {
+            self.state
+                .existing_candidate(
+                    ADR046_W5_RETAINED_WAVE,
+                    &CandidateId::parse(&self.retained_candidate_id)
+                        .expect("retained candidate id"),
+                )
+                .expect("retained candidate")
+        }
+
+        fn validate(&self, policy: &HistoricalPredecessorPolicy<'_>) -> Result<()> {
+            validate_historical_predecessor(policy, &self.current, &self.material, &self.roots)
+        }
+    }
+
+    fn git_rev_parse(repository: &GitFixture, revision: &str) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository.repo())
+            .args(["rev-parse", revision])
+            .output()
+            .expect("git rev-parse");
+        assert!(
+            output.status.success(),
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[test]
+    fn adr046_w6_historical_predecessor_accepts_only_the_exact_state() {
+        let fixture = HistoricalFixture::new("historical-predecessor-positive");
+        fixture
+            .validate(&fixture.policy())
+            .expect("the exact retained state passes");
+    }
+
+    #[test]
+    fn adr046_w6_historical_predecessor_rejects_wrong_candidate_and_artifacts() {
+        let fixture = HistoricalFixture::new("historical-predecessor-artifacts");
+
+        let missing_candidate = "c".repeat(64);
+        let mut policy = fixture.policy();
+        policy.retained_candidate_id = &missing_candidate;
+        let error = fixture
+            .validate(&policy)
+            .expect_err("a different retained candidate must fail");
+        assert!(
+            error.message().contains("retained candidate is missing"),
+            "{error}"
+        );
+
+        let retained = fixture.retained();
+        fs::write(retained.path().join(PANEL_REQUEST_FILE), b"wrong roster")
+            .expect("replace request");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("changed request bytes must fail");
+        assert!(
+            error.message().contains("request digest mismatch"),
+            "{error}"
+        );
+        fs::write(
+            retained.path().join(PANEL_REQUEST_FILE),
+            RETAINED_REQUEST_BYTES,
+        )
+        .expect("restore request");
+
+        fs::write(retained.path().join(SNAPSHOT_FILE), b"wrong head").expect("replace snapshot");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("changed snapshot bytes must fail");
+        assert!(
+            error.message().contains("snapshot digest mismatch"),
+            "{error}"
+        );
+        fs::write(retained.path().join(SNAPSHOT_FILE), RETAINED_SNAPSHOT_BYTES)
+            .expect("restore snapshot");
+
+        fs::write(retained.path().join("seal.json"), b"{}").expect("plant seal");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("an added seal must fail");
+        assert!(error.message().contains("entries differ"), "{error}");
+        fs::remove_file(retained.path().join("seal.json")).expect("remove seal");
+
+        fs::create_dir(retained.path().join("panel")).expect("plant panel directory");
+        fs::write(
+            retained.path().join("panel/software.json"),
+            b"non-unanimous",
+        )
+        .expect("plant verdict");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("added panel state must fail");
+        assert!(error.message().contains("entries differ"), "{error}");
+    }
+
+    #[test]
+    fn adr046_w6_historical_predecessor_rejects_wrong_ancestry_and_constitution() {
+        let fixture = HistoricalFixture::new("historical-predecessor-lineage");
+
+        fixture.repository.write("later.txt", "later\n");
+        fixture.repository.commit("later non-ancestor");
+        let later = fixture.repository.head();
+        let mut policy = fixture.policy();
+        policy.predecessor_merge_oid = &later;
+        let error = fixture
+            .validate(&policy)
+            .expect_err("a non-ancestor boundary must fail");
+        assert!(error.message().contains("does not descend"), "{error}");
+
+        let wrong_constitution = sha256_bytes(b"wrong constitution");
+        let mut policy = fixture.policy();
+        policy.constitution_sha256 = &wrong_constitution;
+        let error = fixture
+            .validate(&policy)
+            .expect_err("wrong constitution bytes must fail");
+        assert!(
+            error.message().contains("wrong FR-036 constitution bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn non_adr046_w6_candidates_do_not_consume_the_historical_exception() {
+        let fixture = HistoricalFixture::new("historical-predecessor-scope");
+        let mut material = fixture.material.clone();
+        "spec001w5".clone_into(&mut material.wave);
+        require_adr046_w6_historical_predecessor_for_exit(
+            &fixture.current,
+            &material,
+            &BTreeMap::new(),
+        )
+        .expect("another wave does not consume the one-time W6 exception");
+    }
+
+    #[test]
+    fn committed_constitution_matches_the_historical_predecessor_policy() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("xtask lives under packages/");
+        let constitution = fs::read(root.join(CONSTITUTION_PATH)).expect("read constitution");
+        assert_eq!(
+            sha256_bytes(&constitution),
+            ADR046_FR036_CONSTITUTION_SHA256
+        );
     }
 
     #[test]

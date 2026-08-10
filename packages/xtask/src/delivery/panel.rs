@@ -1036,6 +1036,11 @@ fn request_checked(
         &snapshot.material,
         repository_roots,
     )?;
+    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+        candidate,
+        &snapshot.material,
+        repository_roots,
+    )?;
     match selection_path {
         Some(path) => request_with_selection(candidate, snapshot, path),
         None => {
