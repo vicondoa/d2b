@@ -87,14 +87,53 @@ below is the sole feature authority for cross-provider acceptance coordination.
 {
   "artifact_kind": "d2b-feature-local-task-contract",
   "schema_version": 1,
-  "task_ids": ["T604", "T479", "T480"],
-  "unchecked_task_ids": ["T604", "T479", "T480"],
+  "task_ids": ["T606", "T607", "T608", "T609", "T604", "T479", "T480"],
+  "unchecked_task_ids": ["T606", "T607", "T608", "T609", "T604", "T479", "T480"],
   "outside_retired_fences": true,
-  "permitted_local_dependency_ids": ["T221", "T604", "T479", "T480"],
+  "permitted_local_dependency_ids": [
+    "T221",
+    "T606",
+    "T607",
+    "T608",
+    "T609",
+    "T604",
+    "T479",
+    "T480"
+  ],
   "required_local_dependencies": {
-    "T604": ["T221"],
+    "T606": ["T221"],
+    "T607": ["T606"],
+    "T608": ["T606"],
+    "T609": ["T606"],
+    "T604": ["T221", "T607", "T608", "T609"],
     "T479": ["T604", "T221"],
     "T480": ["T479"]
+  },
+  "historical_foundation_adoption": {
+    "source_wave_label": "W5",
+    "execution_wave": "W6",
+    "mutates_historical_state": false,
+    "T607": [
+      "ADR046-cli-001",
+      "ADR046-cli-009",
+      "ADR046-exec-003",
+      "ADR046-exec-004",
+      "ADR046-exec-005",
+      "ADR046-nix-003",
+      "ADR046-zone-control-001"
+    ],
+    "T608": [
+      "ADR046-volume-001",
+      "ADR046-volume-002",
+      "ADR046-volume-004",
+      "ADR046-zone-control-019",
+      "ADR046-zone-control-020",
+      "ADR046-zone-control-024"
+    ],
+    "T609": [
+      "ADR046-audit-001",
+      "ADR046-telem-001"
+    ]
   },
   "required_manifest_dependencies": {
     "T604": [
@@ -162,9 +201,95 @@ below is the sole feature authority for cross-provider acceptance coordination.
     }
   },
   "shared_file_order": {
-    "Makefile": ["ADR046-ch-001", "T604"]
+    "Makefile": ["T606", "ADR046-ch-001", "T604"],
+    "packages/Cargo.toml": ["T606"],
+    "packages/Cargo.lock": ["T606"],
+    "flake.nix": ["T606"],
+    "packages/d2b-contracts/src/broker_wire.rs": ["T606"],
+    "packages/d2b-priv-broker/src/runtime.rs": ["T606"],
+    "packages/d2bd/src/lib.rs": ["T606"],
+    "packages/d2b/src/lib.rs": ["T606"]
   },
   "owned_files": {
+    "T606": [
+      "packages/Cargo.toml",
+      "packages/Cargo.lock",
+      "flake.nix",
+      "Makefile",
+      "nixos-modules/provider-catalog.nix",
+      "nixos-modules/generated/provider-catalog-shape.nix",
+      "packages/xtask/src/provider_crate_policy.rs",
+      "packages/xtask/src/provider_packaging.rs",
+      "packages/d2b-contract-tests/tests/policy_provider_crates.rs",
+      "packages/d2b-contracts/src/broker_wire.rs",
+      "packages/d2b-contracts/src/lib.rs",
+      "packages/d2b-core/src/privileges.rs",
+      "packages/d2b-core/src/lib.rs",
+      "packages/d2b-priv-broker/src/audit.rs",
+      "packages/d2b-priv-broker/src/live_handlers.rs",
+      "packages/d2b-priv-broker/src/main.rs",
+      "packages/d2b-priv-broker/src/runtime.rs",
+      "packages/d2b-priv-broker/src/ops/mod.rs",
+      "packages/d2bd/src/lib.rs",
+      "packages/d2bd/src/wire.rs",
+      "packages/d2b/src/dispatch.rs",
+      "packages/d2b/src/lib.rs",
+      "nixos-modules/options-site.nix",
+      "packages/d2b-provider-activation-nixos/",
+      "packages/d2b-provider-audio-pipewire/",
+      "packages/d2b-provider-clipboard-wayland/",
+      "packages/d2b-provider-display-wayland/",
+      "packages/d2b-provider-notification-desktop/",
+      "packages/d2b-provider-runtime-azure-container-apps/",
+      "packages/d2b-provider-runtime-azure-virtual-machine/",
+      "packages/d2b-provider-runtime-cloud-hypervisor/",
+      "packages/d2b-provider-runtime-qemu-media/",
+      "packages/d2b-provider-shell-terminal/",
+      "packages/d2b-provider-transport-azure-relay/",
+      "packages/d2b-provider-transport-unix/",
+      "packages/d2b-provider-transport-vsock/"
+    ],
+    "T607": [
+      "packages/d2b-contracts/src/v3/zone.rs",
+      "packages/d2b-core-controller/src/zone.rs",
+      "packages/d2b-provider-system-core/src/host.rs",
+      "packages/d2b-provider-system-core/src/user.rs",
+      "packages/d2b-provider-system-core/tests/",
+      "packages/d2b-provider-system-core/integration/",
+      "packages/d2b-provider-system-core/README.md",
+      "packages/d2b/src/context.rs",
+      "packages/d2b/src/zone.rs",
+      "nixos-modules/options-zones.nix"
+    ],
+    "T608": [
+      "packages/d2b-contracts/src/v3/volume.rs",
+      "packages/d2b-contracts/src/v3/volume_layout.rs",
+      "packages/d2b-contracts/src/v3/volume_attachment.rs",
+      "packages/d2b-provider-volume-local/src/",
+      "packages/d2b-provider-volume-local/tests/",
+      "packages/d2b-provider-volume-local/integration/",
+      "packages/d2b-provider-volume-local/README.md",
+      "nixos-modules/resources-volume.nix",
+      "nixos-modules/options-volumes.nix",
+      "packages/d2b-core-controller/src/export_import.rs",
+      "packages/d2b-core-controller/src/export_import_projection.rs",
+      "packages/d2b-core-controller/src/authority.rs",
+      "packages/d2b-provider/src/share_adapter.rs"
+    ],
+    "T609": [
+      "packages/d2b-audit/src/hash_chain.rs",
+      "packages/d2b-audit/src/segment.rs",
+      "packages/d2b-audit/src/rate_limit.rs",
+      "packages/d2b-audit/src/record_types.rs",
+      "packages/d2b-audit/src/sink.rs",
+      "packages/d2b-audit/src/export.rs",
+      "packages/d2b-telemetry/src/trace_context.rs",
+      "packages/d2b-telemetry/src/audit_hash.rs",
+      "packages/d2b-telemetry/src/emitter.rs",
+      "packages/d2b-telemetry/src/meter_registry.rs",
+      "packages/d2b-telemetry/src/metric_label_policy.rs",
+      "packages/d2b-telemetry/src/redaction_guard.rs"
+    ],
     "T604": [
       "packages/d2b-contract-tests/tests/resource_operator_activation.rs",
       "packages/d2bd/tests/resource_operator_activation.rs",
@@ -638,10 +763,10 @@ completion. This wave pins the later W6 operator acceptance set as exactly
 `acceptance`, with the exact Provider installs, configs, effects, readiness, and Device
 cleanup frozen in `spec.md`.
 Support resources cannot substitute. W4 history remains byte-preserved but its sole-opt-in
-Network result is nonconforming. T221 requires the accepted Network contract/work-item
-amendment to remove stale sole-opt-in contract paths and retain the production implementation
-plus four-case matrix in authoritative W6 work items `ADR046-nl-001` through
-`ADR046-nl-020`. Wave 5
+Network result is nonconforming. ADR 0012 and committed policy code are canon. T608 plus
+`ADR046-nl-001` through `ADR046-nl-005` establish the prospective Host-global/effect
+foundation before the remaining Network implementation and four-case matrix in
+`ADR046-nl-006` through `ADR046-nl-020`. Wave 5
 does not claim the prospective positive operator result. Generated authority owns provider
 implementation after that exact set merges; the exact machine-readable T604/T479/T480 local
 contract owns cross-provider acceptance coordination.
@@ -1010,13 +1135,14 @@ retained candidate or delivery history.
 
 ## Wave W6: Remaining Provider dossiers in five file-disjoint families
 
-**Manifest inventory**: 27 Provider dossiers and 258 work items. `ADR046-nl-001` through
-`ADR046-nl-020` remain
-authoritative W6 work and may start only after T221's W6 plan lifecycle passes. The launch
-set remains all 27 dossiers and all 258 work items, in 29 groups including
-process-provider integration and core-controller coordination. Generated authority owns
-provider implementation; the exact machine-readable T604/T479/T480 local contract owns
-cross-provider acceptance coordination.
+**Manifest inventory**: 27 Provider dossiers and 258 work items in 29 manifest groups.
+The complete post-entry execution census additionally contains four local foundation groups
+and three local acceptance/close groups, for 36 groups and 265 active post-entry work
+records. T221 is the separate entry gate. It authorizes only T606. After T606, T607, T608,
+and T609 launch in parallel; Provider groups launch only as their named foundations complete.
+Generated authority owns provider implementation; the expanded machine-readable local
+contract owns foundation adoption and cross-provider acceptance coordination without
+changing retained W5 state.
 
 - [ ] T221 [US2] W6 HISTORICAL-PREDECESSOR GUARD + PLAN PANEL + ENTRY - before any Wave 6
   implementation lane is dispatched, fetch `origin/v3` and require the exact resolved
@@ -1050,11 +1176,122 @@ cross-provider acceptance coordination.
   T480's distinct validation, exact-candidate panel, protected PR, post-merge seal, and
   merge-eligibility gates remain mandatory. No Wave 5 seal is required or created.
 
+  The first discovery packet at lifecycle `spec001w6-entry`, round
+  `spec001w6entry-r1`, is discovery evidence rather than an entry approval. It was bound to
+  panel candidate `1062f5348470756577abe0e11d315fec5819f81b5977a5450adf70e16401e8f7`,
+  content ID `fc123bf263d8ed82e54c3554ab549a7f4ab75c9b249ea94a768c2068d1e8fbac`,
+  panel snapshot `edd532c5e3dc13c74f1ab8daa285fee17a3347938f77af674eeb047ad19f0cf3`,
+  and selection digest
+  `2399894e8b1b0383d84511853b5a89c4bee553c5eaa3a6f6353a6b81963463a6`.
+  This feature-artifact correction invalidates that content binding. T221 remains unchecked
+  until production tooling creates a replacement snapshot and selection and every selected
+  seat returns signoff with zero recommendations. Once that replacement result passes,
+  T221 authorizes T606 only; it does not authorize immediate Provider-lane fan-out.
+
+### Group `feature-local:w6-shared-prep` (1 task)
+
+- [ ] T606 [US2] **W6 SHARED-CONTRACT AND PROVIDER-SCAFFOLD PREP.** Depends on
+  T221. Land one integrator-owned prep commit before any implementation worktree opens.
+  Freeze the shared broker contract, privilege table, dispatch/module registration, workspace,
+  lockfile, flake, Provider catalog, aggregate import, and Makefile anchors named by the
+  machine-readable local task contract. Pre-create the thirteen absent Provider crate roots
+  named there, each with `Cargo.toml`, `src/`, `tests/`, `integration/`, and `README.md`, but
+  no semantic implementation. Each root transfers to its dossier owner only after this prep
+  commit merges. No later parallel slice may edit a T606 shared file unless the task contract
+  names an explicit serialized handoff.
+
+  **Done when** Cargo metadata sees exactly the twenty-seven dossier Provider crates as
+  workspace members; both dossier-minus-crate and crate-minus-dossier sets are empty; every
+  shared file has exactly one initial writer and a declared later handoff; and
+  `make test-inventory`, `make test-policy`, `make test-drift`, and `make test-rust` pass.
+
+### Group `feature-local:w6-core-control-foundations` (1 task)
+
+- [ ] T607 [US2] **PROSPECTIVELY COMPLETE CORE AND CONTROL FOUNDATIONS.** Depends
+  on T606. Adopt the obligations of `ADR046-cli-001`, `ADR046-cli-009`,
+  `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-nix-003`, and
+  `ADR046-zone-control-001` as current W6 work without changing their retained W5 labels,
+  checkboxes, delivery records, or evidence. Implement only the dedicated Zone, CLI
+  context/zone projection, system-core Host/User, bootstrap, and Zone-option destinations
+  assigned by the local task contract; consume T606's shared registrations unchanged.
+
+  **Done when** Host and User reconcilers are production-reachable; bootstrap reconciles
+  Host/User before Process Provider launch; Zone self-resource and CLI discovery/get/list/
+  status traverse the authenticated production route; no test-only adapter can satisfy
+  readiness; focused contract/core/system-core/CLI tests, `make test-nix-unit`,
+  `make test-policy`, and the enabled fixture-contract coverage pass.
+
+### Group `feature-local:w6-storage-authority-foundations` (1 task)
+
+- [ ] T608 [US2] **PROSPECTIVELY COMPLETE STORAGE AND HOST-GLOBAL AUTHORITY
+  FOUNDATIONS.** Depends on T606. Adopt the obligations of `ADR046-volume-001`,
+  `ADR046-volume-002`, `ADR046-volume-004`, `ADR046-zone-control-019`,
+  `ADR046-zone-control-020`, and `ADR046-zone-control-024` as current W6 work without
+  changing retained W5 history. Own the dedicated Volume contracts, volume-local
+  layout/store-view/swtpm implementation, Volume Nix compiler, export/import projection, and
+  Core Host-global authority files assigned by the local task contract.
+
+  **Done when** Volume effects use opaque typed broker operations and expose no raw host path;
+  Host-global claims reject cross-Zone collisions before effects; external-NIC cross-Zone
+  bridge multiplexing fails closed; marker, adoption, cleanup, and authority ordering tests
+  pass; and focused Cargo tests plus executed `make test-integration` pass. A declaration-only
+  fixture is not execution evidence.
+
+### Group `feature-local:w6-audit-telemetry-foundations` (1 task)
+
+- [ ] T609 [US2] **PROSPECTIVELY COMPLETE AUDIT AND TELEMETRY FOUNDATIONS.**
+  Depends on T606. Adopt `ADR046-audit-001` and `ADR046-telem-001` as current W6
+  work without modifying retained W5 state. Own only the `d2b-audit` and `d2b-telemetry`
+  foundation files assigned by the local task contract.
+
+  **Done when** audit records are hash-chained, redacted, append-only, rotated, and pruned;
+  privileged records are never rate-limited and failed durable audit denies completion;
+  telemetry remains lossy and cannot become authorization or audit authority; forbidden path,
+  argv, socket, credential, identity, and resource-name canaries are absent; retention,
+  restart, failed-write, redaction, and concurrency tests pass; and focused Cargo tests plus
+  `make test-policy` pass.
+
+### Staged Wave 6 launch census
+
+The executable launch graph is:
+
+```text
+T221
+  -> T606
+  -> {T607, T608, T609}
+
+T607 + T609
+  -> ADR046-activation-001
+  -> ADR046-activation-006
+  -> remaining activation-nixos items
+
+T608 + T609
+  -> ADR046-nl-001..ADR046-nl-005
+  -> ADR046-nl-006..ADR046-nl-020
+
+T606 plus each dossier's completed foundation dependencies
+  -> other ready Provider dossier groups
+
+all 258 manifest W6 items + T607..T609 + T604
+  -> T479
+  -> T480
+```
+
+The census is twenty-nine manifest groups, four local foundation groups, and
+three local acceptance/close groups: thirty-six post-entry groups total. The first ready
+set contains only T606. The second ready set contains T607, T608, and T609 in parallel.
+The 258 count describes only manifest-backed W6 work; it is not the complete executable W6
+task count.
+
 ### Group `wi:ADR-046-provider-activation-nixos` (7 items)
 
 NIX-8 and NIX-9 are code-canon gaps, not landed Wave 5 work. The exact searches recorded in
 `research.md` found no production handoff contract and no rebuild-reference option.
-Prospective ownership resolves only from authoritative member specs and generated manifests.
+Existing accepted member specifications and the current generated manifests own the
+prospective implementation. No absent Version 2 delivery or traceability artifact is an
+entry prerequisite. `ADR046-activation-001` follows T607 and T609;
+`ADR046-activation-006` follows it and consumes T606's shared-file prep before the remaining
+activation Provider items may start.
 
 - [ ] T222 [P] [US2] `ADR046-activation-001` - complete manifest object; depends on
   `ADR046-audit-001` and `ADR046-cli-001`; first serialized shared broker/contract writer
@@ -1206,17 +1443,17 @@ Prospective ownership resolves only from authoritative member specs and generate
 ### Group `wi:ADR-046-provider-network-local` (20 items)
 
 **Current generated ownership remains W6:** `ADR046-nl-001` through `ADR046-nl-020` are the authoritative production
-implementation rows under T221. T221 requires the accepted versioned
-`ADR-046-resources-network` contract/work-item amendment on the exact fetched base. It must
-require
-`Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`, default both false,
-remove every current-facing sole Network-opt-in path, and regenerate these rows with the
-production adapter, site-gate transport, schema migration, and all four real
-emitter/controller/broker/net-VM cases still assigned to W6. The amendment must not move or
-replace those exact workItemIds with retired Wave 5 owners. Generated authority owns Network
-implementation. Under the exact machine-readable local contract, T604 consumes the merged
-result for cross-provider acceptance, T479 owns candidate execution and evidence, and T480
-revalidates the closed predicates.
+implementation rows under T221. ADR 0012 and committed double-opt-in code are canon:
+effective east-west access requires
+`Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`, with both inputs
+defaulting false. The sole-opt-in member-spec prose is recorded drift, not an alternate
+implementation or a reason to reopen W4/W5. T608 first completes Host-global authority;
+`ADR046-nl-001` through `ADR046-nl-005` then complete the typed production adapter and
+broker boundary before `ADR046-nl-006` through `ADR046-nl-020` proceed. All four real
+emitter/controller/broker/net-VM combinations remain W6 evidence. Generated authority owns
+Network implementation. Under the exact machine-readable local contract, T604 consumes the
+merged result for cross-provider acceptance, T479 owns candidate execution and evidence, and
+T480 revalidates the closed predicates.
 
 - [ ] T336 [P] [US2] `ADR046-nl-001` - preserve the landed `d2b-provider-network-local::controller::NetworkEffectPort`; implement the authoritative generated destination and typed broker adapter with no direct host mutation (adapt/create)
 - [ ] T337 [US2] `ADR046-nl-002` - Broker wire contract and broker/core adapter operation table for `DeletePersistentTap` (adapt)

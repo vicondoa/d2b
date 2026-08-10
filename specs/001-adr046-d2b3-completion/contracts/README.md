@@ -150,6 +150,18 @@ Before Wave 6 implementation dispatch, T221 must:
 5. run the ordinary exact-base selected-roster plan lifecycle to N/N sign-off with zero
    recommendations.
 
+The first discovery packet used fetched base
+`bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0`, entry commit
+`d6de52ca44240b890dd7cc90e6962bf244945b7c`, panel candidate
+`1062f5348470756577abe0e11d315fec5819f81b5977a5450adf70e16401e8f7`, content ID
+`fc123bf263d8ed82e54c3554ab549a7f4ab75c9b249ea94a768c2068d1e8fbac`, panel
+snapshot `edd532c5e3dc13c74f1ab8daa285fee17a3347938f77af674eeb047ad19f0cf3`,
+and selection digest
+`2399894e8b1b0383d84511853b5a89c4bee553c5eaa3a6f6353a6b81963463a6`. This
+feature-content correction invalidates that binding. It remains discovery evidence, not an
+entry pass. T221 requires a replacement snapshot, selection, and unanimous result. Passing
+T221 authorizes T606 only.
+
 The same production guard runs at Wave 6 snapshot/entry and is rechecked at panel request,
 seal, and merge eligibility. Missing, extra, partial, changed, unfetched, non-first-parent,
 non-ancestor, or substituted state refuses with remediation to restore the exact retained

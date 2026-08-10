@@ -229,6 +229,21 @@ record's evidence scope; the record authorizes nothing, and FR-035 requires them
 **Supersession note**: That W0 assignment is historical; current authority is the W7
 allocation in `spec.md`, `plan.md`, and `tasks.md`.
 
+**Wave 6 entry measurement (2026-08-10)**: the committed external delivery specification is
+Version 1 and no `ADR-046-validation-and-delivery-traceability.{json,md}` artifacts exist.
+The first T221 discovery packet therefore cannot cite an accepted Version 2 authority. The
+fetched base, W5 ancestry, retained-state guard, focused delivery test, drift gate, Rust
+suite, and heavy-gate probe passed, but the feature-content findings invalidate that
+candidate's panel binding. A replacement snapshot and unanimous plan result are required.
+
+The measured prospective launch inventory is:
+
+- fifteen direct W6 prerequisites still carried by retained Planned W5 rows, adopted without
+  historical mutation by T607-T609;
+- thirteen dossier Provider crates absent from `packages/`, scaffolded once by T606;
+- 258 manifest-backed W6 items, which are not the complete executable W6 task census;
+- first ready set `{T606}`, then `{T607,T608,T609}`.
+
 ---
 
 ## R7: Toolchain, platform, and scale parameters
@@ -284,8 +299,12 @@ OpenPeerPidfdFromAcceptedSocket
 ```
 
 Therefore NIX-8, NIX-9, the handler contract, and the peer-pidfd operation are not landed.
-Their prospective ownership, ordering, and file maps resolve only from authoritative member
-specs and generated manifests after T221; this feature does not independently assign them.
+The accepted activation-nixos member specification and current generated rows own NIX-8 and
+NIX-9 semantics; T607 and T609 provide their missing foundations before
+`ADR046-activation-001` and `ADR046-activation-006` run. T606 freezes their shared
+contract/dispatch surfaces. No absent Version 2 delivery artifact is required or inferred.
+The handler and peer-pidfd gaps remain assigned by their current member-spec/generated rows;
+this research record does not invent a second implementation contract.
 
 ---
 

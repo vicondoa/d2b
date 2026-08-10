@@ -94,7 +94,15 @@ cargo run --manifest-path packages/Cargo.toml -p xtask -- \
 
 Only after that succeeds, run `/d2b-panel-round plan` against the exact base, entry snapshot,
 and current feature snapshot. T221 remains incomplete until every selected seat signs off
-with zero recommendations.
+with zero recommendations. The first discovery packet
+`spec001w6entry-r1` used fetched base
+`bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0`, entry commit
+`d6de52ca44240b890dd7cc90e6962bf244945b7c`, panel candidate
+`1062f5348470756577abe0e11d315fec5819f81b5977a5450adf70e16401e8f7`, content ID
+`fc123bf263d8ed82e54c3554ab549a7f4ab75c9b249ea94a768c2068d1e8fbac`, and panel
+snapshot `edd532c5e3dc13c74f1ab8daa285fee17a3347938f77af674eeb047ad19f0cf3`.
+This feature edit invalidates that binding. Generate new identities; do not reuse or predict
+them. A passing replacement T221 result authorizes T606 only.
 
 ### 1c. Reject actionable retired-phase prose
 
@@ -366,7 +374,26 @@ A ready slice left unlaunched without a recorded blocker fails wave entry.
 `adr046w5` has no executable implementation or close chain in this guide. Its retained state
 is immutable history with zero attestations and no seal. The feature-owned record preserves that
 disposition. Start only Wave 6 work selected by the T221 plan result, and launch every ready,
-file-disjoint Wave 6 slice in the same coordination cycle.
+file-disjoint Wave 6 slice in the same coordination cycle. The corrected launch census is
+staged rather than a 29-group fan-out:
+
+```text
+T221 -> T606 -> {T607,T608,T609}
+
+T607 + T609
+  -> ADR046-activation-001
+  -> ADR046-activation-006
+  -> remaining activation-nixos items
+
+T608 + T609
+  -> ADR046-nl-001..ADR046-nl-005
+  -> ADR046-nl-006..ADR046-nl-020
+```
+
+After T606, other Provider groups open only when their own T607/T608/T609 dependency is
+complete. The first ready set is exactly T606. The second is exactly T607, T608, and T609.
+The 258 manifest work items are only the manifest body; four foundation groups and three
+acceptance/close groups make 36 post-entry groups and 265 active post-entry work records.
 
 ### 3. Inner loop while implementing
 
@@ -880,13 +907,12 @@ prospective task after T221; nothing in the retired Wave 5 plan may be inferred 
 ## Operator loop: prove the plane works
 
 This is the loop that distinguishes a live control plane from a sealed wave. Its exact
-operator activation positive remains W6 acceptance after T221. T221 first requires the
-accepted external Network contract/work-item amendment to remove every current-facing sole
-Network-opt-in path and retain `ADR046-nl-001` through `ADR046-nl-020` plus all four
-double-opt-in cases as authoritative
-W6 work. Active local T604 consumes the merged generated `ADR046-nl-001` through
-`ADR046-nl-020` implementation. A stale sole-opt-in contract makes T221 fail closed; an
-unimplemented workItemId in that exact set blocks T479.
+operator activation positive remains W6 acceptance after T221. ADR 0012 and committed
+double-opt-in code are canon. T608 first completes Host-global authority;
+`ADR046-nl-001` through `ADR046-nl-005` then complete the production effect boundary before
+the remaining `ADR046-nl-006` through `ADR046-nl-020` work and all four double-opt-in cases.
+Active local T604 consumes that merged implementation. Sole-opt-in behavior or an
+unimplemented workItemId in the exact set blocks T479.
 
 ### Story 1 - declare and reconcile
 
@@ -944,14 +970,14 @@ configuration values below; this procedure has no fixed illustrative target.
 > host-generation handoff operation, and the existing broker service cannot execute a
 > target-closure compatibility binary before profile publication. Exact code-canon searches
 > also find no `hostGenerationRebuildRef` option or carrier. Do not run migration or rollback
-> until T221 passes and the authoritative NIX-8/NIX-9 objects merge.
+> until T221 passes, T607 and T609 complete, and `ADR046-activation-001` plus
+> `ADR046-activation-006` merge.
 >
-> The source-floor schema, encoding, digest and signature rules, receipts, capability
-> transitions, fixtures, poison registries, and transition matrices are owned solely by
-> accepted Version 2 through `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-> `VD2-SC002-TRACEABILITY`. Ownership resolves only from those authoritative rows. A missing,
-> stale, wrong-owner, or failing prospective row blocks acceptance. Retired Wave 5 text
-> supplies no implementation or command.
+> The accepted activation-nixos member specification and current
+> `ADR046-activation-001`/`ADR046-activation-006` rows own the source-floor and carrier.
+> The committed tree contains no accepted Version 2 or generated `VD2-SC002-*` authority.
+> A missing or failing prospective row blocks acceptance. Retired Wave 5 text supplies no
+> implementation or command.
 >
 After the authoritative NIX-8/NIX-9 objects merge, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
@@ -1160,12 +1186,11 @@ resubmitting the byte-identical artifact resumes the same operation and attempt 
 converges to restored without duplicate provenance.
 
 Restoration, durable-record, lifecycle, status, audit-edge, capacity, continuity,
-redaction, and shrinkage fixture membership is owned only by generated
-`VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows. This quickstart copies no ids,
-counts, fixture contents, or transition matrix. Every assigned fixture remains independently
-authored from production and no registry substitutes for another. Missing, stale,
-runtime-derived, skipped, wrong-owner, non-ancestor, or failing coverage blocks the operation
-with the generated remediation.
+redaction, and shrinkage fixture membership comes from the accepted activation, audit,
+storage, and delivery contracts plus their current work-item validations. This quickstart
+copies no ids, counts, fixture contents, or transition matrix. Every fixture remains
+independently authored from production and no registry substitutes for another. Missing,
+runtime-derived, skipped, or failing coverage blocks the operation.
 
 The Type-1 Nix
 case proves only
@@ -1259,11 +1284,10 @@ in a fresh run before the first mutation and, after exactly the first mutation a
 become durable, immediately before each individual later mutation edge.
 
 The mutation-edge, peer-transition, pre-start, unit-census, redaction, and source-floor
-fixture sets are resolved only through the accepted generated `VD2-SC002-REGISTRIES` and
-`VD2-SC002-TRACEABILITY` rows assigned by authoritative member specs and manifests. This quickstart does
-not copy their ids, counts, ordering, or poison cases. The generated rows must name
-independently authored expectations and enforcing gates; missing, duplicate, stale,
-wrong-owner, non-ancestor, runtime-derived, skipped, or unvisited coverage fails closed.
+fixture sets resolve from the accepted activation-nixos member specification, current
+activation work-item validations, and T609's audit validation. This quickstart does not copy
+their ids, counts, ordering, or poison cases. Expectations remain independently authored;
+missing, runtime-derived, skipped, or unvisited coverage fails closed.
 
 Every apply connection still binds the live peer identity to the pinned apply object and
 revalidates it before each mutation. A selected refusal leaves that mutation and all
@@ -1281,16 +1305,14 @@ merges and owns the `operator-nix-activation-cleanup` validator. T479 alone invo
 F6 freezes and emits the one F6-bound record.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
-Host/Network double opt-in. T221 requires the accepted Network contract/work-item amendment
-on the exact fetched Wave 6 base. It must require
+Host/Network double opt-in. ADR 0012 and committed bridge-port policy code require
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
-default both inputs false, remove every current-facing sole Network-opt-in path, and
-regenerate the manifest with `ADR046-nl-001` through `ADR046-nl-020` retained as authoritative
-W6 implementation under T221 and all four Network/Host production cases assigned there. T480 revalidates that
-migration, implementation, and evidence before every Wave 6 close boundary. T604 and T479
-require the merged W6 implementation and all four passing cases. Historical or current sole
-opt-in cannot satisfy T221, T604, T479, or T480. Do not change feature status to bypass that
-stop.
+with both inputs default false. T608 establishes Host-global authority;
+`ADR046-nl-001` through `ADR046-nl-005` establish the effect boundary before the remaining
+Network rows and all four Network/Host production cases. T480 revalidates implementation and
+evidence before every Wave 6 close boundary. T604 and T479 require the merged W6
+implementation and all four passing cases. Historical or current sole opt-in cannot satisfy
+T604, T479, or T480. Do not change feature status to bypass that stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is
 the correct restored state. The broker-owned durable coordinator resumes rollback after an
@@ -1335,8 +1357,8 @@ d2b vm status acceptance-vm
 ```
 
 The host test repeats that exact census before VM start, after public start, after daemon
-restart/adoption, and after public stop. Its fixture membership comes only from authoritative
-generated `VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows; this quickstart copies no
+restart/adoption, and after public stop. T604 owns the independently authored case-ID
+fixtures, T479 executes them against F6, and T480 revalidates them; this quickstart copies no
 ids or counts. Every assigned injected unit survives the sole `d2b.slice` exclusion and fails
 exact equality. Missing, runtime-derived, skipped, or unvisited coverage fails, so a transient
 per-VM unit cannot hide between lifecycle observations.

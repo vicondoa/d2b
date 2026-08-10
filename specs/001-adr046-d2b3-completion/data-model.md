@@ -222,51 +222,38 @@ Owning spec: `ADR-046-validation-and-delivery`.
 
 ---
 
-## 9. SC-002 Version 2 authority reference
+## 9. Current delivery and foundation authority
 
-This feature artifact is not the SC-002 protocol authority. The sole normative source is the
-accepted Version 2 of
-[`ADR-046-validation-and-delivery`](../../docs/specs/ADR-046-validation-and-delivery.md),
-together with its generated schemas, fixtures, and generated traceability artifacts:
-`docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}`. The current external
-specification is Version 1, so every consumer below remains blocked until Version 2 is
-accepted, the generated artifacts are present, Gate 0 passes, and that commit is an ancestor
-of the consumer base.
+The committed entry tree contains Version 1 of
+[`ADR-046-validation-and-delivery`](../../docs/specs/ADR-046-validation-and-delivery.md)
+and no `ADR-046-validation-and-delivery-traceability.{json,md}` artifacts. This feature
+therefore does not claim a Version 2 protocol, identifier registry, schema, fixture census, or
+transition matrix. Production delivery tooling and the committed Version 1 contract govern
+candidate snapshots, evidence, panels, and seals.
 
-Version 2 and the generated traceability table MUST publish these stable identifiers:
+Fifteen incomplete obligations whose retained source rows carry a W5 label are modeled as
+prospective W6 foundation adoption, not as historical state transitions:
 
-| Identifier | Sole owned subject |
+| W6 foundation | Adopted subject |
 | --- | --- |
-| `VD2-SC002-RECEIPT` | activation receipt, evidence-record reference, and close-stage validation |
-| `VD2-SC002-PUBLICATION` | candidate-local publication, locking, retention, and crash recovery |
-| `VD2-SC002-INCIDENT` | incident preimage, state, evidence, and redaction |
-| `VD2-SC002-DISPOSITION` | successor freeze, authority request, signed disposition, apply, and admission |
-| `VD2-SC002-RECOVERY` | inspectable states, emitted actions, exact invocations, exits, and convergence |
-| `VD2-SC002-SOURCE-FLOOR` | installed source-generation compatibility evidence and capability consumption |
-| `VD2-SC002-REGISTRIES` | independently authored fixture and poison registries with generated ownership traceability |
-| `VD2-SC002-TRACEABILITY` | bijection from every identifier to schema, fixture, implementation owner, task, and gate |
+| T607 | Zone/CLI/system-core Host/User/bootstrap control foundation |
+| T608 | Volume, export/import projection, and Host-global authority foundation |
+| T609 | Durable audit and bounded telemetry foundation |
 
-The generated JSON is the machine authority and the generated Markdown is its review view.
-Generation MUST fail on a missing, duplicate, extra, or ownerless identifier and drift gates
-MUST compare both artifacts byte-for-byte. Retired consumers remain fenced history.
-Prospective evidence ownership resolves only from authoritative member specs and generated
-manifests. No feature-local field list, count, digest recipe, state table,
-fixture registry, or transition matrix may substitute for generated rows.
+The exact adopted work-item identities are machine-readable in `tasks.md`. Their retained W5
+checkboxes and delivery bytes never change. T606 separately owns the shared-contract and
+thirteen-crate scaffold prep that makes those foundation tasks file-disjoint.
 
 ---
 
 ## 10. Installed source-floor evidence
 
 `SourceGenerationCompatibilityFloorV1` is a stable type identifier, not a feature-local
-schema. Its canonical encoding, fields, digests, signatures, capability rules, receipts,
-fixtures, poison registries, and transitions are owned solely by accepted Version 2 through
-`VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-`VD2-SC002-TRACEABILITY`.
-
-Code canon contains no source-floor or host-generation handoff implementation. Prospective
-ownership and ordering resolve only from authoritative member specs and generated manifests.
-No feature-local field list, digest recipe, fixture census, registry count, or transition
-copy substitutes.
+schema. The accepted `ADR-046-provider-activation-nixos` specification and its
+`ADR046-activation-001` and `ADR046-activation-006` rows own the canonical handoff and
+carrier. Code canon contains no production implementation, so those rows run prospectively
+in W6 after T607 and T609. No feature-local field list, digest recipe, fixture census,
+registry count, or transition copy substitutes.
 
 ---
 

@@ -18,8 +18,8 @@ artifact and requires a clean `git diff`, fail-closed.
 | `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
 | per-Zone `resource-bundle.json` | sole active chain: `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix`; historical/compatibility-only input: `zone-resources-json.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}`. `zone-resources-json.nix` is not an active generator and cannot emit, version, hash, or publish the active bundle |
 | `docs/reference/schemas/v3/resource-bundle.json` | `xtask gen-zone-schemas` from the active crate-root `ZoneBundle` | compiler, Nix and daemon contract tests, companions | Generated with the 4/2 change; no duplicate full-envelope DTO may generate a competing schema |
-| target-closure `share/d2b/host-generation-rebuild-ref` | authoritative prospective NIX-9 generated row | authoritative prospective acceptance row and broker handoff | Code-canon search found it absent; current ownership resolves only from member specs and generated manifests |
-| `/etc/d2b/host-generation-rebuild-ref` | authoritative prospective NIX-8 broker row consuming NIX-9 input | Handoff digest, post-bootstrap operator recovery | Code-canon search found it absent; current ownership resolves only from member specs and generated manifests |
+| target-closure `share/d2b/host-generation-rebuild-ref` | prospective `ADR046-activation-006` carrier | `ADR046-activation-001` broker handoff | Code-canon search found it absent; T606 shared prep plus T607/T609 foundations precede these W6 rows |
+| `/etc/d2b/host-generation-rebuild-ref` | prospective `ADR046-activation-001` broker publication consuming the carrier | Handoff digest, post-bootstrap operator recovery | Code-canon search found it absent; no feature-local or activation-time direct writer substitutes |
 | `docs/specs/ADR-046-spec-set.json` | `xtask spec-registry` | Gate 0, drift gate | Integrator-only; last commit of each wave |
 | `docs/specs/ADR-046-work-items.json` | `xtask spec-registry` | Wave entry/seal checks | Same |
 | `docs/specs/ADR-046-implementation-graph.{json,md}` | `xtask implementation-graph` | Wave planning, seal | Same |
@@ -35,8 +35,9 @@ artifact and requires a clean `git diff`, fail-closed.
 
 ## Invariants
 
-The host-generation bullets below are prospective NIX-8/NIX-9 requirements whose owners
-resolve only from authoritative member specs and generated manifests after T221. Code canon
+The host-generation bullets below are prospective NIX-8/NIX-9 requirements owned by the
+accepted activation-nixos member specification and current `ADR046-activation-001` and
+`ADR046-activation-006` rows. T607 and T609 supply their missing W6 foundations. Code canon
 does not yet implement them. Other bullets
 describe existing or independently prospective artifact invariants as stated.
 
@@ -74,10 +75,10 @@ describe existing or independently prospective artifact invariants as stated.
   reevaluate. The broker binds the accepted apply connection's direct peer pidfd and live
   executable store/NAR/digest identity to that pin, revalidates it before every mutation, and
   refuses exit, exec, PID reuse, mismatch, or ambiguity. Tests use only the independently
-  authored fixture membership assigned by generated `VD2-SC002-REGISTRIES` and
-  `VD2-SC002-TRACEABILITY`; missing, duplicate, stale, runtime-derived, skipped, or unvisited
+  authored fixture membership in the accepted activation-nixos contract and its current
+  work-item validations; missing, duplicate, stale, runtime-derived, skipped, or unvisited
   coverage fails, and the selected edge and all successors remain unexecuted. Every raw
-  apply-peer input assigned by generated `VD2-SC002-REGISTRIES` remains absent from human, JSON,
+  apply-peer input remains absent from human, JSON,
   wire, error, log, span, metric, audit, panic, and `Debug` output. Correlation uses only the
   typed process-instance and executable-identity digests, and metrics
   carry no identity label. The connection-scoped pidfd and executable fds are never
@@ -89,14 +90,13 @@ describe existing or independently prospective artifact invariants as stated.
   existing `d2b-priv-broker.service`, after both installed source peers negotiate numeric
   protocol 4 plus Hello `operation_catalogue_sha256` exactly equal to the
   `source-handoff-v1` operation-catalogue fingerprint; after durable
-  transfer it is the target broker. Prospective `SourceGenerationCompatibilityFloorV1`
-  ownership resolves only from authoritative member specs and generated manifests. Canonical membership, receipts,
-  fixtures, poison registries, and transitions come only from generated
-  `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-  `VD2-SC002-TRACEABILITY` rows. Missing, stale, wrong-owner, non-ancestor, or failing rows
-  refuse before source mutation. Code canon has no handoff operation or catalogue fingerprint.
-  the authoritative prospective NIX-8/NIX-9 rows must land after T221 and before the
-  authoritative acceptance row. Retired Wave 5 ownership has no prospective effect. A
+  transfer it is the target broker. The accepted activation-nixos member specification and
+  `ADR046-activation-001`/`ADR046-activation-006` own
+  `SourceGenerationCompatibilityFloorV1`, canonical membership, receipts, fixtures, poison
+  cases, and transitions. Missing or failing rows refuse before source mutation. Code canon
+  has no handoff operation or catalogue fingerprint. These prospective NIX-8/NIX-9 rows must
+  land after T607/T609 and before acceptance. Retired Wave 5 ownership has no prospective
+  effect. A
   target-closure-only mode, synthetic starting image, new unit or override, child, mutating
   entrypoint, or daemon recovery owner is not a substitute.
 - The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.
@@ -162,7 +162,7 @@ pre-mutation claim, and same-intent coordinator replay only after mutation. It b
 connection's direct peer pidfd and executable identity to that pin, and refuses every identity
 transition assigned by the generated independent registry, with no persisted pidfd or later
 mutation. Every raw
-apply-peer input assigned by generated `VD2-SC002-REGISTRIES` remains absent from every output
+apply-peer input assigned by the accepted activation work-item validation remains absent from every output
 surface; only the typed process-instance and executable-identity digests are permitted and metrics carry
 no identity label. The positive case
 proves initial public-socket Admin classification, sealed durable capability,

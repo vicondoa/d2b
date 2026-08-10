@@ -234,16 +234,16 @@ candidate generic net-VM system. The exact acceptance resources are:
 | `Device/acceptance-tpm` | `metadata.ownerRef = "Guest/acceptance-vm"`; `providerRef = "Provider/device-tpm"`; `deviceClass = "emulated"`; `arbitration = "exclusive"`; `maxConcurrentClaims = 1`; `inventory.selector = {}`; `provider = { schemaId = "device-tpm.d2bus.org/Device/spec"; schemaVersion = "1.0.0"; settings.logLevel = 20; }` | The production Device controller creates or adopts its controller-managed TPM state Volume, verifies its tamper marker, completes the mandatory pre-start flush, starts the broker-supervised long-lived swtpm Process, and publishes the typed TPM Endpoint. The universal resource phase and Provider phase are `Ready`, `status.update.state` is `Current`, and Device status reports `present = true` and `health = healthy`; a manually assigned phase, refusal, or fake worker is ineligible. |
 
 This single denied-east-west acceptance case does not establish Host/Network double opt-in.
-The untouched external `ADR-046-resources-network` and committed absence of a production
-adapter make the historical sole-opt-in result nonconforming and non-authorizing. T070 and
-T071 cannot complete by ratifying it. The required contract is
+ADR 0012 and committed `d2b-host` policy code are canon; untouched sole-opt-in member-spec
+prose is recorded drift and is non-authorizing. The committed absence of a production
+adapter keeps the result prospective. T070 and T071 cannot complete by ratifying it. The
+required contract is
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
-both inputs default false. The former freeze predicate is historical only. T221 requires
-the accepted versioned correction and migration to remove every current-facing sole
-Network-opt-in path and retain `ADR046-nl-001` through `ADR046-nl-020` plus all four
-Network/Host combinations as W6 work.
-It requires the migration and ownership on
-the fetched Wave 6 base, and T480 revalidates them before every prospective close boundary.
+both inputs default false. The former freeze predicate is historical only. T221 requires a
+plan that puts Host-global authority in T608 and keeps `ADR046-nl-001` through
+`ADR046-nl-020` plus all four Network/Host combinations as W6 work. T608 and
+`ADR046-nl-001` through `ADR046-nl-005` must complete before the remaining Network items;
+T480 revalidates the resulting production behavior before every prospective close boundary.
 Generated authority owns provider implementation. The exact machine-readable T604/T479/T480
 local contract owns cross-provider acceptance coordination after that exact workItemId set
 merges; it assigns no Network implementation to a local task. A feature-local status,
@@ -589,13 +589,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   peer identities are pinned and revalidated before every mutation; exit, exec, PID reuse,
   mismatch, ambiguity, or recovery-owner uncertainty refuses before mutation.
 
-  All source-generation floor schemas, encodings, digests, receipts, capability transitions,
-  fixtures, poison registries, and handoff transition matrices are owned solely by accepted
-  Version 2 `ADR-046-validation-and-delivery` through `VD2-SC002-SOURCE-FLOOR`,
-  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. Retired feature-local ownership has no
-  prospective effect. Current provider-implementation ownership resolves only from
-  authoritative member specs and generated manifests. Feature-local field lists, counts, or
-  transition copies are not authority.
+  The accepted `ADR-046-provider-activation-nixos` member specification and current
+  `ADR046-activation-001`/`ADR046-activation-006` rows own the source-generation floor,
+  carrier, broker handoff, fixtures, and refusal behavior. The committed entry tree contains
+  no accepted Version 2 delivery or generated traceability artifact, so feature prose may not
+  cite one. Retired feature-local ownership has no prospective effect. T607 and T609 supply
+  the missing current foundations before those two activation rows run in W6; feature-local
+  copies are not a competing contract.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -1011,7 +1011,13 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   roster against that exact base and current feature snapshot with zero recommendations.
   The production guard runs at the Wave 6 snapshot/entry boundary and again at panel request,
   seal, and merge eligibility. It is process-integrity and signoff tracking, not
-  authentication or a security boundary.
+  authentication or a security boundary. The first discovery used fetched base
+  `bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0` and entry commit
+  `d6de52ca44240b890dd7cc90e6962bf244945b7c`; this feature correction invalidates
+  its candidate binding. A replacement production snapshot and unanimous plan result are
+  required. Passing T221 authorizes T606 only. T606 then freezes shared contracts and
+  Provider scaffolds before T607, T608, and T609 run in parallel and before any Provider
+  group opens.
 - **FR-057**: After FR-036's historical disposition is matched, the program
   MUST distinguish **entry evidence** from **exit evidence**, and
   MUST NOT treat a requirement for one as a requirement for the other. Entry evidence is what
@@ -1341,15 +1347,12 @@ carries the object verbatim rather than copying selected fields into the task ro
   Active local T604 authors and development-validates the operator validator but emits no
   candidate-bound record. After converging and freezing exact F6, T479 invokes that validator
   and emits `operator-nix-activation-cleanup`; that identifier is not
-  a member of the Wave 5 exact-seven profile. The sole authority for receipt shape,
-  publication, incident handling, disposition, recovery, source-floor evidence, fixture and
-  poison registries, and traceability is accepted Version 2
-  `ADR-046-validation-and-delivery` plus generated `VD2-SC002-RECEIPT`,
-  `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`,
-  `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-  `VD2-SC002-TRACEABILITY` rows. Until those rows are accepted, generated, ancestor-bound,
-  and passing Gate 0, every consumer fails closed. No feature-local field list, digest recipe,
-  fixture census, registry count, or transition matrix can satisfy SC-002.
+  a member of the Wave 5 exact-seven profile. Current receipt and delivery behavior comes
+  from the committed Version 1 delivery specification and production delivery tooling.
+  Source-floor behavior comes from the accepted activation-nixos member specification and
+  its current rows. The entry tree contains no later delivery traceability authority.
+  T606-T609 make the missing foundations prospectively executable
+  in W6 without rewriting retained W5 evidence or inventing a feature-local protocol copy.
 - **SC-003**: Every operator-facing capability whose migration disposition promises a
   successor is obtainable after the program, expressed as declared resources rather than
   framework-internal switches. Zero capabilities disappear silently: any deliberate

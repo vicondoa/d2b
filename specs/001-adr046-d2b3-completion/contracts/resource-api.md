@@ -198,3 +198,14 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
   the retained Wave 5 evidence inventory.
 
 <!-- RETIRED-READONLY-END -->
+
+## Prospective Wave 6 foundation binding
+
+The retained acceptance text above is historical only. Current W6 execution starts with
+T606 shared prep, then T607, T608, and T609 in parallel. T607 supplies the production Zone,
+CLI, system-core, and bootstrap route; T608 supplies Volume/export/import/Host-global
+authority; T609 supplies durable audit and bounded telemetry. ADR 0012 and committed policy
+code remain the double-opt-in authority. `ADR046-nl-001` through `ADR046-nl-005` must complete
+after T608/T609 and before the remaining Network rows. T604 consumes only those merged
+prospective results. No retained W5 row, absent Version 2 artifact, direct service call, fake
+effect port, or status-only fixture satisfies this boundary.

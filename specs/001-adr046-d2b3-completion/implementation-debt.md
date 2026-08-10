@@ -27,6 +27,26 @@ invent a wire contract, and that was the correct outcome each time.
 
 ---
 
+## Current Wave 6 foundation census
+
+The immutable W5 boundary left fifteen directly consumed foundation obligations labelled
+Planned W5. They are not recoverable W5 tasks and are not silently treated as complete.
+Current W6 ownership is:
+
+| Owner | Retained obligation IDs | Closing evidence |
+| --- | --- | --- |
+| T607 | `ADR046-cli-001`, `ADR046-cli-009`, `ADR046-exec-003` through `005`, `ADR046-nix-003`, `ADR046-zone-control-001` | Production Zone/CLI/system-core/bootstrap reachability and focused Rust/Nix/policy/fixture gates |
+| T608 | `ADR046-volume-001`, `002`, `004`, `ADR046-zone-control-019`, `020`, `024` | Typed broker storage effects, Host-global admission before effects, and executed integration coverage |
+| T609 | `ADR046-audit-001`, `ADR046-telem-001` | Durable privileged-audit refusal, retention/restart/concurrency, lossy telemetry separation, and redaction gates |
+
+T606 precedes them with the shared-file contract and thirteen missing Provider crate
+scaffolds. The retained W5 work-item state and delivery evidence remain byte-for-byte
+historical; these local tasks own only prospective implementation and validation. The
+committed tree has Version 1 of the delivery specification and no generated Version 2
+traceability pair, so debt closure cannot cite such an artifact.
+
+---
+
 ## 0. Wave 2 delivery claim, stated precisely
 
 Wave 2 is **17 of 19 items complete, 2 partial**. Saying "all nineteen

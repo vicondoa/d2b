@@ -109,7 +109,10 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [x] CHK049 Is the Wave 5 Provider readiness member the exact `Provider/system-core` registration and its two owned handler-health handles rather than all Wave 6 dossiers or a boolean? [Clarity, Spec FR-069]
 - [x] CHK050 Is the former editor/lifecycle sequence explicitly retained inside a read-only
   fence with no current resume or mutation authority? [Traceability, Plan historical graph]
-- [x] CHK051 Does commit create immutable authoritative audit in the same transaction, keep export completion separate, make export-pending behavior explicit about the protobuf-represented committed state, exact replay binding, fixed digests, retention health, restart replay, and no rollback claim, and confine bounded Version 2 `zoneRef`/`operationId` recovery coordinates to direct operator responses without telemetry, span, exported-audit, or unrelated-error propagation? [Scenario, Spec FR-070]
+- [x] CHK051 Does the prospective W6 audit foundation require immutable authoritative audit,
+  separate export completion, exact replay binding, fixed digests, retention health, restart
+  replay, no rollback claim, and no raw recovery identity propagation, without citing an
+  absent Version 2 delivery contract? [Scenario, Spec FR-070, Tasks T609]
 - [x] CHK052 Does the Constitution Check keep Constitution 3.1.0 generic while the feature and
   exact delivery validator/tooling contract own the one-time historical disposition through
   merged Wave 5, preserve the retained request with zero

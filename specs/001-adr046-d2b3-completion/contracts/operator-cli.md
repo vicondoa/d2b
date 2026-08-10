@@ -212,29 +212,13 @@ The d2b 3.0 clean cutover imports no persisted Version 1 recovery state.
 ## Host-generation handoff recovery
 
 Code canon does not provide this surface. Prospective ownership and ordering resolve only
-from authoritative member specs and generated manifests after T221. SC-002
-protocol authority belongs solely to accepted Version 2
-`docs/specs/ADR-046-validation-and-delivery.md` and its generated
-`docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}` artifacts. The generated
-JSON is machine authority and the generated Markdown is its review view.
-
-The CLI consumes these stable generated rows rather than copying their protocol:
-
-| Generated identifier | CLI use |
-| --- | --- |
-| `VD2-SC002-RECEIPT` | consume the assigned activation and close-stage evidence references |
-| `VD2-SC002-PUBLICATION` | consume publication, locking, retention, capacity, and crash-recovery decisions without restating them |
-| `VD2-SC002-INCIDENT` | consume incident classification, redaction, and escalation decisions |
-| `VD2-SC002-DISPOSITION` | consume accepted authority and recovery disposition only through its generated owner |
-| `VD2-SC002-RECOVERY` | consume inspectable states, emitted actions, exact invocations, exits, and convergence |
-| `VD2-SC002-SOURCE-FLOOR` | consume the installed source-generation compatibility result |
-| `VD2-SC002-REGISTRIES` | consume independently authored fixture and poison assignments |
-| `VD2-SC002-TRACEABILITY` | bind every consumed identifier to its schema, implementation owner, task, fixture, and enforcing gate |
-
-Missing, duplicate, extra, stale, wrong-owner, non-ancestor, or failing generated rows block
-the surface. The refusal names the remediation: accept Version 2, regenerate its traceability,
-and pass Gate 0. This contract defines no host-generation protocol shape, state machinery, or
-test matrix. None may be inferred from the operator commands or action procedures below.
+from the accepted activation-nixos and CLI member specifications plus their current generated
+work-item rows after T221. The committed entry tree contains no accepted Version 2 delivery
+or generated validation-and-delivery traceability artifacts. T606 freezes the shared CLI,
+daemon, contract, and broker registration surfaces; T607 and T609 complete their foundations;
+then `ADR046-activation-001` and `ADR046-activation-006` own the handoff and carrier. This
+contract defines no competing host-generation protocol shape, state machinery, or test
+matrix.
 
 ### Operator commands
 
@@ -250,17 +234,15 @@ published. The commands traverse the existing public socket and typed broker ope
 run as root, connect directly to the broker, add a daemon repair path, or create a new unit.
 The inspect and repair forms reject intent, generation, path, token, authority, selector,
 extra positional, and `--force` input. The restoration form rejects every additional path,
-selector, override, authority/key/token, extra positional, and `--force` input. The accepted
-`VD2-SC002-RECOVERY` row alone supplies response states, exact human and JSON rendering, exits,
-and convergence. The CLI must not synthesize a replacement status or translate an unknown
-variant into a generic success or repair instruction.
+selector, override, authority/key/token, extra positional, and `--force` input. The accepted activation-nixos and CLI member specifications supply response states, exact
+human and JSON rendering, exits, and convergence. The CLI must not synthesize a replacement
+status or translate an unknown variant into a generic success or repair instruction.
 
 ### Public action owners
 
-The following rows define operator resolution for generated public actions. They do not
-define the emitted action enum or map protocol states and failures to actions; accepted
-Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
-`VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` own those decisions.
+The following rows define operator resolution for public actions. They do not define the
+emitted action enum or map protocol states and failures to actions; the accepted activation
+and CLI member specifications own those decisions.
 
 | Action | Owner and exact procedure |
 | --- | --- |
@@ -336,16 +318,16 @@ FR-042 explicit retirement list rather than the parity list.
   never call pending state success, rollback, or safe to repeat with a new ID, expose no
   mutation payload or raw sink error, and contain no Zone/ID-bearing argv, command vector,
   shell fragment, or free-form JSON remediation. Human output carries only the exact static
-  identifier-free guidance above; JSON retains the closed action enum. The bounded Version 2
+  identifier-free guidance above; JSON retains the closed action enum. Bounded
   `zoneRef` and `operationId` recovery coordinates stay confined to direct operator responses
   and occur zero times in telemetry labels, spans, exported audit identities, or unrelated
   error context.
-- The former Version 2 amendment, migration, and fold are read-only historical design and
-  authorize no current implementation.
-- Host-generation handoff commands consume only accepted generated `VD2-SC002-*` rows for
-  protocol states, publication, capacity, rendering, exits, and transitions. Every generated
+- Former Version 2 amendment prose is historical design and authorizes no current
+  implementation.
+- Host-generation handoff commands consume the accepted activation and CLI member contracts
+  for protocol states, publication, capacity, rendering, exits, and transitions. Every
   public action resolves to exactly one command or named owner and public runbook procedure
-  above; the feature-local CLI contract does not redefine the SC-002 protocol.
+  above; the feature-local CLI contract does not redefine those contracts.
 - `d2b --help`, host-generation subcommand help, packaging, completions, and policy tests
   expose only the `d2b` binary. The retired standalone executable name occurs in no emitted
   command, package output, runbook invocation, or compatibility alias.

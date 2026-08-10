@@ -78,9 +78,9 @@ definition.
 | Graph nodes / edges | 600 / 1949 | 55 + 545 |
 | Max topological rank | 22 | |
 
-### Work items by wave
+### Manifest work items by wave
 
-| Wave | Specs | Work items | Cumulative | Status |
+| Wave | Specs | Manifest work items | Cumulative | Status |
 | --- | --- | --- | --- | --- |
 | W0 | 6 | 8 | 8 | Merged; missing panel/seal history bound only by the exact ADR-046 contract under generic Constitution 3.1.0 |
 | W1 | 2 | 6 | 14 | Merged; missing panel/seal history bound only by the exact ADR-046 contract under generic Constitution 3.1.0 |
@@ -88,9 +88,14 @@ definition.
 | W3 | 1 | 4 | 37 | All 4 manifest `Merged`; unproven entry evidence remains historical |
 | W4 | 5 | 31 | 68 | All 31 current-wave items manifest `Merged`; unproven entry evidence remains historical |
 | W5 | 7 | 146 | 214 | Merged at `177235ed37188b3be87525e7f016fb43401574c5`; retained request has zero attestations and no seal |
-| W6 | 27 | 258 | 472 | T221 exact historical-predecessor guard and ordinary plan panel pending |
+| W6 | 27 | 258 | 472 | T221 pending; manifest body plus T606-T609 and T604/T479/T480 yields 265 active post-entry work records |
 | W7 | 5 | 73 | 545 | Destructive cutover |
 | W8 | 0 | recorded after W7 seal, merge, and cleanup | 545+ | Terminal; release gate evaluated here |
+
+The W6 executable group census is 29 manifest groups, four local foundation groups, and three
+local acceptance/close groups: 36 post-entry groups. T221 is the separate entry gate. Its
+replacement unanimous plan result authorizes only T606; T607, T608, and T609 are the next
+parallel ready set.
 
 ### Reuse disposition across all 545 items
 
@@ -438,7 +443,19 @@ complete 15-field manifest object.
 | `ADR046-zone-control-023` | `resources-zone-control` | Planned | adapt | `packages/d2b-core-controller/src/{quota |
 | `ADR046-zone-control-024` | `resources-zone-control` | Planned | adapt | `packages/d2b-core-controller/src/authority.rs` (Host-global index scope + hardware admission) |
 
-### W6 - 258 work items
+### W6 local foundations - 4 tasks
+
+| Task | Prospective coverage |
+| --- | --- |
+| T606 | Shared contracts, workspace/flake/catalog/dispatch ownership, and thirteen absent Provider crate scaffolds |
+| T607 | `ADR046-cli-001`, `ADR046-cli-009`, `ADR046-exec-003` through `005`, `ADR046-nix-003`, and `ADR046-zone-control-001`, adopted without historical mutation |
+| T608 | `ADR046-volume-001`, `002`, `004` and `ADR046-zone-control-019`, `020`, `024`, adopted without historical mutation |
+| T609 | `ADR046-audit-001` and `ADR046-telem-001`, adopted without historical mutation |
+
+The retained W5 labels, checkboxes, candidate, request, evidence, and absent seal remain
+unchanged. These tasks provide prospective W6 implementation and validation only.
+
+### W6 - 258 manifest work items
 
 | Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
@@ -1108,7 +1125,10 @@ content. The original clarification family and the later approved additions are:
 | FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective correction | Retired rows remain fenced; T221 matches retained bytes, authoritative provider rows supply implementation, and active local T604 supplies cross-provider acceptance before T479/T480. |
 | FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | T604 authors development coverage without candidate evidence; T479 emits the sole exact-F6 result in `w6-cloud-hypervisor-guest-acceptance`; T480 revalidates. |
 
-Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. Retired consumers are fenced history; prospective ownership resolves only from current authoritative rows.
+The committed entry tree contains Version 1 of the delivery specification and no generated
+validation-and-delivery traceability pair. Current delivery tooling and accepted member specs
+remain authority; T606-T609 make the missing foundations prospective W6 work. Retired
+consumers remain fenced history.
 
 ### Success-criteria traceability
 

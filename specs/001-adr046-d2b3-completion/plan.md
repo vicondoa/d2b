@@ -73,11 +73,12 @@ Consequently the target closure's proposed compatibility mode is not an executab
 supervised actor before profile publication. The constraints correctly forbid solving that
 cycle with a new unit, runtime override, child process, mutating entrypoint, or daemon recovery
 owner. Code canon confirms the missing `SourceGenerationCompatibilityFloorV1` and handoff.
-Prospective ownership and ordering resolve only from authoritative member specs and generated
-manifests. Accepted Version 2 and generated `VD2-SC002-SOURCE-FLOOR`,
-`VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows solely own the object shape,
-validation, fixtures, poison cases, and transitions. Retired Wave 5 tasks consume nothing
-prospectively.
+The accepted `ADR-046-provider-activation-nixos` member specification and its current
+`ADR046-activation-001` and `ADR046-activation-006` manifest rows own the prospective
+contract and carrier. No Version 2 delivery specification or generated traceability artifact
+exists in the committed entry tree, so none is an authority or T221 prerequisite. Retired
+Wave 5 tasks consume nothing prospectively; T607 and T609 provide the required current
+foundations before the two activation rows run in W6.
 The caller-flake target entrypoint
 remains unprivileged. Numeric protocol 4 without that exact negotiated fingerprint is the
 bare committed protocol and refuses. Authoritative prospective objects must merge after T221
@@ -119,11 +120,11 @@ excluded standalone workspaces)
 p95 crash-safe single-resource mutation <=10 ms; p95 durable commit to controller handler
 start <=5 ms; p95 ready Process commit to launch-attempt start <=20 ms
 
-SC-002 performance and evidence semantics are owned solely by accepted Version 2
-`ADR-046-validation-and-delivery` and generated `VD2-SC002-RECEIPT` plus
-`VD2-SC002-TRACEABILITY` rows. Retired Wave 5 records perform no current verification or
-import. Current outcome ownership resolves from authoritative generated rows. This plan
-does not copy the clock, receipt, digest, census, publication, or recovery protocol.
+SC-002 performance and evidence semantics resolve from the committed Version 1 delivery
+specification, accepted member specifications, current generated work-item graph, and the
+prospective W6 foundation tasks in this plan. Retired Wave 5 records perform no current
+verification or import. This plan does not invent a second clock, receipt, digest,
+publication, or recovery protocol and does not cite absent Version 2 artifacts.
 
 **Constraints**: Whole-process RSS <=24,576 KiB with **no baseline subtraction** - historical
 production fixtures passed at their recorded tips. The former final-F measurement
@@ -266,6 +267,10 @@ The graph moved
 follows that state and wave
 without renumbering. Every item carries a non-empty `removalProof`, so FR-023's per-path
 proof obligation is already itemized rather than needing to be invented.
+Those counts describe the committed manifest only. They do not include local W6 tasks
+T606-T609, T604, T479, or T480, and they do not authorize execution of the fifteen
+incomplete W5-labelled foundations. The prospective execution census is the staged W6 graph
+below.
 
 A `tasks.md` that does not cover every `Planned` id in `spec-coverage.md` is incomplete by
 definition.
@@ -334,7 +339,7 @@ applies without modification.
 | W3 | 1 | 4 | 1, strictly serial | Delivery state reports sealed/merged; T030, T035, and T036 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W4 | 5 | 31 | 6 parallel | Delivery state reports sealed/merged; T037, T070, and T071 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W5 (`adr046w5` delivery address) | 7 | historical manifest and local records | Historical only | Merged at `177235ed37188b3be87525e7f016fb43401574c5`; exact retained state is immutable and fenced |
-| W6 | 27 manifest dossiers | authoritative generated work plus active local T604/T479/T480 coordination | Provider ownership from authoritative member specs/generated manifests; local coordination is closed | T221 first; manifest-backed `ADR046-ch-001` writes the Cloud Hypervisor Makefile recipe, then T604 writes its distinct operator/daemon-restart recipes after every exact dependency in the local-task contract; T479 freezes F6 and creates both candidate records; T480 revalidates them |
+| W6 | 27 manifest dossiers | 258 manifest work items plus T606-T609 foundations and active local T604/T479/T480 coordination | T221 authorizes only T606; T606 freezes shared contracts/scaffolds; T607-T609 then run in parallel; each Provider group opens only after its named foundation dependencies | 29 manifest groups + 4 foundation groups + 3 acceptance/close groups = 36 post-entry groups; T604 follows its complete foundation/manifest set, T479 freezes F6 and creates both candidate records, and T480 revalidates them |
 | W7 | 5 | 73 | 5 parallel | T481 plan panel before implementation; T555 work panel after convergence |
 | W8 | 0 | determined by T557 after W7 merge, seal, and cleanup | friction closure | No pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
@@ -350,10 +355,58 @@ applies without modification.
 | Cross-provider operator acceptance | No single member-spec item can own it | **Active local T604** authors the implementation, cases, and validator identity after manifest-backed `ADR046-ch-001`; after exact F6 freezes, local T479 invokes it and owns the candidate record; local T480 revalidates it. No generated T604 work-item exists. |
 | W2-W5 host continuity | Retained evidence only | **Retired** from execution; prospective execution belongs to T479 and later current work |
 
+#### Prospective Wave 6 foundation graph
+
+The retained W5 labels and delivery bytes are immutable. Fifteen incomplete obligations that
+the old graph labelled Planned W5 are therefore not closed, recovered, checked, or sealed.
+They are adopted prospectively by three local W6 foundation tasks:
+
+| W6 owner | Retained obligation IDs | Current deliverable |
+| --- | --- | --- |
+| T607 | `ADR046-cli-001`, `ADR046-cli-009`, `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-nix-003`, `ADR046-zone-control-001` | Production-reachable Zone/CLI/system-core Host/User/bootstrap control foundation |
+| T608 | `ADR046-volume-001`, `ADR046-volume-002`, `ADR046-volume-004`, `ADR046-zone-control-019`, `ADR046-zone-control-020`, `ADR046-zone-control-024` | Volume implementation, export/import projection, and Host-global authority foundation |
+| T609 | `ADR046-audit-001`, `ADR046-telem-001` | Durable redacted audit and bounded lossy telemetry foundation |
+
+T606 precedes those tasks with one integrator-owned shared-contract and Provider-scaffold
+commit. It creates the thirteen absent dossier crate roots and freezes every shared
+workspace, flake, catalog, broker contract, dispatch, registration, and Makefile anchor
+before T607, T608, T609, or a Provider worktree opens. This yields the executable graph:
+
+```text
+T221
+  -> T606
+  -> {T607, T608, T609}
+
+T607 + T609
+  -> ADR046-activation-001
+  -> ADR046-activation-006
+  -> remaining activation-nixos items
+
+T608 + T609
+  -> ADR046-nl-001..ADR046-nl-005
+  -> ADR046-nl-006..ADR046-nl-020
+
+T606 plus each dossier's completed foundation dependencies
+  -> other ready Provider dossier groups
+
+all 258 manifest W6 items + T607..T609 + T604
+  -> T479
+  -> T480
+```
+
+The first post-entry ready set is exactly `{T606}`. The next is exactly
+`{T607,T608,T609}`. Provider readiness then resolves by dependency rather than by treating
+all 29 manifest groups as simultaneously launchable. The manifest count stays 258; the
+complete post-entry census is 265 work records and 36 groups. T221 remains a separate gate.
+
 The closed local ownership map is:
 
 | Local task | Owned files or evidence surface | Mechanically checkable boundary |
 | --- | --- | --- |
+| T606 | Shared workspace/lockfile/flake/catalog/import/broker-contract/dispatch/registration/Makefile surfaces plus the thirteen absent Provider crate roots enumerated in `tasks.md` | Cargo metadata reports exactly 27 dossier Provider crates, both dossier/crate set differences are empty, every shared file has one initial owner and explicit later handoff, and inventory/policy/drift/Rust gates pass |
+| T607 | Dedicated Zone, CLI context/zone projection, system-core Host/User/bootstrap, and Zone-option files listed in `tasks.md` | The seven adopted obligations are production-reachable through authenticated routes and cannot be satisfied by test-only adapters; focused Rust, nix-unit, policy, and fixture-contract gates pass |
+| T608 | Dedicated Volume, volume-local, Volume Nix, export/import projection, and Core Host-global authority files listed in `tasks.md` | Typed broker effects expose no raw path, cross-Zone Host-global conflicts refuse before effects, and focused Rust plus executed integration coverage passes |
+| T609 | Dedicated `d2b-audit` and `d2b-telemetry` foundation files listed in `tasks.md` | Durable privileged audit refusal, rotation/retention/restart/concurrency, lossy telemetry separation, and redaction canaries pass focused Rust and policy gates |
 | T604 | `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; `packages/d2bd/tests/resource_operator_activation.rs`; `tests/host-integration/resource-operator-activation.nix`; `tests/host-integration/daemon-restart-vm-survival.nix`; `tests/golden/delivery/host-generation-pre-start-case-ids.txt`; `tests/golden/delivery/host-generation-unit-census-case-ids.txt`; its distinct recipes in `Makefile`; `changelog.d/operator-resource-activation.md` | Completes after exact dependencies in `tasks.md` and `ADR046-ch-001 -> T604` serialization; development-validates the `operator-nix-activation-cleanup` validator and daemon-restart case but emits no candidate-bound record |
 | T479 | No source file; exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records | First converges and freezes clean F6, then invokes the T604-owned operator validator and solely executes exact-candidate FR-075 |
 | T480 | No source file; the immutable records owned by T479 | Revalidates both closed predicates at every prospective close boundary |
@@ -1270,6 +1323,17 @@ The backend commit predates the amendment base, so it is outside this focused Ga
 is not reverted or re-adjudicated here.
 
 <!-- RETIRED-READONLY-END -->
+
+### Prospective T221 entry correction
+
+The first T221 discovery used fetched base
+`bfeaf3fe39e4eea9c9180441b7a892b682dfc7f0`, entry commit
+`d6de52ca44240b890dd7cc90e6962bf244945b7c`, and immutable W5 boundary
+`177235ed37188b3be87525e7f016fb43401574c5`. Its candidate, content, snapshot, and
+selection identities are recorded in `tasks.md`. This feature-content correction invalidates
+that panel binding, so it is not an entry pass. T221 must create a replacement production
+snapshot and receive a new unanimous zero-recommendation plan result. That result authorizes
+T606 only.
 
 ## Complexity Tracking
 

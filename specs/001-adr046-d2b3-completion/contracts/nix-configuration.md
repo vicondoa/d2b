@@ -34,8 +34,8 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
 | NIX-6 | Active local T604 authors and development-validates the exact Volume/Network/Device path and state-preserving cleanup after T221 and every exact workItemId in `tasks.md` `required_manifest_dependencies.T604`. It owns `tests/golden/delivery/host-generation-pre-start-case-ids.txt` and `tests/golden/delivery/host-generation-unit-census-case-ids.txt`, authors and development-validates the `operator-nix-activation-cleanup` validator, and authors the daemon-restart case. It emits no candidate-bound record; after F6 freezes, T479 invokes the operator validator, emits its one record, and alone executes candidate-bound FR-075. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | active feature-local T604 |
 | NIX-7 | Historical Wave 5 design for the compiler-only audit carrier and bundle-version transition. Exact retired ownership remains only in fenced history. | FR-070, SC-032 | historical W5 |
-| NIX-8 | Code-canon search found no production host-generation handoff. Prospective ownership, file assignment, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
-| NIX-9 | Code-canon search found no rebuild-reference option, emitter, or test. Prospective ownership, grammar/bounds, carrier, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
+| NIX-8 | Code canon has no production host-generation handoff. The accepted activation-nixos specification and `ADR046-activation-001` own the broker-only handoff after T607/T609; T606 owns its shared contract/dispatch prep. | FR-070, SC-032 | prospective W6 activation foundation |
+| NIX-9 | Code canon has no rebuild-reference option, emitter, or test. `ADR046-activation-006` owns the carrier after `ADR046-activation-001` and T606/T607 foundations. | FR-070, SC-032 | prospective W6 activation foundation |
 
 ## Invariants
 
@@ -117,10 +117,10 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   ResourceSpec/ZoneSpec placement, and consumer-side silent defaulting. Production tests pin
   post-export-only journal retention and degraded health on prune or file/directory-sync
   failure.
-- Active local T604 host-activation coverage consumes only the generated `VD2-SC002-SOURCE-FLOOR`,
-  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows assigned by authoritative member
-  specs and generated manifests. Those rows own source-floor membership, fixture ids, poison cases, counts,
-  and transition ordering; this contract does not copy them. The Type-10 positive runs the
+- Active local T604 host-activation coverage consumes the accepted activation-nixos contract
+  and completed `ADR046-activation-001`/`ADR046-activation-006` implementation after T607
+  and T609. Those rows own source-floor membership, fixture identities, poison cases, and
+  transition ordering; this contract does not copy them. The Type-10 positive runs the
   parameterized target-closure entrypoint from an independently installed source floor,
   proves unprivileged request-only entrypoint behavior, broker-only mutation, one durable
   coordinator transfer, target-before-daemon activation, crash/rollback continuation, exact

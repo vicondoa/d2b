@@ -62,6 +62,10 @@ attestation payload.** Describe the friction, not the review text that surfaced 
 
 <!-- RETIRED-READONLY-END -->
 
+| ID | Date | Category | Wave | What happened | Cost | Resolution |
+| --- | --- | --- | --- | --- | --- | --- |
+| F026 | 2026-08-10 | `signoff` | W6 entry | T221 discovery found that active feature prose cited an accepted Version 2 delivery contract and generated `VD2-SC002-*` traceability that are absent from the committed tree, while fifteen consumed foundations retain Planned W5 labels and thirteen dossier Provider crates are absent | The plan could either fabricate external authority, reopen immutable W5, or launch Provider lanes without their prerequisites | Preserve F014-F018 as historical observations, remove their stale active authority claims, adopt the fifteen obligations prospectively through T607-T609, create shared contracts and all missing scaffolds through T606, and require a replacement T221 snapshot/panel that authorizes T606 only |
+
 ## Standing obligations
 
 - **Log continuously.** A friction point recorded at W7 close from memory is worth much less

@@ -29,20 +29,21 @@
   and production `Ready` projection is bound to that same identity. Guest runtime-effect
   acceptance remains the distinct T479/T480 coordination over the generated Cloud Hypervisor
   implementation
-- [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
+- [x] The feature accurately records that the committed delivery specification is Version 1
+  and no validation-and-delivery traceability pair exists; current delivery tooling and
+  accepted member specifications remain authority, and no active requirement cites
+  nonexistent later authority artifacts
 - [x] Retired Wave 5 rows are read-only fenced history. Prospective provider-implementation
-  ownership resolves only from authoritative member specs and generated manifests; the exact
-  machine-readable T604/T479/T480 local contract owns cross-provider acceptance coordination
+  ownership resolves from accepted member specs, current generated manifests, and the exact
+  machine-readable T606-T609/T604/T479/T480 local contract without changing historical state
 - [x] Prospective host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
-- [x] Historical W2-W5 records are read-only. T221 requires the accepted
+- [x] Historical W2-W5 records are read-only. ADR 0012 and committed code require
   `effectiveEastWest = Network.spec.isolation.allowEastWest &&
-  d2b.site.allowUnsafeEastWest` migration to remove every current-facing sole opt-in path and
-  retain `ADR046-nl-001` through `ADR046-nl-020` plus all four cases as
-  generated-authority-owned W6 provider implementation. The exact machine-readable
-  T604/T479/T480 local contract owns
-  cross-provider acceptance coordination over that generated implementation
+  d2b.site.allowUnsafeEastWest`; T608 and `ADR046-nl-001` through
+  `ADR046-nl-005` establish the prospective foundation before the remaining Network rows and
+  four production cases, while T604/T479/T480 own acceptance coordination
 - [x] Generic Constitution 3.1.0 contains no ADR-046 detail; FR-036 and the exact feature-owned
   validator/tooling contract preserve the immutable W0-W5 history, authorize no recovery
   or reconstructed seal, and make T221 the next executable gate
