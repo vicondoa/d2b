@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "a2efb4377196d8bc6b272a0331246ab3b573f64ecd4a97ded3184c4ac9679166";
+    "4d56dbc77c3dce63c23496ec95ebe882066e923199684a2bbd2a36fcb29b16e3";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
@@ -1806,6 +1806,24 @@ fn check_local_completion_contract(
 
     expect_contract_value(
         contract,
+        &["entry_prepare_contract"],
+        serde_json::json!({
+            "public_command": "delivery wave snapshot",
+            "flag": "--entry-prepare true",
+            "first_call": "fresh-fetch and discover candidate; atomically create-or-compare the 36-entry NotLaunched dispatch ledger and create-or-compare an empty command-evidence directory; emit digests; do not write snapshot.json",
+            "first_call_command_evidence_count": 0,
+            "import_flag": "--command-evidence PATH",
+            "import_cardinality": 8,
+            "import_rule": "repeat entry preparation with one flag per closed command identity; strict-parse and create-or-compare every record",
+            "ordinary_snapshot_rule": "omit --entry-prepare and --command-evidence; validate ledger and exact eight-record evidence set before writing snapshot.json",
+            "records_must_preexist_before_discovery": false
+        }),
+        "entry_prepare_contract",
+        findings,
+    );
+
+    expect_contract_value(
+        contract,
         &["structured_command_evidence_contract"],
         serde_json::json!({
             "artifact_kind": "d2b-feature-local/command-evidence",
@@ -2911,6 +2929,15 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "\"NotLaunched\", \"Completed\", \"Validated\", \"Dispatched\", \"Blocked\"",
         ),
         (
+            "\"first_call_command_evidence_count\": 0",
+            "\"first_call_command_evidence_count\": 1",
+        ),
+        ("\"import_cardinality\": 8", "\"import_cardinality\": 7"),
+        (
+            "\"records_must_preexist_before_discovery\": false",
+            "\"records_must_preexist_before_discovery\": true",
+        ),
+        (
             "\"artifact_kind\": \"d2b-feature-local/plan-approval\"",
             "\"artifact_kind\": \"d2b-feature-local/plan-approval-v2\"",
         ),
@@ -3132,6 +3159,15 @@ fn feature_local_semantic_branches_reject_independent_mutations() {
     assert!(
         !findings.is_empty(),
         "a non-monotonic local transition unexpectedly passed"
+    );
+
+    let mut entry_prepare_mutation = contract.clone();
+    entry_prepare_mutation["entry_prepare_contract"]["import_cardinality"] = serde_json::json!(7);
+    findings.clear();
+    check_local_completion_contract(&entry_prepare_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "an incomplete entry-prepare import contract unexpectedly passed"
     );
 
     let mut foundation_mutation = contract.clone();
