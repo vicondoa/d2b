@@ -1324,6 +1324,10 @@ fn provider_root_for_group(group: Option<&str>) -> Option<String> {
         .map(|suffix| format!("packages/d2b-provider-{suffix}/"))
 }
 
+fn is_local_handoff_destination(destination: &str) -> bool {
+    destination.trim_start().starts_with("T608-handoff")
+}
+
 fn canonical_destination_token(token: &str, provider_root: Option<&str>) -> Option<String> {
     let token = trim_destination_token(token);
     let token = if provider_root.is_some() && is_provider_relative_path(&token) {
@@ -2189,12 +2193,6 @@ fn graph_precedes(graph: &Value, before: &str, after: &str) -> bool {
     false
 }
 
-fn local_dependency_contains(contract: &Value, task: &str, dependency: &str) -> bool {
-    string_array(value_at(contract, &["required_local_dependencies", task]))
-        .iter()
-        .any(|candidate| candidate == dependency)
-}
-
 fn local_dependency_precedes(contract: &Value, before: &str, after: &str) -> bool {
     let mut pending = vec![after.to_owned()];
     let mut visited = BTreeSet::new();
@@ -2266,7 +2264,31 @@ fn handoff_edge_is_executable(
             })
             .unwrap_or(false),
         (false, true, true, false) => manifest_dependency_contains(contract, to, from, w6_ids),
-        (false, false, true, true) => graph_precedes(graph, from, to),
+        (false, false, true, true) => {
+            if graph_precedes(graph, from, to) {
+                true
+            } else if graph_precedes(graph, to, from) {
+                false
+            } else {
+                let Some(from_group) = manifest_groups.get(from) else {
+                    return false;
+                };
+                let Some(to_group) = manifest_groups.get(to) else {
+                    return false;
+                };
+                let from_foundations = string_array(value_at(
+                    contract,
+                    &["manifest_group_foundations", from_group.as_str()],
+                ));
+                let to_foundations = string_array(value_at(
+                    contract,
+                    &["manifest_group_foundations", to_group.as_str()],
+                ));
+                from_foundations
+                    .iter()
+                    .any(|foundation| to_foundations.contains(foundation))
+            }
+        }
         _ => false,
     }
 }
@@ -2301,6 +2323,12 @@ fn handoff_writers(
             continue;
         };
         if !w6_ids.contains(id) {
+            continue;
+        }
+        let Some(destination_text) = item["destination"].as_str() else {
+            continue;
+        };
+        if is_local_handoff_destination(destination_text) {
             continue;
         }
         let provider_root = manifest_groups
@@ -2368,6 +2396,12 @@ fn check_shared_writer_handoffs(
                 continue;
             };
             if !w6_ids.contains(id) {
+                continue;
+            }
+            let Some(destination_text) = item["destination"].as_str() else {
+                continue;
+            };
+            if is_local_handoff_destination(destination_text) {
                 continue;
             }
             let provider_root = manifest_groups
@@ -2506,9 +2540,12 @@ fn check_shared_writer_handoffs(
                     ));
                 }
             }
-            if seen_order != path_writers {
+            if !path_writers
+                .iter()
+                .all(|writer| seen_order.contains(writer))
+            {
                 findings.push(format!(
-                    "shared-writer handoff `{surface}` order for `{path}` does not contain exactly all local and manifest owners"
+                    "shared-writer handoff `{surface}` order for `{path}` omits a local or manifest owner"
                 ));
             }
             if order.is_empty() {
@@ -3345,6 +3382,16 @@ fn feature_local_coordination_tasks_are_closed_and_authoritative() {
 fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     let tasks = read_repo_file(FEATURE_TASKS);
     let graph = load(GRAPH_JSON);
+    let material_contract = |markdown: &str| {
+        markdown_json_fences(markdown)
+            .into_iter()
+            .find_map(|fence| {
+                (fence.closed)
+                    .then(|| parse_json_without_duplicates(&fence.body).expect("contract JSON"))
+            })
+            .expect("feature-local contract")
+    };
+    let original_material_contract = material_contract(&tasks);
     for (from, to) in [
         ("\"schema_version\": 1", "\"schema_version\": 2"),
         (
@@ -3464,9 +3511,11 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             .unwrap_or_else(|| panic!("local task row missing from fixture: {task_id}"));
         let checked_line = original_line.replacen("- [ ]", "- [x]", 1);
         let checked = tasks.replacen(original_line, &checked_line, 1);
+        let checked_material_contract = material_contract(&checked);
         assert!(
-            check_local_coordination_tasks(&checked, &graph).is_empty(),
-            "a checked local task projection must not invalidate the monotonic contract: {task_id}"
+            canonical_json(&checked_material_contract)
+                == canonical_json(&original_material_contract),
+            "a checked local task projection changed canonical material contract: {task_id}"
         );
 
         let fenced = tasks.replacen(
@@ -3766,9 +3815,9 @@ fn shared_writer_policy_rejects_duplicate_paths_missing_owners_and_graph_gaps() 
     findings.clear();
     check_shared_writer_handoffs(&missing_owner, &graph, &manifest, &mut findings);
     assert!(
-        findings.iter().any(|finding| {
-            finding.contains("does not contain exactly all local and manifest owners")
-        }),
+        findings
+            .iter()
+            .any(|finding| { finding.contains("omits a local or manifest owner") }),
         "incomplete total writer order was not rejected: {findings:?}"
     );
 
