@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1959,
+    "edges" : 1960,
     "maxTopologicalRank" : 22,
     "nodes" : 600,
     "specNodes" : 55,
@@ -7105,6 +7105,11 @@
     {
       "from" : "ADR046-nl-002",
       "to" : "ADR046-nl-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-nl-002",
+      "to" : "ADR046-transport-unix-006",
       "type" : "work-item-depends-on"
     },
     {
@@ -17302,14 +17307,15 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the request-bound selected-roster panel seal recorded",
       "id" : "ADR046-nl-002",
       "kind" : "work-item",
-      "owner" : "Core; broker/core contract work consumed by ADR046-nl-001.",
+      "owner" : "`ADR046-transport-unix-006`; Core; broker/core contract work consumed by ADR046-nl-001. The transport item is the dependency-ordered prior writer of the shared broker wire, privilege, audit, runtime, and dispatch surfaces; this item is their later Network-operation writer.",
       "parallelGroup" : "wi:ADR-046-provider-network-local",
       "prerequisites" : [
         "ADR-046-provider-network-local",
-        "ADR046-nl-001"
+        "ADR046-nl-001",
+        "ADR046-transport-unix-006"
       ],
       "specId" : "ADR-046-provider-network-local",
-      "topologicalRank" : 12,
+      "topologicalRank" : 14,
       "validation" : "Broker tests cover `DeletePersistentTap` success, validated already-absent idempotency, stale Network/attachment generations, foreign-marker fail-closed behavior, path-free audit, and rejection of any IfName/path field; `ApplyNftablesProjection` tests cover apply/remove of exactly one ownership marker, sibling-Network and device-usbip marker preservation, never-whole-table-replace, generation-fence rejection of stale same-projection mutation, validated-absence idempotency, foreign-marker fail-closed, projection-scoped digest, and path-free audit with no rule text/IfName/path; `integration/host_fabric.rs` covers persistent-tap deletion, bridge create/delete, nftables projection apply/remove/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation.",
       "wave" : "W6"
     },
@@ -17403,7 +17409,7 @@
         "ADR046-nl-005"
       ],
       "specId" : "ADR-046-provider-network-local",
-      "topologicalRank" : 13,
+      "topologicalRank" : 15,
       "validation" : "`tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values.",
       "wave" : "W6"
     },
@@ -17580,7 +17586,7 @@
         "ADR046-nl-006"
       ],
       "specId" : "ADR-046-provider-network-local",
-      "topologicalRank" : 14,
+      "topologicalRank" : 16,
       "validation" : "`tests/controller_state.rs` covers normal path, CIDR conflict, User not Ready, Volume error, Guest timeout, agent reload failure, finalizer sequence, `DeletePersistentTap` validated absence, transient retry with retained handle, stale-generation refresh, foreign-marker block, adoption, and drift.",
       "wave" : "W6"
     },

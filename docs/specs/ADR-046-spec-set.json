@@ -429,7 +429,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-network-local.md",
-      "sha256" : "a288c5247068048826a5a5201700ec2be89f5b7c41ba9d2fd7d5afd40467d795",
+      "sha256" : "c36de2a8a817e819bee406fc6fc128d278876161d175ac97cfaee99afb2ba209",
       "specId" : "ADR-046-provider-network-local",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",
