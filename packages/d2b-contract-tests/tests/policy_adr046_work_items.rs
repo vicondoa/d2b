@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "cf317616723e50911f504974ac46ff3b77141991b2f3499a8ae8e44b4bfb01fc";
+    "d2f721417c5c4db413f2411ffdfafedf316281e091983a854595d2c78edfcb1f";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
@@ -1315,9 +1315,9 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
     }
     let expected_owned_counts = BTreeMap::from([
         ("T606", 36usize),
-        ("T607", 10usize),
-        ("T608", 13usize),
-        ("T609", 12usize),
+        ("T607", 14usize),
+        ("T608", 16usize),
+        ("T609", 14usize),
         ("T604", 8usize),
     ]);
     for (task, expected_count) in expected_owned_counts {
