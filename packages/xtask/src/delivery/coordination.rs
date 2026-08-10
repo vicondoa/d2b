@@ -3548,7 +3548,7 @@ mod tests {
                         .is_some_and(|(from, to)| from != to)
             })
             .expect("cross-group dependency");
-        let prerequisites = graph_group_prerequisites(&root).expect("group prerequisites");
+        let prerequisites = graph_group_prerequisites(root).expect("group prerequisites");
         let from_group = groups[edge["from"].as_str().expect("from")].clone();
         let to_group = groups[edge["to"].as_str().expect("to")].clone();
         assert!(prerequisites[&from_group].contains(&to_group));
@@ -3561,7 +3561,7 @@ mod tests {
             .parent()
             .and_then(Path::parent)
             .expect("repository root");
-        let barriers = readiness_group_barriers(&root).expect("readiness barriers");
+        let barriers = readiness_group_barriers(root).expect("readiness barriers");
         let operator = barriers
             .get("feature-local:w6-operator-acceptance")
             .expect("T604 barriers");
