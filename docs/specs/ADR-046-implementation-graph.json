@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1960,
+    "edges" : 1962,
     "maxTopologicalRank" : 22,
     "nodes" : 600,
     "specNodes" : 55,
@@ -6348,6 +6348,11 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-device-tpm-003",
+      "to" : "ADR046-device-tpm-004",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-device-tpm-004",
       "to" : "ADR046-device-tpm-001",
       "type" : "work-item-depends-on"
@@ -8950,6 +8955,11 @@
     {
       "from" : "ADR046-system-core-001",
       "to" : "ADR046-zone-control-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-systemd-001",
+      "to" : "ADR046-activation-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -12015,9 +12025,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-host/src/bin/d2b-activation-helper.rs`; `packages/d2b-contracts/src/{host_generation.rs,broker_wire.rs,public_wire.rs,lib.rs}`; `packages/d2b-core/src/{host_generation.rs,privileges.rs,lib.rs}`; `packages/d2b-priv-broker/src/{audit.rs,live_handlers.rs,main.rs,runtime.rs}`; `packages/d2b-priv-broker/src/ops/{host_generation_handoff.rs,mod.rs}`; `packages/d2bd/src/{host_generation.rs,lib.rs,wire.rs}`; `packages/d2b/src/{host_generation.rs,dispatch.rs,lib.rs}`; `packages/d2b-contracts/tests/host_generation_handoff.rs`; `packages/d2b-priv-broker/tests/host_generation_handoff.rs`; `packages/d2bd/tests/host_generation_handoff.rs`; `packages/d2b/tests/host_generation_handoff.rs`; `tests/unit/nix/cases/broker-socket-activation.nix`; `tests/host-integration/host-generation-handoff.nix`"
+        "`packages/d2b-host/src/bin/d2b-activation-helper.rs`; `packages/d2b-contracts/src/{host_generation.rs,broker_wire.rs,public_wire.rs,lib.rs}`; `packages/d2b-core/src/{host_generation.rs,privileges.rs,lib.rs}`; `packages/d2b-priv-broker/src/{audit.rs,live_handlers.rs,main.rs,runtime.rs}`; `packages/d2b-priv-broker/src/ops/{host_generation_handoff.rs,storage_contract.rs,sync_contract.rs,mod.rs}`; `packages/d2bd/src/{host_generation.rs,lib.rs,wire.rs}`; `packages/d2b/src/{host_generation.rs,dispatch.rs,lib.rs}`; `packages/d2b-contracts/tests/host_generation_handoff.rs`; `packages/d2b-priv-broker/tests/{host_generation_handoff.rs,broker_storage_sync.rs}`; `packages/d2bd/tests/host_generation_handoff.rs`; `packages/d2b/tests/host_generation_handoff.rs`; `tests/unit/nix/cases/broker-socket-activation.nix`; `tests/host-integration/host-generation-handoff.nix`"
       ],
-      "detailedDesign" : "Define the typed `SourceGenerationCompatibilityFloorV1` contract and `ApplyHostGenerationHandoff` broker operation. The unprivileged client accepts one bounded target-generation request and submits only an opaque, integrity-bound intent through the public daemon after lifecycle authorization; it cannot select a privileged executable, command, path, authority token, or coordinator state. A pure core state machine validates the compatibility floor and closed transitions, while the broker is the sole durable coordinator and mutation owner. The installed source broker records one intent durably before mutation, re-resolves and revalidates the target closure, apply program, GC root, and live peer before each effect, transfers coordinator ownership exactly once to the target broker through durable state, and makes either broker adopt the same intent after restart or response loss before cleanup. Target, apply-program, GC-root, live-peer, generation-ancestry, and caller substitutions fail closed before mutation. The helper keeps its file ownership, replaces legacy flags with bounded JSON input/output for `systemArtifactId` and `activationMode`, resolves the store path internally, emits no resource metadata or store path, and has no bash fallback. Only `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` participate; no new unit, runtime override, child compatibility actor, raw command path, or daemon-owned rollback path is permitted. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the helper in place and extend the existing typed daemon-broker path.",
+      "detailedDesign" : "Define the typed `SourceGenerationCompatibilityFloorV1` contract and `ApplyHostGenerationHandoff` broker operation. The unprivileged client accepts one bounded target-generation request and submits only an opaque, integrity-bound intent through the public daemon after lifecycle authorization; it cannot select a privileged executable, command, path, authority token, or coordinator state. A pure core state machine validates the compatibility floor and closed transitions, while the broker is the sole durable coordinator and mutation owner. The installed source broker records one intent durably before mutation, re-resolves and revalidates the target closure, apply program, GC root, and live peer before each effect, transfers coordinator ownership exactly once to the target broker through durable state, and makes either broker adopt the same intent after restart or response loss before cleanup. Target, apply-program, GC-root, live-peer, generation-ancestry, and caller substitutions fail closed before mutation. Every filesystem, systemd, cgroup, and lock effect is a typed broker sub-operation with a durable path-free audit result; no helper or Provider process performs one directly. Durable files, coordinator journals, and lock files are opened relative to anchored trusted dirfds with `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)` or an equivalent fail-closed walk, `O_NOFOLLOW|O_CLOEXEC`, regular-file owner/mode/link-count verification, and atomic file-plus-parent sync. Locks use non-inheritable OFD locks in the ADR 0034 total order. As the first serialized writer of the shared broker contract, this item also lands the reusable broker storage/sync primitive and the single boot-scoped `nft-inet-d2b` OFD lock used by later Network and USBIP owners; it does not acquire Network semantic ownership. The helper keeps its file ownership, replaces legacy flags with bounded JSON input/output for `systemArtifactId` and `activationMode`, resolves the store path internally, emits no resource metadata or store path, and has no bash fallback. Only `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` participate; no new unit, runtime override, child compatibility actor, raw command path, or daemon-owned rollback path is permitted. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the helper in place and extend the existing typed daemon-broker path.",
       "entryContracts" : [
         "ADR-046-provider-activation-nixos"
       ],
@@ -12033,7 +12043,7 @@
       ],
       "specId" : "ADR-046-provider-activation-nixos",
       "topologicalRank" : 11,
-      "validation" : "Focused contract, core, broker, daemon, client, Nix, and host-integration tests cover exact `SourceGenerationCompatibilityFloorV1` encoding, the `ApplyHostGenerationHandoff` catalogue and authorization row, successful source-to-target ownership transfer, restart adoption before and after mutation, response-loss replay, rollback, target-closure substitution, apply-program substitution, GC-root substitution, live-peer substitution, non-ancestor generation, unauthorized caller, legacy bare-protocol refusal, helper JSON bounds and outcomes, absence of resource metadata and store paths, exactly the three existing root-visible units, and source policy proving no `Command::new(\"bash\")` or alternate raw execution path.",
+      "validation" : "Focused contract, core, broker, daemon, client, Nix, and host-integration tests cover exact `SourceGenerationCompatibilityFloorV1` encoding, the `ApplyHostGenerationHandoff` catalogue and authorization row, successful source-to-target ownership transfer, restart adoption before and after mutation, response-loss replay, rollback, target-closure substitution, apply-program substitution, GC-root substitution, live-peer substitution, non-ancestor generation, unauthorized caller, legacy bare-protocol refusal, helper JSON bounds and outcomes, absence of resource metadata and store paths, exactly the three existing root-visible units, and source policy proving no `Command::new(\"bash\")` or alternate raw execution path. Filesystem and sync tests plant symlink, hardlink, wrong-type, owner/mode/link-count, cross-mount, lock-inheritance, lock-order, and audit-sync failures; they prove anchored no-follow resolution, crash-safe file and parent sync, close-on-exec OFD locks, and one shared `nft-inet-d2b` lock across Network and USBIP broker operations.",
       "wave" : "W6"
     },
     {
@@ -12063,7 +12073,7 @@
       "destinations" : [
         "packages/d2b-provider-activation-nixos/src/controller/"
       ],
-      "detailedDesign" : "Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical startRoot=true shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; emit §12.3 metrics with fixed `mode`/`outcome` semantics and no Zone or resource-name-derived labels; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic.",
+      "detailedDesign" : "Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical `startRoot: false` shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; emit §12.3 metrics with fixed `mode`/`outcome` semantics and no Zone or resource-name-derived labels; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic.",
       "entryContracts" : [
         "ADR-046-provider-activation-nixos"
       ],
@@ -12131,7 +12141,7 @@
       "destinations" : [
         "`nixos-modules/providers/activation-nixos.nix`; `nixos-modules/options-site.nix`; `nixos-modules/host-generation-rebuild-ref.nix`; `tests/unit/nix/cases/host-generation-rebuild-ref.nix`; `flake.nix`; `examples/{minimal,graphics-workstation,multi-env,with-entra-id,with-observability}/configuration.nix`; `templates/default/configuration.nix`; `tests/unit/nix/pinned/{common.txt,aarch64-linux.txt,x86_64-linux.txt}`"
       ],
-      "detailedDesign" : "Declare required, no-default `d2b.site.hostGenerationRebuildRef`. Accept only UTF-8 strings matching `^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` whose encoded length is at most exactly 2048 bytes; reject missing, empty, malformed, multiline, leading or trailing whitespace, embedded whitespace, missing selector, empty selector, and overlong values at evaluation. `nixos-modules/host-generation-rebuild-ref.nix` emits the validated bytes into the target closure at `share/d2b/host-generation-rebuild-ref`, and `nixos-modules/providers/activation-nixos.nix` is the only module wiring import. Publication is not a Nix activation side effect: it requests `ADR046-activation-001` to atomically publish those exact target-closure bytes at `/etc/d2b/host-generation-rebuild-ref` as `root:d2bd` mode `0640`. The handoff audit contains only the fixed digest; rollback restores the prior bytes or prior absence. No CLI, log, error, status, audit, or resource output exposes the value or either stable path. The module also emits the Provider spec and `activation-nixos.d2bus.org.NixosGeneration` resources per target, flows `retainedGenerations` only through `Provider.spec.config.retainedGenerations`, references systems only by `systemArtifactId`, omits store paths from resources, and declares no state-layout User or ComponentPrincipal because `ProviderStateSet` is empty. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new resource and carrier emitters adapted from existing Nix activation inputs.",
+      "detailedDesign" : "Declare required, no-default `d2b.site.hostGenerationRebuildRef`. Accept only UTF-8 strings matching `^[A-Za-z0-9+._~:/,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` whose encoded length is at most exactly 2048 bytes. In addition to missing, empty, malformed, multiline, whitespace, missing/empty selector, and overlong values, reject URI userinfo, query parameters, percent encoding, embedded credentials, and any second fragment delimiter; the value is a syntactically secret-free local or public rebuild locator, never credential material. `nixos-modules/host-generation-rebuild-ref.nix` emits the validated bytes into the target closure at `share/d2b/host-generation-rebuild-ref`, and `nixos-modules/providers/activation-nixos.nix` is the only module wiring import. Publication is not a Nix activation side effect: it requests `ADR046-activation-001` to atomically publish those exact target-closure bytes at `/etc/d2b/host-generation-rebuild-ref` as `root:d2bd` mode `0640`. The handoff audit contains only the fixed digest; rollback restores the prior bytes or prior absence. No CLI, log, error, status, audit, or resource output exposes the value or either stable path. The module also emits the Provider spec and `activation-nixos.d2bus.org.NixosGeneration` resources per target, flows `retainedGenerations` only through `Provider.spec.config.retainedGenerations`, references systems only by `systemArtifactId`, omits store paths from resources, and declares no state-layout User or ComponentPrincipal because `ProviderStateSet` is empty. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new resource and carrier emitters adapted from existing Nix activation inputs.",
       "entryContracts" : [
         "ADR-046-provider-activation-nixos"
       ],
@@ -12147,7 +12157,7 @@
       ],
       "specId" : "ADR-046-provider-activation-nixos",
       "topologicalRank" : 12,
-      "validation" : "`tests/unit/nix/cases/host-generation-rebuild-ref.nix` covers a valid reference, exactly 2048 UTF-8 bytes, 2049 bytes, missing option, empty value, malformed value, multiline value, leading/trailing/embedded whitespace, missing/empty/invalid/overlong selector, exact carrier bytes, and absence of direct `/etc` publication. Provider eval tests retain Provider config, NixosGeneration shape, `retainedGenerations` source, no `systemStorePath`, no state Volume or state-layout principal, and artifact-ID resolution coverage. Broker/CLI redaction tests from `ADR046-activation-001` prove fixed-digest-only audit, rollback to prior bytes or absence, `root:d2bd` `0640`, and no value or stable-path output. Every affected flake, example, and template eval passes with an explicit fixture value, and the regenerated Nix-unit inventories contain the new case on every supported system.",
+      "validation" : "`tests/unit/nix/cases/host-generation-rebuild-ref.nix` covers a valid local reference, a valid public reference, exactly 2048 UTF-8 bytes, 2049 bytes, missing option, empty value, malformed value, multiline value, leading/trailing/embedded whitespace, missing/empty/invalid/overlong selector, URI userinfo, query, percent encoding, credential-like material, a second fragment, exact carrier bytes, and absence of direct `/etc` publication. Provider eval tests retain Provider config, NixosGeneration shape, `retainedGenerations` source, no `systemStorePath`, no state Volume or state-layout principal, and artifact-ID resolution coverage. Broker/CLI redaction tests from `ADR046-activation-001` prove fixed-digest-only audit, rollback to prior bytes or absence, `root:d2bd` `0640`, and no value or stable-path output. Every affected flake, example, and template eval passes with an explicit secret-free fixture value, and the regenerated Nix-unit inventories contain the new case on every supported system.",
       "wave" : "W6"
     },
     {
@@ -12528,9 +12538,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-audit/src/{hash_chain.rs,segment.rs,rate_limit.rs,record_types.rs,sink.rs,export.rs}`"
+        "`packages/d2b-audit/src/{hash_chain.rs,segment.rs,record_types.rs,sink.rs,export.rs,acknowledgement.rs}`"
       ],
-      "detailedDesign" : "`d2b-audit` provides: typed record structs per class; canonical serialization with `zone` replacing `realm: RealmPath`; SHA-256 hash chain (extracted from `daemon_audit.rs`); segment writer (O_APPEND CLOEXEC, 64 MiB / UTC-midnight rotation); 30-day compaction (adapts `prune_old` from `JsonlGatewayAudit`); `AuditWriteClass::{Privileged,Standard,BestEffort}` (extends current `{Privileged,Unprivileged}`); rate-limit with privileged-never-dropped invariant; export iterator with inline hash-break reporting. `AuditStreamKind` re-versioned: `Daemon→Zone`, `Gateway→ZoneLink`, `RemoteNode→RemoteZone`. `AuditChainRecord` re-versioned: `{zone: String}` replaces `{realm: RealmPath, node: NodeId}`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged: `AuditHash`, `AuditChainLink` from `d2b-realm-core/src/audit.rs`; copy hash-chain append algorithm from `daemon_audit.rs`; copy `AuditWriteClass`/rate-limit/rotation/prune from broker `audit.rs`; adapt `JsonlGatewayAudit` segment writer; adapt `OpAuditRecord` to `BrokerEffect` record class.",
+      "detailedDesign" : "`d2b-audit` provides typed record structs with no raw identities/handles/credentials/cgroup/unit fields; record-specific domain-separated correlation constructors; SHA-256 hash chain; O_APPEND/CLOEXEC segment writer with 64 MiB or UTC-midnight rotation; immutable exactly-once recovery keys; and export acknowledgements binding destination class, segment sequence/hash, and terminal record hash. Every authoritative record is durable exactly once. Every `BrokerEffect` is a privileged-effect record whose durable intent precedes effect release and whose completion is exactly once. No rate-limit, drop, `BestEffort`, or Provider-local authority exists. Thirty-day age is only one prune predicate; every required destination acknowledgement must also be durable and matching. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -12544,7 +12554,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 10,
-      "validation" : "`audit_record_hash_chain`, `audit_record_schema` (no `realm`/`node` fields), `audit_segment_rotation`, `audit_rate_limit_privileged_never_dropped`, `audit_unavailable_blocks_privileged`",
+      "validation" : "`audit_record_hash_chain`; identity/handle/credential/cgroup/unit schema canaries; segment rotation; crash/restart/concurrency exactly-once privileged-effect matrix; unavailable/pending refusal; export acknowledgement mismatch/rollback; prune blocked until all required acknowledgements and retention floor hold",
       "wave" : "W5"
     },
     {
@@ -12552,7 +12562,7 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/audit.rs`, `packages/d2b-core-controller/src/authz_audit.rs`"
       ],
-      "detailedDesign" : "`ResourceMutation` records emitted by the store actor inside the write transaction before commit returns. The audit sink must durably fsync the audit record before returning the commit success (privileged durability class). `RBACChange` emitted by the authz handler in the same write transaction. `subject_digest` = SHA-256 of normalized canonical subject string from v3 `AuthenticatedSubjectContext` (ADR-046-componentsession-and-bus). Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `OpAuditRecord` structural pattern for `ResourceMutation` / `RBACChange` record classes; adapt `PrincipalId` → `subject_digest` derivation.",
+      "detailedDesign" : "`ResourceMutation` records are committed by the store actor with an immutable audit recovery key before commit success. `RBACChange` uses the same authoritative path. Raw Zone/resource/subject/operation identity is absent; required joins use distinct record-specific correlation newtypes derived only from authoritative contexts. An audit append/export gap returns `CommittedPendingAudit` and same-ID replay observes rather than reapplies. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -12568,7 +12578,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 11,
-      "validation" : "Integration test: 100 mutations → verify hash-chained audit records with `zone` field, no `realm` field",
+      "validation" : "Integration test: 100 mutations verify hash-chained exactly-once audit, no raw Zone/resource/subject/operation identity, and stable same-ID pending/final replay",
       "wave" : "W5"
     },
     {
@@ -12576,7 +12586,7 @@
       "destinations" : [
         "`packages/d2b-session/src/audit.rs`, `packages/d2b-bus/src/audit.rs`"
       ],
-      "detailedDesign" : "`SessionConnect` records emitted at handshake completion. `GatewayAuditKind::DisplaySessionOpenAdmitted/Denied` → `event=\"connect\"`, `authz_decision=\"allowed/denied\"`. `GatewayAuditKind::DisplaySessionRunning` → informational `ProcessEffect`. `GatewayAuditKind::DisplaySessionClosed` → `event=\"close\"`. `transport_class=zone_link` covers what the current `AuditStreamKind::Gateway` stream recorded for gateway-backed realm sessions. `RouteAdmission` records emitted at bus route resolution for denied routes. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `GatewayAudit` trait pattern for `SessionConnect` and `RouteAdmission` record classes; `NoopGatewayAudit` pattern reused for test sinks.",
+      "detailedDesign" : "Session authority emits durable exactly-once `SessionConnect` records at handshake terminal transitions; bus route resolution does the same for `RouteAdmission`. A running-process transition uses the owning process authority's durable `ProcessEffect`, never an informational Provider event. Records contain only closed fields and required typed domain-separated correlation digests, with no raw Zone/subject/session/trace identity. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -12601,7 +12611,7 @@
       "destinations" : [
         "`packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand); `packages/d2b/tests/zone_audit_contract.rs`"
       ],
-      "detailedDesign" : "`d2b zone audit export` opens segments read-only (shared flock), streams NDJSON to stdout, validates hash chain inline, reports breaks as inline error records, and invokes only `d2b.audit.v3.AuditService/Export` under the admin-only `audit-export` session verb (same `SO_PEERCRED`/Role check as current `ExportBrokerAuditOk`). The session grant provides no Zone resource authority. Assert no `realm`, `node`, `workload_id` fields in exported records. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt audit CLI contract test (daemon-down/exit behavior); adapt broker export test to new `zone` field and v3 record schema.",
+      "detailedDesign" : "`d2b zone audit export` opens segments read-only (shared flock), streams NDJSON, validates the hash chain inline, reports breaks as bounded inline error records, and invokes only `d2b.audit.v3.AuditService/Export` under the admin-only `audit-export` session verb. The grant provides no Zone resource authority. Export contains no raw identity/handle/credential/cgroup/unit/invocation/locator field. Stdout export is not a prune acknowledgement. A configured required destination must acknowledge the exact segment sequence/hash and terminal record hash, and that acknowledgement must be file- and directory-synced before prune eligibility. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -12616,7 +12626,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 11,
-      "validation" : "`export_audit.rs`: admin-only, hash break inline, no old field names (`realm`/`node`/`workload_id`), no path/argv in output, exit 0 on clean chain",
+      "validation" : "`export_audit.rs`: admin-only, bounded hash break, raw-field canaries absent, exit 0 on clean chain; stdout does not acknowledge; missing/wrong/stale/unsynced destination acknowledgement blocks prune across restart",
       "wave" : "W5"
     },
     {
@@ -12783,9 +12793,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`src/{telemetry.rs,audit.rs}`"
+        "`src/{telemetry.rs,diagnostics.rs}`; central descriptor rows in `d2b-contracts`"
       ],
-      "detailedDesign" : "Closed metric labels; OTEL span attributes; audit durability classes; `azure-vm-deleted` appended post-commit; no ARM URI, ARM resource ID, or cloud endpoint in any telemetry surface Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt audit shape; replace Prometheus with d2b-telemetry emitter.",
+      "detailedDesign" : "Select exact central metric rows; emit complete typed-digest spans; enforce per-signal age/byte retention; keep only the closed bounded diagnostic accumulator; and strip identity, refs, handles, credentials, cloud/account locators, and cgroup/unit/invocation fields. Telemetry failure never changes the observed operation. The Provider supplies typed outcomes to core/session/Credential/effect audit owners and writes no authoritative audit. Privileged effect audit remains durable exactly once and never best-effort. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-provider-runtime-azure-virtual-machine"
       ],
@@ -12800,7 +12810,7 @@
       ],
       "specId" : "ADR-046-provider-runtime-azure-virtual-machine",
       "topologicalRank" : 14,
-      "validation" : "`tests/error_redaction.rs`; `d2b-contract-tests/tests/policy_observability.rs` updated",
+      "validation" : "Error/identity/handle/credential/cgroup/unit canaries; exact central registry/no local descriptors; aggregate gauges only; per-signal retention; complete trace lifecycle; emitter failure isolation; authoritative owner audit exactly-once tests",
       "wave" : "W6"
     },
     {
@@ -12852,7 +12862,7 @@
       "destinations" : [
         "`packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`; the `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` discovery/build recipe in `Makefile`"
       ],
-      "detailedDesign" : "End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. The host-integration case boots the real Provider-owned Cloud Hypervisor process through KVM, establishes the authenticated guest-control session, and observes ready Guest state. This item is the first W6 writer of the shared `Makefile` acceptance-recipe surface; active local T604 is dependency-ordered after this item and owns only its distinct resource-operator and daemon-restart recipes. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt.",
+      "detailedDesign" : "End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → exactly-one VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources and no runtime-controller pidfd/adoption authority at any step. Multiple or ambiguous VMM children quarantine the Guest without an effect. The host-integration case boots the real Provider-owned Cloud Hypervisor process through KVM, establishes the authenticated guest-control session, and observes ready Guest state. This item is the first W6 writer of the shared `Makefile` acceptance-recipe surface; active local T604 is dependency-ordered after this item and owns only its distinct resource-operator and daemon-restart recipes. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt.",
       "entryContracts" : [
         "ADR-046-provider-runtime-cloud-hypervisor"
       ],
@@ -12866,7 +12876,7 @@
       ],
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "topologicalRank" : 11,
-      "validation" : "Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: nonempty discovery and no-skip build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` through `make test-host-integration`, proving real KVM boot, the Provider-owned VMM process effect, authenticated guest-control session, and ready Guest state.",
+      "validation" : "Unit: reconcile state machine, fast-path latency, Process-status adoption observation, multiple/ambiguous-child quarantine with zero effects, absence of pidfd/PID/proc/cgroup APIs from this Provider, and finalize ordering. Integration: nonempty discovery and no-skip build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` through `make test-host-integration`, proving real KVM boot, the Provider-owned VMM process effect, authenticated guest-control session, and ready Guest state.",
       "wave" : "W6"
     },
     {
@@ -12943,9 +12953,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs`"
+        "`packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption_observation.rs`"
       ],
-      "detailedDesign" : "Authenticated KK ComponentSession health check over vsock; adoption verification (pid/cgroup/executable/generation) within `adoptionWindow`; ambiguity → Unknown/Degraded, never broad kill; graceful shutdown via guest-control session before SIGTERM",
+      "detailedDesign" : "Authenticated KK ComponentSession health check over vsock; observe only Provider/system-minijail's typed Process adoption result within `adoptionWindow`; never accept a PID, pidfd, cgroup, executable path, or caller-constructed identity; matching adopted child resumes, proved absence permits one replacement, and ambiguity/multiple children quarantine the Guest with zero VMM effects; graceful shutdown is requested via guest-control before the Process Provider receives `desiredLifecycle: stopped`",
       "entryContracts" : [
         "ADR-046-provider-runtime-cloud-hypervisor"
       ],
@@ -12961,7 +12971,7 @@
       ],
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "topologicalRank" : 12,
-      "validation" : "Fake guest-control server test; health check timeout/failure/retry; adoption property test (ambiguity, gone, stale pid); graceful shutdown ordering",
+      "validation" : "Fake guest-control server test; health check timeout/failure/retry; adoption-observation property tests for adopted, proved absent, ambiguous, multiple-child, and stale typed outcomes; source/API tests prove this Provider has no pidfd/PID/proc/cgroup identity surface; graceful shutdown ordering",
       "wave" : "W6"
     },
     {
@@ -12993,7 +13003,7 @@
       "destinations" : [
         "`packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs`"
       ],
-      "detailedDesign" : "`state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) - the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs).",
+      "detailedDesign" : "`state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) - the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and typed Process/Export Provider status, treating `status` as observation, never authority (D087); Process Providers alone re-adopt running VMM/virtiofsd processes and retain pidfd/cgroup authority. Status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs).",
       "entryContracts" : [
         "ADR-046-provider-runtime-cloud-hypervisor"
       ],
@@ -14589,7 +14599,7 @@
       "destinations" : [
         "packages/d2b-provider-device-tpm/src/effect_port.rs; packages/d2b-provider-device-tpm/tests/effect_fake.rs; production implementation in the framework-internal core Device effect adapter"
       ],
-      "detailedDesign" : "TpmEffectPort and FakeTpmEffectPort: define the effect trait, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters.",
+      "detailedDesign" : "TpmEffectPort and FakeTpmEffectPort: define the effect trait, including opaque `migrate_legacy_state` before first ensure, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs, migration outcomes, and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters.",
       "entryContracts" : [
         "ADR-046-provider-device-tpm"
       ],
@@ -14604,7 +14614,7 @@
       ],
       "specId" : "ADR-046-provider-device-tpm",
       "topologicalRank" : 12,
-      "validation" : "`tests/effect_fake.rs`; static proof that non-test files do not import `d2b_priv_broker`",
+      "validation" : "`tests/effect_fake.rs` proves migration precedes ensure and carries no path/uid/gid/mode/command; static proof that non-test files do not import `d2b_priv_broker`",
       "wave" : "W6"
     },
     {
@@ -14612,30 +14622,31 @@
       "destinations" : [
         "packages/d2b-provider-device-tpm/src/controller.rs; packages/d2b-provider-device-tpm/tests/controller_fsm.rs"
       ],
-      "detailedDesign" : "Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, covering happy path, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained; emit §14 metrics with only closed `phase`/`outcome`/`status` semantics and no Zone/resource-name-derived label. Primary reuse disposition: `replace`. Preserved source-plan detail: replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status.",
+      "detailedDesign" : "Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, making terminal legacy migration outcome a hard predecessor of the first `ensure_state_volume`; cover happy path, migration pending/failure/ambiguity, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained; emit §14 metrics with only closed `phase`/`outcome`/`status` semantics and no Zone/resource-name-derived label. Primary reuse disposition: `replace`. Preserved source-plan detail: replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status.",
       "entryContracts" : [
         "ADR-046-provider-device-tpm"
       ],
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the request-bound selected-roster panel seal recorded",
       "id" : "ADR046-device-tpm-003",
       "kind" : "work-item",
-      "owner" : "P0; blocked by ADR046-device-tpm-002; owner: device-tpm controller FSM",
+      "owner" : "P0; blocked by ADR046-device-tpm-002 and ADR046-device-tpm-004; owner: device-tpm controller FSM",
       "parallelGroup" : "wi:ADR-046-provider-device-tpm",
       "prerequisites" : [
         "ADR-046-provider-device-tpm",
-        "ADR046-device-tpm-002"
+        "ADR046-device-tpm-002",
+        "ADR046-device-tpm-004"
       ],
       "specId" : "ADR-046-provider-device-tpm",
       "topologicalRank" : 13,
-      "validation" : "`tests/controller_fsm.rs` covering happy path, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior; `tests/metrics_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and Device/Zone-name canary absence",
+      "validation" : "`tests/controller_fsm.rs` covering happy path, strict migrate-before-ensure order, migration pending/failure/ambiguity with zero ensure calls, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior; `tests/metrics_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and Device/Zone-name canary absence",
       "wave" : "W6"
     },
     {
       "blockers" : [],
       "destinations" : [
-        "packages/d2b-provider-device-tpm/src/resources.rs; packages/d2b-provider-device-tpm/tests/volume_create.rs"
+        "packages/d2b-provider-device-tpm/src/{resources.rs,migration.rs}; packages/d2b-provider-device-tpm/tests/{volume_create.rs,legacy_state_migration.rs}; core/volume-local adapter and typed broker `MigrateLegacySwtpmState` operation"
       ],
-      "detailedDesign" : "Controller-created Volume spec: implement `build_tpm_state_volume_spec` with `cleanupPolicy: never`, `repairPolicy: fail-closed`, `adoptionPolicy: quarantine-on-ambiguity`, `sensitivity: secret-adjacent`, required invariants, `source.sourceId`, no `hostPath`, no top-level identityMarker/persistenceClass/quotaBytes/stateSchema, `ownerRef: Device/<name>`, `managedBy: controller`, empty attachments, and `quota: null`. Primary reuse disposition: `replace`. Preserved source-plan detail: replace VM-level TPM option/state path with controller-created Device-owned Volume spec.",
+      "detailedDesign" : "Implement `build_tpm_state_volume_spec` with `cleanupPolicy: never`, `repairPolicy: fail-closed`, `adoptionPolicy: quarantine-on-ambiguity`, `sensitivity: secret-adjacent`, required invariants, `source.sourceId`, no `hostPath`, no top-level identityMarker/persistenceClass/quotaBytes/stateSchema, `ownerRef: Device/<name>`, `managedBy: controller`, empty attachments, and `quota: null`. Also implement §7.5's opaque migrate-before-ensure contract: anchored no-follow source/destination/marker/journal/lock resolution; exact owner/mode/type/link-count and live-owner checks; close-on-exec OFD lock; create-exclusive phased journal synced before mutation; same-filesystem rename or verified fully synced cross-filesystem staging; marker re-key after durable payload; destination-parent, marker-parent, and journal sync; commit before source retirement; idempotent crash/restart/response-loss resume; quarantine on any ambiguity; durable path-free broker audit before success. Primary reuse disposition: `replace`. Preserved source-plan detail: replace VM-level TPM option/state path with crash-safe adoption into the controller-created Device-owned Volume.",
       "entryContracts" : [
         "ADR-046-provider-device-tpm"
       ],
@@ -14650,7 +14661,7 @@
       ],
       "specId" : "ADR-046-provider-device-tpm",
       "topologicalRank" : 12,
-      "validation" : "`tests/volume_create.rs` proving every canonical Volume field and forbidden field listed in this item",
+      "validation" : "`tests/volume_create.rs` proves every canonical Volume field and forbidden field. `tests/legacy_state_migration.rs` and broker integration fault injection cover a crash after every journal phase; same- and cross-filesystem paths; symlink/hardlink/wrong-type/owner/mode/link-count; missing marker; live owner; lock contention/inheritance; audit and every file/directory sync failure; response loss; already-migrated replay; proved never-provisioned absence; no empty replacement; migration-before-first-ensure ordering; and zero raw paths in Provider/wire/status/audit.",
       "wave" : "W6"
     },
     {
@@ -16093,7 +16104,7 @@
       "destinations" : [
         "`packages/d2b-provider-system-minijail/src/sandbox_compiler.rs`"
       ],
-      "detailedDesign" : "Accept `SandboxSpec` from common contracts; compile NamespaceClass/CapabilityClass/SeccompClass/UserNamespaceSpec/mount/environment/rlimit/umask into a versioned `CompiledSandboxPlan`; compute `sandboxRevisionDigest`; all rejection conditions from §12.1; no raw bitmask/BPF/argv/path in any output type; golden round-trip test vectors Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT.",
+      "detailedDesign" : "Accept `SandboxSpec` from common contracts; compile NamespaceClass/CapabilityClass/SeccompClass/UserNamespaceSpec/mount/environment/rlimit/umask into a versioned `CompiledSandboxPlan`; require mount namespaces to carry recursively private propagation, anchored no-follow sources, broker-declared pivot/chroot, and old-root-detach proof; compute `sandboxRevisionDigest`; all rejection conditions from §12.1; no raw bitmask/BPF/argv/path in any output type; golden round-trip test vectors. Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT.",
       "entryContracts" : [
         "ADR-046-provider-system-minijail"
       ],
@@ -16140,7 +16151,7 @@
       "destinations" : [
         "Broker-side: `d2b-priv-broker` retains `SpawnRunner` and user-namespace pre-establishment; core/ProviderSupervisor owns the `MinijailProcessEffectPort` implementation; Provider-side `packages/d2b-provider-system-minijail/src/launch.rs` calls the trait with opaque Process/profile/policy IDs and `user_ns.rs` validates only semantic request constraints"
       ],
-      "detailedDesign" : "Linux ≥5.14 and delegated-leaf `cgroup.kill` platform gate; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `MinijailProcessEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO",
+      "detailedDesign" : "Linux 6.9, pidfs, and delegated-leaf `cgroup.kill` platform gates; one typed root-only `PrepareCgroupDelegation` setup followed by a permanent non-root cgroup runtime that refuses euid 0 for leaf create/observe/kill/release; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); recursively private mount propagation, anchored no-follow source resolution, broker-compiled pivot/chroot, and old-root-detach proof before exec; `MinijailProcessEffectPort` privately maps opaque IDs to typed broker effects; each broker effect syncs a durable path-free audit row before success; Provider crate imports no broker service/client/DTO",
       "entryContracts" : [
         "ADR-046-provider-system-minijail"
       ],
@@ -16155,7 +16166,7 @@
       ],
       "specId" : "ADR-046-provider-system-minijail",
       "topologicalRank" : 12,
-      "validation" : "`tests/fault_injection.rs`; `tests/platform_gate.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/`",
+      "validation" : "`tests/fault_injection.rs`; `tests/platform_gate.rs`; `tests/mount_isolation.rs`; `tests/cgroup_delegation.rs`; `tests/broker_audit.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/`; `integration/mount_isolation/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/`",
       "wave" : "W6"
     },
     {
@@ -16235,9 +16246,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-contracts/src/v3/network.rs`: NetworkSpec, NetworkStatus, AttachmentSpec, AttachmentStatus, ExternalAttachmentSpec, ExternalAttachmentStatus, PortForwardSpec, NetworkConditionType, opaque AttachmentHandle, and AttachmentGenerationFence; `packages/d2b-contracts/src/v3/ifname.rs`: IfName newtype, derivation, collision detection (extracted from `d2b-host/src/ifname.rs`). Also defines `User/net-local-controller` as a proper Resource with explicit lifecycle: `Provider/network-local`'s Nix package/module provisions the reserved `net-local-controller` OS account with a private fixed UID/GID in Host prerequisites and in the generic net-VM nixos-system artifact (same account, same UID/GID inside the Guest); the network-local controller creates and owns the User Resource (`spec.osUsername: net-local-controller`, `ownerRef: Provider/network-local`, `managedBy: controller`); `Provider/system-core` verifies the account via NSS lookup and reconciles the User Resource to Ready - it does not provision the OS account. No numeric UID/GID enters any ResourceSpec field, authz check, or audit record; `User.status` MAY carry diagnostic `uid`/`gid` values discovered by NSS lookup, but those are informational only and are never authorization inputs. The network-local controller waits for `User/net-local-controller` to reach `Ready` before creating any config Volume (reconcile precondition, not a bootstrap side effect)."
+        "`packages/d2b-contracts/src/v3/network.rs` owns only canonical public Network base/status/value types. Version 3 removes the current preview concrete attachment handle from the public contract; `ADR046-nl-003` owns the Core-private associated capability and API seal."
       ],
-      "detailedDesign" : "Strict ResourceEnvelope with Network-specific spec/status. IfName newtype: IFNAMSIZ-1 validated, FNV-1a 64-bit derivation, base32 Crockford, 8-char suffix, bridge/tap role prefixes, detect_collisions over IfNameMapping slice. cidrOverlaps: pure Rust IPv4 arithmetic, same algorithm as lib.nix. NetworkSpec validators: /24 lanCidr with .0 base, /30 uplinkCidr, unique attachment indices 2-250, default hostBlocklist enforcement. The opaque attachment realization binds Network UID/generation and attachment UID/generation so deletion can supply a non-printable ID plus explicit expected generation fence without an IfName/path. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Keep the strict canonical Network schema, IfName value/derivation, and CIDR arithmetic. Bind attachment deletion through a Core-private realization plus explicit generation fence, with no public concrete capability, IfName, or path.",
       "entryContracts" : [
         "ADR-046-resources-network"
       ],
@@ -16306,7 +16317,7 @@
       "destinations" : [
         "`nixos-modules/resources-network.nix`: Nix resource object emitter for Network ResourceType; `nixos-modules/index.nix`: network resource compilation section"
       ],
-      "detailedDesign" : "The emitter replaces `d2b.envs.<env>` with `d2b.zones.<zone>.resources.<name> = { type = \"Network\"; spec = { ... }; }` (attr key = resource name; `type` explicit field; `spec` fields identical to the canonical ResourceSpec JSON - no bespoke Nix vocabulary). It validates CIDR shape, attachment index uniqueness, external attachment constraints, and CIDR overlap (reusing `cidrOverlaps` from `lib.nix`). **Bridges are NOT emitted as `systemd.network.netdevs` entries** (D-NETWORK-003 resolved; bridges are created dynamically by the broker `CreateBridge` op at reconcile time). The Nix emitter provisions only bootstrap/static prerequisites that do not require runtime bridge IfNames: `networking.networkmanager.unmanaged` pattern for the `d2b-*` prefix (covers all dynamically-created bridges and taps regardless of specific IfNames; emitted to `00-d2b-unmanaged.conf`); schema validation and controller binary deployment artifacts. Current `d2b.vms.<vm>.env` + `d2b.vms.<vm>.index` attachment semantics (`options-vms.nix` lines 944/962) become `Network.spec.attachments[].executionRef` + `index`. Current `d2b.site.allowUnsafeEastWest` (`options-site.nix` line 48) moves to the per-Network `isolation.allowEastWest` field; Zone.spec is empty in v3. Current `d2b.hostLanCidrs` (`options-site.nix` line 382) becomes the Host resource's network inventory, queried at runtime; at Nix build time the eval may validate CIDRs against declared host configuration input. The emitter does not emit `boot.kernel.sysctl` entries per bridge IfName (bridges do not exist at activation time; IPv6 suppression is applied by `CreateBridge` and `ApplySysctl` per INV-NET-002). **Nix option types** for `spec.*` fields are generated from `core.d2bus.org_Network.schema.json`; they are not hand-written. **Bundle generation**: the emitter collects all declared `Network` resource objects, sorts them lexicographically by `(type, name)`, serializes each as canonical JSON **omitting `managedBy` and `configurationGeneration`** (core sets these at activation), and assembles the Zone resource bundle at `$out/bundle.json` (see [Nix configuration contract - Stage 3](#stage-3--build-output-zone-resource-bundle)). The emitter records a `providerSchemaDigest` entry for `Provider/network-local` in the bundle resolved from the artifact catalog. The bundle's `contentHash` is a SHA-256 of the sorted canonical resource array; the derivation is fixed-output so that identical configuration always produces the same store path. The `managedBy` field is NOT set by the emitter; core sets `managedBy = \"configuration\"` and assigns the `configurationGeneration` counter when applying the bundle. The core controller retains prior bundle copies under `/var/lib/d2b/zones/<zone>/configuration/prior/` per [Generation lifecycle and cleanup contract](#generation-lifecycle-and-cleanup-contract).",
+      "detailedDesign" : "Emit the exact NET Version 3 base shape and strict empty `network-local` extension; mechanically prove parity with the canonical schema/fingerprint. Retain both false defaults and require the exact Network/Host double opt-in. Validate declared Host-wide CIDRs, names, external IPv4/forwards, and artifact refs. Emit no runtime bridge, per-Network NetworkManager writer, or per-Network Host-global file writer; Core owns those aggregate runtime projections.",
       "entryContracts" : [
         "ADR-046-resources-network"
       ],
@@ -16331,7 +16342,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/src/controller.rs`: async NetworkReconciler; `packages/d2b-provider-network-local/src/plan.rs`: ReconcilePlan computation; `packages/d2b-provider-network-local/src/observe.rs`: drift-detection observe loop. Full crate layout required (see [Package and crate boundary](#package-and-crate-boundary)): `src/` (controller/plan/observe + colocated unit tests), `tests/` (hermetic conformance and state-machine tests), `integration/` (provider-system reconcile fixtures), `README.md` (Network ResourceType, controller binary, placement, RBAC, security invariants, build/test/integration commands)."
       ],
-      "detailedDesign" : "Implements full async reconcile interface from `ADR-046-resource-reconciliation`. `plan()` computes desired vs. actual bridge-presence, sysctl, host-side nftables, hosts-file, NM-unmanaged, config Volume content, Guest, guest-agent Process, and mDNS-Process states. `reconcile()` dispatches in order: `CreateBridge` for each bridge not present (broker applies IPv6 sysctls atomically; `CreateBridge` failure sets `FabricReady=False/bridge-create-error` and aborts) → `ApplySysctl` (defense-in-depth IPv6) → `ApplyNftablesProjection` (`action: Apply`, generation-fenced; mutates only this Network UID's ownership projection inside the shared `inet d2b` table and byte-preserves every sibling Network and device-usbip marker; never whole-table replace; D-NETWORK-004) → `ApplyNmUnmanaged` → `ApplyRoute` → `UpdateHostsFile` → `SeedDnsmasqLease` for new reservations → **Volume upsert** (two-phase): Phase 1 - create `Volume/net-<networkName>-config` with `kind: ephemeral`, `source.executionRef: Host/<hostName>`, `source.settings.kind: tmpfs`, `quota: {maxBytes: 4194304, maxInodes: 128, enforcement: hard}` (tmpfs quota charged to Host memory budget), `layout` entries (root directory with `type: directory` and four config files each with `type: file`, `ownerRef: User/net-local-controller`, `groupRef: User/net-local-controller`, `mode: \"0640\"`, `accessAcl: []`, `defaultAcl: []`, `noFollow: true`, conservative create/repair/cleanup policies), `views: {guest-readonly: {path: \"\", rights: [read, traverse]}}`, `attachments: []` (no Guest attachment); abort on terminal error with `ConfigVolumeReady=False/config-volume-error`. Wait for Volume backing to reach `Ready`; requeue on `Degraded`/`Failed` with `ConfigVolumeReady=False/volume-not-ready`. Write rendered config content through Volume write service (no raw host paths). Phase 2 - create Guest upsert with `systemArtifactId` from REQUIRED `Network.spec.netVmSystemArtifactId`. Wait for Guest `Ready`. Then update Volume with Guest attachment: `attachments: [{executionRef: Guest/<netVmName>, transport: virtiofs, view: guest-readonly, access: read-only, mountPath: \"/run/d2b/net-config\", settings: {posixAcl: false, xattr: false, cache: auto, inodeFileHandles: never, threadPoolSize: null, socketGroup: null}}]`; wait for attachment `Ready`; requeue on `Degraded` with `ConfigVolumeReady=False/attachment-not-ready`. Create or update guest-agent Process `Process/net-<networkName>-agent` with `processClass: worker`, `sandbox: {namespaceClasses: [], capabilityClasses: [network-admin, network-bind, network-raw]}` (inherits Guest network namespace; `network-admin`→`CAP_NET_ADMIN`, `network-bind`→`CAP_NET_BIND_SERVICE`, `network-raw`→`CAP_NET_RAW`, all effective in Guest network namespace only; INV-NET-009), `mounts: [{volumeRef: Volume/net-<networkName>-config, view: guest-readonly, mountPath: \"/run/d2b/net-config\", access: read-only, required: true}]`. mDNS Process upsert when `spec.mdns.enable = true` (D-NETWORK-001) → `SetBridgePortFlags` per tap. Removed attachments first wait for Guest/VMM FD ownership to close, then issue `DeletePersistentTap` with the retained opaque attachment ID and current expected Network/attachment generations; the handle remains retained until confirmed effect or validated absence. Stale generation refreshes/requeues, transient kernel error retries, and foreign marker fails closed. Each broker op returns typed audit evidence. `observe()` re-reads `firewallDigest` (host-side), bridge isolation flags, IPv6 sysctls, and guest-agent Process status (`dnsmasq-bound`, `firewall-applied` predicates); queues reconcile on drift. Metrics use only the fixed semantic labels in §OTEL spans and metrics; Zone/Network identity remains in OTEL resource attributes and permitted audit fields and never enters metric labels or span attributes. **Finalizer** (strictly child-first): `NetworkDraining` → stop workload Guests and await VMM FD closure → generation-fenced `DeletePersistentTap` for each retained attachment, awaiting confirmation → delete guest-agent Process and mDNS Processes; wait for each Deleted watch event → update Volume to remove Guest attachment (`attachments: []`); wait for attachment removal confirmed → delete `Guest/<netVmName>`; wait for Deleted watch event → delete `Volume/net-<networkName>-config`; wait for Deleted watch event → `ApplyNftablesProjection` (`action: Remove`, generation-fenced; removes only this Network UID's ownership projection and never empties or recreates the whole `inet d2b` table, so sibling Networks and device-usbip markers are preserved; validated already-absent projection is idempotent success; foreign marker fails closed; D-NETWORK-004) → `ApplyNmUnmanaged` (empty) → `UpdateHostsFile` (empty) → `DeleteBridge` for each bridge (idempotent) → clear finalizer. No USBIP rules installed by Network; device-usbip issues the shared `ApplyNftablesProjection` request with action `Apply` for apply or `Remove` for release (D-NETWORK-002, D124).",
+      "detailedDesign" : "Version 3 supersedes the historical controller order. Implement the exact ordered path in the authority amendment: Host-global admission; aggregate NM; durable marked links and typed addresses; private attachment and LaunchTicket handoff; typed guest plan; exactly one dnsmasq Process; aggregate routes/nft/hosts; readback-gated Ready. Finalization reverses dependency order and releases Host-global reservations last.",
       "entryContracts" : [
         "ADR-046-resources-network"
       ],
@@ -16346,7 +16357,7 @@
       ],
       "specId" : "ADR-046-resources-network",
       "topologicalRank" : 10,
-      "validation" : "`ADR046-reconcile-001` toolkit conformance; latency gates (p95 ≤5 ms hint-to-handler); Network-specific: CIDR conflict blocks reconcile, `CreateBridge` failure sets `FabricReady=False`, Volume creation failure sets `ConfigVolumeReady=False/config-volume-error`, `User/net-local-controller` not Ready aborts with `ConfigVolumeReady=False/user-not-ready`, Volume schema round-trip (kind=ephemeral, source.settings.kind=tmpfs, quota.enforcement=hard, layout type=file entries, views.guest-readonly.rights=[read,traverse]), tmpfs quota charged to Host memory budget (test Volume creation fails when Host memory budget exceeded), Guest not created before Volume backing `Ready`, Guest attachment not added before Guest `Ready`, guest-agent Process created after attachment `Ready` (`processClass: worker`, `namespaceClasses: []`, `capabilityClasses: [network-admin, network-bind, network-raw]`, `access: read-only`, `required: true`), host-capability leakage test: no host-netns process gains `CAP_NET_ADMIN`/`CAP_NET_BIND_SERVICE`/`CAP_NET_RAW` as result of guest-agent launch (INV-NET-009; `tests/host-integration/guest-agent-cap-confinement.nix`), removed attachment and finalizer call `DeletePersistentTap` only after Guest/VMM FD closure with opaque ID/current generations, validated absence succeeds, transient failure retains handle/retries, stale generation refreshes, foreign marker blocks without deletion, request/audit contain no IfName/path, `DeleteBridge` called only after tap confirmations, Volume attachment removed before net-VM Guest deletion in finalizer (test order: workload FD closure → persistent taps deleted → agent Deleted → Volume attachment removed → net-VM Guest Deleted → Volume Deleted → bridges), east-west invariant (INV-NET-003), hostBlocklist enforcement (INV-NET-004), macvtap attachment status (delegated to runtime-ch), mDNS Process created/deleted with `spec.mdns.enable` toggle, broker INV-NET-002 tests, config-only spec change updates Volume content and triggers agent reload without Guest restart (INV-NET-008); `ApplyNftablesProjection` firewall model (D-NETWORK-004): `apply_host_firewall` and `remove_host_firewall` dispatch `ApplyNftablesProjection` (not `ApplyNftables`), `firewall_projection_apply_preserves_sibling_network_markers` (two Networks apply concurrently; neither erases the other's `inet d2b` marker), `firewall_projection_apply_preserves_usbip_markers` and `firewall_projection_remove_preserves_usbip_markers` (a Network apply/delete leaves device-usbip TCP/3240 markers byte-identical), `firewall_projection_concurrent_apply_same_projection_serialized_by_ofd_lock` (same-generation requests converge idempotently with no last-writer-wins), `firewall_projection_stale_configuration_generation_requeues_without_mutation`, `firewall_projection_concurrent_delete_preserves_other_projections`, `firewall_projection_remove_never_empties_whole_table` (Remove deletes only this marker's rules; the `inet d2b` table and all foreign markers survive), `firewall_projection_foreign_marker_fails_closed` (`foreign-nft-rule-preserved`), `firewall_projection_validated_absence_is_idempotent`, `firewall_projection_digest_is_projection_scoped` (digest covers only this Network's marker; USBIP churn does not change it), `firewall_projection_request_and_audit_have_no_rule_text_ifname_or_path`; golden tests updated for v3 IfNames; structural metric descriptor test asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `network`, and every resource-name-derived label and verifies a Network-name canary is absent from emitted label values",
+      "validation" : "Hermetic controller tests prove ordering and fail-closed transitions but cannot establish production reachability. Wave 6 acceptance must enter through evaluated Nix, the emitted bundle, daemon, production Core adapter, broker, net-VM, exactly one dnsmasq Process, and attached workload Guests; it covers Host-global collision races, private capability seals, typed effect ordering, full MTU propagation, aggregate foreign-state preservation, durable restart/adoption/delete, external IPv4/forwards, and all four east-west combinations.",
       "wave" : "W4"
     },
     {
@@ -17278,7 +17289,7 @@
       "destinations" : [
         "`d2b-contracts` trait plus `d2b-core` core adapter; maps to broker wire operations and audit emission."
       ],
-      "detailedDesign" : "Implement `NetworkEffectPort` core adapter in `d2b-core`; map to broker wire ops; emit audit records. `revoke_attachment_tap` accepts only an opaque `AttachmentHandle` plus `AttachmentGenerationFence { expected_network_generation, expected_attachment_generation }` and maps to `DeletePersistentTap`; no IfName/path or caller-authored marker crosses the trait. Versioning: minor releases may add methods with default impls; major releases require Provider upgrade. The trait lives in `d2b-contracts`; the adapter in `d2b-core`.",
+      "detailedDesign" : "Implement the sealed Version 4 `NetworkEffectPort` and production Core adapter. The trait has a Core-private associated attachment capability rather than a concrete public handle. It accepts only the typed admission, link, address, attachment, route, nftables, NetworkManager, and hosts intents in §5. Provider methods publish contributions to Host-global owners; only Core maps admitted desired state to broker operations and audit. No IfName, path, command, script, allocated vsock CID, or caller-authored marker crosses the trait.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17298,9 +17309,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "Broker wire contract and broker/core adapter operation table for `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`."
+        "Broker wire/core adapter operation table for typed address and route reconciliation, durable bridge/route ownership, readback, aggregate NetworkManager/hosts application, and the retained generation-fenced tap/nftables projection operations."
       ],
-      "detailedDesign" : "Add canonical closed `DeletePersistentTap` paired with `CreatePersistentTap`, plus `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. `DeletePersistentTapRequest` contains only an opaque attachment ID and expected Network/attachment generations. `ApplyNftablesProjectionRequest` contains only an opaque `bundle_nft_projection_ref`, a closed `NftProjectionAction { Apply, Remove }`, an `expected_generation_id` fence, and an optional `tracing_span_id`; the broker resolves the projection (ownership marker + rule set) from the private bundle, mutates only that marker's rules inside `inet d2b`, byte-preserves every other Network and device-usbip marker, never whole-table replaces, treats validated absence as success, rejects foreign markers without deletion, and emits a path-free post-effect audit with a projection-scoped digest. The broker resolves trusted realization state, validates generations and ownership marker, treats validated absence as success, rejects foreign markers without deletion, and emits path-free post-effect audit. No request accepts an IfName, path, inline rule text, or caller-authored marker. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape.",
+      "detailedDesign" : "Reuse the existing closed bridge/tap/projection ops. Add typed `ReconcileNetworkAddress` and `ReconcileNetworkRoutes` operations with no free-form command strings. Extend bridge and route effects to fsync broker-resolved ADR 0034 ownership records and verify live kernel markers. Add one in-process Host-global dispatcher for nftables, NM, and hosts; it is not a unit. The broker receives only opaque bundle refs and generation fences, preserves foreign state, and emits path-free audit.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17322,23 +17333,23 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`d2b-contracts` opaque byte-array newtypes; core-held HMAC key and provider-facing redacted handle types."
+        "Core-private realization module plus sealed `NetworkEffectPort::PrivateAttachment` associated type; public API-surface seal."
       ],
-      "detailedDesign" : "Implement `AttachmentHandle` and `FabricHandle` as opaque byte-array newtypes (32 bytes of HMAC-SHA-256 over internal identity material; key held by core). Each attachment handle identifies one generation-fenced realization and is retained until explicit `DeletePersistentTap` confirmation during attachment removal or Network finalization. These types are declared in `d2b-contracts`, not in the provider crate.",
+      "detailedDesign" : "Remove the public concrete handle, constructor, clone, serializer/display potential, identity accessors, and re-exports. The production Core adapter retains one generation-fenced realization and exposes it to generic Provider code only as the unnameable associated capability. Deletion consumes it after VMM FD closure.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the request-bound selected-roster panel seal recorded",
       "id" : "ADR046-nl-003",
       "kind" : "work-item",
-      "owner" : "Core; handle DTOs are owned by `d2b-contracts` and consumed by `d2b-core` plus `Provider/network-local`.",
+      "owner" : "Core; owns the private attachment realization and sealed associated capability.",
       "parallelGroup" : "wi:ADR-046-provider-network-local",
       "prerequisites" : [
         "ADR-046-provider-network-local"
       ],
       "specId" : "ADR-046-provider-network-local",
       "topologicalRank" : 11,
-      "validation" : "`tests/fault_injection.rs` and `tests/controller_state.rs` cover opaque-handle mismatch, generation-fenced `DeletePersistentTap`, retained handle until confirmation, and no raw IfName/IP/MAC/path public surface.",
+      "validation" : "Compile-fail/API-surface seals reject construction, naming, cloning, serialization, conversion, accessors, and re-export outside Core. State-machine tests retain the private capability across retry and consume it only after generation-fenced deletion confirmation.",
       "wave" : "W6"
     },
     {
@@ -17346,7 +17357,7 @@
       "destinations" : [
         "Core LaunchTicket builder and dependency resolver that walks `Guest.ownerRef: Network/<name>` to resolved tap FDs."
       ],
-      "detailedDesign" : "Implement LaunchTicket FD resolution: when core builds the LaunchTicket for a Guest with `ownerRef: Network/<name>`, it walks the owner graph, locates the Network, reads its internally-held `AttachmentHandle` set, and includes the corresponding tap FDs in the ticket. No API surface for the provider or runtime is required beyond the existing LaunchTicket mechanism. Primary reuse disposition: `create`. Preserved source-plan detail: net-new LaunchTicket integration; reuse existing LaunchTicket mechanism without adding provider/runtime API surface.",
+      "detailedDesign" : "Implement LaunchTicket FD resolution: Core walks the owner graph, locates its private attachment realization ledger, and includes only admitted connected FDs plus the private Host-global vsock allocation. No concrete attachment capability, raw CID, IfName, or broker request enters Guest spec/status or the runtime Provider API.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17361,7 +17372,7 @@
       ],
       "specId" : "ADR-046-provider-network-local",
       "topologicalRank" : 12,
-      "validation" : "`integration/guest_lifecycle.rs` validates net-VM/workload Guest lifecycle, opaque attachment handle resolution, and `systemArtifactId` binding.",
+      "validation" : "`integration/guest_lifecycle.rs` validates net-VM/workload Guest lifecycle, Core-private LaunchTicket FD resolution, private vsock allocation, and `systemArtifactId` binding.",
       "wave" : "W6"
     },
     {
@@ -17369,7 +17380,7 @@
       "destinations" : [
         "Core adapter imports `d2b-host` modules; `packages/d2b-provider-network-local/src/ifname.rs` re-exports `d2b_host::ifname::derive_ifname` only."
       ],
-      "detailedDesign" : "The `d2b-host` IfName/nftables/bridge/route modules are consumed directly by the core adapter (not by the provider crate). The provider crate re-exports only `d2b_host::ifname::derive_ifname` for validation purposes. No additional extraction work is required beyond confirming the `d2b-host` API surface is stable. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse directly in core adapter; provider re-exports only `derive_ifname` for validation.",
+      "detailedDesign" : "Consume `d2b-host` modules in the Core adapter, not the Provider. Extend link/route adapters for durable ownership marker readback, typed address/route operations, and complete MTU propagation. Provider-local derivation is diagnostic only; Host-global Core admission owns collision decisions.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17391,7 +17402,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/src/{controller.rs,metrics.rs}`."
       ],
-      "detailedDesign" : "Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection and the §21 metric descriptors with closed semantic labels. Attachment removal and finalization wait for Guest/VMM FD ownership to close, then call `revoke_attachment_tap` with the retained opaque handle and current Network/attachment generation fence; transient deletion retries retain the handle, stale generations refresh/requeue, and ownership conflict blocks finalizer clearing. No descriptor may carry `vm`, `zone`, `zone_id`, `zone_uid`, `network`, or another resource-name-derived key; Network/Zone identity stays only in OTEL resource attributes and permitted audit fields. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership.",
+      "detailedDesign" : "Implement the §16 ordered handlers with sealed `NetworkEffectPort` injection. Admission precedes effects; aggregate NM precedes link creation; typed addresses/routes/forwarding/filter/NAT and one dnsmasq Process obey readiness barriers; aggregate routes/nft/hosts follow guest readiness; deletion reverses the order. Attachment removal consumes the private associated capability only after FD closure.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17418,7 +17429,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/src/process_specs.rs` agent template plus agent service implementation in the net-VM artifact."
       ],
-      "detailedDesign" : "Implement `NetworkAgentService` Noise-KK vsock ComponentSession (Reload + ReadinessQuery methods). Agent reconnect policy: if the controller cannot reach the agent vsock (Guest restart in progress), it retries with exponential backoff up to `drainTimeout` of the agent Process; after timeout it deletes and re-creates the agent Process resource. Primary reuse disposition: `create`. Preserved source-plan detail: net-new service; preserve semantic nftables/routes reload behavior from v1 net VM configuration.",
+      "detailedDesign" : "Implement `NetworkAgentService` `ApplyPlan` plus `ReadinessQuery`. Strictly decode versioned `GuestNetworkPlan` and apply typed address, route, forwarding, filter, and NAT effects in that order with per-stage readback. No Provider-authored command or script is executed. Reconnect remains bounded by Process drain timeout.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17432,7 +17443,7 @@
       ],
       "specId" : "ADR-046-provider-network-local",
       "topologicalRank" : 11,
-      "validation" : "`integration/agent_reload.rs` validates Reload, `nft_applied` and `routes_applied` predicates, reconnect behavior, and config digest matching.",
+      "validation" : "`integration/agent_reload.rs` validates strict plan decode, ordered effects, stop-on-first-failure, all five readbacks, reconnect behavior, and digest/generation matching.",
       "wave" : "W6"
     },
     {
@@ -17440,7 +17451,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/src/config_volume.rs`."
       ],
-      "detailedDesign" : "Implement config Volume content rendering (dnsmasq.conf, nftables.rules, routing.conf, attachments.json). Primary reuse disposition: `adapt`. Preserved source-plan detail: port and render into bounded config Volume files.",
+      "detailedDesign" : "Render `dnsmasq.conf`, strict `network-plan.json`, and `attachments.json`. The plan contains typed effects, never free-form nft/route text, and dnsmasq config carries the effective DHCP MTU.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17462,7 +17473,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/src/process_specs.rs`."
       ],
-      "detailedDesign" : "Implement canonical Process spec builders for agent, dnsmasq, mdns-reflector, mdns-dnsbridge. Primary reuse disposition: `adapt`. Preserved source-plan detail: port service semantics into canonical Process resource specs.",
+      "detailedDesign" : "Implement canonical Process builders for one agent, exactly one dnsmasq worker, and optional mDNS workers. The generic artifact has no competing dnsmasq service; the agent cannot spawn dnsmasq.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17498,7 +17509,7 @@
       ],
       "specId" : "ADR-046-provider-network-local",
       "topologicalRank" : 11,
-      "validation" : "Eval cases `net-vm-artifact-id-eval.nix` and `network-spec-eval.nix`, plus `tests/net-vm-network-eval.sh` for the lib.mkForce invariant.",
+      "validation" : "Current root `flake.checks.<system>.nix-unit` case `tests/unit/nix/cases/net-vm-network.nix` proves the `lib.mkForce` neutralizer and MTU propagation. It asserts non-`ether` `10-eth-dhcp` matching and exact `00:00:00:00:00:00`; the retired standalone script is not evidence.",
       "wave" : "W6"
     },
     {
@@ -17506,7 +17517,7 @@
       "destinations" : [
         "Nix module resource emission for `Provider/network-local`, `User/net-local-controller`, host OS account, `provider-network-local`, and `net-vm-base` artifacts."
       ],
-      "detailedDesign" : "Nix module for `Provider/network-local` resource declaration; `User/net-local-controller` declaration; OS account provisioning; artifact catalog entries. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix option/resource emission and account provisioning to v3 resources.",
+      "detailedDesign" : "Bind the Nix emitter to NET Version 3's one canonical schema/fingerprint, keep `d2b.site.allowUnsafeEastWest` as the independent false-by-default Host/site input, emit no duplicate `networkName` or Provider-base fields, and emit no per-Network NetworkManager writer.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17528,7 +17539,7 @@
       "destinations" : [
         "Nix flake/resource schema checks for declared Networks and provider `validate.rs` parity."
       ],
-      "detailedDesign" : "Build-time CIDR overlap check for declared Networks in flake check. Primary reuse disposition: `adapt`. Preserved source-plan detail: port/reuse overlap semantics in v3 eval checks and provider validation.",
+      "detailedDesign" : "Evaluate all declared Host Network CIDRs, names, external IPv4/forwards, and the exact east-west double opt-in. Runtime Core atomically reserves CIDRs, derived names, vsock CIDs, and external-NIC authority across all Zones on the Host before effects.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17542,7 +17553,7 @@
       ],
       "specId" : "ADR-046-provider-network-local",
       "topologicalRank" : 11,
-      "validation" : "Eval case `network-cidr-overlap-eval.nix` and `tests/cidr_overlap.rs` cover same-Network, cross-Network, external CIDR, and adjacency cases.",
+      "validation" : "Eval plus Core concurrency tests cover cross-Zone CIDR/name/vsock collisions, exact external IPv4/forward validation, and all four east-west input combinations with zero loser effects.",
       "wave" : "W6"
     },
     {
@@ -17550,7 +17561,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/tests/schema_roundtrip.rs`, `tests/ifname_derive.rs`, and `tests/cidr_overlap.rs`."
       ],
-      "detailedDesign" : "Conformance suite: NetworkSpec round-trip, IfName derivation, CIDR validation matrix. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing IfName/CIDR assertions into provider conformance tests.",
+      "detailedDesign" : "Conformance imports NET's exact base schema/vector and the strict empty provider-settings schema; it must not define a second Network base. Add external IPv4/forward and Host-global admission intent round trips.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17572,7 +17583,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/tests/controller_state.rs`."
       ],
-      "detailedDesign" : "Controller state-machine unit tests with fake `NetworkEffectPort` (from d2b-contracts mock) and deterministic clock, including attachment removal/finalizer calls to generation-fenced `DeletePersistentTap`.",
+      "detailedDesign" : "Controller state-machine unit tests with a fake sealed port and deterministic clock cover ordered admission/effects, aggregate publication, one dnsmasq Process, private capability consumption, and strict reverse finalization. These tests are necessary but are not production acceptance.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17587,7 +17598,7 @@
       ],
       "specId" : "ADR-046-provider-network-local",
       "topologicalRank" : 16,
-      "validation" : "`tests/controller_state.rs` covers normal path, CIDR conflict, User not Ready, Volume error, Guest timeout, agent reload failure, finalizer sequence, `DeletePersistentTap` validated absence, transient retry with retained handle, stale-generation refresh, foreign-marker block, adoption, and drift.",
+      "validation" : "`tests/controller_state.rs` covers normal path, Host-global admission loss, User not Ready, Volume error, Guest timeout, agent plan failure, exact effect ordering, one dnsmasq identity, private-capability retry/consume, stale-generation refresh, foreign-marker block, adoption, and drift.",
       "wave" : "W6"
     },
     {
@@ -17595,7 +17606,7 @@
       "destinations" : [
         "`packages/d2b-provider-network-local/integration/host_fabric.rs`, `guest_lifecycle.rs`, `agent_reload.rs`, and `delete_sequence.rs`."
       ],
-      "detailedDesign" : "Integration tests: full Network lifecycle (create, config update, agent Reload, generation-fenced persistent-tap deletion, delete sequence) in container environment. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt reusable semantic assertions into v3 integration coverage.",
+      "detailedDesign" : "Add full lifecycle integration plus `tests/host-integration/network-local-data-plane.nix`. The host case enters through evaluated Nix, emitted bundle, daemon, production Core adapter, broker, net-VM, one dnsmasq Process, and attached workload Guests. It proves DHCP/DNS/egress, MTU, typed effect ordering, aggregate foreign-byte preservation, durable adoption/delete, and all four double opt-in combinations.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17661,7 +17672,7 @@
       "destinations" : [
         "Device-usbip EffectPort/adapter owns USBIP rules, drift, and strict provider status; network-local host/net-VM renderers and status cover only Network-owned policy."
       ],
-      "detailedDesign" : "`ApplyNftablesProjection { action: Apply | Remove }` is the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse the shared projection-scoped broker op; remove both generic network-local USBIP allows and do not extend or dispatch the shipped whole-table `UsbipBindFirewallRule` op.",
+      "detailedDesign" : "Network-local and device-usbip publish typed contributions to the same Host-global Core nftables dispatcher. Only that dispatcher invokes generation-fenced `ApplyNftablesProjection { action: Apply | Remove }` for each composed owner. Network-local emits no TCP/3240 match, excludes USBIP markers from its digest, and never reports USBIP drift.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17705,7 +17716,7 @@
       "destinations" : [
         "Network schema/Provider descriptor, Core authority index, Network reconcile/update/finalizer, runtime LaunchTicket resolver, and authority tests"
       ],
-      "detailedDesign" : "Register the external physical-NIC `AuthorityDescriptor`: Host-global `external-physical-nic/v1` Core-derived identity, `zero-or-one` authority, an isolation domain equal to the claimant's Zone UID, exclusive `passthru`/`private`/`vepa`, exclusive-by-default `bridge`, explicitly compatible bounded multiplexing only for `bridge` and only among holders in one Zone, categorical cross-Zone `bridge` multiplex rejection with `external-physical-nic-cross-zone-l2` (INV-NET-011), `external-physical-nic-conflict` for same-Zone incompatible claims, exact owner proof, drain-release-reacquire update, forbidden export, and bounded FIFO holder policy. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the existing broker-internal macvtap-FD creation path behind mandatory Core authority admission.",
+      "detailedDesign" : "Register the external physical-NIC authority as described above and require canonical external IPv4/forward validation before admission. Apply effective MTU only to the d2b-created macvtap child; refuse a smaller parent. Encode DNAT/forwarding/NAT as typed guest effects after address and route readiness. Adapt the existing broker-internal macvtap-FD creation path behind mandatory Core authority admission.",
       "entryContracts" : [
         "ADR-046-provider-network-local"
       ],
@@ -17935,7 +17946,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,ingress_policy,exporter,controller,service,binding}.rs`; updated Nix observability modules"
       ],
-      "detailedDesign" : "Register the initial implementation of both provider-neutral qualified ResourceTypes by binding the exact ADR046-provider-004 base versions/fingerprints, then define only strict observability-otel Service/Binding spec and status extensions. Reconcile each Binding into an edge collector, private Endpoints, runtime Volume, and optional forwarder. Collector links the full OTEL SDK, resolves `serviceRef`, stamps trusted producer identity into allow-listed OTEL Resource attributes, and routes Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream metrics through one structural `METRIC_LABEL_POLICY` gate before aggregation, queueing, batching, retry, or export. The gate rejects exact/suffix identity keys and trusted `metadata.name`/resource-identity canary values, applies bounded non-echoing error classes and connection quarantine, and never consumes audit. Write generic Service/Binding observations to `status.resource` and SigNoz/OTLP/OTEL observations only to `status.provider`; no state file or Provider state Volume. Provider root config remains installation-only. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone name; replace socat runner with vsock-forwarder long-lived Process; adapt `ingressSources` per-Zone entry).",
+      "detailedDesign" : "Register the initial implementation of both provider-neutral qualified ResourceTypes by binding the exact ADR046-provider-004 base versions/fingerprints, then define only strict observability-otel Service/Binding spec and status extensions. Reconcile each Binding into an edge collector, private Endpoints, runtime Volume, and optional forwarder. Collector links the full OTEL SDK, resolves `serviceRef`, uses trusted producer identity only for internal route/quota selection, strips it before OTEL construction, and validates every metric against the exact central descriptor row before aggregation, queueing, batching, retry, or export. Every buffer enforces per-signal byte and age limits. Spans use typed correlation digests and complete lifecycle. Generic Service/Binding observations stay in `status.resource`; bounded implementation stages/counts stay in `status.provider`, with no child refs/handles/locators. Audit is never consumed. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-provider-observability-otel"
       ],
@@ -17953,7 +17964,7 @@
       ],
       "specId" : "ADR-046-provider-observability-otel",
       "topologicalRank" : 12,
-      "validation" : "Common-fixture/fingerprint and canonical-minimal-base conformance (including a fake alternate telemetry Provider); `tests/emitter_socket_receive.rs`; table-driven `tests/ingress_metric_policy.rs` across all four ingress adapters; `tests/exporter_outage.rs`; `tests/exporter_backpressure.rs`; `integration/scenario_full_pipeline.rs`; adapted `policy_observability.rs` (retain all existing assertions; add new `d2b.zone`, `d2b.provider` allowlist entries)",
+      "validation" : "Common-fixture/fingerprint and canonical-minimal-base conformance (including a fake alternate telemetry Provider); `tests/emitter_socket_receive.rs`; table-driven `tests/ingress_metric_policy.rs` across all four ingress adapters; per-signal retention; emitter failure isolation; complete trace lifecycle; exporter outage/backpressure; central-registry/no-local-descriptor proof; identity/handle/credential/cgroup/unit canaries; integration full pipeline",
       "wave" : "W6"
     },
     {
@@ -17961,7 +17972,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/nix/journald.nix`; `packages/d2b-provider-observability-otel/src/journald.rs`"
       ],
-      "detailedDesign" : "Per `ADR-046-telemetry-audit-and-support` §journald stdout/stderr ingestion: cgroup filter derived from trusted `producerRef`; redaction drops credential/secret/path fields, `_CMDLINE`, `_EXE`, and `INVOCATION_ID`; the strict `TelemetryBinding.spec.provider.settings.journald.enable` defaults false. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt journald receiver config for per-Zone cgroup filter.",
+      "detailedDesign" : "Per `ADR-046-telemetry-audit-and-support` journald contract, cgroup/unit metadata may select input internally but is structurally removed before output together with every raw identity, `_CMDLINE`, `_EXE`, `INVOCATION_ID`, `_SYSTEMD_CGROUP`, `_SYSTEMD_UNIT`, `_SYSTEMD_USER_UNIT`, `_PID`, `_UID`, and `_GID`; credential/secret/path-bearing messages are dropped. The strict `TelemetryBinding.spec.provider.settings.journald.enable` defaults false. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-provider-observability-otel"
       ],
@@ -17978,7 +17989,7 @@
       ],
       "specId" : "ADR-046-provider-observability-otel",
       "topologicalRank" : 13,
-      "validation" : "Nix eval test: filter expression set when enabled; assert `_CMDLINE` and `INVOCATION_ID` in drop list; `tests/redaction.rs` for journald field redaction",
+      "validation" : "Nix eval test: filter expression set when enabled; assert every raw identity plus `_CMDLINE`, `_EXE`, `INVOCATION_ID`, `_SYSTEMD_CGROUP`, `_SYSTEMD_UNIT`, `_SYSTEMD_USER_UNIT`, `_PID`, `_UID`, and `_GID` is removed from mock OTLP output",
       "wave" : "W6"
     },
     {
@@ -17986,7 +17997,7 @@
       "destinations" : [
         "`packages/d2b-contract-tests/tests/policy_observability.rs` (updated); `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new, per ADR046-telem-008); `packages/d2b-provider-observability-otel/tests/{no_vm_label_in_metrics,ingress_metric_policy}.rs`"
       ],
-      "detailedDesign" : "(1) Extend `loki_native_otel_resource_attributes` allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add gate: `no_isolation` must not appear in any Provider `MetricDescriptor` label or span attribute catalog. (3) Adapt `minijail_relay_otel.rs` shape test for Provider-managed runner (no broker `RunnerRole::OtelHostBridge`). (4) Add metric inventory gates for `d2b_otel_*` instruments from this spec. (5) Structurally prove that all four metrics ingress adapters call the shared pre-batch policy gate; run exact forbidden-key, suffix, `metadata.name`, ResourceRef, UID, and resource-identity canaries through each adapter; assert bounded non-echoing outcomes/quarantine/backpressure and valid OTEL Resource identity preservation. (6) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = \"realm-controllers\"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend existing tests; keep existing test assertions.",
+      "detailedDesign" : "(1) Replace the baseline Resource allowlist with fixed `service.name`, `service.version`, `d2b.provider`, and `d2b.component` classes. (2) Prove the Provider owns no metric descriptor/inventory/label authority and exact central rows cover every `d2b_otel_*` emission. (3) Reject per-resource/session/Binding/lease gauges and require merge-safe aggregate gauge scopes. (4) Adapt the Provider-managed runner test. (5) Prove every ingress applies descriptor, redaction, and per-signal retention gates before queue/batch/export. (6) Run raw identity, handle, ResourceRef, credential, cgroup/unit/invocation, and trace/span canaries through metrics/traces/logs/diagnostics. (7) Prove emitter failures never affect observed operations and all spans end exactly once. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-provider-observability-otel"
       ],
@@ -18009,7 +18020,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/share_adapter.rs`"
       ],
-      "detailedDesign" : "Implement the signed adapter: `sys-obs` exports only the authority `TelemetryService`; its local ingest Endpoint remains Service-owned implementation transport and is never an Export field. ResourceExport uses only canonical `serviceType`, `projectionSchemaFingerprint`, and `factoryFingerprint`; ResourceImport uses the corresponding `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`. Every producer import causes Core to create one local `TelemetryService` projection with ResourceImport ownership, `providerRef`, semantic base/import fields, and no `spec.provider`. Routing derives from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version, never Provider/adapter identity, which the signed descriptor authenticates separately. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (implement the signed observability export/import adapter).",
+      "detailedDesign" : "Implement the signed adapter: `sys-obs` exports only the authority `TelemetryService`; its local ingest Endpoint remains Service-owned implementation transport and is never an Export field. ResourceExport/Import use only the canonical Service/fingerprint fields. Each producer import creates one core-owned local Service projection with no `spec.provider`. Routing derives from the signed descriptor and Import record. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/trusted-source admission/identity stripping/redaction/cardinality and per-signal age ceilings over bounded encrypted streams; no FD/socket or raw identity crosses a Zone and audit authority stays local. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-provider-observability-otel"
       ],
@@ -18025,7 +18036,7 @@
       ],
       "specId" : "ADR-046-provider-observability-otel",
       "topologicalRank" : 13,
-      "validation" : "Fast `projection_chain.rs` proves Service projection semantics with a fake stream, exact canonical Export/Import type and fingerprint fields, rejection of obsolete `endpointRef`/`exportedType`/`baseSchemaFingerprint`/`expectedType`/`expectedBaseSchemaFingerprint`/`projectionType`, rejection of projection `spec.provider`, and semantic-fingerprint stability under Provider/adapter identity mutation while signed descriptor authentication remains exact; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality",
+      "validation" : "Fast `projection_chain.rs` proves Service projection semantics with a fake stream, exact canonical Export/Import fields, obsolete-field and projection-extension rejection, and semantic-fingerprint stability; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, trusted-source admission/identity stripping, retention, no FD/identity crossing, and audit locality",
       "wave" : "W6"
     },
     {
@@ -18033,7 +18044,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/{authority,service,binding,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` `TelemetryService`"
       ],
-      "detailedDesign" : "Implement one provider-neutral D097 authority Service with generic telemetry-ingest Endpoint refs and common service/signals/quota/policy fields. Its strict observability-otel `spec.provider` alone selects the loopback SigNoz stack, backend Endpoints, and OTLP. Core rejects duplicates and adopts by owner proof. Implement core-owned imported Service projections with no `spec.provider` or backend ownership. Implement per-producer Bindings with common service/producer/signals/quota/policy fields and strict implementation extension; Bindings own/cause edge collector/forwarder/private Endpoints/runtime Volume. Keep generic observations in `status.resource` and SigNoz/OTLP/OTEL observations in `status.provider`. Preserve trusted source upsert, retry/queue, bounded cardinality/redaction, audit non-transfer, status-first state, and no OTEL SDK in core. Endpoint is transport only. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new universal provider-neutral `telemetry.d2bus.org.TelemetryService`/`telemetry.d2bus.org.TelemetryBinding` pair; adapt existing authority/edge behavior as the initial observability-otel implementation.",
+      "detailedDesign" : "Implement one provider-neutral D097 authority Service with generic telemetry-ingest Endpoint refs and common service/signals/quota/policy fields. Its strict observability-otel `spec.provider` alone selects the loopback SigNoz stack, backend Endpoints, and OTLP. Core rejects duplicates and adopts by owner proof. Implement core-owned imported Service projections with no `spec.provider` or backend ownership. Implement per-producer Bindings and Binding-owned edge children. Keep generic observations in `status.resource` and bounded implementation stage/count/error observations in `status.provider`, never child refs/handles. Preserve trusted-source admission followed by identity stripping, fixed per-signal retention, exact central descriptor admission, retry/queue, bounded redaction, audit non-transfer, complete trace lifecycle, status-first state, and no OTEL SDK in core. Endpoint is transport only. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-provider-observability-otel"
       ],
@@ -18050,7 +18061,7 @@
       ],
       "specId" : "ADR-046-provider-observability-otel",
       "topologicalRank" : 14,
-      "validation" : "Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove provider-neutral names, base/Provider field separation, projection `spec.provider` rejection, exact D088 placement of semantic observations under `status.resource` and implementation observations under `status.provider`, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only.",
+      "validation" : "Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove provider-neutral names, base/Provider separation, projection extension rejection, exact D088 placement, ownership, schemas, trusted-source admission/identity stripping, retention, registry authority, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only.",
       "wave" : "W6"
     },
     {
@@ -21584,23 +21595,23 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-shell-terminal/src/{audit,telemetry}.rs`"
+        "`packages/d2b-provider-shell-terminal/src/{telemetry,diagnostics}.rs`; central descriptor rows in `d2b-contracts`"
       ],
-      "detailedDesign" : "Implement closed-label metrics, redacted spans, and audit events with no usernames, session names, paths, or terminal bytes. Primary reuse disposition: `create`. Preserved source-plan detail: net-new redacted observability.",
+      "detailedDesign" : "Select exact central metric rows, export only merge-safe aggregate gauges, emit complete typed-digest spans, enforce per-signal age/byte retention, and keep only the closed bounded Provider diagnostic accumulator. Strip identity, ResourceRefs, handles, credentials, terminal data, paths, PIDs/pidfds, and cgroup/unit/invocation fields. Telemetry failure never changes shell/session behavior. The Provider supplies typed outcomes to resource/session/effect audit owners and writes no authoritative audit. Privileged effect audit remains durable exactly once and never best-effort. Primary reuse disposition: `create`.",
       "entryContracts" : [
         "ADR-046-provider-shell-terminal"
       ],
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the request-bound selected-roster panel seal recorded",
       "id" : "ADR046-sterm-011",
       "kind" : "work-item",
-      "owner" : "Audit and telemetry area; owned by shell-terminal audit/telemetry modules.",
+      "owner" : "Telemetry/diagnostics area; authoritative audit remains with resource/session/effect owners.",
       "parallelGroup" : "wi:ADR-046-provider-shell-terminal",
       "prerequisites" : [
         "ADR-046-provider-shell-terminal"
       ],
       "specId" : "ADR-046-provider-shell-terminal",
       "topologicalRank" : 11,
-      "validation" : "`packages/d2b-provider-shell-terminal/tests/redaction.rs`",
+      "validation" : "Redaction canaries; exact central registry/no local descriptor; merge-safe aggregate gauges only; per-signal retention; complete span lifecycle; emitter failure isolation; Provider diagnostics cannot satisfy authoritative audit",
       "wave" : "W6"
     },
     {
@@ -22355,24 +22366,25 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor"
+        "`packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production adapter and typed operation contracts in `packages/d2b-contracts`, `packages/d2b-core`, and `packages/d2b-priv-broker` after the shared activation foundation"
       ],
-      "detailedDesign" : "Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 fail-closed drain; §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration; Linux 6.9 plus mandatory pidfs readiness probe; closed broker operations from §12.2 with durable audit before success. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-provider-system-systemd"
       ],
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the request-bound selected-roster panel seal recorded",
       "id" : "ADR046-systemd-001",
       "kind" : "work-item",
-      "owner" : "`ADR046-process-002`; Process contracts/supervisor owner; effect port interface owner",
+      "owner" : "`ADR046-process-002` and `ADR046-activation-001`; Process contracts/supervisor owner and effect port interface owner. The activation item is the dependency-ordered first writer of shared broker catalogue, audit, storage, and dispatch files.",
       "parallelGroup" : "wi:ADR-046-provider-system-systemd",
       "prerequisites" : [
         "ADR-046-provider-system-systemd",
+        "ADR046-activation-001",
         "ADR046-process-002"
       ],
       "specId" : "ADR-046-provider-system-systemd",
-      "topologicalRank" : 11,
-      "validation" : "`tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call)",
+      "topologicalRank" : 12,
+      "validation" : "`tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time and pidfs golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); broker contract/integration tests for closed request fields, Linux 6.9 and pidfs refusal, durable audit failure, no direct Provider/core DBus or cgroup mutation, and retained finalizer on ambiguous exit; latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call)",
       "wave" : "W6"
     },
     {
@@ -22394,7 +22406,7 @@
         "ADR046-systemd-001"
       ],
       "specId" : "ADR-046-provider-system-systemd",
-      "topologicalRank" : 12,
+      "topologicalRank" : 13,
       "validation" : "`tests/unit/nix/cases/provider-system-systemd.nix` (eval-time validation); `tests/unit/gates/drift-check.sh` covers generated option schema",
       "wave" : "W6"
     },
@@ -22417,16 +22429,16 @@
         "ADR046-systemd-001"
       ],
       "specId" : "ADR-046-provider-system-systemd",
-      "topologicalRank" : 12,
+      "topologicalRank" : 13,
       "validation" : "All conformance vectors pass; all fault injection scenarios reach expected phase/condition; all §19 Host and Guest test scenarios pass",
       "wave" : "W6"
     },
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,metric_label_policy.rs,redaction_guard.rs}`"
+        "`packages/d2b-contracts/src/v3/telemetry_policy.rs`; `packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,metric_label_policy.rs,redaction_guard.rs}`"
       ],
-      "detailedDesign" : "`d2b-telemetry` provides: (1) `TraceContext` / `AuditHash` / `AuditChainLink` extracted unchanged; (2) `BoundedEmitter`: `tracing`-subscriber layer that serializes span/metric events into compact frames and writes them over a private Unix datagram socket to the `observability-otel` Provider - no `opentelemetry_sdk` dependency; (3) the canonical closed `METRIC_LABEL_POLICY`, structural descriptor/data-point/exemplar validator, exact forbidden-key/suffix predicates, and non-serializable resource-identity canary matcher used by emitter defense in depth and the mandatory collector ingress gate; (4) `RedactionGuard` span wrapper that asserts the v3 resource attribute allowlist at span creation. No OTEL SDK in this crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged (`TraceContext`, `AuditHash`, `AuditChainLink`); adapt (`OperationId`/`CorrelationId` for v3 record contract); add bounded emitter.",
+      "detailedDesign" : "`d2b-contracts` owns the sole closed `METRIC_DESCRIPTOR_REGISTRY`, including every descriptor, label domain, bucket list, and aggregation scope; `METRIC_LABEL_POLICY` is derived from it. `d2b-telemetry` re-exports that data and provides: (1) typed domain-separated trace/span/operation correlation contexts plus `AuditHash`/`AuditChainLink`; (2) `BoundedEmitter`, with fixed byte and 60/300/120-second per-signal age bounds, that serializes span/metric events and writes them over a private Unix datagram socket to the `observability-otel` Provider without `opentelemetry_sdk`; (3) structural descriptor/data-point/exemplar validation against the exact central row; (4) the fixed emitter-failure accumulator; and (5) `RedactionGuard` enforcing the identity-free Resource attribute allowlist and complete span lifecycle. No Provider/core crate defines a descriptor or label domain. Emitter failure never changes the observed operation. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22440,7 +22452,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 10,
-      "validation" : "Unit test for `RedactionGuard` attribute gate; unit test for `BoundedEmitter` ring-full drop and FIFO drain; table tests for `METRIC_LABEL_POLICY` exact keys, suffixes, and `metadata.name`/UID/ResourceRef identity canaries; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = \"realm-controllers\"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml",
+      "validation" : "Unit tests for `RedactionGuard`, complete trace lifecycle, fixed per-signal age/byte retention, ring-full FIFO, and emitter failure isolation; structural proof that every emitter selects an exact central descriptor row and no local inventory exists; raw identity/handle/credential/cgroup/unit canaries; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = \"realm-controllers\"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml",
       "wave" : "W5"
     },
     {
@@ -22448,7 +22460,7 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/metrics.rs`, `packages/d2b-resource-store-redb/src/tracing.rs`"
       ],
-      "detailedDesign" : "Instrument the store actor, write/read/group-commit paths with the metric inventory from this spec via `d2b-telemetry` `BoundedEmitter`. Emit `d2b.store.*` spans. The p95 `d2b_store_write_duration_seconds` hard target (≤10 ms) feeds the benchmark fixture. No `vm` label; `resource_type` label only from closed catalog. No OTEL SDK in the store crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bucket boundary constants (rename; remove `vm` labels); replace hand-rolled `Registry` with `d2b-telemetry` `BoundedEmitter` meter API.",
+      "detailedDesign" : "Instrument the store actor, write/read/group-commit paths by selecting exact central descriptor rows through `d2b-telemetry` `BoundedEmitter`. Emit complete `d2b.store.*` spans. No `vm` label; `resource_type` label only from the closed catalog. No OTEL SDK in the store crate. The exported histogram is operational data only; the <=10 ms p95 target is measured and recorded separately by the benchmark harness. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22464,7 +22476,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 11,
-      "validation" : "p95 write ≤10 ms benchmark fixture; metric inventory policy test asserting no `vm` label; assert old `d2b_daemon_vm_state` shape absent",
+      "validation" : "Candidate-bound benchmark evidence asserts p95 write <=10 ms from harness samples; central descriptor selection test asserts no `vm` label and no local inventory; old `d2b_daemon_vm_state` shape absent",
       "wave" : "W5"
     },
     {
@@ -22497,7 +22509,7 @@
       "destinations" : [
         "`packages/d2b-core-controller/src/metrics.rs`, `packages/d2b-core-controller/src/tracing.rs`"
       ],
-      "detailedDesign" : "Emit `d2b.controller.hint` span at the instant the post-commit dispatcher fires; emit `d2b.controller.reconcile` child span at handler entry. Interval = p95 ≤5 ms target. `handler` label from closed set; no resource name labels. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bucket patterns; adapt trace-context-in-reconcile pattern from `allocator_engine.rs`.",
+      "detailedDesign" : "Emit `d2b.controller.hint` span at the instant the post-commit dispatcher fires; emit `d2b.controller.reconcile` child span at handler entry. Both spans end exactly once on every exit and use typed correlation context. `handler` label comes from the closed central row; no resource identity. The exported interval histogram is operational data only; the <=5 ms p95 target is measured separately by the benchmark harness. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22513,7 +22525,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 11,
-      "validation" : "`hint_to_handler_latency` benchmark with p95 ≤5 ms assertion; closed `handler` label set gate",
+      "validation" : "`hint_to_handler_latency` candidate-bound benchmark evidence with p95 <=5 ms assertion; exact central `handler` descriptor row; complete trace lifecycle",
       "wave" : "W5"
     },
     {
@@ -22521,7 +22533,7 @@
       "destinations" : [
         "`packages/d2b-provider-supervisor/src/metrics.rs`, `packages/d2b-provider-supervisor/src/tracing.rs`"
       ],
-      "detailedDesign" : "`d2b_process_launch_duration_seconds`: start = instant Process controller receives commit-to-Ready hint; end = first OS spawn call (clone3 or systemd unit start). This implements p95 ≤20 ms. `provider` label replaces `vmm`/`RunnerRole` with the closed set `{minijail,systemd}`. No `vm` name label. A separate `d2b_process_ready_duration_seconds` histogram covers launch-attempt → readiness signal (not a hard target). Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt launch histogram bucket constants; rename `vm` label to no label (process identity in resource attributes); rename `vmm`/`RunnerRole` → `provider` closed enum.",
+      "detailedDesign" : "`d2b_process_launch_duration_seconds`: start = instant Process controller receives commit-to-Ready hint; end = first OS spawn call (clone3 or systemd unit start). `provider` label replaces `vmm`/`RunnerRole` with the closed set `{minijail,systemd}`. No `vm` name label and no process identity in Resource attributes. A separate `d2b_process_ready_duration_seconds` histogram covers launch-attempt to readiness. Exported histograms are operational data; the <=20 ms p95 target is measured separately by the benchmark harness. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22537,7 +22549,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 11,
-      "validation" : "`commit_to_launch_latency` benchmark with p95 ≤20 ms assertion; assert no `vm` label in process metrics; `vmm→provider` label rename gate",
+      "validation" : "`commit_to_launch_latency` candidate-bound benchmark evidence with p95 <=20 ms assertion; no `vm` label or identity Resource attribute; exact central `provider` descriptor row",
       "wave" : "W5"
     },
     {
@@ -22545,7 +22557,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/`, `nixos-modules/components/observability/` (adapted files)"
       ],
-      "detailedDesign" : "`Provider/observability-otel` is an **ordinary optional non-bootstrap Process** (not counted toward the ≤64 MiB mandatory core aggregate). It owns: (1) per-Zone datagram receiver socket at `$ZONE_STATE/telemetry/emitter.sock` (drains frames from core emitters) and OTLP/gRPC Unix socket at `$ZONE_STATE/telemetry/otlp.sock`; (2) the full OTEL SDK with OTLP exporter - only this process links `opentelemetry_sdk`; (3) OTel Collector pipeline per Zone and per Host; (4) vsock OTLP forwarding to obs Zone (replaces socat-based `OtelHostBridgeArgvInputs`); (5) D096 import-stream ingest; (6) one structural `METRIC_LABEL_POLICY` gate shared by Unix emitter, OTLP Unix, OTLP/vsock, and import-stream metrics before aggregation, queueing, batching, retry, or export, with bounded non-echoing errors/quarantine/backpressure; (7) SigNoz stack Nix adapted from `stack.nix` with per-Zone `ingressSources` replacing per-VM `vmName`; (8) journald scrape (optional, disabled by default); (9) self-metrics endpoint. Trusted producer identity is stamped only into allow-listed OTEL Resource attributes; audit remains separate. Zone/controller startup does not wait for this Provider. If absent or unready, Zone health is `Degraded` (not `Failed`). Readiness: socket exists and first drain cycle completes successfully. `d2b.observability.host.identityName` option preserved; `vmName` in `ingressSources` populated from Zone name. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone naming); adapt `OtelHostBridgeArgvInputs` vsock forwarding to native OTLP/gRPC-over-vsock; adapt readiness gate pattern (`OtelHostBridgeReadiness::Ready` → Provider phase `Ready`); adapt `ingressSources` per-VM → per-Zone.",
+      "detailedDesign" : "`Provider/observability-otel` is an **ordinary optional non-bootstrap Process** (not counted toward the <=64 MiB mandatory core aggregate). It owns the per-Zone receivers, full OTEL SDK/exporter, SigNoz pipeline, native forwarding, import-stream ingest, journald input, and self-metrics. Every ingress validates the exact `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY` row before queueing. Every ring/queue/retry/forwarding path applies the 60/300/120-second metric/trace/log ceilings. Trusted producer identity selects routing/quota only and is removed before export; Resource attributes contain fixed semantic classes only. Spans use typed domain-separated correlation digests and end exactly once. Zone/controller startup does not wait for this Provider, and emitter/export failure never changes the observed operation. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22569,7 +22581,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/nix/journald.nix` (new Nix fragment)"
       ],
-      "detailedDesign" : "`d2b.zones.<name>.observability.journald.enable = false` (default). When enabled: journald receiver follows `z-<zone-id>/*` and `s-<execution-id>/*` cgroup filters. Collector applies redaction: drops `MESSAGE` credential/path patterns, `_CMDLINE`, `_EXE`, `INVOCATION_ID`. Current `scrapeJournal` host option is preserved unchanged. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt journald receiver config for per-Zone cgroup filter (`z-<zone-id>/*`, `s-<execution-id>/*`).",
+      "detailedDesign" : "`d2b.zones.<name>.observability.journald.enable = false` (default). When enabled, the receiver may use trusted cgroup/unit metadata only for internal selection. Before output it structurally removes every raw identity plus `_CMDLINE`, `_EXE`, `INVOCATION_ID`, `_SYSTEMD_CGROUP`, `_SYSTEMD_UNIT`, `_SYSTEMD_USER_UNIT`, `_PID`, `_UID`, and `_GID`, and drops credential/path-bearing messages. Current `scrapeJournal` host option remains an input switch, not permission to export those fields. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22584,7 +22596,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 11,
-      "validation" : "Nix eval test: filter expression set when enabled; test that `_CMDLINE` and `INVOCATION_ID` appear in drop list",
+      "validation" : "Nix eval test: filter expression set when enabled; test every identity/cgroup/unit/invocation field above is in the structural drop set and absent from mock OTLP output",
       "wave" : "W5"
     },
     {
@@ -22592,7 +22604,7 @@
       "destinations" : [
         "`packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new); updated `policy_observability.rs`; updated `policy_metrics.rs`"
       ],
-      "detailedDesign" : "(1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add structural metric-label policy lint: parse every v3 `MetricDescriptor`, require each label key and value domain to exist in the closed `METRIC_LABEL_POLICY`, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `network`, `network_name`, and `link_name_hash`, reject resource-name-derived key suffixes `*_name`, `*_name_hash`, `*_name_digest`, and `*_uid`, and prove `metadata.name`, UID, ResourceRef, and resource-identity canaries never enter label values. Fixed semantic labels remain allowed only with closed domains. (4) Prove the observability Provider's Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream adapters all invoke that validator before queue/batch/export; assert whole-frame rejection, bounded non-echoing error classes/quarantine, and policy-before-capacity backpressure. (5) Assert the `d2b.zone` Resource attribute remains present and audit is unchanged. (6) Add bucket boundary gates for 5 ms and 20 ms. (7) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = \"realm-controllers\"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates.",
+      "detailedDesign" : "(1) Replace the baseline OTEL Resource allowlist with fixed `service.name`, `service.version`, `d2b.provider`, and `d2b.component` semantic/build classes; raw Host/VM/Zone/source/deployment fields are forbidden. (2) Scan all v3 instrumentation for raw identity, handle, credential, path/socket/argv/env, PID/pidfd, cgroup/unit/invocation, and raw trace/span fields. (3) Parse the one `d2b-contracts::METRIC_DESCRIPTOR_REGISTRY`; reject any local descriptor/inventory, label-domain or bucket authority, and any non-identical emitter selection. (4) Reject every per-resource/session/lease/component gauge without identity and require a merge-safe aggregate scope/operator for each identity-free gauge. (5) Prove all four ingress variants validate before queue/batch/export and apply per-signal age ceilings. (6) Prove complete span terminal coverage and bounded emitter diagnostics that cannot affect observed operations. (7) Keep the 5 ms and 20 ms bucket rows while requiring separate benchmark evidence for targets. (8) Retain the SigNoz-only backend and `config_source = \"realm-controllers\"` absence gates. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22662,7 +22674,7 @@
       "destinations" : [
         "`packages/d2b-core-controller/src/{configuration.rs, ownership.rs}`"
       ],
-      "detailedDesign" : "(1) On new generation activation, every stored `managedBy=configuration` resource absent from the new configured set receives `deletionRequestedAt` plus `deletion-pending`; controller/API-managed resources are untouched. (2) Activation returns after durable intent queueing and does not wait for cleanup. (3) The ownership handler drives child-before-parent finalizers. (4) When finalizers clear, one atomic store transaction writes the `Deleted` revision/change event and removes the row and indexes. After commit, the audit subsystem appends `ResourceMutation{event=\"deleted\", trigger=\"config-cleanup\"}` from that revision using a dedup/exactly-once recovery key; audit append is not part of the store transaction. (5) Stall detection sets `cleanup-stalled` without force-removing finalizers. (6) Prior generations use count retention, default 3 and range 1..16, with no TTL. (7) Core sets `managedBy`/`configurationGeneration` in persisted resources; input bundles omit both. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt hash-chain append from `daemon_audit.rs` for `ResourceMutation{trigger=\"config-cleanup\"}` records; adapt prior-generation retention window from `manifest.nix` pattern.",
+      "detailedDesign" : "(1) On new generation activation, every stored `managedBy=configuration` resource absent from the new configured set receives `deletionRequestedAt` plus `deletion-pending`; controller/API-managed resources are untouched. (2) Activation returns after durable intent queueing and does not wait for cleanup. (3) The ownership handler drives child-before-parent finalizers. (4) When finalizers clear, one atomic store transaction writes the `Deleted` revision/change event, immutable audit recovery row, and row/index removal. Segment append/export completion replays exactly once from that row; until durable completion the operation is `CommittedPendingAudit`, never success or rollback. (5) Stall detection sets `cleanup-stalled` without force-removing finalizers. (6) Prior generations use count retention, default 3 and range 1..16, with no TTL. (7) Core sets `managedBy`/`configurationGeneration` in persisted resources; input bundles omit both. Primary reuse disposition: `adapt`.",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -22801,9 +22813,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}`"
+        "`packages/d2b-provider-transport-azure-relay/src/{telemetry.rs,diagnostics.rs}`; central descriptor rows in `d2b-contracts`"
       ],
-      "detailedDesign" : "Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed semantic label sets with no Zone/resource-name-derived keys; retain Zone identity only in the `d2b.zone` OTEL resource attribute; never label secret bytes; provider audit covers **carriage authentication and health observations only** - Azure auth events, WebSocket lifecycle, credential acquisition outcomes - and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider)",
+      "detailedDesign" : "Select exact central metric rows, emit complete typed-digest spans, enforce 60/300/120-second signal retention, and keep only the closed bounded Provider diagnostic accumulator. Strip every raw identity, ResourceRef, relay/account identifier, handle, Credential, cgroup/unit/invocation field, locator, and provider error. Telemetry failure never changes transport/Credential/session operations. This Provider writes no authoritative audit; owning Credential/session/resource/effect boundaries emit durable exactly-once records, with privileged effects never best-effort.",
       "entryContracts" : [
         "ADR-046-provider-transport-azure-relay"
       ],
@@ -22822,7 +22834,7 @@
       ],
       "specId" : "ADR-046-provider-transport-azure-relay",
       "topologicalRank" : 13,
-      "validation" : "`tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/metric_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and that a Zone-name canary never enters label values; `tests/fake_relay_transport.rs` asserts audit record fields against schema",
+      "validation" : "Credential/identity/handle/cgroup/unit redaction canaries; exact central registry rows and no local descriptors; no per-resource/session/lease gauges; per-signal retention; complete trace lifecycle; emitter failure isolation; boundary-owner audit tests prove Provider diagnostic events cannot satisfy authoritative audit",
       "wave" : "W6"
     },
     {
@@ -22875,7 +22887,7 @@
       "destinations" : [
         "`packages/d2b-provider-transport-unix/src/{seqpacket,identity,socket}.rs`"
       ],
-      "detailedDesign" : "Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup - that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
+      "detailedDesign" : "Adapt transport structs while removing every public raw-credential field/accessor/conversion. `PeerIdentityPolicy` produces only a private kernel observation for the safe session adapter; it never reports `PeerCredentials` upward as subject input. Maintain `SO_PASSCRED` setup and first-packet credential extraction, but all ancillary receive paths use `MSG_CMSG_CLOEXEC`, verify with `F_GETFD`, reject `MSG_CTRUNC`/malformed/missing/extra descriptors, and scavenge every failure. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy transport mechanics and replace identity/CLOEXEC ownership.",
       "entryContracts" : [
         "ADR-046-provider-transport-unix"
       ],
@@ -22891,7 +22903,7 @@
       ],
       "specId" : "ADR-046-provider-transport-unix",
       "topologicalRank" : 12,
-      "validation" : "Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here`",
+      "validation" : "Adapt the 12 source tests; replace the raw-peercred projection test with `peer_observation_is_private_and_consumed`, and add atomic CLOEXEC, truncation, malformed ancillary, missing/extra FD, and stable descriptor-count tests",
       "wave" : "W6"
     },
     {
@@ -22945,7 +22957,7 @@
       "destinations" : [
         "`packages/d2b-provider-transport-unix/src/descriptor.rs`"
       ],
-      "detailedDesign" : "Copy verbatim; adapt `DescriptorPolicy::verify` to produce `AcceptedAttachment` carrying `ObjectIdentity` binding for v3 ComponentSession attachment descriptor model; `pid` not stored beyond liveness check Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
+      "detailedDesign" : "Do not copy the numeric-PID algorithm. Retain generic attachment `ObjectIdentity` and RAII scavenge behavior, but remove `pidfd_open(peer_credentials.pid)`, `/proc/<pid>` fdinfo/status reads, `kcmp` peer-PID comparison, and any received-pidfd path that can mint peer admission. Define the sealed evidence consumer for the exact `OwnedFd` returned by `OpenPeerPidfdFromAcceptedSocket`; ADR046-transport-unix-006 owns broker acquisition and registrar wiring. Primary reuse disposition: `adapt`. Preserved source-plan detail: retain descriptor ownership and replace peer identity.",
       "entryContracts" : [
         "ADR-046-provider-transport-unix"
       ],
@@ -22960,15 +22972,15 @@
       ],
       "specId" : "ADR-046-provider-transport-unix",
       "topologicalRank" : 13,
-      "validation" : "Copy `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` and `duplicate_kernel_objects_are_rejected_and_cleaned_up`",
+      "validation" : "Adapt `duplicate_kernel_objects_are_rejected_and_cleaned_up`; replace the numeric-PID test with compile/source tests proving absent `pidfd_open(SO_PEERCRED.pid)`, absent `/proc/<pid>` reopen, and refusal to treat a received pidfd attachment as admission evidence",
       "wave" : "W6"
     },
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-transport-unix/src/admission.rs`; `packages/d2b-provider-transport-unix/tests/admission.rs`; `packages/d2b-contracts/src/{broker_wire.rs,lib.rs}`; `packages/d2b-core/src/privileges.rs`; `packages/d2b-priv-broker/src/{audit.rs,fd_passing.rs,live_handlers.rs,protocol.rs,runtime.rs,sys.rs}`; `packages/d2b-priv-broker/src/ops/{peer_pidfd.rs,mod.rs}`; `packages/d2b-contracts/tests/broker_peer_pidfd.rs`; `packages/d2b-priv-broker/tests/peer_pidfd_from_accepted_socket.rs`; `packages/d2b-session-unix/src/{adapter.rs,descriptor.rs,error.rs,lib.rs,pidfd.rs,socket.rs,subject.rs,zone_admission.rs}`; `packages/d2b-session-unix/tests/{subject_mapping.rs,unix_session.rs}`; `packages/d2b-bus/src/{router.rs,transport/unix.rs}`; `packages/d2b-bus/tests/{public_mint_surface.rs,approved-public-api.txt,approved-hidden-public-api.txt,approved-capability-api.txt,approved-capability-trait-impls.txt}`"
+        "`packages/d2b-provider-transport-unix/src/{admission.rs,platform.rs}`; `packages/d2b-provider-transport-unix/tests/{admission.rs,platform.rs}`; `packages/d2b-contracts/src/{broker_wire.rs,lib.rs}`; `packages/d2b-core/src/privileges.rs`; `packages/d2b-priv-broker/src/{audit.rs,fd_passing.rs,live_handlers.rs,protocol.rs,runtime.rs,sys.rs}`; `packages/d2b-priv-broker/src/ops/{peer_pidfd.rs,mod.rs}`; `packages/d2b-contracts/tests/broker_peer_pidfd.rs`; `packages/d2b-priv-broker/tests/peer_pidfd_from_accepted_socket.rs`; `packages/d2b-session-unix/src/{adapter.rs,descriptor.rs,error.rs,lib.rs,pidfd.rs,socket.rs,subject.rs,zone_admission.rs}`; `packages/d2b-session-unix/tests/{subject_mapping.rs,unix_session.rs}`; `packages/d2b-bus/src/{router.rs,transport/unix.rs}`; `packages/d2b-bus/tests/{public_mint_surface.rs,approved-public-api.txt,approved-hidden-public-api.txt,approved-capability-api.txt,approved-capability-trait-impls.txt}`"
       ],
-      "detailedDesign" : "Keep `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)`: it calls `getsockopt(SO_TYPE)` on `received_fd`; `SOCK_SEQPACKET` must match `\"seqpacket\"`, `SOCK_STREAM` must match `\"stream\"`, every other type fails `invalid-socket-fd`; ZoneLink with attachments and stream with attachments fail `attachment-policy-conflict`; Noise profile enforcement remains ComponentSession-owned. Add the typed `OpenPeerPidfdFromAcceptedSocket` broker request. Its request carries no numeric PID, credential tuple, raw descriptor integer, path, or subject claim and must arrive with exactly one accepted-socket `SCM_RIGHTS` fd. Receipt uses `MSG_CMSG_CLOEXEC`, rejects truncated/malformed control data and missing/extra fds, and closes every received or produced fd on all refusal, decode, send, and disconnect paths. The broker obtains the peer pidfd from that exact accepted socket using `SO_PEERPIDFD` in the existing `packages/d2b-priv-broker/src/sys.rs` quarantine, verifies it is live and close-on-exec, and returns exactly one owned pidfd; unsupported kernels fail closed with an actionable typed kernel-floor error. There is no `pidfd_open(SO_PEERCRED.pid)` or other numeric-PID fallback and no new FFI crate, Cargo dependency, or manifest edit. The safe Unix session adapter consumes the accepted socket and returned `OwnedFd`, verifies `SO_PEERCRED`, process generation/start identity, expected cgroup, liveness, and descriptor identity against that exact fd, and transfers one opaque, non-cloneable evidence value into the private `ZoneRegistrar` issuer. The registrar alone resolves the subject. Remove public verifier/credential constructors, `ZoneBootstrapIdentity::verify`, its `Clone`, `VerifiedUnixPeer::credentials`, evidence accessors, conversions, re-exports, and any alternate issuance path. Compile-fail and API seals reject `Clone`, `Copy`, `Default`, `From`, public fields, raw credential/pidfd access, caller-supplied verifiers, and external issuance. Primary reuse disposition: `adapt`. Preserved source-plan detail: retain socket-kind admission and replace numeric peer identity with accepted-socket-bound pidfd evidence.",
+      "detailedDesign" : "Keep `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)`: it calls `getsockopt(SO_TYPE)` on `received_fd`; `SOCK_SEQPACKET` must match `\"seqpacket\"`, `SOCK_STREAM` must match `\"stream\"`, every other type fails `invalid-socket-fd`; ZoneLink with attachments and stream with attachments fail `attachment-policy-conflict`; Noise profile enforcement remains ComponentSession-owned. Gate Provider readiness on Linux 6.9 plus successful pidfs self-pidfd and `SO_PEERPIDFD` socketpair probes, with no soft-fail. Add the typed `OpenPeerPidfdFromAcceptedSocket` broker request. Its request carries no numeric PID, credential tuple, raw descriptor integer, path, or subject claim and must arrive with exactly one accepted-socket `SCM_RIGHTS` fd. Receipt uses `MSG_CMSG_CLOEXEC`, rejects truncated/malformed control data and missing/extra fds, verifies `FD_CLOEXEC`, and closes every received or produced fd on all refusal, decode, send, and disconnect paths. The broker obtains the peer pidfd from that exact accepted socket using `SO_PEERPIDFD` in the existing `packages/d2b-priv-broker/src/sys.rs` quarantine, verifies it is live, pidfs-backed, and close-on-exec, durably appends and syncs the typed path-free audit row, and returns exactly one owned pidfd; unsupported kernels or audit failure fail closed with an actionable typed error. There is no `pidfd_open(SO_PEERCRED.pid)` or other numeric-PID fallback and no new FFI crate, Cargo dependency, or manifest edit. The safe Unix session adapter consumes the accepted socket and returned `OwnedFd`, verifies `SO_PEERCRED`, process generation/start identity, expected cgroup, liveness, and descriptor identity against that exact fd, and transfers one opaque, non-cloneable evidence value into the private `ZoneRegistrar` issuer. The registrar alone resolves the subject. Remove public verifier/credential constructors, `ZoneBootstrapIdentity::verify`, its `Clone`, `VerifiedUnixPeer::credentials`, evidence accessors, conversions, re-exports, and any alternate issuance path. Compile-fail and API seals reject `Clone`, `Copy`, `Default`, `From`, public fields, raw credential/pidfd access, caller-supplied verifiers, and external issuance. Primary reuse disposition: `adapt`. Preserved source-plan detail: retain socket-kind admission and replace numeric peer identity with accepted-socket-bound pidfd evidence.",
       "entryContracts" : [
         "ADR-046-provider-transport-unix"
       ],
@@ -22986,7 +22998,7 @@
       ],
       "specId" : "ADR-046-provider-transport-unix",
       "topologicalRank" : 13,
-      "validation" : "Retain `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`, `stream_fd_passes_stream_kind`, `seqpacket_fd_rejects_stream_kind_declaration`, `zone_link_with_attachments_enabled_fails`, `local_portal_seqpacket_with_attachments_accepted`, and `stream_with_attachments_enabled_rejected`. Focused broker/session/bus tests cover successful accepted-socket pidfd acquisition; exact one-fd ownership; `FD_CLOEXEC`; missing, extra, truncated, malformed, and post-decode-failure ancillary closure; unsupported `SO_PEERPIDFD`; dead pidfd; credential, generation, start-identity, cgroup, and descriptor mismatch; post-credential PID reuse; ambiguity; broker response loss; and stable descriptor counts on every path. Source and API tests prove there is no numeric-PID fallback, raw descriptor/credential field, public verifier, constructor, clone, accessor, conversion, re-export, caller-supplied issuer, or FFI/Cargo expansion, and that the private registrar is the sole subject issuer.",
+      "validation" : "Retain `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`, `stream_fd_passes_stream_kind`, `seqpacket_fd_rejects_stream_kind_declaration`, `zone_link_with_attachments_enabled_fails`, `local_portal_seqpacket_with_attachments_accepted`, and `stream_with_attachments_enabled_rejected`. Focused platform, broker, session, and bus tests cover Linux-before-6.9 refusal; successful and failed pidfs/`SO_PEERPIDFD` probes; successful accepted-socket pidfd acquisition; exact one-fd ownership; `MSG_CMSG_CLOEXEC` plus `F_GETFD`; missing, extra, truncated, malformed, non-CLOEXEC, and post-decode-failure ancillary closure; unsupported `SO_PEERPIDFD`; dead/non-pidfs pidfd; credential, generation, start-identity, cgroup, and descriptor mismatch; post-credential PID reuse; ambiguity; audit append/sync failure; broker response loss; and stable descriptor counts on every path. Source and API tests prove there is no numeric-PID fallback, raw descriptor/credential field, public verifier, constructor, clone, accessor, conversion, re-export, caller-supplied issuer, or FFI/Cargo expansion, and that the private registrar is the sole subject issuer.",
       "wave" : "W6"
     },
     {
@@ -23967,7 +23979,7 @@
       "destinations" : [
         "`packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`; `packages/d2b-provider-volume-virtiofs/tests/argv_golden.rs`"
       ],
-      "detailedDesign" : "Create crate skeleton with mandatory `src/`, `tests/`, `integration/`, `README.md`. Extract `VirtiofsdArgvInput` and `generate_virtiofsd_argv` with these changes: (1) replace `extra_args: Vec<String>` with nothing (removed); (2) replace `socket_path: String` with `socket_path: SocketPath` newtype backed by `socket_path.rs`; (3) add `shared_dir_fd: i32` replacing `shared_dir: String` (FD-based); (4) replace `socket_group: Option<u32>` with `socket_group: Option<Gid>`. Implement `socket_path.rs`: private path using SHA-256 of `<zone>\\x00<volume>\\x00<guest>`, truncated 8 hex chars, formatted as `<zone-runtime-dir>/vms/<guest>/vol-<hash>.vfd.sock`. Assert path length ≤ 108 bytes. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Create crate skeleton with mandatory `src/`, `tests/`, `integration/`, `README.md`. Extract `VirtiofsdArgvInput` and `generate_virtiofsd_argv` with these changes: (1) remove `extra_args`; (2) replace `socket_path: String` with an opaque `SocketStorageId` backed by `socket_storage.rs`; (3) add `shared_dir_fd: i32` replacing `shared_dir: String`; (4) remove caller-selected `socket_group`; (5) remove `inode_file_handles` input and always emit the fixed literal `--inode-file-handles=never`. The broker resolves the socket storage ID to the bounded private path and dedicated Export principal only at exec. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-provider-volume-virtiofs"
       ],
@@ -23983,7 +23995,7 @@
       ],
       "specId" : "ADR-046-provider-volume-virtiofs",
       "topologicalRank" : 12,
-      "validation" : "`tests/argv_golden.rs`: 14 migrated tests + `no_extra_args_ever_emitted`, `socket_path_is_not_in_args`, `shared_dir_is_fd_path`, `path_length_within_sunpath_limit`; `tests/socket_path_privacy.rs`: `socket_path_not_in_export_status`, `socket_path_not_in_volume_status`, `socket_path_not_in_audit_record`; `tests/schema_conformance.rs`: `process_spec_readiness_class_is_provider_defined`, `process_spec_readiness_has_no_kind_or_period_fields`, `process_spec_budget_cpu_request_limit_nested`, `process_spec_budget_memory_request_limit_nested`, `process_spec_budget_pids_limit_present`, `process_spec_budget_fds_limit_present`, `process_spec_sandbox_no_new_privileges_true`, `process_spec_sandbox_read_only_root_true`, `process_spec_no_host_uid_gid_in_spec`",
+      "validation" : "`tests/argv_golden.rs`: 14 adapted tests plus `no_extra_args_ever_emitted`, `inode_file_handles_is_fixed_never`, `inode_file_handles_has_no_input`, `socket_path_is_not_provider_input`, `socket_group_is_not_provider_input`, `shared_dir_is_fd_path`, `broker_resolved_path_length_within_sunpath_limit`; `tests/socket_path_privacy.rs`: `socket_path_not_in_export_status`, `socket_path_not_in_volume_status`, `socket_path_not_in_audit_record`, `socket_principal_is_unique_per_export`; `tests/schema_conformance.rs`: `process_spec_readiness_class_is_provider_defined`, `process_spec_readiness_has_no_kind_or_period_fields`, `process_spec_budget_cpu_request_limit_nested`, `process_spec_budget_memory_request_limit_nested`, `process_spec_budget_pids_limit_present`, `process_spec_budget_fds_limit_present`, `process_spec_sandbox_no_new_privileges_true`, `process_spec_sandbox_read_only_root_true`, `process_spec_no_host_uid_gid_in_spec`, and rejection of `inodeFileHandles`/`socketGroup` settings",
       "wave" : "W6"
     },
     {
@@ -23991,7 +24003,7 @@
       "destinations" : [
         "`packages/d2b-provider-volume-virtiofs/src/user_ns.rs` (conformance kit); `packages/d2b-provider-volume-virtiofs/tests/adr021_invariant.rs`"
       ],
-      "detailedDesign" : "`user_ns.rs` contains only the conformance check and template descriptor assertion: verify that the virtiofsd-worker Process template declares `capabilityClasses: []`, `startRoot: false`, `noNewPrivileges: true`, `readOnlyRoot: true`, and `sandbox.userNamespace.mappingClass: process-principal-root`. `hostUid`/`hostGid` are NOT set by the controller - system-minijail resolves the mapping from the `User/vol-<vol>-vfd` principal when building the LaunchTicket via the effect port. The conformance check rejects any template mutation that adds host capability classes, sets `startRoot: true`, disables `noNewPrivileges`, or disables `readOnlyRoot`. The user-NS pre-establishment code itself remains in `d2b-priv-broker/src/sys.rs` and is invoked via the system-minijail effect port. Primary reuse disposition: `extract`. Preserved source-plan detail: extract conformance kit only; pre-establishment code stays in broker.",
+      "detailedDesign" : "`user_ns.rs` contains only the conformance check and template descriptor assertion: verify that the virtiofsd-worker Process template declares `namespaceClasses: [user, mount]`, `capabilityClasses: []`, `startRoot: false`, `noNewPrivileges: true`, `readOnlyRoot: true`, and `sandbox.userNamespace.mappingClass: process-principal-root`. `hostUid`/`hostGid` are NOT set by the controller - system-minijail resolves the mapping from the Export-owned `User/exp-<export>-vfd` principal when building the LaunchTicket via the effect port. The conformance check rejects a shared principal, missing mount namespace, non-private propagation, absent pivot/chroot proof, any host capability class, `startRoot: true`, disabled `noNewPrivileges`, or disabled `readOnlyRoot`. The user-NS and mount-namespace setup remains in `d2b-priv-broker/src/sys.rs` and is invoked via the system-minijail effect port. Primary reuse disposition: `extract`. Preserved source-plan detail: extract conformance kit only; setup code stays in broker.",
       "entryContracts" : [
         "ADR-046-provider-volume-virtiofs"
       ],
@@ -24007,7 +24019,7 @@
       ],
       "specId" : "ADR-046-provider-volume-virtiofs",
       "topologicalRank" : 13,
-      "validation" : "`tests/adr021_invariant.rs`: `virtiofsd_capability_classes_must_be_empty`, `virtiofsd_start_root_must_be_false`, `virtiofsd_no_new_privileges_must_be_true`, `virtiofsd_read_only_root_must_be_true`, `process_spec_has_no_host_uid_gid`, `sandbox_namespace_never_emitted`, `user_ns_single_entry_single_uid_mapping`, `uid_map_write_ordering_uid_setgroups_gid`, `child_setuid_in_ns_not_host_uid`, `clone_newns_not_in_clone3_flags`, `child_exits_user_ns_sync_on_pipe_eof`",
+      "validation" : "`tests/adr021_invariant.rs`: `virtiofsd_capability_classes_must_be_empty`, `virtiofsd_start_root_must_be_false`, `virtiofsd_no_new_privileges_must_be_true`, `virtiofsd_read_only_root_must_be_true`, `process_spec_has_no_host_uid_gid`, `sandbox_namespace_never_emitted`, `user_ns_single_entry_single_uid_mapping`, `uid_map_write_ordering_uid_setgroups_gid`, `child_setuid_in_ns_not_host_uid`, `clone_newns_not_in_clone3_flags`, `mount_ns_created_after_user_map`, `mount_propagation_is_private_before_bind`, `pivot_chroot_detaches_old_root`, `dedicated_export_principal_not_shared`, `child_exits_user_ns_sync_on_pipe_eof`",
       "wave" : "W6"
     },
     {
@@ -24015,7 +24027,7 @@
       "destinations" : [
         "`packages/d2b-provider-volume-virtiofs/src/controller.rs`; `packages/d2b-provider-volume-virtiofs/src/export.rs`"
       ],
-      "detailedDesign" : "Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2bus.org.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure User/vol-<vol>-vfd; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2). Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2bus.org.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure the Export-owned dedicated `User/exp-<export>-vfd` or gctl-class equivalent; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2), with all socket filesystem effects routed through typed broker operations and durably audited before success. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-provider-volume-virtiofs"
       ],
@@ -24041,7 +24053,7 @@
       "destinations" : [
         "`packages/d2b-provider-volume-virtiofs/src/readiness.rs`; `packages/d2b-provider-volume-virtiofs/integration/guest_mount_readiness/`"
       ],
-      "detailedDesign" : "`unix-socket-exists` readiness: check file existence at the private socket path via a bounded blocking adapter (e.g., `tokio::task::spawn_blocking` wrapping `fstatat(2)` relative to the zone runtime `OwnedFd`, or an async-safe fd-relative equivalent); no blocking syscall on the async executor thread. Probe period 1 s; timeout 30 s. On socket present → set `Export.status.exportReady: true`. Guest-mount readiness: send `VirtioFsMountReady?` probe to guest-control health endpoint over vsock. Response `MountReady` sets `guestMountReady: true`. Response `MountAbsent` or timeout sets `guestMountReady: false`. The vsock health probe is async-native. If Guest is down, set Export `phase: Unknown`. All readiness probes (unix-socket-exists, guest-mount health) use bounded blocking adapters or async-safe fd-relative equivalents; no blocking I/O on the reconcile executor thread. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "`unix-socket-exists` readiness uses an opaque `SocketStorageId` through the injected EffectPort; the core adapter dispatches a typed broker observation that opens from the anchored runtime dirfd with no-follow/CLOEXEC flags, verifies socket type, dedicated Export principal, mode, link count, and expected identity, and returns only `Present|Absent|Unsafe|Ambiguous`. The controller receives no path or fd. The broker operation is bounded, runs off the reconcile executor, and durably audits unsafe/ambiguous refusal. Probe period 1 s; timeout 30 s. `Present` sets `Export.status.exportReady: true`; `Unsafe|Ambiguous` quarantines. Guest-mount readiness sends `VirtioFsMountReady?` to guest-control over vsock. `MountReady` sets `guestMountReady: true`; `MountAbsent` or timeout sets it false. If Guest is down, set Export `phase: Unknown`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-provider-volume-virtiofs"
       ],
@@ -24056,7 +24068,7 @@
       ],
       "specId" : "ADR-046-provider-volume-virtiofs",
       "topologicalRank" : 15,
-      "validation" : "`tests/export_lifecycle.rs` (extended); `integration/guest_mount_readiness/`: virtiofsd launches, socket appears, guest-control probe returns MountReady, guestMountReady flips to true; probe returns MountAbsent on umount",
+      "validation" : "`tests/export_lifecycle.rs` covers typed present/absent/unsafe/ambiguous socket outcomes and proves no path/fd reaches the Provider; broker tests plant symlink, hardlink, wrong principal, wrong mode/type, stale socket, and audit-sync failure; `integration/guest_mount_readiness/` proves virtiofsd launches, the dedicated-principal socket becomes Ready, guest-control returns MountReady, and MountAbsent follows unmount",
       "wave" : "W6"
     },
     {
@@ -24089,7 +24101,7 @@
       "destinations" : [
         "`nixos-modules/resources-volume.nix` (store-view and user Volume attachment emission); `nixos-modules/options-volumes.nix` (optional user-facing volume/attachment options)"
       ],
-      "detailedDesign" : "Extend the Nix resource compiler to: (1) auto-emit a store-view Volume (with `ro-store` and `meta` Views, virtiofs ro-store attachment) per Guest that has a VM runtime Provider; (2) emit virtiofs attachment entries for explicitly configured user Volumes; (3) emit `User/vol-<vol>-vfd` resources for each Volume with virtiofs attachments; (4) emit `Provider/volume-virtiofs` as a Provider resource when any virtiofs attachment is configured. volume-local creates Export resources at runtime (not in Nix bundle); no `virtiofs.d2bus.org.Export` resources appear in the Nix-emitted bundle. All eval validation steps (§16.5) apply.",
+      "detailedDesign" : "Extend the Nix resource compiler to: (1) auto-emit a store-view Volume (with `ro-store` and `meta` Views, virtiofs ro-store attachment) per Guest that has a VM runtime Provider; (2) emit virtiofs attachment entries for explicitly configured user Volumes; (3) emit `Provider/volume-virtiofs` as a Provider resource when any virtiofs attachment is configured. Nix emits no virtiofs principal: volume-local creates Export resources at runtime, and volume-virtiofs creates one Export-owned dedicated socket principal per Export. No `virtiofs.d2bus.org.Export` resources appear in the Nix-emitted bundle. All eval validation steps (§16.5) apply.",
       "entryContracts" : [
         "ADR-046-provider-volume-virtiofs"
       ],
