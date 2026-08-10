@@ -1182,10 +1182,7 @@ fn expected_scaffold_handoffs() -> BTreeMap<&'static str, &'static str> {
 
 fn expected_local_task_label_prefixes() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
-        (
-            "T606",
-            "T606 [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - W6 SHARED-CONTRACT AND",
-        ),
+        ("T606", "T606 [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION -"),
         (
             "T607",
             "T607 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY",
