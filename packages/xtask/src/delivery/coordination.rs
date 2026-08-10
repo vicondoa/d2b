@@ -37,7 +37,6 @@ use super::{
         SnapshotSha256, canonical_digest, qualified_wave_parts, sha256_bytes,
         validate_bounded_string, validate_hash, validate_identifier, validate_sha256,
     },
-    snapshot,
     storage::{MAX_JSON_BYTES, absolute_path, ensure_external_path},
 };
 
@@ -378,6 +377,45 @@ impl FreshFetchEvidence {
         if resolved != self.fetched_oid {
             return Err(DeliveryError::new(
                 "fresh-fetch evidence names a commit that is not present in the checkout",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_close(
+        &self,
+        ledger: &DispatchLedger,
+        command_evidence: &CommandEvidenceSet,
+        feature_dir: &Path,
+        panel_roles: Option<&[PanelRole]>,
+    ) -> Result<()> {
+        self.validate_shape()?;
+        if let Some(panel_roles) = panel_roles {
+            let roster = panel_roles
+                .iter()
+                .map(|role| role.as_str().to_owned())
+                .collect::<Vec<_>>();
+            if roster != self.selected_roster {
+                return Err(DeliveryError::new(
+                    "plan approval receipt selected roster differs from the panel request",
+                ));
+            }
+        }
+        if self.dispatch_ledger_sha256 != ledger.material_digest()? {
+            return Err(DeliveryError::new(
+                "plan approval receipt dispatch ledger material has changed",
+            ));
+        }
+        if self.command_evidence_set_sha256 != command_evidence.digest() {
+            return Err(DeliveryError::new(
+                "plan approval receipt command evidence set has changed",
+            ));
+        }
+        let expected_feature = feature_plan_material_digest(feature_dir)?;
+        if self.feature_plan_material_sha256 != expected_feature {
+            return Err(DeliveryError::new(
+                "plan approval receipt feature material is stale; status-only checkbox updates \
+                 are excluded, but requirement and guard changes invalidate approval",
             ));
         }
         Ok(())
@@ -1724,7 +1762,6 @@ pub fn require_plan_receipt_with_selection_bytes(
 }
 
 pub fn require_close_receipts(
-    state: &super::storage::StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
     panel_roles: Option<&[PanelRole]>,
@@ -1732,42 +1769,19 @@ pub fn require_close_receipts(
 ) -> Result<DispatchLedger> {
     let paths = W6Paths::from_environment(repository_roots)?;
     let receipt = read_plan_approval(&paths.plan_approval, repository_roots)?;
-    let entry_candidate = state.existing_candidate(&receipt.wave, &receipt.entry_candidate_id)?;
-    let entry_snapshot = snapshot::read(&entry_candidate)?.ok_or_else(|| {
-        DeliveryError::new(
-            "plan approval receipt names an entry candidate without a readable production snapshot",
-        )
-    })?;
-    let entry_material = entry_snapshot.material.clone();
     let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
-    let digests = entry_material.digests()?;
-    let head = entry_material
-        .repository_set
+    let head = ledger
+        .entries
         .first()
-        .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository"))?
+        .ok_or_else(|| DeliveryError::new("dispatch ledger has no entries"))?
         .head_oid
         .as_str();
-    ledger.validate_for_candidate(&digests.candidate_id, head)?;
+    ledger.validate_for_candidate(&receipt.entry_candidate_id, head)?;
     let evidence = read_command_evidence(&paths.command_evidence_dir, repository_roots)?;
     evidence.validate_t221(head)?;
     let feature_root = feature_root(repository_roots)?;
-    receipt.validate_for(
-        &entry_material,
-        None,
-        &ledger,
-        &evidence,
-        &feature_root,
-        panel_roles,
-    )?;
-    let current_digests = material.digests()?;
-    if current_digests.content_id == entry_snapshot.content_id
-        && current_digests.candidate_id == entry_snapshot.candidate_id
-        && current_digests.snapshot_sha256 != entry_snapshot.snapshot_sha256
-    {
-        return Err(DeliveryError::new(
-            "Wave 6 close material moved commit history without a replacement production snapshot",
-        ));
-    }
+    receipt.validate_for_close(&ledger, &evidence, &feature_root, panel_roles)?;
+    material.digests()?;
     for group in [
         "feature-local:w6-shared-prep",
         "feature-local:w6-core-control-foundations",

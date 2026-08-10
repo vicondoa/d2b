@@ -262,7 +262,6 @@ fn seal_checked(
     if super::coordination::is_wave6_entry_wave(&snapshot.material) {
         let request = panel::stored_request(candidate, snapshot)?;
         super::coordination::require_close_receipts(
-            state,
             &snapshot.material,
             repository_roots,
             Some(&request.roles),
