@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "d2f721417c5c4db413f2411ffdfafedf316281e091983a854595d2c78edfcb1f";
+    "a2efb4377196d8bc6b272a0331246ab3b573f64ecd4a97ded3184c4ac9679166";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
@@ -1437,7 +1437,7 @@ fn check_manifest_group_foundations(
         ));
     }
     let expected_foundations = expected_strings(&["T606", "T607", "T608", "T609"]);
-    for group in groups {
+    for group in &groups {
         if string_array(value_at(
             contract,
             &["manifest_group_foundations", group.as_str()],
@@ -1974,7 +1974,7 @@ fn check_shared_writer_handoffs(
         .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
         .filter_map(|node| node["id"].as_str())
         .collect::<BTreeSet<_>>();
-    let local_ids = string_set(&["T606", "T607", "T608", "T609"]);
+    let local_ids = string_set(EXPECTED_LOCAL_TASK_IDS);
     let graph_ids = graph_node_ids(graph);
 
     let mut derived_paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -2011,9 +2011,9 @@ fn check_shared_writer_handoffs(
         findings.push("local_to_manifest_shared_writer_handoffs.handoffs is missing".to_owned());
         return;
     };
-    if handoffs.len() != 14 {
+    if handoffs.len() != 13 {
         findings.push(format!(
-            "shared-writer handoff count is {}, expected 14",
+            "shared-writer handoff count is {}, expected 13",
             handoffs.len()
         ));
     }
@@ -2899,6 +2899,45 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "\"T604\": [\"T221\", \"T607\", \"T608\", \"T609\"]",
             "\"T604\": [\"T221\"]",
         ),
+        ("\"Merged\": []", "\"Merged\": [\"Dispatched\"]"),
+        ("\"w6-shared-prep-inventory\"", "\"w6-shared-prep-missing\""),
+        (
+            "\"wi:ADR-046-provider-activation-nixos\": [\"T606\", \"T607\", \"T608\", \"T609\"]",
+            "\"wi:ADR-046-provider-activation-nixos\": [\"T606\"]",
+        ),
+        (
+            "\"artifact_kind\": \"d2b-feature-local/dispatch-ledger\"",
+            "\"artifact_kind\": \"d2b-feature-local/dispatch-ledger-v2\"",
+        ),
+        (
+            "\"NotLaunched\", \"Dispatched\", \"Validated\", \"Completed\", \"Blocked\"",
+            "\"NotLaunched\", \"Completed\", \"Validated\", \"Dispatched\", \"Blocked\"",
+        ),
+        (
+            "\"artifact_kind\": \"d2b-feature-local/plan-approval\"",
+            "\"artifact_kind\": \"d2b-feature-local/plan-approval-v2\"",
+        ),
+        ("\"result\": \"approved\"", "\"result\": \"rejected\""),
+        (
+            "\"status_only_updates_do_not_invalidate_after_first_dispatch\": true",
+            "\"status_only_updates_do_not_invalidate_after_first_dispatch\": false",
+        ),
+        (
+            "\"packages/d2b-priv-broker/src/audit.rs\"",
+            "\"packages/d2b-priv-broker/src/other.rs\"",
+        ),
+        (
+            "\"packages/d2b-provider-activation-nixos/\": \"wi:ADR-046-provider-activation-nixos\"",
+            "\"packages/d2b-provider-activation-nixos/\": \"wi:ADR-046-provider-audio-pipewire\"",
+        ),
+        (
+            "\"single_foundation_owner\": \"T609\"",
+            "\"single_foundation_owner\": \"T608\"",
+        ),
+        (
+            "\"tpm_before_first_ensure\": [",
+            "\"tpm_before_first_ensure\": []",
+        ),
         (
             "\"source_wave_label\": \"W5\"",
             "\"source_wave_label\": \"W4\"",
@@ -3065,6 +3104,122 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
             "{label} pseudo-closer unexpectedly hid a competing contract"
         );
     }
+}
+
+#[test]
+fn feature_local_semantic_branches_reject_independent_mutations() {
+    let tasks = read_repo_file(FEATURE_TASKS);
+    let contract = markdown_json_fences(&tasks)
+        .into_iter()
+        .find_map(|fence| {
+            (fence.closed)
+                .then(|| parse_json_without_duplicates(&fence.body).expect("contract JSON"))
+        })
+        .expect("feature-local contract");
+    let graph = load(GRAPH_JSON);
+    let manifest = load(WORK_ITEMS);
+
+    let mut findings = Vec::new();
+    check_local_completion_contract(&contract, &graph, &manifest, &mut findings);
+    assert!(
+        findings.is_empty(),
+        "semantic contract baseline failed:\n{}",
+        findings.join("\n")
+    );
+
+    let mut state_mutation = contract.clone();
+    state_mutation["local_completion_state_machine"]["transitions"]["Planned"] =
+        serde_json::json!(["Validated"]);
+    findings.clear();
+    check_local_completion_contract(&state_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "a non-monotonic local transition unexpectedly passed"
+    );
+
+    let mut foundation_mutation = contract.clone();
+    foundation_mutation["manifest_group_foundations"]
+        .as_object_mut()
+        .expect("foundation map")
+        .remove("wi:ADR-046-provider-activation-nixos");
+    findings.clear();
+    check_local_completion_contract(&foundation_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "a missing manifest foundation mapping unexpectedly passed"
+    );
+
+    let mut dispatch_mutation = contract.clone();
+    dispatch_mutation["dispatch_ledger_contract"]["entry_required_fields"] =
+        serde_json::json!(["group"]);
+    findings.clear();
+    check_local_completion_contract(&dispatch_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "an incomplete dispatch-ledger entry schema unexpectedly passed"
+    );
+
+    let mut receipt_mutation = contract.clone();
+    receipt_mutation["plan_approval_receipt_contract"]["required_values"]["result"] =
+        serde_json::json!("rejected");
+    findings.clear();
+    check_local_completion_contract(&receipt_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "a rejected plan-approval receipt schema unexpectedly passed"
+    );
+
+    let mut handoff_mutation = contract.clone();
+    handoff_mutation["local_to_manifest_shared_writer_handoffs"]["handoffs"][0]["order"][1] =
+        serde_json::json!("T999");
+    findings.clear();
+    check_shared_writer_handoffs(&handoff_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "an unresolved shared-writer order endpoint unexpectedly passed"
+    );
+
+    let mut scaffold_mutation = contract.clone();
+    scaffold_mutation["local_to_manifest_shared_writer_handoffs"]["scaffold_handoffs"]["packages/d2b-provider-activation-nixos/"] =
+        serde_json::json!("wi:ADR-046-provider-audio-pipewire");
+    findings.clear();
+    check_shared_writer_handoffs(&scaffold_mutation, &graph, &manifest, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "a wrong scaffold-to-group handoff unexpectedly passed"
+    );
+
+    let mut missing_overlap = manifest.clone();
+    let item = missing_overlap["items"]
+        .as_array_mut()
+        .expect("manifest items")
+        .iter_mut()
+        .find(|item| item["workItemId"] == "ADR046-vl-011")
+        .expect("provider policy item");
+    item["destination"] = serde_json::json!("packages/xtask/src/other_policy.rs");
+    findings.clear();
+    check_shared_writer_handoffs(&contract, &graph, &missing_overlap, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "a missing normalized local-owned overlap unexpectedly passed"
+    );
+
+    let mut extra_overlap = manifest.clone();
+    let item = extra_overlap["items"]
+        .as_array_mut()
+        .expect("manifest items")
+        .iter_mut()
+        .find(|item| item["workItemId"] == "ADR046-vl-011")
+        .expect("provider policy item");
+    item["destination"] = serde_json::json!(
+        "`packages/xtask/src/provider_crate_policy.rs`; `packages/d2b-contracts/src/v3/volume.rs`"
+    );
+    findings.clear();
+    check_shared_writer_handoffs(&contract, &graph, &extra_overlap, &mut findings);
+    assert!(
+        !findings.is_empty(),
+        "an extra normalized local-owned overlap unexpectedly passed"
+    );
 }
 
 #[test]
