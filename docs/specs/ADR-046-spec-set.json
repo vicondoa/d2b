@@ -548,7 +548,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-      "sha256" : "bd567dc9e137e222e0e0b189ddb9145d5bb5359e6e4024730dbaf865ed19e10c",
+      "sha256" : "494640c9494d5a85aa34142a06ea9c9f6b436d37cf86d86246818f3387226131",
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "status" : "Accepted",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",

@@ -12850,9 +12850,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`"
+        "`packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`; the `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` discovery/build recipe in `Makefile`"
       ],
-      "detailedDesign" : "End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt.",
+      "detailedDesign" : "End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. The host-integration case boots the real Provider-owned Cloud Hypervisor process through KVM, establishes the authenticated guest-control session, and observes ready Guest state. This item is the first W6 writer of the shared `Makefile` acceptance-recipe surface; active local T604 is dependency-ordered after this item and owns only its distinct resource-operator and daemon-restart recipes. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt.",
       "entryContracts" : [
         "ADR-046-provider-runtime-cloud-hypervisor"
       ],
@@ -12866,7 +12866,7 @@
       ],
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "topologicalRank" : 11,
-      "validation" : "Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: end-to-end VMM boot with real KVM and guest-control session (requires `make test-host-integration`)",
+      "validation" : "Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: nonempty discovery and no-skip build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` through `make test-host-integration`, proving real KVM boot, the Provider-owned VMM process effect, authenticated guest-control session, and ready Guest state.",
       "wave" : "W6"
     },
     {
