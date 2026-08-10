@@ -38,6 +38,24 @@ const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
     "T221", "T606", "T607", "T608", "T609", "T604", "T479", "T480",
 ];
 const EXPECTED_OWNED_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604"];
+const EXPECTED_LOCAL_GROUP_IDS: &[&str] = &[
+    "feature-local:w6-shared-prep",
+    "feature-local:w6-core-control-foundations",
+    "feature-local:w6-storage-authority-foundations",
+    "feature-local:w6-audit-telemetry-foundations",
+    "feature-local:w6-operator-acceptance",
+    "feature-local:w6-converge",
+    "feature-local:w6-close",
+];
+const EXPECTED_W6_WORK_ITEMS: usize = 258;
+const EXPECTED_W6_MANIFEST_GROUPS: usize = 29;
+const EXPECTED_W6_PROVIDER_GROUPS: usize = 27;
+const EXPECTED_POST_ENTRY_GROUPS: usize = 36;
+const EXPECTED_POST_ENTRY_RECORDS: usize = 265;
+const EXPECTED_TASKS: usize = 609;
+const EXPECTED_PARALLEL_TASKS: usize = 101;
+const EXPECTED_MANIFEST_MERGED: usize = 68;
+const EXPECTED_MANIFEST_PLANNED: usize = 477;
 
 /// The normative member count, per `docs/specs/README.md`.
 const EXPECTED_MEMBERS: usize = 55;
@@ -47,7 +65,7 @@ const EXPECTED_WORK_ITEMS: usize = 545;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
 const EXPECTED_NODES: u64 = 600;
-const EXPECTED_EDGES: u64 = 1960;
+const EXPECTED_EDGES: u64 = 1962;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
@@ -790,7 +808,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 
 fn load(rel: &str) -> Value {
-    serde_json::from_str(&read_repo_file(rel))
+    parse_json_without_duplicates(&read_repo_file(rel))
         .unwrap_or_else(|error| panic!("policy-lint: {rel} is not valid JSON: {error}"))
 }
 
@@ -1018,6 +1036,8 @@ fn expected_shared_file_order() -> BTreeMap<&'static str, Vec<&'static str>> {
         ("Makefile", vec!["T606", "ADR046-ch-001", "T604"]),
         ("packages/Cargo.toml", vec!["T606"]),
         ("packages/Cargo.lock", vec!["T606"]),
+        ("packages/d2b-priv-broker/Cargo.toml", vec!["T606"]),
+        ("packages/d2b-priv-broker/Cargo.lock", vec!["T606"]),
         ("flake.nix", vec!["T606"]),
         ("packages/d2b-contracts/src/broker_wire.rs", vec!["T606"]),
         ("packages/d2b-priv-broker/src/runtime.rs", vec!["T606"]),
@@ -1039,6 +1059,1112 @@ fn expected_t604_manifest_dependencies() -> Vec<String> {
     dependencies
 }
 
+fn expected_local_completion_evidence() -> BTreeMap<&'static str, Vec<&'static str>> {
+    BTreeMap::from([
+        (
+            "T606",
+            vec![
+                "w6-shared-prep-inventory",
+                "w6-shared-prep-shared-writers",
+                "w6-shared-prep-lockfile-flake-packages",
+            ],
+        ),
+        (
+            "T607",
+            vec![
+                "w6-core-control-production-route",
+                "w6-real-so-peercred-admission",
+            ],
+        ),
+        (
+            "T608",
+            vec![
+                "w6-typed-broker-host-effects",
+                "w6-strict-resource-nix-validation",
+                "w6-tpm-legacy-migration",
+                "w6-host-global-authority",
+            ],
+        ),
+        (
+            "T609",
+            vec![
+                "w6-transactional-privileged-audit",
+                "w6-forbidden-identity-redaction",
+                "w6-bounded-telemetry",
+                "w6-closed-metric-descriptors",
+            ],
+        ),
+        (
+            "T604",
+            [
+                "operator-nix-activation-cleanup-development",
+                "daemon-restart-vm-survival-development",
+            ]
+            .to_vec(),
+        ),
+        (
+            "T479",
+            [
+                "operator-nix-activation-cleanup",
+                "w6-cloud-hypervisor-guest-acceptance",
+            ]
+            .to_vec(),
+        ),
+        (
+            "T480",
+            [
+                "w6-binding-panel-unanimous",
+                "w6-protected-merge",
+                "w6-post-merge-seal",
+                "w6-merge-eligibility",
+            ]
+            .to_vec(),
+        ),
+    ])
+}
+
+fn expected_scaffold_handoffs() -> BTreeMap<&'static str, &'static str> {
+    BTreeMap::from([
+        (
+            "packages/d2b-provider-activation-nixos/",
+            "wi:ADR-046-provider-activation-nixos",
+        ),
+        (
+            "packages/d2b-provider-audio-pipewire/",
+            "wi:ADR-046-provider-audio-pipewire",
+        ),
+        (
+            "packages/d2b-provider-clipboard-wayland/",
+            "wi:ADR-046-provider-clipboard-wayland",
+        ),
+        (
+            "packages/d2b-provider-display-wayland/",
+            "wi:ADR-046-provider-display-wayland",
+        ),
+        (
+            "packages/d2b-provider-notification-desktop/",
+            "wi:ADR-046-provider-notification-desktop",
+        ),
+        (
+            "packages/d2b-provider-runtime-azure-container-apps/",
+            "wi:ADR-046-provider-runtime-azure-container-apps",
+        ),
+        (
+            "packages/d2b-provider-runtime-azure-virtual-machine/",
+            "wi:ADR-046-provider-runtime-azure-virtual-machine",
+        ),
+        (
+            "packages/d2b-provider-runtime-cloud-hypervisor/",
+            "wi:ADR-046-provider-runtime-cloud-hypervisor",
+        ),
+        (
+            "packages/d2b-provider-runtime-qemu-media/",
+            "wi:ADR-046-provider-runtime-qemu-media",
+        ),
+        (
+            "packages/d2b-provider-shell-terminal/",
+            "wi:ADR-046-provider-shell-terminal",
+        ),
+        (
+            "packages/d2b-provider-transport-azure-relay/",
+            "wi:ADR-046-provider-transport-azure-relay",
+        ),
+        (
+            "packages/d2b-provider-transport-unix/",
+            "wi:ADR-046-provider-transport-unix",
+        ),
+        (
+            "packages/d2b-provider-transport-vsock/",
+            "wi:ADR-046-provider-transport-vsock",
+        ),
+    ])
+}
+
+fn expected_local_task_label_prefixes() -> BTreeMap<&'static str, &'static str> {
+    BTreeMap::from([
+        (
+            "T606",
+            "T606 [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - W6 SHARED-CONTRACT AND",
+        ),
+        (
+            "T607",
+            "T607 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY",
+        ),
+        (
+            "T608",
+            "T608 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY",
+        ),
+        (
+            "T609",
+            "T609 [P] [US2] **FEATURE-LOCAL FOUNDATION/COMPLETION - PROSPECTIVELY",
+        ),
+        (
+            "T604",
+            "T604 [US1] **FEATURE-LOCAL COORDINATION/COMPLETION - author and development-validate operator activation and daemon-restart acceptance.**",
+        ),
+        (
+            "T479",
+            "T479 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 CONVERGE + FREEZE + OPERATOR/GUEST ACCEPTANCE -",
+        ),
+        (
+            "T480",
+            "T480 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 SINGLE BINDING WORK GATE + MERGE -",
+        ),
+    ])
+}
+
+fn split_top_level(text: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, character) in text.char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ';' | ',' if depth == 0 => {
+                parts.push(text[start..index].to_owned());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(text[start..].to_owned());
+    parts
+}
+
+fn expand_destination_braces(text: &str) -> Vec<String> {
+    let Some(open) = text.find('{') else {
+        return vec![text.to_owned()];
+    };
+    let mut depth = 0usize;
+    let mut close = None;
+    for (offset, character) in text[open..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        return vec![text.to_owned()];
+    };
+
+    let alternatives = split_top_level(&text[open + 1..close]);
+    alternatives
+        .into_iter()
+        .flat_map(|alternative| {
+            expand_destination_braces(&format!(
+                "{}{}{}",
+                &text[..open],
+                alternative,
+                &text[close + 1..]
+            ))
+        })
+        .collect()
+}
+
+fn trim_destination_token(token: &str) -> String {
+    token
+        .trim()
+        .trim_matches(|character: char| {
+            matches!(
+                character,
+                '`' | '\'' | '"' | '(' | ')' | '[' | ']' | ',' | ';' | '.' | ':'
+            )
+        })
+        .trim_start_matches("./")
+        .to_owned()
+}
+
+fn is_path_like(token: &str) -> bool {
+    token == "Makefile"
+        || token == "flake.nix"
+        || [
+            "packages/",
+            "nixos-modules/",
+            "tests/",
+            "integration/",
+            "examples/",
+            "templates/",
+            "docs/",
+            "proofs/",
+            "changelog.d/",
+        ]
+        .iter()
+        .any(|prefix| token.starts_with(prefix))
+}
+
+fn is_ignored_destination_root(token: &str) -> bool {
+    matches!(
+        token,
+        "packages/" | "nixos-modules/" | "tests/" | "integration/"
+    )
+}
+
+/// Expands only concrete path expressions. Wildcard and prose-only
+/// destinations are deliberately not treated as shared-writer evidence: they
+/// cannot identify a unique handoff and are covered by the scaffold/manifest
+/// group checks instead.
+fn normalized_destination_atoms(destination: &str) -> BTreeSet<String> {
+    let mut candidates = Vec::new();
+    let mut code = String::new();
+    let mut in_code = false;
+    for character in destination.chars() {
+        if character == '`' {
+            if in_code {
+                candidates.extend(split_top_level(&code));
+                code.clear();
+            }
+            in_code = !in_code;
+        } else if in_code {
+            code.push(character);
+        }
+    }
+
+    // Some generated rows intentionally keep a path outside code spans (for
+    // example the short Nix and broker operation rows). Include only tokens
+    // anchored at a repository path root so surrounding prose cannot become a
+    // false destination.
+    for token in destination.split_whitespace() {
+        let token = trim_destination_token(token);
+        if is_path_like(&token) {
+            candidates.push(token);
+        }
+    }
+
+    let mut atoms = BTreeSet::new();
+    for candidate in candidates {
+        for part in split_top_level(&candidate) {
+            for expanded in expand_destination_braces(&part) {
+                let token = trim_destination_token(&expanded);
+                if token.is_empty()
+                    || !is_path_like(&token)
+                    || is_ignored_destination_root(&token)
+                    || token.contains('*')
+                    || token.contains("...")
+                    || token.contains('<')
+                {
+                    continue;
+                }
+                atoms.insert(token);
+            }
+        }
+    }
+    atoms
+}
+
+fn local_path_overlaps_destination(local_path: &str, destination: &str) -> bool {
+    if local_path.ends_with('/') {
+        destination.starts_with(local_path)
+    } else {
+        destination == local_path
+    }
+}
+
+fn local_owned_path_owners(contract: &Value) -> BTreeMap<String, BTreeSet<String>> {
+    let mut owners = BTreeMap::new();
+    for task in ["T606", "T607", "T608", "T609"] {
+        if let Some(paths) = value_at(contract, &["owned_files", task]).and_then(Value::as_array) {
+            for path in paths.iter().filter_map(Value::as_str) {
+                owners
+                    .entry(path.to_owned())
+                    .or_insert_with(BTreeSet::new)
+                    .insert(task.to_owned());
+            }
+        }
+    }
+    owners
+}
+
+fn graph_node_ids(graph: &Value) -> BTreeSet<String> {
+    graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn w6_manifest_groups(graph: &Value) -> BTreeSet<String> {
+    graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .filter_map(|node| node["parallelGroup"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn is_sha256_hex(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_str).is_some_and(|text| {
+        text.len() == 64 && text.chars().all(|character| character.is_ascii_hexdigit())
+    })
+}
+
+fn check_manifest_group_foundations(
+    contract: &Value,
+    graph: &Value,
+    manifest: &Value,
+    findings: &mut Vec<String>,
+) {
+    let groups = w6_manifest_groups(graph);
+    if groups.len() != EXPECTED_W6_MANIFEST_GROUPS {
+        findings.push(format!(
+            "Wave 6 graph has {} manifest groups, expected {EXPECTED_W6_MANIFEST_GROUPS}",
+            groups.len()
+        ));
+    }
+    let provider_groups = groups
+        .iter()
+        .filter(|group| group.starts_with("wi:ADR-046-provider-"))
+        .count();
+    if provider_groups != EXPECTED_W6_PROVIDER_GROUPS {
+        findings.push(format!(
+            "Wave 6 graph has {provider_groups} Provider groups, expected {EXPECTED_W6_PROVIDER_GROUPS}"
+        ));
+    }
+
+    let foundations = value_at(contract, &["manifest_group_foundations"]);
+    if object_keys(foundations) != groups {
+        findings.push(format!(
+            "manifest_group_foundations keys do not equal the {EXPECTED_W6_MANIFEST_GROUPS} W6 graph groups"
+        ));
+    }
+    let expected_foundations = expected_strings(&["T606", "T607", "T608", "T609"]);
+    for group in groups {
+        if string_array(value_at(
+            contract,
+            &["manifest_group_foundations", group.as_str()],
+        )) != expected_foundations
+        {
+            findings.push(format!(
+                "manifest_group_foundations entry for `{group}` is not the exact T606/T607/T608/T609 substitution"
+            ));
+        }
+    }
+
+    let w6_nodes: Vec<&Value> = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .collect();
+    let mut w6_ids = BTreeSet::new();
+    for node in &w6_nodes {
+        let Some(id) = node["id"].as_str() else {
+            findings.push("a W6 graph node has no workItemId".to_owned());
+            continue;
+        };
+        if !w6_ids.insert(id.to_owned()) {
+            findings.push(format!("W6 graph workItemId `{id}` appears more than once"));
+        }
+    }
+    if w6_nodes.len() != EXPECTED_W6_WORK_ITEMS {
+        findings.push(format!(
+            "Wave 6 graph has {} work items, expected {EXPECTED_W6_WORK_ITEMS}",
+            w6_nodes.len()
+        ));
+    }
+
+    let mut manifest_by_id: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+    for item in manifest["items"].as_array().into_iter().flatten() {
+        if let Some(id) = item["workItemId"].as_str() {
+            manifest_by_id.entry(id).or_default().push(item);
+        }
+    }
+    let mut w6_states = BTreeMap::<&str, usize>::new();
+    for id in &w6_ids {
+        match manifest_by_id.get(id.as_str()) {
+            Some(items) if items.len() == 1 => {
+                let item = items[0];
+                let state = item["implementationState"].as_str().unwrap_or_default();
+                *w6_states.entry(state).or_default() += 1;
+                if state != "Planned" {
+                    findings.push(format!(
+                        "W6 manifest item `{id}` has state `{state}`, expected `Planned` at entry"
+                    ));
+                }
+            }
+            Some(items) => findings.push(format!(
+                "W6 manifest item `{id}` resolves to {} rows instead of exactly one",
+                items.len()
+            )),
+            None => findings.push(format!("W6 graph item `{id}` is absent from the manifest")),
+        }
+    }
+    if w6_states != BTreeMap::from([("Planned", EXPECTED_W6_WORK_ITEMS)]) {
+        findings.push(format!(
+            "W6 manifest state census is {w6_states:?}, expected {EXPECTED_W6_WORK_ITEMS} Planned"
+        ));
+    }
+
+    let mut post_entry_groups = groups;
+    post_entry_groups.extend(
+        EXPECTED_LOCAL_GROUP_IDS
+            .iter()
+            .map(|group| (*group).to_owned()),
+    );
+    if post_entry_groups.len() != EXPECTED_POST_ENTRY_GROUPS {
+        findings.push(format!(
+            "post-entry group census is {}, expected {EXPECTED_POST_ENTRY_GROUPS}",
+            post_entry_groups.len()
+        ));
+    }
+    if w6_ids.len() + EXPECTED_LOCAL_TASK_IDS.len() != EXPECTED_POST_ENTRY_RECORDS {
+        findings.push(format!(
+            "post-entry record census is {}, expected {EXPECTED_POST_ENTRY_RECORDS}",
+            w6_ids.len() + EXPECTED_LOCAL_TASK_IDS.len()
+        ));
+    }
+}
+
+fn check_local_completion_contract(
+    contract: &Value,
+    graph: &Value,
+    manifest: &Value,
+    findings: &mut Vec<String>,
+) {
+    expect_contract_value(
+        contract,
+        &["adoption_substitution_semantics"],
+        serde_json::json!({
+            "scope": "W6 readiness and local completion only",
+            "substitutes_execution_and_validation_obligation": true,
+            "substitutes_manifest_identity": false,
+            "substitutes_manifest_implementation_state": false,
+            "mutates_historical_checkbox_or_delivery_state": false,
+            "usable_for_prior_wave_seal_or_recovery": false,
+            "satisfaction_rule": "every adopted id resolves to exactly one local task in historical_foundation_adoption; that task must reach Merged with all required completion evidence before any dependent manifest group is Ready"
+        }),
+        "adoption_substitution_semantics",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["local_completion_state_machine"],
+        serde_json::json!({
+            "states": ["Planned", "Dispatched", "Validated", "Merged"],
+            "initial_state": "Planned",
+            "transitions": {
+                "Planned": ["Dispatched"],
+                "Dispatched": ["Validated"],
+                "Validated": ["Dispatched", "Merged"],
+                "Merged": []
+            },
+            "transition_authority": "external dispatch ledger plus structured evidence; checkbox rendering is a status projection only",
+            "validated_requires_all_evidence": true,
+            "merged_requires_validated_state_and_accepted_commit": true,
+            "validation_failure_transition": ["Validated", "Dispatched"]
+        }),
+        "local_completion_state_machine",
+        findings,
+    );
+
+    let expected_evidence = expected_local_completion_evidence();
+    let expected_evidence_keys = expected_evidence
+        .keys()
+        .map(|task| (*task).to_owned())
+        .collect::<BTreeSet<_>>();
+    if object_keys(value_at(contract, &["required_local_completion_evidence"]))
+        != expected_evidence_keys
+    {
+        findings.push("required_local_completion_evidence task set is incorrect".to_owned());
+    }
+    for (task, evidence) in expected_evidence {
+        let expected = evidence
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        let actual = string_array(value_at(
+            contract,
+            &["required_local_completion_evidence", task],
+        ));
+        if actual != expected || actual.is_empty() {
+            findings.push(format!(
+                "required_local_completion_evidence for `{task}` is incomplete or reordered"
+            ));
+        }
+        let mut unique = BTreeSet::new();
+        if let Some(values) = value_at(contract, &["required_local_completion_evidence", task])
+            .and_then(Value::as_array)
+        {
+            for value in values {
+                if let Some(value) = value.as_str() {
+                    if !unique.insert(value) {
+                        findings.push(format!(
+                            "required local completion evidence `{value}` is duplicated for `{task}`"
+                        ));
+                    }
+                } else {
+                    findings.push(format!(
+                        "required local completion evidence for `{task}` contains a non-string"
+                    ));
+                }
+            }
+        }
+    }
+
+    expect_contract_value(
+        contract,
+        &["t608_strict_nix_and_tpm_prerequisites"],
+        serde_json::json!({
+            "nix_owners": [
+                "packages/xtask/src/zone_schema.rs",
+                "nixos-modules/generated/resource-types.nix",
+                "nixos-modules/generated/options-zones-Zone.nix",
+                "nixos-modules/generated/options-zones-ZoneLink.nix",
+                "nixos-modules/options-resources.nix",
+                "nixos-modules/options-zones-resources.nix",
+                "nixos-modules/resource-schema-validation.nix",
+                "nixos-modules/resource-compiler.nix",
+                "nixos-modules/resources.nix",
+                "nixos-modules/resources-bundle.nix",
+                "nixos-modules/assertions.nix"
+            ],
+            "tpm_before_first_ensure": [
+                "T606 shared broker and storage contract freeze is Merged",
+                "T608 Volume contract and Host-global authority index are Validated",
+                "legacy swtpm state and marker inventory is complete",
+                "migration or exact-owner adoption is durable",
+                "missing, replacement, ambiguity, and foreign-owner cases are refused"
+            ]
+        }),
+        "t608_strict_nix_and_tpm_prerequisites",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["t609_production_audit_wiring"],
+        serde_json::json!({
+            "single_foundation_owner": "T609",
+            "surfaces": [
+                "d2b-audit record, sink, segment, export, rotation, and prune",
+                "resource-store transactional mutation audit",
+                "daemon runtime and daemon audit",
+                "broker privileged audit writer",
+                "core authorization audit",
+                "bus and session audit producers",
+                "production boundary and failure-injection tests"
+            ],
+            "provider_rule": "Provider-specific emitters consume typed ports after T609; no Provider opens a writer or chooses durability"
+        }),
+        "t609_production_audit_wiring",
+        findings,
+    );
+
+    check_manifest_group_foundations(contract, graph, manifest, findings);
+
+    let dispatch = value_at(contract, &["dispatch_ledger_contract"]);
+    let dispatch_keys = string_set(&[
+        "path_environment",
+        "must_be_absolute",
+        "must_be_outside_git",
+        "artifact_kind",
+        "schema_version",
+        "entry_key",
+        "states",
+        "entry_required_fields",
+        "not_launched_null_fields",
+        "required_groups",
+        "local_group_ids",
+        "readiness_rule",
+        "pre_t221_rule",
+        "not_authentication",
+    ]);
+    if object_keys(dispatch) != dispatch_keys {
+        findings.push("dispatch_ledger_contract field set is incorrect".to_owned());
+    }
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "path_environment"],
+        serde_json::json!("D2B_W6_DISPATCH_LEDGER"),
+        "dispatch_ledger_contract.path_environment",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "must_be_absolute"],
+        serde_json::json!(true),
+        "dispatch_ledger_contract.must_be_absolute",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "must_be_outside_git"],
+        serde_json::json!(true),
+        "dispatch_ledger_contract.must_be_outside_git",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "artifact_kind"],
+        serde_json::json!("d2b-feature-local/dispatch-ledger"),
+        "dispatch_ledger_contract.artifact_kind",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "schema_version"],
+        serde_json::json!(1),
+        "dispatch_ledger_contract.schema_version",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "entry_key"],
+        serde_json::json!("group"),
+        "dispatch_ledger_contract.entry_key",
+        findings,
+    );
+    expect_contract_string_array(
+        contract,
+        &["dispatch_ledger_contract", "states"],
+        &[
+            "NotLaunched",
+            "Dispatched",
+            "Validated",
+            "Completed",
+            "Blocked",
+        ],
+        "dispatch_ledger_contract.states",
+        findings,
+    );
+    expect_contract_string_array(
+        contract,
+        &["dispatch_ledger_contract", "entry_required_fields"],
+        &[
+            "group",
+            "state",
+            "candidateId",
+            "headOid",
+            "dispatchId",
+            "updatedAtUnix",
+            "completionEvidenceIds",
+        ],
+        "dispatch_ledger_contract.entry_required_fields",
+        findings,
+    );
+    expect_contract_string_array(
+        contract,
+        &["dispatch_ledger_contract", "not_launched_null_fields"],
+        &["dispatchId"],
+        "dispatch_ledger_contract.not_launched_null_fields",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "required_groups"],
+        serde_json::json!(EXPECTED_POST_ENTRY_GROUPS),
+        "dispatch_ledger_contract.required_groups",
+        findings,
+    );
+    expect_contract_string_array(
+        contract,
+        &["dispatch_ledger_contract", "local_group_ids"],
+        EXPECTED_LOCAL_GROUP_IDS,
+        "dispatch_ledger_contract.local_group_ids",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "readiness_rule"],
+        serde_json::json!(
+            "a group is Ready only when every local foundation in manifest_group_foundations and every graph prerequisite is Completed or Merged in the ledger"
+        ),
+        "dispatch_ledger_contract.readiness_rule",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "pre_t221_rule"],
+        serde_json::json!(
+            "derive launched groups from ledger entries whose state is not NotLaunched and require the derived set to be empty"
+        ),
+        "dispatch_ledger_contract.pre_t221_rule",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["dispatch_ledger_contract", "not_authentication"],
+        serde_json::json!(true),
+        "dispatch_ledger_contract.not_authentication",
+        findings,
+    );
+    let graph_groups = w6_manifest_groups(graph);
+    let mut expected_post_entry_groups = graph_groups.clone();
+    expected_post_entry_groups.extend(
+        EXPECTED_LOCAL_GROUP_IDS
+            .iter()
+            .map(|group| (*group).to_owned()),
+    );
+    if expected_post_entry_groups.len() != EXPECTED_POST_ENTRY_GROUPS {
+        findings.push("post-entry group derivation is not closed".to_owned());
+    }
+
+    expect_contract_value(
+        contract,
+        &["structured_command_evidence_contract"],
+        serde_json::json!({
+            "artifact_kind": "d2b-feature-local/command-evidence",
+            "schema_version": 1,
+            "required_fields": [
+                "commandId",
+                "argv",
+                "workingTreeOid",
+                "startedAtUnix",
+                "completedAtUnix",
+                "exitCode",
+                "result",
+                "stdoutSha256",
+                "stderrSha256",
+                "outputBytes"
+            ],
+            "required_t221_command_ids": [
+                "focused-guard-list",
+                "focused-guard-ignored-list",
+                "focused-guard-run",
+                "gate0-test-drift",
+                "test-policy",
+                "test-unit",
+                "heavy-gate-acquire",
+                "predispatch-census"
+            ],
+            "focused_fields": ["discoveredTests", "ignoredTests", "skipMatches"],
+            "result_values": ["passed", "failed"],
+            "raw_output_persisted_in_git": false,
+            "not_authentication": true
+        }),
+        "structured_command_evidence_contract",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["plan_approval_receipt_contract"],
+        serde_json::json!({
+            "path_environment": "D2B_W6_PLAN_APPROVAL_RECEIPT",
+            "must_be_absolute": true,
+            "must_be_outside_git": true,
+            "artifact_kind": "d2b-feature-local/plan-approval",
+            "schema_version": 1,
+            "required_fields": [
+                "program",
+                "wave",
+                "entryBaseOid",
+                "featurePlanMaterialSha256",
+                "entryCandidateId",
+                "entryContentId",
+                "entrySnapshotSha256",
+                "selectionSha256",
+                "dispatchLedgerSha256",
+                "commandEvidenceSetSha256",
+                "selectedRoster",
+                "signoffCount",
+                "recommendationCount",
+                "result",
+                "durableWriteEvidenceSha256",
+                "approvedAtUnix"
+            ],
+            "required_values": {
+                "program": "ADR046",
+                "wave": "adr046w6",
+                "recommendationCount": 0,
+                "result": "approved"
+            },
+            "feature_plan_material_digest": "SHA-256 over the ordered FEATURE_DIR files with only entry_plan_invalidation_policy.status_only_updates normalized to fixed placeholders; requirements, machine contract, dependencies, ownership, validation, readiness, census, and guards remain byte-significant",
+            "durable_write": [
+                "create same-directory temporary file",
+                "write canonical JSON",
+                "fsync temporary file",
+                "rename over target",
+                "fsync parent directory"
+            ],
+            "correlation_only": true,
+            "not_authentication": true
+        }),
+        "plan_approval_receipt_contract",
+        findings,
+    );
+    expect_contract_value(
+        contract,
+        &["entry_plan_invalidation_policy"],
+        serde_json::json!({
+            "boundary": "first Dispatched transition in the external dispatch ledger",
+            "pre_first_dispatch_material_changes_invalidate": [
+                "entry base or ancestry",
+                "retained predecessor material",
+                "guard implementation or command evidence",
+                "requirements or success criteria",
+                "local task contract",
+                "dependencies or launch/readiness rules",
+                "ownership or shared-writer handoffs",
+                "validation or completion evidence",
+                "manifest group membership or foundation mapping"
+            ],
+            "status_only_updates": [
+                "checkbox projection derived from the dispatch ledger",
+                "local completion state projection",
+                "evidence result, digest, byte count, or external locator",
+                "dispatch, validation, merge, or seal status",
+                "timestamps and non-authorizing progress summaries"
+            ],
+            "status_only_must_not_change": [
+                "requirements",
+                "dependencies",
+                "owners",
+                "destinations",
+                "validation",
+                "state transitions",
+                "launch census",
+                "readiness rules",
+                "guard predicates"
+            ],
+            "status_only_updates_do_not_invalidate_after_first_dispatch": true,
+            "material_change_after_first_dispatch": "stop affected dispatch, record Blocked in the ledger, replace the plan material and approval receipt before further launch"
+        }),
+        "entry_plan_invalidation_policy",
+        findings,
+    );
+    if !is_sha256_hex(value_at(
+        contract,
+        &[
+            "local_to_manifest_shared_writer_handoffs",
+            "work_items_sha256",
+        ],
+    )) || !is_sha256_hex(value_at(
+        contract,
+        &[
+            "local_to_manifest_shared_writer_handoffs",
+            "implementation_graph_sha256",
+        ],
+    )) {
+        findings.push("shared-writer handoff source digests must be SHA-256 values".to_owned());
+    }
+}
+
+fn check_shared_writer_handoffs(
+    contract: &Value,
+    graph: &Value,
+    manifest: &Value,
+    findings: &mut Vec<String>,
+) {
+    let owners = local_owned_path_owners(contract);
+    let scaffold_roots = object_keys(value_at(
+        contract,
+        &[
+            "local_to_manifest_shared_writer_handoffs",
+            "scaffold_handoffs",
+        ],
+    ));
+    let manifest_ids = manifest["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["workItemId"].as_str())
+        .collect::<BTreeSet<_>>();
+    let w6_ids = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["kind"] == "work-item" && node["wave"] == "W6")
+        .filter_map(|node| node["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    let local_ids = string_set(&["T606", "T607", "T608", "T609"]);
+    let graph_ids = graph_node_ids(graph);
+
+    let mut derived_paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in owners.keys().filter(|path| !scaffold_roots.contains(*path)) {
+        for item in manifest["items"].as_array().into_iter().flatten() {
+            let Some(id) = item["workItemId"].as_str() else {
+                continue;
+            };
+            if !w6_ids.contains(id) {
+                continue;
+            }
+            let atoms = item["destination"]
+                .as_str()
+                .map(normalized_destination_atoms)
+                .unwrap_or_default();
+            if atoms
+                .iter()
+                .any(|destination| local_path_overlaps_destination(path, destination))
+            {
+                derived_paths
+                    .entry(path.to_owned())
+                    .or_default()
+                    .insert(id.to_owned());
+            }
+        }
+    }
+
+    let handoffs = value_at(
+        contract,
+        &["local_to_manifest_shared_writer_handoffs", "handoffs"],
+    )
+    .and_then(Value::as_array);
+    let Some(handoffs) = handoffs else {
+        findings.push("local_to_manifest_shared_writer_handoffs.handoffs is missing".to_owned());
+        return;
+    };
+    if handoffs.len() != 14 {
+        findings.push(format!(
+            "shared-writer handoff count is {}, expected 14",
+            handoffs.len()
+        ));
+    }
+
+    let mut handoff_paths = BTreeSet::new();
+    for handoff in handoffs {
+        let surface = handoff["surface"].as_str().unwrap_or_default();
+        if surface.is_empty() {
+            findings.push("a shared-writer handoff has no surface".to_owned());
+        }
+        let paths = handoff["paths"].as_array();
+        let order = handoff["order"].as_array();
+        let (Some(paths), Some(order)) = (paths, order) else {
+            findings.push(format!(
+                "shared-writer handoff `{surface}` is missing paths or order"
+            ));
+            continue;
+        };
+        let mut paths_in_handoff = BTreeSet::new();
+        for path in paths {
+            let Some(path) = path.as_str() else {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` contains a non-string path"
+                ));
+                continue;
+            };
+            if !paths_in_handoff.insert(path.to_owned()) {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` repeats path `{path}`"
+                ));
+            }
+            handoff_paths.insert(path.to_owned());
+            let Some(path_owners) = owners.get(path) else {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` names unowned path `{path}`"
+                ));
+                continue;
+            };
+            if !derived_paths.contains_key(path) {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` path `{path}` has no manifest destination overlap"
+                ));
+            }
+            let Some(first) = order.first().and_then(Value::as_str) else {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` has an empty order"
+                ));
+                continue;
+            };
+            if !path_owners.contains(first) {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` starts `{first}` instead of a local owner of `{path}`"
+                ));
+            }
+        }
+        if order.len() < 2 {
+            findings.push(format!(
+                "shared-writer handoff `{surface}` has an incomplete order"
+            ));
+        }
+        let mut seen_order = BTreeSet::new();
+        for endpoint in order {
+            let Some(endpoint) = endpoint.as_str() else {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` contains a non-string order endpoint"
+                ));
+                continue;
+            };
+            if !seen_order.insert(endpoint.to_owned()) {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` repeats order endpoint `{endpoint}`"
+                ));
+            }
+            if !local_ids.contains(endpoint)
+                && !manifest_ids.contains(endpoint)
+                && !graph_ids.contains(endpoint)
+            {
+                findings.push(format!(
+                    "shared-writer handoff `{surface}` has unresolved order endpoint `{endpoint}`"
+                ));
+            }
+        }
+    }
+
+    for path in derived_paths.keys() {
+        if !handoff_paths.contains(path) {
+            findings.push(format!(
+                "manifest destination overlap `{path}` has no shared-writer handoff"
+            ));
+        }
+    }
+    for path in handoff_paths.difference(&derived_paths.keys().cloned().collect()) {
+        findings.push(format!(
+            "shared-writer handoff path `{path}` has no derived local-owned manifest overlap"
+        ));
+    }
+
+    let expected_scaffolds = expected_scaffold_handoffs();
+    if object_keys(value_at(
+        contract,
+        &[
+            "local_to_manifest_shared_writer_handoffs",
+            "scaffold_handoffs",
+        ],
+    )) != expected_scaffolds
+        .keys()
+        .map(|key| (*key).to_owned())
+        .collect()
+    {
+        findings.push("scaffold handoff roots are missing or extra".to_owned());
+    }
+    let derived_scaffolds = owners
+        .iter()
+        .filter(|(path, path_owners)| {
+            path.ends_with('/')
+                && path.starts_with("packages/d2b-provider-")
+                && path_owners.contains("T606")
+        })
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+    if derived_scaffolds
+        != expected_scaffolds
+            .keys()
+            .map(|key| (*key).to_owned())
+            .collect()
+    {
+        findings.push("T606 Provider scaffold roots are not closed".to_owned());
+    }
+    for (root, group) in expected_scaffolds {
+        let actual = value_at(
+            contract,
+            &[
+                "local_to_manifest_shared_writer_handoffs",
+                "scaffold_handoffs",
+                root,
+            ],
+        )
+        .and_then(Value::as_str);
+        if actual != Some(group) {
+            findings.push(format!(
+                "scaffold handoff `{root}` does not map to `{group}`"
+            ));
+        }
+        if !w6_manifest_groups(graph).contains(group) {
+            findings.push(format!(
+                "scaffold handoff `{root}` maps to unresolved W6 group `{group}`"
+            ));
+        }
+    }
+}
+
 fn contract_task_row(line: &str, task_ids: &BTreeSet<String>) -> Option<(String, bool)> {
     let rest = line.strip_prefix("- ")?;
     if !rest.starts_with('[') {
@@ -1055,8 +2181,93 @@ fn contract_task_row(line: &str, task_ids: &BTreeSet<String>) -> Option<(String,
         .then_some((id.to_owned(), marker != "[ ]"))
 }
 
+fn task_row_id(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("- ")?;
+    let close = rest.find(']')?;
+    let marker = &rest[..=close];
+    if !matches!(marker, "[ ]" | "[x]" | "[X]") {
+        return None;
+    }
+    let id = rest[close + 1..].split_whitespace().next()?;
+    (id.starts_with('T') && id[1..].chars().all(|character| character.is_ascii_digit()))
+        .then_some(id.to_owned())
+}
+
+fn check_task_census(markdown: &str, findings: &mut Vec<String>) {
+    let expected_labels = expected_local_task_label_prefixes();
+    let expected_ids = string_set(EXPECTED_LOCAL_TASK_IDS);
+    let mut task_count = 0usize;
+    let mut parallel_count = 0usize;
+    let mut ids = BTreeSet::new();
+    let mut local_lines = BTreeMap::new();
+
+    for line in markdown.lines() {
+        if !line.starts_with("- [") {
+            continue;
+        }
+        let Some(close) = line.find(']') else {
+            findings.push("task row has an unterminated checkbox".to_owned());
+            continue;
+        };
+        let marker = &line[2..=close];
+        let id = task_row_id(line);
+        if !matches!(marker, "[ ]" | "[x]" | "[X]") {
+            if id.is_some() {
+                findings.push(format!(
+                    "task row `{}` has an invalid checkbox marker `{marker}`",
+                    id.as_deref().unwrap_or_default()
+                ));
+            }
+            continue;
+        }
+        let Some(id) = id else {
+            findings.push(format!("task row has no numeric task id: `{line}`"));
+            continue;
+        };
+        task_count += 1;
+        if line.contains("[P]") {
+            parallel_count += 1;
+        }
+        if !ids.insert(id.clone()) {
+            findings.push(format!("task id `{id}` is declared more than once"));
+        }
+        if expected_ids.contains(&id) {
+            local_lines.insert(id, line.to_owned());
+        } else if line.contains("FEATURE-LOCAL") {
+            findings.push(format!("unregistered feature-local task label on `{id}`"));
+        }
+    }
+
+    if task_count != EXPECTED_TASKS {
+        findings.push(format!(
+            "task census is {task_count}, expected {EXPECTED_TASKS}"
+        ));
+    }
+    if parallel_count != EXPECTED_PARALLEL_TASKS {
+        findings.push(format!(
+            "parallel task census is {parallel_count}, expected {EXPECTED_PARALLEL_TASKS}"
+        ));
+    }
+    for (task, expected) in expected_labels {
+        let Some(line) = local_lines.get(task) else {
+            findings.push(format!("feature-local task label `{task}` is missing"));
+            continue;
+        };
+        let Some(close) = line.find(']') else {
+            continue;
+        };
+        let actual = line[close + 2..].trim_start();
+        if !actual.starts_with(expected) {
+            findings.push(format!(
+                "feature-local task label `{task}` is not the current authoritative label"
+            ));
+        }
+    }
+}
+
 fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
     let mut findings = Vec::new();
+    check_task_census(markdown, &mut findings);
     let mut contracts = Vec::new();
     for fence in markdown_json_fences(markdown) {
         if !fence.closed {
@@ -1089,6 +2300,9 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
             "feature-local task contract canonical SHA-256 pin mismatch (got {contract_hash})"
         ));
     }
+    let manifest = load(WORK_ITEMS);
+    check_local_completion_contract(&contract, graph, &manifest, &mut findings);
+    check_shared_writer_handoffs(&contract, graph, &manifest, &mut findings);
 
     expect_contract_value(
         &contract,
@@ -1314,10 +2528,10 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         findings.push("feature-local owned task set is incorrect".to_owned());
     }
     let expected_owned_counts = BTreeMap::from([
-        ("T606", 36usize),
+        ("T606", 38usize),
         ("T607", 14usize),
-        ("T608", 16usize),
-        ("T609", 14usize),
+        ("T608", 27usize),
+        ("T609", 20usize),
         ("T604", 8usize),
     ]);
     for (task, expected_count) in expected_owned_counts {
@@ -1504,11 +2718,16 @@ fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> 
         ),
     ]);
     for (id, required) in requirements {
-        let Some((heading, block, depth, checked)) = blocks.get(id) else {
+        let Some((heading, block, depth, _checked)) = blocks.get(id) else {
             continue;
         };
-        if *checked || !heading.starts_with("- [ ]") {
-            findings.push(format!("feature-local task {id} must remain unchecked"));
+        if !heading.starts_with("- [ ]")
+            && !heading.starts_with("- [x]")
+            && !heading.starts_with("- [X]")
+        {
+            findings.push(format!(
+                "feature-local task {id} has an invalid checkbox projection"
+            ));
         }
         if *depth != 0 {
             findings.push(format!(
@@ -1560,6 +2779,21 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
         work_items["schemaVersion"].as_u64(),
         Some(EXPECTED_WORK_ITEMS_SCHEMA),
         "the work-item artifact schema must be version {EXPECTED_WORK_ITEMS_SCHEMA}"
+    );
+    let mut manifest_state_counts = BTreeMap::new();
+    for item in work_items["items"].as_array().expect("items array") {
+        let state = item["implementationState"]
+            .as_str()
+            .expect("implementationState");
+        *manifest_state_counts.entry(state).or_insert(0usize) += 1;
+    }
+    assert_eq!(
+        manifest_state_counts,
+        BTreeMap::from([
+            ("Merged", EXPECTED_MANIFEST_MERGED),
+            ("Planned", EXPECTED_MANIFEST_PLANNED),
+        ]),
+        "the current manifest implementation-state census changed"
     );
 
     let mut census: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1713,9 +2947,8 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     );
     let phrase_findings = check_local_coordination_tasks(&without_legacy_phrase, &graph);
     assert!(
-        phrase_findings.is_empty(),
-        "local task parsing still depends on the retired coordination phrase:\n{}",
-        phrase_findings.join("\n")
+        !phrase_findings.is_empty(),
+        "a changed feature-local task label unexpectedly passed"
     );
 
     for task_id in EXPECTED_LOCAL_TASK_IDS {
@@ -1727,8 +2960,8 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
         let checked_line = original_line.replacen("- [ ]", "- [x]", 1);
         let checked = tasks.replacen(original_line, &checked_line, 1);
         assert!(
-            !check_local_coordination_tasks(&checked, &graph).is_empty(),
-            "checked local task row unexpectedly passed: {task_id}"
+            check_local_coordination_tasks(&checked, &graph).is_empty(),
+            "a checked local task projection must not invalidate the monotonic contract: {task_id}"
         );
 
         let fenced = tasks.replacen(
