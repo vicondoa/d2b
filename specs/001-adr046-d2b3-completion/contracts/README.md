@@ -254,15 +254,17 @@ post-merge seal, merge-target registration, and merge eligibility.
     (FR-070).
 
 Current prospective host-generation, handler-contract, admission, and operator-acceptance
-ownership resolves only from authoritative member specs and generated manifests. This feature
-does not independently assign it.
+implementation ownership resolves only from authoritative member specs and generated
+manifests. Active feature-local T604 is the narrow cross-provider acceptance exception; its
+task row owns its files, validation, and `operator-nix-activation-cleanup` evidence before
+T479/T480.
 
 <!-- RETIRED-READONLY-BEGIN: retired Wave 5 rules 11-16 -->
 
 11. **Amended-plan reconciliation is historical.** The former T603/T589 editor and lifecycle
     sequence is read-only history and authorizes no current mutation. Code canon lacks the
-    source-generation handoff; prospective T222/T227 own it before T604.
-12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix
+    source-generation handoff.
+12. **Operator activation is acceptance evidence.** The acceptance task starts from the emitted Nix
     resource declaration and per-Zone bundle, activates on startup and public declaration and
     removal switches without manual restart, observes the spec-pinned Provider/config/effect
     and readiness for `Volume/acceptance-state`, `Network/acceptance-net`, and
@@ -276,14 +278,14 @@ does not independently assign it.
     plus all four Network/Host production cases as W6 work under T221. T070 and T071 retain
     historical evidence only. T221 fail-closes prospective Wave 6 entry until the migration,
     ownership, and exact historical-predecessor guard are on the fetched integration base.
-    T604 remains W6 acceptance-only after T336-T355 merge and consumes the landed
+    The task remains W6 acceptance-only after T336-T355 merge and consumes the landed
     implementation.
     Guest runtime-effect acceptance
     is deferred specifically to Wave 6 `Provider/runtime-cloud-hypervisor` T384/T479/T480;
     Guest emission, status, or refusal cannot
     satisfy this partial US1 production-plane checkpoint. Refusals are
     separate negative cases. The exact
-    candidate result is emitted once by T604 as
+    candidate result is emitted once as
     `operator-nix-activation-cleanup`, imported by T479 on exact F6, and excluded from the
     Wave 5 T589/T600-T602 profile.
 13. **C1 is a prospective W6 correction.** Retired T605 did not land: code canon contains
@@ -291,7 +293,7 @@ does not independently assign it.
     as `system-core-host` and `system-core-user`; underscore spellings remain internal
     telemetry labels. Both governing normative specs and their version metadata move with
     targeted Rust/contract tests, compiler-derived public/private API snapshots, paired
-    reference status text, and byte-identical Zone desired-schema proof before T604/T479.
+    reference status text, and byte-identical Zone desired-schema proof before acceptance.
     Former T595/T599/T605/T220 ownership is historical and not reconstructed.
 14. **Wave 5 evidence is immutable history.** The former T220 graph and T600/T601 evidence
     ownership are retained as unchecked historical design only. The T600 set was
@@ -300,7 +302,7 @@ does not independently assign it.
     T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
     `cli-reference-conformance`. Those seven identifiers were the complete historical plan.
-    T604 separately owns W6 `operator-nix-activation-cleanup`, which T479 imports and which
+    The acceptance task separately produces W6 `operator-nix-activation-cleanup`, which T479 imports and which
     cannot enter the Wave 5 profile. T602's planned validator rejects any unknown, duplicate,
     missing, extra, wrong-lane, or conflated identifier. The exact disposition does not claim
     those unchecked planned rows completed. Wave 5's retained `panel-request.json` consumed
@@ -312,7 +314,7 @@ does not independently assign it.
     `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`,
     `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`,
     `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589/T600/T220 are historical
-    planned consumers. Prospective T604 uses only its current generated rows. This feature
+    planned consumers. Prospective acceptance uses only current generated rows. This feature
     contains no normative SC-002 encoding, census, registry count, or recovery state copy.
 16. **Recovery is never a status-only dead end.** `VD2-SC002-RECOVERY` requires every emitted
     action to resolve to an exact invocation or an owned versioned runbook section and binds

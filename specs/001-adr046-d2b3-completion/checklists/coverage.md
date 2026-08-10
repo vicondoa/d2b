@@ -120,8 +120,8 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [x] CHK054 Does the historical correction remain fenced while current handler-contract
   ownership resolves only from authoritative member specs and generated manifests?
 - [x] CHK055 Does `CommittedPendingAudit` preserve the layered `ResourceStatus` composite without claiming phase/code members on `ResourceUpdateStatus`, while assigning the additive protobuf field to every mutation response including delete and recording the ResourceService fingerprint impact? [Consistency, Spec FR-070]
-- [x] CHK056 Does the authoritative prospective acceptance row, after T221 and generated
-  predecessors, preserve the exact Volume/Network/Device identity and effect/readiness scope?
+- [x] CHK056 Does active local T604, after T221 and its exact authoritative dependencies,
+  preserve the exact Volume/Network/Device identity, files, validation, and evidence scope?
 - [x] CHK057 Is every retired Wave 5 task occurrence confined to an explicit read-only fence,
   with no feature-local prospective ownership?
 
@@ -499,7 +499,7 @@ the exact `Provider/system-core` registration plus both required handler handles
 aggregate readiness projection. T221 requires the accepted Network contract/work-item
 amendment to remove every current-facing sole Network-opt-in path and retain the double-opt-in
 production path plus all four cases in authoritative W6 rows T336-T355. The three-resource
-operator boundary remains separate W6 acceptance: T604 consumes
+operator boundary remains separate W6 acceptance: the local acceptance task consumes
 that merged W6 path for exact `Volume/acceptance-state`, `Network/acceptance-net`, and
 `Device/acceptance-tpm` activation and cleanup, and T479/T480 bind that record plus the distinct
 `Provider/runtime-cloud-hypervisor` Guest record to F6. Guest emission, status, or refusal
@@ -514,7 +514,7 @@ incomplete export reported as success, a fictitious `ResourceUpdateStatus` phase
 manual-restart operator evidence, or stale/dirty candidate evidence.
 
 SC-030 through SC-034 retain the historical planned conditions, while T221 and W6
-T604/T479/T480 make prospective continuation and stopping conditions mechanical and bind
+The local acceptance and close tasks make prospective continuation and stopping conditions mechanical and bind
 them to exact artifact/candidate identities. CHK021 is therefore closed as a
 specification-quality item; no implementation or validation result is claimed by this
 transition.
@@ -539,9 +539,9 @@ T220, or T603 complete and do not convert historical evidence into current evide
 
 | Item | Status |
 | --- | --- |
-| CHK054 / C1 | **Closed as specification quality only.** Code canon lacks both handler enum values. Retired T595/T599/T605/T220 ownership is read-only history; prospective T423 owns the complete enum, emitter, consumer, API/reference, and unchanged-schema proof before T604/T479. |
+| CHK054 / C1 | **Closed as specification quality only.** Code canon lacked both handler enum values; current ownership is external and precedes local acceptance. |
 | CHK055 / C2 | **Closed as specification text only.** FR-070, SC-032, plan/tasks, and contracts now use the actual layered `ResourceStatus` composite and explicitly reject a fictitious `ResourceUpdateStatus` phase/code shape or schema change. |
-| CHK056 / G1 | **Closed as task coverage only.** Unchecked W6 T604 owns disjoint fixture-contract, Type-3 d2bd production-boundary, and `runNixOSTest` destinations, names the existing public validation targets including `make test-host-integration`, and feeds T479's exact-F6 `operator-nix-activation-cleanup` record. No test result is claimed. |
+| CHK056 / G1 | **Closed as task coverage only.** The unchecked local acceptance task owns disjoint fixture-contract, daemon-boundary, and host-integration destinations and feeds later convergence evidence. |
 | CHK057 / I1 and U1 | **Closed as process specification only.** T220/T600-T602 remain unchecked historical planned evidence. T219 is complete only as the exact ADR-046 disposition under generic Constitution 3.1.0, with zero attestations and no seal. The actionable retained-request recovery model is retired. No implementation, evidence, seal, or panel result is claimed. |
 
 CHK054 no longer authorizes any retired Wave 5 action. Prospective implementation remains
@@ -552,9 +552,9 @@ owned by T423 after T221.
 
 | Finding | Feature-artifact disposition |
 | --- | --- |
-| COV1 | Exact-F6 operator acceptance covers `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`. T221 requires the accepted external amendment to remove stale sole Network-opt-in paths and preserve T336-T355 plus the four-case matrix as W6 work; T604 remains W6 acceptance-only after those rows merge and T479/T480 bind its result plus distinct Guest acceptance. |
+| COV1 | Exact-F6 operator acceptance covers `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`. The local acceptance task remains after authoritative Network work; later local tasks bind its result plus distinct Guest acceptance. |
 | UND1 | Code canon lacks `OpenPeerPidfdFromAcceptedSocket`. Retired T592/T593 ownership is read-only history; prospective T445 owns the typed operation, accepted-socket/pidfd transfer, safe adapter, descriptor closure, FFI quarantine, poison fixtures, and no-numeric-PID/API seals before T479. |
-| INC1 | The historical Wave 5 plan retains the T589-T599/T605 fragment map and T220 fragment record as read-only data. T604's W6 fragment remains prospective and is folded by T479. |
+| INC1 | The historical Wave 5 fragment map remains read-only data. The local acceptance fragment remains prospective and is folded by later convergence. |
 | INC2 | Constitution 3.0 keeps selected-roster pipelined implementation start, supersedes round-count deferral, and makes the legacy deferred-findings file historical compatibility data. |
 
 These dispositions amend planning contracts only. They check no task, claim no implementation
@@ -564,20 +564,20 @@ or validation result, and do not authorize T603 or any later source dispatch.
 
 | Finding | Feature-artifact disposition |
 | --- | --- |
-| A1 | The operator acceptance set is exact and non-selectable. `spec.md` pins the three resources and their Providers/effects. Support resources cannot substitute. T604 consumes the merged authoritative W6 T336-T355 Network implementation as acceptance-only evidence, and T479/T480 bind the operator record to exact F6. |
+| A1 | The operator acceptance set is exact and non-selectable. The local acceptance task consumes merged authoritative provider work, and later local tasks bind its record to exact F6. |
 | A2 | SC-002 now uses one monotonic clock from durable target-generation transition-intent commit before publication/ingestion to the later of real-effect observation and production operator `Ready` projection. It includes automatic activation ingestion and requires the 2,000 ms outer ceiling plus every applicable FR-030 component p95 independently. Its separately versioned typed receipt is referenced by an unchanged schema-v2 `EvidenceRecord`; a failed operator record imports without a receipt but cannot close. CHK024 is closed. |
-| U1 | FR-075 and SC-035 retain W2-W5 continuity as immutable historical evidence and make W6 continuity a fail-closed exact-candidate close gate. T604 remains the sole W6 source owner of the existing host VM case and its Makefile discovery/build recipe; T479 executes the prospective W6 predicate. The no-skip evidence requires explicit Ready/Stopped states, same PID/start-time through a newly acquired pidfd, PID reuse/mismatch/ambiguity quarantine with no adoption/signal/cleanup, and full `d2b*`/`microvm*` namespace enumeration whose sorted unit-name set, after excluding only the canonical `d2b.slice`, equals exactly the three ADR-0015 units; every other unexpected lifecycle unit is rejected. A nonzero `systemctl list-units --all` result fails before filtering and cannot be masked by the later pipeline. Separate injected unexpected-slice and unexpected-service cases survive that sole exclusion and fail equality. Querying only the expected names is ineligible. CHK038 is closed. |
+| U1 | FR-075 and SC-035 retain W2-W5 continuity as immutable history and make W6 continuity a fail-closed exact-candidate gate. The local acceptance task owns the host VM case and discovery recipe; later convergence executes the prospective predicate. |
 | I1 | CHK008 is closed by FR-070's bounded journal/segment retention and prune/replay requirements; CHK041 is closed by complete owner-or-explicit-local traceability including FR-075; CHK045 is closed by SC-012's final-F measurement and FR-030's mandatory redesign path. No implementation or measurement result is claimed. |
 
 ### Current plan-panel recommendation disposition (2026-08-07)
 
 | Class | Planning disposition |
 | --- | --- |
-| Host authorization and recovery | Initial public-socket `SO_PEERCRED`/group Admin classification is consumed into one sealed nonfabricable capability. Code canon lacks the handoff. Retired T592 is read-only history; prospective T222 owns handoff and recovery before T227/T604. |
-| SC-002 compatibility | Feature-local protocol copies are non-authoritative. T589/T600/T220 are historical planned consumers only. Prospective T604/T479 use current generated W6 operator rows. |
+| Host authorization and recovery | Initial public-socket classification is consumed into one sealed capability. Current handoff ownership is external and precedes local acceptance. |
+| SC-002 compatibility | Feature-local protocol copies are non-authoritative. The local acceptance task and later convergence use current generated rows. |
 | Delivery-state preservation | The retained candidate root, request, snapshot, and exact evidence inventory are immutable. T219 records the accepted no-seal historical disposition. T221's production guard rejects missing, extra, or changed state before prospective Wave 6 entry. |
-| Network escalation | The untouched external Network spec and absent production adapter make W4 sole opt-in historical and non-authorizing. T221 requires the accepted contract/work-item amendment, double opt-in with both defaults false, and retained T336-T355 plus all four Network/Host cases on the exact fetched W6 base. T480 revalidates implementation and evidence before close; T604 remains W6 acceptance-only after that implementation merges. |
-| Host continuity and pidfd | T604 solely owns the existing daemon-restart VM case and Makefile discovery/build recipe. Empty discovery and every skip are fatal. Its generated `VD2-SC002-REGISTRIES` and `VD2-SC002-TRACEABILITY` rows own the pre-start/root and unit-census fixture membership; this checklist copies no ids or counts. Ready/Stopped, exact three-unit equality at every named phase, fresh-pidfd adoption, reuse/mismatch/ambiguity negatives, pidfd quarantine, and immediate `SAFETY:` comments remain mandatory. |
+| Network escalation | Historical sole opt-in is non-authorizing. Local acceptance remains after authoritative Network implementation. |
+| Host continuity and pidfd | The local acceptance task owns the daemon-restart VM case and discovery/build recipe. Empty discovery and every skip are fatal. |
 | Operator procedure and T603 scope | T603's editor procedure remains unchecked historical planning evidence and is not executed after the merged Wave 5 boundary. T221 owns the prospective continuation procedure. |
 | R22-R30 SC-002 simplification | Dated rounds raised protocol corrections but do not own protocol text. Accepted Version 2 and the generated `VD2-SC002-*` bijection are the sole authority. This feature retains only stable identifiers and task/owner pointers; no historical count, registry, fixture, source-floor field list, or transition copy is active acceptance evidence. |
 

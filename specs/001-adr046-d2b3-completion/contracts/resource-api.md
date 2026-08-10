@@ -51,7 +51,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 | RA-11 | Commit an immutable authoritative audit journal row transactionally with each mutation, export through a root-owned fd-anchored segment owner by typed fixed digest plus ordinal with file/directory durability, prune journal rows only after durable export plus bounded retention, represent export-pending `CommittedPendingAudit` on every mutation response including delete, and expose typed durable `InspectOperation` keyed only by required `(Zone, operation_id)`. Permit the same opaque ID in different Zones, create no host-global index, require exact same-Zone replay binding, and reject malformed/future/expired UUIDv7 IDs before observation or mutation so pruning never makes an old ID new | FR-070, SC-032 | W5 |
 | RA-12 | Reopen advanced mutable revisions from durable metadata and isolate per-Zone startup/close failures without dropping later Zones | FR-071, SC-033 | W5 |
 | RA-13 | Keep all RBAC DTO deserialization, compilation, and ownership outside both store crates | FR-073, D106 | W5 |
-| RA-14 | Retain the T603-T602 Wave 5 reconciliation design as unchecked historical planning evidence without reconstructing it. Preserve the exact retained candidate, request, snapshot, evidence inventory, zero attestations, and no seal. Require T221's production guard and ordinary exact-base unanimous plan panel before prospective W6. `operator-nix-activation-cleanup` remains T604-owned W6 evidence imported only by T479. | FR-036, FR-072, SC-034 | historical W5 / prospective W6 |
+| RA-14 | Retain the Wave 5 reconciliation design as unchecked historical planning evidence without reconstructing it. Preserve the exact retained candidate, request, snapshot, evidence inventory, zero attestations, and no seal. | FR-036, FR-072, SC-034 | historical W5 |
 | RA-15 | Make the readiness Provider member exactly the `d2b-core-controller`-owned `Provider/system-core` registration plus exactly one `Zone.status.handlers[]` record named `system-core-host` and one named `system-core-user`, each carrying phase/timestamp from the active, initialized, current `HostReconciler` or `UserReconciler`; reject duplicates, missing/wrong names, and `ProviderLifecycle` substitution; do not wait for other W6 dossiers | FR-069, SC-033 | W5 |
 | RA-16 | Historical Wave 5 coordinated-correction design assigning enum artifacts to T605, emission to T595, consumers to T599, and generated-manifest/full-drift convergence to T220. Those unchecked rows are read-only history. | FR-072, SC-033, SC-034 | historical W5 |
 
@@ -177,7 +177,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - All acceptance evidence names one exact candidate and uses production owners. Wave 5 verifies
   only that the accepted migration and ownership contract assigns the double-opt-in Network
   implementation and all four Network/Host cases to Wave 6 tasks T336-T355 under T221; it does
-  not claim that implementation or its results. T604 starts only after the double-opt-in
+  not claim that implementation or its results. The acceptance task starts only after the double-opt-in
   implementation and all four Network/Host cases have merged. It starts at the emitted
   operator Nix declaration/bundle,
   activates on initial startup and public declaration/removal switches without manual daemon
@@ -193,7 +193,7 @@ Making this reachable is the core of User Story 1 and the precondition for SC-02
 - The T603-T602 Wave 5 reconciliation sequence is historical planning evidence. Constitution
   3.1.0 does not claim it completed and authorizes no attempt to recreate it. T219 records
   only the exact no-attestation, no-seal historical disposition. T221 consumes the production
-  historical-predecessor guard before the ordinary Wave 6 plan panel. T604's W6 result
+  historical-predecessor guard before the ordinary Wave 6 plan panel. The local W6 result
   appears only as `operator-nix-activation-cleanup`, is imported by T479, and remains outside
   the retained Wave 5 evidence inventory.
 

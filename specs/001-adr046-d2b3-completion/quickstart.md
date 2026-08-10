@@ -50,7 +50,7 @@ Do not run a Wave 5 recovery or close command. Fetch and bind the exact Wave 6 b
 the focused guard tests:
 
 ```bash
-set -eu
+set -euo pipefail
 
 REPOSITORY="github.com/vicondoa/d2b"
 CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
@@ -108,21 +108,85 @@ instructions, including multiline forms, and round-threshold deferral rules are 
 set -eu
 
 FEATURE_DIR="specs/001-adr046-d2b3-completion"
-RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|604|605)'
+RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|605)'
 ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*[[:space:]]+(MUST[[:space:]]+)?(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b"
 REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b.{0,240}\\b${RETIRED}('s)?\\b"
 EDGE="(?s)\\b(after|before|depends[[:space:]]+on|owned[[:space:]]+by)[[:space:]]+.{0,160}\\b${RETIRED}('s)?\\b"
 ANY_RETIRED="(?s)\\b${RETIRED}\\b"
 
+check_fences() {
+  awk -v file="$1" '
+    stack[depth] == "STALE-PROSE-CHECK" &&
+      $0 != "<!-- STALE-PROSE-CHECK-END -->" { next }
+    {
+      marker_text = $0
+      marker_count = gsub(
+        /<!-- [A-Z0-9-]+-(BEGIN(:[^>]*)?|END) -->/,
+        "",
+        marker_text
+      )
+      if (marker_count > 1) exit 45
+    }
+    /<!-- [A-Z0-9-]+-BEGIN(:[^>]*)? -->/ {
+      kind = $0
+      sub(/^.*<!-- /, "", kind)
+      sub(/-BEGIN(:[^>]*)? -->.*$/, "", kind)
+      depth += 1
+      stack[depth] = kind
+      next
+    }
+    /<!-- [A-Z0-9-]+-END -->/ {
+      kind = $0
+      sub(/^.*<!-- /, "", kind)
+      sub(/-END -->.*$/, "", kind)
+      if (depth == 0) exit 42
+      if (stack[depth] != kind) exit 43
+      delete stack[depth]
+      depth -= 1
+      next
+    }
+    /<!-- [^>]*-(BEGIN|END)[^>]*-->/ { exit 45 }
+    depth == 0 { print file ":" FNR ":" $0 }
+    END {
+      if (depth != 0) exit 44
+    }
+  ' "$1"
+}
+
+# Planted positive and negative fence cases.
+printf '%s\n' \
+  '<!-- RETIRED-TEST-BEGIN: positive -->' \
+  'read-only bytes' \
+  '<!-- RETIRED-TEST-END -->' |
+  check_fences - >/dev/null
+if printf '%s\n' '<!-- RETIRED-TEST-BEGIN -->' | check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' '<!-- RETIRED-TEST-END -->' | check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-OUTER-BEGIN -->' \
+  '<!-- RETIRED-INNER-BEGIN -->' \
+  '<!-- RETIRED-OUTER-END -->' \
+  '<!-- RETIRED-INNER-END -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-DUP-BEGIN --><!-- RETIRED-DUP-BEGIN -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+
+# Validate every file independently before filtering fenced history.
+while IFS= read -r -d '' file; do
+  check_fences "$file" >/dev/null
+done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0)
+
 current_hits="$(
   while IFS= read -r -d '' file; do
-    awk -v file="$file" '
-      /RETIRED-.*-BEGIN/ { retired += 1; next }
-      /RETIRED-.*-END/ { retired -= 1; next }
-      /STALE-PROSE-CHECK-BEGIN/ { retired += 1; next }
-      /STALE-PROSE-CHECK-END/ { retired -= 1; next }
-      retired == 0 { print file ":" FNR ":" $0 }
-    ' "$file"
+    check_fences "$file"
   done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0) |
     rg -n -U -i "$ACTION|$REVERSE|$EDGE|$ANY_RETIRED" || true
 )"
@@ -659,13 +723,13 @@ This is the loop that distinguishes a live control plane from a sealed wave. Its
 operator activation positive remains W6 acceptance after T221. T221 first requires the
 accepted external Network contract/work-item amendment to remove every current-facing sole
 Network-opt-in path and retain T336-T355 plus all four double-opt-in cases as authoritative
-W6 work. The authoritative prospective acceptance row consumes their merged implementation. A stale sole-opt-in contract makes
+W6 work. Active local T604 consumes their merged implementation. A stale sole-opt-in contract makes
 T221 fail closed; an unimplemented T336-T355 row blocks T479.
 
 ### Story 1 - declare and reconcile
 
-The exact-F6 automated proof and its ownership resolve only from authoritative member specs
-and generated manifests after T221 and merged T336-T355. Its fixture-contract leg names
+The exact-F6 automated proof is active local T604 after T221 and its authoritative
+dependencies. Its fixture-contract leg owns
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; its lowest feasible
 production-boundary leg owns `packages/d2bd/tests/resource_operator_activation.rs`; and its
 real activation/effect leg owns
@@ -694,14 +758,14 @@ ready, identity-stable, intact, and unrecreated. The same candidate must also pa
 no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` FR-075 continuity case. Guest
 runtime-effect acceptance remains distinct Wave 6
 `Provider/runtime-cloud-hypervisor` T384/T479/T480 work; Guest emission, status, or refusal
-cannot satisfy the authoritative acceptance row. This host leg is prospective W6 acceptance, not Wave 5 evidence. Wave 5
+cannot satisfy T604. This host leg is active local T604 acceptance, not Wave 5 evidence. Wave 5
 retains only its production-plane prerequisites, the accepted double-opt-in contract
 migration, and the settled T336-T355 W6 ownership. Full US1 completes only after
 T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a real Cloud
 Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
 skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
-Direct ResourceService calls, private reloads, and status-only effects do not satisfy the
-authoritative acceptance row. After the authoritative NIX-9 object lands, the host configuration must set
+Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
+After the authoritative NIX-9 object lands, the host configuration must set
 `d2b.site.hostGenerationRebuildRef` to the exact `<flake-ref>#<configuration-name>` value. It
 is required, has no default, and is limited to 2048 bytes. Use the real validated flake and
 configuration values below; this procedure has no fixed illustrative target.
@@ -1041,8 +1105,9 @@ may survive, and metrics carry no peer-identity label.
 `Device/acceptance-tpm` completes the pinned state-preserving cleanup; and FR-075 continuity
 passes separately through T479 on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
-`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. The authoritative
-acceptance row consumes Network implementation after authoritative T336-T355 merge.
+`Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. Active local T604 consumes
+Network implementation after authoritative T336-T355 merge and emits exactly one F6-bound
+`operator-nix-activation-cleanup` record.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
 Host/Network double opt-in. T221 requires the accepted Network contract/work-item amendment
@@ -1051,9 +1116,9 @@ on the exact fetched Wave 6 base. It must require
 default both inputs false, remove every current-facing sole Network-opt-in path, and
 regenerate the manifest with T336-T355 retained as authoritative W6 implementation under
 T221 and all four Network/Host production cases assigned there. T480 revalidates that
-migration, implementation, and evidence before every Wave 6 close boundary. The authoritative
-acceptance row and T479 require the merged W6 implementation and all four passing cases.
-Historical or current sole opt-in cannot satisfy T221, T479, T480, or that authoritative row. Do not change feature status to bypass that
+migration, implementation, and evidence before every Wave 6 close boundary. T604 and T479
+require the merged W6 implementation and all four passing cases. Historical or current sole
+opt-in cannot satisfy T221, T604, T479, or T480. Do not change feature status to bypass that
 stop.
 
 If migration rolls back to a 3/1 generation that had no stable reference, verified absence is

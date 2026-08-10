@@ -93,8 +93,8 @@ not the published daemon boundary.
 
 The operator has approved the missing production-plane wiring in FR-066 through FR-074 as
 Wave 5 work except for the settled Network implementation and operator-positive boundaries.
-T336-T355 retain the Network production path and four-case matrix in W6 under T221, and T604
-retains W6 activation/cleanup acceptance after those rows merge. Wave 5 must instead remove
+T336-T355 retain the Network production path and four-case matrix in W6 under T221, while
+prospective activation/cleanup acceptance follows those rows. Wave 5 must instead remove
 every current-facing sole Network-opt-in path and freeze the double-opt-in migration plus
 that W6 ownership. A readiness bit, direct `WatchService` call, fake endpoint, disabled audit
 callback, or test-only subject may not substitute for any real path. This is an explicit
@@ -117,8 +117,8 @@ telemetry labels, bump both governing normative specification versions, and upda
 paired compiler-derived API snapshot, Rust serialization and duplicate/underscore-rejection
 test, lowest-layer contract/policy guard, and reference status surface. The historical plan
 assigned emitter and consumer work to T595/T599; those assignments are retired. Prospective
-T423 owns the enum, emitter, consumer, generated-artifact, and focused evidence correction
-before T604/T479.
+the then-proposed owner held the enum, emitter, consumer, generated-artifact, and focused
+evidence correction before later acceptance.
 
 The C1 correction itself adds no field or operation and changes no desired-state ResourceType
 schema. Therefore it requires no `apiVersion`, JSON `schemaVersion`, `manifestVersion`,
@@ -201,7 +201,8 @@ needed to satisfy the declared resources, and without performing a host cutover.
 claim the three-resource operator activation positive. The exact acceptance set is
 `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in Zone
 `acceptance`; no other resource may substitute for one of those three. The authoritative
-prospective acceptance row exercises that
+prospective acceptance row is the active feature-local T604 coordination/completion task; it
+exercises that
 set as W6 acceptance after T221 and merged authoritative T336-T355, consuming their
 double-opt-in production Network path and four-case matrix. Full US1 completion occurs only
 after that result and the Wave 6 `Provider/runtime-cloud-hypervisor` family supply positive

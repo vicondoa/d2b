@@ -819,8 +819,8 @@ validator/tooling contract applies the generic Constitution 3.1.0 disposition on
 retained state through the merged boundary. An accepted external Network
 contract/work-item amendment must remove every current-facing sole Network-opt-in path before
 prospective W6 and retain the double-opt-in production path plus all four cases in
-authoritative W6 rows T336-T355 under T221. T604 remains the W6 operator activation boundary
-and consumes their merged implementation. The feature task total remains 605. The historical
+authoritative W6 rows T336-T355 under T221. The prospective operator activation boundary
+consumes their merged implementation. The feature task total remains 605. The historical
 planned completion boundary was:
 
 - registrar-consumed, pidfd-bound authenticated ComponentSession and authoritative subject,
@@ -863,7 +863,7 @@ planned completion boundary was:
   desired Zone spec is unchanged; the historical plan assigned T595 emission, T599 consumer
   reconciliation, and T220 generated-manifest/full-drift convergence;
 - per-Zone failure isolation;
-- separate W6 T604 exact-F6 coverage, after T221 and merged authoritative T336-T355, from an operator Nix declaration and emitted bundle through
+- separate W6 exact-F6 coverage, after T221 and merged authoritative T336-T355, from an operator Nix declaration and emitted bundle through
   startup and public declaration/removal switches without manual restart to a real owned
   effect/readiness for the exact spec-pinned `Volume/acceptance-state`,
   `Network/acceptance-net`, and `Device/acceptance-tpm`, including their selected Provider
@@ -1087,7 +1087,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction with the feature-owned exact predecessor exception under generic Constitution 3.1.0, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication, historical Wave 5 design, and prospective correction | **Historical design plus authoritative member-spec/generated-manifest ownership** | T221 plus authoritative generated rows |
+| FR-066 - FR-072 | Authenticated production publication, historical Wave 5 design, and prospective correction | **Historical design plus authoritative provider rows and the closed feature-local acceptance exception** | T221, authoritative generated rows, active local T604, T479, and T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | authoritative generated row |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | authoritative generated row |
 | FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | T221 and authoritative generated rows |
@@ -1103,7 +1103,7 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective correction | Retired rows remain fenced; T221 matches retained bytes and all later ownership resolves from authoritative member specs/generated manifests. |
+| FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective correction | Retired rows remain fenced; T221 matches retained bytes, authoritative provider rows supply implementation, and active local T604 supplies cross-provider acceptance before T479/T480. |
 | FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Retains W2-W5 bytes as historical evidence and makes the existing daemon restart VM survival check exact-candidate close evidence for prospective W6, with full namespace equality after excluding only canonical `d2b.slice` and separate unexpected-slice/unexpected-service negative injections. It adds no task and no W5 evidence identifier. |
 
 Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. Retired consumers are fenced history; prospective ownership resolves only from current authoritative rows.
