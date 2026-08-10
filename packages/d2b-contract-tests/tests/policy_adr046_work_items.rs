@@ -801,7 +801,11 @@ struct MarkdownJsonFence {
 }
 
 fn markdown_fence(line: &str) -> Option<(char, usize, &str)> {
-    let trimmed = line.trim_start();
+    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 || line.as_bytes().get(indentation) == Some(&b'\t') {
+        return None;
+    }
+    let trimmed = &line[indentation..];
     let delimiter = trimmed.chars().next()?;
     if !matches!(delimiter, '`' | '~') {
         return None;
@@ -1271,6 +1275,14 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
 }
 
 #[test]
+fn markdown_json_fences_require_commonmark_delimiters() {
+    let fences = markdown_json_fences("````json\n{\"artifact_kind\":\"other\"}\n```\n~~~\n`````\n");
+    assert_eq!(fences.len(), 1);
+    assert!(fences[0].closed);
+    assert_eq!(fences[0].body, "{\"artifact_kind\":\"other\"}\n```\n~~~\n");
+}
+
+#[test]
 fn feature_local_coordination_tasks_are_closed_and_authoritative() {
     let findings =
         check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS), &load(GRAPH_JSON));
@@ -1395,6 +1407,16 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
         !check_local_coordination_tasks(&unclosed, &graph).is_empty(),
         "unclosed local-task contract unexpectedly passed"
     );
+    for (label, pseudo_closer) in [("overindented", "    ````"), ("tab-indented", "\t````")] {
+        let malformed = format!(
+            "{tasks}\n````json\n{{\"artifact_kind\":\"other\"}}\n{pseudo_closer}\n\
+             {{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n`````\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&malformed, &graph).is_empty(),
+            "{label} pseudo-closer unexpectedly hid a competing contract"
+        );
+    }
 }
 
 #[test]
