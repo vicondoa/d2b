@@ -35,6 +35,8 @@ const D2B_REPOSITORY_ID: &str = "github.com/vicondoa/d2b";
 const D2B_INTEGRATION_REF: &str = "refs/remotes/origin/v3";
 const ADR046_W5_RETAINED_EVIDENCE_SHA256: &str =
     "7deb84943d36962493422407ac74342fd598b2fea4970ea1a162942e25cfd33d";
+const ADR046_W5_WORK_ITEM_PROJECTION_SHA256: &str =
+    "42099e7e75a5e00f1637d48d575b4af4cf3ceef9c0c4b7cef8313ce44864d991";
 
 struct HistoricalPredecessorPolicy<'a> {
     repository_id: &'a str,
@@ -134,8 +136,8 @@ pub fn require_predecessor_state_for_exit(
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
-    let disposed_wave = if is_adr046_w6(material) {
-        require_adr046_w6_historical_predecessor_for_exit(state_root, material, repository_roots)?;
+    let disposed_wave = if is_adr046_post_w5(material) {
+        require_adr046_historical_predecessor_for_exit(state_root, material, repository_roots)?;
         Some(5)
     } else {
         None
@@ -145,6 +147,14 @@ pub fn require_predecessor_state_for_exit(
         return Ok(());
     }
     let (graph, work_items) = load_bound_state(material, repository_roots)?;
+    if disposed_wave.is_some() {
+        require_disposed_work_item_projection(
+            &graph,
+            &work_items,
+            5,
+            ADR046_W5_WORK_ITEM_PROJECTION_SHA256,
+        )?;
+    }
     validate_state_with_disposition(
         &material.wave,
         Gate::Exit,
@@ -170,31 +180,31 @@ pub fn require_predecessor_state_for_exit(
 /// accepted commit stays in the integration ancestry. This is deterministic
 /// workflow validation for signoff tracking, not authentication or a security
 /// boundary.
-pub fn require_adr046_w6_historical_predecessor_for_exit(
+pub fn require_adr046_historical_predecessor_for_exit(
     state_root: &StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
-    require_adr046_w6_historical_predecessor(state_root, material, repository_roots, false)
+    require_adr046_historical_predecessor(state_root, material, repository_roots, false)
 }
 
 /// Entry variant: the candidate base must be the fetched integration tip
 /// before a snapshot can authorize implementation.
-pub fn require_adr046_w6_historical_predecessor_at_entry(
+pub fn require_adr046_historical_predecessor_at_entry(
     state_root: &StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
-    require_adr046_w6_historical_predecessor(state_root, material, repository_roots, true)
+    require_adr046_historical_predecessor(state_root, material, repository_roots, true)
 }
 
-fn require_adr046_w6_historical_predecessor(
+fn require_adr046_historical_predecessor(
     state_root: &StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
     require_current_tip: bool,
 ) -> Result<()> {
-    if !is_adr046_w6(material) {
+    if !is_adr046_post_w5(material) {
         return Ok(());
     }
     validate_historical_predecessor(
@@ -206,10 +216,13 @@ fn require_adr046_w6_historical_predecessor(
     )
 }
 
-fn is_adr046_w6(material: &CandidateMaterial) -> bool {
-    (material.program.eq_ignore_ascii_case("ADR046")
-        && matches!(material.wave.as_str(), "W6" | "adr046w6"))
-        || (material.program.eq_ignore_ascii_case("SPEC001") && material.wave == "spec001w6")
+fn is_adr046_post_w5(material: &CandidateMaterial) -> bool {
+    let Ok(ordinal) = wave_number(&material.wave) else {
+        return false;
+    };
+    ordinal >= 6
+        && (material.program.eq_ignore_ascii_case("ADR046")
+            || material.program.eq_ignore_ascii_case("SPEC001"))
 }
 
 /// Freezes the historically dispositioned predecessor phase.
@@ -417,9 +430,9 @@ fn find_first_parent_amendment(
             return Ok(commit.to_owned());
         }
     }
-    Err(DeliveryError::new(format!(
-        "ADR-046 Wave 6 base commit has no first-parent integration commit after merged Wave 5 with FR-036 constitution digest {expected_constitution_sha256}"
-    )))
+    Err(DeliveryError::new(
+        "delivery base has no accepted historical disposition on first-parent integration history",
+    ))
 }
 
 fn resolve_commit(root: &Path, revision: &str, label: &str) -> Result<String> {
@@ -456,7 +469,7 @@ fn require_commit_ancestor(
     match output.status.code() {
         Some(0) => Ok(()),
         Some(1) => Err(DeliveryError::new(format!(
-            "ADR-046 Wave 6 {label} does not descend from merged Wave 5 boundary {ancestor}"
+            "delivery {label} does not descend from the accepted historical boundary"
         ))),
         _ => Err(DeliveryError::environment(format!(
             "cannot verify ADR-046 Wave 5 merge ancestry for {label}"
@@ -480,6 +493,49 @@ enum Gate {
     Exit,
     /// Seal boundary: every item in this wave must be `Merged`.
     Seal,
+}
+
+fn require_disposed_work_item_projection(
+    graph: &[u8],
+    work_items: &[u8],
+    disposed_wave: u8,
+    expected_sha256: &str,
+) -> Result<()> {
+    let graph: GraphView = serde_json::from_slice(graph)?;
+    let work_items: WorkItemsView = serde_json::from_slice(work_items)?;
+    let mut states = BTreeMap::new();
+    for item in work_items.items {
+        if states
+            .insert(item.work_item_id.clone(), item.implementation_state)
+            .is_some()
+        {
+            return Err(DeliveryError::new(
+                "work-item state manifest repeats a disposed work item",
+            ));
+        }
+    }
+
+    let mut projection = BTreeMap::new();
+    for node in graph.nodes {
+        if node.kind != "work-item" || wave_number(&node.wave)? != disposed_wave {
+            continue;
+        }
+        let state = states.get(&node.id).ok_or_else(|| {
+            DeliveryError::new("disposed work-item projection is missing a graph work item")
+        })?;
+        if projection.insert(node.id, state.clone()).is_some() {
+            return Err(DeliveryError::new(
+                "disposed work-item projection repeats a graph work item",
+            ));
+        }
+    }
+    let rows = projection.into_iter().collect::<Vec<_>>();
+    if sha256_bytes(&serde_json::to_vec(&rows)?) != expected_sha256 {
+        return Err(DeliveryError::new(
+            "disposed work-item projection differs from the accepted historical boundary",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_state(wave: &str, gate: Gate, graph: &[u8], work_items: &[u8]) -> Result<()> {
@@ -811,6 +867,39 @@ mod tests {
             .expect("the validated historical predecessor satisfies its exact prior rows");
         validate_state("spec001w6", Gate::Exit, graph, work_items)
             .expect_err("without the disposition the Planned predecessor remains blocking");
+
+        let later_graph = br#"{
+          "nodes": [
+            {"id":"ADR046-history-001","kind":"work-item","wave":"W5"},
+            {"id":"ADR046-current-001","kind":"work-item","wave":"W6"},
+            {"id":"ADR046-next-001","kind":"work-item","wave":"W7"}
+          ]
+        }"#;
+        let later_items = br#"{
+          "items": [
+            {"workItemId":"ADR046-history-001","implementationState":"Planned"},
+            {"workItemId":"ADR046-current-001","implementationState":"Merged"},
+            {"workItemId":"ADR046-next-001","implementationState":"Merged"}
+          ]
+        }"#;
+        validate_state_with_disposition("spec001w8", Gate::Exit, later_graph, later_items, Some(5))
+            .expect("later phases retain the exact historical predecessor disposition");
+
+        let unmerged_successor = br#"{
+          "items": [
+            {"workItemId":"ADR046-history-001","implementationState":"Planned"},
+            {"workItemId":"ADR046-current-001","implementationState":"Planned"},
+            {"workItemId":"ADR046-next-001","implementationState":"Merged"}
+          ]
+        }"#;
+        validate_state_with_disposition(
+            "spec001w8",
+            Gate::Exit,
+            later_graph,
+            unmerged_successor,
+            Some(5),
+        )
+        .expect_err("the disposition must not waive later unmerged work");
     }
 
     #[test]
@@ -838,6 +927,24 @@ mod tests {
         let material = crate::delivery::model::fixtures::material();
         reject_adr046_w5_mutation(&material, "snapshot")
             .expect("unrelated delivery state remains mutable");
+    }
+
+    #[test]
+    fn historical_mutation_guard_is_wired_to_every_mutating_delivery_command() {
+        for (source, operation) in [
+            (include_str!("snapshot.rs"), "\"snapshot\""),
+            (include_str!("evidence.rs"), "\"evidence import\""),
+            (include_str!("panel.rs"), "\"panel request\""),
+            (include_str!("panel.rs"), "\"panel attestation\""),
+            (include_str!("seal.rs"), "\"seal\""),
+            (include_str!("eligibility.rs"), "\"merge target capture\""),
+            (include_str!("eligibility.rs"), "\"merge eligibility\""),
+        ] {
+            assert!(
+                source.contains("reject_adr046_w5_mutation") && source.contains(operation),
+                "missing historical mutation guard for {operation}"
+            );
+        }
     }
 
     const RETAINED_REQUEST_BYTES: &[u8] = br#"{"roles":["software","test"]}"#;
@@ -980,14 +1087,25 @@ mod tests {
             .validate(&fixture.policy())
             .expect("the exact retained state passes");
 
+        for wave in ["spec001w6", "spec001w7", "spec001w8"] {
+            let mut material = fixture.material.clone();
+            wave.clone_into(&mut material.wave);
+            require_adr046_historical_predecessor_for_exit(
+                &fixture.state,
+                &material,
+                &fixture.roots,
+            )
+            .expect("the accepted historical predecessor carries through later phases");
+        }
+
         let mut lowercase_spec = fixture.material.clone();
         "spec001".clone_into(&mut lowercase_spec.program);
-        assert!(is_adr046_w6(&lowercase_spec));
+        assert!(is_adr046_post_w5(&lowercase_spec));
 
         let mut lowercase_adr = fixture.material.clone();
         "adr046".clone_into(&mut lowercase_adr.program);
         "adr046w6".clone_into(&mut lowercase_adr.wave);
-        assert!(is_adr046_w6(&lowercase_adr));
+        assert!(is_adr046_post_w5(&lowercase_adr));
     }
 
     #[test]
@@ -1110,7 +1228,7 @@ mod tests {
         assert!(
             error
                 .message()
-                .contains("no first-parent integration commit"),
+                .contains("no accepted historical disposition"),
             "{error}"
         );
     }
@@ -1229,12 +1347,53 @@ mod tests {
         let fixture = HistoricalFixture::new("historical-predecessor-scope");
         let mut material = fixture.material.clone();
         "spec001w5".clone_into(&mut material.wave);
-        require_adr046_w6_historical_predecessor_for_exit(
-            &fixture.state,
-            &material,
-            &BTreeMap::new(),
+        require_adr046_historical_predecessor_for_exit(&fixture.state, &material, &BTreeMap::new())
+            .expect("another wave does not consume the one-time W6 exception");
+    }
+
+    #[test]
+    fn committed_disposed_work_item_projection_is_exact() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("xtask lives under packages/");
+        let graph = fs::read(root.join(GRAPH_PATH)).expect("read graph");
+        let work_items = fs::read(root.join(WORK_ITEMS_PATH)).expect("read work items");
+        require_disposed_work_item_projection(
+            &graph,
+            &work_items,
+            5,
+            ADR046_W5_WORK_ITEM_PROJECTION_SHA256,
         )
-        .expect("another wave does not consume the one-time W6 exception");
+        .expect("the accepted historical work-item projection matches");
+
+        let mut graph_json: serde_json::Value =
+            serde_json::from_slice(&graph).expect("parse graph");
+        graph_json["nodes"]
+            .as_array_mut()
+            .expect("nodes")
+            .push(serde_json::json!({
+                "id": "ADR046-late-added-001",
+                "kind": "work-item",
+                "wave": "W5"
+            }));
+        let mut work_items_json: serde_json::Value =
+            serde_json::from_slice(&work_items).expect("parse work items");
+        work_items_json["items"]
+            .as_array_mut()
+            .expect("items")
+            .push(serde_json::json!({
+                "workItemId": "ADR046-late-added-001",
+                "implementationState": "Planned"
+            }));
+        require_disposed_work_item_projection(
+            &serde_json::to_vec(&graph_json).expect("graph bytes"),
+            &serde_json::to_vec(&work_items_json).expect("work-item bytes"),
+            5,
+            ADR046_W5_WORK_ITEM_PROJECTION_SHA256,
+        )
+        .expect_err("an added historical row must invalidate the disposition");
     }
 
     #[test]

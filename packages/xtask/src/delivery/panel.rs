@@ -1035,6 +1035,11 @@ fn request_checked(
     selection_path: Option<&Path>,
 ) -> Result<WorkflowOutput> {
     super::work_item_state::reject_adr046_w5_mutation(&snapshot.material, "panel request")?;
+    super::work_item_state::require_adr046_historical_predecessor_at_entry(
+        state,
+        &snapshot.material,
+        repository_roots,
+    )?;
     super::work_item_state::require_predecessor_state_for_exit(
         state,
         &snapshot.material,

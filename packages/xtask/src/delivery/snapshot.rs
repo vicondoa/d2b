@@ -134,7 +134,7 @@ fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<Workflow
     let material = discover(request)?;
     super::work_item_state::reject_adr046_w5_mutation(&material, "snapshot")?;
     let repository_roots = request.checkout_roots()?;
-    super::work_item_state::require_adr046_w6_historical_predecessor_at_entry(
+    super::work_item_state::require_adr046_historical_predecessor_at_entry(
         root,
         &material,
         &repository_roots,
