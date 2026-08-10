@@ -65,7 +65,7 @@ const EXPECTED_WORK_ITEMS: usize = 545;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
 const EXPECTED_NODES: u64 = 600;
-const EXPECTED_EDGES: u64 = 1962;
+const EXPECTED_EDGES: u64 = 1963;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
@@ -3713,15 +3713,12 @@ fn feature_local_semantic_branches_reject_independent_mutations() {
     );
 
     let mut missing_overlap = manifest.clone();
-    let item = missing_overlap["items"]
+    missing_overlap["local_to_manifest_shared_writer_handoffs"]["handoffs"][0]["paths"]
         .as_array_mut()
-        .expect("manifest items")
-        .iter_mut()
-        .find(|item| item["workItemId"] == "ADR046-vl-011")
-        .expect("provider policy item");
-    item["destination"] = serde_json::json!("packages/xtask/src/other_policy.rs");
+        .expect("broker handoff paths")
+        .retain(|path| path != "packages/d2b-contracts/src/broker_wire.rs");
     findings.clear();
-    check_shared_writer_handoffs(&contract, &graph, &missing_overlap, &mut findings);
+    check_shared_writer_handoffs(&missing_overlap, &graph, &manifest, &mut findings);
     assert!(
         !findings.is_empty(),
         "a missing normalized local-owned overlap unexpectedly passed"
@@ -3811,7 +3808,7 @@ fn shared_writer_policy_rejects_duplicate_paths_missing_owners_and_graph_gaps() 
     missing_owner["local_to_manifest_shared_writer_handoffs"]["handoffs"][0]["order"]
         .as_array_mut()
         .expect("broker handoff order")
-        .pop();
+        .retain(|endpoint| endpoint != "ADR046-transport-unix-006");
     findings.clear();
     check_shared_writer_handoffs(&missing_owner, &graph, &manifest, &mut findings);
     assert!(
