@@ -166,13 +166,15 @@ Each spec's work items are listed in the per-wave sections below.
 | `ADR-046-provider-volume-virtiofs` | W6 | 7 | W6-storage-network-device |
 
 The full-US1 Guest acceptance is not a four-family matrix. Its sole family is
-`ADR-046-provider-runtime-cloud-hypervisor` / `Provider/runtime-cloud-hypervisor`. T384
-(`ADR046-ch-001`) owns `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` and
+`ADR-046-provider-runtime-cloud-hypervisor` / `Provider/runtime-cloud-hypervisor`.
+Manifest-backed `ADR046-ch-001` owns
+`packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` and
 `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, its sole `Makefile`
 recipe, and the authoritative real-KVM plus guest-control `make test-host-integration`
 obligation through exact attr
 `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`;
-T384-T390 bound the complete family file set, including T387's Nix Guest emitter. T479 owns
+Manifest-backed `ADR046-ch-001` through `ADR046-ch-007` bind the complete family file set,
+including the generated Nix Guest emitter. T479 owns
 the exact-F6 `w6-cloud-hypervisor-guest-acceptance` evidence gate and T480 revalidates that
 same record at every close boundary. The ACA, Azure VM, and qemu-media runtime families
 cannot satisfy this acceptance.
@@ -810,7 +812,7 @@ choice.
 
 ### Wave 5 production reachability is boundary-bound
 
-<!-- RETIRED-READONLY-BEGIN: historical Wave 5 completion coverage -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 The approved 2026-08-06 amendment added fifteen local Wave 5 completion/evidence task
 definitions without changing the 545-item manifest census. They remain unchecked historical
@@ -981,7 +983,7 @@ authored with the wave that removes its path.
 
 ## Detail-preservation checklist
 
-<!-- RETIRED-READONLY-BEGIN: historical task-graph checklist -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 Run this against `tasks.md` before implementation starts.
 
@@ -1090,7 +1092,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-066 - FR-072 | Authenticated production publication, historical Wave 5 design, and prospective correction | **Historical design plus authoritative provider rows and the closed feature-local acceptance exception** | T221, authoritative generated rows, active local T604, T479, and T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | authoritative generated row |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | authoritative generated row |
-| FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | T221 and authoritative generated rows |
+| FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Local split**: T604 authors the case/recipe after manifest-backed `ADR046-ch-001`; T479 solely executes and records it; T480 revalidates | T604, T479, T480 |
 
 ### Locally added requirements
 
@@ -1104,7 +1106,7 @@ content. The original clarification family and the later approved additions are:
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
 | FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective correction | Retired rows remain fenced; T221 matches retained bytes, authoritative provider rows supply implementation, and active local T604 supplies cross-provider acceptance before T479/T480. |
-| FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Retains W2-W5 bytes as historical evidence and makes the existing daemon restart VM survival check exact-candidate close evidence for prospective W6, with full namespace equality after excluding only canonical `d2b.slice` and separate unexpected-slice/unexpected-service negative injections. It adds no task and no W5 evidence identifier. |
+| FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | T604 authors development coverage without candidate evidence; T479 emits the sole exact-F6 result in `w6-cloud-hypervisor-guest-acceptance`; T480 revalidates. |
 
 Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. Retired consumers are fenced history; prospective ownership resolves only from current authoritative rows.
 
@@ -1121,4 +1123,4 @@ Accepted external Version 2 and generated `ADR-046-validation-and-delivery-trace
 | SC-025 | FR-043 - locally added; candidate-bound enforcement through T580/T555/T556 |
 | SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
 | SC-030 - SC-034 | FR-066 - FR-074; historical Wave 5 planning, exact retained state, T221 predecessor guard, and authoritative prospective acceptance |
-| SC-035 | FR-075; immutable historical evidence plus T221 and authoritative prospective validation |
+| SC-035 | FR-075; immutable history plus T604 case authorship, T479 sole candidate evidence, and T480 revalidation |

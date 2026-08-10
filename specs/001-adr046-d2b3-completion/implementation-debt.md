@@ -1675,11 +1675,13 @@ writes, but they are not the same broker state.
 
 The current tree corrects one ownership assumption in that table:
 `NetworkEffectPort` already lives in
-`packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`. T336 keeps
+`packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`.
+Manifest-backed `ADR046-nl-001` keeps
 that trait and owns the production implementation in
 `packages/d2bd/src/network_effect_adapter.rs`, with prospective W6 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
-broker operations and performs no direct host mutation. Current generated rows T336-T355
+broker operations and performs no direct host mutation. Current generated work items
+`ADR046-nl-001` through `ADR046-nl-020`
 place that work in W6, and final R9 preserves that ownership. The retired Wave 5 blocker has
 no prospective effect. T221 requires the accepted amendment and authoritative member specs
 and generated manifests own subsequent implementation and evidence.
@@ -1853,6 +1855,8 @@ regenerate `wire-protocol.json`; hand-editing the generated schema would leave
 the canonical source stale and fail the drift contract.
 
 ## 19. Rulings recorded before Wave 5 opens, and what debt the wave takes on
+
+<!-- RETIRED-READONLY-BEGIN -->
 
 Recorded the way sections 9 and 14 were, before any slice opens, so the wave's
 scope and its shared-file decisions are settled rather than argued at review.
@@ -2144,6 +2148,8 @@ part of the evidence, not as an aside.
 
 **Class: unmet obligation** until the measurement of record is taken under that
 precondition. The provisional slice reading is explicitly not evidence.
+
+<!-- RETIRED-READONLY-END -->
 
 ## 20. Wave 5 destination and rename drift, and two corrections to earlier entries
 

@@ -1,6 +1,6 @@
 # Historical record: W0 and W1 delivered without sealed wave records
 
-<!-- RETIRED-READONLY-BEGIN: immutable historical compatibility record -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 | Field | Value |
 | --- | --- |

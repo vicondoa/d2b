@@ -76,7 +76,7 @@ prospective continuation.
 
 ### Approved Wave 5 production-completion amendment (2026-08-06)
 
-<!-- RETIRED-READONLY-BEGIN: historical Wave 5 amendment -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 The preceding Context is retained as the feature's historical starting record. The committed
 tree has moved beyond it: the production redb backend now exists in
@@ -202,10 +202,11 @@ claim the three-resource operator activation positive. The exact acceptance set 
 `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` in Zone
 `acceptance`; no other resource may substitute for one of those three. The authoritative
 prospective acceptance row is the active feature-local T604 coordination/completion task; it
-exercises that
-set as W6 acceptance after T221 and merged authoritative T336-T355, consuming their
-double-opt-in production Network path and four-case matrix. Full US1 completion occurs only
-after that result and the Wave 6 `Provider/runtime-cloud-hypervisor` family supply positive
+authors and development-validates that set after T221 and the merged authoritative
+`ADR046-nl-001` through `ADR046-nl-020` workItemId set, consuming its double-opt-in production
+Network path and four-case matrix. After exact F6 freezes, T479 invokes the T604-owned
+validator and emits the candidate-bound record. Full US1 completion occurs only after that
+record and the Wave 6 `Provider/runtime-cloud-hypervisor` family supply positive
 runtime-effect acceptance for the declared Guest. Missing, skipped, status-only,
 fake-boundary, or refusal evidence leaves US1 incomplete.
 
@@ -238,13 +239,15 @@ T071 cannot complete by ratifying it. The required contract is
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
 both inputs default false. The former freeze predicate is historical only. T221 requires
 the accepted versioned correction and migration to remove every current-facing sole
-Network-opt-in path and retain T336-T355 plus all four Network/Host combinations as W6 work.
+Network-opt-in path and retain `ADR046-nl-001` through `ADR046-nl-020` plus all four
+Network/Host combinations as W6 work.
 It requires the migration and ownership on
 the fetched Wave 6 base, and T480 revalidates them before every prospective close boundary.
-Prospective acceptance ownership resolves only from authoritative member specs and generated
-manifests after T336-T355 merge. A feature-local status,
+Manifest-backed provider implementation comes only from generated authority. Active local
+T604 coordinates acceptance after that exact workItemId set merges and owns no Network
+implementation. A feature-local status,
 declaration-only fixture, fake effect port, historical W4 record, stale sole Network opt-in,
-or reassignment of T336-T355 outside W6 cannot unblock any boundary.
+or reassignment of those exact workItemIds outside W6 cannot unblock any boundary.
 
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
@@ -606,7 +609,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   reference documentation compared with emitted behavior. The former enum/list evidence was
   planned but is absent from code canon; current ownership resolves only from authoritative
   member specs and generated manifests. The exact three-resource operator activation positive
-  is not Wave 5 evidence: its authoritative prospective row follows T221 and merged T336-T355, and
+  is not Wave 5 evidence: its authoritative prospective row follows T221 and the merged
+  `ADR046-nl-001` through `ADR046-nl-020` workItemId set, and
   T479/T480 bind it to F6 together with the
   `Provider/runtime-cloud-hypervisor` Guest result. Actionable refusals remain separate
   negative cases and cannot satisfy either positive story.
@@ -627,8 +631,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   transition may mutate or complete Wave 5. Historical planning and accounting text
   remains evidence only and is not a prerequisite for the one-time Wave 6 predecessor
   disposition. T221 requires the accepted
-  double-opt-in Network contract and settled T336-T355 W6 ownership on its exact fetched
-  base; T479/T480 own the prospective implementation evidence and close checks.
+  double-opt-in Network contract and settled `ADR046-nl-001` through `ADR046-nl-020` W6
+  ownership on its exact fetched
+  base; T479 owns the prospective candidate evidence and T480 owns its close revalidation.
 
 - **FR-073**: D106 remains binding in the completed production path.
   `d2b-resource-store` and `d2b-resource-store-redb` MUST NOT deserialize, import, compile,
@@ -676,9 +681,12 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   equality. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
   cases MUST quarantine without adoption, cleanup, or signal. Prospective command execution
   is limited to T479 for W6. Historical T028/T035/T070 and retained Wave 5 evidence are read
-  only and MUST NOT rerun the target. Current source ownership of the host VM case and its
-  discovery/build recipe resolves only from authoritative objects; every current or later close
-  reuses that
+  only and MUST NOT rerun the target. Active local T604 authors
+  `daemon-restart-vm-survival.nix` and its `Makefile` recipe after manifest-backed
+  `ADR046-ch-001` authors the distinct Cloud Hypervisor recipe. T604 development validation
+  is not candidate-bound FR-075 evidence.
+  T479 is the sole exact-candidate executor and evidence owner: it runs both host cases once
+  and records FR-075 only in `w6-cloud-hypervisor-guest-acceptance`. T480 revalidates that
   candidate-bound predicate. Passing evidence MUST name the enumerated and successfully built
   attr, command success, and no `SKIP` result. Missing, empty, skipped, stale,
   wrong-candidate, status-only, private-hook, incomplete unit enumeration, missing
@@ -1327,8 +1335,9 @@ carries the object verbatim rather than copying selected fields into the task ro
   that durable start are excluded. The outer 2,000 ms ceiling and every applicable FR-030
   component budget pass independently.
 
-  The authoritative prospective acceptance row collects the exact-F6 operator sample and emits only its assigned evidence
-  by accepted Version 2. T479 imports `operator-nix-activation-cleanup`; that identifier is not
+  Active local T604 authors and development-validates the operator validator but emits no
+  candidate-bound record. After converging and freezing exact F6, T479 invokes that validator
+  and emits `operator-nix-activation-cleanup`; that identifier is not
   a member of the Wave 5 exact-seven profile. The sole authority for receipt shape,
   publication, incident handling, disposition, recovery, source-floor evidence, fixture and
   poison registries, and traceability is accepted Version 2
@@ -1427,7 +1436,8 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-035**: The exact W6 close candidate has one candidate-bound passing FR-075 result for
   `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and built
   and no skip. W2-W4 and Wave 5 retain their exact historical evidence without rerun or
-  reconstruction. W6 carries the prospective result only inside
+  reconstruction. T604 authors the case but emits no candidate-bound FR-075 evidence. T479
+  owns and carries the sole prospective result only inside
   `w6-cloud-hypervisor-guest-acceptance`, and T480 revalidates it before panel request, seal,
   merge eligibility, and merge.
 

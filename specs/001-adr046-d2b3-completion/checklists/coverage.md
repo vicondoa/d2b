@@ -121,7 +121,10 @@ Are requirements present for each scenario class, or explicitly excluded?
   ownership resolves only from authoritative member specs and generated manifests?
 - [x] CHK055 Does `CommittedPendingAudit` preserve the layered `ResourceStatus` composite without claiming phase/code members on `ResourceUpdateStatus`, while assigning the additive protobuf field to every mutation response including delete and recording the ResourceService fingerprint impact? [Consistency, Spec FR-070]
 - [x] CHK056 Does active local T604, after T221 and its exact authoritative dependencies,
-  preserve the exact Volume/Network/Device identity, files, validation, and evidence scope?
+  including serialized Makefile order `ADR046-ch-001 -> T604`, preserve the exact
+  Volume/Network/Device identity, files, development validation, and
+  `operator-nix-activation-cleanup` validator scope while leaving both candidate record
+  emission and candidate-bound FR-075 solely to T479, with T480 revalidating both?
 - [x] CHK057 Is every retired Wave 5 task occurrence confined to an explicit read-only fence,
   with no feature-local prospective ownership?
 
@@ -139,7 +142,7 @@ Are requirements present for each scenario class, or explicitly excluded?
 
 ## Resolution log
 
-<!-- RETIRED-READONLY-BEGIN: historical checklist resolution log -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 ### Gate 1 - closed before `/speckit-tasks` (2026-07-29)
 
@@ -566,7 +569,6 @@ or validation result, and do not authorize T603 or any later source dispatch.
 | --- | --- |
 | A1 | The operator acceptance set is exact and non-selectable. The local acceptance task consumes merged authoritative provider work, and later local tasks bind its record to exact F6. |
 | A2 | SC-002 now uses one monotonic clock from durable target-generation transition-intent commit before publication/ingestion to the later of real-effect observation and production operator `Ready` projection. It includes automatic activation ingestion and requires the 2,000 ms outer ceiling plus every applicable FR-030 component p95 independently. Its separately versioned typed receipt is referenced by an unchanged schema-v2 `EvidenceRecord`; a failed operator record imports without a receipt but cannot close. CHK024 is closed. |
-| U1 | FR-075 and SC-035 retain W2-W5 continuity as immutable history and make W6 continuity a fail-closed exact-candidate gate. The local acceptance task owns the host VM case and discovery recipe; later convergence executes the prospective predicate. |
 | I1 | CHK008 is closed by FR-070's bounded journal/segment retention and prune/replay requirements; CHK041 is closed by complete owner-or-explicit-local traceability including FR-075; CHK045 is closed by SC-012's final-F measurement and FR-030's mandatory redesign path. No implementation or measurement result is claimed. |
 
 ### Current plan-panel recommendation disposition (2026-08-07)

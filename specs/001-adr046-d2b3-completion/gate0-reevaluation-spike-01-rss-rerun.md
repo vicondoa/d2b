@@ -1,6 +1,6 @@
 # Gate 0 re-evaluation: SPIKE-01 RSS rerun amendment
 
-<!-- RETIRED-READONLY-BEGIN: immutable historical compatibility record -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 | Field | Value |
 | --- | --- |

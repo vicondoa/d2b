@@ -30,7 +30,7 @@ attestation payload.** Describe the friction, not the review text that surfaced 
 
 ## Log
 
-<!-- RETIRED-READONLY-BEGIN: immutable historical delivery-memory rows -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 | ID | Date | Category | Wave | Friction | Impact | Status |
 | --- | --- | --- | --- | --- | --- | --- |

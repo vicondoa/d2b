@@ -1,6 +1,6 @@
 # Removal proofs: the three W5 crate removals (FR-023)
 
-<!-- RETIRED-READONLY-BEGIN: immutable historical compatibility record -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 | Field | Value |
 | --- | --- |

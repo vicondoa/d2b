@@ -28,7 +28,7 @@ companion reads this surface or the socket beside it.
 
 ## Historical committed-pending-audit recovery plan
 
-<!-- RETIRED-W5-CLI-BEGIN: read-only historical compatibility -->
+<!-- RETIRED-W5-CLI-BEGIN -->
 
 This retired design assigned T599 a coordinated amendment of the accepted
 `ADR-046-cli-and-operations` specification from Version 1 to Version 2. Version 2 assigns the

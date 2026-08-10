@@ -32,7 +32,7 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
 | NIX-3 | Add Zone assertions to `assertions.nix` (sole W2 writer of that file) | FR-001 | W2 |
 | NIX-4 | Removing a declared resource activates the new generation immediately and requests async owner- and finalizer-safe deletion with visible cleanup status | FR-005 | W5 |
 | NIX-5 | Extend the `eval-*` flake checks with Zone and resource examples | FR-032 | W5 |
-| NIX-6 | Active local T604 proves the exact Volume/Network/Device path and state-preserving cleanup after T221; authoritative T222/T227/T423; Network T336-T355; TPM T310-T322; and Volume T458-T470. It emits `operator-nix-activation-cleanup` before T479/T480. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | active feature-local T604 |
+| NIX-6 | Active local T604 authors and development-validates the exact Volume/Network/Device path and state-preserving cleanup after T221 and every exact workItemId in `tasks.md` `required_manifest_dependencies.T604`. It owns `tests/golden/delivery/host-generation-pre-start-case-ids.txt` and `tests/golden/delivery/host-generation-unit-census-case-ids.txt`, authors and development-validates the `operator-nix-activation-cleanup` validator, and authors the daemon-restart case. It emits no candidate-bound record; after F6 freezes, T479 invokes the operator validator, emits its one record, and alone executes candidate-bound FR-075. | FR-001, FR-005, FR-072, FR-075, SC-034, SC-035 | active feature-local T604 |
 | NIX-7 | Historical Wave 5 design for the compiler-only audit carrier and bundle-version transition. Exact retired ownership remains only in fenced history. | FR-070, SC-032 | historical W5 |
 | NIX-8 | Code-canon search found no production host-generation handoff. Prospective ownership, file assignment, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
 | NIX-9 | Code-canon search found no rebuild-reference option, emitter, or test. Prospective ownership, grammar/bounds, carrier, dependencies, and validation resolve only from the authoritative member spec and generated manifest after T221. | FR-070, SC-032 | prospective authoritative row |
@@ -99,7 +99,8 @@ emit, version, hash, or publish the active envelope. The sole canonical active c
   `Ready` projection must both carry that same exact resource identity; a missing, duplicate,
   unrelated, or mixed-identity member is rejected. Guest support objects remain
   prerequisites only: Guest runtime-effect acceptance is deferred specifically to Wave 6
-  `Provider/runtime-cloud-hypervisor` T384/T479/T480 and cannot satisfy the authoritative acceptance row. Direct
+  manifest-backed `ADR046-ch-001` plus local T479/T480 and cannot satisfy the authoritative
+  acceptance row. Direct
   ResourceService calls, status-only
   effects, actionable refusals, a skipped lane, or empty check discovery are ineligible for
   that positive proof. Evidence must enumerate and successfully build the exact

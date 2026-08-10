@@ -25,7 +25,7 @@ third source of truth that the drift gates do not check.
 
 ## Candidate recovery prerequisite v1
 
-<!-- RETIRED-READONLY-BEGIN: historical candidate-recovery compatibility -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 **Contract id**: `adr046-candidate-recovery-prerequisite/v1`
 
@@ -256,10 +256,15 @@ post-merge seal, merge-target registration, and merge eligibility.
 Current prospective host-generation, handler-contract, admission, and operator-acceptance
 implementation ownership resolves only from authoritative member specs and generated
 manifests. Active feature-local T604 is the narrow cross-provider acceptance exception; its
-task row owns its files, validation, and `operator-nix-activation-cleanup` evidence before
-T479/T480.
+task row owns its files, development validation, and the
+`operator-nix-activation-cleanup` validator identity. It authors the daemon-restart host case
+and its Makefile recipe after manifest-backed `ADR046-ch-001`, but emits no candidate-bound
+record. After converging and freezing F6, T479 invokes the operator validator, runs the
+daemon-restart case with the Cloud Hypervisor case, emits the one
+`operator-nix-activation-cleanup` record, and records FR-075 only in
+`w6-cloud-hypervisor-guest-acceptance`; T480 revalidates both closed predicates.
 
-<!-- RETIRED-READONLY-BEGIN: retired Wave 5 rules 11-16 -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 11. **Amended-plan reconciliation is historical.** The former T603/T589 editor and lifecycle
     sequence is read-only history and authorizes no current mutation. Code canon lacks the

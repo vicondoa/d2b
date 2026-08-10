@@ -1,6 +1,6 @@
 # Contract: Resource API and ComponentSession
 
-<!-- RETIRED-READONLY-BEGIN: historical Wave 5 contract compatibility -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 **Owning specs**: `ADR-046-resource-api-and-authorization`, `ADR-046-componentsession-and-bus`,
 `ADR-046-zone-routing`, `ADR-046-resource-store-redb`

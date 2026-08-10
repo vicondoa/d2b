@@ -77,6 +77,145 @@ must point to authoritative work-item IDs or another task in this closed local s
 not make summaries authoritative for manifest-backed rows and does not create a broad second
 authority.
 
+All provider implementation remains manifest-backed and comes only from generated authority.
+Manifest-backed dependencies are named by exact `workItemId`; T aliases and numeric T ranges
+are never dependency identities. The closed local tasks coordinate across those
+implementations but own no provider implementation row.
+
+```json
+{
+  "artifact_kind": "d2b-feature-local-task-contract",
+  "schema_version": 1,
+  "task_ids": ["T604", "T479", "T480"],
+  "unchecked_task_ids": ["T604", "T479", "T480"],
+  "outside_retired_fences": true,
+  "permitted_local_dependency_ids": ["T221", "T604", "T479", "T480"],
+  "required_local_dependencies": {
+    "T604": ["T221"],
+    "T479": ["T604", "T221"],
+    "T480": ["T479"]
+  },
+  "required_manifest_dependencies": {
+    "T604": [
+      "ADR046-activation-001",
+      "ADR046-activation-006",
+      "ADR046-system-core-001",
+      "ADR046-ch-001",
+      "ADR046-nl-001",
+      "ADR046-nl-002",
+      "ADR046-nl-003",
+      "ADR046-nl-004",
+      "ADR046-nl-005",
+      "ADR046-nl-006",
+      "ADR046-nl-007",
+      "ADR046-nl-008",
+      "ADR046-nl-009",
+      "ADR046-nl-010",
+      "ADR046-nl-011",
+      "ADR046-nl-012",
+      "ADR046-nl-013",
+      "ADR046-nl-014",
+      "ADR046-nl-015",
+      "ADR046-nl-016",
+      "ADR046-nl-017",
+      "ADR046-nl-018",
+      "ADR046-nl-019",
+      "ADR046-nl-020",
+      "ADR046-device-tpm-001",
+      "ADR046-device-tpm-002",
+      "ADR046-device-tpm-003",
+      "ADR046-device-tpm-004",
+      "ADR046-device-tpm-005",
+      "ADR046-device-tpm-006",
+      "ADR046-device-tpm-007",
+      "ADR046-device-tpm-008",
+      "ADR046-device-tpm-009",
+      "ADR046-device-tpm-010",
+      "ADR046-device-tpm-011",
+      "ADR046-device-tpm-012",
+      "ADR046-device-tpm-013",
+      "ADR046-vl-001",
+      "ADR046-vl-002",
+      "ADR046-vl-003",
+      "ADR046-vl-004",
+      "ADR046-vl-005",
+      "ADR046-vl-006",
+      "ADR046-vl-007",
+      "ADR046-vl-008",
+      "ADR046-vl-009",
+      "ADR046-vl-010",
+      "ADR046-vl-011",
+      "ADR046-vl-012",
+      "ADR046-vl-013"
+    ],
+    "T479": ["ADR046-process-002"]
+  },
+  "required_manifest_dependency_queries": {
+    "T479": {
+      "artifact": "docs/specs/ADR-046-implementation-graph.json",
+      "where": {"kind": "work-item", "wave": "W6"},
+      "project": "id",
+      "project_semantics": "workItemId",
+      "expected_count": 258,
+      "cardinality": "exact"
+    }
+  },
+  "shared_file_order": {
+    "Makefile": ["ADR046-ch-001", "T604"]
+  },
+  "owned_files": {
+    "T604": [
+      "packages/d2b-contract-tests/tests/resource_operator_activation.rs",
+      "packages/d2bd/tests/resource_operator_activation.rs",
+      "tests/host-integration/resource-operator-activation.nix",
+      "tests/host-integration/daemon-restart-vm-survival.nix",
+      "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+      "tests/golden/delivery/host-generation-unit-census-case-ids.txt",
+      "Makefile",
+      "changelog.d/operator-resource-activation.md"
+    ]
+  },
+  "case_id_fixture_paths": [
+    "tests/golden/delivery/host-generation-pre-start-case-ids.txt",
+    "tests/golden/delivery/host-generation-unit-census-case-ids.txt"
+  ],
+  "validator_identity_literals": {
+    "T604": ["operator-nix-activation-cleanup"]
+  },
+  "candidate_evidence_literals": {
+    "T479": [
+      "operator-nix-activation-cleanup",
+      "w6-cloud-hypervisor-guest-acceptance"
+    ]
+  },
+  "t479_candidate_execution_order": [
+    "converge-f6",
+    "freeze-f6",
+    "invoke-t604-operator-validator",
+    "execute-t604-authored-daemon-restart-case-with-cloud-hypervisor-case",
+    "emit-both-candidate-records"
+  ],
+  "operator_acceptance": {
+    "validator_author": "T604",
+    "candidate_executor": "T479",
+    "candidate_evidence_owner": "T479",
+    "candidate_evidence_literal": "operator-nix-activation-cleanup",
+    "candidate_record_count": 1,
+    "t604_pre_f6_candidate_evidence_emission": false,
+    "close_revalidator": "T480"
+  },
+  "fr075": {
+    "case_author": "T604",
+    "candidate_executor": "T479",
+    "candidate_evidence_owner": "T479",
+    "candidate_evidence_literal": "w6-cloud-hypervisor-guest-acceptance",
+    "candidate_record_count": 1,
+    "t604_candidate_bound_evidence": false,
+    "close_revalidator": "T480"
+  }
+}
+```
+
 ## Wave gate tasks
 
 Prospective wave delivery carries two distinct panel surfaces. Before implementation dispatch,
@@ -131,18 +270,23 @@ The negative matrix injects one unexpected loaded `d2b-unexpected.slice` and, se
 unexpected loaded `d2b-unexpected.service`; both remain after the sole `d2b.slice` exclusion
 and must fail the exact-set comparison.
 Historical W2-W5 records describe retained evidence and own no current execution or test
-edit. Current host-check ownership resolves only from authoritative member specs and
-generated manifests; its public target must fail on empty discovery, any `SKIP`, a missing
-build, or a non-x86 result presented as passing. The positive case proves
+edit. T604 authors `tests/host-integration/daemon-restart-vm-survival.nix` and its distinct
+Makefile recipe after manifest-backed `ADR046-ch-001` authors the Cloud Hypervisor recipe;
+the shared Makefile order is `ADR046-ch-001 -> T604`. T604 development validation may
+exercise the case but creates no candidate-bound
+FR-075 evidence. T479 is the sole exact-candidate executor and evidence owner: it runs the
+daemon-restart case once with the Cloud Hypervisor case and records both only in
+`w6-cloud-hypervisor-guest-acceptance`. The public target must fail on empty discovery, any
+`SKIP`, a missing build, or a non-x86 result presented as passing. The positive case proves
 `Ready` before daemon restart, reachability, fresh-pidfd adoption of the original runner with
 the same PID and start identity, continued reachability, and `Stopped` after public stop.
 Its negative cases inject numeric PID reuse, pidfd/start-identity mismatch, and multiple
 plausible runners and require quarantine with no adoption, signal, or cleanup against an
 unproven process.
 T029, T036, and T071 remain historical adjudication records; no current workflow reopens
-their results. The retained W5 result is historical and matched only by T221's predecessor guard. T480
-revalidates W6's prospective result before panel request, merge, post-merge seal, and merge
-eligibility. Historical F2/F3/F4 records must each contain exactly one
+their results. The retained W5 result is historical and matched only by T221's predecessor
+guard. T480 revalidates T479's one closed FR-075 predicate before panel request, merge,
+post-merge seal, and merge eligibility. Historical F2/F3/F4 records must each contain exactly one
 candidate-bound `local-host`
 `EvidenceRecord.validation = "pre-adr046-host-continuity"` result; the historical W5 record
 placed the result in `production-session-watch`; W6 places it in the
@@ -453,13 +597,13 @@ a recorded nonconformance, not an alternative close path. T070 and T071 remain b
 an accepted external correction preserves F4's historical bytes, marks its sole-opt-in result
 non-authorizing, and lands a versioned double-opt-in migration that removes every
 current-facing sole Network-opt-in path on the T221 base. The generated work-item amendment
-must retain T336-T355 as authoritative W6 implementation under T221 and assign all
+must retain `ADR046-nl-001` through `ADR046-nl-020` as authoritative W6 implementation under T221 and assign all
 four Network/Host cases to that W6 group. A feature-local matrix, single-opt-in assertion,
 declaration-only fixture, fake adapter, or evidence from the old env surface cannot resolve
 the conflict. The retired Wave 5 plan remains read-only evidence. T221 requires the accepted migration
 and regenerated double-opt-in contract on the exact fetched Wave 6 base, and T480 revalidates
-the production cases at close. Current acceptance ownership resolves only from authoritative
-member specs and generated manifests; no feature-local status correction can unblock any
+the production cases at close. Active local T604 coordinates acceptance over the
+manifest-backed implementation; no feature-local status correction can unblock any
 boundary.
 
 ### Group `wi:core-config-hub:w4` (1 items)
@@ -490,12 +634,13 @@ cleanup frozen in `spec.md`.
 Support resources cannot substitute. W4 history remains byte-preserved but its sole-opt-in
 Network result is nonconforming. T221 requires the accepted Network contract/work-item
 amendment to remove stale sole-opt-in contract paths and retain the production implementation
-plus four-case matrix in authoritative W6 rows T336-T355. Wave 5
+plus four-case matrix in authoritative W6 work items `ADR046-nl-001` through
+`ADR046-nl-020`. Wave 5
 does not claim the prospective positive operator result. Current acceptance ownership
-resolves only from authoritative member specs and generated manifests after T336-T355 merge.
+resolves only from authoritative member specs and generated manifests after that exact set merges.
 Guest runtime-effect acceptance
 remains fail-closed until Wave 6
-`Provider/runtime-cloud-hypervisor` completes T384 and T479/T480 accept its exact-F6 evidence.
+manifest-backed `ADR046-ch-001` completes and local T479/T480 accept its exact-F6 evidence.
 
 - [ ] T072 [US1] `adr046w5` HISTORICAL ENTRY ATTESTATION - no exact contemporaneous Wave 5
   plan-panel receipt is cited, so this predicate remains unproven. The exact ADR-046
@@ -505,7 +650,7 @@ remains fail-closed until Wave 6
   or permit a new Wave 5 request, attestation, seal, merge, or close. Preserve this checkbox
   unchecked as historical evidence.
 
-<!-- RETIRED-READONLY-BEGIN: historical Wave 5 completion graph summary -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 **Approved production-completion amendment**: the 12 manifest groups remain authoritative for
 their 146 work items. T589-T602 and T605 add the missing Wave 5 composition, coordinated
@@ -539,7 +684,7 @@ acceptance fragment is outside this historical block.
 
 <!-- RETIRED-READONLY-END -->
 
-<!-- RETIRED-W5-MANIFEST-BEGIN: read-only historical compatibility -->
+<!-- RETIRED-W5-MANIFEST-BEGIN -->
 
 ### Group `wi:ADR-046-cli-and-operations` (13 items)
 
@@ -748,7 +893,7 @@ Every unchecked task in this Wave 5 completion subsection is retained as histori
 evidence only. Do not dispatch it as recovery, do not change its checkbox to reconstruct the
 merged history, and do not make it a Wave 6 predecessor.
 
-<!-- RETIRED-W5-PLAN-BEGIN: read-only historical compatibility -->
+<!-- RETIRED-W5-PLAN-BEGIN -->
 
 - [ ] T603 [US1] **`adr046w5` HISTORICAL FEATURE-EDITOR RECONCILIATION PLAN.** The planned
   all-or-nothing editor accounting sequence remains unproven and unchecked. Constitution
@@ -858,7 +1003,8 @@ retained candidate or delivery history.
 
 ## Wave W6: Remaining Provider dossiers in five file-disjoint families
 
-**Manifest inventory**: 27 Provider dossiers and 258 work items. T336-T355 remain
+**Manifest inventory**: 27 Provider dossiers and 258 work items. `ADR046-nl-001` through
+`ADR046-nl-020` remain
 authoritative W6 work and may start only after T221's W6 plan lifecycle passes. The launch
 set remains all 27 dossiers and all 258 work items, in 29 groups including
 process-provider integration and core-controller coordination. Prospective acceptance
@@ -1051,7 +1197,7 @@ Prospective ownership resolves only from authoritative member specs and generate
 
 ### Group `wi:ADR-046-provider-network-local` (20 items)
 
-**Current generated ownership remains W6:** T336-T355 are the authoritative production
+**Current generated ownership remains W6:** `ADR046-nl-001` through `ADR046-nl-020` are the authoritative production
 implementation rows under T221. T221 requires the accepted versioned
 `ADR-046-resources-network` contract/work-item amendment on the exact fetched base. It must
 require
@@ -1059,9 +1205,8 @@ require
 remove every current-facing sole Network-opt-in path, and regenerate these rows with the
 production adapter, site-gate transport, schema migration, and all four real
 emitter/controller/broker/net-VM cases still assigned to W6. The amendment must not move or
-replace T336-T355 with retired Wave 5 owners. Prospective acceptance ownership resolves only
-from authoritative objects and owns
-no Network implementation, and consumes the merged T336-T355 result. T479 revalidates the
+replace those exact workItemIds with retired Wave 5 owners. Active local T604 owns no Network
+implementation and consumes the merged generated result. T479 revalidates the
 implementation and evidence, and T480 rechecks them at close.
 
 - [ ] T336 [P] [US2] `ADR046-nl-001` - preserve the landed `d2b-provider-network-local::controller::NetworkEffectPort`; implement the authoritative generated destination and typed broker adapter with no direct host mutation (adapt/create)
@@ -1085,35 +1230,38 @@ implementation and evidence, and T480 rechecks them at close.
 - [ ] T354 [P] [US2] `ADR046-nl-019` - Provider descriptor (create)
 - [ ] T355 [P] [US2] `ADR046-nl-020` - Network schema/Provider descriptor (adapt)
 
-- [ ] T604 [US1] **FEATURE-LOCAL COORDINATION/COMPLETION - prove exact-F6 operator activation through real effect and cleanup.**
+- [ ] T604 [US1] **FEATURE-LOCAL COORDINATION/COMPLETION - author and development-validate operator activation and daemon-restart acceptance.**
   This is a closed feature-local coordination/completion task, not a generated work-item.
-  Depends on T221; authoritative T222, T227, and T423; Network T336-T355; TPM T310-T322; and
-  Volume T458-T470. It must complete before T479.
+  Depends on local entry gate T221 and every exact workItemId in
+  `required_manifest_dependencies.T604` above. It must complete before local T479.
+  `ADR046-ch-001 -> T604` serializes their distinct W6 `Makefile` acceptance-recipe edits.
 
   Sole owned files are
   `packages/d2b-contract-tests/tests/resource_operator_activation.rs`,
   `packages/d2bd/tests/resource_operator_activation.rs`,
   `tests/host-integration/resource-operator-activation.nix`,
-  `tests/host-integration/daemon-restart-vm-survival.nix`, the two host-generation case-id
-  fixtures selected by authoritative generated registries, only those checks'
+  `tests/host-integration/daemon-restart-vm-survival.nix`,
+  `tests/golden/delivery/host-generation-pre-start-case-ids.txt`,
+  `tests/golden/delivery/host-generation-unit-census-case-ids.txt`, only those checks'
   discovery/build recipe in `Makefile`, and
   `changelog.d/operator-resource-activation.md`.
 
-  Against one clean proposed F6, run
-  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, `make test-rust`, and no-skip
-  `make test-host-integration`. Require exact enumeration and successful builds of
-  `vmChecks.x86_64-linux.resource-operator-activation` and
-  `vmChecks.x86_64-linux.daemon-restart-vm-survival`. Prove automatic startup and
+  Against one clean development tree, run
+  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`, `make test-rust`, and the no-skip
+  `vmChecks.x86_64-linux.resource-operator-activation` host leg. Prove automatic startup and
   declaration/removal ingestion without manual daemon restart; real owned effects and
   production `Ready` for exactly `Volume/acceptance-state`, `Network/acceptance-net`, and
   `Device/acceptance-tpm`; Device-only swtpm/flush/Endpoint/finalizer cleanup; preserved
-  same-identity TPM state Volume; unchanged ready Volume/Network and unrelated resources; and
-  FR-075 runner continuity.
+  same-identity TPM state Volume; and unchanged ready Volume/Network and unrelated resources.
+  Development validation may run the authored daemon-restart case through the public target,
+  but T604 does not execute it as exact-candidate FR-075 evidence and emits no candidate-bound
+  FR-075 record.
 
-  Emit exactly one `EvidenceRecord.validation = "operator-nix-activation-cleanup"` bound to
-  F6 and its tree. Missing, duplicate, skipped, fake-boundary, status-only, refusal,
-  wrong-candidate, or wrong-resource evidence fails. T604 issues no binding request,
-  attestation, or seal.
+  Own and validate the `operator-nix-activation-cleanup` validator identity, but emit no
+  candidate-bound record during T604. T479 invokes that validator after F6 is converged and
+  frozen and emits exactly one record bound to F6 and its tree. Missing, duplicate, skipped,
+  fake-boundary, status-only, refusal, wrong-candidate, or wrong-resource evidence fails.
+  T604 issues no binding request, attestation, or seal.
 
 ### Group `wi:ADR-046-provider-notification-desktop` (6 items)
 
@@ -1157,7 +1305,7 @@ implementation and evidence, and T480 rechecks them at close.
 
 ### Group `wi:ADR-046-provider-runtime-cloud-hypervisor` (7 items)
 
-- [ ] T384 [P] [US2] `ADR046-ch-001` - `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` (adapt). For the manifest-required end-to-end real-KVM/guest-control validation, this task also solely owns new `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix` and only that check's discovery/build recipe in `Makefile`; the exact attr is `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`
+- [ ] T384 [P] [US2] `ADR046-ch-001` - complete manifest object. Its generated authority includes `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, only that check's discovery/build recipe in `Makefile`, and the manifest-required end-to-end real-KVM/guest-control validation through exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`
 - [ ] T385 [US2] `ADR046-ch-002` - `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` (replace)
 - [ ] T386 [US2] `ADR046-ch-003` - `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs` (adapt)
 - [ ] T387 [US2] `ADR046-ch-004` - `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter) (adapt)
@@ -1295,15 +1443,19 @@ implementation and evidence, and T480 rechecks them at close.
 
 - [ ] T478 [US2] `ADR046-core-002` - `packages/d2b-core-controller/tests/system_core_coordination.rs` (adapt)
 
-- [ ] T479 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 CONVERGE + FREEZE + OPERATOR/GUEST ACCEPTANCE - depends on T039, T604, T221,
-  every W6 work item, and every prospective acceptance object named by authoritative member
-  specs and generated manifests. Derive the exact set from those authorities and reject
+- [ ] T479 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 CONVERGE + FREEZE + OPERATOR/GUEST ACCEPTANCE - depends on local T604 and T221,
+  `ADR046-process-002`, every exact W6 workItemId selected by
+  `required_manifest_dependency_queries.T479`, and every prospective acceptance object named
+  by authoritative member specs and generated manifests. Derive the exact set from those authorities and reject
   missing, extra, duplicate, unchecked, or unreachable rows. Reinvoke the production
-  historical-predecessor guard, converge W6, run the authoritative no-skip operator, Guest,
-  and daemon-restart acceptance lanes, import exactly one T604
+  historical-predecessor guard, converge and freeze clean F6, invoke T604's owned operator
+  validator against exact F6, then run the Cloud Hypervisor and daemon-restart host cases
+  together once on that same F6. Emit exactly one
   `operator-nix-activation-cleanup` record and exactly one
-  `w6-cloud-hypervisor-guest-acceptance` record, both bound to F6 and its tree, and freeze only
-  the clean accepted candidate. T479 issues no binding request, attestation, or seal.
+  `w6-cloud-hypervisor-guest-acceptance` record containing both Guest and FR-075 results,
+  bound to F6 and its tree, and retain F6 only when both pass. T479 is the sole
+  candidate-bound FR-075 executor/evidence owner and issues no binding request, attestation,
+  or seal.
 - [ ] T480 [US2] FEATURE-LOCAL COORDINATION/COMPLETION - W6 SINGLE BINDING WORK GATE + MERGE - depends on T479 including its exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records. Require HEAD and tree to equal clean F6; revalidate T221's exact-base unanimous plan-panel receipt, reviewed feature snapshot, accepted first-parent generic Constitution 3.1.0 integration ancestry, and exact retained Wave 5 inventory; and require the reviewed entry base to be an ancestor of every W6 implementation head. Reinvoke the production historical-predecessor guard and both closed acceptance predicates before panel request, merge, post-merge seal, and merge eligibility; missing, extra, changed, wrong-family, fake-boundary, skipped, empty, stale, or wrong-candidate evidence refuses each boundary. T480's work panel is not a substitute. Against F6, first dispatch the read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`; a content defect from either lane abandons F6 and returns to T479 before any binding panel request. Route the defect through scoped fixes, convergence, validation, and both acceptance lanes, then iterate delta/full-context `/d2b-panel-round plan` phase reviews until the replacement provisional candidate has N/N sign-off for the selected lifecycle roster with zero recommendations. Only that final candidate may receive W6's exactly one binding `/d2b-panel-round work` request: create the final snapshot and candidate-bound selection, issue the sole panel request, run `make-records`, and panel-attest N/N for the selected roster. Then require the already-open PR to preserve that exact head, wait for required CI, import the final evidence, capture the green merge-target input, and merge through the protected PR flow. The merge MUST preserve the successful candidate's tree byte-for-byte. Only after the merge may T480 seal the wave, register the captured merge target, and pass merge eligibility. A nonunanimous binding result permanently fails the W6 close: retain its candidate, request, findings, and records, issue no second binding request for any candidate, and stop with an integrator scope escalation; findings are not waived. From binding panel request through disposition, the final candidate and its tree are immutable. After the post-merge close passes, rebase the next wave onto updated `v3`, then clean up in order: delete each worktree `packages/target`, remove worktrees, delete local branches, delete remote branches, run `nix-collect-garbage`, and audit `git worktree list` plus `git branch -a` for residue. The one-time predecessor disposition never substitutes for these Wave 6 gates.
 
 **Checkpoint**: W6 converged, panelled, merged to `v3`, sealed, rebased, and cleaned up.
@@ -1901,7 +2053,7 @@ T221. It must prove the fetched exact `origin/v3` base, accepted first-parent Co
 3.1.0 integration commit, exact retained Wave 5 inventory and digests, and focused production
 guard tests before the ordinary unanimous Wave 6 plan panel. The retained Wave 5 request is
 already consumed with zero attestations and no seal; the feature-owned record preserves that
-history. Final R9 keeps T336-T355 as authoritative W6 implementation under T221, followed by
+history. Final R9 keeps `ADR046-nl-001` through `ADR046-nl-020` as authoritative W6 implementation under T221, followed by
 authoritative acceptance and close gates.
 
 ### Incremental value
@@ -1909,7 +2061,8 @@ authoritative acceptance and close gates.
 Each user story is independently demonstrable:
 
 - **After historical `adr046w5`** - the only accepted output is the exact immutable merged
-  boundary and retained no-seal state. Retired planning remains fenced. T336-T355 land the
+  boundary and retained no-seal state. Retired planning remains fenced. The exact generated
+  Network workItemId set lands the
   Network path prospectively in W6, and authoritative acceptance objects bind later results.
 - **After W6** - full US1 completes only after T479/T480 accept exact-F6
   authoritative operator activation/cleanup plus `Provider/runtime-cloud-hypervisor`

@@ -37,8 +37,8 @@ eval that follows the same path. A forgotten `git add` on a new module is the mo
 
 Constitution 3.1.0 supplies a generic historical-process disposition with no ADR-046 detail.
 This feature's exact delivery validator/tooling contract bounds it through merged Wave 5
-commit `177235ed37188b3be87525e7f016fb43401574c5`. It creates no Wave 5 seal and authorizes no
-Wave 5 recovery. For Wave 6, entry first requires the production historical-predecessor guard
+commit `177235ed37188b3be87525e7f016fb43401574c5`. The Wave 5 seal remains absent and recovery
+is unavailable. For Wave 6, entry first requires the production historical-predecessor guard
 against the fetched exact `origin/v3` base. After that guard, entry requires Gate 0 passed, no
 unresolved contention flag on Wave 6 destinations, a free heavy-gate semaphore, and a green
 fast hermetic suite. The ordinary T221 selected roster uses the current thirteen-seat role
@@ -46,8 +46,8 @@ domain and may only widen over fix deltas.
 
 ### 1b. Verify the Wave 5 to Wave 6 boundary
 
-Do not run a Wave 5 recovery or close command. Fetch and bind the exact Wave 6 base, then run
-the focused guard tests:
+Wave 5 recovery and close commands are unavailable. Fetch and bind the exact Wave 6 base,
+then run the focused guard tests:
 
 ```bash
 set -euo pipefail
@@ -100,7 +100,11 @@ with zero recommendations.
 
 Run this read-only check after any feature-artifact edit. Explicitly marked historical blocks
 are allowed; the word `historical` alone is not suppression. Actionable retired-task
-instructions, including multiline forms, and round-threshold deferral rules are not.
+instructions, including multiline forms, and round-threshold deferral rules are not. The only
+retired marker kinds are `RETIRED-READONLY`, `RETIRED-W5-VALIDATION`,
+`RETIRED-W5-EVIDENCE`, `RETIRED-W5-MANIFEST`, `RETIRED-W5-PLAN`, and
+`RETIRED-W5-CLI`; the validator additionally reserves exactly `STALE-PROSE-CHECK` for this
+self-check block. Every marker is a whole line with no payload.
 
 <!-- STALE-PROSE-CHECK-BEGIN -->
 
@@ -113,41 +117,51 @@ ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*
 REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b.{0,240}\\b${RETIRED}('s)?\\b"
 EDGE="(?s)\\b(after|before|depends[[:space:]]+on|owned[[:space:]]+by)[[:space:]]+.{0,160}\\b${RETIRED}('s)?\\b"
 ANY_RETIRED="(?s)\\b${RETIRED}\\b"
+PHASE='((historical|retired|former)[[:space:]]+(Wave[[:space:]]+5[[:space:]]+)?(prep|preparation|implementation|measurement)|Wave[[:space:]]+5[[:space:]]+(prep|preparation|implementation|measurement))'
+PHASE_ACTION="(?s)\\b${PHASE}\\b[[:space:]]+(MUST[[:space:]]+)?(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b"
+PHASE_REVERSE="(?s)\\b(own|add|check|harden|prove|extend|wire|consume|require|depend|block|dispatch|run|measure|validate|reject|reconcile|fold|seal|close)(s|es|ed|ing|er|ership|ment|ation)?\\b[^.!?\\n]{0,40}\\b(after|for|in)\\b[[:space:]]+\\b${PHASE}\\b"
 
 check_fences() {
   awk -v file="$1" '
     stack[depth] == "STALE-PROSE-CHECK" &&
-      $0 != "<!-- STALE-PROSE-CHECK-END -->" { next }
-    {
-      marker_text = $0
-      marker_count = gsub(
-        /<!-- [A-Z0-9-]+-(BEGIN(:[^>]*)?|END) -->/,
-        "",
-        marker_text
-      )
-      if (marker_count > 1) exit 45
-    }
-    /<!-- [A-Z0-9-]+-BEGIN(:[^>]*)? -->/ {
+      $0 !~ /^[[:space:]]*<!-- STALE-PROSE-CHECK-END -->[[:space:]]*$/ { next }
+    /^[[:space:]]*<!-- (RETIRED-(READONLY|W5-VALIDATION|W5-EVIDENCE|W5-MANIFEST|W5-PLAN|W5-CLI)|STALE-PROSE-CHECK)-BEGIN -->[[:space:]]*$/ {
       kind = $0
-      sub(/^.*<!-- /, "", kind)
-      sub(/-BEGIN(:[^>]*)? -->.*$/, "", kind)
+      sub(/^[[:space:]]*<!-- /, "", kind)
+      sub(/-BEGIN -->[[:space:]]*$/, "", kind)
+      for (i = 1; i <= depth; i += 1) {
+        if (stack[i] == kind) {
+          fatal = 45
+          exit fatal
+        }
+      }
       depth += 1
       stack[depth] = kind
       next
     }
-    /<!-- [A-Z0-9-]+-END -->/ {
+    /^[[:space:]]*<!-- (RETIRED-(READONLY|W5-VALIDATION|W5-EVIDENCE|W5-MANIFEST|W5-PLAN|W5-CLI)|STALE-PROSE-CHECK)-END -->[[:space:]]*$/ {
       kind = $0
-      sub(/^.*<!-- /, "", kind)
-      sub(/-END -->.*$/, "", kind)
-      if (depth == 0) exit 42
-      if (stack[depth] != kind) exit 43
+      sub(/^[[:space:]]*<!-- /, "", kind)
+      sub(/-END -->[[:space:]]*$/, "", kind)
+      if (depth == 0) {
+        fatal = 42
+        exit fatal
+      }
+      if (stack[depth] != kind) {
+        fatal = 43
+        exit fatal
+      }
       delete stack[depth]
       depth -= 1
       next
     }
-    /<!-- [^>]*-(BEGIN|END)[^>]*-->/ { exit 45 }
+    /<!-- [^>]*-(BEGIN|END)[^>]*-->/ {
+      fatal = 45
+      exit fatal
+    }
     depth == 0 { print file ":" FNR ":" $0 }
     END {
+      if (fatal != 0) exit fatal
       if (depth != 0) exit 44
     }
   ' "$1"
@@ -155,27 +169,75 @@ check_fences() {
 
 # Planted positive and negative fence cases.
 printf '%s\n' \
-  '<!-- RETIRED-TEST-BEGIN: positive -->' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
   'read-only bytes' \
-  '<!-- RETIRED-TEST-END -->' |
+  '<!-- RETIRED-READONLY-END -->' |
   check_fences - >/dev/null
-if printf '%s\n' '<!-- RETIRED-TEST-BEGIN -->' | check_fences - >/dev/null; then
+if printf '%s\n' '<!-- RETIRED-READONLY-BEGIN -->' | check_fences - >/dev/null; then
   exit 1
 fi
-if printf '%s\n' '<!-- RETIRED-TEST-END -->' | check_fences - >/dev/null; then
+if printf '%s\n' '<!-- RETIRED-READONLY-END -->' | check_fences - >/dev/null; then
   exit 1
 fi
 if printf '%s\n' \
-  '<!-- RETIRED-OUTER-BEGIN -->' \
-  '<!-- RETIRED-INNER-BEGIN -->' \
-  '<!-- RETIRED-OUTER-END -->' \
-  '<!-- RETIRED-INNER-END -->' |
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  '<!-- RETIRED-W5-PLAN-BEGIN -->' \
+  '<!-- RETIRED-READONLY-END -->' \
+  '<!-- RETIRED-W5-PLAN-END -->' |
   check_fences - >/dev/null; then
   exit 1
 fi
 if printf '%s\n' \
-  '<!-- RETIRED-DUP-BEGIN --><!-- RETIRED-DUP-BEGIN -->' |
+  '<!-- RETIRED-READONLY-BEGIN --><!-- RETIRED-READONLY-BEGIN -->' |
   check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  '<!-- RETIRED-READONLY-BEGIN -->' \
+  '<!-- RETIRED-READONLY-END -->' \
+  '<!-- RETIRED-READONLY-END -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  'prefix <!-- RETIRED-READONLY-BEGIN -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-READONLY-END --> suffix' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- ACTIVE-BEGIN -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-INVENTED-BEGIN -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-READONLY-BEGIN: payload -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+if printf '%s\n' \
+  '<!-- RETIRED-READONLY-END: payload -->' |
+  check_fences - >/dev/null; then
+  exit 1
+fi
+
+# Planted identifier-free retired-phase action negatives.
+printf '%s\n' 'Wave 5 implementation runs validation' |
+  rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null
+printf '%s\n' 'measure results after retired measurement' |
+  rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null
+if printf '%s\n' 'Wave 5 evidence remains read-only' |
+  rg -U -i "$PHASE_ACTION|$PHASE_REVERSE" >/dev/null; then
   exit 1
 fi
 
@@ -188,7 +250,8 @@ current_hits="$(
   while IFS= read -r -d '' file; do
     check_fences "$file"
   done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0) |
-    rg -n -U -i "$ACTION|$REVERSE|$EDGE|$ANY_RETIRED" || true
+    rg -n -U -i \
+      "$ACTION|$REVERSE|$EDGE|$ANY_RETIRED|$PHASE_ACTION|$PHASE_REVERSE" || true
 )"
 test -z "$current_hits" || {
   printf '%s\n' "$current_hits"
@@ -232,9 +295,13 @@ make check                       # full PR-equivalent Layer-1 gate
 Read `tests/layer1-jobs.json` for the current enforcing-vs-advisory split rather than assuming
 it. An advisory result is not validation evidence.
 
+<!-- RETIRED-READONLY-BEGIN -->
+
 The former Wave 5 loop is historical planning evidence. Do not rerun it to
 reconstruct Wave 5 completion. Wave 6 implementers run only the validation owned by their
 T221-selected tasks.
+
+<!-- RETIRED-READONLY-END -->
 
 ### 4. Heavy lanes, through the semaphore only
 
@@ -247,9 +314,13 @@ Never invoke an internal `heavy-lane-*` target directly - it fails closed by des
 
 ### 4b. Pre-panel gates (parallel, read-only)
 
+<!-- RETIRED-READONLY-BEGIN -->
+
 **Historical `adr046w5` boundary:** do not dispatch any Wave 5 panel lane or run any Wave 5
 delivery command. Its consumed request, zero attestations, and absent seal are immutable.
 Proceed here only for Wave 6 after T221 passes.
+
+<!-- RETIRED-READONLY-END -->
 
 Before any panel lane is dispatched, run both gates against **this wave scope**:
 
@@ -712,24 +783,30 @@ and is never re-attested, replaced, or used for successor admission.
 
 ### Historical SC-002 recovery plan
 
+<!-- RETIRED-READONLY-BEGIN -->
+
 The former Wave 5 recovery sequence is read-only historical planning evidence. It is
 not an executable runbook and supplies no current command, gate, or refusal. Current work must
 obtain any recovery action from an accepted current generated traceability row owned by a
 prospective task after T221; nothing in the retired Wave 5 plan may be inferred or run.
+
+<!-- RETIRED-READONLY-END -->
 
 ## Operator loop: prove the plane works
 
 This is the loop that distinguishes a live control plane from a sealed wave. Its exact
 operator activation positive remains W6 acceptance after T221. T221 first requires the
 accepted external Network contract/work-item amendment to remove every current-facing sole
-Network-opt-in path and retain T336-T355 plus all four double-opt-in cases as authoritative
-W6 work. Active local T604 consumes their merged implementation. A stale sole-opt-in contract makes
-T221 fail closed; an unimplemented T336-T355 row blocks T479.
+Network-opt-in path and retain `ADR046-nl-001` through `ADR046-nl-020` plus all four
+double-opt-in cases as authoritative
+W6 work. Active local T604 consumes the merged generated `ADR046-nl-001` through
+`ADR046-nl-020` implementation. A stale sole-opt-in contract makes T221 fail closed; an
+unimplemented workItemId in that exact set blocks T479.
 
 ### Story 1 - declare and reconcile
 
-The exact-F6 automated proof is active local T604 after T221 and its authoritative
-dependencies. Its fixture-contract leg owns
+The implementation and development-validation work is active local T604 after T221 and its
+authoritative dependencies. Its fixture-contract leg owns
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; its lowest feasible
 production-boundary leg owns `packages/d2bd/tests/resource_operator_activation.rs`; and its
 real activation/effect leg owns
@@ -741,6 +818,13 @@ D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 make test-rust
 make test-host-integration
 ```
+
+For T604, this development command validates the authored operator and daemon-restart tests
+and recipes only. It emits no candidate-bound record and is not candidate-bound FR-075
+execution. After converging and freezing exact F6, T479 invokes the operator validator and runs
+`runtime-cloud-hypervisor-guest-acceptance` and `daemon-restart-vm-survival` together once on
+exact F6 and emits the sole FR-075 result inside
+`w6-cloud-hypervisor-guest-acceptance`.
 
 The host leg declares Zone `acceptance` with the exact W6 operator acceptance set -
 `Volume/acceptance-state` through `Provider/volume-local`,
@@ -754,13 +838,14 @@ every one of those three exact resources under the Provider/config/effect predic
 exact swtpm/flush cleanup, an unresolvable Endpoint, finalizer clearance, and same-identity
 TPM state-Volume preservation,
 and proves `Volume/acceptance-state`, `Network/acceptance-net`, and unrelated resources remain
-ready, identity-stable, intact, and unrecreated. The same candidate must also pass the
-no-skip `vmChecks.x86_64-linux.daemon-restart-vm-survival` FR-075 continuity case. Guest
-runtime-effect acceptance remains distinct Wave 6
-`Provider/runtime-cloud-hypervisor` T384/T479/T480 work; Guest emission, status, or refusal
+ready, identity-stable, intact, and unrecreated. T604 owns and development-validates the
+`operator-nix-activation-cleanup` validator but emits no candidate-bound record. After
+converging and freezing exact F6, T479 invokes it once and emits that one record. Guest
+runtime-effect acceptance remains distinct Wave 6 manifest-backed `ADR046-ch-001` plus local
+T479/T480 work; Guest emission, status, or refusal
 cannot satisfy T604. This host leg is active local T604 acceptance, not Wave 5 evidence. Wave 5
 retains only its production-plane prerequisites, the accepted double-opt-in contract
-migration, and the settled T336-T355 W6 ownership. Full US1 completes only after
+migration, and the settled `ADR046-nl-001` through `ADR046-nl-020` W6 ownership. Full US1 completes only after
 T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a real Cloud
 Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
 skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
@@ -1106,16 +1191,17 @@ may survive, and metrics carry no peer-identity label.
 passes separately through T479 on the same candidate. Actionable refusal coverage runs
 separately and cannot satisfy this positive proof. Guest passes through the distinct Wave 6
 `Provider/runtime-cloud-hypervisor` T479/T480 exact-F6 acceptance. Active local T604 consumes
-Network implementation after authoritative T336-T355 merge and emits exactly one F6-bound
-`operator-nix-activation-cleanup` record.
+Network implementation after the authoritative `ADR046-nl-001` through `ADR046-nl-020` set
+merges and owns the `operator-nix-activation-cleanup` validator. T479 alone invokes it after
+F6 freezes and emits the one F6-bound record.
 
 This acceptance run fixes `isolation.allowEastWest = false`; it does not alone prove
 Host/Network double opt-in. T221 requires the accepted Network contract/work-item amendment
 on the exact fetched Wave 6 base. It must require
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`,
 default both inputs false, remove every current-facing sole Network-opt-in path, and
-regenerate the manifest with T336-T355 retained as authoritative W6 implementation under
-T221 and all four Network/Host production cases assigned there. T480 revalidates that
+regenerate the manifest with `ADR046-nl-001` through `ADR046-nl-020` retained as authoritative
+W6 implementation under T221 and all four Network/Host production cases assigned there. T480 revalidates that
 migration, implementation, and evidence before every Wave 6 close boundary. T604 and T479
 require the merged W6 implementation and all four passing cases. Historical or current sole
 opt-in cannot satisfy T221, T604, T479, or T480. Do not change feature status to bypass that

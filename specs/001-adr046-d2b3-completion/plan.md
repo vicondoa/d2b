@@ -262,7 +262,8 @@ which is a worse failure than referencing the authoritative bytes. Instead:
 At the receipt HEAD it is 68 `Merged` and 477 `Planned`, splitting
 8/6/19/4/31/146/258/73 across W0-W7 with W8 recorded only after W7 merge, seal, and cleanup.
 The graph moved
-`ADR046-process-002` from W4 to W6 and leaves it `Planned`; T039 follows that state and wave
+`ADR046-process-002` from W4 to W6 and leaves it `Planned`; the matching manifest pointer
+follows that state and wave
 without renumbering. Every item carries a non-empty `removalProof`, so FR-023's per-path
 proof obligation is already itemized rather than needing to be invented.
 
@@ -333,7 +334,7 @@ applies without modification.
 | W3 | 1 | 4 | 1, strictly serial | Delivery state reports sealed/merged; T030, T035, and T036 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W4 | 5 | 31 | 6 parallel | Delivery state reports sealed/merged; T037, T070, and T071 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W5 (`adr046w5` delivery address) | 7 | historical manifest and local records | Historical only | Merged at `177235ed37188b3be87525e7f016fb43401574c5`; exact retained state is immutable and fenced |
-| W6 | 27 manifest dossiers | authoritative generated work plus active local T604/T479/T480 coordination | Provider ownership from authoritative member specs/generated manifests; local coordination is closed | T221 first; T604 after authoritative T222/T227/T423 and Network/TPM/Volume rows; T479/T480 consume its exact evidence |
+| W6 | 27 manifest dossiers | authoritative generated work plus active local T604/T479/T480 coordination | Provider ownership from authoritative member specs/generated manifests; local coordination is closed | T221 first; manifest-backed `ADR046-ch-001` writes the Cloud Hypervisor Makefile recipe, then T604 writes its distinct operator/daemon-restart recipes after every exact dependency in the local-task contract; T479 freezes F6 and creates both candidate records; T480 revalidates them |
 | W7 | 5 | 73 | 5 parallel | T481 plan panel before implementation; T555 work panel after convergence |
 | W8 | 0 | determined by T557 after W7 merge, seal, and cleanup | friction closure | No pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
 
@@ -346,8 +347,16 @@ applies without modification.
 | System-core handler contract | Zero handler-enum source matches | **Unfinished**; ownership resolves from authoritative member specs/generated manifests |
 | Accepted-socket peer pidfd operation | Zero source/test matches | **Unfinished**; ownership resolves from authoritative member specs/generated manifests |
 | Closed feature-local phase | Exact retained state and checkbox history only | **Retired** inside explicit read-only fences; no reconstruction |
-| Cross-provider operator acceptance | No single member-spec item can own it | **Active local T604** before local T479/T480; no generated T604 work-item |
+| Cross-provider operator acceptance | No single member-spec item can own it | **Active local T604** authors the implementation, cases, and validator identity after manifest-backed `ADR046-ch-001`; after exact F6 freezes, local T479 invokes it and owns the candidate record; local T480 revalidates it. No generated T604 work-item exists. |
 | W2-W5 host continuity | Retained evidence only | **Retired** from execution; prospective execution belongs to T479 and later current work |
+
+The closed local ownership map is:
+
+| Local task | Owned files or evidence surface | Mechanically checkable boundary |
+| --- | --- | --- |
+| T604 | `packages/d2b-contract-tests/tests/resource_operator_activation.rs`; `packages/d2bd/tests/resource_operator_activation.rs`; `tests/host-integration/resource-operator-activation.nix`; `tests/host-integration/daemon-restart-vm-survival.nix`; `tests/golden/delivery/host-generation-pre-start-case-ids.txt`; `tests/golden/delivery/host-generation-unit-census-case-ids.txt`; its distinct recipes in `Makefile`; `changelog.d/operator-resource-activation.md` | Completes after exact dependencies in `tasks.md` and `ADR046-ch-001 -> T604` serialization; development-validates the `operator-nix-activation-cleanup` validator and daemon-restart case but emits no candidate-bound record |
+| T479 | No source file; exact-F6 `operator-nix-activation-cleanup` and `w6-cloud-hypervisor-guest-acceptance` records | First converges and freezes clean F6, then invokes the T604-owned operator validator and solely executes exact-candidate FR-075 |
+| T480 | No source file; the immutable records owned by T479 | Revalidates both closed predicates at every prospective close boundary |
 
 #### W8 release freeze and publication
 
@@ -429,7 +438,7 @@ matched only by the T221 historical-predecessor guard. The evidence map is close
 | historical F3 | T035 | T036 | exactly one `local-host` `EvidenceRecord.validation = "pre-adr046-host-continuity"` result |
 | historical F4 | T070 | T071 | exactly one `local-host` `EvidenceRecord.validation = "pre-adr046-host-continuity"` result |
 | historical F | retained evidence inventory | feature-owned historical disposition | the exact retained evidence bytes are matched by T221; no rerun or close action |
-| F6 | T479 | T480 | required results resolve only from authoritative prospective evidence rows |
+| F6 | T479 | T480 | exactly one `w6-cloud-hypervisor-guest-acceptance` record contains both the Cloud Hypervisor and FR-075 results |
 
 Missing, duplicate, wrong-candidate, empty, skipped, status-only, private-hook, missing
 Ready/Stopped state, non-fresh-pidfd adoption, incomplete unit enumeration, or stale
@@ -438,11 +447,22 @@ retained Wave 5 evidence blocks T221 and every Wave 6 snapshot, panel request, s
 eligibility check. It never licenses a new W2-W5 binding request. No new W5 evidence
 identifier is introduced. W7's explicit cutover is the only point that ends this gate.
 
+Manifest-backed `ADR046-ch-001` authors the Cloud Hypervisor host case and its `Makefile`
+recipe first. Active local T604
+then authors `daemon-restart-vm-survival.nix` and its distinct `Makefile` recipe, with explicit
+shared-file order `ADR046-ch-001 -> T604`, plus
+`tests/golden/delivery/host-generation-pre-start-case-ids.txt` and
+`tests/golden/delivery/host-generation-unit-census-case-ids.txt`. T604 may run development validation but emits no
+candidate-bound FR-075 evidence. T479 alone executes the daemon-restart case on exact F6
+together with the Cloud Hypervisor case and records the single FR-075 result only inside
+`w6-cloud-hypervisor-guest-acceptance`. T480 revalidates that one closed predicate at each
+close boundary.
+
 #### W6 Guest acceptance ownership
 
 | Scope | Owner | Exact files or evidence surface | Validation lane and done condition |
 | --- | --- | --- | --- |
-| `Provider/runtime-cloud-hypervisor` implementation family | T384-T390 (`ADR046-ch-001` through `ADR046-ch-007`) | `packages/d2b-provider-runtime-cloud-hypervisor/src/{controller,bootstrap_graph,vmm_argv,health,adoption,metrics,audit,state}.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/{nix,tests}/`, only T387's generated Guest option extension under `nixos-modules/`, plus T384's `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix` and only its discovery/build recipe in `Makefile` | Each manifest row's own validation; T384 is the acceptance owner because its authoritative validation requires end-to-end VMM boot with real KVM and a guest-control session through `make test-host-integration` |
+| `Provider/runtime-cloud-hypervisor` implementation family | Manifest-backed `ADR046-ch-001` through `ADR046-ch-007` | `packages/d2b-provider-runtime-cloud-hypervisor/src/{controller,bootstrap_graph,vmm_argv,health,adoption,metrics,audit,state}.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/{nix,tests}/`, the generated Guest option extension under `nixos-modules/`, plus `ADR046-ch-001`'s `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix` and only its discovery/build recipe in `Makefile` | Each manifest row's own validation; `ADR046-ch-001` is the generated acceptance owner because its authoritative validation requires end-to-end VMM boot with real KVM and a guest-control session through `make test-host-integration` |
 | Exact-F6 Guest acceptance | T479 | No repository write; exactly one delivery `EvidenceRecord.validation = "w6-cloud-hypervisor-guest-acceptance"` bound to F6 | Heavy-gated `make test-host-integration`; nonempty enumeration and successful no-skip builds of exact attrs `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` and `vmChecks.x86_64-linux.daemon-restart-vm-survival`; declared Guest reaches the real Provider-owned Cloud Hypervisor process effect, authenticated guest-control session, and ready state; the same record carries FR-075 public lifecycle continuity |
 | Close revalidation | T480 | Same immutable T479 evidence record; no alternate record or Provider family | Reinvoke the same closed predicate at every close boundary through merge |
 
@@ -519,13 +539,13 @@ feature snapshot. T072 is therefore unproven and may be checked only if that ret
 plus every other historical predicate, is produced. The exact validator/tooling contract
 leaves T072 unchecked and applies the generic Constitution 3.1.0 disposition only inside the
 historical deviation through merged Wave 5. It
-authorizes no remedial receipt or resumed Wave 5 implementation. The feature-owned record preserves that historical
+authorizes no remedial receipt or resumption of Wave 5 work. The feature-owned record preserves that historical
 disposition without a seal or recovery action. W6-W8 are prospective and their entry tasks
 T221, T481, and T558 refuse first implementation dispatch until their own plan panels pass.
 
 ### Historical `adr046w5` production-completion graph
 
-<!-- RETIRED-READONLY-BEGIN: historical Wave 5 plan and evidence map -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 This section preserves the graph approved by the 2026-08-06 operator decision. Constitution
 3.1.0 does not claim its unchecked tasks completed and authorizes no dispatch from it after
@@ -884,7 +904,7 @@ not current implementation authority; T220 has no prospective effect.
 The validation sequence below is retained as design evidence. It MUST NOT be run to recover,
 attest, seal, or close Wave 5.
 
-<!-- RETIRED-W5-VALIDATION-BEGIN: read-only historical compatibility -->
+<!-- RETIRED-W5-VALIDATION-BEGIN -->
 
 The implementation tasks run focused hermetic tests while writing their files. Before T595,
 T605 runs the `d2b-contracts` unit/serialization cases, the existing
@@ -976,7 +996,7 @@ ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed subject,
 endpoint, or manually set readiness field may remain useful unit coverage but is explicitly
 ineligible as T479/T480 evidence.
 
-<!-- RETIRED-W5-EVIDENCE-BEGIN: read-only historical compatibility -->
+<!-- RETIRED-W5-EVIDENCE-BEGIN -->
 
 The historical Wave 5 plan defined one hermetic `adr046w5` closed-evidence profile and the
 following seven-record layout. T589-T602 remain unchecked historical records. The table is
@@ -1012,7 +1032,7 @@ historical-predecessor guard and ordinary prospective plan panel.
 
 ### Spec corrections
 
-<!-- RETIRED-READONLY-BEGIN: historical spec-correction and gate record -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 | Prose drift | Canon kept | Planning correction |
 | --- | --- | --- |

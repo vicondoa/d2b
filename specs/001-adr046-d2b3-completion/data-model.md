@@ -272,7 +272,7 @@ copy substitutes.
 
 ## 11. Immutable Wave 5 historical predecessor
 
-<!-- RETIRED-READONLY-BEGIN: exact immutable Wave 5 evidence -->
+<!-- RETIRED-READONLY-BEGIN -->
 
 The former actionable retained-request disposition model is superseded. Constitution 3.1.0
 supplies only the generic historical-process disposition. This feature and the exact delivery
