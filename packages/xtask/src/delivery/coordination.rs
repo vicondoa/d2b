@@ -2016,6 +2016,7 @@ fn sync_parent(parent: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delivery::snapshot::tests::GitFixture;
 
     fn id(seed: char) -> String {
         std::iter::repeat_n(seed, 64).collect()
@@ -2090,6 +2091,45 @@ mod tests {
         assert_ne!(
             normalize_status_only_updates(first),
             normalize_status_only_updates(b"- [ ] T606\nrequirements changed\n")
+        );
+    }
+
+    #[test]
+    fn fresh_fetch_evidence_verifies_the_fetched_object_and_command_identity() {
+        let fixture = GitFixture::new("coordination-fresh-fetch");
+        let head = fixture.head();
+        let digest = sha256_bytes(&[]);
+        let evidence = FreshFetchEvidence {
+            artifact_kind: FRESH_FETCH_ARTIFACT_KIND.to_owned(),
+            schema_version: FRESH_FETCH_SCHEMA_VERSION,
+            repository: "github.com/vicondoa/d2b".to_owned(),
+            remote: "origin".to_owned(),
+            ref_name: "v3".to_owned(),
+            fetched_oid: head.clone(),
+            command_id: "git-fetch-origin-v3".to_owned(),
+            argv: ["git", "fetch", "origin", "v3"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            started_at_unix: 1,
+            completed_at_unix: 2,
+            exit_code: 0,
+            result: CommandResult::Passed,
+            stdout_sha256: digest.clone(),
+            stderr_sha256: digest,
+            output_bytes: 0,
+            fetched_at_unix: 2,
+            before_oid: None,
+        };
+        evidence
+            .validate(&fixture.repo(), &head)
+            .expect("fresh-fetch evidence");
+
+        let mut forged = evidence;
+        forged.command_id = "remote-ref-only".to_owned();
+        assert!(
+            forged.validate(&fixture.repo(), &head).is_err(),
+            "a remote ref name must not substitute for fetch evidence"
         );
     }
 }
