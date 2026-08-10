@@ -2026,6 +2026,33 @@ mod tests {
     }
 
     #[test]
+    fn wave_6_requires_a_nonempty_dependency_graph() {
+        let mut material = material();
+        material.program = "SPEC001".to_owned();
+        material.wave = "spec001w6".to_owned();
+        material.dependency_graph.clear();
+        let error = material
+            .digests()
+            .expect_err("Wave 6 must not bind an empty dependency graph");
+        assert!(error.message().contains("nonempty"), "{error}");
+    }
+
+    #[test]
+    fn wave_6_rejects_a_cyclic_dependency_graph() {
+        let mut material = material();
+        material.program = "SPEC001".to_owned();
+        material.wave = "spec001w6".to_owned();
+        material.dependency_graph.push(DependencyEdge {
+            from: "adr046-w2".to_owned(),
+            to: "adr046-w0".to_owned(),
+        });
+        let error = material
+            .digests()
+            .expect_err("Wave 6 dependency graph must be acyclic");
+        assert!(error.message().contains("acyclic"), "{error}");
+    }
+
+    #[test]
     fn a_changed_repository_set_changes_the_candidate_id() {
         let baseline = material().digests().expect("digests");
         let mut changed = material();
