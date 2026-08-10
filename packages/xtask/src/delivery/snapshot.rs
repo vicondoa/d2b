@@ -1687,6 +1687,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn entry_prepare_parses_the_candidate_evidence_import_inputs() {
+        let fixture = GitFixture::new("snapshot-entry-prepare-parse");
+        let mut args = fixture.snapshot_args();
+        args.extend([
+            "--entry-prepare".to_owned(),
+            "true".to_owned(),
+            "--command-evidence".to_owned(),
+            "/tmp/command-evidence/focused-guard-list.json".to_owned(),
+        ]);
+        let request = SnapshotRequest::parse(&args).expect("entry preparation request");
+        assert!(request.entry_prepare);
+        assert_eq!(request.command_evidence_paths.len(), 1);
+    }
+
+    #[test]
+    fn command_evidence_import_is_rejected_without_entry_prepare() {
+        let fixture = GitFixture::new("snapshot-entry-prepare-flag");
+        let mut args = fixture.snapshot_args();
+        args.extend([
+            "--command-evidence".to_owned(),
+            "/tmp/command-evidence/focused-guard-list.json".to_owned(),
+        ]);
+        let error = SnapshotRequest::parse(&args)
+            .expect_err("command evidence imports must be scoped to entry preparation");
+        assert!(error.message().contains("--entry-prepare"), "{error}");
+    }
+
+    #[test]
     fn a_state_root_inside_the_repository_is_refused_by_the_entry_point() {
         let fixture = GitFixture::new("snapshot-external");
         let mut args = fixture.snapshot_args();

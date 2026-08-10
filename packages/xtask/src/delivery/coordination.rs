@@ -2207,4 +2207,36 @@ mod tests {
             "a remote ref name must not substitute for fetch evidence"
         );
     }
+
+    #[test]
+    fn command_evidence_prepare_creates_an_external_import_surface() {
+        let directory = std::env::temp_dir().join(format!(
+            "d2b-entry-prepare-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let roots = BTreeMap::new();
+        prepare_command_evidence_directory(&directory, &roots).expect("prepare evidence directory");
+        let record = CommandEvidenceRecord {
+            artifact_kind: COMMAND_EVIDENCE_ARTIFACT_KIND.to_owned(),
+            schema_version: COMMAND_EVIDENCE_SCHEMA_VERSION,
+            command_id: "focused-guard-list".to_owned(),
+            argv: vec!["cargo".to_owned(), "test".to_owned()],
+            working_tree_oid: head('a'),
+            started_at_unix: 1,
+            completed_at_unix: 2,
+            exit_code: 0,
+            result: CommandResult::Passed,
+            stdout_sha256: sha256_bytes(b"stdout"),
+            stderr_sha256: sha256_bytes(b"stderr"),
+            output_bytes: 12,
+            discovered_tests: Some(1),
+            ignored_tests: Some(0),
+            skip_matches: Some(0),
+        };
+        write_command_evidence(&directory, &record, &roots).expect("import evidence");
+        let records = read_command_evidence(&directory, &roots).expect("read evidence");
+        assert_eq!(records.records, vec![record]);
+        let _ = fs::remove_dir_all(directory);
+    }
 }
