@@ -795,31 +795,60 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
     (spec_set, work_items, declared)
 }
 
-fn markdown_json_fences(markdown: &str) -> Vec<String> {
+struct MarkdownJsonFence {
+    body: String,
+    closed: bool,
+}
+
+fn markdown_fence(line: &str) -> Option<(char, usize, &str)> {
+    let trimmed = line.trim_start();
+    let delimiter = trimmed.chars().next()?;
+    if !matches!(delimiter, '`' | '~') {
+        return None;
+    }
+    let length = trimmed
+        .chars()
+        .take_while(|char| *char == delimiter)
+        .count();
+    (length >= 3).then(|| (delimiter, length, &trimmed[length..]))
+}
+
+fn markdown_json_fences(markdown: &str) -> Vec<MarkdownJsonFence> {
     let mut bodies = Vec::new();
     let mut body = String::new();
-    let mut in_json_fence = false;
+    let mut open_fence = None;
 
     for line in markdown.lines() {
-        let trimmed = line.trim();
-        if !in_json_fence {
-            if trimmed
-                .strip_prefix("```")
-                .is_some_and(|info| info.trim() == "json")
-            {
-                in_json_fence = true;
+        if let Some((delimiter, length)) = open_fence {
+            let closes_fence = markdown_fence(line).is_some_and(
+                |(candidate_delimiter, candidate_length, remainder)| {
+                    candidate_delimiter == delimiter
+                        && candidate_length >= length
+                        && remainder.trim().is_empty()
+                },
+            );
+            if closes_fence {
+                bodies.push(MarkdownJsonFence {
+                    body: std::mem::take(&mut body),
+                    closed: true,
+                });
+                open_fence = None;
+            } else {
+                body.push_str(line);
+                body.push('\n');
+            }
+        } else if let Some((delimiter, length, info)) = markdown_fence(line) {
+            if info.trim() == "json" {
+                open_fence = Some((delimiter, length));
                 body.clear();
             }
-        } else if trimmed == "```" {
-            bodies.push(std::mem::take(&mut body));
-            in_json_fence = false;
-        } else {
-            body.push_str(line);
-            body.push('\n');
         }
     }
-    if in_json_fence {
-        bodies.push(body);
+    if open_fence.is_some() {
+        bodies.push(MarkdownJsonFence {
+            body,
+            closed: false,
+        });
     }
 
     bodies
@@ -828,8 +857,12 @@ fn markdown_json_fences(markdown: &str) -> Vec<String> {
 fn check_local_coordination_tasks(markdown: &str, graph: &Value) -> Vec<String> {
     let mut findings = Vec::new();
     let mut contracts = Vec::new();
-    for body in markdown_json_fences(markdown) {
-        match parse_json_without_duplicates(&body) {
+    for fence in markdown_json_fences(markdown) {
+        if !fence.closed {
+            findings.push("JSON task contract fence is not closed".to_owned());
+            continue;
+        }
+        match parse_json_without_duplicates(&fence.body) {
             Ok(value) if value["artifact_kind"] == "d2b-feature-local-task-contract" => {
                 contracts.push(value);
             }
@@ -1325,6 +1358,31 @@ fn feature_local_coordination_contract_rejects_load_bearing_mutations() {
     assert!(
         !check_local_coordination_tasks(&malformed_escaped_kind, &graph).is_empty(),
         "malformed escaped competing local-task contract unexpectedly passed"
+    );
+    for (label, opening, closing) in [
+        ("long backtick", "````json", "````"),
+        ("tilde", "~~~ json", "~~~"),
+    ] {
+        let duplicate = format!(
+            "{tasks}\n{opening}\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n{closing}\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&duplicate, &graph).is_empty(),
+            "{label} duplicate local-task contract unexpectedly passed"
+        );
+        let malformed = format!(
+            "{tasks}\n{opening}\n{{\"artifact_kind\":\"d2b-feature-local-task-\\u0063ontract\",\n{closing}\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&malformed, &graph).is_empty(),
+            "{label} malformed local-task contract unexpectedly passed"
+        );
+    }
+    let unclosed =
+        format!("{tasks}\n````json\n{{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n");
+    assert!(
+        !check_local_coordination_tasks(&unclosed, &graph).is_empty(),
+        "unclosed local-task contract unexpectedly passed"
     );
 }
 
