@@ -684,8 +684,8 @@ below is the sole feature authority for cross-provider acceptance coordination.
   },
   "local_to_manifest_shared_writer_handoffs": {
     "derivation_source": "current candidate docs/specs/ADR-046-work-items.json destination fields plus docs/specs/ADR-046-implementation-graph.json W6 nodes",
-    "work_items_sha256": "aac0b8ffb75a8450217b37df7e14b0bbeae567cf1d6489c1cd83b46aa8a42c43",
-    "implementation_graph_sha256": "12b709cbd3d847313ce59005c4ca073e04a4ea82ba3f99c80c1772b7fc2709cc",
+    "work_items_sha256": "9281525649410e042595ea2ae1f4f67f000827bc52724a2a261a9743a8c0df6f",
+    "implementation_graph_sha256": "e0775635807a0a2453e98b93699799b7d0a5b223c81fa54e0226456f094ebb20",
     "sha_pins_status": "pending final source/generated sibling regeneration; T221 entry and every dispatch remain blocked until d2b-spec-edit replaces both placeholders with measured final digests",
     "completeness_rule": "expand current manifest destination path expressions; every local/shared path or owned prefix appears in exactly one path order, every order is nonempty and deterministic, every endpoint resolves, every T606 scaffold root maps to exactly one W6 manifest group, volume-local has one complete topological order, T609/broker audit paths have one order each, and both Cargo locks terminate at T479",
     "handoffs": [

@@ -61,7 +61,7 @@ handoffs to the current manifest/graph digests, and derives readiness from an ex
 36-group dispatch ledger. Structured command evidence and a durably written plan-approval
 receipt are required for T221 process completeness but are not authentication. Feature
 status-only projections after first dispatch do not change plan authority; a material change
-blocks affected groups. The corrected live census is 600 graph nodes, 1962 edges, 545
+blocks affected groups. The corrected live census is 600 graph nodes, 1963 edges, 545
 manifest items, 609 feature task rows, and 36 W6 post-entry groups containing 265 work
 records.
 

@@ -154,7 +154,7 @@ Are requirements present for each scenario class, or explicitly excluded?
   are command evidence plus the durably written approval receipt required as non-
   authentication process evidence?
 - [x] CHK066 Are material invalidation and status-only updates separated at first dispatch,
-  the graph fixed at 600 nodes/1962 edges/545 manifest items, feature tasks fixed at 609,
+  the graph fixed at 600 nodes/1963 edges/545 manifest items, feature tasks fixed at 609,
   W6 fixed at 36 groups/265 records, and no fixed agent count retained?
 - [x] CHK067 Does the public operator sequence first create-or-compare empty candidate-bound
   entry surfaces with `--entry-prepare true`, then record real commands externally, import

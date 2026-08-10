@@ -143,7 +143,7 @@ cargo run --quiet --manifest-path packages/Cargo.toml -p xtask -- \
 ```
 
 The production profile invokes the repository-owned `delivery wave entry-census` runner. It
-validates the canonical auto-derived 600-node/1962-edge graph, 545 manifest items, 258 W6
+validates the canonical auto-derived 600-node/1963-edge graph, 545 manifest items, 258 W6
 items, 29 manifest groups, seven local tasks, 36 ledger groups, 265 post-entry records,
 foundation map, one-path-one-order handoffs, exact SHA pins, all-Planned manifest entry
 state, all-unchecked local entry state, and T606-only first readiness. Do not replace it with
