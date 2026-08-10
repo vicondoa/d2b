@@ -1382,6 +1382,27 @@ impl PlanApprovalReceipt {
         feature_dir: &Path,
         panel_roles: Option<&[PanelRole]>,
     ) -> Result<()> {
+        self.validate_for_with_selection_bytes(
+            material,
+            selection,
+            None,
+            ledger,
+            command_evidence,
+            feature_dir,
+            panel_roles,
+        )
+    }
+
+    pub fn validate_for_with_selection_bytes(
+        &self,
+        material: &CandidateMaterial,
+        selection: Option<&PanelSelectionV1>,
+        selection_bytes: Option<&[u8]>,
+        ledger: &DispatchLedger,
+        command_evidence: &CommandEvidenceSet,
+        feature_dir: &Path,
+        panel_roles: Option<&[PanelRole]>,
+    ) -> Result<()> {
         self.validate_shape()?;
         let digests = material.digests()?;
         let base = material
@@ -1405,7 +1426,11 @@ impl PlanApprovalReceipt {
                 material.wave.as_str(),
                 &digests,
             )?;
-            if sha256_bytes(&serde_json::to_vec(selection)?) != self.selection_sha256 {
+            let selection_digest = match selection_bytes {
+                Some(bytes) => sha256_bytes(bytes),
+                None => sha256_bytes(&serde_json::to_vec(selection)?),
+            };
+            if selection_digest != self.selection_sha256 {
                 return Err(DeliveryError::new(
                     "plan approval receipt selection digest does not match the lifecycle selection",
                 ));
@@ -1570,6 +1595,22 @@ pub fn require_plan_receipt(
     selection: Option<&PanelSelectionV1>,
     panel_roles: Option<&[PanelRole]>,
 ) -> Result<PlanApprovalReceipt> {
+    require_plan_receipt_with_selection_bytes(
+        material,
+        repository_roots,
+        selection,
+        None,
+        panel_roles,
+    )
+}
+
+pub fn require_plan_receipt_with_selection_bytes(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    selection: Option<&PanelSelectionV1>,
+    selection_bytes: Option<&[u8]>,
+    panel_roles: Option<&[PanelRole]>,
+) -> Result<PlanApprovalReceipt> {
     let paths = W6Paths::from_environment(repository_roots)?;
     let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
     let head = material
@@ -1585,9 +1626,10 @@ pub fn require_plan_receipt(
     evidence.validate_t221(&head)?;
     let receipt = read_plan_approval(&paths.plan_approval, repository_roots)?;
     let feature_root = feature_root(repository_roots)?;
-    receipt.validate_for(
+    receipt.validate_for_with_selection_bytes(
         material,
         selection,
+        selection_bytes,
         &ledger,
         &evidence,
         &feature_root,
@@ -1605,10 +1647,7 @@ pub fn require_close_receipts(
 ) -> Result<DispatchLedger> {
     let paths = W6Paths::from_environment(repository_roots)?;
     let receipt = read_plan_approval(&paths.plan_approval, repository_roots)?;
-    let entry_candidate = state.existing_candidate(
-        &receipt.wave,
-        &receipt.entry_candidate_id,
-    )?;
+    let entry_candidate = state.existing_candidate(&receipt.wave, &receipt.entry_candidate_id)?;
     let entry_snapshot = snapshot::read(&entry_candidate)?.ok_or_else(|| {
         DeliveryError::new(
             "plan approval receipt names an entry candidate without a readable production snapshot",

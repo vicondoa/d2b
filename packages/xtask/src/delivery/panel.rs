@@ -1049,10 +1049,17 @@ fn request_checked(
         let selection = selection_path
             .map(|path| read_json_file::<PanelSelectionV1>(path, "panel selection"))
             .transpose()?;
-        super::coordination::require_plan_receipt(
+        let selection_bytes = selection_path
+            .map(|path| {
+                fs::read(path)
+                    .map_err(|_| DeliveryError::environment("cannot read panel selection bytes"))
+            })
+            .transpose()?;
+        super::coordination::require_plan_receipt_with_selection_bytes(
             &snapshot.material,
             repository_roots,
             selection.as_ref(),
+            selection_bytes.as_deref(),
             None,
         )?;
     }
