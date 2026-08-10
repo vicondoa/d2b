@@ -1280,6 +1280,21 @@ fn markdown_json_fences_require_commonmark_delimiters() {
     assert_eq!(fences.len(), 1);
     assert!(fences[0].closed);
     assert_eq!(fences[0].body, "{\"artifact_kind\":\"other\"}\n```\n~~~\n");
+
+    let tasks = read_repo_file(FEATURE_TASKS);
+    let graph = load(GRAPH_JSON);
+    for indentation in 0..=3 {
+        let spaces = " ".repeat(indentation);
+        let duplicate = format!(
+            "{tasks}\n{spaces}```json\n\
+             {{\"artifact_kind\":\"d2b-feature-local-task-contract\"}}\n\
+             {spaces}```\n"
+        );
+        assert!(
+            !check_local_coordination_tasks(&duplicate, &graph).is_empty(),
+            "{indentation}-space duplicate local-task contract unexpectedly passed"
+        );
+    }
 }
 
 #[test]
