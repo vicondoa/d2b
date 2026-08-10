@@ -2402,7 +2402,7 @@ fn check_shared_writer_handoffs(
                 };
                 let canonical = canonical_handoff_path(&raw_path, &declared_handoff_paths);
                 writers_by_path
-                    .entry(canonical)
+                    .entry(canonical.clone())
                     .or_default()
                     .extend(owners.get(path).into_iter().flatten().cloned());
                 writers_by_path
