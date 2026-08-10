@@ -3845,25 +3845,20 @@ export function validateResponseHandoff(ledger, envelope) {
       }
       continue;
     }
-    if (!DISPOSITIONS.includes(response.disposition)) {
-      error(
-        `next implementation response ${expected[index]} disposition is unsupported`,
-      );
-    }
-    if (!Array.isArray(response.changed_surface)) {
-      error(
-        `next implementation response ${expected[index]} changed_surface must be an array`,
-      );
-    }
-    if (
-      typeof response.justification !== "string" ||
-      response.justification.trim() === ""
-    ) {
-      error(
-        `next implementation response ${expected[index]} requires a non-blank justification`,
-      );
-    }
   }
+  const validationResponses = envelope.responses.map((response) =>
+    response.disposition === null
+      ? {
+          issue_id: response.issue_id,
+          disposition: "Fixed",
+          changed_surface: ["handoff-validation-placeholder"],
+          justification: "Handoff validation placeholder.",
+          evidence: "Handoff validation placeholder.",
+          verified_factual_status: null,
+        }
+      : response
+  );
+  validateResponses(ledger, validationResponses);
   return envelope;
 }
 

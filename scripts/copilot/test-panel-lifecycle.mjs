@@ -1303,13 +1303,12 @@ try {
   const minor = {
     issue_id: "R3",
     disposition: "Deferred",
-    changed_surface: [],
     justification: "This non-blocking cleanup is recorded for later.",
   };
   const nit = {
     issue_id: "R4",
     disposition: "Withdrawn",
-    changed_surface: [],
+    changed_paths: [],
     justification: "The wording is already correct.",
     verified_factual_status: "Verified against the candidate.",
     evidence: "source inspection",
