@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "eaef20e9fd0541d6ae76b07071bff87265c95ae0ef7759de53c3e9c8f900c341";
+    "55557db16dfb3e5562f9a2edf7cd7482c3c301ff998e68d46b90bc3386f1deb7";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
@@ -2262,9 +2262,9 @@ fn check_shared_writer_handoffs(
         findings.push("local_to_manifest_shared_writer_handoffs.handoffs is missing".to_owned());
         return;
     };
-    if handoffs.len() != 13 {
+    if handoffs.len() != 16 {
         findings.push(format!(
-            "shared-writer handoff count is {}, expected 13",
+            "shared-writer handoff count is {}, expected 16",
             handoffs.len()
         ));
     }
