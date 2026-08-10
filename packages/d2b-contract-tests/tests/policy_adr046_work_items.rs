@@ -3712,7 +3712,7 @@ fn feature_local_semantic_branches_reject_independent_mutations() {
         "a wrong scaffold-to-group handoff unexpectedly passed"
     );
 
-    let mut missing_overlap = manifest.clone();
+    let mut missing_overlap = contract.clone();
     missing_overlap["local_to_manifest_shared_writer_handoffs"]["handoffs"][0]["paths"]
         .as_array_mut()
         .expect("broker handoff paths")
@@ -3825,8 +3825,11 @@ fn shared_writer_policy_rejects_duplicate_paths_missing_owners_and_graph_gaps() 
         .find(|node| node["id"] == "ADR046-transport-unix-006")
         .expect("transport handoff node");
     transport["prerequisites"] = serde_json::json!([]);
+    let mut graph_gap_contract = contract.clone();
+    graph_gap_contract["manifest_group_foundations"]["wi:ADR-046-provider-transport-unix"] =
+        serde_json::json!([]);
     findings.clear();
-    check_shared_writer_handoffs(&contract, &graph, &manifest, &mut findings);
+    check_shared_writer_handoffs(&graph_gap_contract, &graph, &manifest, &mut findings);
     assert!(
         findings.iter().any(|finding| {
             finding.contains("adjacent order") && finding.contains("graph/readiness ordering")
