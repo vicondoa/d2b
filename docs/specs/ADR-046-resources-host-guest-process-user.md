@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-resources-host-guest-process-user` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-contracts`, `d2b-provider-system-core`, `d2b-provider-system-systemd`, `d2b-provider-system-minijail` |
@@ -262,13 +262,13 @@ classes to exact implementation.
 
 | Field | Type | Default | Bound | Description |
 | --- | --- | --- | --- | --- |
-| `namespaceClasses` | `[NamespaceClass]` | `[]` | 0..8 items, unique | Namespace isolation requests. Empty means inherits all parent namespaces. |
+| `namespaceClasses` | `[NamespaceClass]` | `[]` | 0..8 items, unique | Explicit namespace isolation requests. The Process Provider derives `mount` whenever `readOnlyRoot=true` or `mounts` is non-empty, even when callers omit it. |
 | `capabilityClasses` | `[CapabilityClass]` | `[]` | 0..16 items, unique | Semantic capability grants. Empty means no capabilities beyond user-domain base set. |
 | `seccompClass` | `strict\|permissive\|allow-all\|<provider-class>` | `strict` | max 64 chars | Seccomp policy class. `strict` = minimal allow-list for the process class. `permissive` = log-only. `allow-all` = no filter; requires explicit carve-out in the controlling Provider's descriptor. `<provider-class>` = named profile from the Provider's compiled seccomp catalog. |
 | `noNewPrivileges` | bool | `true` | - | If true, sets PR_SET_NO_NEW_PRIVS before exec. Must be true when `startRoot` is false. |
 | `startRoot` | bool | `false` | - | If true, process starts as the in-namespace root UID before privilege drop. Requires explicit Provider justification in its descriptor. Cannot be true for user-domain Processes. |
 | `environmentClass` | `minimal\|safe-inherited\|provider-defined` | `minimal` | - | `minimal` = only the fixed approved environment set. `safe-inherited` = inherits the declared safe subset from the owning Provider's component. `provider-defined` = exact environment from Provider's component template. |
-| `readOnlyRoot` | bool | `true` | - | If true, rootfs is mounted read-only. |
+| `readOnlyRoot` | bool | `true` | - | If true, the Process Provider derives a mount namespace, makes propagation recursively private, and pivots/chroots into the compiled read-only root before exec. |
 | `umask` | string? | `"0022"` | octal 3-4 digits | File-creation mask installed before exec. |
 | `oomScoreAdj` | int | `0` | -1000..1000 | OOM score adjustment. |
 | `userNamespace` | UserNamespaceSpec? | `null` | - | If set, the process's effect adapter pre-establishes a single-entry user namespace before exec. Required for virtiofsd-class processes per ADR 0021. |
@@ -322,6 +322,16 @@ Core resolves the exact host UID/GID from the named principal and writes
 launch time; the numeric values never appear in the public ResourceSpec,
 status, audit, or API surface. The `user` NamespaceClass (CLONE_NEWUSER) is
 unaffected by this change.
+
+The effective namespace set is
+`namespaceClasses ∪ {mount if readOnlyRoot || mounts is non-empty}`. This is a
+derived security invariant, not an authoring convenience: callers cannot omit
+`mount` to retain the host mount namespace while requesting a read-only root
+or Volume mounts. Before exec, both Process Providers must make propagation
+recursively private, apply only broker-resolved mounts, pivot or use an
+equivalent fd-anchored chroot into the compiled root, detach the old root, and
+prove it is unreachable. The derived namespace and root-isolation plan are
+covered by `sandboxRevisionDigest`.
 
 ### ExecutionSpec
 
@@ -437,7 +447,7 @@ spec:
   volumeAttachmentDefaults: []        # 0..64 VolumeAttachmentDefaultList entries
   provider:
     schemaId: system-core.d2bus.org/host-spec
-    schemaVersion: "1.0"
+    schemaVersion: "2.0"
     settings: {}                      # system-core Host extension schema; bounded
 ```
 
@@ -456,11 +466,11 @@ Full field table:
 | `isolationPosture` | string? | no | `null` | `null\|"none"` | Promoted Host base field (not a provider extension). `"none"` marks a user-only no-isolation Host and requires `defaultDomain=user`, `allowedDomains=["user"]`, and `defaultUserRef` set (and that tuple conversely requires `"none"`; `null` used to evade the no-isolation warning is rejected). Reflected in status. System processes are denied at admission when set to `"none"`. |
 | `provider` | object? | no | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional `Provider/system-core` extension envelope (D089), schema `system-core.d2bus.org/Host/spec`; see `spec.provider.settings` below. Strict deny-unknown; MUST NOT shadow a base field. |
 
-`spec.provider.settings` for `Provider/system-core` (schemaId `system-core.d2bus.org/Host/spec`, schemaVersion `1.0`):
+`spec.provider.settings` for `Provider/system-core` (schemaId `system-core.d2bus.org/Host/spec`, schemaVersion `2.0`):
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kernelVersionMin` | string? | `null` | Minimum required kernel version string, e.g. `"6.1"`. Reconcile fails if running kernel is older. |
+| `kernelVersionMin` | string? | `null` | Optional operator floor above the unconditional Linux 6.9 floor. Null or a value below 6.9 cannot weaken Host readiness. |
 | `capabilities` | `[HostCapabilityClass]` | `[]` | Capabilities this Host is expected to expose. Reconcile reports status.capabilities against this claim. |
 
 The no-isolation `isolationPosture` field is a promoted Host base field at
@@ -473,7 +483,10 @@ top-level `spec.isolationPosture` (see the base spec table above); it is never a
 | --- | --- |
 | `kvm` | KVM hypervisor support |
 | `pidfd` | pidfd_open(2) and CLONE_PIDFD kernel support |
+| `pidfs` | Per-process pidfd inode identity on Linux 6.9 or newer |
+| `peer-pidfd` | `SO_PEERPIDFD` on an accepted AF_UNIX socket |
 | `cgroup-v2` | cgroup v2 delegation support |
+| `cgroup-kill` | Writable `cgroup.kill` on a delegated test leaf |
 | `user-namespace` | unprivileged user namespaces |
 | `virtiofs` | virtiofsd/virtio-fs support |
 | `audio-pipewire` | host PipeWire session manager running |
@@ -483,16 +496,18 @@ top-level `spec.isolationPosture` (see the base spec table above); it is never a
 | `tpm2` | TPM 2.0 device present |
 | `usbip` | USBIP kernel module loadable |
 
-`Provider/system-minijail` has a mandatory platform floor independent of the
-optional Host setting: Linux **5.14 or newer**, cgroup v2 delegation, and a
-writable `cgroup.kill` file on a delegated test leaf. Linux 5.14 is required
-because intentional teardown uses `cgroup.kill` rather than PID/PGID ownership.
-When any Process selects system-minijail, Host reconciliation performs this
-probe before placement; `kernelVersionMin = null` cannot waive it, while a
-higher configured minimum still applies. An older kernel fails with
-`kernel-too-old`; missing or unusable `cgroup.kill` fails with
-`cgroup-kill-unavailable`. Both keep the Provider/placement not Ready and
-launch zero processes.
+Every Host has one unconditional kernel-readiness contract, independent of
+installed Providers, selected Processes, `allowedDomains`, requested
+capabilities, `isolationPosture`, and optional `kernelVersionMin`: Linux 6.9 or
+newer, a successful pidfs self-pidfd identity probe, a successful
+`SO_PEERPIDFD` accepted-socket probe, cgroup v2 delegation, and writable
+`cgroup.kill` on a delegated test leaf. The version string is not proof.
+Missing or inconclusive support returns `kernel-too-old`,
+`pidfs-unavailable`, `peer-pidfd-unavailable`,
+`cgroup-delegation-unavailable`, or `cgroup-kill-unavailable`, keeps the Host
+not Ready, and permits zero Process or Provider placement. There is no
+production soft-fail, capability-claim opt-out, or user-only Host exception.
+A higher `kernelVersionMin` remains an additional constraint.
 
 ### Status schema
 
@@ -577,14 +592,16 @@ exposed in public status or audit.
 | Condition type | Ready = True when | Ready = False when | reason codes |
 | --- | --- | --- | --- |
 | `HostAvailable` | Host OS is reachable and matches `spec.provider.settings` | Host OS unreachable or kernel version requirement unmet | `host-unreachable`, `kernel-too-old`, `cgroup-unavailable` |
+| `KernelContractReady` | Linux 6.9, pidfs, `SO_PEERPIDFD`, cgroup v2 delegation, and delegated-leaf `cgroup.kill` all pass live probes | Any mandatory probe is missing, failed, or inconclusive | `kernel-too-old`, `pidfs-unavailable`, `peer-pidfd-unavailable`, `cgroup-delegation-unavailable`, `cgroup-kill-unavailable` |
 | `CapabilitiesVerified` | All `spec.provider.settings.capabilities` are observed | One or more claimed capabilities absent | `capability-absent-<class>` |
 | `UserManagerReady` | User domain allowed and user manager reachable | User manager not running or unreachable | `user-manager-unavailable`, `user-manager-unknown` |
 | `PolicyValid` | spec fields pass admission invariants | allowedDomains/defaultUserRef inconsistency detected | `spec-invalid-domains`, `spec-missing-default-user-ref` |
 | `BudgetAdmitted` | Aggregate budget within Zone capacity | Overcommit detected | `budget-overcommit` |
 
-Phase is `Ready` only when `HostAvailable` and `CapabilitiesVerified` are
-True. `UserManagerReady` may be Degraded without affecting Ready for system-
-only Hosts. `Failed` requires persistent unrecoverable error.
+Phase is `Ready` only when `HostAvailable`, `KernelContractReady`, and
+`CapabilitiesVerified` are True. `UserManagerReady` may be Degraded without
+affecting Ready for system-only Hosts. `Failed` requires persistent
+unrecoverable error.
 
 ### RBAC
 
@@ -613,11 +630,12 @@ Provider/system-core reconcile loop for Host:
 1. Receive trigger: `spec-generation-changed`, `dependency-changed`, `startup-relist`, or `scheduled-observe`.
 2. Read fresh spec snapshot.
 3. Validate spec invariants (domains, defaultUserRef, budget, capabilities claim).
-4. Probe local OS availability: `uname(2)`, cgroup v2 mount, user namespace
-   check, requested HostCapabilityClass probes. If system-minijail is installed
-   or selected by a targeting Process, also enforce Linux ≥5.14 and probe a
-   delegated leaf's writable `cgroup.kill`; failure is a platform-gate error,
-   not a feature downgrade.
+4. Unconditionally enforce Linux 6.9 and run live pidfs self-pidfd,
+   accepted-socket `SO_PEERPIDFD`, cgroup v2 delegation, and delegated-leaf
+   writable `cgroup.kill` probes. Run user-namespace and requested
+   HostCapabilityClass probes in addition. Any mandatory probe failure or
+   inconclusive result keeps Host not Ready and dispatches no Process or
+   Provider placement.
 5. If `allowedDomains` contains `user`: contact fixed user supervisor to verify `defaultUserRef`'s user manager availability.
 6. Compute aggregate Budget reservation from all non-terminal Processes targeting this Host via `List(executionRef=Host/<name>)`.
 7. Check aggregate budget against Zone capacity policy.
@@ -1071,7 +1089,15 @@ These rules are invariant for all Process Providers. Violation is a
    Provider controller never receives the raw fd.
 7. For system-systemd: ProviderSupervisor reads the unit's MainPID after
    InvocationID + cgroup + start-time verification and calls `pidfd_open(2)`
-   on that PID. systemd performs wait/reap.
+   on that PID. systemd performs wait/reap. Its adoption observation is the
+   closed enum `Adopted { handle } | AbsentProven | Ambiguous { reason }`.
+   `AbsentProven` requires the unit to be absent, the expected owned cgroup
+   leaf to be absent or verified empty, and no pidfs-backed candidate to match
+   the stored identity. `Ambiguous` covers every mismatch, multiple
+   candidate, partial observation, timeout, permission/I/O error, or
+   inconclusive absence. Only `AbsentProven` permits replacement launch;
+   `Ambiguous` quarantines and produces no stop, kill, delete, or launch
+   effect. There is no untyped `NotFound` outcome.
 8. A non-parent ProviderSupervisor may poll pidfd readability, but readability
    is only a terminal-liveness hint: it is not `waitid`, reap, or exit-status
    collection. For system-minijail, only the identity-bound terminal result
@@ -1112,7 +1138,14 @@ A process launched under `Provider/system-systemd` must satisfy all of:
   cgroup + MainPID + start-time tuple.
 - On adoption after restart: ProviderSupervisor rediscovers the live unit by
   cgroup path, re-checks InvocationID, cgroup, MainPID, start-time against
-  stored processIdentityDigest. Mismatch → quarantine.
+  stored processIdentityDigest, and returns only `Adopted`, `AbsentProven`, or
+  `Ambiguous`. Only absent unit plus absent/empty owned cgroup plus no pidfs
+  candidate is `AbsentProven`; mismatch, partial/error observation, or
+  inconclusive absence is `Ambiguous` and performs no lifecycle effect.
+- `readOnlyRoot=true` or non-empty mounts derives a mount namespace even when
+  the authored namespace list omits `mount`; private propagation,
+  broker-resolved binds, pivot/chroot, and old-root absence are required before
+  exec.
 
 ### system-minijail conformance
 
@@ -1133,7 +1166,8 @@ A process launched under `Provider/system-minijail` must satisfy all of:
 - The SandboxSpec's `namespaceClasses`, `capabilityClasses`, `seccompClass`,
   and `userNamespace` are compiled by the broker from the trusted bundle
   into a minijail/seccomp/namespace plan. The compiled plan digest is stored
-  in `sandboxRevisionDigest`.
+  in `sandboxRevisionDigest`. `readOnlyRoot=true` or non-empty mounts derives
+  `mount` into the effective namespace set.
 - The broker verifies: executable path/hash, template generation, declared UID/GID,
   compiled sandbox plan digest, and cgroup placement before exec.
 - No environment variable, mount, or path from the caller resource payload
@@ -1153,8 +1187,12 @@ A process launched under `Provider/system-minijail` must satisfy all of:
   `cgroup.kill`; it waits for broker-reaped main status and
   `cgroup.events: populated 0` before rmdir. There is no PID/PGID SIGKILL
   fallback.
-- Linux ≥5.14 plus writable delegated-leaf `cgroup.kill` is a mandatory
-  placement gate, not an optional capability downgrade.
+- Root Phase A creates and delegates the complete bounded process-free cgroup
+  subtree. Nonroot steady state creates only final leaves inside it and places
+  children with `clone3(CLONE_PIDFD|CLONE_INTO_CGROUP)`.
+- The unconditional Host Linux 6.9, pidfs, accepted-socket `SO_PEERPIDFD`,
+  cgroup v2 delegation, and delegated-leaf `cgroup.kill` contract is a
+  mandatory placement gate, not an optional capability downgrade.
 
 ### Fast path contract (D030)
 
@@ -2303,10 +2341,21 @@ The zone configuration controller retains the N most recently activated, cleanup
     `populated 0`, the decoy is untouched, and rmdir/finalizer clearing occurs
     only after broker-reaped main status. Ambiguous adoption performs no signal
     or `cgroup.kill`.
-26. Linux <5.14 or a delegated cgroup v2 leaf without writable `cgroup.kill` →
-    Host/system-minijail placement remains not Ready with
-    `kernel-too-old`/`cgroup-kill-unavailable`, and the broker receives zero
-    spawn requests.
+26. Every Host, including user-only/no-isolation Hosts with no Process Provider
+    selected, probes Linux 6.9, pidfs, accepted-socket `SO_PEERPIDFD`, cgroup
+    v2 delegation, and delegated-leaf `cgroup.kill`. A failure or inconclusive
+    result in any probe keeps Host not Ready with the exact typed reason and
+    yields zero Process/Provider placement or broker spawn requests.
+27. A Process with `namespaceClasses=[]` and `readOnlyRoot=true`, or with any
+    non-empty `mounts`, compiles an effective mount namespace. Both Process
+    Providers prove recursively private propagation, compiled-root
+    pivot/chroot, and old-root absence before exec; planted omission of the
+    derived namespace fails conformance.
+28. system-systemd adoption returns only `Adopted`, `AbsentProven`, or
+    `Ambiguous`. A proved absent unit plus empty/absent owned cgroup permits one
+    replacement; missing unit with cgroup occupant, partial observation,
+    timeout, mismatch, multiple candidate, or probe error returns `Ambiguous`,
+    quarantines, and emits zero lifecycle effects.
 
 ---
 
@@ -2397,10 +2446,10 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Current source | `packages/d2b-core/src/host_check.rs`: `HostCheckReport`, `HostCheckSummary`, `HostCheckFinding`, `HostCheckSeverity`; `packages/d2bd/src/pidfs_probe.rs`; `packages/d2bd/src/kernel_module_check.rs`; `packages/d2b-core/src/provider_capabilities.rs`; `packages/d2b-realm-core/src/ids.rs`: `HostResourceId` (current host-identity handle), `NodeId` (execution node identity); `packages/d2b-realm-core/src/node.rs`: `NodeKind::FullHost`, `NodeSummary` (host node's capability advertisement - direct reuse model for Host status `capabilities[]`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-core/src/host.rs`: HostReconciler; status/conditions/capability probe implementation; `packages/d2b-provider-system-core/tests/`: hermetic reconcile/conformance/fault tests; `packages/d2b-provider-system-core/integration/`: Host probe and lifecycle integration scenarios; `packages/d2b-provider-system-core/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout - see §Provider crate standard layout) |
-| Detailed design | Async Host reconcile loop per this spec's Reconcile section; HostCapabilityClass probe set (kvm/pidfd/cgroup-v2/user-namespace/wayland/audio-pipewire/gpu-render/tpm2/usbip); bounded OS probes with timeout; mandatory system-minijail placement gate for Linux ≥5.14 plus writable delegated-leaf `cgroup.kill` independent of optional `kernelVersionMin`; `isolationPosture` validation and status; aggregate budget reservation tracking via List; status write with expected revision Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Async Host reconcile loop per this spec's Reconcile section; HostCapabilityClass probe set (kvm/pidfd/pidfs/peer-pidfd/cgroup-v2/cgroup-kill/user-namespace/wayland/audio-pipewire/gpu-render/tpm2/usbip); bounded OS probes with timeout; unconditional Host readiness gate for Linux 6.9 plus live pidfs self-pidfd, accepted-socket `SO_PEERPIDFD`, cgroup v2 delegation, and delegated-leaf writable `cgroup.kill`, independent of installed/selected Providers, Process presence, domains, isolation posture, capability claims, or optional `kernelVersionMin`; no production soft-fail; `isolationPosture` validation and status; aggregate budget reservation tracking via List; status write with expected revision. This is a prospective correction only; retained historical W5 generated rows and state are not rewritten. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider/system-core fixed bootstrap process; ResourceClient Get/List/UpdateStatus |
 | Data migration | New Host resources from Nix; no v2 state import |
-| Validation | Multiple Hosts per Zone; system-only and user-only Hosts; capability probe mocks; Linux <5.14 and missing/unwritable `cgroup.kill` reject system-minijail before spawn; Linux ≥5.14 positive probe; `isolationPosture="none"` rejection of system processes; budget overcommit rejection; `tests/` all pass under `cargo test`; `integration/` scenario passes in container fixture; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
+| Validation | Multiple Hosts per Zone; system-only, user-only, and no-isolation Hosts; each Host runs all mandatory probes even with empty capability claims, no installed Process Provider, and no targeting Process; Linux before 6.9, non-pidfs pidfd, unavailable/inconclusive `SO_PEERPIDFD`, absent cgroup v2 delegation, and missing/unwritable `cgroup.kill` each keep Host not Ready with the exact actionable reason and zero placement/spawn; Linux 6.9 with successful pidfs/socketpair/delegated-leaf probes is the positive case; `kernelVersionMin=null` and values below 6.9 cannot waive the floor, while a higher value is enforced; probe timeout/I/O/permission errors fail closed; `isolationPosture="none"` rejection of system processes; budget overcommit rejection; `tests/` all pass under `cargo test`; `integration/` scenario passes in container fixture; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
 | Removal proof | Current host capability checks in `d2bd` removed after Host reconcile parity |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

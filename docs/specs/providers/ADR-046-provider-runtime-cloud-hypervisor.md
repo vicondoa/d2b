@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-runtime-cloud-hypervisor` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | Permitted; exact commit and selected behavior named per work item |
 | Normative | Yes |
@@ -600,20 +600,23 @@ belongs exclusively to the selected Process Provider. The runtime controller:
    children.
 2. Requires exactly zero or one child per Guest and consumes only the child's
    typed `status.resource.adoptionState` and phase.
-3. On `adopted`, resumes Guest reconciliation without disrupting the VMM.
-4. On `not-found`, permits the ordinary missing-child reconcile path to create
-   one replacement only after the Process Provider has proved the old cgroup
-   leaf empty.
-5. On `quarantined`, `unknown`, multiple children, identity mismatch, or an
-   inconclusive result, sets `AdoptionAmbiguous=True`, transitions the Guest to
-   `Degraded`, retains the existing child references, and issues no create,
-   restart, stop, delete, signal, or cgroup effect.
+3. On typed `Adopted`, resumes Guest reconciliation without disrupting the VMM.
+4. On typed `AbsentProven`, permits the ordinary missing-child reconcile path
+   to create one replacement. For a systemd-backed VMM this proof includes
+   absent unit, absent/empty owned cgroup, and no pidfs candidate; a generic
+   missing/not-found observation is insufficient.
+5. On typed `Ambiguous`, `quarantined`, `unknown`, multiple children, identity
+   mismatch, partial observation, timeout, or error, sets
+   `AdoptionAmbiguous=True`, transitions the Guest to `Degraded`, retains the
+   existing child references, and issues no create, restart, stop, delete,
+   signal, or cgroup effect.
 
 The controller never opens or reopens a pidfd from a numeric PID, verifies
 `/proc`, claims a cgroup, or treats Guest status as process authority.
-Quarantine clears only after the Process Provider reports an unambiguous
-identity/absence result or the operator performs the documented full Zone
-reset. This prevents a second VMM authority from racing the Process Provider.
+Quarantine clears only after the Process Provider reports `Adopted` or
+`AbsentProven`, or the operator performs the documented full Zone reset. This
+Provider never converts an error or untyped NotFound into absence. This
+prevents a second VMM authority from racing the Process Provider.
 
 ### 9.5 Observe interval
 
@@ -1394,7 +1397,7 @@ The controller emits authoritative audit records (not OTEL) for:
 | `GuestDeletionStarted` | durable | `zone`, `resource`, `generation`, `correlation_id` |
 | `GuestDeletionSucceeded` | durable | `zone`, `resource`, `generation` |
 | `VmmProcessExited` | durable | `zone`, `resource`, `exitCode` (bounded int) |
-| `VmmAdoptionObserved` | durable | `zone`, `resource`, `outcome: adopted|not-found|ambiguous` |
+| `VmmAdoptionObserved` | durable | `zone`, `resource`, `outcome: adopted|absent-proven|ambiguous` |
 
 No argv, paths, socket names, kernel cmdline, OEM strings, PID, pidfd, TAP
 name, guest-control locator, or credential material appears in any audit field. Bounded
@@ -1537,7 +1540,7 @@ emitter (no OTEL SDK; frames forwarded by `Provider/observability-otel`):
 | `d2b_runtime_ch_guest_phase` | Gauge | `phase` | Current Guests by phase |
 | `d2b_runtime_ch_vmm_restarts_total` | Counter | (none) | VMM Process restart count |
 | `d2b_runtime_ch_reconcile_duration_seconds` | Histogram | `result: converged|pending|failed` | Per-reconcile duration |
-| `d2b_runtime_ch_adoption_total` | Counter | `outcome: adopted|failed|ambiguous` | Controller restart adoption events |
+| `d2b_runtime_ch_adoption_total` | Counter | `outcome: adopted|absent-proven|ambiguous` | Controller restart adoption events |
 | `d2b_runtime_ch_health_check_duration_seconds` | Histogram | `result: passed|failed|timeout` | Guest health check duration |
 
 Cardinality rules:
@@ -1789,10 +1792,10 @@ per-test advisory threshold.
 | Current source | `packages/d2bd/src/provider_shutdown.rs::GracefulVmShutdown`; `packages/d2b-host/src/runtime_provider.rs::RuntimeProvider::plan_guest_update` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption_observation.rs` |
-| Detailed design | Authenticated KK ComponentSession health check over vsock; observe only Provider/system-minijail's typed Process adoption result within `adoptionWindow`; never accept a PID, pidfd, cgroup, executable path, or caller-constructed identity; matching adopted child resumes, proved absence permits one replacement, and ambiguity/multiple children quarantine the Guest with zero VMM effects; graceful shutdown is requested via guest-control before the Process Provider receives `desiredLifecycle: stopped` |
+| Detailed design | Authenticated KK ComponentSession health check over vsock; observe only the selected Process Provider's typed `Adopted|AbsentProven|Ambiguous` result within `adoptionWindow`; never accept a PID, pidfd, cgroup, executable path, caller-constructed identity, generic NotFound, or error-as-absence conversion; `Adopted` resumes, `AbsentProven` permits one replacement, and `Ambiguous`/multiple children quarantine the Guest with zero VMM effects; graceful shutdown is requested via guest-control before the Process Provider receives `desiredLifecycle: stopped` |
 | Integration | ComponentSession enrolled KK; guest bootstrap credential from `d2b-gctl` virtiofs share; `GuestReachable` condition write |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Fake guest-control server test; health check timeout/failure/retry; adoption-observation property tests for adopted, proved absent, ambiguous, multiple-child, and stale typed outcomes; source/API tests prove this Provider has no pidfd/PID/proc/cgroup identity surface; graceful shutdown ordering |
+| Validation | Fake guest-control server test; health check timeout/failure/retry; adoption-observation property tests for exact `Adopted`, `AbsentProven`, `Ambiguous`, multiple-child, stale, timeout, and error outcomes; only `AbsentProven` creates one replacement, every Ambiguous/error case creates zero effects, and no NotFound variant exists; source/API tests prove this Provider has no pidfd/PID/proc/cgroup identity surface; graceful shutdown ordering |
 | Removal proof | `ProcessRole::GuestControlHealth` observation path; `ProcessRole::GuestSshReadiness` deleted at cutover |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

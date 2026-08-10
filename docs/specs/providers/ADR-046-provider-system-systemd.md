@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-system-systemd` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-system-systemd` crate, Process contracts |
@@ -38,8 +38,11 @@ ongoing reconcile lifecycle as an ordinary controller.
 
 ### Linux platform gate
 
-Provider/system-systemd requires Linux 6.9 or newer and a successful runtime
-pidfs probe before it becomes Ready. The probe opens a self pidfd and proves
+Every Host is already required to prove Linux 6.9 or newer, pidfs,
+accepted-socket `SO_PEERPIDFD`, cgroup v2 delegation, and delegated-leaf
+`cgroup.kill` before Host Ready, regardless of whether this Provider is
+installed or selected. Provider/system-systemd additionally rechecks Linux 6.9
+and pidfs before it becomes Ready. The probe opens a self pidfd and proves
 per-process pidfs inode identity; a version string alone is insufficient.
 Missing pidfs, an inconclusive probe, or a kernel older than 6.9 returns
 `pidfs-unavailable`, keeps the Provider not Ready, and directs the operator to
@@ -598,16 +601,22 @@ terminal phase. For each:
 2. The core adapter asks the broker to locate the unit, read and validate the
    full identity tuple, compare the digest, open and re-verify a fresh pidfd
    against pidfs, and return
-   `Adopted { handle }`, `Quarantined`, or `NotFound`.
+   exactly one typed outcome:
+   `Adopted { handle }`, `AbsentProven`, or `Ambiguous { reason }`.
 3. On `Adopted`, retain the opaque handle, write
    `adoptionState=adopted`, and resume typed EffectPort observation.
-4. On `Quarantined`, write `adoptionState=quarantined` and do not issue any
-   stop effect.
-5. On `NotFound`, write `adoptionState=adoption-failed` and re-launch.
+4. `AbsentProven` is returned only when the unit is absent, the expected owned
+   cgroup leaf is absent or verified empty, and no pidfs-backed candidate
+   matches the stored identity. Only then write `adoptionState=adoption-failed`
+   and permit one replacement launch.
+5. `Ambiguous` covers identity mismatch, multiple candidates, missing unit with
+   a populated/foreign cgroup, partial property reads, timeout, permission/I/O
+   error, or any inconclusive absence. Write `adoptionState=quarantined` and
+   issue no stop, kill, delete, or launch effect.
 
-Quarantined processes are never killed by adoption logic. The operator resolves
-them via explicit `delete` or `update-spec` with an acknowledged quarantine
-acknowledgment field.
+There is no untyped `NotFound` outcome and no "error means absent" conversion.
+Ambiguous processes are never killed by adoption logic. The operator resolves
+them through the documented quarantine workflow or a full Zone reset.
 
 ---
 
@@ -640,12 +649,23 @@ and computes a deterministic `sandboxRevisionDigest`. It passes only the
 opaque policy ID and digest through SystemdProcessEffectPort. The core adapter
 owns the frozen mapping to systemd unit hardening properties:
 
+The effective namespace set derives `mount` whenever `readOnlyRoot=true` or
+`mounts` is non-empty. This derivation is included in
+`sandboxRevisionDigest`; callers cannot omit `namespaceClasses: [mount]` to
+avoid it. The broker-generated transient-unit properties must establish a
+private mount namespace, make propagation recursively private, bind only
+broker-resolved Volume views, pivot/chroot into the compiled root, and make the
+old root unreachable before exec. `PrivateMounts=yes` or
+`ProtectSystem=strict` without that complete root-isolation proof is
+insufficient.
+
 The mapping from semantic sandbox classes to systemd properties:
 
 | SandboxSpec field | Compiled systemd property |
 | --- | --- |
 | `namespaceClasses: [pid]` | `PrivatePIDs=yes` |
 | `namespaceClasses: [mount]` | `PrivateMounts=yes`, `ProtectSystem=strict` |
+| derived `mount` from `readOnlyRoot=true` or non-empty `mounts` | `PrivateMounts=yes` plus broker-resolved root/bind properties that prove private propagation, pivot/chroot, and old-root absence |
 | `namespaceClasses: [ipc]` | `PrivateIPC=yes` |
 | `namespaceClasses: [uts]` | `ProtectHostname=yes` |
 | `namespaceClasses: [network]` | `PrivateNetwork=yes` |
@@ -692,7 +712,7 @@ Route key:
 | --- | --- | --- |
 | `LaunchProcess` | request/response | Receive opaque Process/template/policy IDs; request launch through SystemdProcessEffectPort; return `processIdentityDigest` or error. |
 | `StopProcess` | request/response | Receive `ProcessRef + pidfd-less stop request`; drain and stop unit; return outcome. |
-| `AdoptProcess` | request/response | Receive `ProcessRef + adoptionCandidateDigest`; run adoption algorithm; return `adopted`/`quarantined`/`failed`. |
+| `AdoptProcess` | request/response | Receive `ProcessRef + adoptionCandidateDigest`; return only `Adopted`, `AbsentProven`, or `Ambiguous`; only proved absence permits replacement. |
 | `QueryProcessState` | request/response | Receive `ProcessRef`; return current typed process state (common phase + exit class); does not surface raw systemd `ActiveState`/`SubState` strings. |
 
 No method accepts a pidfd from the caller. No method returns a pidfd to the
@@ -965,6 +985,8 @@ argv/PIDs/names).
 | `pidfs-unavailable` | `ProviderReady` | Runtime pidfs probe failed or was inconclusive; Provider remains not Ready |
 | `launch-timeout` | `Launching` | `MainPID` did not appear within `launchTimeoutSec` |
 | `identity-mismatch` | `Adopted` | InvocationID/cgroup/start-time tuple does not match stored digest |
+| `adoption-ambiguous` | `Adopted` | Adoption cannot prove the exact process or exact absence; process is quarantined and no lifecycle effect runs |
+| `adoption-absence-not-proven` | `Adopted` | Unit absence was observed but the owned cgroup/pidfs absence proof did not complete |
 | `pidfd-open-failed` | `Launching` | `pidfd_open(2)` failed (possible PID reuse race) |
 | `pid-reuse-detected` | `Launching` | cgroup/PPid re-verification after pidfd open detected PID reuse |
 | `readiness-timeout` | `Ready` | Process did not pass readiness check within `readiness.timeout` |
@@ -976,6 +998,7 @@ argv/PIDs/names).
 | `process-exit-unconfirmed` | finalizer | Process exit not confirmed through DBus before finalization |
 | `provider-drain` | `Ready` | Process Degraded because Provider is draining |
 | `runtime-security-violation` | `Launching` | Detected an invariant violation (any of: daemonizing unit type used, InvocationID absent, unit-name used as identity, incorrect cgroup placement) |
+| `sandbox-root-isolation-failed` | `Launching` | Derived mount namespace, private propagation, pivot/chroot, or old-root absence proof failed before exec |
 
 ---
 
@@ -1329,10 +1352,10 @@ assumptions. Copied behavior is independently re-tested against v3
 | Reuse source | Main `a1cc0b2d`: `d2b-session/src/engine.rs`, `d2b-session-unix/src/adapter.rs` (effect port test double session/transport) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production adapter and typed operation contracts in `packages/d2b-contracts`, `packages/d2b-core`, and `packages/d2b-priv-broker` after the shared activation foundation |
-| Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 fail-closed drain; §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration; Linux 6.9 plus mandatory pidfs readiness probe; closed broker operations from §12.2 with durable audit before success. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption with the closed `Adopted|AbsentProven|Ambiguous` result and no untyped NotFound; §9 fail-closed drain; §10 sandbox compilation deriving mount namespace whenever `readOnlyRoot=true` or mounts are non-empty, with private propagation, pivot/chroot, and old-root absence; §11 bus services; ProviderSupervisor LaunchTicket integration; consume unconditional Host Linux 6.9/pidfs/accepted-socket-`SO_PEERPIDFD`/cgroup-v2/`cgroup.kill` readiness and recheck pidfs; closed broker operations from §12.2 with durable audit before success. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Core ProviderDeployment creates the controller Process via Provider/system-minijail with no state Volume or `/state` mount; the controller issues no Volume CRUD operations, watches Process/EphemeralProcess, and persists bounded non-secret observations only in owning-resource status and the core Operation ledger; ProviderSupervisor injects the effect port, which maps opaque calls to typed broker operations and never exposes broker or systemd authority to the Provider |
 | Data migration | No state migration; controller relists and adopts on restart |
-| Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time and pidfs golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); broker contract/integration tests for closed request fields, Linux 6.9 and pidfs refusal, durable audit failure, no direct Provider/core DBus or cgroup mutation, and retained finalizer on ambiguous exit; latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
+| Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time and pidfs golden vectors via mock effect port); `tests/adoption.rs` proves exact `Adopted`, proved unit+cgroup+pidfs `AbsentProven`, and `Ambiguous` for populated/foreign cgroup, mismatch, multiple candidate, timeout, permission/I/O error, partial properties, and inconclusive absence, with zero effects for every Ambiguous case and no NotFound variant; `tests/sandbox_compile.rs` proves authored-empty namespace plus read-only root or mounts derives mount isolation and validates private propagation/pivot/old-root absence; `tests/restart.rs`; broker contract/integration tests for closed request fields, unconditional Host readiness consumption, Linux 6.9/pidfs refusal, durable audit failure, no direct Provider/core DBus or cgroup mutation, and retained finalizer on ambiguous exit; latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
 | Removal proof | `VmProcessDag` supervisor roles removed per role disposition table after each succeeds in conformance |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1394,7 +1417,7 @@ packages/d2b-provider-system-systemd/
 ├── tests/
 │   ├── conformance.rs              # shared conformance kit (`check_provider_conformance`)
 │   ├── identity_binding.rs         # opaque identity receipt and mismatch/quarantine cases
-│   ├── adoption.rs                 # adoption algorithm: adopted/quarantined/failed outcomes; restart scenarios
+│   ├── adoption.rs                 # typed Adopted/AbsentProven/Ambiguous outcomes
 │   ├── restart.rs                  # backoff/maxRestarts/resetAfter correctness
 │   ├── ephemeral.rs                # EphemeralProcess: TTL, startDeadline, runtimeDeadline
 │   ├── sandbox_compile.rs          # semantic SandboxSpec validation: every class; unsupported `user` namespace rejection
@@ -1423,7 +1446,7 @@ and `FakeProvider` fixtures from `d2b-provider-toolkit`:
 | --- | --- |
 | `conformance.rs` | `check_provider_conformance` returns zero `ConformanceError` for `Process` and `EphemeralProcess` ProviderType axes |
 | `identity_binding.rs` | Mock EffectPort returns opaque `IdentityBound`, `identity-mismatch`, and `pid-reuse-detected` outcomes; Provider never receives tuple fields or a pidfd. Core adapter tests own the raw tuple golden vectors. |
-| `adoption.rs` | Mock effect port `locate_by_identity` returns match → `adopted`; any mismatch → `quarantined` (unit NOT killed); absent unit → `adoption-failed` + effect port `stop`+`kill` attempt |
+| `adoption.rs` | Mock effect port returns `Adopted` only for exact identity, `AbsentProven` only for absent unit plus empty/absent owned cgroup plus no pidfs candidate, and `Ambiguous` for every partial/error/mismatch case; Ambiguous performs no stop/kill/delete/launch |
 | `restart.rs` | `on-failure`: restart on non-zero, not on zero; `never`: no restart; backoff exponential; `maxRestarts` exceeded → `Failed`; `resetAfter` resets counter |
 | `ephemeral.rs` | Zero exit → `Succeeded`, TTL countdown; non-zero exit → `Failed`; `runtimeDeadline` expiry → SIGTERM then SIGKILL → `Failed`; `startDeadline` expiry → `Failed`; `incidentHold=true` blocks cleanup |
 | `sandbox_compile.rs` | Every semantic `NamespaceClass` and `capabilityClasses` value is accepted or rejected per signed policy; no systemd property fragment is produced; `userNamespace.mappingClass` non-null → `unsupported-user-namespace-mapping`; `seccompClass=allow-all` without descriptor carve-out → error. Core adapter tests own semantic-class-to-systemd-property mappings. |
