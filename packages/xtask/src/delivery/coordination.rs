@@ -813,9 +813,7 @@ impl DispatchLedger {
                     && complete("feature-local:w6-audit-telemetry-foundations")
             } else if group == "feature-local:w6-converge" {
                 complete("feature-local:w6-operator-acceptance")
-                    && W6_MANIFEST_GROUPS
-                        .into_iter()
-                        .all(|dependency| complete(dependency))
+                    && W6_MANIFEST_GROUPS.into_iter().all(complete)
             } else if group == "feature-local:w6-close" {
                 complete("feature-local:w6-converge")
             } else {
@@ -985,6 +983,7 @@ pub fn transition_local_state(current: DispatchState, next: DispatchState) -> Re
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_group(
     path: &Path,
     material: &CandidateMaterial,
@@ -1478,6 +1477,7 @@ impl PlanApprovalReceipt {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_for_with_selection_bytes(
         &self,
         material: &CandidateMaterial,
