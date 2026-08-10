@@ -690,6 +690,98 @@ fn real_tree() -> (Value, Value, BTreeMap<String, Vec<Declaration>>) {
 
 fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
     let mut findings = Vec::new();
+    let contract = markdown
+        .split("```json")
+        .skip(1)
+        .filter_map(|tail| tail.split("```").next())
+        .find_map(|body| serde_json::from_str::<Value>(body).ok())
+        .filter(|value| value["artifact_kind"] == "d2b-feature-local-task-contract");
+    let Some(contract) = contract else {
+        return vec!["feature-local task contract JSON block is missing".to_owned()];
+    };
+
+    let json_set = |path: &[&str]| -> BTreeSet<String> {
+        let mut value = &contract;
+        for component in path {
+            value = &value[*component];
+        }
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    };
+    let expected_local = ["T479", "T480", "T604"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    for field in ["task_ids", "unchecked_task_ids"] {
+        let actual = json_set(&[field]);
+        if actual != expected_local {
+            findings.push(format!(
+                "feature-local contract {field} must be {expected_local:?}, got {actual:?}"
+            ));
+        }
+    }
+    if contract["outside_retired_fences"] != true {
+        findings.push("feature-local tasks must be outside retired fences".to_owned());
+    }
+    let expected_local_dependencies = BTreeMap::from([
+        ("T604", ["T221"].as_slice()),
+        ("T479", ["T221", "T604"].as_slice()),
+        ("T480", ["T479"].as_slice()),
+    ]);
+    for (task, expected) in expected_local_dependencies {
+        let actual = json_set(&["required_local_dependencies", task]);
+        let expected = expected.iter().map(|value| (*value).to_owned()).collect();
+        if actual != expected {
+            findings.push(format!(
+                "feature-local contract {task} local dependencies are incorrect"
+            ));
+        }
+    }
+    let mut expected_t604_manifest = BTreeSet::from([
+        "ADR046-activation-001".to_owned(),
+        "ADR046-activation-006".to_owned(),
+        "ADR046-system-core-001".to_owned(),
+        "ADR046-ch-001".to_owned(),
+    ]);
+    expected_t604_manifest.extend((1..=20).map(|ordinal| format!("ADR046-nl-{ordinal:03}")));
+    expected_t604_manifest
+        .extend((1..=13).map(|ordinal| format!("ADR046-device-tpm-{ordinal:03}")));
+    expected_t604_manifest.extend((1..=13).map(|ordinal| format!("ADR046-vl-{ordinal:03}")));
+    if json_set(&["required_manifest_dependencies", "T604"]) != expected_t604_manifest {
+        findings.push("feature-local T604 manifest dependency set is incorrect".to_owned());
+    }
+    if json_set(&["required_manifest_dependencies", "T479"])
+        != BTreeSet::from(["ADR046-process-002".to_owned()])
+    {
+        findings.push("feature-local T479 manifest dependency set is incorrect".to_owned());
+    }
+    if contract["shared_file_order"]["Makefile"] != serde_json::json!(["ADR046-ch-001", "T604"]) {
+        findings.push("feature-local Makefile ownership order is incorrect".to_owned());
+    }
+    let expected_fixtures = BTreeSet::from([
+        "tests/golden/delivery/host-generation-pre-start-case-ids.txt".to_owned(),
+        "tests/golden/delivery/host-generation-unit-census-case-ids.txt".to_owned(),
+    ]);
+    if json_set(&["case_id_fixture_paths"]) != expected_fixtures {
+        findings.push("feature-local case-id fixture set is incorrect".to_owned());
+    }
+    if contract["operator_acceptance"]["validator_author"] != "T604"
+        || contract["operator_acceptance"]["candidate_executor"] != "T479"
+        || contract["operator_acceptance"]["candidate_evidence_owner"] != "T479"
+        || contract["operator_acceptance"]["t604_pre_f6_candidate_evidence_emission"] != false
+        || contract["fr075"]["case_author"] != "T604"
+        || contract["fr075"]["candidate_executor"] != "T479"
+        || contract["fr075"]["candidate_evidence_owner"] != "T479"
+        || contract["fr075"]["t604_candidate_bound_evidence"] != false
+    {
+        findings.push("feature-local acceptance ownership contract is incorrect".to_owned());
+    }
+
     let lines = markdown.lines().collect::<Vec<_>>();
     let mut blocks = BTreeMap::new();
     let mut retired_depth = 0usize;
@@ -744,12 +836,16 @@ fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
             "T604",
             [
                 "T221",
-                "T222",
-                "T227",
-                "T423",
-                "T336-T355",
-                "T310-T322",
-                "T458-T470",
+                "ADR046-activation-001",
+                "ADR046-activation-006",
+                "ADR046-system-core-001",
+                "ADR046-ch-001",
+                "ADR046-nl-001",
+                "ADR046-nl-020",
+                "ADR046-device-tpm-001",
+                "ADR046-device-tpm-013",
+                "ADR046-vl-001",
+                "ADR046-vl-013",
                 "operator-nix-activation-cleanup",
                 "T479",
             ]
@@ -760,6 +856,7 @@ fn check_local_coordination_tasks(markdown: &str) -> Vec<String> {
             [
                 "T604",
                 "T221",
+                "ADR046-process-002",
                 "operator-nix-activation-cleanup",
                 "w6-cloud-hypervisor-guest-acceptance",
             ]
