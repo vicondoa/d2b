@@ -292,9 +292,9 @@ Version 2 and generated `VD2-SC002-RECOVERY`, `VD2-SC002-INCIDENT`,
 | `preserve-and-escalate-audit-integrity-incident` | site security authority runs `host-generation-audit-integrity-escalation-v1` |
 
 Each named `host-generation-*-v1` procedure is an identically named anchor in
-`docs/how-to/host-generation-recovery-v1.md`. T599 owns that public runbook and generated
-`docs/reference/host-generation-recovery-actions-v1.json`; T220 verifies links and complete
-agreement with the generated emitted-action assignments. A missing, extra, duplicate,
+`docs/how-to/host-generation-recovery-v1.md`. The historical plan assigned that public
+runbook and generated action map to T599 and historical link/agreement verification to T220. Those rows
+are read-only history and supply no current gate. A missing, extra, duplicate,
 unowned, or broken action mapping blocks release. Machine output carries only the generated
 action token, never an argv array, shell fragment, free-form command, Zone, operation ID, or
 artifact path. Escalation procedures preserve the affected evidence and authorize no repair,
@@ -340,8 +340,8 @@ FR-042 explicit retirement list rather than the parity list.
   error context.
 - T599 bumps the accepted CLI specification to Version 2 and owns migration guidance,
   DTO/schema, contract tests, references, and
-  `changelog.d/cli-operation-recovery.md`. T220 verifies and folds the coordinated
-  version/reference/test/schema/release treatment. Missing or Version 1 envelopes
+  `changelog.d/cli-operation-recovery.md`. The former T220 verification/fold is historical.
+  Missing or Version 1 envelopes
   are never interpreted as Version 2, and arbitrary Version 1 IDs are never silently migrated.
 - Host-generation handoff commands consume only accepted generated `VD2-SC002-*` rows for
   protocol states, publication, capacity, rendering, exits, and transitions. Every generated

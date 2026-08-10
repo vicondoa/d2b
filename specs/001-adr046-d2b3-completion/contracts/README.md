@@ -257,8 +257,8 @@ post-merge seal, merge-target registration, and merge eligibility.
     cleanup without disturbing the ready, identity-stable, unrecreated acceptance
     Volume/Network or unrelated resources. W4 history remains byte-preserved but its sole
     Network opt-in is nonconforming and non-authorizing.
-    This one denied-east-west sample is not double-opt-in evidence. Before T220 freezes F,
-    an accepted external Network contract/work-item amendment must land the double-opt-in
+    This one denied-east-west sample is not double-opt-in evidence. T221 requires the
+    accepted Network contract/work-item amendment and double-opt-in
     migration, remove every current-facing sole Network-opt-in path, and retain T336-T355
     plus all four Network/Host production cases as W6 work under T221. T070 and T071 retain
     historical evidence only. T221 fail-closes prospective Wave 6 entry until the migration,
@@ -279,19 +279,16 @@ post-merge seal, merge-target registration, and merge eligibility.
     telemetry labels. Both governing normative specs and their version metadata move with
     targeted Rust/contract tests, compiler-derived public/private API snapshots, paired
     reference status text, and byte-identical Zone desired-schema proof. T605 completes on
-    those owned pre-consumer artifacts; T595 consumes the variants, T599 reconciles other
-    consumers, and T220 reconciles generated spec manifests plus the full drift gate in the
-    same Wave 5 PR. C1 changes no desired Zone field or JSON schema version. Implementation
-    remains pending.
-14. **Wave 5 evidence is immutable history.** T220's planned graph converges every repository change
-    before freezing F through exactly one nonbinding lifecycle and one stable discovery
-    ledger. Every provisional candidate or fix reruns deterministic widen-only selection and
-    scoped verification; comprehensive discovery runs once and is never rerun. T600 owns
-    exactly `production-session-watch`,
+    those owned pre-consumer artifacts; it assigned T595 emission, T599 consumer
+    reconciliation, and T220 generated-manifest/full-drift convergence. Those Wave 5 rows are
+    historical and not reconstructed.
+14. **Wave 5 evidence is immutable history.** The former T220 graph and T600/T601 evidence
+    ownership are retained as unchecked historical design only. The T600 set was
+    `production-session-watch`,
     `effect-replay-cleanup`, `audit-drain-replay`, and `system-core-handler-contract`;
     T601 owns exactly
     `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
-    `cli-reference-conformance`. Those seven identifiers are the complete Wave 5 profile.
+    `cli-reference-conformance`. Those seven identifiers were the complete historical plan.
     T604 separately owns W6 `operator-nix-activation-cleanup`, which T479 imports and which
     cannot enter the Wave 5 profile. T602's planned validator rejects any unknown, duplicate,
     missing, extra, wrong-lane, or conflated identifier. The exact disposition does not claim
@@ -303,16 +300,15 @@ post-merge seal, merge-target registration, and merge eligibility.
     `ADR-046-validation-and-delivery-traceability.{json,md}` artifacts solely own
     `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`,
     `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`,
-    `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589, T600, T604, and T220 consume
-    only their generated rows. Until Version 2 is accepted and the generated bijection passes
-    Gate 0 and drift validation, all four tasks remain blocked. This feature contains no
-    normative SC-002 encoding, census, registry count, or recovery state copy.
+    `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589/T600/T220 are historical
+    planned consumers. Prospective T604 uses only its current generated rows. This feature
+    contains no normative SC-002 encoding, census, registry count, or recovery state copy.
 16. **Recovery is never a status-only dead end.** `VD2-SC002-RECOVERY` requires every emitted
     action to resolve to an exact invocation or an owned versioned runbook section and binds
     the resulting state transition. T599 separately owns
-    `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping;
-    T220 blocks release on missing or broken mappings. Recovery uses only the existing broker
-    unit and preserves the daemon-only three-unit architecture.
+    `docs/how-to/host-generation-recovery-v1.md` and the generated public action mapping.
+    The former T220 release check is historical and supplies no current gate. Recovery uses
+    only the existing broker unit and preserves the daemon-only three-unit architecture.
 17. **Observed panel values are process metadata, not authentication.** Before prospective
     Track A `make-records`, round-local `observed.json` contains exactly one entry for every
     selected seat and no other seat. Every entry requires `provider`, `model`,

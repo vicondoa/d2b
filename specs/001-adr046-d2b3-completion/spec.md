@@ -229,16 +229,15 @@ The untouched external `ADR-046-resources-network` and committed absence of a pr
 adapter make the historical sole-opt-in result nonconforming and non-authorizing. T070 and
 T071 cannot complete by ratifying it. The required contract is
 `effectiveEastWest = Network.spec.isolation.allowEastWest && d2b.site.allowUnsafeEastWest`;
-both inputs default false. Before T220 may freeze F, an accepted external versioned
-correction and migration must remove every current-facing sole Network-opt-in path and
-regenerate the work-item manifest with T336-T355 retained as authoritative W6 implementation
-under T221 and all four Network/Host combinations assigned there. T220 does not require or
-claim that later implementation or its results. T221 requires the migration and ownership on
+both inputs default false. T220's former freeze predicate is historical only. T221 requires
+the accepted versioned correction and migration to remove every current-facing sole
+Network-opt-in path and retain T336-T355 plus all four Network/Host combinations as W6 work.
+It requires the migration and ownership on
 the fetched Wave 6 base, and T480 revalidates them before every prospective close boundary.
 T604 remains W6 acceptance-only after T336-T355 merge and consumes the already landed
 implementation. A feature-local status,
 declaration-only fixture, fake effect port, historical W4 record, stale sole Network opt-in,
-or pre-T220 reassignment of T336-T355 cannot unblock any boundary.
+or reassignment of T336-T355 outside W6 cannot unblock any boundary.
 
 The removal generation deletes only `Device/acceptance-tpm`. Its
 `device-tpm.d2bus.org/state-preserved` finalizer MUST set the owned swtpm Process to stopped,
@@ -605,44 +604,26 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   T479/T480 bind it to F6 together with the
   `Provider/runtime-cloud-hypervisor` Guest result. Actionable refusals remain separate
   negative cases and cannot satisfy either positive story.
-  Independently, before T220 freezes F, the accepted external Network contract/work-item
-  amendment and double-opt-in migration MUST be ancestors of F and MUST remove every
-  current-facing sole Network-opt-in contract path. The regenerated manifest MUST retain
-  T336-T355 as authoritative W6 implementation under T221 and assign all four Network/Host
-  combinations there. Production implementation and four-case results remain W6 work and are not T220
-  evidence. T604 consumes the merged W6 implementation as acceptance evidence and is not an
-  eighth Wave 5 evidence-profile member.
-  Direct `WatchService` calls, fixed
-  or fake endpoints, test-only subject injection, stale evidence from an older tree, and
-  historical proof artifacts are not evidence for this gate. T220 MUST converge all slice and
-  integrator-owned generated-artifact changes, including T605/T595/T599 reconciliation and
-  the full drift gate, before freezing final candidate F. Exact-candidate evidence MUST use
-  this closed feature-local `EvidenceRecord.validation` set:
+  The historical Wave 5 plan assigned T220 convergence and the following closed
+  `EvidenceRecord.validation` set:
   `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`,
   `system-core-handler-contract`, `resource-plane-rss-owner-fanin`, `wave5-removal-proofs`, and
-  `cli-reference-conformance`. T600 owns the first four and T601 owns the final three. Before F freezes,
-  T589 MUST implement one hermetic closed-profile validator
-  used by panel-request/panel-attest, seal, and merge-eligibility, with negative tests for missing, extra,
-  duplicate, unknown, wrong-lane, and conflated mappings. T602 MUST invoke that validator and
-  MUST require all seven records to bind F and F's tree. Before F is final, T220 MUST create
-  exactly one nonbinding `/d2b-panel-round plan` lifecycle with one stable discovery ledger.
-  For each integrated provisional candidate and each fix, it MUST rerun deterministic
-  selection against the current candidate, preserve that lifecycle and ledger, and allow the
-  selected roster only to widen. The first selected roster performs the lifecycle's sole
-  comprehensive discovery. Every provisional candidate and fix then receives scoped
-  verification with the full stable ledger, responses, self-verification, fix delta, and full
-  candidate. T220 MUST NOT rerun comprehensive discovery or create a successor lifecycle.
-  Only unanimous scoped verification may freeze final F for T600-T602. This loop issues no
-  binding delivery request. Wave 5's retained `panel-request.json` consumed its sole binding
-  request with zero attestations and no seal. The exact delivery validator/tooling contract,
-  under the generic Constitution 3.1.0 disposition, accepts that state only as closed history
-  through merged Wave 5 commit
+  `cli-reference-conformance`. T600 was assigned the first four and T601 the final three.
+  T589-T602 remain unchecked historical planning records and authorize no current validator
+  run, convergence, evidence import, host-continuity execution, or close action.
+
+  Wave 5's retained `panel-request.json` consumed its sole binding request with zero
+  attestations and no seal. The exact delivery validator/tooling contract, under the generic
+  Constitution 3.1.0 disposition, accepts that state only as closed history through merged
+  Wave 5 commit
   `177235ed37188b3be87525e7f016fb43401574c5`. T219 records that historical disposition and
   performs no binding or close action. No retained-state fixture, current panel, replacement
   candidate, second request, retroactive attestation, reconstructed seal, or recovery
   transition may mutate or complete Wave 5. T603's historical planning and accounting text
   remains evidence only and is not a prerequisite for the one-time Wave 6 predecessor
-  disposition. T221, not T219, is the next executable gate.
+  disposition. Historical T219 has no executable action. T221 requires the accepted
+  double-opt-in Network contract and settled T336-T355 W6 ownership on its exact fetched
+  base; T479/T480 own the prospective implementation evidence and close checks.
 
 - **FR-073**: D106 remains binding in the completed production path.
   `d2b-resource-store` and `d2b-resource-store-redb` MUST NOT deserialize, import, compile,
@@ -1441,7 +1422,11 @@ carries the object verbatim rather than copying selected fields into the task ro
   handlers; a boolean substitute fails the test. In the multi-Zone startup and shutdown
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
-- **SC-034**: At clean base A, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If all T073-T218 obligations have qualifying evidence, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records the exact checkbox-only change in dedicated commit C. The editor receipt and Git history are the sole authority. Any open row leaves all 147 boxes unchanged. T603 owns no source, changelog fragment, scratch receipt, digest chain, resume protocol, or sidecar. Before T589, fresh analysis and a new selected-roster lifecycle must bind clean C and the changed snapshot. The exact delivery validator/tooling disposition does not claim that this historical accounting sequence completed; T219 records only the exact one-time Wave 5 disposition and no seal.
+- **SC-034**: The historical Wave 5 plan described a clean-base analysis, selected-roster
+  lifecycle, all-or-nothing T603 editor batch, checkbox-only commit C, and fresh post-edit
+  review. Those unchecked records are read-only history and are not reconstructed. T219
+  records only the exact one-time Wave 5 disposition and no seal; T221 is the next executable
+  gate.
 
 - **SC-035**: The exact W6 close candidate has one candidate-bound passing FR-075 result for
   `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and built

@@ -248,9 +248,8 @@ Version 2 and the generated traceability table MUST publish these stable identif
 
 The generated JSON is the machine authority and the generated Markdown is its review view.
 Generation MUST fail on a missing, duplicate, extra, or ownerless identifier and drift gates
-MUST compare both artifacts byte-for-byte. T589 implements only rows assigned to T589. T604
-emits only its W6 acceptance evidence and T479 imports that exact-F6 result. T220 verifies
-every generated Wave 5 row. No feature-local field list, count, digest recipe, state table,
+MUST compare both artifacts byte-for-byte. T589/T220 are historical planned consumers only.
+T604 emits only its W6 acceptance evidence and T479 imports that exact-F6 result. No feature-local field list, count, digest recipe, state table,
 fixture registry, or transition matrix may substitute for generated rows.
 
 ---
@@ -323,7 +322,7 @@ It matches every root entry and digest above, rejects every extra or missing art
 rechecked at Wave 6 snapshot/entry, panel request, seal, and merge eligibility.
 
 No transition leaves this historical state. There is no recovery action, second request,
-retroactive attestation, reconstructed seal, replacement candidate, or import record. T219
-records the historical disposition only. T221 consumes the production guard result before
+retroactive attestation, reconstructed seal, replacement candidate, or import record.
+Historical T219 records the disposition only. T221 consumes the production guard result before
 the ordinary prospective Wave 6 plan panel. The guard provides process-integrity and signoff
 tracking; it is not authentication and does not establish a security boundary.

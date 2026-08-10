@@ -96,6 +96,55 @@ Only after that succeeds, run `/d2b-panel-round plan` against the exact base, en
 and current feature snapshot. T221 remains incomplete until every selected seat signs off
 with zero recommendations.
 
+### 1c. Reject actionable retired-phase prose
+
+Run this read-only check after any feature-artifact edit. Explicitly marked historical blocks
+and lines are allowed; actionable T219/T220/T600 instructions and round-threshold deferral
+rules are not.
+
+<!-- STALE-PROSE-CHECK-BEGIN -->
+
+```bash
+set -eu
+
+FEATURE_DIR="specs/001-adr046-d2b3-completion"
+ACTION='(T219|T220|T600).{0,120}(MUST|run|consume|refuse|require|revalidate|verify|freeze|emit|import|reopen|block)|(MUST|run|consume|refuse|require|revalidate|verify|freeze|emit|import|reopen|block).{0,120}(T219|T220|T600)'
+HISTORICAL='historical|former|retired|read-only|no current|does not|has no|performs no|authorizes no|unchecked'
+
+current_hits="$(
+  rg -n -i "$ACTION" "$FEATURE_DIR" -g '*.md' -g '!tasks.md' -g '!plan.md' -g '!quickstart.md' |
+    rg -v -i "$HISTORICAL" || true
+)"
+test -z "$current_hits" || {
+  printf '%s\n' "$current_hits"
+  exit 1
+}
+
+for file in tasks.md plan.md quickstart.md; do
+  current_hits="$(
+    awk '
+      /RETIRED-W5-.*-BEGIN/ { retired = 1; next }
+      /RETIRED-W5-.*-END/ { retired = 0; next }
+      /STALE-PROSE-CHECK-BEGIN/ { retired = 1; next }
+      /STALE-PROSE-CHECK-END/ { retired = 0; next }
+      !retired { print }
+    ' "$FEATURE_DIR/$file" |
+      rg -n -i "$ACTION" |
+      rg -v -i "$HISTORICAL" || true
+  )"
+  test -z "$current_hits" || {
+    printf '%s\n' "$current_hits"
+    exit 1
+  }
+done
+
+! rg -n -i \
+  'round nine.*\bMAY\b|eight panel rounds.*\bMAY\b|^## Standing obligations$' \
+  "$FEATURE_DIR/deferred-findings.md"
+```
+
+<!-- STALE-PROSE-CHECK-END -->
+
 ### 2. Launch every ready, file-disjoint slice together
 
 Anti-serialization is a positive obligation, not permission (FR-028). For W2 that means both
@@ -604,21 +653,12 @@ Any content change before the binding panel request invalidates validation evide
 re-snapshot, and rerun before requesting the panel. The retained Wave 5 request is historical
 and is never re-attested, replaced, or used for successor admission.
 
-### Recover an SC-002 sidecar incident
+### Historical SC-002 recovery plan
 
-This quickstart does not restate the protocol. Recovery is unavailable until accepted
-Version 2 `ADR-046-validation-and-delivery` and its generated
-`ADR-046-validation-and-delivery-traceability.{json,md}` artifacts provide complete rows for
-`VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, and `VD2-SC002-RECOVERY`, and T589 installs
-the commands those rows own. Before then, stop and do not infer a command from historical
-feature prose.
-
-After those gates pass, use only the exact invocation or versioned runbook anchor resolved by
-the generated traceability row for the emitted action. A missing row, broken link, unknown
-action, or action without an owned invocation is a release-blocking refusal. The runbook is
-`docs/how-to/host-generation-recovery-v1.md`; T599 owns it and
-`docs/reference/host-generation-recovery-actions-v1.json`, while T220 verifies complete
-emitted-action coverage.
+The former T589/T599/T220 recovery sequence is read-only historical planning evidence. It is
+not an executable runbook and supplies no current command, gate, or refusal. Current work must
+obtain any recovery action from an accepted current generated traceability row owned by a
+prospective task after T221; nothing in the retired Wave 5 plan may be inferred or run.
 
 ## Operator loop: prove the plane works
 

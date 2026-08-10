@@ -1680,13 +1680,12 @@ that trait and owns the production implementation in
 `packages/d2bd/src/network_effect_adapter.rs`, with serialized post-T595 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
 broker operations and performs no direct host mutation. Current generated rows T336-T355
-place that work in W6, and final R9 preserves that ownership. The external
-contract/work-item-manifest blocker is narrower: before T220 freezes F, the accepted amendment
-must remove every current-facing sole Network-opt-in path, install the double-opt-in
-migration, and regenerate T336-T355 plus all four Network/Host production cases as W6 work
-under T221. T604 remains W6 acceptance-only after those rows merge and consumes the landed
-path. T220 and T219 refuse stale sole-opt-in contract or ownership state; T604 and T479 refuse
-missing W6 implementation or production evidence.
+place that work in W6, and final R9 preserves that ownership. The former T220/T219 blocker is
+historical. T221 now requires the accepted amendment to remove every current-facing sole
+Network-opt-in path, install the double-opt-in migration, and retain T336-T355 plus all four
+Network/Host production cases as W6 work. T604 remains W6 acceptance-only after those rows
+merge and consumes the landed path. T479/T480 own the prospective implementation and evidence
+refusals.
 
 ### 16.3 Credential Provider work is in progress, not complete
 
@@ -2295,10 +2294,10 @@ the existing paired `docs/reference/resource-plane-runtime.md`. It treats
 `packages/xtask/src/zone_schema.rs` and
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` as read-only proof inputs and must
 show that generator output remains byte-identical because the desired Zone spec is unchanged.
-T605 completes on those owned pre-consumer artifacts and does not run the full drift gate.
-T595 consumes the variants in the production emitter; T599 reconciles downstream consumers;
-T220 reconciles integrator-owned generated spec manifests and the full drift gate; T596,
-T600-T602, and T219 consume the coordinated list-shape evidence after those stages.
+The historical plan assigned T605 the pre-consumer artifacts, T595 the production emitter,
+T599 downstream reconciliation, T220 generated-manifest/full-drift convergence, and
+T596/T600-T602/T219 list-shape evidence consumption. Those unchecked or disposition-only
+records are read-only history and authorize no current run, evidence import, or close action.
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
