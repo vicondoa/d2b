@@ -619,8 +619,9 @@ impl DispatchLedger {
             )));
         }
         let expected = W6_GROUPS.into_iter().collect::<BTreeSet<_>>();
+        let expected_order = W6_GROUPS;
         let mut actual = BTreeSet::new();
-        for entry in &self.entries {
+        for (index, entry) in self.entries.iter().enumerate() {
             validate_bounded_string(&entry.group, "dispatch ledger group")?;
             if entry.group.chars().any(char::is_control) {
                 return Err(DeliveryError::new(
@@ -639,6 +640,11 @@ impl DispatchLedger {
                     entry.group
                 )));
             }
+            if entry.group != expected_order[index] {
+                return Err(DeliveryError::new(
+                    "dispatch ledger entries must be in canonical group order",
+                ));
+            }
             validate_hash(&entry.head_oid, "dispatch ledger head OID")?;
             CandidateId::parse(entry.candidate_id.as_str())?;
             if let Some(dispatch_id) = &entry.dispatch_id {
@@ -646,6 +652,16 @@ impl DispatchLedger {
             }
             for evidence_id in &entry.completion_evidence_ids {
                 validate_identifier(evidence_id, "completion evidence identifier")?;
+            }
+            if entry
+                .completion_evidence_ids
+                .windows(2)
+                .any(|window| window[0] >= window[1])
+            {
+                return Err(DeliveryError::new(format!(
+                    "completion evidence for group {} must be sorted and unique",
+                    entry.group
+                )));
             }
             match entry.state {
                 DispatchState::NotLaunched => {
@@ -753,6 +769,15 @@ impl DispatchLedger {
         self.ready_groups_with_graph(plan_approved, &BTreeMap::new())
     }
 
+    pub fn ready_groups_for_checkout(
+        &self,
+        plan_approved: bool,
+        repository_root: &Path,
+    ) -> Result<Vec<String>> {
+        let prerequisites = graph_group_prerequisites(repository_root)?;
+        self.ready_groups_with_graph(plan_approved, &prerequisites)
+    }
+
     pub fn ready_groups_with_graph(
         &self,
         plan_approved: bool,
@@ -761,6 +786,60 @@ impl DispatchLedger {
         self.validate()?;
         if !plan_approved {
             return Ok(Vec::new());
+        }
+
+        pub fn graph_group_prerequisites(
+            repository_root: &Path,
+        ) -> Result<BTreeMap<String, BTreeSet<String>>> {
+            let graph: Value =
+                serde_json::from_slice(&fs::read(repository_root.join(GRAPH_PATH)).map_err(
+                    |_| DeliveryError::environment("cannot read the implementation graph"),
+                )?)?;
+            let nodes = graph
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| DeliveryError::new("implementation graph has no nodes"))?;
+            let edges = graph
+                .get("edges")
+                .and_then(Value::as_array)
+                .ok_or_else(|| DeliveryError::new("implementation graph has no edges"))?;
+            let mut groups = BTreeMap::new();
+            for node in nodes {
+                if node.get("kind").and_then(Value::as_str) != Some("work-item")
+                    || node.get("wave").and_then(Value::as_str) != Some("W6")
+                {
+                    continue;
+                }
+                let id = node
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| DeliveryError::new("Wave 6 graph node has no id"))?;
+                let group = node
+                    .get("parallelGroup")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| DeliveryError::new("Wave 6 graph node has no parallel group"))?;
+                groups.insert(id.to_owned(), group.to_owned());
+            }
+            let mut prerequisites = BTreeMap::<String, BTreeSet<String>>::new();
+            for edge in edges {
+                let from = edge.get("from").and_then(Value::as_str);
+                let to = edge.get("to").and_then(Value::as_str);
+                let (Some(from), Some(to)) = (from, to) else {
+                    return Err(DeliveryError::new(
+                        "implementation graph edge has no endpoints",
+                    ));
+                };
+                let (Some(from_group), Some(to_group)) = (groups.get(from), groups.get(to)) else {
+                    continue;
+                };
+                if from_group != to_group {
+                    prerequisites
+                        .entry(to_group.clone())
+                        .or_default()
+                        .insert(from_group.clone());
+                }
+            }
+            Ok(prerequisites)
         }
         let complete = |group: &str| {
             self.entry(group)
@@ -1020,7 +1099,11 @@ pub fn dispatch_group(
     ledger.validate_for_candidate(&digests.candidate_id, head)?;
     ledger.require_pre_t221_state()?;
     require_plan_receipt(material, repository_roots, None, None)?;
-    let ready = ledger.ready_groups(true)?;
+    let ready = repository_roots
+        .get("github.com/vicondoa/d2b")
+        .map(|root| ledger.ready_groups_for_checkout(true, root))
+        .transpose()?
+        .unwrap_or(ledger.ready_groups(true)?);
     if ready != vec!["feature-local:w6-shared-prep".to_owned()] {
         return Err(DeliveryError::new(format!(
             "first Wave 6 dispatch is not ready; computed ready groups are {ready:?}"
