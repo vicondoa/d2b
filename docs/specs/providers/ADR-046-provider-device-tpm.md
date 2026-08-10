@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-device-tpm` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 3 |
+| Version | 4 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-device-tpm` crate |
@@ -25,6 +25,8 @@ is a `Guest`. The Provider:
   verified against the Host's observed `tpm2` capability);
 - creates and supervises the per-Device persistent TPM state `Volume`
   (controller-created, `managedBy: controller`, owned by the `Device`);
+- completes or resumes the crash-safe legacy swtpm state/marker migration
+  before the first state-Volume ensure;
 - creates and supervises the long-lived `swtpm socket` worker `Process`;
 - creates and supervises a mandatory pre-start flush `EphemeralProcess`
   before each swtpm activation cycle to prevent stale session handles
@@ -90,6 +92,7 @@ integration/
   marker_tamper.rs
   guest_endpoint.rs
   lifecycle_restart.rs
+  legacy_state_migration.rs
 ```
 
 ---
@@ -254,9 +257,12 @@ reconcile loops and call the broker for privileged effects. This means:
 
 - No socket path, filesystem path, UID integer, GID integer, pidfd, or broker
   wire type ever crosses the controller/port boundary.
-- `PrepareSwtpmDir` and `SpawnRunner` are invoked exclusively by `volume-local`
-  and `system-minijail` respectively - never by the device-tpm controller.
+- `MigrateLegacySwtpmState`/`PrepareSwtpmDir` and `SpawnRunner` are invoked
+  exclusively by `volume-local` and `system-minijail` respectively - never by
+  the device-tpm controller.
 - The broker remains the sole audited executor of all privileged effects.
+- Broker filesystem, lock, namespace, and spawn operations append and sync
+  their path-free audit result before reporting success.
 - The controller can be tested against `FakeTpmEffectPort` without any store,
   broker, or host.
 
@@ -271,7 +277,17 @@ policy violation.
 /// No path, UID, GID, pidfd, socket name, or broker wire type is accepted
 /// or returned.
 pub trait TpmEffectPort: Send + Sync + 'static {
+    /// Complete or resume the one-time legacy swtpm state migration before the
+    /// first Volume ensure. The port accepts only opaque trusted inventory IDs.
+    async fn migrate_legacy_state(
+        &self,
+        device_uid: &DeviceUid,
+        execution_ref: &ResourceRef,
+        legacy_state_id: &LegacyTpmStateId,
+    ) -> Result<LegacyMigrationOutcome, TpmEffectError>;
+
     /// Create or verify the persistent TPM state Volume for this Device.
+    /// Refuses unless migrate_legacy_state has a terminal successful outcome.
     /// Returns the opaque VolumeId once the Volume is Ready.
     async fn ensure_state_volume(
         &self,
@@ -322,9 +338,9 @@ pub trait TpmEffectPort: Send + Sync + 'static {
 ```
 
 All opaque/internal IDs (`DeviceUid`, `VolumeId`, `ProcessId`,
-`EphemeralProcessId`) and typed refs (`ResourceRef`, `EndpointRef`) are bounded
-newtypes in `d2b-contracts`. They carry no path, UID integer, or network
-address.
+`EphemeralProcessId`, `LegacyTpmStateId`) and typed refs (`ResourceRef`,
+`EndpointRef`) are bounded newtypes in `d2b-contracts`. They carry no path,
+UID integer, or network address.
 
 ### 5.3 Port implementation
 
@@ -501,6 +517,56 @@ re-creation.
   ProviderStateSet extensions that do not apply to a Device-owned Volume.
 - No automatic snapshots. Restoring a TPM state snapshot appears as device
   tampering to any Identity Provider and forces re-enrollment.
+
+### 7.5 Crash-safe legacy-state migration before first ensure
+
+A Device mapped from a pre-v3 `tpm.enable` declaration must complete one
+one-time migration before `TpmEffectPort.ensure_state_volume` may run. The
+controller calls `migrate_legacy_state` with an opaque
+`LegacyTpmStateId` supplied by the trusted cutover inventory. The Provider
+never receives a source path, destination path, marker path, lock path, uid,
+gid, mode, or copy command.
+
+The port creates or adopts exactly one Device-owned
+`EphemeralProcess` using the signed `swtpm-legacy-state-migrate` template.
+That rootless worker has no mounts or filesystem capability; its LaunchTicket
+contains only an opaque migration portal. The core/volume-local adapter behind
+that portal dispatches the broker operation, and the worker returns only the
+closed migration outcome. A second migration process for the same Device is
+an ambiguity and is quarantined.
+
+The core/volume-local adapter dispatches the typed broker operation
+`MigrateLegacySwtpmState`. The broker:
+
+1. Acquires the per-Device migration lock in the ADR 0034 total order using
+   `O_NOFOLLOW|O_CLOEXEC` and `F_OFD_SETLK`.
+2. Opens source, destination parent, legacy marker, journal, and temporary
+   entries relative to trusted anchored dirfds with
+   `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)`.
+   It verifies exact type, owner, mode, link count, Device binding, and that
+   no swtpm/VMM process is using the source.
+3. Writes and syncs a create-exclusive migration journal before mutation. Its
+   closed phases are `prepared`, `payload-staged`, `marker-published`,
+   `committed`, and `source-retired`.
+4. Uses an atomic rename when source and destination share a filesystem.
+   Otherwise it copies into a create-exclusive temporary destination, syncs
+   every regular file and directory, verifies the complete tree and identity
+   digest, atomically renames the staged directory, and syncs the destination
+   parent.
+5. Re-keys the root-owned provisioning marker only after the payload is
+   durable, then syncs the marker file and parent. It records `committed` and
+   syncs the journal before the old source may be removed.
+6. Resumes idempotently from the durable journal after crash, broker restart,
+   response loss, or power loss. Conflicting source/destination/marker state
+   is quarantined; the broker never guesses and never provisions an empty TPM.
+
+The only successful outcomes are `migrated`, `already-migrated`, and
+`not-applicable`. `not-applicable` is permitted only when the trusted inventory
+states the Device was never provisioned and both legacy state and marker are
+absent. A baseline TPM with a missing marker, an ambiguous candidate, a
+foreign file, lock contention, audit failure, or sync failure returns a typed
+failure and prevents the first ensure. Every transition emits and syncs a
+path-free broker `OpAuditRecord` before success is visible.
 
 ---
 
@@ -919,33 +985,40 @@ trigger: spec-generation-changed | dependency-changed | startup-relist | schedul
  3. Resolve: executionRef = settings.executionRef ?? config.controllerExecutionRef
  4. Probe Host.status.capabilities for tpm2.
     - Absent → Device Degraded; condition TpmCapabilityAbsent; requeue 60s.
- 5. TpmEffectPort.ensure_state_volume(device_uid, executionRef)
+ 5. Before the first ensure, call
+    TpmEffectPort.migrate_legacy_state(device_uid, executionRef, legacyStateId).
+    - migrated/already-migrated/not-applicable → persist the bounded outcome
+      in the core Operation ledger; proceed.
+    - pending → Device Pending; condition LegacyStateMigrationPending; return.
+    - failed/ambiguous → Device Failed; condition
+      LegacyStateMigrationFailed; do not call ensure_state_volume.
+ 6. TpmEffectPort.ensure_state_volume(device_uid, executionRef)
     - Volume not Ready → Device Pending; condition VolumeNotReady; return pending.
     - Volume.status.markerStatus ∈ {missing, replaced}
       → Device Failed; condition TpmStateCompromised; stop swtpm; return.
- 6. Check flush EphemeralProcess:
-    - Succeeded: proceed to step 8.
+ 7. Check flush EphemeralProcess:
+    - Succeeded: proceed to step 9.
     - Failed: Device Failed; condition TpmFlushFailed; return.
     - Pending/Running: Device Pending; return pending (watch fires on completion).
- 7. No prior flush (or prior flush cleaned up after TTL):
+ 8. No prior flush (or prior flush cleaned up after TTL):
     a. Set swtpm Process desiredLifecycle = stopped (if running).
     b. Wait for swtpm stopped (bounded: drainTimeout + 30s).
     c. TpmEffectPort.request_flush_process(device_uid, swtpm_process_id_or_none, executionRef)
     d. Watch flush EphemeralProcess status.
-    e. Succeeded → proceed to step 8.  Failed → Device Failed; condition TpmFlushFailed.
- 8. TpmEffectPort.request_swtpm_process(device_uid, volume_id, executionRef)
+    e. Succeeded → proceed to step 9.  Failed → Device Failed; condition TpmFlushFailed.
+ 9. TpmEffectPort.request_swtpm_process(device_uid, volume_id, executionRef)
     - Set desiredLifecycle = running.
     - Pending/Launching → Device Pending; return pending.
     - Failed → Device Failed; condition TpmProcessFailed.
- 9. TpmEffectPort.watch_tpm_endpoint(swtpm_process_id) → EndpointRef
-10. UpdateStatus (expected revision):
+10. TpmEffectPort.watch_tpm_endpoint(swtpm_process_id) → EndpointRef
+11. UpdateStatus (expected revision):
     - phase = Ready
     - status.resource.present = true; status.resource.health = healthy
     - status.resource.endpointRefs.tpmEndpointRef = EndpointRef (no path or raw locator)
     - status.provider.details.tpm.markerStatus from Volume.status
     - status.provider.details.tpm.stateVolumeRef / swtpmProcessRef / lastFlushRef (ResourceRefs)
-11. Emit Claim for holderRef from Device ownerRef or claim request.
-12. Return converged.
+12. Emit Claim for holderRef from Device ownerRef or claim request.
+13. Return converged.
 ```
 
 Non-blocking steps complete in ≤ 10 s. Long-running waits (Volume Ready,
@@ -984,6 +1057,7 @@ at 300 s before `failed-terminal` with explicit audit record.
 | Condition type | reason codes |
 | --- | --- |
 | `TpmCapabilityVerified` | `tpm-capability-absent`, `host-not-ready` |
+| `LegacyStateMigrated` | `legacy-state-migration-pending`, `legacy-state-migration-failed`, `legacy-state-migration-ambiguous` |
 | `StateVolumeReady` | `volume-not-ready`, `volume-failed`, `volume-pending` |
 | `MarkerVerified` | `marker-missing`, `marker-replaced`, `marker-unknown` |
 | `FlushSucceeded` | `flush-process-failed`, `flush-process-pending`, `flush-start-deadline-exceeded` |
@@ -996,6 +1070,10 @@ at 300 s before `failed-terminal` with explicit audit record.
 | Code | Retryable | Description |
 | --- | --- | --- |
 | `tpm-capability-absent` | yes | Host capability `tpm2` not observed. |
+| `legacy-state-migration-failed` | no | Crash-safe legacy payload/marker migration failed before first ensure. |
+| `legacy-state-migration-ambiguous` | no | Source, destination, marker, journal, or live-owner evidence is ambiguous; state is quarantined. |
+| `legacy-state-marker-missing` | no | Trusted inventory expected a provisioned legacy TPM but its root-owned marker is absent. |
+| `legacy-state-lock-contended` | yes | Another migration owns the anchored close-on-exec OFD lock; wait and retry. |
 | `volume-marker-missing` | no | Marker absent after prior provision. |
 | `volume-marker-replaced` | no | st_ino mismatch: swtpm directory replaced. |
 | `flush-process-failed` | no | `swtpm_ioctl -i` exited non-zero or timed out. |
@@ -1020,6 +1098,7 @@ audit payload.
 
 | Event | Stable kind | Payload fields |
 | --- | --- | --- |
+| Legacy migration transition | `device-tpm/legacy-state-migration` | `zone`, `device_uid`, `phase`, `outcome`, `correlation_id`; broker effect audit remains separate |
 | Device first provision | `device-tpm/state-volume-created` | `zone`, `device_uid` (opaque), `volume_uid` (opaque) |
 | Marker verified on start | `device-tpm/marker-verified` | `zone`, `device_uid`, `volume_uid` |
 | Marker fail-closed | `device-tpm/marker-fail-closed` | `zone`, `device_uid`, `volume_uid`, `marker_status` |
@@ -1035,6 +1114,11 @@ audit payload.
 
 `device_uid`, `volume_uid`, `process_uid`, `holder_ref` are opaque
 store-assigned UIDs - not human names, filesystem paths, or socket addresses.
+
+The resource events above do not replace broker effect audit.
+`MigrateLegacySwtpmState`, `PrepareSwtpmDir`, and SpawnRunner each append and
+sync a typed path-free `OpAuditRecord` before returning success. Audit append
+or sync failure is a failed effect.
 
 ---
 
@@ -1143,15 +1227,20 @@ TpmEffectPort calls are sequential; no concurrent calls for the same Device UID.
 
 After controller restart:
 1. Re-list all Device resources.
-2. For each Ready/Degraded Device: `ensure_state_volume` and
+2. For each Device without a completed migration outcome, resume
+   `migrate_legacy_state` from the broker journal before any Volume ensure.
+3. For each Ready/Degraded Device: `ensure_state_volume` and
    `request_swtpm_process` use `Get` semantics (resources already exist).
-3. If swtpm Process is already Ready: re-fetch the TPM EndpointRef and
+4. If swtpm Process is already Ready: re-fetch the TPM EndpointRef and
    publish `tpmEndpointRef`; no new flush.
-4. New flush issued only if swtpm Process is not running or has exited.
+5. New flush issued only if swtpm Process is not running or has exited.
 
 ### 16.4 Idempotency
 
 All controller effects are idempotent:
+- `migrate_legacy_state`: resumes the durable broker journal and returns the
+  same terminal outcome; it never repeats a committed move or replaces an
+  ambiguous source.
 - `ensure_state_volume`: `Create` is a no-op if Volume exists with the same
   name and owner. Port returns existing `VolumeId`.
 - `request_swtpm_process`: `Create` is a no-op if Process already exists.
@@ -1227,12 +1316,19 @@ Current: `d2b.vms.corp-vm.tpm.enable = true` (in `nixos-modules/components/tpm.n
 v3: the Nix Device declaration in §17.1 replaces this option. Migration steps:
 - Remove `d2b.vms.<vm>.tpm.enable`.
 - Declare Device resource per §17.1.
+- The trusted cutover inventory supplies an opaque `LegacyTpmStateId`. Before
+  the first `ensure_state_volume`, the controller creates or adopts the
+  one-time migration EphemeralProcess, which requests only the typed
+  `MigrateLegacySwtpmState` effect described in §7.5.
 - The existing `/var/lib/d2b/vms/<vm>/swtpm/` directory is migrated to the
-  controller-created Volume path via a one-time migration EphemeralProcess.
+  controller-created Volume path through the crash-safe journal. A restart or
+  response loss resumes; it never starts an empty replacement.
 - The existing provisioning marker in `swtpm-markers/<vm>` must be preserved
   (re-keyed by volume-local from the old basename to the new `device_uid`-based
   name). A missing or dropped marker fails the Volume provision fail-closed -
   no silent re-creation.
+- The first Volume ensure is mechanically blocked until migration reports
+  `migrated`, `already-migrated`, or a proved `not-applicable`.
 
 ---
 
@@ -1242,6 +1338,7 @@ v3: the Nix Device declaration in §17.1 replaces this option. Migration steps:
 | --- | --- | --- |
 | `SwtpmArgvInput`, `SwtpmIoctlFlushInput` | `packages/d2b-host/src/swtpm_argv.rs` | Extract into `d2b-provider-device-tpm/src/`; remove caller-supplied binary path fields |
 | `PrepareSwtpmDir` | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` | Retained; invoked only by `volume-local`; device-tpm controller never calls it |
+| Legacy swtpm directory and marker | `/var/lib/d2b/vms/<vm>/swtpm/`, `/var/lib/d2b/swtpm-markers/<vm>` | Adopted through crash-safe `MigrateLegacySwtpmState` before first Volume ensure; never silently recreated |
 | `SpawnRunner { role: Swtpm }` | `packages/d2b-priv-broker/src/ops/spawn_runner.rs` | Retained; invoked only by `system-minijail` |
 | `ProcessRole::Swtpm`, `::SwtpmPreStartFlush` | `packages/d2b-core/src/processes.rs` | Retire after Provider parity |
 | `minijail_swtpm_video.rs` | `packages/d2b-contract-tests/tests/` | Preserved; proves zero caps, `w1-swtpm`, user-NS long-lived only |
@@ -1281,10 +1378,10 @@ policy test must pass.
 | Current source | `PrepareSwtpmDir` in `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` and `SpawnRunner { role: Swtpm }` in `packages/d2b-priv-broker/src/ops/spawn_runner.rs` remain privileged executors, but the controller must not import broker crates |
 | Reuse action | wrap |
 | Destination | packages/d2b-provider-device-tpm/src/effect_port.rs; packages/d2b-provider-device-tpm/tests/effect_fake.rs; production implementation in the framework-internal core Device effect adapter |
-| Detailed design | TpmEffectPort and FakeTpmEffectPort: define the effect trait, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters. |
+| Detailed design | TpmEffectPort and FakeTpmEffectPort: define the effect trait, including opaque `migrate_legacy_state` before first ensure, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs, migration outcomes, and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters. |
 | Integration | Device controller calls `TpmEffectPort`; the core implementation resolves ResourceAPI/ComponentSession state and maps Volume and Process effects to broker operations. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
-| Validation | `tests/effect_fake.rs`; static proof that non-test files do not import `d2b_priv_broker` |
+| Validation | `tests/effect_fake.rs` proves migration precedes ensure and carries no path/uid/gid/mode/command; static proof that non-test files do not import `d2b_priv_broker` |
 | Removal proof | Direct broker references in controller/daemon TPM paths are superseded by the effect-port/resource-provider boundary; final deletion is ADR046-device-tpm-013 |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1296,14 +1393,14 @@ Implement `TpmEffectPort` trait, typed TPM EndpointRef handoff, and
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P0; blocked by ADR046-device-tpm-002; owner: device-tpm controller FSM |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-002 and ADR046-device-tpm-004; owner: device-tpm controller FSM |
 | Current source | Current direct daemon/broker swtpm lifecycle call sites in `packages/d2bd/src/*` are superseded; controller algorithm is specified in §11.1 |
 | Reuse action | replace |
 | Destination | packages/d2b-provider-device-tpm/src/controller.rs; packages/d2b-provider-device-tpm/tests/controller_fsm.rs |
-| Detailed design | Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, covering happy path, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained; emit §14 metrics with only closed `phase`/`outcome`/`status` semantics and no Zone/resource-name-derived label. Primary reuse disposition: `replace`. Preserved source-plan detail: replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status. |
+| Detailed design | Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, making terminal legacy migration outcome a hard predecessor of the first `ensure_state_volume`; cover happy path, migration pending/failure/ambiguity, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained; emit §14 metrics with only closed `phase`/`outcome`/`status` semantics and no Zone/resource-name-derived label. Primary reuse disposition: `replace`. Preserved source-plan detail: replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status. |
 | Integration | Resource watches drive the controller; controller creates/observes Volume, Process, EphemeralProcess, and Endpoint resources through `TpmEffectPort`; Device status/finalizers expose outcomes to the ResourceAPI. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
-| Validation | `tests/controller_fsm.rs` covering happy path, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior; `tests/metrics_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and Device/Zone-name canary absence |
+| Validation | `tests/controller_fsm.rs` covering happy path, strict migrate-before-ensure order, migration pending/failure/ambiguity with zero ensure calls, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior; `tests/metrics_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and Device/Zone-name canary absence |
 | Removal proof | Direct daemon swtpm lifecycle logic is removable after this Provider reconcile FSM reaches parity and ADR046-device-tpm-013 removes the old call sites |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1319,11 +1416,11 @@ swtpm maxRestarts, finalizer (Process deleted; Volume retained).
 | Dependency/owner | P0; blocked by ADR046-device-tpm-001; owner: device-tpm resource builders |
 | Current source | `nixos-modules/components/tpm.nix` declares TPM enablement today; §17.3 defines migration from the existing swtpm directory and marker |
 | Reuse action | replace |
-| Destination | packages/d2b-provider-device-tpm/src/resources.rs; packages/d2b-provider-device-tpm/tests/volume_create.rs |
-| Detailed design | Controller-created Volume spec: implement `build_tpm_state_volume_spec` with `cleanupPolicy: never`, `repairPolicy: fail-closed`, `adoptionPolicy: quarantine-on-ambiguity`, `sensitivity: secret-adjacent`, required invariants, `source.sourceId`, no `hostPath`, no top-level identityMarker/persistenceClass/quotaBytes/stateSchema, `ownerRef: Device/<name>`, `managedBy: controller`, empty attachments, and `quota: null`. Primary reuse disposition: `replace`. Preserved source-plan detail: replace VM-level TPM option/state path with controller-created Device-owned Volume spec. |
+| Destination | packages/d2b-provider-device-tpm/src/{resources.rs,migration.rs}; packages/d2b-provider-device-tpm/tests/{volume_create.rs,legacy_state_migration.rs}; core/volume-local adapter and typed broker `MigrateLegacySwtpmState` operation |
+| Detailed design | Implement `build_tpm_state_volume_spec` with `cleanupPolicy: never`, `repairPolicy: fail-closed`, `adoptionPolicy: quarantine-on-ambiguity`, `sensitivity: secret-adjacent`, required invariants, `source.sourceId`, no `hostPath`, no top-level identityMarker/persistenceClass/quotaBytes/stateSchema, `ownerRef: Device/<name>`, `managedBy: controller`, empty attachments, and `quota: null`. Also implement §7.5's opaque migrate-before-ensure contract: anchored no-follow source/destination/marker/journal/lock resolution; exact owner/mode/type/link-count and live-owner checks; close-on-exec OFD lock; create-exclusive phased journal synced before mutation; same-filesystem rename or verified fully synced cross-filesystem staging; marker re-key after durable payload; destination-parent, marker-parent, and journal sync; commit before source retirement; idempotent crash/restart/response-loss resume; quarantine on any ambiguity; durable path-free broker audit before success. Primary reuse disposition: `replace`. Preserved source-plan detail: replace VM-level TPM option/state path with crash-safe adoption into the controller-created Device-owned Volume. |
 | Integration | Device controller creates the TPM data Volume; `volume-local` materializes/protects state and marker; swtpm Process mounts the Volume; Guest runtime receives only EndpointRefs. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
-| Validation | `tests/volume_create.rs` proving every canonical Volume field and forbidden field listed in this item |
+| Validation | `tests/volume_create.rs` proves every canonical Volume field and forbidden field. `tests/legacy_state_migration.rs` and broker integration fault injection cover a crash after every journal phase; same- and cross-filesystem paths; symlink/hardlink/wrong-type/owner/mode/link-count; missing marker; live owner; lock contention/inheritance; audit and every file/directory sync failure; response loss; already-migrated replay; proved never-provisioned absence; no empty replacement; migration-before-first-ensure ordering; and zero raw paths in Provider/wire/status/audit. |
 | Removal proof | `nixos-modules/components/tpm.nix` state-path ownership is superseded by the Device-owned Volume once migration and Nix roundtrip are complete |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1573,6 +1670,7 @@ budget.
 | `controller_fsm.rs` | All Device reconcile state transitions; FakeTpmEffectPort |
 | `effect_fake.rs` | FakeTpmEffectPort records all calls; no broker import in crate |
 | `volume_create.rs` | Volume canonical fields: `cleanupPolicy: never`, `repairPolicy: fail-closed`, `sensitivity: secret-adjacent`, correct invariants, no ProviderStateSet extensions |
+| `legacy_state_migration.rs` | Crash-safe journal phases and fault matrix; migration is terminal before first ensure; no raw path authority |
 | `flush_mandatory.rs` | Flush always issued; no skip; no `startupClear`; correct TTLs; no userNamespace |
 | `endpoint_ref.rs` | `tpmEndpointRef` is an EndpointRef; no path or raw locator |
 | `marker_fail_closed.rs` | Marker replaced/missing → Device Failed; no auto-recovery; no second `ensure_state_volume` |
@@ -1590,6 +1688,7 @@ budget.
 | `marker_tamper.rs` | Replace swtpm/ dir → Volume Failed → Device Failed; no auto-recovery |
 | `guest_endpoint.rs` | Guest reads `tpmEndpointRef`; receives socket fd; no path in LaunchTicket |
 | `lifecycle_restart.rs` | Controller restart: adopts swtpm Process; Volume retained; no double-flush |
+| `legacy_state_migration.rs` | Same/cross-filesystem migration, crash/restart/response-loss resume, marker preservation, and ambiguity quarantine |
 
 ### 20.3 Existing contract tests (preserved)
 
@@ -1605,7 +1704,9 @@ budget.
 
 When this Provider reaches `Evidence class: implemented-and-reachable`:
 
-1. Remove `d2b.vms.<vm>.tpm.enable` from `nixos-modules/components/tpm.nix`.
+1. Remove `d2b.vms.<vm>.tpm.enable` from `nixos-modules/components/tpm.nix`
+   only after the crash-safe legacy migration and migrate-before-ensure tests
+   pass.
 2. Retire `ProcessRole::Swtpm` and `::SwtpmPreStartFlush` from `d2b-core`.
 3. Move `SwtpmArgvInput`, `SwtpmIoctlFlushInput` from `d2b-host/src/swtpm_argv.rs`
    to `d2b-provider-device-tpm/src/`; remove binary path fields.

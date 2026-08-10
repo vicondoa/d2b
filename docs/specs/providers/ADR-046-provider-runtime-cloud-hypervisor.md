@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-runtime-cloud-hypervisor` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | Permitted; exact commit and selected behavior named per work item |
 | Normative | Yes |
@@ -23,7 +23,9 @@ it:
 
 - asserts an owned VMM `Process` resource and observes Device, Network, and
   Volume dependency readiness through `ResourceClient` before launching it;
-- supervises the Cloud Hypervisor VMM process as a long-lived `Process`;
+- owns the desired child relationship for one Cloud Hypervisor VMM `Process`
+  and observes the selected Process Provider's status; it does not duplicate
+  process supervision authority;
 - presents the running guest to the Zone resource plane with typed health status
   and conditions;
 - tears down the VMM Process in finalizer-safe order on deletion.
@@ -63,7 +65,7 @@ not enforced by the policy gate.
   modules, and colocated unit tests.
 - `tests/`: hermetic Cargo integration tests - ResourceType conformance,
   fault/retry/restart scenarios, redaction, schema golden vectors, fake-port
-  bus tests, and pidfd adoption property tests.
+  bus tests, and Process-status adoption/quarantine property tests.
 - `integration/`: heavier container/Host/Guest/cross-process fixtures invoked
   by existing repository test orchestration (`make test-integration`,
   `make test-host-integration`).
@@ -117,7 +119,7 @@ config:
   defaultMemoryMb: 512        # int [128, 524288]
   defaultMachineType: q35     # q35 | microvm
   watchdog: true              # bool; CH software watchdog emitted to all VMMs
-  adoptionWindow: "30s"       # duration; maximum pidfd adoption wait after controller restart
+  adoptionWindow: "30s"       # duration; maximum wait for Process Provider adoption status after controller restart
   healthCheckInterval: "30s"  # duration [5s, 300s]; guest-control health polling period
   healthCheckTimeout: "5s"    # duration [1s, 60s]
   healthCheckFailureThreshold: 3
@@ -330,11 +332,11 @@ controller-created `Guest/<network-name>-net-vm`.
   `timeout: "30s"`, `failureThreshold: 3`.
 - **Desired lifecycle**: `running` while Guest's `spec.desiredState` is
   `running`; `stopped` when Guest is stopping.
-- **Adoption**: `adopt-on-restart`. After controller restart, the controller
-  attempts to reopen a pidfd for the running process within `adoptionWindow`.
-  Adoption verifies pid/start-time/cgroup/executable/template/generation before
-  `pidfd_open`; ambiguity sets the VMM Process to `Unknown`/`Degraded`, never
-  causes a broad kill.
+- **Adoption**: `adopt-on-restart`. Provider/system-minijail alone verifies and
+  adopts process identity. After controller restart, this controller waits up
+  to `adoptionWindow` for the typed Process adoption outcome. Ambiguity sets
+  the Guest to `Degraded` and causes no VMM effect; this controller never opens
+  or receives a pidfd.
 
 ### 5.2 Pre-start dependency ordering
 
@@ -576,9 +578,12 @@ After a Guest `spec` durable commit:
    all virtiofs Volume statuses) through the capability-limited `ResourceClient`.
 5. If any dependency is not Ready: write Guest status `Pending`/conditions;
    return `pending`. Controller will be re-triggered by `dependency-ready`.
-6. Diff desired VMM Process spec against observed child. If absent, create it;
-   if drifted, repair with expected-revision `update-spec`. Batch with
-   expected-revision preconditions.
+6. Require the owner index to contain at most one VMM Process child. If it
+   contains more than one, or the sole child's Process Provider reports
+   identity ambiguity, quarantine the Guest and issue no create, update,
+   restart, stop, or delete effect. Otherwise diff desired VMM Process spec
+   against the child. If absent, create it; if drifted, repair with
+   expected-revision `update-spec`. Batch with expected-revision preconditions.
 7. Stale conflict on any batch → discard result; toolkit re-reads and the
    handler retries under policy.
 8. Write Guest status (`status.resource.bootstrapReady`, Guest readiness,
@@ -588,20 +593,27 @@ After a Guest `spec` durable commit:
 
 ### 9.4 Adoption after controller restart
 
-The controller restart trigger is `startup-relist`:
+The controller restart trigger is `startup-relist`, but VMM identity adoption
+belongs exclusively to the selected Process Provider. The runtime controller:
 
-1. The controller lists all `runtime-cloud-hypervisor` Guests in the Zone.
-2. For each Guest in `Ready` phase, it attempts to adopt its VMM Process by
-   verifying the existing pidfd (pid/start-time/cgroup/executable/template/
-   generation) within `adoptionWindow`.
-3. If adoption succeeds: the controller reconciles current state without
-   disrupting the running VMM.
-4. If adoption fails (process gone, ambiguous identity): the VMM Process
-   transitions to `Unknown`; the Guest transitions to `Degraded`; the
-   controller requests a restart through a new `desiredLifecycle: running`
-   expected-revision write.
-5. Ambiguous identity sets condition `AdoptionAmbiguous=True` and never issues
-   a broad kill.
+1. Lists all `runtime-cloud-hypervisor` Guests and owner-indexed VMM Process
+   children.
+2. Requires exactly zero or one child per Guest and consumes only the child's
+   typed `status.resource.adoptionState` and phase.
+3. On `adopted`, resumes Guest reconciliation without disrupting the VMM.
+4. On `not-found`, permits the ordinary missing-child reconcile path to create
+   one replacement only after the Process Provider has proved the old cgroup
+   leaf empty.
+5. On `quarantined`, `unknown`, multiple children, identity mismatch, or an
+   inconclusive result, sets `AdoptionAmbiguous=True`, transitions the Guest to
+   `Degraded`, retains the existing child references, and issues no create,
+   restart, stop, delete, signal, or cgroup effect.
+
+The controller never opens or reopens a pidfd from a numeric PID, verifies
+`/proc`, claims a cgroup, or treats Guest status as process authority.
+Quarantine clears only after the Process Provider reports an unambiguous
+identity/absence result or the operator performs the documented full Zone
+reset. This prevents a second VMM authority from racing the Process Provider.
 
 ### 9.5 Observe interval
 
@@ -616,18 +628,18 @@ the `GuestReachable` condition.
 
 ### 10.1 pidfd contract
 
-The VMM Process uses `Provider/system-minijail` which acquires a pidfd via
-`clone3(CLONE_PIDFD)` and owns wait/reap:
+The VMM Process uses `Provider/system-minijail`, whose broker acquires the
+parent pidfd atomically via `clone3(CLONE_PIDFD)` and owns wait/reap:
 
-- pidfd is obtained at spawn time by the broker through `clone3`;
-- pidfd is not persisted across daemon/controller restart;
-- pidfd is not public status and never crosses d2b-bus;
-- after controller restart, pidfd is reopened via `pidfd_open` after identity
-  re-verification (adoption path above);
-- the controller holds the pidfd locally; it is closed on clean restart
-  re-verification or final process exit;
-- the ProviderSupervisor returns the stable process identity and pidfd evidence
-  to the Process controller, which retains it locally.
+- pidfd authority remains entirely in the broker/Process Provider boundary;
+- pidfds are never persisted, placed in Process or Guest status, or sent over
+  d2b-bus;
+- controller restart consumes Process status only; this Provider performs no
+  `pidfd_open`, numeric-PID reopen, `/proc` identity check, or pidfd duplicate;
+- a still-parent broker may return a fresh verified duplicate only to the
+  Process Provider/ProviderSupervisor, never to this runtime controller;
+- the runtime controller receives no pidfd evidence, only the closed Process
+  phase/adoption outcome and opaque Process ResourceRef.
 
 ### 10.2 Process readiness
 
@@ -1239,6 +1251,13 @@ supervisor ticket covers:
 - cgroup placement in the delegated Zone subtree;
 - pidfd return.
 
+The return is private to Provider/system-minijail/ProviderSupervisor; no pidfd
+or process-authority handle reaches this Provider. Every privileged
+filesystem, device, network, cgroup, and spawn effect is a typed broker
+operation owned by the corresponding EffectPort, with its path-free
+`OpAuditRecord` appended and synced before success. Guest resource audit does
+not substitute for broker effect audit.
+
 The adapter and supervisor retain CLOEXEC ownership of parent copies and close
 them after successful spawn. Ticket rejection, cancellation, or spawn failure
 closes all copies before generation-fenced `DeletePersistentTap`; normal
@@ -1261,13 +1280,18 @@ Algorithm on `deletion-requested`:
 
 1. Set Guest status atomically: `status.provider.details.providerPhase: draining`,
    condition `GuestDraining=True`.
-2. Set `desiredLifecycle: stopped` on the VMM Process via expected-revision
-   `update-spec`.
-3. Wait for the owned VMM Process to be deleted (owner-child cascade with its
+2. Read the owner index and typed Process adoption state. Multiple children or
+   ambiguous identity sets `AdoptionAmbiguous=True`, retains the Guest
+   finalizer, and issues no lifecycle effect. Proved absence proceeds directly
+   to finalization.
+3. Set `desiredLifecycle: stopped` on the single unambiguous VMM Process via
+   expected-revision `update-spec`.
+4. Wait for the owned VMM Process to be deleted (owner-child cascade with its
    own finalizer).
-4. Verify VMM process exit through the local pidfd.
-5. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer.
-6. Return `finalized`.
+5. Require the Process Provider's terminal/deleted result and empty owned-leaf
+   proof. This Provider performs no local pidfd check.
+6. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer.
+7. Return `finalized`.
 
 If any child finalizer is blocked beyond `finalize` deadline (300 s), the
 finalizer returns `blocked` with condition `FinalizationBlocked` and a bounded
@@ -1293,10 +1317,10 @@ ProviderStateSet(zone, "runtime-cloud-hypervisor") =
 
 `Provider/runtime-cloud-hypervisor`'s controller declares **no** Provider state
 Volume; its `ProviderStateSet` is empty. All application-level recovery data -
-resource generations, watch cursors, adoption tokens - is derivable from the
-Zone resource store, the core Operation ledger, and independent external
-observation (running VMM/virtiofsd processes re-adopted from declared cgroup
-leaves and fresh pidfds) at restart time. Its bounded non-secret operational
+resource generations and watch cursors - is derivable from the Zone resource
+store, the core Operation ledger, and Process/Export Provider status. Running
+VMM and virtiofsd processes are re-adopted by their owning Process Providers,
+not by this controller. Its bounded non-secret operational
 state - reconcile stage, per-Guest launch/adoption observations, bounded
 counters, and closed-enum error detail - lives in the owning resource's
 `status` subresource and the core Operation ledger (D087). Because that state is
@@ -1370,7 +1394,7 @@ The controller emits authoritative audit records (not OTEL) for:
 | `GuestDeletionStarted` | durable | `zone`, `resource`, `generation`, `correlation_id` |
 | `GuestDeletionSucceeded` | durable | `zone`, `resource`, `generation` |
 | `VmmProcessExited` | durable | `zone`, `resource`, `exitCode` (bounded int) |
-| `AdoptionAttempted` | durable | `zone`, `resource`, `outcome: adopted|failed|ambiguous` |
+| `VmmAdoptionObserved` | durable | `zone`, `resource`, `outcome: adopted|not-found|ambiguous` |
 
 No argv, paths, socket names, kernel cmdline, OEM strings, PID, pidfd, TAP
 name, guest-control locator, or credential material appears in any audit field. Bounded
@@ -1494,6 +1518,7 @@ status:
 | `dependency-network-not-ready` | Pending | CapabilitiesVerified=False | A required Network is not Ready |
 | `dependency-volume-not-ready` | Pending | BootstrapReady=False | A required virtiofs Volume share is not Ready |
 | `adoption-ambiguous` | Degraded | AdoptionAmbiguous=True | VMM process identity ambiguous after restart |
+| `multiple-vmm-processes` | Degraded | AdoptionAmbiguous=True | Owner index contains more than one VMM Process child; all VMM effects are quarantined |
 | `quota-exceeded` | Failed | BudgetAdmitted=False | Budget overcommit at spec admission |
 | `finalization-blocked` | Degraded | FinalizationBlocked=True | VMM Process finalizer blocked beyond deadline |
 
@@ -1598,7 +1623,8 @@ between dependency readiness and VMM Process creation.
 1. New Provider resource generation (new `artifactId` in Nix → new
    `configurationGeneration`).
 2. Controller drains existing reconcile queue (`drain` handler, deadline 60 s).
-3. New controller binary starts; adoption re-verifies all running VMM pidfds.
+3. New controller binary starts and observes Provider/system-minijail's typed
+   adoption outcomes for all running VMM Processes.
 4. Guests remain running across controller upgrade (KillMode=process equivalent
    in cgroup/pidfd model).
 5. Controller descriptor changes that add new ResourceType verbs require a new
@@ -1643,8 +1669,8 @@ bundle and are never swept by configuration generation cleanup.
 | --- | --- |
 | Current anchor | `packages/d2b-host/src/runtime_provider.rs` (`CloudHypervisorRuntimeProvider`, `CloudHypervisorRuntimeControl`); `packages/d2b-host/src/ch_argv.rs` (`ChArgvInput`, `ChArgvGenerator`); `packages/d2bd/src/provider_shutdown.rs` (`CloudHypervisorShutdown`); `packages/d2b-core/src/processes.rs` (`ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`); `packages/d2b-host-providers/src/lib.rs` (`RuntimeProvider` adapter); `nixos-modules/components/tpm.nix`; `nixos-modules/network.nix`; `nixos-modules/processes-json.nix` (VMM/swtpm/net-VM process node emitters); `nixos-modules/store.nix` |
 | Evidence class | `production-reachable` for all items above; see migration map §2 |
-| Behavior retained | Typed argv generation (pure data, no syscalls); pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
-| Required delta | Controller as async ResourceReconciler; Guest ResourceSpec validation; VMM Process as single owned child resource; direct dependency-readiness gate via ResourceClient (no EphemeralProcess); ComponentSession guest-control health in observe handler; typed provider descriptor; framework-provisioned ProviderStateSet; bus-only resource access; ResourceMutationBatch status writes; explicit Device/kvm in Guest deviceAttachments; required controllerExecutionRef in Provider config |
+| Behavior retained | Typed argv generation (pure data, no syscalls); Process Provider-owned pidfd identity/adoption and direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
+| Required delta | Controller as async ResourceReconciler; Guest ResourceSpec validation; exactly one owned VMM Process resource with no second pidfd/adoption authority; direct dependency-readiness gate via ResourceClient (no EphemeralProcess); ComponentSession guest-control health in observe handler; typed provider descriptor; framework-provisioned ProviderStateSet; bus-only resource access; ResourceMutationBatch status writes; explicit Device/kvm in Guest deviceAttachments; required controllerExecutionRef in Provider config |
 | Reuse path | See §22.2 |
 | Replacement/deletion | Current `d2b-<vm>-vm.service` systemd unit, `SpawnRunner{role: CloudHypervisor}` broker op, `RuntimeProvider` trait calls, and `CloudHypervisorRuntimeProvider` adapter remain until runtime-cloud-hypervisor integration passes full test parity |
 | Feasibility proof | `ADR046-ch-001` spike |
@@ -1699,10 +1725,10 @@ per-test advisory threshold.
 | Current source | `d2b-host/src/runtime_provider.rs`; `d2b-host/src/ch_argv.rs`; `d2bd/src/supervisor/dag.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`; the `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` discovery/build recipe in `Makefile` |
-| Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. The host-integration case boots the real Provider-owned Cloud Hypervisor process through KVM, establishes the authenticated guest-control session, and observes ready Guest state. This item is the first W6 writer of the shared `Makefile` acceptance-recipe surface; active local T604 is dependency-ordered after this item and owns only its distinct resource-operator and daemon-restart recipes. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt. |
+| Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → exactly-one VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources and no runtime-controller pidfd/adoption authority at any step. Multiple or ambiguous VMM children quarantine the Guest without an effect. The host-integration case boots the real Provider-owned Cloud Hypervisor process through KVM, establishes the authenticated guest-control session, and observes ready Guest state. This item is the first W6 writer of the shared `Makefile` acceptance-recipe surface; active local T604 is dependency-ordered after this item and owns only its distinct resource-operator and daemon-restart recipes. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt. |
 | Integration | Zone ResourceClient + system-minijail Process Provider + fake MinijailProcessEffectPort; real-KVM `runtime-cloud-hypervisor-guest-acceptance` host check discovered through the public heavy-gated target |
 | Data migration | None (spike) |
-| Validation | Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: nonempty discovery and no-skip build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` through `make test-host-integration`, proving real KVM boot, the Provider-owned VMM process effect, authenticated guest-control session, and ready Guest state. |
+| Validation | Unit: reconcile state machine, fast-path latency, Process-status adoption observation, multiple/ambiguous-child quarantine with zero effects, absence of pidfd/PID/proc/cgroup APIs from this Provider, and finalize ordering. Integration: nonempty discovery and no-skip build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` through `make test-host-integration`, proving real KVM boot, the Provider-owned VMM process effect, authenticated guest-control session, and ready Guest state. |
 | Removal proof | Not applicable (new crate) |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1762,11 +1788,11 @@ per-test advisory threshold.
 | Dependency/owner | ADR046-ch-001; ComponentSession/d2b-bus (`ADR046-session-001`) |
 | Current source | `packages/d2bd/src/provider_shutdown.rs::GracefulVmShutdown`; `packages/d2b-host/src/runtime_provider.rs::RuntimeProvider::plan_guest_update` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
-| Detailed design | Authenticated KK ComponentSession health check over vsock; adoption verification (pid/cgroup/executable/generation) within `adoptionWindow`; ambiguity → Unknown/Degraded, never broad kill; graceful shutdown via guest-control session before SIGTERM |
+| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption_observation.rs` |
+| Detailed design | Authenticated KK ComponentSession health check over vsock; observe only Provider/system-minijail's typed Process adoption result within `adoptionWindow`; never accept a PID, pidfd, cgroup, executable path, or caller-constructed identity; matching adopted child resumes, proved absence permits one replacement, and ambiguity/multiple children quarantine the Guest with zero VMM effects; graceful shutdown is requested via guest-control before the Process Provider receives `desiredLifecycle: stopped` |
 | Integration | ComponentSession enrolled KK; guest bootstrap credential from `d2b-gctl` virtiofs share; `GuestReachable` condition write |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Fake guest-control server test; health check timeout/failure/retry; adoption property test (ambiguity, gone, stale pid); graceful shutdown ordering |
+| Validation | Fake guest-control server test; health check timeout/failure/retry; adoption-observation property tests for adopted, proved absent, ambiguous, multiple-child, and stale typed outcomes; source/API tests prove this Provider has no pidfd/PID/proc/cgroup identity surface; graceful shutdown ordering |
 | Removal proof | `ProcessRole::GuestControlHealth` observation path; `ProcessRole::GuestSshReadiness` deleted at cutover |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1795,7 +1821,7 @@ per-test advisory threshold.
 | Current source | `packages/d2b-core/src/storage.rs` (`StoragePathSpec`, `SensitivityClass`) - to be retired |
 | Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs` |
-| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) - the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs). |
+| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) - the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and typed Process/Export Provider status, treating `status` as observation, never authority (D087); Process Providers alone re-adopt running VMM/virtiofsd processes and retain pidfd/cgroup authority. Status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs). |
 | Integration | The controller reads Volume/Device/Network dependency status through its ComponentSession/ResourceClient and writes its own bounded `status`; no Provider state Volume is provisioned or mounted |
 | Data migration | v3 reset; no v2 state storage migration |
 | Validation | `state_status_test.rs` (hermetic): status projection round-trip and bound enforcement; restart re-derivation from store/ledger/external observation without a state Volume; no secret/path/argv/PID in status |
@@ -1815,7 +1841,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     vmm_argv.rs                  # VmmArgvInput, vmm_argv_build (pure; no store paths in output)
     guest_spec.rs                # GuestProviderSpecSettings, spec.provider.settings schema, validateSpec
     health.rs                    # ComponentSession KK health check, GuestReachable condition (observe)
-    adoption.rs                  # pidfd adoption, ambiguity detection, quarantine
+    adoption_observation.rs      # typed Process adoption observation and Guest quarantine
     shutdown.rs                  # graceful shutdown via guest-control session
     metrics.rs                   # d2b_runtime_ch_* metric definitions
     audit.rs                     # bounded durable audit record types and emit helpers
@@ -1827,7 +1853,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     bootstrap_graph_test.rs      # VMM Process spec construction, dependency ordering,
                                  # immediate-launch when all deps ready, drift repair
     reconcile_state_machine_test.rs # full reconcile handler state machine
-    adoption_property_test.rs    # pidfd adoption: gone/ambiguous/stale-pid property tests
+    adoption_property_test.rs    # typed Process outcomes: adopted/absent/ambiguous/multiple
     health_check_test.rs         # fake guest-control server; timeout/failure/retry (observe handler)
     finalize_ordering_test.rs    # finalizer algorithm, single VMM Process teardown, ambiguity
     metrics_cardinality_test.rs  # no VM/Zone/resource-name labels; exact forbidden-key and canary absence
@@ -1839,7 +1865,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
   integration/
     README.md                    # (optional) how to run integration fixtures; prerequisites
     vmm_boot_test.rs             # single Guest boot + guest-control health on real KVM
-    vmm_adoption_test.rs         # controller restart + pidfd adoption with running VMM
+    vmm_adoption_test.rs         # Process Provider adopts; runtime controller observes only typed status
     vmm_restart_test.rs          # unexpected VMM exit + backoff + restart + re-health
     network_attachment_test.rs   # CreatePersistentTap -> flags -> direct LaunchTicket; macvtap
     tap_fd_lifetime_test.rs      # CLOEXEC, one child slot, close-before-generation-fenced-delete

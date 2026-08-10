@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-system-minijail` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` |
 | Normative | Yes |
@@ -60,7 +60,7 @@ capability matrix plus provider-neutral `unsupported-capability`.
 | Package identity | `system-minijail.d2bus.org` |
 | Publisher | `d2bus.org` (first-party) |
 | Implemented ResourceTypes | `Process`, `EphemeralProcess` |
-| Supported Host/Guest Provider capabilities | `pidfd`, `cgroup-v2`, `user-namespace`, `minijail-seccomp` |
+| Supported Host/Guest Provider capabilities | `pidfd`, `pidfs`, `cgroup-v2`, `user-namespace`, `minijail-seccomp` |
 | Supported domains | `system` on any Host or Guest; `user` domain only if the Provider descriptor's conformance extension declares `user-domain-supported: true` for that Host/Guest placement |
 | Bootstrap role | Fixed bootstrap controller - one of the two Providers without a Process resource |
 | Wait/reap ownership | `d2b` (the privileged broker that called `clone3` and is the process's parent); not the non-parent ProviderSupervisor/controller and not systemd |
@@ -68,15 +68,18 @@ capability matrix plus provider-neutral `unsupported-capability`.
 
 ### Linux platform gate
 
-Provider/system-minijail requires Linux **5.14 or newer**. Linux 5.14 is the
-first supported baseline because intentional teardown depends on the cgroup v2
-`cgroup.kill` file. Host reconciliation must verify the kernel release, a
-delegated cgroup v2 leaf, and writable `cgroup.kill` semantics before this
-Provider becomes Ready or any Process is placed on it. This mandatory platform
-gate applies even when `Host.spec.provider.settings.kernelVersionMin` is null;
-an operator may raise that minimum but cannot lower the Provider baseline.
-Failure is `kernel-too-old` or `cgroup-kill-unavailable`, and no launch is
-attempted. There is no PID/PGID fallback on older kernels.
+Provider/system-minijail requires Linux **6.9 or newer**. Host reconciliation
+must verify the kernel release, open and inspect a self pidfd to prove
+per-process pidfs inode semantics, verify a delegated cgroup v2 leaf, and prove
+writable `cgroup.kill` semantics before this Provider becomes Ready or any
+Process is placed on it. A version string alone is not readiness evidence.
+This mandatory platform gate applies even when
+`Host.spec.provider.settings.kernelVersionMin` is null; an operator may raise
+that minimum but cannot lower the Provider baseline. Failure is
+`kernel-too-old`, `pidfs-unavailable`, or `cgroup-kill-unavailable`, and no
+launch is attempted. An inconclusive probe fails closed with remediation to
+upgrade or enable pidfs. There is no production soft-fail and no PID/PGID
+fallback.
 
 The Provider crate mandatory layout:
 
@@ -391,12 +394,12 @@ spawned process. An empty list inherits all parent namespaces.
 | --- | --- | --- |
 | `user` | `CLONE_NEWUSER` | Requires `SandboxSpec.userNamespace` to be set; see §7.7. Cannot combine with `startRoot: false` on a plain system-domain process unless `userNamespace` is set. |
 | `pid` | `CLONE_NEWPID` | Spawned process is PID 1 inside the namespace. |
-| `mount` | `CLONE_NEWNS` | Required for read-only root or custom mount table. |
+| `mount` | `CLONE_NEWNS` | Required for read-only root or custom mount table. After creation the broker makes `/` recursively private before any bind, pivot, or chroot. |
 | `ipc` | `CLONE_NEWIPC` | Isolates SysV IPC and POSIX message queues. |
 | `uts` | `CLONE_NEWUTS` | Isolates hostname and NIS domain. |
 | `network` | `CLONE_NEWNET` | Isolates network interfaces; used only for fully network-isolated workers. Not used when the Process has a `networkUsage` ref to an active Network resource. |
 | `cgroup` | `CLONE_NEWCGROUP` | New cgroup namespace. Not used when the broker must place the process into a pre-delegated cgroup leaf. |
-| `time` | `CLONE_NEWTIME` | New time namespace. Available throughout this Provider's Linux ≥5.14 platform baseline. |
+| `time` | `CLONE_NEWTIME` | New time namespace. Available throughout this Provider's Linux 6.9 platform baseline. |
 
 Combinations that the compiler rejects at spec admission:
 
@@ -462,12 +465,34 @@ digests.
 3. The `mountPath` is an absolute path inside the sandbox.
 4. The `access` field (`read-only` or `read-write`) is enforced at mount time.
 
-The broker translates the compiled mount table into a set of bind-mount
-operations applied after namespace setup. No caller-supplied absolute host path
+The broker translates the compiled mount table into a closed `SpawnRunner`
+mount plan applied after namespace setup. No caller-supplied absolute host path
 reaches the broker. All source paths come from the Volume Provider's
-implementation through the trusted ProviderSupervisor ticket. A mount whose
-Volume is not Ready at launch time and whose `required: true` aborts the launch
-with `volume-not-ready`.
+implementation through the trusted ProviderSupervisor ticket.
+
+The mount sequence is mandatory:
+
+1. Create the mount namespace only after any user-namespace uid/gid mapping
+   completes.
+2. Immediately apply `MS_REC|MS_PRIVATE` to `/` and verify propagation is
+   private before creating any mount. A shared or slave root fails
+   `mount-propagation-private-failed`; no mount is attempted.
+3. Resolve every source from an anchored trusted dirfd with
+   `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)` and
+   `O_NOFOLLOW|O_CLOEXEC`, or fail closed if equivalent resolution is not
+   available.
+4. Assemble the broker-declared root and bind only those verified source fds.
+   Apply read-only remounts after the binds and verify the resulting flags.
+5. `pivot_root` into the assembled root, detach and remove the old root, and
+   use an fd-anchored `chroot` fallback only when the compiled profile
+   explicitly permits it and proves the same no-old-root invariant. A process
+   must never exec while it can still resolve the host root.
+
+For virtiofsd, this pre-exec namespace and propagation sequence is still
+mandatory; virtiofsd's fixed `--sandbox=chroot` then performs its final
+share-root pivot inside that already-private namespace. A mount whose Volume
+is not Ready at launch time and whose `required: true` aborts the launch with
+`volume-not-ready`.
 
 ### 7.5 Environment classes
 
@@ -485,10 +510,19 @@ paths, and socket addresses are not environment variables.
 
 ### 7.6 cgroup placement
 
-The broker places the process directly into its declared cgroup leaf using
-`CLONE_INTO_CGROUP`. This means the process is born in its final cgroup before
-any instruction executes. The cgroup leaf path follows the shape defined in
-`ADR-046-components-processes-and-sandbox`:
+The broker uses the ADR 0011 setup-then-drop delegation boundary. The typed
+`PrepareCgroupDelegation` operation runs once during broker bootstrap: while
+privileged it probes controllers, enables the ordered controller set, creates
+and verifies the delegated root, inherits cpusets, and fd-chowns only that
+subtree to the `d2bd` runtime identity. It then drops root for cgroup runtime
+mutation. Every later leaf create, observe, kill, and release operation must
+run with `euid != 0` inside the delegated subtree; a root steady-state caller
+fails `cgroup-delegation-refused`.
+
+The broker then places each process directly into its declared cgroup leaf
+using `CLONE_INTO_CGROUP`. This means the process is born in its final cgroup
+before any instruction executes. The cgroup leaf path follows the shape
+defined in `ADR-046-components-processes-and-sandbox`:
 
 ```text
 z-<zone-id>/
@@ -502,9 +536,10 @@ z-<zone-id>/
                 process/
 ```
 
-Intermediate cgroup nodes are process-free. The cgroup leaf is created by the
-broker under the delegated cgroup subtree before clone3 is called. After process
-exit and pidfd-confirmed reap, the broker removes the leaf.
+Intermediate cgroup nodes are process-free. The non-root delegated broker
+runtime creates the leaf before clone3 is called. After process exit and
+pidfd-confirmed reap, that same delegated runtime removes the leaf. No Provider,
+core adapter, root steady-state path, or systemd unit writes the subtree.
 
 The compiled cgroup path is never a public resource field, status field, log
 line, audit payload, or metric label.
@@ -530,7 +565,11 @@ Pre-establishment sequence:
    from `mappingClass` and writes it privately. The resolved GID must not be 0
    (host root); the effect port enforces this before any write.
 5. The broker writes the pipe sync byte, unblocking the child.
-6. The child proceeds to exec the target binary.
+6. If the compiled plan needs a mount namespace, the child creates it now,
+   makes `/` recursively private, applies the anchored mount plan, and
+   pivots/chroots as specified in §7.4.
+7. The child proceeds to exec the target binary only after the root-isolation
+   proof succeeds.
 
 The result: the process runs as in-namespace UID/GID 0 and may hold
 in-namespace capabilities without holding any host capabilities. The host
@@ -599,7 +638,8 @@ remains the sole executor and audit owner of all privileged effects. The broker:
    trusted bundle.
 2. Verifies the executable path, executable hash, template generation, declared
    UID/GID, and cgroup placement before any exec call.
-3. Creates the cgroup leaf under the delegated subtree.
+3. Requests leaf creation from the post-delegation non-root cgroup runtime and
+   verifies that a root steady-state path is refused.
 4. Calls `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with the exact cgroup leaf
    FD to place the process directly in its cgroup. `CLONE_PIDFD` ensures the
    pidfd is obtained atomically at spawn time with no PID-reuse race.
@@ -616,6 +656,12 @@ The broker rejects any request that does not match the precompiled and
 broker-verified plan digest. No environment variable, mount, capability, or
 argument fragment from the caller resource payload reaches exec without passing
 through this compilation step.
+
+`SpawnRunner` is the typed authority for namespace, mount, pivot/chroot, and
+exec effects. Its path-free `OpAuditRecord` is appended and synced before a
+successful spawn receipt is returned. Cgroup setup and every leaf mutation
+have their own typed audit result. Audit append or sync failure fails the
+operation closed and leaves any resumable cleanup state owned by the broker.
 
 ### 8.3 Pidfd ownership and wait/reap
 
@@ -949,12 +995,13 @@ broker remains the sole executor and audit owner:
 
 | Operation | Purpose | Authority |
 | --- | --- | --- |
+| `PrepareCgroupDelegation` | One-time controller enablement, delegated-root creation, cpuset inheritance, verification, and fd-chown before privilege drop | Broker bootstrap only; root phase ends before runtime leaf mutation |
 | `SpawnRunner` | Clone3-spawn of a Process/EphemeralProcess with a pre-compiled sandbox plan | Scoped to the zone-delegated cgroup subtree and pre-verified plan digest |
 | Broker wait/reap and terminal-status relay | Parent-only `waitid(P_PIDFD, ...)`, exact-once reap, and typed exit-status delivery to ProviderSupervisor | Only for the broker's own `clone3` children; non-parent callers cannot invoke wait/reap |
 | User namespace uid_map/gid_map write | Write UID/GID mapping for user-namespace processes | Broker-internal; always part of SpawnRunner when `userNamespace` is set |
-| Cgroup leaf create/observe | Create and manage the cgroup leaf for each process | Delegated cgroup subtree only; broker validates path against `z-<zone-id>/` prefix |
-| Cgroup leaf kill | Write `1` to the anchored leaf's `cgroup.kill` after graceful exact-main signaling for an unambiguous intentional stop | Exact verified owned leaf only; Linux ≥5.14; forbidden for ambiguous/quarantined candidates |
-| Cgroup leaf release | Remove cgroup leaf on process exit | Same delegation scope |
+| `CreateCgroupLeaf` / `ObserveCgroupLeaf` | Create and observe the cgroup leaf for each process | Post-drop non-root runtime; delegated subtree only; broker validates the opaque row and refuses euid 0 |
+| `KillCgroupLeaf` | Write `1` to the anchored leaf's `cgroup.kill` after graceful exact-main signaling for an unambiguous intentional stop | Post-drop non-root runtime; exact verified owned leaf only; forbidden for ambiguous/quarantined candidates |
+| `ReleaseCgroupLeaf` | Remove cgroup leaf on process exit | Post-drop non-root runtime in the same delegation scope |
 
 No direct path exists from the Provider crate to the broker socket. The
 `MinijailProcessEffectPort` enforces the boundary: all spawn effects are carried
@@ -963,6 +1010,11 @@ by opaque identifiers, and the effect port resolves them privately.
 The broker exposes no arbitrary host-global operations through the effect port.
 The broker's host-global mutation authority (firewall, network, device, storage)
 is not available to this Provider.
+
+Every row above emits and syncs a durable path-free broker `OpAuditRecord`
+before success. Mount sources and any broker-owned runtime files are resolved
+from anchored dirfds with no-follow semantics; neither a Provider request nor
+an audit/degraded ledger supplies path authority.
 
 The minijail controller writes status only on `Process` and `EphemeralProcess`
 resources. `Provider/system-minijail` resource status is aggregated by core from
@@ -996,7 +1048,8 @@ description.
 | `execution-ref-not-ready` | `executionRef` target is not in Ready phase at admission time |
 | `provider-not-ready` | `Provider/system-minijail` is not in Ready phase |
 | `template-not-found` | `template` ID does not resolve in the owning Provider's component descriptor |
-| `kernel-too-old` | Host kernel is older than the mandatory Linux 5.14 baseline |
+| `kernel-too-old` | Host kernel is older than the mandatory Linux 6.9 baseline |
+| `pidfs-unavailable` | Runtime self-pidfd probe did not prove pidfs identity; Provider remains not Ready |
 | `cgroup-kill-unavailable` | The delegated cgroup v2 leaf does not expose writable `cgroup.kill`; Provider remains not Ready and no launch is attempted |
 
 ### 12.2 Launch errors
@@ -1009,6 +1062,9 @@ description.
 | `clone3-failed` | Kernel returned an error from `clone3` |
 | `user-ns-uid-map-failed` | Writing `uid_map` failed during user namespace setup |
 | `user-ns-gid-map-failed` | Writing `gid_map` failed during user namespace setup |
+| `mount-propagation-private-failed` | The new mount namespace root could not be made and verified recursively private before bind mounts |
+| `mount-source-resolution-failed` | Anchored no-follow source resolution failed or crossed a forbidden filesystem boundary |
+| `sandbox-root-isolation-failed` | Pivot/chroot or old-root detach verification failed; child exits before exec |
 | `broker-spawn-denied` | Broker refused the SpawnRunner request (admission check failed) |
 | `volume-not-ready` | A required Volume mount is not Ready at launch time |
 | `launch-ticket-expired` | LaunchTicket deadline exceeded before spawn completed |
@@ -1416,7 +1472,7 @@ The build:
 
 | Bound | Value | Enforced by |
 | --- | --- | --- |
-| Minimum Linux version | 5.14 | Host platform gate before Provider Ready/placement; verifies delegated cgroup v2 `cgroup.kill` |
+| Minimum Linux version | 6.9 | Host platform gate before Provider Ready/placement; verifies pidfs and delegated cgroup v2 `cgroup.kill` |
 | Maximum concurrent inflight LaunchTickets per Zone | 64 (fixed manifest bound; not operator-configurable) | Controller semaphore; excess queued |
 | LaunchTicket TTL | `spec.startDeadline` (1s..3600s; default 60s) | Controller ticker |
 | Maximum runtimeDeadline | `spec.runtimeDeadline` max 86400s | Spec admission |
@@ -1466,7 +1522,9 @@ Every module in `src/` includes `#[cfg(test)]` unit tests for:
 
 - `sandbox_compiler.rs`: SandboxSpec → compiled plan round-trips; every
   NamespaceClass, CapabilityClass, and SeccompClass combination; user namespace
-  block with valid/invalid mappingClass; every rejection condition in §12.1.
+  block with valid/invalid mappingClass; private mount propagation,
+  anchored-source, pivot/chroot, and old-root-detach requirements; every
+  rejection condition in §12.1.
 - `launch.rs`: opaque launch-request construction through
   `MinijailProcessEffectPort`; digest binding; expired/revoked request paths;
   no LaunchTicket internals or broker DTOs.
@@ -1503,6 +1561,9 @@ tests/
   broker_wait_contract.rs   # Provider accepts only identity-bound typed terminal results
   cgroup_kill_finalize.rs   # graceful-stop then subtree-stop request ordering; no PID/PGID input
   platform_gate.rs          # typed unsupported-platform preflight result fails before launch
+  mount_isolation.rs        # private propagation + anchored binds + pivot/chroot required
+  cgroup_delegation.rs      # root setup precedes permanent non-root runtime mutation
+  broker_audit.rs           # each privileged effect is durably audited before success
 ```
 
 All tests pass under `cargo test -p d2b-provider-system-minijail`.
@@ -1524,7 +1585,8 @@ integration/
   status_state_restart/     # controller starts with no state Volume; reaches Ready from status/core ledger; restart re-derives observed state and gets fresh supervisor duplicates from the still-parent broker; no state-Volume mount
   broker_parent_reap/       # broker clone3 parent reaps exactly once and relays exit status; controller restart preserves parent
   cgroup_kill_subtree/      # setsid descendant + recycled-PGID fixture is killed only through anchored leaf cgroup.kill
-  kernel_platform_gate/     # Linux >=5.14/cgroup.kill positive probe and fail-closed unsupported-kernel fixture
+  kernel_platform_gate/     # Linux 6.9/pidfs/cgroup.kill positive probes and fail-closed fixtures
+  mount_isolation/          # private propagation, anchored binds, pivot/chroot, old-root absence
 ```
 
 Each integration scenario:
@@ -1560,7 +1622,9 @@ is run against both system-minijail and system-systemd providers:
 | Parent-only wait/reap | Only the `clone3` broker parent calls `waitid(P_PIDFD)` and reaps; ProviderSupervisor poll readability is not accepted as exit status |
 | Pidfd signaling holder | Verified broker/ProviderSupervisor duplicate can `pidfd_send_signal` the exact main process; controller holds only an opaque handle |
 | Descendant escape resistance | A descendant that calls `setsid(2)` and a recycled-PGID decoy cannot evade or be hit by teardown; only the verified leaf's `cgroup.kill` is used |
-| Platform gate | Linux <5.14 or absent/unwritable leaf `cgroup.kill` keeps Provider not Ready and launches zero processes |
+| Platform gate | Linux before 6.9, absent pidfs, or absent/unwritable leaf `cgroup.kill` keeps Provider not Ready and launches zero processes |
+| Mount isolation | Every mount namespace is recursively private before binds; anchored sources only; pivot/chroot and old-root detachment complete before exec |
+| Cgroup setup then drop | Root performs only one-time delegation setup; all leaf create/observe/kill/release operations run after drop and refuse euid 0 |
 | Effect port boundary | Provider crate imports no broker service/client/DTO; all spawn effects via `MinijailProcessEffectPort` with opaque IDs |
 | Provider status by core | Minijail controller writes no `Provider` resource status; core aggregates from checkpoint/health events |
 | No state Volume | The minijail controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); no bootstrap state Volume, no bootstrap storage mechanism, and no bootstrap-storage exception (D086 superseded by D087); running units re-adopted from cgroup leaves + fresh pidfds on restart |
@@ -1609,7 +1673,7 @@ delivery assumptions are not copied.
 | Current source | `d2b-core/src/minijail_profile.rs`; `d2b-core/src/processes.rs` (NamespaceSet, MountPolicy, CgroupPlacement); `d2b-priv-broker/src/ops/spawn_runner.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-minijail/src/sandbox_compiler.rs` |
-| Detailed design | Accept `SandboxSpec` from common contracts; compile NamespaceClass/CapabilityClass/SeccompClass/UserNamespaceSpec/mount/environment/rlimit/umask into a versioned `CompiledSandboxPlan`; compute `sandboxRevisionDigest`; all rejection conditions from §12.1; no raw bitmask/BPF/argv/path in any output type; golden round-trip test vectors Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT. |
+| Detailed design | Accept `SandboxSpec` from common contracts; compile NamespaceClass/CapabilityClass/SeccompClass/UserNamespaceSpec/mount/environment/rlimit/umask into a versioned `CompiledSandboxPlan`; require mount namespaces to carry recursively private propagation, anchored no-follow sources, broker-declared pivot/chroot, and old-root-detach proof; compute `sandboxRevisionDigest`; all rejection conditions from §12.1; no raw bitmask/BPF/argv/path in any output type; golden round-trip test vectors. Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT. |
 | Integration | LaunchTicket builder (ADR046-minijail-002); effect port integration (ADR046-minijail-003) |
 | Data migration | Full reset; current `MinijailProfile` not import-compatible with v3 SandboxSpec |
 | Validation | `tests/sandbox_compilation.rs`; `tests/schema.rs`; golden vectors |
@@ -1641,10 +1705,10 @@ delivery assumptions are not copied.
 | Current source | `d2b-priv-broker/src/ops/spawn_runner.rs`; `d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`, user namespace setup) |
 | Reuse action | adapt |
 | Destination | Broker-side: `d2b-priv-broker` retains `SpawnRunner` and user-namespace pre-establishment; core/ProviderSupervisor owns the `MinijailProcessEffectPort` implementation; Provider-side `packages/d2b-provider-system-minijail/src/launch.rs` calls the trait with opaque Process/profile/policy IDs and `user_ns.rs` validates only semantic request constraints |
-| Detailed design | Linux ≥5.14 and delegated-leaf `cgroup.kill` platform gate; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `MinijailProcessEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO |
+| Detailed design | Linux 6.9, pidfs, and delegated-leaf `cgroup.kill` platform gates; one typed root-only `PrepareCgroupDelegation` setup followed by a permanent non-root cgroup runtime that refuses euid 0 for leaf create/observe/kill/release; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); recursively private mount propagation, anchored no-follow source resolution, broker-compiled pivot/chroot, and old-root-detach proof before exec; `MinijailProcessEffectPort` privately maps opaque IDs to typed broker effects; each broker effect syncs a durable path-free audit row before success; Provider crate imports no broker service/client/DTO |
 | Integration | ADR046-minijail-002 (core-owned LaunchTicket); real cgroup/broker fixtures exercise the core adapter in `integration/clone3_pidfd/` and `integration/user_namespace/`, while the Provider observes only typed EffectPort results |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/fault_injection.rs`; `tests/platform_gate.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/` |
+| Validation | `tests/fault_injection.rs`; `tests/platform_gate.rs`; `tests/mount_isolation.rs`; `tests/cgroup_delegation.rs`; `tests/broker_audit.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/`; `integration/mount_isolation/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/` |
 | Removal proof | Old broker `SpawnRunner` direct-caller paths in `d2bd` removed after system-minijail Provider integration |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1826,9 +1890,25 @@ process termination.
     claim wait/reap ownership.
 
 14. **Intentional teardown uses the owned cgroup, never PGID ownership.** On
-    Linux 5.14 or newer, after exact-main `SIGTERM` and the bounded graceful
+    Linux 6.9 or newer, after exact-main `SIGTERM` and the bounded graceful
     phase, the broker writes `1` to the reverified leaf's `cgroup.kill`, waits
     for `cgroup.events` `populated 0` and its own wait/reap result, and only then
     removes the leaf. This closes `setsid(2)` escape and PGID-reuse races. No
     PID/PGID SIGKILL fallback exists. An ambiguous/quarantined candidate is
     never signaled or subjected to `cgroup.kill`; its finalizer remains.
+
+15. **Cgroup delegation is setup-then-drop.** Root authority is limited to the
+    one-time `PrepareCgroupDelegation` sequence. Every steady-state leaf
+    mutation runs as the delegated non-root identity and explicitly refuses
+    euid 0. No Provider, core adapter, or systemd unit writes the subtree.
+
+16. **Mount namespaces are private and root-isolated before exec.** The broker
+    makes `/` recursively private before any bind, resolves every source
+    relative to an anchored trusted dirfd without following links, and proves
+    pivot/chroot plus old-root detachment before the target executes. A sandbox
+    that merely unshares while retaining the host root is rejected.
+
+17. **Every privileged effect has durable broker audit.** Spawn, namespace,
+    mount, cgroup, signal, and cleanup effects return success only after their
+    typed path-free broker audit row is appended and synced. Audit failure is
+    an effect failure, never a warning.

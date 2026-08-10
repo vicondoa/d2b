@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-activation-nixos` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 3 |
+| Version | 4 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `packages/d2b-provider-activation-nixos/`, `d2b activation` CLI namespace, `activation-nixos.d2bus.org.NixosGeneration` ResourceType |
@@ -470,9 +470,9 @@ spec:
     capabilityClasses: []
     seccompClass: activation-nixos-runner
     noNewPrivileges: true                             # see §7.3
-    startRoot: true                                   # see §7.3
+    startRoot: false                                  # see §7.3
     environmentClass: provider-defined
-    readOnlyRoot: true                                # rootfs read-only; all target mutation via LaunchTicket effect resources
+    readOnlyRoot: true                                # rootfs read-only; broker owns every target mutation
   budget:
     cpu:
       request: "100m"
@@ -508,19 +508,22 @@ the runner binary. Host and Guest targets use the identical contract with no
 bypass or fallback path (OQ-1 closed).
 
 The runner receives only fixed inherited operation attachments from its
-`LaunchTicket`: a pre-opened activation portal, dirfd(s) for any required
-integrity-bound inputs, and the manifest-declared system-manager effect
-resources. It does not call d2b-bus (processClass worker carries no bus
-authority), and it does not resolve, construct, or traverse any host paths.
+`LaunchTicket`: a pre-opened activation portal and read-only dirfd(s) for
+integrity-bound inputs. It does not call d2b-bus (processClass worker carries
+no bus authority), and it does not resolve, construct, or traverse any host
+paths. It has no system-manager, filesystem-mutation, service-manager, or
+cgroup authority.
 
 Steps the runner performs using its inherited attachments:
 
 1. Invokes the integrity-bound `d2b-activation-helper` through the pre-opened
    activation portal FD, passing the activation mode. The helper operates
    entirely within the inherited FD set; no path construction.
-2. All target profile and system mutation occurs only through the
-   manifest-declared, pre-opened system-manager effect resources routed in
-   the LaunchTicket. No ambient host paths are accessed.
+2. It submits the opaque activation intent through the portal. Core maps that
+   request to the closed `ApplyHostGenerationHandoff` broker operation. The
+   broker alone performs profile, filesystem, systemd, and cgroup effects and
+   durably appends their typed audit result before reporting success. No
+   system-manager handle or ambient host path reaches the runner.
 3. Exits with a structured outcome (bounded outcome code) returned through the
    activation portal. No store path, no d2b-bus call, no path in output.
 
@@ -729,21 +732,17 @@ each resource:
    window (§ 4.6). Initiate deletion of surplus records via the finalizer
    protocol (§ 4.5).
 
-### 7.3 startRoot justification
+### 7.3 Privilege boundary
 
-The activation-runner EphemeralProcess requires `startRoot: true`. The
-explicit Provider descriptor justification is:
-
-> The `activation-nixos-runner` template requires in-namespace root
-> (`startRoot: true`) to operate the integrity-bound activation helper, which
-> requires the fixed root identity to apply the system profile through the
-> pre-opened system-manager effect resources. `noNewPrivileges: true` and
-> `readOnlyRoot: true` are set; no writable ambient root paths or ambient host
-> paths are accessible. All target profile and system mutation flows only
-> through the manifest-declared, pre-opened activation portal and system-manager
-> effect resources routed in the LaunchTicket. No persistent root process
-> results; the runner is a one-shot EphemeralProcess that exits after the
-> activation operation completes.
+The activation-runner EphemeralProcess requires `startRoot: false`,
+`capabilityClasses: []`, `noNewPrivileges: true`, and `readOnlyRoot: true`.
+It validates and projects an integrity-bound request but never applies a
+profile, writes a durable file, calls systemd, or changes a cgroup. Every such
+effect is a closed `ApplyHostGenerationHandoff` broker transition resolved
+from trusted installed-generation data. The broker durably records the typed
+operation result before the runner can observe success. A descriptor that
+grants the runner root, a system-manager handle, a writable host mount, or a
+raw path fails conformance.
 
 ### 7.4 Rollback
 
@@ -891,9 +890,10 @@ The controller runs under:
 
 ### 10.3 Runner sandbox
 
-The activation-runner runs with `startRoot: true` and the provider-declared
-justification (§ 7.3). After the activation operation completes, the runner
-process exits entirely. No persistent root process results.
+The activation-runner runs with `startRoot: false`, an empty capability-class
+set, and the privilege boundary in §7.3. After the activation operation
+completes, the runner process exits entirely. It never becomes a privileged
+process.
 
 The runner's `seccompClass: activation-nixos-runner` allowlist is defined in
 the signed Provider package. It permits only the syscalls required to:
@@ -913,6 +913,22 @@ into the runner's process memory at activation time. They do not appear in:
 - Any CLI output
 - Any audit record or OTEL span attribute
 - Any log message at any severity level
+
+### 10.5 Secret-free rebuild reference
+
+`d2b.site.hostGenerationRebuildRef` is a public locator, not a credential
+carrier. Its flake-ref portion must be a local or public immutable input
+reference and its selector must be a bounded NixOS configuration name. The
+grammar rejects URI userinfo, query parameters, percent-encoded material,
+embedded credentials, control characters, and a second fragment delimiter.
+No secret source, credential file, environment expansion, or runtime lookup
+may populate it. The eval error directs the operator to use a secret-free
+local or public flake reference.
+
+The validated bytes exist only in the target closure carrier and in the
+broker-published stable reference. They never enter a resource, CLI output,
+error, log, audit record, metric, span, or `Debug` representation. Audit uses
+only the fixed digest.
 
 ---
 
@@ -969,6 +985,12 @@ Audit events are emitted by the Zone's post-commit audit chain after each
 store transaction is durable. The controller declares the event shape; the
 runtime fires it post-commit. No raw path, store path, digest, or private
 material appears in any audit record.
+
+These resource audit events do not replace privileged-effect audit.
+`ApplyHostGenerationHandoff` and every typed filesystem, systemd, cgroup, and
+lock sub-effect append and sync the broker `OpAuditRecord` before success is
+returned. A failed audit append or sync fails the effect closed and leaves the
+durable coordinator resumable.
 
 | Event | Trigger | Bounded fields |
 | --- | --- | --- |
@@ -1049,11 +1071,11 @@ Required adaptations (work item `ADR046-activation-001`):
 | Dependency/owner | `ADR046-audit-001` and `ADR046-cli-001`; `Provider/activation-nixos` owns the unprivileged host-generation request projection and the reused helper, while `d2b-priv-broker` exclusively owns the durable coordinator, authority checks, audit, and every host mutation. This item is the first serialized writer of the shared broker and contract wiring named in Destination. |
 | Current source | `packages/d2b-host/src/bin/d2b-activation-helper.rs`; the existing broker request, privilege, dispatch, daemon, and CLI wiring in `packages/d2b-contracts/src/{broker_wire.rs,public_wire.rs,lib.rs}`, `packages/d2b-core/src/{privileges.rs,lib.rs}`, `packages/d2b-priv-broker/src/{audit.rs,live_handlers.rs,main.rs,runtime.rs,ops/mod.rs}`, `packages/d2bd/src/{lib.rs,wire.rs}`, and `packages/d2b/src/{dispatch.rs,lib.rs}`. Code canon has no `SourceGenerationCompatibilityFloorV1`, `ApplyHostGenerationHandoff`, or durable host-generation handoff coordinator. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-host/src/bin/d2b-activation-helper.rs`; `packages/d2b-contracts/src/{host_generation.rs,broker_wire.rs,public_wire.rs,lib.rs}`; `packages/d2b-core/src/{host_generation.rs,privileges.rs,lib.rs}`; `packages/d2b-priv-broker/src/{audit.rs,live_handlers.rs,main.rs,runtime.rs}`; `packages/d2b-priv-broker/src/ops/{host_generation_handoff.rs,mod.rs}`; `packages/d2bd/src/{host_generation.rs,lib.rs,wire.rs}`; `packages/d2b/src/{host_generation.rs,dispatch.rs,lib.rs}`; `packages/d2b-contracts/tests/host_generation_handoff.rs`; `packages/d2b-priv-broker/tests/host_generation_handoff.rs`; `packages/d2bd/tests/host_generation_handoff.rs`; `packages/d2b/tests/host_generation_handoff.rs`; `tests/unit/nix/cases/broker-socket-activation.nix`; `tests/host-integration/host-generation-handoff.nix` |
-| Detailed design | Define the typed `SourceGenerationCompatibilityFloorV1` contract and `ApplyHostGenerationHandoff` broker operation. The unprivileged client accepts one bounded target-generation request and submits only an opaque, integrity-bound intent through the public daemon after lifecycle authorization; it cannot select a privileged executable, command, path, authority token, or coordinator state. A pure core state machine validates the compatibility floor and closed transitions, while the broker is the sole durable coordinator and mutation owner. The installed source broker records one intent durably before mutation, re-resolves and revalidates the target closure, apply program, GC root, and live peer before each effect, transfers coordinator ownership exactly once to the target broker through durable state, and makes either broker adopt the same intent after restart or response loss before cleanup. Target, apply-program, GC-root, live-peer, generation-ancestry, and caller substitutions fail closed before mutation. The helper keeps its file ownership, replaces legacy flags with bounded JSON input/output for `systemArtifactId` and `activationMode`, resolves the store path internally, emits no resource metadata or store path, and has no bash fallback. Only `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` participate; no new unit, runtime override, child compatibility actor, raw command path, or daemon-owned rollback path is permitted. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the helper in place and extend the existing typed daemon-broker path. |
+| Destination | `packages/d2b-host/src/bin/d2b-activation-helper.rs`; `packages/d2b-contracts/src/{host_generation.rs,broker_wire.rs,public_wire.rs,lib.rs}`; `packages/d2b-core/src/{host_generation.rs,privileges.rs,lib.rs}`; `packages/d2b-priv-broker/src/{audit.rs,live_handlers.rs,main.rs,runtime.rs}`; `packages/d2b-priv-broker/src/ops/{host_generation_handoff.rs,storage_contract.rs,sync_contract.rs,mod.rs}`; `packages/d2bd/src/{host_generation.rs,lib.rs,wire.rs}`; `packages/d2b/src/{host_generation.rs,dispatch.rs,lib.rs}`; `packages/d2b-contracts/tests/host_generation_handoff.rs`; `packages/d2b-priv-broker/tests/{host_generation_handoff.rs,broker_storage_sync.rs}`; `packages/d2bd/tests/host_generation_handoff.rs`; `packages/d2b/tests/host_generation_handoff.rs`; `tests/unit/nix/cases/broker-socket-activation.nix`; `tests/host-integration/host-generation-handoff.nix` |
+| Detailed design | Define the typed `SourceGenerationCompatibilityFloorV1` contract and `ApplyHostGenerationHandoff` broker operation. The unprivileged client accepts one bounded target-generation request and submits only an opaque, integrity-bound intent through the public daemon after lifecycle authorization; it cannot select a privileged executable, command, path, authority token, or coordinator state. A pure core state machine validates the compatibility floor and closed transitions, while the broker is the sole durable coordinator and mutation owner. The installed source broker records one intent durably before mutation, re-resolves and revalidates the target closure, apply program, GC root, and live peer before each effect, transfers coordinator ownership exactly once to the target broker through durable state, and makes either broker adopt the same intent after restart or response loss before cleanup. Target, apply-program, GC-root, live-peer, generation-ancestry, and caller substitutions fail closed before mutation. Every filesystem, systemd, cgroup, and lock effect is a typed broker sub-operation with a durable path-free audit result; no helper or Provider process performs one directly. Durable files, coordinator journals, and lock files are opened relative to anchored trusted dirfds with `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)` or an equivalent fail-closed walk, `O_NOFOLLOW|O_CLOEXEC`, regular-file owner/mode/link-count verification, and atomic file-plus-parent sync. Locks use non-inheritable OFD locks in the ADR 0034 total order. As the first serialized writer of the shared broker contract, this item also lands the reusable broker storage/sync primitive and the single boot-scoped `nft-inet-d2b` OFD lock used by later Network and USBIP owners; it does not acquire Network semantic ownership. The helper keeps its file ownership, replaces legacy flags with bounded JSON input/output for `systemArtifactId` and `activationMode`, resolves the store path internally, emits no resource metadata or store path, and has no bash fallback. Only `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` participate; no new unit, runtime override, child compatibility actor, raw command path, or daemon-owned rollback path is permitted. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the helper in place and extend the existing typed daemon-broker path. |
 | Integration | `d2b host-generation` uses `packages/d2b/src/host_generation.rs` to submit the typed request to `packages/d2bd/src/host_generation.rs`; the daemon enforces the existing public-socket lifecycle authorization and forwards `ApplyHostGenerationHandoff` over the existing broker socket. The source broker persists and begins the coordinator transaction, the existing broker service lifecycle starts the target broker after the generation transition, and the target broker adopts the single transferred transaction before completing or rolling it back. The activation-runner invokes the adapted helper through its pre-opened activation portal and reports the bounded result to activation-nixos status. |
 | Data migration | Full d2b 3.0 reset; no v2 activation-helper invocation compatibility |
-| Validation | Focused contract, core, broker, daemon, client, Nix, and host-integration tests cover exact `SourceGenerationCompatibilityFloorV1` encoding, the `ApplyHostGenerationHandoff` catalogue and authorization row, successful source-to-target ownership transfer, restart adoption before and after mutation, response-loss replay, rollback, target-closure substitution, apply-program substitution, GC-root substitution, live-peer substitution, non-ancestor generation, unauthorized caller, legacy bare-protocol refusal, helper JSON bounds and outcomes, absence of resource metadata and store paths, exactly the three existing root-visible units, and source policy proving no `Command::new("bash")` or alternate raw execution path. |
+| Validation | Focused contract, core, broker, daemon, client, Nix, and host-integration tests cover exact `SourceGenerationCompatibilityFloorV1` encoding, the `ApplyHostGenerationHandoff` catalogue and authorization row, successful source-to-target ownership transfer, restart adoption before and after mutation, response-loss replay, rollback, target-closure substitution, apply-program substitution, GC-root substitution, live-peer substitution, non-ancestor generation, unauthorized caller, legacy bare-protocol refusal, helper JSON bounds and outcomes, absence of resource metadata and store paths, exactly the three existing root-visible units, and source policy proving no `Command::new("bash")` or alternate raw execution path. Filesystem and sync tests plant symlink, hardlink, wrong-type, owner/mode/link-count, cross-mount, lock-inheritance, lock-order, and audit-sync failures; they prove anchored no-follow resolution, crash-safe file and parent sync, close-on-exec OFD locks, and one shared `nft-inet-d2b` lock across Network and USBIP broker operations. |
 | Removal proof | Legacy helper flags and every direct or daemon-owned host-generation mutation path are absent once the JSON helper, typed handoff, restart-adoption, authorization, substitution-denial, and three-unit tests pass. No compatibility unit, target-only binary, runtime override, bash fallback, or second coordinator remains. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1102,7 +1124,7 @@ Define JSON schema and Rust DTOs. Enforce:
 | Current source | Current top-level activation behavior in packages/d2b/src/lib.rs and hardlink-farm/store ownership split described in this dossier |
 | Reuse action | replace |
 | Destination | packages/d2b-provider-activation-nixos/src/controller/ |
-| Detailed design | Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical startRoot=true shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; emit §12.3 metrics with fixed `mode`/`outcome` semantics and no Zone or resource-name-derived labels; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic. |
+| Detailed design | Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical `startRoot: false` shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; emit §12.3 metrics with fixed `mode`/`outcome` semantics and no Zone or resource-name-derived labels; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic. |
 | Integration | Controller watches NixosGeneration resources through Zone resource API, creates activation-runner EphemeralProcesses, releases ownership references for Provider/volume-local, and writes bounded status. |
 | Data migration | Full d2b 3.0 reset; adopt mode records an existing active generation but does not import v2 controller state |
 | Validation | Controller tests for retention, finalizer sequence, no TTL retention, no direct store ops, no store path in status, deleted event-only removal, runner shape, and a structural metric descriptor assertion that `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys are absent and a generation/Zone-name canary never enters labels. |
@@ -1115,7 +1137,7 @@ Define JSON schema and Rust DTOs. Enforce:
 Reconcile loop for `activation-nixos.d2bus.org.NixosGeneration`. Key invariants:
 
 - No direct store-path operations; no `nix-collect-garbage` invocation.
-- EphemeralProcess dispatch creates runner with startRoot=true and the exact
+- EphemeralProcess dispatch creates runner with startRoot=false and the exact
   spec shape from §5.4; no raw command/argv composition.
 - Retention pruning via finalizer protocol; no explicit VolumeGcRequest or
   store-path deletion.
@@ -1178,10 +1200,10 @@ only after this lands (work item ADR046-activation-007).
 | Current source | Current VM Nix configuration emits activation inputs implicitly. Code canon has no `d2b.site.hostGenerationRebuildRef`, target-closure rebuild-reference carrier, validated publication request, or focused rebuild-reference eval case. |
 | Reuse action | adapt |
 | Destination | `nixos-modules/providers/activation-nixos.nix`; `nixos-modules/options-site.nix`; `nixos-modules/host-generation-rebuild-ref.nix`; `tests/unit/nix/cases/host-generation-rebuild-ref.nix`; `flake.nix`; `examples/{minimal,graphics-workstation,multi-env,with-entra-id,with-observability}/configuration.nix`; `templates/default/configuration.nix`; `tests/unit/nix/pinned/{common.txt,aarch64-linux.txt,x86_64-linux.txt}` |
-| Detailed design | Declare required, no-default `d2b.site.hostGenerationRebuildRef`. Accept only UTF-8 strings matching `^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` whose encoded length is at most exactly 2048 bytes; reject missing, empty, malformed, multiline, leading or trailing whitespace, embedded whitespace, missing selector, empty selector, and overlong values at evaluation. `nixos-modules/host-generation-rebuild-ref.nix` emits the validated bytes into the target closure at `share/d2b/host-generation-rebuild-ref`, and `nixos-modules/providers/activation-nixos.nix` is the only module wiring import. Publication is not a Nix activation side effect: it requests `ADR046-activation-001` to atomically publish those exact target-closure bytes at `/etc/d2b/host-generation-rebuild-ref` as `root:d2bd` mode `0640`. The handoff audit contains only the fixed digest; rollback restores the prior bytes or prior absence. No CLI, log, error, status, audit, or resource output exposes the value or either stable path. The module also emits the Provider spec and `activation-nixos.d2bus.org.NixosGeneration` resources per target, flows `retainedGenerations` only through `Provider.spec.config.retainedGenerations`, references systems only by `systemArtifactId`, omits store paths from resources, and declares no state-layout User or ComponentPrincipal because `ProviderStateSet` is empty. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new resource and carrier emitters adapted from existing Nix activation inputs. |
+| Detailed design | Declare required, no-default `d2b.site.hostGenerationRebuildRef`. Accept only UTF-8 strings matching `^[A-Za-z0-9+._~:/,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` whose encoded length is at most exactly 2048 bytes. In addition to missing, empty, malformed, multiline, whitespace, missing/empty selector, and overlong values, reject URI userinfo, query parameters, percent encoding, embedded credentials, and any second fragment delimiter; the value is a syntactically secret-free local or public rebuild locator, never credential material. `nixos-modules/host-generation-rebuild-ref.nix` emits the validated bytes into the target closure at `share/d2b/host-generation-rebuild-ref`, and `nixos-modules/providers/activation-nixos.nix` is the only module wiring import. Publication is not a Nix activation side effect: it requests `ADR046-activation-001` to atomically publish those exact target-closure bytes at `/etc/d2b/host-generation-rebuild-ref` as `root:d2bd` mode `0640`. The handoff audit contains only the fixed digest; rollback restores the prior bytes or prior absence. No CLI, log, error, status, audit, or resource output exposes the value or either stable path. The module also emits the Provider spec and `activation-nixos.d2bus.org.NixosGeneration` resources per target, flows `retainedGenerations` only through `Provider.spec.config.retainedGenerations`, references systems only by `systemArtifactId`, omits store paths from resources, and declares no state-layout User or ComponentPrincipal because `ProviderStateSet` is empty. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new resource and carrier emitters adapted from existing Nix activation inputs. |
 | Integration | `nixos-modules/providers/activation-nixos.nix` imports the focused carrier module, emits Provider and NixosGeneration resources plus private artifact-catalog entries, and supplies only the validated target-closure carrier to `ApplyHostGenerationHandoff`. Root flake eval fixtures, all shipped examples, and the default template set an explicit non-secret rebuild reference because the option has no default. `make nix-unit-pin` regenerates the three owned case-presence inventories after the focused case is added; no flake-check membership changes. |
 | Data migration | Full d2b 3.0 reset; existing d2b.vms activation settings are reauthored as Zone resources rather than imported |
-| Validation | `tests/unit/nix/cases/host-generation-rebuild-ref.nix` covers a valid reference, exactly 2048 UTF-8 bytes, 2049 bytes, missing option, empty value, malformed value, multiline value, leading/trailing/embedded whitespace, missing/empty/invalid/overlong selector, exact carrier bytes, and absence of direct `/etc` publication. Provider eval tests retain Provider config, NixosGeneration shape, `retainedGenerations` source, no `systemStorePath`, no state Volume or state-layout principal, and artifact-ID resolution coverage. Broker/CLI redaction tests from `ADR046-activation-001` prove fixed-digest-only audit, rollback to prior bytes or absence, `root:d2bd` `0640`, and no value or stable-path output. Every affected flake, example, and template eval passes with an explicit fixture value, and the regenerated Nix-unit inventories contain the new case on every supported system. |
+| Validation | `tests/unit/nix/cases/host-generation-rebuild-ref.nix` covers a valid local reference, a valid public reference, exactly 2048 UTF-8 bytes, 2049 bytes, missing option, empty value, malformed value, multiline value, leading/trailing/embedded whitespace, missing/empty/invalid/overlong selector, URI userinfo, query, percent encoding, credential-like material, a second fragment, exact carrier bytes, and absence of direct `/etc` publication. Provider eval tests retain Provider config, NixosGeneration shape, `retainedGenerations` source, no `systemStorePath`, no state Volume or state-layout principal, and artifact-ID resolution coverage. Broker/CLI redaction tests from `ADR046-activation-001` prove fixed-digest-only audit, rollback to prior bytes or absence, `root:d2bd` `0640`, and no value or stable-path output. Every affected flake, example, and template eval passes with an explicit secret-free fixture value, and the regenerated Nix-unit inventories contain the new case on every supported system. |
 | Removal proof | Old implicit activation inputs and any direct Nix activation publication are unused once resource-emitter and carrier parity tests pass. A source scan and eval assertions prove there is no option default, no second carrier emitter, no direct `/etc/d2b/host-generation-rebuild-ref` writer, and no raw rebuild-reference value in generated resources or output fixtures. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-transport-unix` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 3 |
+| Version | 4 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-transport-unix` crate; d2b-bus Unix transport layer |
@@ -37,7 +37,7 @@ ADR 0045 assumptions excluded.
 | --- | --- |
 | `UnixSeqpacketTransport` | Atomic packet + ancillary FDs via `sendmsg`/`recvmsg` with `SCM_RIGHTS`; each `send` is one `sendmsg` call - packet and FD ancillary data are delivered atomically or not at all; receive reads the full packet and collects all attached FDs before returning |
 | `UnixStreamTransport` | Frame-based: 2-byte big-endian record-length prefix on every write; reader reads the prefix, allocates a buf, reads the body; no FD ancillary support |
-| `PeerIdentityPolicy` | Three variants: `Accepted` (no further check), `Pathname { uid, gid }` (SO_PEERCRED verified against expected uid/gid from the endpoint config), `InheritedSocketpair` (credentials extracted from kernel SO_PEERCRED without connecting; verified not overwritten by peer) |
+| `PeerIdentityPolicy` | Reuse only the endpoint-policy classification. Raw credentials are not reported upward and numeric PID identity is rejected; production admission consumes accepted-socket-bound pidfd evidence through the private registrar path. |
 | `UnixAttachmentPayload` | Attachment payload for seqpacket-received FDs; holds an `OwnedFd` with CLOEXEC enforced; `validate_descriptor` called after the protected record is decrypted and before the FD is delivered to any service handler |
 | `OwnedUnixAttachment` | RAII wrapper over `UnixAttachmentPayload`; calls `close()` exactly once on drop; `into_payload()` transfers without close |
 
@@ -55,10 +55,10 @@ ADR 0045 assumptions excluded.
 
 | Symbol | Selected behavior |
 | --- | --- |
-| `PeerCredentials` | Wraps kernel-supplied `ucred` (`uid`, `gid`, `pid`); never derived from payload or peer assertion |
-| `PidfdIdentityPolicy` | Verifies live process identity: opens pidfd via `pidfd_open(pid, 0)`, reads `/proc/<pid>/fdinfo/<fd>`, checks `pos` and `flags`; rejects on any I/O error or kernel-object mismatch |
-| `DescriptorPolicy` | Combines `PeerCredentials`, `PidfdIdentityPolicy`, and object identity into one admission decision; all three must pass |
-| `VerifiedPacket` | Output of `DescriptorPolicy::verify`; carries verified `PeerCredentials`, verified object identities, and scavenged `OwnedFd` set - guaranteed close on drop |
+| `PeerCredentials` | Reuse only as a private kernel observation compared inside the safe adapter; public fields/accessors and any use of `pid` as authority are rejected. |
+| `PidfdIdentityPolicy` | **Adapt, do not copy**: the numeric `pidfd_open(pid, 0)` and `/proc/<pid>/fdinfo` algorithm is forbidden. Production peer evidence comes only from `SO_PEERPIDFD` on the exact accepted socket through the typed broker operation. |
+| `DescriptorPolicy` | Adapt generic attachment object validation; it must not mint peer identity or accept a received pidfd as a substitute for accepted-socket evidence. |
+| `VerifiedPacket` | Retain owned-FD scavenging only. It carries no raw credentials or admission evidence. |
 | `ObjectIdentity` | `st_dev`, `st_ino`, `file_type`; kernel-supplied; same-kernel-object check rejects duplicate FDs |
 | `AcceptedAttachment` | Binding of `VerifiedPacket` and `UnixAttachmentPayload` after decrypted descriptor matches verified object |
 
@@ -90,12 +90,12 @@ ADR 0045 assumptions excluded.
 | `failed_multiscope_reservation_rolls_back_every_prior_scope` | CreditBundle rollback | copy |
 | `staged_credit_reservations_release_once_at_each_scope` | Release idempotency | copy |
 | `inherited_passcred_is_verified_but_never_repaired` | SO_PASSCRED passthrough | copy |
-| `first_packet_has_exact_directional_credentials` | First-packet SO_PEERCRED direction check | copy |
-| `seqpacket_transfer_is_atomic_cloexec_and_object_exact` | FD transfer atomicity and CLOEXEC | copy |
+| `first_packet_has_exact_directional_credentials` | First-packet SO_PEERCRED direction check | adapt to private consumed observation |
+| `seqpacket_transfer_is_atomic_cloexec_and_object_exact` | FD transfer atomicity and CLOEXEC | adapt to `MSG_CMSG_CLOEXEC` receipt plus `F_GETFD` verification |
 | `duplicate_kernel_objects_are_rejected_and_cleaned_up` | Duplicate FD rejection and scavenge | copy |
 | `owned_transport_adapters_transfer_packets_and_owned_files_end_to_end` | End-to-end seqpacket | copy |
 | `stream_transport_reassembles_partial_and_coalesced_records` | Stream framing | copy |
-| `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` | Pidfd liveness | copy |
+| `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` | Numeric-PID pidfd liveness | replace with accepted-socket `SO_PEERPIDFD` evidence tests |
 | `payload_and_control_truncation_scavenge_received_files` | FD scavenge on truncation | copy |
 
 **V3 destination**: `packages/d2b-provider-transport-unix/src/{seqpacket,stream,identity,credit,descriptor,socket}.rs`
@@ -164,6 +164,18 @@ ZoneLink handler exists.
 | Process domains | `system` only |
 | ResourceTypes owned | None |
 | ResourceTypes consumed | `Host` (executionRef target); `Provider/system-minijail` (Process Provider); `Volume` (view only: component mounts its ProviderDeployment-created Volume view; `Provider/transport-unix` does not own, reconcile, or create Volume resources) |
+
+### Linux platform gate
+
+Provider/transport-unix requires Linux 6.9 or newer. Before the Provider is
+Ready, the core/broker readiness path must pass both a pidfs self-pidfd probe
+and an `SO_PEERPIDFD` socketpair probe, including pidfs object identity,
+liveness, close-on-exec, and exact descriptor ownership. A kernel version
+string is not proof. Missing or inconclusive pidfs or `SO_PEERPIDFD` support
+returns an actionable `pidfs-unavailable` or `peer-pidfd-unavailable` refusal,
+keeps the Provider not Ready, and launches no production Unix admission path.
+There is no production soft-fail, numeric-PID fallback, or reduced-identity
+mode.
 
 **D089 desired-spec shape.** This transport Provider owns no ResourceType; child
 core reconciles the exact canonical ZoneLink base fields:
@@ -354,10 +366,12 @@ incoming packet. `SeqpacketSocket::accept` reads this credential immediately;
 it is stored as `PeerCredentials` for that socket and is never re-read or
 overwritten by peer data.
 
-**CLOEXEC**: every `OwnedFd` extracted from `SCM_RIGHTS` has `O_CLOEXEC` set
-immediately via `fcntl(fd, F_SETFD, FD_CLOEXEC)` before being exposed to any
-higher layer. A CLOEXEC failure is a fatal transport error; the FD is closed and
-the packet rejected.
+**CLOEXEC**: every `recvmsg` that can receive `SCM_RIGHTS` uses
+`MSG_CMSG_CLOEXEC`, then verifies `FD_CLOEXEC` with `F_GETFD` before exposing
+an `OwnedFd`. Post-receipt `fcntl(F_SETFD)` repair is forbidden because another
+thread could exec in the gap. Missing `MSG_CMSG_CLOEXEC`, a descriptor without
+`FD_CLOEXEC`, `MSG_CTRUNC`, malformed control data, or an unexpected
+descriptor count closes every received FD and rejects the packet.
 
 **Scavenge on error**: if any validation step fails after FDs are received,
 every received FD in the packet is closed immediately. The `VerifiedPacket`
@@ -383,10 +397,11 @@ Provider).
 
 ## Peer identity and provenance
 
-`PeerIdentityPolicy` governs how the transport maps the connected peer to an
-authenticated subject. The endpoint configuration selects exactly one policy;
-the transport reports `PeerCredentials` upward to ComponentSession for
-subject mapping.
+`PeerIdentityPolicy` governs which checks the safe adapter applies before it
+hands one opaque evidence value to the registrar. The endpoint configuration
+selects exactly one policy. The transport never reports raw credentials,
+numeric PIDs, or pidfds upward for subject mapping; only the registrar-private
+issuer resolves the subject.
 
 ### `Accepted`
 
@@ -422,18 +437,12 @@ compiler-only `parentZone` selects a local parent allocator.
 
 When `SO_PASSCRED` is enabled (seqpacket only), the kernel includes
 `SCM_CREDENTIALS` in the ancillary data of the first incoming packet. The
-`SeqpacketSocket` reads these credentials from the first `recvmsg` call and
-stores them as an immutable `PeerCredentials`. Subsequent packets on the same
-connection are bound to the same credentials; the kernel does not allow the
-peer to change them after connection.
-
-```rust
-pub struct PeerCredentials {
-    pub uid: u32,
-    pub gid: u32,
-    pub pid: i32,  // used only for PidfdIdentityPolicy; never stored or logged
-}
-```
+`SeqpacketSocket` reads these credentials from the first `recvmsg` call into a
+private, non-cloneable observation. The safe session adapter compares that
+observation with the accepted-socket-bound pidfd evidence and consumes both
+into the registrar-private issuer. No public `PeerCredentials` fields,
+constructor, accessor, conversion, or re-export exists. Subsequent packets on
+the same connection remain bound to that consumed admission.
 
 ---
 
@@ -480,30 +489,33 @@ duplicate objects.
 
 ## Pidfd identity policy
 
-`PidfdIdentityPolicy` provides liveness proof for pidfd attachments. It is
-invoked when an attachment descriptor declares `KernelObjectType::Pidfd`:
+Production Unix peer identity is obtained only from the exact accepted socket:
 
-1. Open a pidfd via `pidfd_open(peer_credentials.pid, 0)`.
-2. Read `/proc/<pid>/fdinfo/<attachment_fd>`.
-3. Verify `pos` and `flags` are consistent with a live pidfd.
-4. Use `kcmp(getpid(), peer_pid, KCMP_FILE, self_fd, peer_fd)` to confirm the
-   received FD refers to the same open-file-description as the peer.
-5. Reject on any step failure, pid reuse, or FD absence under `/proc`.
+1. The safe adapter transfers that accepted socket, and no numeric PID or
+   credential tuple, as exactly one `SCM_RIGHTS` request attachment to the
+   typed broker operation `OpenPeerPidfdFromAcceptedSocket`.
+2. Broker receipt uses `recvmsg(MSG_CMSG_CLOEXEC)`, rejects
+   missing/extra/truncated/malformed ancillary data, verifies `FD_CLOEXEC`, and
+   owns the accepted socket on every terminal path.
+3. The broker calls `getsockopt(SO_PEERPIDFD)` on that socket in the existing
+   `sys.rs` FFI quarantine, verifies the returned pidfd is live, pidfs-backed,
+   and close-on-exec, and returns exactly one owned pidfd.
+4. The adapter receives that pidfd with `MSG_CMSG_CLOEXEC`, verifies
+   credentials, process generation/start identity, expected cgroup, liveness,
+   and descriptor identity against the exact fd, and consumes one sealed,
+   non-cloneable evidence value into the registrar-private issuer.
 
-The result is an `ObjectIdentity` binding with a `live_at` monotonic timestamp
-stored in `AcceptedAttachment`. `pid` is never stored beyond the liveness check
-and never appears in any log, audit record, or metric label.
-
-Pidfds validated here are returned to callers (core or d2b-bus) as attachment
-payloads. After delivery, the caller owns the FD entirely; the Provider has no
-further knowledge of the pidfd.
+There is no `pidfd_open(SO_PEERCRED.pid)`, `/proc/<pid>` reopen, numeric-PID
+fallback, received-pidfd admission substitute, or public evidence accessor.
+Unsupported `SO_PEERPIDFD`, absent pidfs, mismatch, dead fd, PID reuse,
+response loss, or ambiguity denies admission and closes all descriptors.
 
 ---
 
 ## Blocking adapter requirement
 
-`pidfd_open(2)`, `/proc` reads (`fdinfo`, `status`), `kcmp(2)`, `fstat(2)`,
-`getsockopt(2)`, and `fcntl(2)` are all potentially blocking or slow syscalls.
+`fstat(2)`, `getsockopt(2)`, `recvmsg(2)`, and `fcntl(F_GETFD)` are all
+potentially blocking or slow syscalls.
 Running them directly on an async task thread stalls the Tokio executor and
 delays portal responsiveness and `ObserveTransport` event delivery.
 
@@ -511,8 +523,8 @@ All such calls **must** be dispatched through a bounded blocking adapter:
 
 ```rust
 // Correct: spawn_blocking isolates the blocking syscall
-let identity = tokio::task::spawn_blocking(move || {
-    PidfdIdentityPolicy::verify(pid, attachment_fd)
+let object = tokio::task::spawn_blocking(move || {
+    DescriptorPolicy::verify_attachment(attachment_fd)
 }).await??;
 
 // Correct: getsockopt dispatched via blocking adapter
@@ -527,12 +539,14 @@ deadline of `BLOCKING_SYSCALL_TIMEOUT_MS=500` ms; exceeding this fails
 `open-transport-bad-attachment` for the affected `OpenTransport` call.
 
 This requirement covers:
-- `PidfdIdentityPolicy::verify` (pidfd_open + /proc/fdinfo + kcmp)
-- `DescriptorPolicy::fstat_all` (fstat per attachment FD)
+- `DescriptorPolicy::fstat_all` (fstat per attachment FD; never peer identity)
 - `admission::get_socket_type` (getsockopt SO_TYPE)
 - `admission::set_passcred` (setsockopt SO_PASSCRED)
-- `admission::set_cloexec` (fcntl F_SETFD)
+- `admission::verify_cloexec` (fcntl F_GETFD)
 - `ProcessCreditLimit::measure` (/proc/self/fd readdir)
+
+The broker's `SO_PEERPIDFD` call and ancillary request/response ownership stay
+inside the broker operation, not this Provider's blocking pool.
 
 ---
 
@@ -771,8 +785,9 @@ OpenTransportRequest {
    before this line is reached.
 4. If `socket_kind = "stream"` and `attachments_enabled = true`:
    fail `attachment-policy-conflict`.
-5. Set `O_CLOEXEC` on the FD (blocking adapter). Fail `cloexec-set-failed`
-   if the syscall fails; close the FD.
+5. Require that attachment receipt used `MSG_CMSG_CLOEXEC` and verify
+   `FD_CLOEXEC` with `F_GETFD`. A non-CLOEXEC descriptor is closed and fails
+   `cloexec-receipt-failed`; it is never repaired after receipt.
 6. If `socket_kind = "seqpacket"`: enable `SO_PASSCRED` (blocking adapter).
 7. Dup the FD: keep the dup internally for `ObserveTransport` monitoring;
    the original FD is returned to core as the `OwnedTransport` attachment.
@@ -1047,17 +1062,23 @@ trusts a uid/gid/pid from the peer payload. On seqpacket, forged
 first kernel-filled credential is used and it comes from the
 accept/connect path.
 
+Credentials are attributes, not process authority. Production admission also
+requires the pidfd obtained with `SO_PEERPIDFD` from that exact accepted socket
+and consumed by the registrar-private issuer. No numeric PID, caller-supplied
+subject, or received pidfd attachment can replace it.
+
 ### No path traversal or TOCTOU
 
-All FD operations use `fstat`/`fcntl`/`getsockopt` relative to the received
-FD, never absolute paths after accept. Pidfd liveness uses `fdinfo` and `kcmp`;
-no `/proc/<pid>/exe` or path-based checks.
+All FD operations use `fstat`/`fcntl`/`getsockopt` relative to owned received
+FDs, never absolute paths after accept. Peer liveness and identity use the
+accepted-socket `SO_PEERPIDFD` result; no `/proc/<pid>` reopen or path-based
+check exists.
 
 ### Debug, log, and metric redaction
 
 The following values are **never** logged, audited, or emitted as metric labels:
 
-- `PeerCredentials.pid` (used only for pidfd liveness; not stored)
+- any numeric peer PID or raw credential tuple
 - Transport handles (opaque tokens; redacted in all Debug output)
 - Static private keys (zeroizing; never reachable by a logger)
 - ZoneLink name in observation events (opaque correlation ID only)
@@ -1074,13 +1095,14 @@ The following values are **never** logged, audited, or emitted as metric labels:
 | `additionalProperties: false` rejects all unknown keys | JSON Schema |
 | ZoneLink transports always have `attachments_enabled=false` | Child Zone's core ZoneLink controller (structural, pre-call); `admission.rs::validate_route_class` (belt-and-suspenders) |
 | `route_class=zone-link` + `attachments_enabled=true` → `attachment-policy-conflict` | `portal.rs::open_transport` step 3 |
-| CLOEXEC on every received FD | `portal.rs::open_transport` (blocking adapter) |
+| Atomic CLOEXEC on every received FD | every ancillary receive uses `MSG_CMSG_CLOEXEC`, then `F_GETFD` verifies; no post-receipt repair |
 | Credit rollback on any validation failure | `CreditBundle` RAII drop |
 | FD scavenge on decryption failure | `VerifiedPacket` RAII drop |
 | `socketKind=stream` → `attachments_enabled` must be false | `admission.rs::validate_route_class` |
 | `getsockopt(SO_TYPE)` verified against declared `socketKind` | `portal.rs::open_transport` (blocking adapter) |
 | Duplicate kernel objects rejected | `ObjectIdentity` check in `DescriptorPolicy` |
-| Pidfd liveness before delivery | `PidfdIdentityPolicy` at descriptor validation |
+| Peer pidfd bound to exact accepted socket | typed broker `OpenPeerPidfdFromAcceptedSocket` uses `SO_PEERPIDFD`; registrar consumes sealed evidence |
+| Linux 6.9, pidfs, and SO_PEERPIDFD available | Provider readiness probes; no production soft-fail |
 | Handle table bounded at `MAX_OPEN_TRANSPORTS=256` | `portal.rs` handle table `insert` |
 | Provider never calls allocator/broker directly | No allocator API call site exists in this crate |
 
@@ -1164,15 +1186,19 @@ never reused.
 | `attachment-policy-conflict` | 2 | `route_class=zone-link` with `attachments_enabled=true` (cross-Zone FD grants are prohibited by the ZoneLink contract); or `socketKind=stream` with `attachments_enabled=true`; or `attachmentsEnabled` field present in ZoneLink `spec.transportSettings` (rejected structurally before Provider) |
 | `open-transport-bad-attachment` | 3 | `OpenTransport` request has no FD attachment or carries more than one FD |
 | `invalid-socket-fd` | 4 | Received FD is not a valid `AF_UNIX` socket (wrong address family or type) |
-| `cloexec-set-failed` | 5 | `fcntl(F_SETFD, FD_CLOEXEC)` failed; FD closed |
+| `cloexec-receipt-failed` | 5 | Ancillary receipt did not atomically set `FD_CLOEXEC`, or verification failed; all FDs closed |
 | `peer-credential-policy-rejected` | 6 | SO_PEERCRED uid/gid does not match the `Pathname` policy expectation |
 | `duplicate-kernel-object` | 7 | Two received FDs in one packet share `st_dev`/`st_ino` and duplicates are not permitted by policy |
 | `insufficient-credit` | 8 | FD credit reservation failed a `CreditScope`; includes `scope` detail field |
 | `attachment-on-stream-socket` | 9 | `SCM_RIGHTS` ancillary data received on a stream transport or on a session with `attachmentsEnabled=false` |
-| `pidfd-liveness-check-failed` | 10 | `PidfdIdentityPolicy` rejected the received pidfd (process reuse, fdinfo mismatch, kcmp failure) |
+| `pidfd-liveness-check-failed` | 10 | Accepted-socket-bound pidfd was dead, not pidfs-backed, or mismatched with credential/generation/cgroup/descriptor evidence |
 | `handle-table-full` | 11 | `MAX_OPEN_TRANSPORTS=256` open transport handles already active |
 | `unknown-handle` | 12 | `CloseTransport` or `ObserveTransport` supplied an unrecognized or already-closed `transport_handle`; idempotent for `CloseTransport` |
 | `transport-settings-schema-violation` | 13 | `spec.transportSettings` violates the JSON Schema at runtime (belt-and-suspenders; build/eval guards should precede this) |
+| `kernel-too-old` | 14 | Host kernel is older than Linux 6.9; Provider remains not Ready |
+| `pidfs-unavailable` | 15 | Runtime pidfs probe failed or was inconclusive; Provider remains not Ready |
+| `peer-pidfd-unavailable` | 16 | `SO_PEERPIDFD` readiness probe or accepted-socket acquisition failed; no fallback |
+| `ancillary-receipt-invalid` | 17 | Missing, extra, truncated, malformed, or non-CLOEXEC ancillary descriptor set; every received FD closed |
 
 Retriable: `handle-table-full` (after delay; core may retry after a prior
 transport is closed). All others are non-retriable from the Provider's perspective;
@@ -1190,14 +1216,19 @@ those are core/session/broker audit responsibilities.
 All records are emitted under category `transport-unix` to the Zone runtime's
 audit log and committed before the operation completes.
 
+The broker separately emits and syncs the path-free
+`OpenPeerPidfdFromAcceptedSocket` `OpAuditRecord` before returning the pidfd.
+Failure to persist that audit row fails admission closed; the Provider record
+does not substitute for broker effect audit.
+
 | Event kind | Required fields | Trigger |
 | --- | --- | --- |
 | `transport-opened` | `transport_class` (`local-seqpacket`\|`local-stream`), `attachments_enabled` (bool), `peer_policy` (`accepted`\|`pathname`\|`inherited-socketpair`) | `OpenTransport` succeeds; no uid/gid/pid/path/handle in record |
 | `transport-closed` | `transport_class` | `CloseTransport` called; no uid/gid/pid/path/handle in record |
 | `peer-credential-policy-rejected` | `peer_policy="pathname"`, `socket_kind` | `peer-credential-policy-rejected` error; no uid/gid values |
 | `attachment-credit-exhausted` | `scope`, `requested`, `available` | `insufficient-credit` error |
-| `pidfd-identity-rejected` | `error_detail` (`"liveness"`\|`"fdinfo"`\|`"kcmp"`) | `pidfd-liveness-check-failed`; no pid in record |
-| `cloexec-enforcement-failed` | (no additional fields) | `cloexec-set-failed` error |
+| `pidfd-identity-rejected` | `error_detail` (`"liveness"`\|`"pidfs"`\|`"credential"`\|`"generation"`\|`"cgroup"`\|`"descriptor"`) | `pidfd-liveness-check-failed`; no pid in record |
+| `cloexec-enforcement-failed` | (no additional fields) | `cloexec-receipt-failed` error |
 
 **Redaction rules (strict)**:
 - No `uid`, `gid`, or `pid` in any record.
@@ -1235,7 +1266,8 @@ Labels:
 - `outcome`: `"ok"` or `"error"`
 - `kind`: `"peer-disconnected"` or `"error"`
 - `scope`: `"packet"`, `"request"`, `"operation"`, `"session"`, `"process"`, `"host"`
-- `reason`: `"liveness"`, `"fdinfo"`, `"kcmp"`
+- `reason`: `"liveness"`, `"pidfs"`, `"credential"`, `"generation"`,
+  `"cgroup"`, or `"descriptor"`
 
 ### OTEL span attributes
 
@@ -1460,8 +1492,8 @@ Old and new suites never run in parallel indefinitely.
 | Unix seqpacket transport | `d2b-session-unix/src/adapter.rs` `UnixSeqpacketTransport` (main `a1cc0b2d`) | `implemented-but-unwired` | copy and adapt to v3 portal model |
 | Unix stream transport | `d2b-session-unix/src/adapter.rs` `UnixStreamTransport` (main `a1cc0b2d`) | `implemented-but-unwired` | copy unchanged |
 | FD credit pool | `d2b-session-unix/src/credit.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | copy unchanged |
-| SO_PEERCRED / SO_PASSCRED | `d2b-session-unix/src/adapter.rs` `PeerIdentityPolicy`, `src/socket.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | copy and adapt for v3 Zone subject mapping |
-| Pidfd identity policy | `d2b-session-unix/src/descriptor.rs` `PidfdIdentityPolicy` (main `a1cc0b2d`) | `implemented-but-unwired` | copy unchanged |
+| SO_PEERCRED / SO_PASSCRED | `d2b-session-unix/src/adapter.rs` `PeerIdentityPolicy`, `src/socket.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | adapt to private consumed observation; never expose raw credentials as subject input |
+| Pidfd identity policy | `d2b-session-unix/src/descriptor.rs` `PidfdIdentityPolicy` (main `a1cc0b2d`) | `implemented-but-unwired` | adapt ownership/scavenge only; delete numeric `pidfd_open` and `/proc` identity algorithm in favor of accepted-socket `SO_PEERPIDFD` |
 | Unix session tests (12) | `d2b-session-unix/tests/unix_session.rs` (main `a1cc0b2d`) | `test-only-or-preview` | copy and adapt for v3 portal model |
 | OpenTransport/CloseTransport/ObserveTransport service API | none | `ADR-only` | new |
 | Service Process resource with full sandbox/budget/endpoints spec | none in v3 baseline | `ADR-only` | new |
@@ -1506,10 +1538,10 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | Same; `UnixSeqpacketTransport`, `PeerIdentityPolicy`, `UnixAttachmentPayload`, `OwnedUnixAttachment`, `SeqpacketSocket`, `PeerCredentials`, `ObjectIdentity`, `AcceptedAttachment`, `VerifiedPacket` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/{seqpacket,identity,socket}.rs` |
-| Detailed design | Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup - that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
+| Detailed design | Adapt transport structs while removing every public raw-credential field/accessor/conversion. `PeerIdentityPolicy` produces only a private kernel observation for the safe session adapter; it never reports `PeerCredentials` upward as subject input. Maintain `SO_PASSCRED` setup and first-packet credential extraction, but all ancillary receive paths use `MSG_CMSG_CLOEXEC`, verify with `F_GETFD`, reject `MSG_CTRUNC`/malformed/missing/extra descriptors, and scavenge every failure. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy transport mechanics and replace identity/CLOEXEC ownership. |
 | Integration | `portal.rs::open_transport` calls `SeqpacketSocket::getsockopt(SO_TYPE)` and `setsockopt(SO_PASSCRED)`, constructs `UnixSeqpacketTransport`, hands OwnedTransport FD back to caller |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here` |
+| Validation | Adapt the 12 source tests; replace the raw-peercred projection test with `peer_observation_is_private_and_consumed`, and add atomic CLOEXEC, truncation, malformed ancillary, missing/extra FD, and stable descriptor-count tests |
 | Removal proof | `d2b-realm-transport` seqpacket path retired after ZoneLink sessions migrate to child-local Providers and tests prove no reciprocal parent-store resource or cross-Zone FD transfer remains |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1566,10 +1598,10 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | Same |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/descriptor.rs` |
-| Detailed design | Copy verbatim; adapt `DescriptorPolicy::verify` to produce `AcceptedAttachment` carrying `ObjectIdentity` binding for v3 ComponentSession attachment descriptor model; `pid` not stored beyond liveness check Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
-| Integration | Called by seqpacket transport after decrypting attachment descriptor |
+| Detailed design | Do not copy the numeric-PID algorithm. Retain generic attachment `ObjectIdentity` and RAII scavenge behavior, but remove `pidfd_open(peer_credentials.pid)`, `/proc/<pid>` fdinfo/status reads, `kcmp` peer-PID comparison, and any received-pidfd path that can mint peer admission. Define the sealed evidence consumer for the exact `OwnedFd` returned by `OpenPeerPidfdFromAcceptedSocket`; ADR046-transport-unix-006 owns broker acquisition and registrar wiring. Primary reuse disposition: `adapt`. Preserved source-plan detail: retain descriptor ownership and replace peer identity. |
+| Integration | Generic attachment validation runs after decrypting the attachment descriptor; production peer admission separately consumes the broker-returned accepted-socket pidfd and can never be satisfied by a packet attachment |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Copy `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` and `duplicate_kernel_objects_are_rejected_and_cleaned_up` |
+| Validation | Adapt `duplicate_kernel_objects_are_rejected_and_cleaned_up`; replace the numeric-PID test with compile/source tests proving absent `pidfd_open(SO_PEERCRED.pid)`, absent `/proc/<pid>` reopen, and refusal to treat a received pidfd attachment as admission evidence |
 | Removal proof | Broker pidfd-open path in `d2b-priv-broker/src/sys.rs` serves different purpose (process supervision); no removal dependency |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1585,11 +1617,11 @@ Old and new suites never run in parallel indefinitely.
 | Current source | No existing v3 socket-kind admission module and no `OpenPeerPidfdFromAcceptedSocket` broker operation. `packages/d2b-session-unix/src/{subject.rs,zone_admission.rs}` currently exposes public peer/bootstrap verification and evidence accessors; `packages/d2b-bus/src/router.rs` consumes raw `PeerCredentials`; `packages/d2b-priv-broker/src/protocol.rs` receives JSON without an attached request fd. |
 | Reuse source | Existing `getsockopt(SO_TYPE)` admission pattern; `packages/d2b-priv-broker/src/{fd_passing.rs,sys.rs}` for close-on-exec ancillary transfer and the existing broker FFI quarantine; `packages/d2b-session-unix/src/{adapter.rs,descriptor.rs,pidfd.rs,socket.rs,subject.rs,zone_admission.rs}` and `packages/d2b-bus/src/router.rs` for the safe adapter and private registrar boundary |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-transport-unix/src/admission.rs`; `packages/d2b-provider-transport-unix/tests/admission.rs`; `packages/d2b-contracts/src/{broker_wire.rs,lib.rs}`; `packages/d2b-core/src/privileges.rs`; `packages/d2b-priv-broker/src/{audit.rs,fd_passing.rs,live_handlers.rs,protocol.rs,runtime.rs,sys.rs}`; `packages/d2b-priv-broker/src/ops/{peer_pidfd.rs,mod.rs}`; `packages/d2b-contracts/tests/broker_peer_pidfd.rs`; `packages/d2b-priv-broker/tests/peer_pidfd_from_accepted_socket.rs`; `packages/d2b-session-unix/src/{adapter.rs,descriptor.rs,error.rs,lib.rs,pidfd.rs,socket.rs,subject.rs,zone_admission.rs}`; `packages/d2b-session-unix/tests/{subject_mapping.rs,unix_session.rs}`; `packages/d2b-bus/src/{router.rs,transport/unix.rs}`; `packages/d2b-bus/tests/{public_mint_surface.rs,approved-public-api.txt,approved-hidden-public-api.txt,approved-capability-api.txt,approved-capability-trait-impls.txt}` |
-| Detailed design | Keep `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)`: it calls `getsockopt(SO_TYPE)` on `received_fd`; `SOCK_SEQPACKET` must match `"seqpacket"`, `SOCK_STREAM` must match `"stream"`, every other type fails `invalid-socket-fd`; ZoneLink with attachments and stream with attachments fail `attachment-policy-conflict`; Noise profile enforcement remains ComponentSession-owned. Add the typed `OpenPeerPidfdFromAcceptedSocket` broker request. Its request carries no numeric PID, credential tuple, raw descriptor integer, path, or subject claim and must arrive with exactly one accepted-socket `SCM_RIGHTS` fd. Receipt uses `MSG_CMSG_CLOEXEC`, rejects truncated/malformed control data and missing/extra fds, and closes every received or produced fd on all refusal, decode, send, and disconnect paths. The broker obtains the peer pidfd from that exact accepted socket using `SO_PEERPIDFD` in the existing `packages/d2b-priv-broker/src/sys.rs` quarantine, verifies it is live and close-on-exec, and returns exactly one owned pidfd; unsupported kernels fail closed with an actionable typed kernel-floor error. There is no `pidfd_open(SO_PEERCRED.pid)` or other numeric-PID fallback and no new FFI crate, Cargo dependency, or manifest edit. The safe Unix session adapter consumes the accepted socket and returned `OwnedFd`, verifies `SO_PEERCRED`, process generation/start identity, expected cgroup, liveness, and descriptor identity against that exact fd, and transfers one opaque, non-cloneable evidence value into the private `ZoneRegistrar` issuer. The registrar alone resolves the subject. Remove public verifier/credential constructors, `ZoneBootstrapIdentity::verify`, its `Clone`, `VerifiedUnixPeer::credentials`, evidence accessors, conversions, re-exports, and any alternate issuance path. Compile-fail and API seals reject `Clone`, `Copy`, `Default`, `From`, public fields, raw credential/pidfd access, caller-supplied verifiers, and external issuance. Primary reuse disposition: `adapt`. Preserved source-plan detail: retain socket-kind admission and replace numeric peer identity with accepted-socket-bound pidfd evidence. |
+| Destination | `packages/d2b-provider-transport-unix/src/{admission.rs,platform.rs}`; `packages/d2b-provider-transport-unix/tests/{admission.rs,platform.rs}`; `packages/d2b-contracts/src/{broker_wire.rs,lib.rs}`; `packages/d2b-core/src/privileges.rs`; `packages/d2b-priv-broker/src/{audit.rs,fd_passing.rs,live_handlers.rs,protocol.rs,runtime.rs,sys.rs}`; `packages/d2b-priv-broker/src/ops/{peer_pidfd.rs,mod.rs}`; `packages/d2b-contracts/tests/broker_peer_pidfd.rs`; `packages/d2b-priv-broker/tests/peer_pidfd_from_accepted_socket.rs`; `packages/d2b-session-unix/src/{adapter.rs,descriptor.rs,error.rs,lib.rs,pidfd.rs,socket.rs,subject.rs,zone_admission.rs}`; `packages/d2b-session-unix/tests/{subject_mapping.rs,unix_session.rs}`; `packages/d2b-bus/src/{router.rs,transport/unix.rs}`; `packages/d2b-bus/tests/{public_mint_surface.rs,approved-public-api.txt,approved-hidden-public-api.txt,approved-capability-api.txt,approved-capability-trait-impls.txt}` |
+| Detailed design | Keep `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)`: it calls `getsockopt(SO_TYPE)` on `received_fd`; `SOCK_SEQPACKET` must match `"seqpacket"`, `SOCK_STREAM` must match `"stream"`, every other type fails `invalid-socket-fd`; ZoneLink with attachments and stream with attachments fail `attachment-policy-conflict`; Noise profile enforcement remains ComponentSession-owned. Gate Provider readiness on Linux 6.9 plus successful pidfs self-pidfd and `SO_PEERPIDFD` socketpair probes, with no soft-fail. Add the typed `OpenPeerPidfdFromAcceptedSocket` broker request. Its request carries no numeric PID, credential tuple, raw descriptor integer, path, or subject claim and must arrive with exactly one accepted-socket `SCM_RIGHTS` fd. Receipt uses `MSG_CMSG_CLOEXEC`, rejects truncated/malformed control data and missing/extra fds, verifies `FD_CLOEXEC`, and closes every received or produced fd on all refusal, decode, send, and disconnect paths. The broker obtains the peer pidfd from that exact accepted socket using `SO_PEERPIDFD` in the existing `packages/d2b-priv-broker/src/sys.rs` quarantine, verifies it is live, pidfs-backed, and close-on-exec, durably appends and syncs the typed path-free audit row, and returns exactly one owned pidfd; unsupported kernels or audit failure fail closed with an actionable typed error. There is no `pidfd_open(SO_PEERCRED.pid)` or other numeric-PID fallback and no new FFI crate, Cargo dependency, or manifest edit. The safe Unix session adapter consumes the accepted socket and returned `OwnedFd`, verifies `SO_PEERCRED`, process generation/start identity, expected cgroup, liveness, and descriptor identity against that exact fd, and transfers one opaque, non-cloneable evidence value into the private `ZoneRegistrar` issuer. The registrar alone resolves the subject. Remove public verifier/credential constructors, `ZoneBootstrapIdentity::verify`, its `Clone`, `VerifiedUnixPeer::credentials`, evidence accessors, conversions, re-exports, and any alternate issuance path. Compile-fail and API seals reject `Clone`, `Copy`, `Default`, `From`, public fields, raw credential/pidfd access, caller-supplied verifiers, and external issuance. Primary reuse disposition: `adapt`. Preserved source-plan detail: retain socket-kind admission and replace numeric peer identity with accepted-socket-bound pidfd evidence. |
 | Integration | `portal.rs::open_transport` performs socket-kind admission before monitoring duplication or handle allocation. At each production Unix accept, `packages/d2b-bus/src/transport/unix.rs` transfers the accepted socket over the existing broker connection, consumes the single returned pidfd through `d2b-session-unix`, and hands the sealed evidence by value to `ZoneRegistrar`; router requests and stream frames carry no subject claim. The shared broker catalogue, privilege row, audit, request-fd protocol, op module registration, and runtime dispatch are edited only after `ADR046-activation-001`, so the two typed operations never write those files concurrently. |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Retain `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`, `stream_fd_passes_stream_kind`, `seqpacket_fd_rejects_stream_kind_declaration`, `zone_link_with_attachments_enabled_fails`, `local_portal_seqpacket_with_attachments_accepted`, and `stream_with_attachments_enabled_rejected`. Focused broker/session/bus tests cover successful accepted-socket pidfd acquisition; exact one-fd ownership; `FD_CLOEXEC`; missing, extra, truncated, malformed, and post-decode-failure ancillary closure; unsupported `SO_PEERPIDFD`; dead pidfd; credential, generation, start-identity, cgroup, and descriptor mismatch; post-credential PID reuse; ambiguity; broker response loss; and stable descriptor counts on every path. Source and API tests prove there is no numeric-PID fallback, raw descriptor/credential field, public verifier, constructor, clone, accessor, conversion, re-export, caller-supplied issuer, or FFI/Cargo expansion, and that the private registrar is the sole subject issuer. |
+| Validation | Retain `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`, `stream_fd_passes_stream_kind`, `seqpacket_fd_rejects_stream_kind_declaration`, `zone_link_with_attachments_enabled_fails`, `local_portal_seqpacket_with_attachments_accepted`, and `stream_with_attachments_enabled_rejected`. Focused platform, broker, session, and bus tests cover Linux-before-6.9 refusal; successful and failed pidfs/`SO_PEERPIDFD` probes; successful accepted-socket pidfd acquisition; exact one-fd ownership; `MSG_CMSG_CLOEXEC` plus `F_GETFD`; missing, extra, truncated, malformed, non-CLOEXEC, and post-decode-failure ancillary closure; unsupported `SO_PEERPIDFD`; dead/non-pidfs pidfd; credential, generation, start-identity, cgroup, and descriptor mismatch; post-credential PID reuse; ambiguity; audit append/sync failure; broker response loss; and stable descriptor counts on every path. Source and API tests prove there is no numeric-PID fallback, raw descriptor/credential field, public verifier, constructor, clone, accessor, conversion, re-export, caller-supplied issuer, or FFI/Cargo expansion, and that the private registrar is the sole subject issuer. |
 | Removal proof | Source-policy, compile-fail, and API exact-set checks prove `pidfd_open(SO_PEERCRED.pid)`, public `ZoneBootstrapIdentity::verify`, `VerifiedUnixPeer::credentials`, caller-supplied verifier/credential constructors, and all alternate issuance paths are absent. The broker's existing `sys.rs` remains the only FFI quarantine, all ancillary fds are owned and closed on every terminal path, and production admission cannot proceed without the accepted-socket-bound pidfd. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-volume-virtiofs` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-volume-virtiofs` crate, volume-virtiofs controller, virtiofsd worker, Export lifecycle |
@@ -88,7 +88,7 @@ packages/d2b-provider-volume-virtiofs/
     controller.rs             volume-virtiofs-controller reconcile loop (Export-based)
     export.rs                 Export ResourceType DTOs and lifecycle state machine
     virtiofsd_argv.rs         argv generation (reuse from d2b-host/src/virtiofsd_argv.rs)
-    socket_path.rs            private per-Export socket path derivation
+    socket_storage.rs         opaque per-Export socket storage ID
     readiness.rs              export socket and guest-mount readiness probes
     user_ns.rs                ADR 0021 user-namespace conformance kit
     metrics.rs                bounded telemetry labels
@@ -271,14 +271,12 @@ spec:
   mountPath: /state
   provider:
     schemaId: volume-virtiofs.d2bus.org/Export/spec
-    schemaVersion: "1.0"
+    schemaVersion: 2.0.0
     settings:
       posixAcl: false
       xattr: false
       cache: auto
-      inodeFileHandles: never
       threadPoolSize: null      # null → resolved from Guest vcpu count
-      socketGroup: null         # null → broker-default gid
 status:
   phase: Ready                # Pending|Ready|Degraded|Failed|Unknown
   resource:
@@ -392,7 +390,7 @@ attachment lifecycle, finalizers, guest-mount readiness, and deletion ordering.
 
 ### Retained opaque handles (D092)
 
-The private virtiofsd socket path, `VolumeMountToken`, per-session named stream,
+The private broker-resolved virtiofsd socket locator, `VolumeMountToken`, per-session named stream,
 `OwnedTransport` byte-stream handle, transport connection handle, pidfd, FD
 index, and `operationId` remain controller-internal or high-churn opaque handles
 under the promotion test. They are not `Endpoint` resources.
@@ -404,9 +402,19 @@ under the promotion test. They are not `Endpoint` resources.
 | `posixAcl` | bool | `false` | Passes `--posix-acl`; omitted for store-view shares |
 | `xattr` | bool | `false` | Passes `--xattr` |
 | `cache` | enum | `auto` | `auto` \| `always` \| `never`; maps to `--cache=<mode>` |
-| `inodeFileHandles` | enum | `never` | `never` \| `prefer` \| `mandatory`; `never` is the only tested value in v3.0 |
 | `threadPoolSize` | int or null | `null` | `null` resolves to target Guest's declared vcpu count; range 1-256 |
-| `socketGroup` | int or null | `null` | `null` uses broker-default gid (vfd principal gid); explicit value must be authorized |
+
+`inodeFileHandles` and `socketGroup` are forbidden settings.
+`--inode-file-handles=never` is a fixed signed-template invariant, and the
+socket group is always the dedicated Export principal. Unknown-field rejection
+therefore denies `prefer`, `mandatory`, caller-selected gids, and even a
+caller-supplied `"never"` value rather than creating a configurable authority
+surface.
+
+Removing those two authority-bearing settings is the breaking
+`volume-virtiofs.d2bus.org/Export/spec` schema change from 1.x to 2.0.0. The
+Provider manifest, schema digest, examples, and conformance vectors use 2.0.0;
+1.x input is rejected rather than translated.
 
 ---
 
@@ -453,7 +461,8 @@ On spec-generation-changed for an Export:
      (read-only Volume Get via ResourceClient)
   2. If store-view Export: check marker prerequisite (§9 step 4)
   3. Resolve threadPoolSize from Guest.spec.vcpus if null
-  4. Ensure User/vol-<vol>-vfd exists (create if absent; ownerRef: Volume)
+  4. Ensure the Export-owned dedicated socket principal
+     User/exp-<export>-vfd exists
   5. Compute desired virtiofsd Process spec and Endpoint child spec
   6. Diff against existing Process and Endpoint owned by this Export
   7. Emit Create (or UpdateSpec) for the virtiofsd Process and exported Endpoint
@@ -461,7 +470,8 @@ On spec-generation-changed for an Export:
      endpointRef=Endpoint/<derived-name>
 
 On owned-resource-changed (Process or Endpoint owned by Export):
-  1. If Process.status.phase == Ready → poll export socket existence (§readiness)
+  1. If Process.status.phase == Ready → request typed socket-storage
+     observation by opaque ID (§readiness)
   2. If socket present → set Endpoint.status.readiness=Ready and
      Export.status.exportReady=true, WorkerReady=True
   3. If socket present → send guest-control MountReady? probe
@@ -514,7 +524,8 @@ Phase 1 - virtiofsd Process teardown
   → volume-virtiofs controller emits Delete for the owned virtiofsd Process
   → system-minijail (via injected effect port) sends SIGTERM; waits via pidfd
   → on process exit: store emits one Deleted revision event; row and index removed atomically
-  → export socket removed by virtiofsd on clean exit; controller cleanup on unclean exit
+  → export socket removed by virtiofsd on clean exit; unclean cleanup is a
+    typed broker socket operation, never a controller filesystem write
   → controller sets Export.status: phase=Degraded, exportReady=false, workerProcessRef=null
 
 Phase 2 - guest mount absent confirmation
@@ -567,7 +578,7 @@ spec:
   processClass: worker
   template: virtiofsd-worker
   sandbox:
-    namespaceClasses: [user]       # user namespace only; no mount/pid/net classes
+    namespaceClasses: [user, mount] # user mapping first; private mount namespace after sync
     capabilityClasses: []          # zero host capability classes; full caps inside NS only
     seccompClass: w1-virtiofsd
     startRoot: false               # system-minijail does NOT start virtiofsd as root
@@ -597,17 +608,20 @@ spec:
 
 The user namespace mapping (`hostUid`/`hostGid`) is **not** in the public Process spec.
 The signed virtiofsd-worker template declares the `process-principal-root` user namespace mapping class.
-system-minijail resolves the UID/GID mapping privately from the `User/vol-<vol>-vfd`
-principal when building the LaunchTicket and establishing the effect port - the controller
-never receives or sets these values.
+system-minijail resolves the UID/GID mapping privately from the
+`User/exp-<export>-vfd` principal when building the LaunchTicket and
+establishing the effect port - the controller never receives or sets these
+values.
 
 Private implementation data that lives exclusively in the LaunchTicket and effect port state,
 never in the Process spec, status, or any public surface:
-- the export socket path (derived in `socket_path.rs`; opaque in the signed LaunchTicket);
+- the export socket path (resolved by the broker from the opaque
+  `SocketStorageId`; absent from the Provider request);
 - the cgroup subtree placement (assigned by ProviderSupervisor from executionRef and
   component placement template);
-- the `hostUid`/`hostGid` for the user-namespace single-entry mapping (resolved by
-  system-minijail from the `User/vol-<vol>-vfd` principal at LaunchTicket build time);
+- the `hostUid`/`hostGid` for the user-namespace single-entry mapping (resolved
+  by system-minijail from the Export-owned `User/exp-<export>-vfd` principal at
+  LaunchTicket build time);
 - the Volume View root directory reference (routed by core from the signed Export spec;
   the virtiofsd controller never touches a file descriptor or host path).
 
@@ -620,9 +634,13 @@ requirement:
   are scoped inside the single-entry user namespace where virtiofsd holds in-namespace root.
 - `sandbox.startRoot: false` - system-minijail does not start virtiofsd as root; the user
   namespace mapping places in-namespace UID/GID 0 at the stable host UID/GID of
-  `User/vol-<vol>-vfd`, which has no privileges outside the namespace.
-- `sandbox.namespaceClasses: [user]` - exactly one namespace class; no additional class.
+  `User/exp-<export>-vfd`, which has no privileges outside the namespace.
+- `sandbox.namespaceClasses: [user, mount]` - the user mapping is established
+  before the mount namespace is created; no pid, net, ipc, or cgroup namespace
+  is added by this template.
 - `--sandbox=chroot` always - `--sandbox=namespace` is never emitted.
+- mount propagation is recursively private before any bind; the final
+  virtiofsd chroot performs `pivot_root(2)` and detaches the old root.
 - `noNewPrivileges: true`, `readOnlyRoot: true` - both required.
 
 These constraints are checked by the conformance kit in `tests/adr021_invariant.rs` before
@@ -654,7 +672,10 @@ system-minijail effect port (built from LaunchTicket):
     close(sync_pipe.write_fd)           # prevent self-deadlock if broker dies
     read(sync_pipe.read_fd, 1 byte)     # blocks until parent writes uid_map
     prctl(PR_SET_NO_NEW_PRIVS, 1)
-    # No CLONE_NEWNS in clone3 flags; virtiofsd --sandbox=chroot handles isolation
+    unshare(CLONE_NEWNS)                 # only after uid/gid maps exist
+    mount(NULL, "/", NULL, MS_REC|MS_PRIVATE, NULL)
+    verify_private_mount_propagation()
+    apply_anchored_broker_mount_plan()
     setgid(0)                           # in-NS GID 0 → host_gid_for_zero
     setuid(0)                           # in-NS UID 0 → host_uid_for_zero
     # setgroups() SKIPPED - parent wrote setgroups=deny
@@ -674,28 +695,37 @@ Parent write ordering is strict: `uid_map` → `setgroups=deny` → `gid_map`. T
 `man 7 user_namespaces`: writing `gid_map` requires either `CAP_SETGID` in the parent or
 `setgroups=deny` first.
 
-`CLONE_NEWNS` is intentionally absent from the `clone3` flags. virtiofsd does not require a
-mount namespace for its `--sandbox=chroot` operation; `--sandbox=chroot` uses `pivot_root(2)`
-with `CAP_SYS_ADMIN` inside the user NS.
+`CLONE_NEWNS` is intentionally absent from the `clone3` flags and created only
+after the user-namespace mapping is installed. The broker immediately makes
+the namespace root recursively private, applies only anchored no-follow mounts,
+and verifies propagation before exec. virtiofsd's mandatory
+`--sandbox=chroot` then uses `pivot_root(2)` inside that private namespace and
+must detach the old root. Failure of private propagation, anchored source
+resolution, pivot/chroot, or old-root detachment fails launch closed.
 
-The mapping is single-entry: in-NS UID/GID 0 → the stable UID/GID of `User/vol-<vol>-vfd`.
-Only that single mapping is written. All other host UIDs are unmapped (overflow `65534`).
+The mapping is single-entry: in-NS UID/GID 0 maps to the stable UID/GID of
+`User/exp-<export>-vfd`. Only that single mapping is written. All other host
+UIDs are unmapped (overflow `65534`).
 
 If a future share requires UID-preserving semantics for arbitrary host UIDs, a multi-entry
 mapping is necessary. That is out of v3.0 scope and requires a new ADR section and work item.
 
-### 7.4 Dedicated per-Volume principal
+### 7.4 Dedicated per-Export socket principal
 
-Each Volume that has at least one virtiofs attachment receives a dedicated system User
-resource `User/vol-<volume-name>-vfd`. The volume-virtiofs controller creates this User
-resource when reconciling the first Export for that Volume, if it does not already exist.
-The User resource is owned by the Volume (`ownerRef: Volume/<name>`).
+Each Export receives one dedicated system User resource
+`User/exp-<export>-vfd`, owned by that Export. No two Exports share this
+principal, even when they serve the same Volume, and it is never the Volume
+owner, Guest runner, VMM, controller, or a generic per-Guest principal. The
+gctl Export uses the narrower class `User/exp-<export>-gctlvfd`, still unique to
+that Export.
 
-The User resource provides the stable UID/GID that system-minijail resolves when building
-the LaunchTicket for the single-entry user namespace mapping and the export socket gid.
-
-The gctl share for guest-control (`d2b-gctl`) uses a separate narrower principal
-`User/vol-<vol>-gctlvfd`. The volume-virtiofs controller selects the principal by share type.
+The principal supplies the stable UID/GID for the single-entry user namespace
+and owns only the Export's dedicated socket directory and socket inode. Core
+passes the opaque principal and socket storage IDs through the LaunchTicket.
+The broker alone prepares, verifies, and cleans those filesystem objects via a
+typed operation, using anchored no-follow resolution, exact owner/mode/type/
+link-count checks, and durable path-free audit before success. The controller
+never creates, chmods, chowns, unlinks, or locks a socket path.
 
 ---
 
@@ -718,12 +748,16 @@ virtiofsd
 ```
 
 No `--sandbox=namespace` is ever emitted.
-No `--inode-file-handles=always` or `--inode-file-handles=prefer` is emitted in v3.0.
+`--inode-file-handles=never` is fixed and unconditional. No Provider setting,
+capability negotiation, compatibility branch, or runtime probe may select
+`always`, `prefer`, or omission.
 No free-form `extraArgs` pass-through is accepted; root config is empty.
 
 ### 8.2 `--socket-path` - private derived path
 
-The export socket path is a **private implementation detail of volume-virtiofs**. It is:
+The export socket path is a **private implementation detail of the core/broker
+socket-storage resolver**. The Provider supplies only an opaque
+`SocketStorageId` derived from the Export UID. The broker resolves it to:
 
 - derived deterministically as:
   ```text
@@ -735,8 +769,14 @@ The export socket path is a **private implementation detail of volume-virtiofs**
 - under `/run/d2b/vms/<guest-name>/` (the Zone/Guest runtime directory);
 - never written to Export spec, Export status, process spec, process status, audit records,
   CLI output, telemetry labels, or log messages;
-- opaque in the LaunchTicket; the controller derives the socket path only to build argv,
-  passing it as a sealed field in the LaunchTicket, never exposing it post-launch.
+- opaque in the LaunchTicket; the controller never derives, receives, or
+  formats the path. The broker injects the resolved argument only at exec.
+
+The parent directory and socket inode are owned by the dedicated Export
+principal from §7.4. Broker readiness/cleanup opens them relative to an
+anchored runtime dirfd with `O_NOFOLLOW|O_CLOEXEC`, verifies type, owner, mode,
+link count, and expected socket identity, and refuses symlink, hardlink,
+foreign-principal, or ambiguous state.
 
 ### 8.3 `--shared-dir` - volume root FD path
 
@@ -936,6 +976,11 @@ serviceFingerprint: <sha256 of attachment.schema.json>
 | `store-view-marker-absent` | `live/.d2b-marker-<guest>` absent; farm not yet populated | yes; requeue |
 | `process-adoption-ambiguous` | virtiofsd process identity ambiguous on controller restart | no; quarantine |
 | `socket-cleanup-failed` | stale socket unlink failed; previous virtiofsd may still be running | yes, once |
+| `socket-principal-invalid` | Socket principal is shared, broader than the Export, or does not own the exact socket storage row | no; halt |
+| `socket-storage-unsafe` | Anchored no-follow socket directory/inode verification failed | no; quarantine |
+| `mount-propagation-private-failed` | Mount namespace was not recursively private before bind setup | no; child exits before exec |
+| `sandbox-root-isolation-failed` | Final pivot/chroot or old-root detachment could not be proved | no; child exits before exec |
+| `inode-file-handles-policy-invalid` | Template omitted `--inode-file-handles=never` or exposed a configurable policy | no; halt |
 | `adr021-violation-detected` | `capabilityClasses` non-empty or `startRoot: true` detected at preflight | no; halt |
 
 All error messages are bounded at 512 bytes, UTF-8/control-character validated, and contain
@@ -980,6 +1025,11 @@ Volume-level conditions (written by volume-local from aggregated Export statuses
 
 All volume-virtiofs audit records use the Zone-local audit stream
 (`d2b-audit` over the private local Unix datagram socket).
+
+Zone resource audit does not replace privileged-effect audit. The broker
+durably appends and syncs a path-free `OpAuditRecord` for socket storage
+prepare/verify/cleanup, namespace/mount setup, and SpawnRunner before each
+effect returns success. Audit failure fails the effect closed.
 
 ### 14.1 Export create
 
@@ -1175,12 +1225,10 @@ is required in Nix.
     "mountPath": "/state",
     "provider": {
       "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
-      "schemaVersion": "1.0",
+      "schemaVersion": "2.0.0",
       "settings": {
         "cache": "auto",
-        "inodeFileHandles": "never",
         "posixAcl": false,
-        "socketGroup": null,
         "threadPoolSize": null,
         "xattr": false
       }
@@ -1246,9 +1294,7 @@ private artifact catalog entry for `volume-virtiofs-provider`. Its canonical for
     "posixAcl":           { "type": "boolean", "default": false },
     "xattr":              { "type": "boolean", "default": false },
     "cache":              { "type": "string", "enum": ["auto", "always", "never"], "default": "auto" },
-    "inodeFileHandles":   { "type": "string", "enum": ["never", "prefer", "mandatory"], "default": "never" },
-    "threadPoolSize":     { "type": ["integer", "null"], "minimum": 1, "maximum": 256, "default": null },
-    "socketGroup":        { "type": ["integer", "null"], "default": null }
+    "threadPoolSize":     { "type": ["integer", "null"], "minimum": 1, "maximum": 256, "default": null }
   }
 }
 ```
@@ -1297,6 +1343,16 @@ d2b.zones."dev".resources."store-view-work-vm" = {
 };
 ```
 
+Every durable regular file and lock in this layout is opened relative to the
+broker-resolved Volume root with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)` and
+`O_NOFOLLOW|O_CLOEXEC`, followed by exact regular-file, owner, mode, and link
+count verification. `sync.lock` uses `F_OFD_SETLK`, never inherits across
+exec, and participates in the ADR 0034 total order. The `meta/current` symlink
+is manipulated only as an anchored symlink leaf and is never followed as an
+authority path. Volume-local owns these effects; volume-virtiofs consumes only
+the resulting typed readiness.
+
 ---
 
 ## 17. Cleanup contract
@@ -1321,9 +1377,10 @@ When a Volume with virtiofs attachments is deleted:
 12. After all finalizers cleared, volume-local emits Deleted revision event for the Volume;
     row and index removed atomically.
 
-Controller-created User resources (`User/vol-<vol>-vfd`) are owned by the Volume
-(`ownerRef: Volume/<name>`) and are deleted in the Volume's owner-child finalizer cascade,
-after the last virtiofsd Process referencing them is deleted.
+Controller-created User resources (`User/exp-<export>-vfd`) are owned by the
+Export (`ownerRef: virtiofs.d2bus.org.Export/<name>`) and are deleted in the
+Export's owner-child finalizer cascade after its virtiofsd Process and socket
+storage are confirmed absent.
 
 ### 17.2 Attachment removal (Volume not deleted)
 
@@ -1383,7 +1440,7 @@ and its owned Exports and Processes; the controller reconciles from the retained
 | `tests/tools/gen-migration-ledger.sh` → `virtiofsd-argv-shape` gate | `implemented-and-reachable` | Adapted to validate Process template argv golden vector |
 | `tests/tools/gen-migration-ledger.sh` → `minijail-validator-virtiofsd` gate | `implemented-and-reachable` | Adapted to enforce Process sandbox spec ADR 0021 invariants |
 | `tests/unit/nix/cases/broker-caps.nix` | `implemented-and-reachable` | Adapted to v3 Process template capability policy gate |
-| `packages/d2b-host/src/virtiofsd_argv.rs` (baseline): socket path format `/run/d2b/vms/<vm>/<vm>-virtiofs-<tag>.sock` | `implemented-and-reachable` | Replaced by private hash-derived path in `socket_path.rs`; new path format equally private |
+| `packages/d2b-host/src/virtiofsd_argv.rs` (baseline): socket path format `/run/d2b/vms/<vm>/<vm>-virtiofs-<tag>.sock` | `implemented-and-reachable` | Replaced by broker-resolved `SocketStorageId`; new path remains private and uses a dedicated Export principal |
 | ADR 0021 (`docs/adr/0021-broker-user-namespace-for-virtiofsd.md`) | `implemented-and-reachable` | Full invariant preserved; user-NS pre-establishment is system-minijail effect port responsibility; not a carve-out |
 
 **Main reuse**: `packages/d2b-session/` and `packages/d2b-session-unix/` from main commit
@@ -1403,10 +1460,10 @@ it does not import session implementation internals directly.
 | Current source | `packages/d2b-host/src/virtiofsd_argv.rs` (VirtiofsdArgvInput, generate_virtiofsd_argv, 14 unit tests, golden argv.txt); `packages/d2b-host/src/lib.rs` (module declaration) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`; `packages/d2b-provider-volume-virtiofs/tests/argv_golden.rs` |
-| Detailed design | Create crate skeleton with mandatory `src/`, `tests/`, `integration/`, `README.md`. Extract `VirtiofsdArgvInput` and `generate_virtiofsd_argv` with these changes: (1) replace `extra_args: Vec<String>` with nothing (removed); (2) replace `socket_path: String` with `socket_path: SocketPath` newtype backed by `socket_path.rs`; (3) add `shared_dir_fd: i32` replacing `shared_dir: String` (FD-based); (4) replace `socket_group: Option<u32>` with `socket_group: Option<Gid>`. Implement `socket_path.rs`: private path using SHA-256 of `<zone>\x00<volume>\x00<guest>`, truncated 8 hex chars, formatted as `<zone-runtime-dir>/vms/<guest>/vol-<hash>.vfd.sock`. Assert path length ≤ 108 bytes. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | volume-virtiofs controller `export.rs` calls virtiofsd_argv.rs at spawn time; LaunchTicket carries resolved socket path as opaque sealed field |
+| Detailed design | Create crate skeleton with mandatory `src/`, `tests/`, `integration/`, `README.md`. Extract `VirtiofsdArgvInput` and `generate_virtiofsd_argv` with these changes: (1) remove `extra_args`; (2) replace `socket_path: String` with an opaque `SocketStorageId` backed by `socket_storage.rs`; (3) add `shared_dir_fd: i32` replacing `shared_dir: String`; (4) remove caller-selected `socket_group`; (5) remove `inode_file_handles` input and always emit the fixed literal `--inode-file-handles=never`. The broker resolves the socket storage ID to the bounded private path and dedicated Export principal only at exec. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Integration | volume-virtiofs controller `export.rs` supplies only the opaque socket storage and principal refs; LaunchTicket resolution and broker exec inject the private path, group, and inherited shared-dir fd |
 | Data migration | v3.0 reset; socket path format changes |
-| Validation | `tests/argv_golden.rs`: 14 migrated tests + `no_extra_args_ever_emitted`, `socket_path_is_not_in_args`, `shared_dir_is_fd_path`, `path_length_within_sunpath_limit`; `tests/socket_path_privacy.rs`: `socket_path_not_in_export_status`, `socket_path_not_in_volume_status`, `socket_path_not_in_audit_record`; `tests/schema_conformance.rs`: `process_spec_readiness_class_is_provider_defined`, `process_spec_readiness_has_no_kind_or_period_fields`, `process_spec_budget_cpu_request_limit_nested`, `process_spec_budget_memory_request_limit_nested`, `process_spec_budget_pids_limit_present`, `process_spec_budget_fds_limit_present`, `process_spec_sandbox_no_new_privileges_true`, `process_spec_sandbox_read_only_root_true`, `process_spec_no_host_uid_gid_in_spec` |
+| Validation | `tests/argv_golden.rs`: 14 adapted tests plus `no_extra_args_ever_emitted`, `inode_file_handles_is_fixed_never`, `inode_file_handles_has_no_input`, `socket_path_is_not_provider_input`, `socket_group_is_not_provider_input`, `shared_dir_is_fd_path`, `broker_resolved_path_length_within_sunpath_limit`; `tests/socket_path_privacy.rs`: `socket_path_not_in_export_status`, `socket_path_not_in_volume_status`, `socket_path_not_in_audit_record`, `socket_principal_is_unique_per_export`; `tests/schema_conformance.rs`: `process_spec_readiness_class_is_provider_defined`, `process_spec_readiness_has_no_kind_or_period_fields`, `process_spec_budget_cpu_request_limit_nested`, `process_spec_budget_memory_request_limit_nested`, `process_spec_budget_pids_limit_present`, `process_spec_budget_fds_limit_present`, `process_spec_sandbox_no_new_privileges_true`, `process_spec_sandbox_read_only_root_true`, `process_spec_no_host_uid_gid_in_spec`, and rejection of `inodeFileHandles`/`socketGroup` settings |
 | Removal proof | `packages/d2b-host/src/virtiofsd_argv.rs` removed only after parity confirmed by argv-shape gate |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1435,10 +1492,10 @@ it does not import session implementation internals directly.
 | Current source | `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`, user-NS pre-establishment block); `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (`SpawnRunnerPlanInput.user_namespace`, `RunnerIsolationSpec.user_namespace`); ADR 0021 implementation contract |
 | Reuse action | extract |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/user_ns.rs` (conformance kit); `packages/d2b-provider-volume-virtiofs/tests/adr021_invariant.rs` |
-| Detailed design | `user_ns.rs` contains only the conformance check and template descriptor assertion: verify that the virtiofsd-worker Process template declares `capabilityClasses: []`, `startRoot: false`, `noNewPrivileges: true`, `readOnlyRoot: true`, and `sandbox.userNamespace.mappingClass: process-principal-root`. `hostUid`/`hostGid` are NOT set by the controller - system-minijail resolves the mapping from the `User/vol-<vol>-vfd` principal when building the LaunchTicket via the effect port. The conformance check rejects any template mutation that adds host capability classes, sets `startRoot: true`, disables `noNewPrivileges`, or disables `readOnlyRoot`. The user-NS pre-establishment code itself remains in `d2b-priv-broker/src/sys.rs` and is invoked via the system-minijail effect port. Primary reuse disposition: `extract`. Preserved source-plan detail: extract conformance kit only; pre-establishment code stays in broker. |
+| Detailed design | `user_ns.rs` contains only the conformance check and template descriptor assertion: verify that the virtiofsd-worker Process template declares `namespaceClasses: [user, mount]`, `capabilityClasses: []`, `startRoot: false`, `noNewPrivileges: true`, `readOnlyRoot: true`, and `sandbox.userNamespace.mappingClass: process-principal-root`. `hostUid`/`hostGid` are NOT set by the controller - system-minijail resolves the mapping from the Export-owned `User/exp-<export>-vfd` principal when building the LaunchTicket via the effect port. The conformance check rejects a shared principal, missing mount namespace, non-private propagation, absent pivot/chroot proof, any host capability class, `startRoot: true`, disabled `noNewPrivileges`, or disabled `readOnlyRoot`. The user-NS and mount-namespace setup remains in `d2b-priv-broker/src/sys.rs` and is invoked via the system-minijail effect port. Primary reuse disposition: `extract`. Preserved source-plan detail: extract conformance kit only; setup code stays in broker. |
 | Integration | volume-virtiofs controller calls conformance check before emitting any Process Create; system-minijail requests launch through MinijailProcessEffectPort and the core/ProviderSupervisor adapter invokes the broker spawn path |
 | Data migration | v3.0 reset; current `adr_carve_out` field in `SpawnRunnerPlanInput` removed; ADR 0021 path is now the default |
-| Validation | `tests/adr021_invariant.rs`: `virtiofsd_capability_classes_must_be_empty`, `virtiofsd_start_root_must_be_false`, `virtiofsd_no_new_privileges_must_be_true`, `virtiofsd_read_only_root_must_be_true`, `process_spec_has_no_host_uid_gid`, `sandbox_namespace_never_emitted`, `user_ns_single_entry_single_uid_mapping`, `uid_map_write_ordering_uid_setgroups_gid`, `child_setuid_in_ns_not_host_uid`, `clone_newns_not_in_clone3_flags`, `child_exits_user_ns_sync_on_pipe_eof` |
+| Validation | `tests/adr021_invariant.rs`: `virtiofsd_capability_classes_must_be_empty`, `virtiofsd_start_root_must_be_false`, `virtiofsd_no_new_privileges_must_be_true`, `virtiofsd_read_only_root_must_be_true`, `process_spec_has_no_host_uid_gid`, `sandbox_namespace_never_emitted`, `user_ns_single_entry_single_uid_mapping`, `uid_map_write_ordering_uid_setgroups_gid`, `child_setuid_in_ns_not_host_uid`, `clone_newns_not_in_clone3_flags`, `mount_ns_created_after_user_map`, `mount_propagation_is_private_before_bind`, `pivot_chroot_detaches_old_root`, `dedicated_export_principal_not_shared`, `child_exits_user_ns_sync_on_pipe_eof` |
 | Removal proof | `adr_carve_out` field and virtiofsd-specific branch in current `SpawnRunnerPlanInput` removed only after v3 LaunchTicket covers all virtiofsd spawn cases |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1451,7 +1508,7 @@ it does not import session implementation internals directly.
 | Current source | `packages/d2bd/src/supervisor/dag.rs` (ProcessRole::Virtiofsd dag node); `nixos-modules/processes-json.nix` (virtiofsdRunner block; attachment-to-Process mapping) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs`; `packages/d2b-provider-volume-virtiofs/src/export.rs` |
-| Detailed design | Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2bus.org.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure User/vol-<vol>-vfd; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2). Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2bus.org.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure the Export-owned dedicated `User/exp-<export>-vfd` or gctl-class equivalent; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2), with all socket filesystem effects routed through typed broker operations and durably audited before success. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | volume-virtiofs controller registered by core ProviderDeployment; receives owned-resource-changed trigger from Export; emits Process resources consumed by system-minijail |
 | Data migration | Current `ProcessRole::Virtiofsd` dag nodes replaced by Export → Process resource lifecycle |
 | Validation | `tests/export_lifecycle.rs`: `export_create_spawns_virtiofsd_process`, `export_ready_when_socket_present`, `export_delete_terminates_virtiofsd`, `export_delete_waits_for_guest_mount_absent`, `export_delete_with_guest_unreachable_holds_finalizer_degraded`, `export_proof_of_ns_death_clears_finalizer`; `tests/multi_attachment.rs`: `two_guests_get_separate_exports_and_processes`, `process_failure_does_not_affect_sibling_export`; `tests/schema_conformance.rs`: `provider_state_set_volume_created_on_install`, `provider_state_set_volume_owner_ref_is_provider`, `provider_state_set_volume_layout_principal_is_user_not_component_principal`, `provider_state_set_no_cross_component_volume_sharing` |
@@ -1467,10 +1524,10 @@ it does not import session implementation internals directly.
 | Current source | `packages/d2bd/src/vm_readiness.rs` (`ReadinessKind::UnixSocketExists`); guest-control vsock health protocol |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/readiness.rs`; `packages/d2b-provider-volume-virtiofs/integration/guest_mount_readiness/` |
-| Detailed design | `unix-socket-exists` readiness: check file existence at the private socket path via a bounded blocking adapter (e.g., `tokio::task::spawn_blocking` wrapping `fstatat(2)` relative to the zone runtime `OwnedFd`, or an async-safe fd-relative equivalent); no blocking syscall on the async executor thread. Probe period 1 s; timeout 30 s. On socket present → set `Export.status.exportReady: true`. Guest-mount readiness: send `VirtioFsMountReady?` probe to guest-control health endpoint over vsock. Response `MountReady` sets `guestMountReady: true`. Response `MountAbsent` or timeout sets `guestMountReady: false`. The vsock health probe is async-native. If Guest is down, set Export `phase: Unknown`. All readiness probes (unix-socket-exists, guest-mount health) use bounded blocking adapters or async-safe fd-relative equivalents; no blocking I/O on the reconcile executor thread. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | `readiness.rs` called from `controller.rs` reconcile loop; uses toolkit health probe client |
+| Detailed design | `unix-socket-exists` readiness uses an opaque `SocketStorageId` through the injected EffectPort; the core adapter dispatches a typed broker observation that opens from the anchored runtime dirfd with no-follow/CLOEXEC flags, verifies socket type, dedicated Export principal, mode, link count, and expected identity, and returns only `Present|Absent|Unsafe|Ambiguous`. The controller receives no path or fd. The broker operation is bounded, runs off the reconcile executor, and durably audits unsafe/ambiguous refusal. Probe period 1 s; timeout 30 s. `Present` sets `Export.status.exportReady: true`; `Unsafe|Ambiguous` quarantines. Guest-mount readiness sends `VirtioFsMountReady?` to guest-control over vsock. `MountReady` sets `guestMountReady: true`; `MountAbsent` or timeout sets it false. If Guest is down, set Export `phase: Unknown`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Integration | `readiness.rs` calls the opaque socket EffectPort and toolkit health probe client from the controller reconcile loop |
 | Data migration | Current `UnixSocketExists` readiness kind adapted to FD-based path resolution |
-| Validation | `tests/export_lifecycle.rs` (extended); `integration/guest_mount_readiness/`: virtiofsd launches, socket appears, guest-control probe returns MountReady, guestMountReady flips to true; probe returns MountAbsent on umount |
+| Validation | `tests/export_lifecycle.rs` covers typed present/absent/unsafe/ambiguous socket outcomes and proves no path/fd reaches the Provider; broker tests plant symlink, hardlink, wrong principal, wrong mode/type, stale socket, and audit-sync failure; `integration/guest_mount_readiness/` proves virtiofsd launches, the dedicated-principal socket becomes Ready, guest-control returns MountReady, and MountAbsent follows unmount |
 | Removal proof | Current `UnixSocketExists` readiness path in `d2bd` retired after volume-virtiofs readiness covers all cases |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1499,7 +1556,7 @@ it does not import session implementation internals directly.
 | Current source | `nixos-modules/processes-json.nix` (virtiofsdRunner block); `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles); `nixos-modules/options-vms.nix` (`d2b.vms.<vm>.shares.*`) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/resources-volume.nix` (store-view and user Volume attachment emission); `nixos-modules/options-volumes.nix` (optional user-facing volume/attachment options) |
-| Detailed design | Extend the Nix resource compiler to: (1) auto-emit a store-view Volume (with `ro-store` and `meta` Views, virtiofs ro-store attachment) per Guest that has a VM runtime Provider; (2) emit virtiofs attachment entries for explicitly configured user Volumes; (3) emit `User/vol-<vol>-vfd` resources for each Volume with virtiofs attachments; (4) emit `Provider/volume-virtiofs` as a Provider resource when any virtiofs attachment is configured. volume-local creates Export resources at runtime (not in Nix bundle); no `virtiofs.d2bus.org.Export` resources appear in the Nix-emitted bundle. All eval validation steps (§16.5) apply. |
+| Detailed design | Extend the Nix resource compiler to: (1) auto-emit a store-view Volume (with `ro-store` and `meta` Views, virtiofs ro-store attachment) per Guest that has a VM runtime Provider; (2) emit virtiofs attachment entries for explicitly configured user Volumes; (3) emit `Provider/volume-virtiofs` as a Provider resource when any virtiofs attachment is configured. Nix emits no virtiofs principal: volume-local creates Export resources at runtime, and volume-virtiofs creates one Export-owned dedicated socket principal per Export. No `virtiofs.d2bus.org.Export` resources appear in the Nix-emitted bundle. All eval validation steps (§16.5) apply. |
 | Integration | `nixos-modules/default.nix` wires resources-volume.nix; nix-unit tests verify canonical output |
 | Data migration | `d2b.vms.<vm>.shares` virtiofs entries → Volume attachments; `d2b.vms.<vm>` store-view auto-emission replaces `nixos-modules/store.nix` virtiofsd portion |
 | Validation | nix-unit: `store_view_volume_auto_emitted_per_guest`, `volume_virtiofs_attachment_canonical_json`, `virtiofs_provider_emitted_when_attachment_configured`, `vfd_user_emitted_per_volume`, `second_read_write_attachment_rejected_at_eval`, `transport_virtiofs_requires_provider_installed`; drift-check gate for `nixos-modules/processes-json.nix` virtiofsdRunner removal |
@@ -1558,7 +1615,7 @@ budget.
 | `nixos-modules/minijail-profiles.nix` virtiofsdProfiles block | ADR046-vvfs-006; Process template sandbox spec passes broker-caps gate | `packages/d2b-provider-volume-virtiofs/src/` Process template descriptor |
 | `nixos-modules/processes-json.nix` virtiofsdRunner block and `roStoreSharedDir` sentinel | ADR046-vvfs-005, ADR046-vvfs-006; VmProcessDag parity gate passes | Export-owned Process resources reconciled by volume-virtiofs |
 | `packages/d2bd/src/supervisor/dag.rs` `ProcessRole::Virtiofsd` branch | ADR046-vvfs-003; Export controller lifecycle covers all virtiofsd spawn/adopt/stop paths | volume-virtiofs Export lifecycle controller |
-| `packages/d2b-priv-broker/src/ops/spawn_runner.rs` `adr_carve_out` virtiofsd field | ADR046-vvfs-002; v3 LaunchTicket handles all virtiofsd spawn cases without carve-out | Process spec `sandbox.namespaceClasses: [user]` + system-minijail effect port |
+| `packages/d2b-priv-broker/src/ops/spawn_runner.rs` `adr_carve_out` virtiofsd field | ADR046-vvfs-002; v3 LaunchTicket handles all virtiofsd spawn cases without carve-out | Process spec `sandbox.namespaceClasses: [user, mount]` + system-minijail effect port |
 | `packages/d2b-core/src/processes.rs` `ProcessRole::Virtiofsd` enum variant | All volume-virtiofs work items complete; no remaining consumer | Process resource template `virtiofsd-worker` (owned by Export) |
 
 No current path is removed until its resource/controller/Provider successor is integrated,

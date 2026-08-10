@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-system-systemd` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-system-systemd` crate, Process contracts |
@@ -35,6 +35,16 @@ This Provider is not bootstrap-fixed. The fixed `Provider/system-minijail`
 controller bootstraps and then reconciles the first `Provider/system-systemd`
 controller `Process`. After that, `Provider/system-systemd` manages its own
 ongoing reconcile lifecycle as an ordinary controller.
+
+### Linux platform gate
+
+Provider/system-systemd requires Linux 6.9 or newer and a successful runtime
+pidfs probe before it becomes Ready. The probe opens a self pidfd and proves
+per-process pidfs inode identity; a version string alone is insufficient.
+Missing pidfs, an inconclusive probe, or a kernel older than 6.9 returns
+`pidfs-unavailable`, keeps the Provider not Ready, and directs the operator to
+upgrade or enable pidfs. There is no production soft-fail or PID-only identity
+mode.
 
 ### Explicit exclusions
 
@@ -131,18 +141,24 @@ supervisor and process specs, not by this Provider crate.
 
 The effect port:
 
-- holds pre-opened system and per-user manager connections;
+- maps opaque requests to closed broker operations; the broker alone holds
+  system and per-user manager connections;
 - owns exact same-UID verification before any user-domain operation;
 - resolves the opaque `userRef`, `template`, and process identity tokens from
   the LaunchTicket into OS-level calls;
-- binds the atomic identity tuple (`InvocationID`, `ControlGroup`, `MainPID`,
-  `ExecMainStartTimestamp`), opens and re-verifies the pidfd, and returns only
-  an opaque `ProcessIdentityHandle`, an identity digest, and a closed outcome;
-- owns unit name computation (fixed hash-derived; opaque to the controller).
+- asks the broker to bind the atomic identity tuple (`InvocationID`,
+  `ControlGroup`, `MainPID`, `ExecMainStartTimestamp`), open and re-verify the
+  pidfd against pidfs, and return only an opaque `ProcessIdentityHandle`, an
+  identity digest, and a closed outcome;
+- asks the broker to compute the fixed hash-derived unit name; the name stays
+  opaque to the controller and core adapter.
 
 The controller receives only opaque handles, digests, typed results, and error
 codes from the port; it never sees raw DBus paths, socket addresses, unit
 names, cgroup strings, PIDs, pidfds, or systemd property fragments.
+Every filesystem, systemd, and cgroup mutation completes through the typed
+broker path, and the broker syncs a path-free `OpAuditRecord` before the effect
+port may return success.
 
 ---
 
@@ -476,20 +492,23 @@ Every step is mandatory; any deviation is a runtime security violation.
      userRef, template generation, and sandbox revision);
    - the opaque sandbox policy ID and `sandboxRevisionDigest`;
    - the `launchTimeoutSec` bound.
-   The port selects the correct manager connection (system or per-user),
-   verifies domain-specific preconditions, privately maps the signed semantic
-   sandbox policy to systemd properties, constructs a transient unit with
-   `Type=exec` (mandatory; the port rejects `Type=forking`, `Type=notify`, and
-   `Type=oneshot`), and dispatches `StartTransientUnit`.
+   The port verifies domain-specific preconditions, privately maps the signed
+   semantic sandbox policy to the closed request, and dispatches the typed
+   `StartTransientSystemdProcess` broker operation. The broker selects the
+   manager connection, constructs a transient unit with `Type=exec`
+   (mandatory; it rejects `Type=forking`, `Type=notify`, and `Type=oneshot`),
+   applies only broker-resolved mount and cgroup properties, and calls
+   `StartTransientUnit`.
 8. Receive an opaque start receipt; no unit name, InvocationID, PID, cgroup,
    property fragment, or manager handle crosses the EffectPort.
 
 ### 6.3 Identity binding
 
-9. Core awaits active state within `launchTimeoutSec`, atomically reads and
-   validates InvocationID, ControlGroup, MainPID, and
-   ExecMainStartTimestamp, verifies expected cgroup placement and launch
-   timing, opens and re-verifies the pidfd, and computes the identity digest.
+9. Core awaits the typed broker observation within `launchTimeoutSec`. The
+   broker atomically reads and validates InvocationID, ControlGroup, MainPID,
+   and ExecMainStartTimestamp, verifies expected cgroup placement and launch
+   timing, opens and re-verifies the pidfd against pidfs, and computes the
+   identity digest.
 10. The EffectPort returns only
     `IdentityBound { handle, processIdentityDigest }` or a closed failure such
     as `identity-mismatch`, `pid-reuse-detected`, or `pidfd-open-failed`.
@@ -500,10 +519,11 @@ Every step is mandatory; any deviation is a runtime security violation.
 ### 6.4 Pidfd acquisition
 
 Pidfd acquisition, `/proc` re-verification, pidfd polling, and systemd
-identity reads are core adapter responsibilities. The Provider never receives
-or opens a pidfd and never reads `/proc`. systemd owns wait/reap and cgroup
-termination. Stop and kill requests use only the opaque identity handle; core
-re-verifies identity and reports a typed terminal observation.
+identity reads are broker responsibilities reached only through the core
+adapter. The Provider never receives or opens a pidfd and never reads `/proc`.
+systemd owns wait/reap, while the broker is the sole caller for systemd and
+cgroup effects. Stop and kill requests use only the opaque identity handle;
+the broker re-verifies identity and reports a typed terminal observation.
 
 ### 6.5 Readiness
 
@@ -575,8 +595,9 @@ terminal phase. For each:
 
 1. Request EffectPort adoption using only the Process ref and stored
    `processIdentityDigest`.
-2. Core locates the unit, reads and validates the full identity tuple, compares
-   the digest, opens and re-verifies a fresh pidfd, and returns
+2. The core adapter asks the broker to locate the unit, read and validate the
+   full identity tuple, compare the digest, open and re-verify a fresh pidfd
+   against pidfs, and return
    `Adopted { handle }`, `Quarantined`, or `NotFound`.
 3. On `Adopted`, retain the opaque handle, write
    `adoptionState=adopted`, and resume typed EffectPort observation.
@@ -598,15 +619,17 @@ On `desiredLifecycle=stopped` or `deletion-requested` (finalizer):
 2. Wait `drainTimeout` (per Process spec, capped at `terminationGraceSec` from
    Provider config when the Process value is larger).
 3. If the unit has not reached inactive/dead, invoke the EffectPort forced-stop
-   operation on that handle. Core re-verifies identity, asks systemd to kill the
-   unit, waits for the core-held pidfd and unit state to agree on termination,
-   and returns a typed outcome.
+   operation on that handle. The broker re-verifies identity, asks systemd to
+   kill the unit, waits for its pidfd observation and unit state to agree on
+   termination, durably audits the outcome, and returns a typed result.
 4. Release the opaque handle.
 5. Clear finalizer `process.system-systemd/cleanup`.
 
-On ambiguous state (unit gone, cgroup empty, exit not confirmed via effect port):
-emit audit condition `process-exit-unconfirmed`; record `finalized`; do not
-block deletion indefinitely.
+On ambiguous state (unit gone, cgroup identity mismatch, or exit not confirmed
+through the effect port), emit `process-exit-unconfirmed`, quarantine the
+identity, and retain the finalizer. No stop, kill, cgroup reuse, or successful
+finalization is permitted until exact absence is proved or the operator
+performs a full Zone reset.
 
 ---
 
@@ -777,17 +800,23 @@ Role/RoleBinding evaluator before any bus operation.
 
 ### 12.2 Broker operations
 
-`Provider/system-systemd` uses no privileged broker operations and holds no
-direct DBus manager connections. All systemd manager interactions - including
-system and per-user `StartTransientUnit`, active-state observation, stop, kill,
-and user-manager availability checks - are dispatched through the injected
-`SystemdProcessEffectPort` whose implementation is owned by the core supervisor
-spec. It does not invoke `BrokerOperation::SpawnRunner`, `CgroupSubtree`, or
-any other broker op. Cgroup placement is systemd's responsibility once a
-transient unit is active.
+`Provider/system-systemd` holds no broker client and no direct DBus manager
+connection. The core-owned `SystemdProcessEffectPort` maps opaque IDs to these
+closed broker operations:
 
-The ProviderSupervisor handles the LaunchTicket flow; it does not itself invoke
-a broker op for system-systemd processes.
+| Operation | Purpose |
+| --- | --- |
+| `StartTransientSystemdProcess` | Resolve the signed template, mounts, principal, sandbox properties, and delegated cgroup leaf; invoke `StartTransientUnit(Type=exec)` |
+| `ObserveSystemdProcess` | Read and bind InvocationID, ControlGroup, MainPID, start timestamp, pidfs identity, liveness, and terminal state |
+| `StopSystemdProcess` | Re-verify the opaque identity, request bounded stop/kill through systemd, and prove the unit and owned cgroup leaf are inactive |
+| `CheckSystemdUserManager` | Verify exact same-UID user-manager availability without exposing a manager connection |
+
+The broker is the sole executor and durable audit owner for these operations.
+Requests accept no unit name, DBus path, property fragment, PID, cgroup path,
+mount source, raw uid/gid, or filesystem path. The broker resolves all of them
+from the trusted LaunchTicket and bundle, and syncs the `OpAuditRecord` before
+success. Systemd remains the cgroup implementation for transient units, but no
+Provider or core path mutates a cgroup directly.
 
 ### 12.3 Effect boundaries
 
@@ -932,6 +961,8 @@ argv/PIDs/names).
 | `user-not-found` | `UserReady` | `spec.userRef` does not resolve to a Ready User |
 | `user-manager-unavailable` | `UserReady` | Per-user systemd manager not reachable or not running |
 | `system-bus-unavailable` | `ProviderReady` | System DBus manager not reachable |
+| `kernel-too-old` | `ProviderReady` | Host kernel is older than Linux 6.9 |
+| `pidfs-unavailable` | `ProviderReady` | Runtime pidfs probe failed or was inconclusive; Provider remains not Ready |
 | `launch-timeout` | `Launching` | `MainPID` did not appear within `launchTimeoutSec` |
 | `identity-mismatch` | `Adopted` | InvocationID/cgroup/start-time tuple does not match stored digest |
 | `pidfd-open-failed` | `Launching` | `pidfd_open(2)` failed (possible PID reuse race) |
@@ -989,6 +1020,10 @@ in plaintext. `operation_id` is an opaque correlation token only.
 
 Audit records follow the `ProcessEffect` shape from
 `ADR-046-telemetry-audit-and-support`. The `provider` field is `"system-systemd"`.
+Resource audit follows the committed Process transition. Separately, each
+typed broker operation in §12.2 durably appends and syncs its path-free
+`OpAuditRecord` before reporting success; failure to persist audit fails the
+effect closed.
 
 | Event kind | Trigger | Required fields |
 | --- | --- | --- |
@@ -1246,9 +1281,10 @@ Evidence class per `ADR-046-current-code-migration-map`:
 - d2b-bus ComponentSession service (`LaunchProcess`, `StopProcess`,
   `AdoptProcess`, `QueryProcessState`).
 - `SystemdProcessEffectPort` trait and Provider-side fake; the production
-  implementation is owned by core and owns DBus manager connections, unit name
+  implementation is owned by core, maps opaque requests to the typed broker
+  operations in §12.2, and leaves DBus manager connections, unit-name
   computation, UID verification, pidfds, identity binding, and
-  start/observe/stop/adopt operations.
+  start/observe/stop/adopt effects inside the broker.
 - User-domain execution via effect port; UID verification and manager-connection
   lifecycle owned by port implementation.
 - ProviderStateSet: empty - the controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); core re-adopts running units from cgroup leaves + fresh pidfds on restart and returns opaque handles.
@@ -1288,15 +1324,15 @@ assumptions. Copied behavior is independently re-tested against v3
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-systemd-001` |
-| Dependency/owner | `ADR046-process-002`; Process contracts/supervisor owner; effect port interface owner |
+| Dependency/owner | `ADR046-process-002` and `ADR046-activation-001`; Process contracts/supervisor owner and effect port interface owner. The activation item is the dependency-ordered first writer of shared broker catalogue, audit, storage, and dispatch files. |
 | Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs` - `SystemdUserScopeManager`, `VerifiedScope`; `packages/d2bd/src/supervisor/` - pidfd adoption, restart backoff |
 | Reuse source | Main `a1cc0b2d`: `d2b-session/src/engine.rs`, `d2b-session-unix/src/adapter.rs` (effect port test double session/transport) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor |
-| Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Core ProviderDeployment creates the controller Process via Provider/system-minijail with no state Volume or `/state` mount; the controller issues no Volume CRUD operations, watches Process/EphemeralProcess, and persists bounded non-secret observations only in owning-resource status and the core Operation ledger; ProviderSupervisor calls LaunchProcess; effect port implementation is injected by the core supervisor spec |
+| Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production adapter and typed operation contracts in `packages/d2b-contracts`, `packages/d2b-core`, and `packages/d2b-priv-broker` after the shared activation foundation |
+| Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 fail-closed drain; §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration; Linux 6.9 plus mandatory pidfs readiness probe; closed broker operations from §12.2 with durable audit before success. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Integration | Core ProviderDeployment creates the controller Process via Provider/system-minijail with no state Volume or `/state` mount; the controller issues no Volume CRUD operations, watches Process/EphemeralProcess, and persists bounded non-secret observations only in owning-resource status and the core Operation ledger; ProviderSupervisor injects the effect port, which maps opaque calls to typed broker operations and never exposes broker or systemd authority to the Provider |
 | Data migration | No state migration; controller relists and adopts on restart |
-| Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
+| Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time and pidfs golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); broker contract/integration tests for closed request fields, Linux 6.9 and pidfs refusal, durable audit failure, no direct Provider/core DBus or cgroup mutation, and retained finalizer on ambiguous exit; latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
 | Removal proof | `VmProcessDag` supervisor roles removed per role disposition table after each succeeds in conformance |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
@@ -1449,8 +1485,8 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | ResourceTypes | Table: `Process` (phases Pending→Launching→Ready→Degraded→Failed, owner field, finalizer `process.system-systemd/cleanup`); `EphemeralProcess` (phases Pending→Ready→Succeeded\|Failed, finalizer) |
 | Controllers/services/workers/binaries | Binary `d2b-provider-system-systemd`; `systemd-controller` component (one instance per execution target); core ProviderDeployment creates controller Process via Provider/system-minijail; no user supervisor binary or entry point inside this crate; cgroup placement per §5.1 |
 | Placement | Valid Host and Guest execution targets; `allowedDomains: [system, user]`; required `providerRef` chain (Provider/system-systemd must be Ready before any Process uses it); system and user domain both dispatched through injected `SystemdProcessEffectPort`; effect port implementation is core-owned |
-| Dependencies and RBAC | Required RoleBinding verbs per §12.1 (no User RoleBindings; UID verification is effect port responsibility); no broker operations; ComponentSession on d2b-bus for ProviderSupervisor integration; no internal socketpair service |
-| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume - bounded non-secret operational state lives in `status`/the core Operation ledger (D087); core-owned pidfds and controller-held opaque effect handles are ephemeral and not persisted; core re-adopts running units from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments enter the Provider |
+| Dependencies and RBAC | Required RoleBinding verbs per §12.1 (no User RoleBindings; UID verification is effect port responsibility); no broker client in the Provider; ComponentSession on d2b-bus for ProviderSupervisor integration; core maps opaque effect requests to the closed broker operations in §12.2 |
+| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections; the controller declares no Provider state Volume - bounded non-secret operational state lives in `status`/the core Operation ledger (D087); broker-owned pidfds and controller-held opaque effect handles are ephemeral and not persisted; adoption uses a fresh broker-verified pidfd; Linux 6.9 and pidfs are mandatory; no raw systemd property fragments enter the Provider |
 | Telemetry | Metric instruments per §15.1; span catalog per §15.2; audit `ProcessEffect` record per §15.3; `no_isolation=true` on user-only Host child ProcessEffect records only |
 | Build/test/integration commands | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Standalone-repo future usage | Crate depends only on published crates and the d2b provider SDK subset (`d2b-contracts`, `d2b-provider-toolkit`); may be extracted to its own repository without copying daemon internals |
