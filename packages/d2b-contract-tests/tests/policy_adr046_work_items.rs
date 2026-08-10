@@ -1343,7 +1343,7 @@ fn canonical_destination_token(token: &str, provider_root: Option<&str>) -> Opti
 /// Expand a manifest destination to canonical repository-relative paths.
 ///
 /// Destination rows mix repository paths, brace groups, globs, and paths
-/// relative to the Provider package named by the W6 graph group. Keep globs
+/// relative to the Provider package named by the graph group. Keep globs
 /// as patterns: dropping them loses the parent/child overlap that protects a
 /// local file from an apparently unrelated `src/*` or Provider-relative row.
 fn normalized_destination_atoms(
