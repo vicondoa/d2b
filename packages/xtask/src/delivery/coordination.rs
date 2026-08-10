@@ -2988,7 +2988,7 @@ pub fn run_resume(args: &[String]) -> Result<WorkflowOutput> {
     let paths = W6Paths::from_environment(&roots)?;
     let replacement_approval = read_plan_approval(&replacement_approval, &roots)?;
     let ledger = read_dispatch_ledger(&paths.ledger, &roots)?;
-    if replacement_approval.entry_candidate_id
+    if replacement_approval.entry_candidate_id.as_str()
         != ledger
             .entries
             .first()
