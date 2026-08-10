@@ -326,8 +326,6 @@ pub struct FreshFetchEvidence {
     pub stdout_sha256: String,
     pub stderr_sha256: String,
     pub output_bytes: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_digest: Option<String>,
     pub fetched_at_unix: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_oid: Option<String>,
@@ -1431,6 +1429,8 @@ pub struct CommandEvidenceRecord {
     pub stderr_sha256: String,
     pub output_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discovered_tests: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ignored_tests: Option<u64>,
@@ -1465,113 +1465,6 @@ impl CommandEvidenceRecord {
             }
         }
 
-        fn profile_argv(profile: &str) -> Result<Vec<String>> {
-            let values: &[&str] = match profile {
-                "focused-guard-list" => &[
-                    "cargo",
-                    "test",
-                    "--manifest-path",
-                    "packages/Cargo.toml",
-                    "-p",
-                    "xtask",
-                    "delivery::work_item_state::tests",
-                    "--",
-                    "--list",
-                ],
-                "focused-guard-ignored-list" => &[
-                    "cargo",
-                    "test",
-                    "--manifest-path",
-                    "packages/Cargo.toml",
-                    "-p",
-                    "xtask",
-                    "delivery::work_item_state::tests",
-                    "--",
-                    "--list",
-                    "--ignored",
-                ],
-                "focused-guard-run" => &[
-                    "cargo",
-                    "test",
-                    "--manifest-path",
-                    "packages/Cargo.toml",
-                    "-p",
-                    "xtask",
-                    "delivery::work_item_state::tests",
-                    "--",
-                    "--nocapture",
-                ],
-                "gate0-test-drift" => &["make", "test-drift"],
-                "test-policy" => &["make", "test-policy"],
-                "test-unit" => &["make", "test-unit"],
-                "heavy-gate-acquire" => &[
-                    "cargo",
-                    "run",
-                    "--quiet",
-                    "--manifest-path",
-                    "packages/Cargo.toml",
-                    "-p",
-                    "xtask",
-                    "--",
-                    "heavy-gate",
-                    "--",
-                    "true",
-                ],
-                "predispatch-census" => &[
-                    "cargo",
-                    "run",
-                    "--quiet",
-                    "--manifest-path",
-                    "packages/Cargo.toml",
-                    "-p",
-                    "xtask",
-                    "--",
-                    "delivery",
-                    "wave",
-                    "entry-census",
-                ],
-                _ => {
-                    return Err(DeliveryError::usage(format!(
-                        "--profile must be one of {}",
-                        COMMAND_PROFILES.join(", ")
-                    )));
-                }
-            };
-            Ok(values.iter().map(|value| (*value).to_owned()).collect())
-        }
-
-        fn profile_runner_digest() -> String {
-            sha256_bytes(
-                COMMAND_PROFILES
-                    .iter()
-                    .flat_map(|profile| {
-                        profile_argv(profile)
-                            .expect("closed command profile")
-                            .into_iter()
-                            .chain(std::iter::once("\n".to_owned()))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\0")
-                    .as_bytes(),
-            )
-        }
-
-        fn validate_profile_argv(record: &CommandEvidenceRecord) -> Result<()> {
-            let expected = profile_argv(&record.command_id)?;
-            if record.command_id == "predispatch-census" {
-                if record.argv.len() < expected.len() || record.argv[..expected.len()] != expected {
-                    return Err(DeliveryError::new(
-                        "predispatch census command argv does not use the repository-owned runner",
-                    ));
-                }
-            } else if record.argv != expected {
-                return Err(DeliveryError::new(format!(
-                    "command evidence {} argv differs from the repository-owned profile",
-                    record.command_id
-                )));
-            }
-            Ok(())
-        }
         validate_hash(&self.working_tree_oid, "command evidence working-tree OID")?;
         if self.completed_at_unix < self.started_at_unix {
             return Err(DeliveryError::new(
@@ -1588,6 +1481,114 @@ impl CommandEvidenceRecord {
         }
         Ok(())
     }
+}
+
+fn profile_argv(profile: &str) -> Result<Vec<String>> {
+    let values: &[&str] = match profile {
+        "focused-guard-list" => &[
+            "cargo",
+            "test",
+            "--manifest-path",
+            "packages/Cargo.toml",
+            "-p",
+            "xtask",
+            "delivery::work_item_state::tests",
+            "--",
+            "--list",
+        ],
+        "focused-guard-ignored-list" => &[
+            "cargo",
+            "test",
+            "--manifest-path",
+            "packages/Cargo.toml",
+            "-p",
+            "xtask",
+            "delivery::work_item_state::tests",
+            "--",
+            "--list",
+            "--ignored",
+        ],
+        "focused-guard-run" => &[
+            "cargo",
+            "test",
+            "--manifest-path",
+            "packages/Cargo.toml",
+            "-p",
+            "xtask",
+            "delivery::work_item_state::tests",
+            "--",
+            "--nocapture",
+        ],
+        "gate0-test-drift" => &["make", "test-drift"],
+        "test-policy" => &["make", "test-policy"],
+        "test-unit" => &["make", "test-unit"],
+        "heavy-gate-acquire" => &[
+            "cargo",
+            "run",
+            "--quiet",
+            "--manifest-path",
+            "packages/Cargo.toml",
+            "-p",
+            "xtask",
+            "--",
+            "heavy-gate",
+            "--",
+            "true",
+        ],
+        "predispatch-census" => &[
+            "cargo",
+            "run",
+            "--quiet",
+            "--manifest-path",
+            "packages/Cargo.toml",
+            "-p",
+            "xtask",
+            "--",
+            "delivery",
+            "wave",
+            "entry-census",
+        ],
+        _ => {
+            return Err(DeliveryError::usage(format!(
+                "--profile must be one of {}",
+                COMMAND_PROFILES.join(", ")
+            )));
+        }
+    };
+    Ok(values.iter().map(|value| (*value).to_owned()).collect())
+}
+
+fn profile_runner_digest() -> String {
+    sha256_bytes(
+        COMMAND_PROFILES
+            .iter()
+            .flat_map(|profile| {
+                profile_argv(profile)
+                    .expect("closed command profile")
+                    .into_iter()
+                    .chain(std::iter::once("\n".to_owned()))
+            })
+            .collect::<Vec<_>>()
+            .join("\0")
+            .as_bytes(),
+    )
+}
+
+fn validate_profile_argv(record: &CommandEvidenceRecord) -> Result<()> {
+    let expected = profile_argv(&record.command_id)?;
+    if record.command_id == "predispatch-census" {
+        if record.argv.len() < expected.len() || record.argv[..expected.len()] != expected {
+            return Err(DeliveryError::new(
+                "predispatch census command argv does not use the repository-owned runner",
+            ));
+        }
+    } else if record.argv != expected {
+        return Err(DeliveryError::new(format!(
+            "command evidence {} argv differs from the repository-owned profile",
+            record.command_id
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2964,7 +2965,7 @@ pub fn run_command_profile(args: &[String]) -> Result<WorkflowOutput> {
     let argv = profile_argv(&profile)?;
     let started = now_unix();
     let (stdout, stderr, exit_code) = if profile == "predispatch-census" {
-        validate_w6_census(root)?;
+        validate_w6_census(&roots)?;
         (b"{\"census\":\"passed\"}".to_vec(), Vec::new(), 0)
     } else {
         let output = Command::new(&argv[0])
@@ -3017,7 +3018,7 @@ pub fn run_entry_census(args: &[String]) -> Result<WorkflowOutput> {
         .get("github.com/vicondoa/d2b")
         .or_else(|| roots.values().next())
         .ok_or_else(|| DeliveryError::new("entry census has no repository root"))?;
-    validate_w6_census(root)?;
+    validate_w6_census(&roots)?;
     let paths = W6Paths::entry_from_environment(&roots)?;
     let ledger = read_dispatch_ledger(&paths.0, &roots)?;
     ledger.require_pre_t221_state()?;
