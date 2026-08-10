@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "55557db16dfb3e5562f9a2edf7cd7482c3c301ff998e68d46b90bc3386f1deb7";
+    "acd74e4458c8dcb167fb952678ae24094b5b252cd197a2973ac81d0b89b26353";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
@@ -2144,6 +2144,27 @@ fn check_local_completion_contract(
         ],
     )) {
         findings.push("shared-writer handoff source digests must be SHA-256 values".to_owned());
+    }
+    for (field, path) in [
+        ("work_items_sha256", "docs/specs/ADR-046-work-items.json"),
+        (
+            "implementation_graph_sha256",
+            "docs/specs/ADR-046-implementation-graph.json",
+        ),
+    ] {
+        let actual = std::fs::read(repo_root().join(path))
+            .map(|bytes| hex_sha256(&bytes))
+            .ok();
+        let expected = value_at(
+            contract,
+            &["local_to_manifest_shared_writer_handoffs", field],
+        )
+        .and_then(Value::as_str);
+        if actual.as_deref() != expected {
+            findings.push(format!(
+                "shared-writer handoff `{field}` does not match `{path}`"
+            ));
+        }
     }
 }
 
