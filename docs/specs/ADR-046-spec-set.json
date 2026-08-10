@@ -641,11 +641,11 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-core.md",
-      "sha256" : "093fd21b437193f7b5af5b1ab93c1e63645b20405f66502bdd0cac86d2820680",
+      "sha256" : "fbc490701464c7a9ca4eaa6c4231ab4a307e9b2c69b52e0c0cca6a1ace77408e",
       "specId" : "ADR-046-provider-system-core",
       "status" : "Accepted",
       "supersedes" : "Current `WorkloadProviderKind::UnsafeLocal`, host/User grouping helpers, `HostJson`/`VmRuntimeRow` host-management paths in `d2bd` and `d2b-realm-core`",
-      "version" : 1,
+      "version" : 2,
       "workItemPrefixes" : [
         "system-core"
       ]
@@ -1013,11 +1013,11 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "02b9eb335520415b7a7ea357bdbcc4ff23b6907bc714a942ec44bf9239d1d506",
+      "sha256" : "7b8be1293d7c7f15cee8dfecdc456b1a2359a01001402a187174e7da9b55d246",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
-      "version" : 1,
+      "version" : 2,
       "workItemPrefixes" : [
         "client",
         "pkg",
@@ -1122,7 +1122,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-telemetry-audit-and-support.md",
-      "sha256" : "5047dca86646519972096ef6717f5a91dbb5b60b8ebb3b33936440e90c224f35",
+      "sha256" : "91ba4a062a14ca64a04f8f2948de70a5eec7a9e4f73d249d8d6560a25aafcba8",
       "specId" : "ADR-046-telemetry-audit-and-support",
       "status" : "Accepted",
       "supersedes" : "Version 2 telemetry/audit authority where corrected below; current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",
