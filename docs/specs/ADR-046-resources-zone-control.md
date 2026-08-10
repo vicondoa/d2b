@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-resources-zone-control` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 1 |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-contracts` (schemas), `d2b-core-controller` (handlers), Zone runtime, Nix resource compiler |
@@ -210,6 +210,26 @@ changing `coreControllerPhase` to Failed.
 `handlers` entries contain only: handler name (stable closed enum), phase, and
 lastReconciledAt. No resource names, counts by type, provider diagnostics, or
 store paths appear here.
+
+Version 2 prospectively adds two mandatory `ZoneHandlerName` values:
+
+- `SystemCoreHost` serializes exactly as `system-core-host`;
+- `SystemCoreUser` serializes exactly as `system-core-user`.
+
+Every valid `Zone.status.handlers[]` list contains exactly one record for each
+value. Missing or duplicate records, unknown names, underscore spellings, and
+another handler name substituted for either record are rejected.
+`ProviderLifecycle` remains an independently allowed handler value, but it
+cannot satisfy either mandatory system-core record. The underscore forms
+`system_core_host` and `system_core_user` remain telemetry labels only and are
+not valid serialized Zone status, manifest, audit, or API handler values.
+
+This requirement is prospective rather than a claim about the indexed
+implementation. `packages/d2b-contracts/src/v3/zone.rs` currently defines the
+earlier closed handler enum and rejects duplicate names, but it has neither
+system-core variant nor the mandatory-pair rule. The W6
+`ADR046-system-core-001` work item owns both normative spec revisions and the
+corresponding implementation, focused tests, and API snapshots.
 
 ### 2.5 Phase and conditions
 
@@ -4121,6 +4141,10 @@ Rollback atomically:
 | `zone-cross-zone-ref-rejected` | Any resource with a ref containing a Zone prefix is rejected |
 | `zone-owner-rejected` | Create request with non-null Zone `ownerRef` is rejected |
 | `zone-deletion-only-on-drain` | Zone deletion without `core.zone-drain` finalizer path is rejected |
+| `zone_handler_name_exact_wire_roundtrip` | `SystemCoreHost` and `SystemCoreUser` round-trip only as `system-core-host` and `system-core-user`; underscore spellings fail |
+| `zone_status_system_core_exactly_one_each` | Zone status accepts exactly one Host and one User handler record |
+| `zone_status_system_core_duplicate_missing_or_wrong_rejected` | Duplicate, missing, unknown, underscore, and wrong-name substitutions are rejected |
+| `zone_status_provider_lifecycle_not_substitute` | `ProviderLifecycle` remains independently accepted but cannot replace either mandatory system-core record |
 
 ### 15.2 ZoneLink tests
 
