@@ -248,7 +248,11 @@ pub(crate) fn evaluate_checked(
             true,
         )?;
     }
-    evaluate(candidate, seal, target)
+    let result = evaluate(candidate, seal, target)?;
+    if super::coordination::is_wave6_entry_wave(&seal.material) {
+        super::coordination::record_eligibility_success(&seal.material, repository_roots)?;
+    }
+    Ok(result)
 }
 
 /// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target`.

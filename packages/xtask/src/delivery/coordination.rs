@@ -2644,16 +2644,20 @@ pub fn require_close_receipts(
     }
     if final_eligibility {
         let entry = ledger.entry("feature-local:w6-close")?;
-        if !entry.state.is_done() {
+        if !matches!(
+            entry.state,
+            DispatchState::Validated | DispatchState::Completed
+        ) {
             return Err(DeliveryError::new(
-                "Wave 6 eligibility requires the local close group to be Completed",
+                "Wave 6 eligibility requires the local close group to be Validated or Completed",
             ));
         }
         let required = LOCAL_COMPLETION_EVIDENCE
             .iter()
             .find(|(group, _)| *group == "feature-local:w6-close")
             .expect("close evidence");
-        if !required.1.iter().all(|id| {
+        let pre_evaluation = &required.1[..required.1.len().saturating_sub(1)];
+        if !pre_evaluation.iter().all(|id| {
             entry
                 .completion_evidence_ids
                 .iter()
@@ -2663,8 +2667,44 @@ pub fn require_close_receipts(
                 "Wave 6 eligibility requires all local close evidence records",
             ));
         }
+        if entry.state == DispatchState::Completed
+            && !required.1.iter().all(|id| {
+                entry
+                    .completion_evidence_ids
+                    .iter()
+                    .any(|actual| actual == id)
+            })
+        {
+            return Err(DeliveryError::new(
+                "Wave 6 eligibility close record is Completed without its success evidence",
+            ));
+        }
     }
     Ok(ledger)
+}
+
+pub fn record_eligibility_success(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<DispatchLedger> {
+    let paths = W6Paths::from_environment(repository_roots)?;
+    let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
+    let entry = ledger.entry("feature-local:w6-close")?.clone();
+    let mut evidence = entry.completion_evidence_ids.clone();
+    if !evidence.iter().any(|id| id == "w6-merge-eligibility") {
+        evidence.push("w6-merge-eligibility".to_owned());
+    }
+    update_group_cas(
+        &paths.ledger,
+        material,
+        "feature-local:w6-close",
+        DispatchState::Completed,
+        entry.dispatch_id.as_deref(),
+        &evidence,
+        None,
+        ledger.revision,
+        repository_roots,
+    )
 }
 
 fn read_group_evidence_files(
