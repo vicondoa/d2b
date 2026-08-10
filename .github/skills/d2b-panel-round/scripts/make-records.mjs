@@ -300,6 +300,7 @@ function readCompletionBoundArtifacts(roundDir) {
     "dispatch-prompt.txt",
     "evidence.md",
     "full.diff",
+    "handoff.json",
     "review-request.md",
     "selection.json",
     "discovery-ledger.json",

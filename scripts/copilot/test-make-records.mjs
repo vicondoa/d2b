@@ -224,13 +224,31 @@ function buildRound(mutate) {
   if (mutate) mutate(state);
   const finalSelectionBytes = stableStringify(state.selection);
   const finalLedgerBytes = stableStringify(state.ledger);
+  const finalResponseBytes = stableStringify(state.responses);
   writeFileSync(join(dir, "address.json"), stableStringify(state.address));
   writeFileSync(join(dir, "current-candidate.json"), stableStringify(state.candidate));
   writeFileSync(join(dir, "selection.json"), finalSelectionBytes);
   writeFileSync(join(dir, "dispatch-binding.json"), stableStringify(state.dispatchBinding));
   writeFileSync(join(dir, "discovery-ledger.json"), finalLedgerBytes);
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
-  writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
+  writeFileSync(join(dir, "responses.json"), finalResponseBytes);
+  writeFileSync(
+    join(dir, "handoff.json"),
+    stableStringify({
+      artifact_kind: "d2b-panel/continuation-handoff",
+      schema_version: 1,
+      lifecycle_id: state.ledger.lifecycle_id,
+      program: state.ledger.program,
+      wave: state.ledger.wave,
+      candidate_id: state.ledger.candidate_id,
+      content_id: state.ledger.content_id,
+      snapshot_sha256: state.ledger.snapshot_sha256,
+      ledger_sha256: sha256(finalLedgerBytes),
+      ledger_bytes: Buffer.byteLength(finalLedgerBytes),
+      responses_sha256: sha256(finalResponseBytes),
+      responses_bytes: Buffer.byteLength(finalResponseBytes),
+    }),
+  );
   writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
   writeFileSync(join(dir, "self-verification.json"), stableStringify({
     tests: ["fixture"],
@@ -270,6 +288,7 @@ function buildRound(mutate) {
     "dispatch-prompt.txt",
     "evidence.md",
     "full.diff",
+    "handoff.json",
     "review-request.md",
     "selection.json",
     "dispatch-binding.json",
