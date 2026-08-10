@@ -402,6 +402,25 @@ console.log("make-records: the happy path");
     rmSync(dir, { recursive: true, force: true });
   }
 }
+{
+  const dir = buildRound();
+  try {
+    rmSync(join(dir, "handoff.json"));
+    const markerPath = join(dir, ".complete");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    delete marker.artifact_sha256["handoff.json"];
+    delete marker.artifact_bytes["handoff.json"];
+    writeFileSync(markerPath, stableStringify(marker));
+    const r = run(dir);
+    check(
+      "a discovery-first verification packet without handoff is accepted",
+      r.code === 0,
+      `${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log("make-records: strict CLI parsing");
 {

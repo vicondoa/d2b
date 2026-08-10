@@ -300,7 +300,6 @@ function readCompletionBoundArtifacts(roundDir) {
     "dispatch-prompt.txt",
     "evidence.md",
     "full.diff",
-    "handoff.json",
     "review-request.md",
     "selection.json",
     "discovery-ledger.json",
@@ -312,13 +311,17 @@ function readCompletionBoundArtifacts(roundDir) {
       `verification/${seat}.json`,
     ]),
   ].sort();
+  const expectedNamesWithHandoff = [...expectedNames, "handoff.json"].sort();
   const actualNames = Object.keys(digests).sort();
-  if (
-    actualNames.length !== expectedNames.length ||
-    actualNames.some((name, index) => name !== expectedNames[index])
-  ) {
+  const matchesExpected = [expectedNames, expectedNamesWithHandoff].some(
+    (expected) =>
+      actualNames.length === expected.length &&
+      actualNames.every((name, index) => name === expected[index]),
+  );
+  if (!matchesExpected) {
+    const expectedUnion = expectedNamesWithHandoff;
     const missing = expectedNames.filter((name) => !actualNames.includes(name));
-    const extra = actualNames.filter((name) => !expectedNames.includes(name));
+    const extra = actualNames.filter((name) => !expectedUnion.includes(name));
     throw new Error(
       "completion marker schema_version 4 requires the exact current " +
       "verification artifact set for the selected roster; " +
