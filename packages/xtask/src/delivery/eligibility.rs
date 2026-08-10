@@ -206,7 +206,7 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let target_path = target_path.map(|path| state.resolve_artifact_ref(&path));
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
     let target = load_target(&candidate, target_path.as_deref())?;
-    evaluate_checked(&candidate, &seal, &target, &repository_roots)
+    evaluate_checked(&state, &candidate, &seal, &target, &repository_roots)
 }
 
 /// Re-derives both work-item conditions, then decides eligibility.
@@ -227,6 +227,7 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 /// and every hermetic fixture lives under the ignored build tree inside this
 /// repository.
 pub(crate) fn evaluate_checked(
+    state: &StateRoot,
     candidate: &CandidateDir,
     seal: &SealRecord,
     target: &MergeTarget,
@@ -235,7 +236,7 @@ pub(crate) fn evaluate_checked(
     super::work_item_state::require_current_wave_merged(&seal.material, repository_roots)?;
     super::work_item_state::require_prior_waves_merged_for_exit(&seal.material, repository_roots)?;
     super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
-        candidate,
+        state,
         &seal.material,
         repository_roots,
     )?;
@@ -717,7 +718,8 @@ mod tests {
         let (candidate, record, _snapshot) = sealed_from(&scratch, material);
         let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
         let merge_target = target(record.material.clone());
-        let error = evaluate_checked(&candidate, &record, &merge_target, &roots)
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let error = evaluate_checked(&state, &candidate, &record, &merge_target, &roots)
             .expect_err("an unmerged prior-wave item must block merge eligibility");
         assert!(
             error
@@ -741,7 +743,8 @@ mod tests {
         let (candidate, record, _snapshot) = sealed_from(&scratch, material);
         let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
         let merge_target = target(record.material.clone());
-        let error = evaluate_checked(&candidate, &record, &merge_target, &roots)
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let error = evaluate_checked(&state, &candidate, &record, &merge_target, &roots)
             .expect_err("a Planned current-wave item must block merge eligibility");
         assert!(error.message().contains("cannot seal W0"), "{error}");
         assert!(error.message().contains("ADR046-foundation-001"), "{error}");

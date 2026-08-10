@@ -503,6 +503,13 @@ impl CandidateDir {
         let key = relative.to_string_lossy().into_owned();
         list_anchored(self.dir_fd.as_fd(), relative, &key)
     }
+
+    /// Lists the candidate directory itself through its already pinned
+    /// descriptor. This is used by closed-state validators that must reject
+    /// any unexpected top-level artifact without reopening the pathname.
+    pub fn list_root(&self) -> Result<Vec<OsString>> {
+        list_directory(self.dir_fd.as_fd(), "candidate root")
+    }
 }
 
 fn default_state_root() -> Result<PathBuf> {
@@ -1329,7 +1336,11 @@ fn list_anchored(anchor: BorrowedFd<'_>, relative: &Path, label: &str) -> Result
         .last()
         .ok_or_else(|| DeliveryError::new("delivery artifact directory path is empty"))?;
 
-    let dir = rustix::fs::Dir::read_from(dir_fd.as_fd()).map_err(|error| {
+    list_directory(dir_fd.as_fd(), label)
+}
+
+fn list_directory(dir_fd: BorrowedFd<'_>, label: &str) -> Result<Vec<OsString>> {
+    let dir = rustix::fs::Dir::read_from(dir_fd).map_err(|error| {
         DeliveryError::environment(format!(
             "cannot list delivery artifact directory {label}: {error}"
         ))

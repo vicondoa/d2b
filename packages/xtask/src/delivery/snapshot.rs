@@ -132,10 +132,19 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 
 fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<WorkflowOutput> {
     let material = discover(request)?;
+    let repository_roots = request.checkout_roots()?;
+    super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
+        root,
+        &material,
+        &repository_roots,
+    )?;
     // FR-036/FR-048: a wave's implementation may start before its predecessor
     // is sealed and merged, so entry runs no prior-wave-merged assertion. That
     // condition is enforced at the panel-request, seal, and merge-eligibility
     // boundary (FR-049) by `work_item_state::require_prior_waves_merged_for_exit`.
+    // The one-time ADR-046 Wave 5 historical disposition is different: every
+    // Wave 6 snapshot must prove its exact retained state and accepted
+    // integration lineage before it can authorize implementation.
     let snapshot = WaveSnapshot::seal(material)?;
     let candidate = root.candidate(snapshot.wave(), &snapshot.candidate_id)?;
     write(&candidate, &snapshot)?;
@@ -1024,6 +1033,40 @@ pub(crate) mod tests {
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         run_with_root(&request, &root)
             .expect("entry must not block on an unmerged prior-wave item");
+    }
+
+    #[test]
+    fn adr046_w6_snapshot_entry_requires_the_historical_predecessor_guard() {
+        let fixture = GitFixture::new("snapshot-w6-historical-predecessor");
+        let mut args = fixture.snapshot_args();
+        let program = args
+            .iter()
+            .position(|value| value == "--program")
+            .expect("--program in the fixture arguments")
+            + 1;
+        args[program] = "SPEC001".to_owned();
+        let wave = args
+            .iter()
+            .position(|value| value == "--wave")
+            .expect("--wave in the fixture arguments")
+            + 1;
+        args[wave] = "spec001w6".to_owned();
+        for value in &mut args {
+            *value = value.replace("github.com/example/d2b", "github.com/vicondoa/d2b");
+        }
+
+        let request = SnapshotRequest::parse(&args).expect("parse W6 request");
+        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+        let error = run_with_root(&request, &root)
+            .expect_err("W6 entry must run the historical predecessor guard");
+        assert!(
+            error.message().contains("cannot resolve integration ref"),
+            "{error}"
+        );
+        assert!(
+            !root.path().join("spec001w6").exists(),
+            "a failed entry guard must not publish a candidate"
+        );
     }
 
     #[test]

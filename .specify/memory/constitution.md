@@ -22,10 +22,10 @@ Amendment 3.1.0 (2026-08-09): ADR-046 historical gate disposition
   `177235ed37188b3be87525e7f016fb43401574c5` is the one-time historical
   predecessor disposition. It is not a reconstructed seal and authorizes no
   Wave 5 recovery or second binding request.
-- Every post-boundary ADR-046 action requires this amendment's merge commit to
-  be an ancestor of the exact execution base. W6 additionally requires the
-  ordinary exact-base unanimous T221 entry plan panel and every remaining
-  prospective gate.
+- Every post-boundary ADR-046 action requires the accepted first-parent
+  integration commit carrying these exact amendment bytes to be an ancestor of
+  the exact execution base. W6 additionally requires the ordinary exact-base
+  unanimous T221 entry plan panel and every remaining prospective gate.
 - Rationale: missing historical evidence cannot be recreated truthfully. A
   closed, commit-bound disposition preserves that fact while restoring strict
   forward enforcement.
@@ -314,18 +314,24 @@ binding request, attestation, or reconstructed seal is authorized.
 For ADR-046 W6 predecessor checks only, merged Wave 5 boundary
 `177235ed37188b3be87525e7f016fb43401574c5` is the one-time historical
 predecessor disposition. Delivery tooling MUST match the exact retained Wave 5
-candidate, snapshot, head, consumed request, and merged boundary above and
-MUST reject every partial, missing, additional, or mismatched state. This
-treatment records a historical exception; it does not create a Wave 5 seal.
+candidate, snapshot, head, consumed request, imported evidence subtree, and
+merged boundary above and MUST reject every partial, missing, additional, or
+mismatched state. It MUST identify the accepted amendment as the unique
+first-parent integration commit after the merged Wave 5 boundary whose tree
+contains the exact Version 3.1.0 constitution bytes, and require that commit to
+be an ancestor of the Wave 6 base and head. This treatment records a historical
+exception; it does not create a Wave 5 seal. These checks provide deterministic
+process integrity for signoff tracking. They are not authentication and do not
+create a security boundary.
 
 Before any post-boundary ADR-046 implementation, resume, fix, panel, seal,
-merge, or advance action, the merge commit carrying this amendment MUST be an
-ancestor of the exact execution base. W6 begins only after rebasing onto that
-lineage and passing the ordinary T221 unanimous selected-roster entry plan
-panel against the exact base and current feature snapshot with zero
-recommendations. Every later implementation, validation, Discover-Fix-Verify,
-binding request, attestation, protected PR merge, seal, and merge-eligibility
-requirement remains unchanged.
+merge, or advance action, the accepted first-parent integration commit carrying
+these exact amendment bytes MUST be an ancestor of the exact execution base.
+W6 begins only after rebasing onto that lineage and passing the ordinary T221
+unanimous selected-roster entry plan panel against the exact base and current
+feature snapshot with zero recommendations. Every later implementation,
+validation, Discover-Fix-Verify, binding request, attestation, protected PR
+merge, seal, and merge-eligibility requirement remains unchanged.
 
 Rationale: convergence comes from comprehensive discovery and scoped
 verification, not fatigue after an arbitrary number of open-ended rounds. The

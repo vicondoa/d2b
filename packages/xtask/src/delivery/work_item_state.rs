@@ -2,7 +2,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -15,7 +14,7 @@ use super::{
         CandidateId, CandidateMaterial, MAX_WAVE_ORDINAL, RepositoryRecord, qualified_wave_parts,
         sha256_bytes,
     },
-    storage::{CandidateDir, MAX_JSON_BYTES, PANEL_REQUEST_FILE, SNAPSHOT_FILE},
+    storage::{MAX_JSON_BYTES, PANEL_REQUEST_FILE, SNAPSHOT_FILE, StateRoot},
 };
 
 const GRAPH_PATH: &str = "docs/specs/ADR-046-implementation-graph.json";
@@ -31,8 +30,11 @@ const ADR046_W5_RETAINED_SNAPSHOT_FILE_SHA256: &str =
     "dcf4d71a572bdf0766de557dde6b8ede7fd680eb9f85572238575d2ab5c82149";
 const ADR046_W5_MERGED_BOUNDARY: &str = "177235ed37188b3be87525e7f016fb43401574c5";
 const ADR046_FR036_CONSTITUTION_SHA256: &str =
-    "82ba409d89ec7b4b41d74cd87b0f52b5dcc4c8c6a110ea1a0fcb3b0f1f24b02e";
+    "a3e95df5094f3f5b196785342a5aa7a3cd3cd03f0d0222261a012de38b540b84";
 const D2B_REPOSITORY_ID: &str = "github.com/vicondoa/d2b";
+const D2B_INTEGRATION_REF: &str = "refs/remotes/origin/v3";
+const ADR046_W5_RETAINED_EVIDENCE_SHA256: &str =
+    "7deb84943d36962493422407ac74342fd598b2fea4970ea1a162942e25cfd33d";
 
 struct HistoricalPredecessorPolicy<'a> {
     repository_id: &'a str,
@@ -42,6 +44,8 @@ struct HistoricalPredecessorPolicy<'a> {
     retained_snapshot_file_sha256: &'a str,
     predecessor_merge_oid: &'a str,
     constitution_sha256: &'a str,
+    retained_evidence_sha256: &'a str,
+    integration_ref: &'a str,
 }
 
 const ADR046_W6_HISTORICAL_POLICY: HistoricalPredecessorPolicy<'static> =
@@ -53,6 +57,8 @@ const ADR046_W6_HISTORICAL_POLICY: HistoricalPredecessorPolicy<'static> =
         retained_snapshot_file_sha256: ADR046_W5_RETAINED_SNAPSHOT_FILE_SHA256,
         predecessor_merge_oid: ADR046_W5_MERGED_BOUNDARY,
         constitution_sha256: ADR046_FR036_CONSTITUTION_SHA256,
+        retained_evidence_sha256: ADR046_W5_RETAINED_EVIDENCE_SHA256,
+        integration_ref: D2B_INTEGRATION_REF,
     };
 
 #[derive(Deserialize)]
@@ -127,10 +133,14 @@ pub fn require_prior_waves_merged_for_exit(
 ///
 /// This check is re-run at panel request, seal, and merge eligibility. It
 /// binds the exact retained candidate bytes, rejects any added panel or seal
-/// state, proves the Wave 6 base and head descend from the merged Wave 5
-/// boundary, and pins the amended constitution bytes at the candidate base.
+/// state, proves the Wave 6 base and head descend from the fetched integration
+/// tip, and identifies the first-parent commit that introduced the accepted
+/// constitution bytes. Later constitution amendments remain valid because the
+/// accepted commit stays in the integration ancestry. This is deterministic
+/// workflow validation for signoff tracking, not authentication or a security
+/// boundary.
 pub fn require_adr046_w6_historical_predecessor_for_exit(
-    candidate: &CandidateDir,
+    state_root: &StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
@@ -139,22 +149,21 @@ pub fn require_adr046_w6_historical_predecessor_for_exit(
     }
     validate_historical_predecessor(
         &ADR046_W6_HISTORICAL_POLICY,
-        candidate,
+        state_root,
         material,
         repository_roots,
     )
 }
 
 fn is_adr046_w6(material: &CandidateMaterial) -> bool {
-    matches!(
-        (material.program.as_str(), material.wave.as_str()),
-        ("ADR046", "W6") | ("ADR046", "adr046w6") | ("SPEC001", "spec001w6")
-    )
+    (material.program.eq_ignore_ascii_case("ADR046")
+        && matches!(material.wave.as_str(), "W6" | "adr046w6"))
+        || (material.program.eq_ignore_ascii_case("SPEC001") && material.wave == "spec001w6")
 }
 
 fn validate_historical_predecessor(
     policy: &HistoricalPredecessorPolicy<'_>,
-    candidate: &CandidateDir,
+    state_root: &StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
@@ -176,107 +185,176 @@ fn validate_historical_predecessor(
         ))
     })?;
 
+    let integration_tip = resolve_commit(root, policy.integration_ref, "integration ref")?;
+    if repository.base_oid != integration_tip {
+        return Err(DeliveryError::new(
+            "ADR-046 Wave 6 base commit is not the fetched integration tip",
+        ));
+    }
     for (label, descendant) in [
         ("base commit", repository.base_oid.as_str()),
         ("head commit", repository.head_oid.as_str()),
     ] {
         require_commit_ancestor(root, policy.predecessor_merge_oid, descendant, label)?;
     }
+    require_commit_ancestor(
+        root,
+        &repository.base_oid,
+        &repository.head_oid,
+        "head commit from its declared base",
+    )?;
 
-    let constitution = read_tree_object(
+    let amendment_commit = find_first_parent_amendment(
         root,
         policy.repository_id,
+        policy.predecessor_merge_oid,
         &repository.base_oid,
-        CONSTITUTION_PATH,
-    )?
-    .ok_or_else(|| {
-        DeliveryError::new(format!(
-            "ADR-046 Wave 6 base commit does not contain {CONSTITUTION_PATH}"
-        ))
-    })?;
-    let constitution_sha256 = sha256_bytes(&constitution);
-    if constitution_sha256 != policy.constitution_sha256 {
-        return Err(DeliveryError::new(format!(
-            "ADR-046 Wave 6 base commit has the wrong FR-036 constitution bytes: expected {}, got {constitution_sha256}",
-            policy.constitution_sha256
-        )));
-    }
+        policy.constitution_sha256,
+    )?;
+    require_commit_ancestor(
+        root,
+        &amendment_commit,
+        &repository.head_oid,
+        "head commit from the accepted FR-036 amendment",
+    )?;
 
-    let state_root = candidate
-        .path()
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| DeliveryError::new("candidate path has no delivery state root"))?;
+    let retained_id = CandidateId::parse(policy.retained_candidate_id)?;
     let retained = state_root
-        .join(policy.retained_wave)
-        .join(policy.retained_candidate_id);
-    let metadata = fs::symlink_metadata(&retained).map_err(|error| {
-        DeliveryError::new(format!(
-            "ADR-046 Wave 5 retained candidate is missing: {error}"
-        ))
-    })?;
-    if !metadata.file_type().is_dir() {
-        return Err(DeliveryError::new(
-            "ADR-046 Wave 5 retained candidate is not a real directory",
-        ));
-    }
-
-    let mut entries = BTreeSet::new();
-    for entry in fs::read_dir(&retained).map_err(|error| {
-        DeliveryError::new(format!(
-            "cannot enumerate ADR-046 Wave 5 retained candidate: {error}"
-        ))
-    })? {
-        let name = entry
-            .map_err(|error| {
-                DeliveryError::new(format!(
-                    "cannot enumerate ADR-046 Wave 5 retained candidate: {error}"
-                ))
-            })?
-            .file_name()
-            .into_string()
-            .map_err(|_| {
-                DeliveryError::new("ADR-046 Wave 5 retained candidate contains a non-UTF-8 entry")
-            })?;
-        entries.insert(name);
-    }
+        .existing_candidate(policy.retained_wave, &retained_id)
+        .map_err(|_| DeliveryError::new("ADR-046 Wave 5 retained candidate is missing"))?;
+    let entries = utf8_entries(retained.list_root()?, "ADR-046 Wave 5 retained candidate")?;
     let expected = ["evidence", PANEL_REQUEST_FILE, SNAPSHOT_FILE]
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     if entries != expected {
-        return Err(DeliveryError::new(format!(
-            "ADR-046 Wave 5 retained candidate entries differ from the accepted historical state: expected {expected:?}, got {entries:?}"
-        )));
+        return Err(DeliveryError::new(
+            "ADR-046 Wave 5 retained candidate entry set differs from the accepted historical state",
+        ));
     }
 
-    require_file_digest(
-        &retained.join(PANEL_REQUEST_FILE),
+    require_candidate_file_digest(
+        &retained,
+        PANEL_REQUEST_FILE,
         policy.retained_request_sha256,
         "retained panel request",
     )?;
-    require_file_digest(
-        &retained.join(SNAPSHOT_FILE),
+    require_candidate_file_digest(
+        &retained,
+        SNAPSHOT_FILE,
         policy.retained_snapshot_file_sha256,
         "retained snapshot",
-    )
-}
-
-fn require_file_digest(path: &Path, expected: &str, label: &str) -> Result<()> {
-    let bytes = fs::read(path)
-        .map_err(|error| DeliveryError::new(format!("cannot read {label}: {error}")))?;
-    if bytes.len() > MAX_JSON_BYTES {
-        return Err(DeliveryError::new(format!(
-            "{label} exceeds the delivery JSON size limit"
-        )));
-    }
-    let actual = sha256_bytes(&bytes);
-    if actual != expected {
-        return Err(DeliveryError::new(format!(
-            "{label} digest mismatch: expected {expected}, got {actual}"
-        )));
+    )?;
+    let evidence_sha256 = retained_evidence_digest(&retained)?;
+    if evidence_sha256 != policy.retained_evidence_sha256 {
+        return Err(DeliveryError::new("retained evidence tree digest mismatch"));
     }
     Ok(())
+}
+
+fn require_candidate_file_digest(
+    candidate: &super::storage::CandidateDir,
+    path: &str,
+    expected: &str,
+    label: &str,
+) -> Result<()> {
+    let bytes = candidate.read_bytes(path)?;
+    let actual = sha256_bytes(&bytes);
+    if actual != expected {
+        return Err(DeliveryError::new(format!("{label} digest mismatch")));
+    }
+    Ok(())
+}
+
+fn retained_evidence_digest(candidate: &super::storage::CandidateDir) -> Result<String> {
+    let expected_root = ["local-host"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let actual_root = utf8_entries(candidate.list("evidence")?, "retained evidence directory")?;
+    if actual_root != expected_root {
+        return Err(DeliveryError::new(
+            "retained evidence directory entry set differs from the accepted historical state",
+        ));
+    }
+
+    let files = utf8_entries(
+        candidate.list("evidence/local-host")?,
+        "retained local-host evidence directory",
+    )?;
+    let mut manifest = Vec::with_capacity(files.len());
+    for name in files {
+        let relative = format!("evidence/local-host/{name}");
+        let bytes = candidate.read_bytes(&relative)?;
+        manifest.push((format!("local-host/{name}"), sha256_bytes(&bytes)));
+    }
+    Ok(sha256_bytes(&serde_json::to_vec(&manifest)?))
+}
+
+fn utf8_entries(entries: Vec<std::ffi::OsString>, label: &str) -> Result<BTreeSet<String>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            entry
+                .into_string()
+                .map_err(|_| DeliveryError::new(format!("{label} contains a non-UTF-8 entry")))
+        })
+        .collect()
+}
+
+fn find_first_parent_amendment(
+    root: &Path,
+    repository_id: &str,
+    predecessor: &str,
+    base: &str,
+    expected_constitution_sha256: &str,
+) -> Result<String> {
+    let range = format!("{predecessor}..{base}");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "--first-parent", "--reverse", &range])
+        .output()
+        .map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot enumerate the ADR-046 integration lineage: {error}"
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(DeliveryError::environment(
+            "cannot enumerate the ADR-046 integration lineage",
+        ));
+    }
+    for commit in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+    {
+        let Some(constitution) = read_tree_object(root, repository_id, commit, CONSTITUTION_PATH)?
+        else {
+            continue;
+        };
+        if sha256_bytes(&constitution) == expected_constitution_sha256 {
+            return Ok(commit.to_owned());
+        }
+    }
+    Err(DeliveryError::new(format!(
+        "ADR-046 Wave 6 base commit has no first-parent integration commit after merged Wave 5 with FR-036 constitution digest {expected_constitution_sha256}"
+    )))
+}
+
+fn resolve_commit(root: &Path, revision: &str, label: &str) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", revision])
+        .output()
+        .map_err(|_| DeliveryError::environment(format!("cannot resolve {label}")))?;
+    if !output.status.success() {
+        return Err(DeliveryError::environment(format!(
+            "cannot resolve {label}"
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn require_commit_ancestor(
@@ -301,8 +379,7 @@ fn require_commit_ancestor(
             "ADR-046 Wave 6 {label} does not descend from merged Wave 5 boundary {ancestor}"
         ))),
         _ => Err(DeliveryError::environment(format!(
-            "cannot verify ADR-046 Wave 5 merge ancestry: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "cannot verify ADR-046 Wave 5 merge ancestry for {label}"
         ))),
     }
 }
@@ -487,7 +564,11 @@ fn wave_number(wave: &str) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delivery::{snapshot::tests::GitFixture, storage::StateRoot};
+    use crate::delivery::{
+        snapshot::tests::GitFixture,
+        storage::{CandidateDir, StateRoot},
+    };
+    use std::fs;
 
     /// Wave ordering is what enforces "wave N+1 waits for wave N to merge", so
     /// both wave forms must yield the same ordinal. The legacy arm is asserted
@@ -623,11 +704,22 @@ mod tests {
 
     const RETAINED_REQUEST_BYTES: &[u8] = br#"{"roles":["software","test"]}"#;
     const RETAINED_SNAPSHOT_BYTES: &[u8] = br#"{"snapshot":"retained"}"#;
+    const TEST_RETAINED_EVIDENCE: [(&str, &str, &[u8]); 2] = [
+        (
+            "one.json",
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            b"{}",
+        ),
+        (
+            "two.json",
+            "4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93",
+            br#"{"ok":true}"#,
+        ),
+    ];
 
     struct HistoricalFixture {
         repository: GitFixture,
         state: StateRoot,
-        current: CandidateDir,
         material: CandidateMaterial,
         roots: BTreeMap<String, PathBuf>,
         retained_candidate_id: String,
@@ -635,6 +727,7 @@ mod tests {
         snapshot_sha256: String,
         predecessor_merge_oid: String,
         constitution_sha256: String,
+        evidence_sha256: String,
     }
 
     impl HistoricalFixture {
@@ -644,6 +737,7 @@ mod tests {
             repository.write(CONSTITUTION_PATH, "constitution 3.1.0\n");
             repository.commit("constitution amendment");
             let current_oid = repository.head();
+            repository.git(&["update-ref", D2B_INTEGRATION_REF, &current_oid]);
             let integration_tree_oid = git_rev_parse(&repository, "HEAD^{tree}");
 
             let mut material = crate::delivery::model::fixtures::material();
@@ -659,7 +753,7 @@ mod tests {
             let roots = BTreeMap::from([(D2B_REPOSITORY_ID.to_owned(), repository.repo())]);
             let state = StateRoot::for_tests(&repository.state()).expect("state root");
             let current_id = CandidateId::parse("a".repeat(64)).expect("current candidate id");
-            let current = state
+            state
                 .candidate("spec001w6", &current_id)
                 .expect("current candidate");
 
@@ -669,18 +763,23 @@ mod tests {
             let retained = state
                 .candidate(ADR046_W5_RETAINED_WAVE, &retained_id)
                 .expect("retained candidate");
-            fs::create_dir(retained.path().join("evidence")).expect("retained evidence directory");
             retained
                 .write_bytes(PANEL_REQUEST_FILE, RETAINED_REQUEST_BYTES)
                 .expect("retained request");
             retained
                 .write_bytes(SNAPSHOT_FILE, RETAINED_SNAPSHOT_BYTES)
                 .expect("retained snapshot");
+            for (name, _, bytes) in TEST_RETAINED_EVIDENCE {
+                retained
+                    .write_bytes(format!("evidence/local-host/{name}"), bytes)
+                    .expect("retained evidence");
+            }
+            let evidence_sha256 =
+                retained_evidence_digest(&retained).expect("retained evidence digest");
 
             Self {
                 repository,
                 state,
-                current,
                 material,
                 roots,
                 retained_candidate_id,
@@ -688,6 +787,7 @@ mod tests {
                 snapshot_sha256: sha256_bytes(RETAINED_SNAPSHOT_BYTES),
                 predecessor_merge_oid,
                 constitution_sha256: sha256_bytes(b"constitution 3.1.0\n"),
+                evidence_sha256,
             }
         }
 
@@ -700,6 +800,8 @@ mod tests {
                 retained_snapshot_file_sha256: &self.snapshot_sha256,
                 predecessor_merge_oid: &self.predecessor_merge_oid,
                 constitution_sha256: &self.constitution_sha256,
+                retained_evidence_sha256: &self.evidence_sha256,
+                integration_ref: D2B_INTEGRATION_REF,
             }
         }
 
@@ -714,7 +816,7 @@ mod tests {
         }
 
         fn validate(&self, policy: &HistoricalPredecessorPolicy<'_>) -> Result<()> {
-            validate_historical_predecessor(policy, &self.current, &self.material, &self.roots)
+            validate_historical_predecessor(policy, &self.state, &self.material, &self.roots)
         }
     }
 
@@ -739,6 +841,15 @@ mod tests {
         fixture
             .validate(&fixture.policy())
             .expect("the exact retained state passes");
+
+        let mut lowercase_spec = fixture.material.clone();
+        "spec001".clone_into(&mut lowercase_spec.program);
+        assert!(is_adr046_w6(&lowercase_spec));
+
+        let mut lowercase_adr = fixture.material.clone();
+        "adr046".clone_into(&mut lowercase_adr.program);
+        "adr046w6".clone_into(&mut lowercase_adr.wave);
+        assert!(is_adr046_w6(&lowercase_adr));
     }
 
     #[test]
@@ -783,11 +894,47 @@ mod tests {
         fs::write(retained.path().join(SNAPSHOT_FILE), RETAINED_SNAPSHOT_BYTES)
             .expect("restore snapshot");
 
+        let evidence = retained.path().join("evidence/local-host/one.json");
+        fs::write(&evidence, b"changed evidence").expect("replace evidence");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("changed evidence bytes must fail");
+        assert!(
+            error.message().contains("evidence tree digest mismatch"),
+            "{error}"
+        );
+        fs::write(&evidence, b"{}").expect("restore evidence");
+
+        fs::remove_file(&evidence).expect("remove evidence");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("missing evidence must fail");
+        assert!(
+            error.message().contains("evidence tree digest mismatch"),
+            "{error}"
+        );
+        fs::write(&evidence, b"{}").expect("restore evidence");
+
+        fs::write(
+            retained.path().join("evidence/local-host/extra.json"),
+            b"{}",
+        )
+        .expect("add evidence");
+        let error = fixture
+            .validate(&fixture.policy())
+            .expect_err("additional evidence must fail");
+        assert!(
+            error.message().contains("evidence tree digest mismatch"),
+            "{error}"
+        );
+        fs::remove_file(retained.path().join("evidence/local-host/extra.json"))
+            .expect("remove extra evidence");
+
         fs::write(retained.path().join("seal.json"), b"{}").expect("plant seal");
         let error = fixture
             .validate(&fixture.policy())
             .expect_err("an added seal must fail");
-        assert!(error.message().contains("entries differ"), "{error}");
+        assert!(error.message().contains("entry set differs"), "{error}");
         fs::remove_file(retained.path().join("seal.json")).expect("remove seal");
 
         fs::create_dir(retained.path().join("panel")).expect("plant panel directory");
@@ -799,7 +946,7 @@ mod tests {
         let error = fixture
             .validate(&fixture.policy())
             .expect_err("added panel state must fail");
-        assert!(error.message().contains("entries differ"), "{error}");
+        assert!(error.message().contains("entry set differs"), "{error}");
     }
 
     #[test]
@@ -823,9 +970,71 @@ mod tests {
             .validate(&policy)
             .expect_err("wrong constitution bytes must fail");
         assert!(
-            error.message().contains("wrong FR-036 constitution bytes"),
+            error
+                .message()
+                .contains("no first-parent integration commit"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn adr046_w6_historical_predecessor_rejects_a_non_integration_base() {
+        let fixture = HistoricalFixture::new("historical-predecessor-non-integration");
+        fixture.repository.git(&[
+            "checkout",
+            "--quiet",
+            "-b",
+            "sibling",
+            &fixture.predecessor_merge_oid,
+        ]);
+        fixture
+            .repository
+            .write(CONSTITUTION_PATH, "constitution 3.1.0\n");
+        fixture.repository.commit("copied amendment bytes");
+        let sibling = fixture.repository.head();
+        let mut material = fixture.material.clone();
+        sibling.clone_into(&mut material.repository_set[0].base_oid);
+        sibling.clone_into(&mut material.repository_set[0].head_oid);
+        material.repository_set[0].integration_tree_oid =
+            git_rev_parse(&fixture.repository, "HEAD^{tree}");
+        sibling.clone_into(&mut material.repository_set[0].expected_pull_requests[0].head_oid);
+        let error = validate_historical_predecessor(
+            &fixture.policy(),
+            &fixture.state,
+            &material,
+            &fixture.roots,
+        )
+        .expect_err("copied bytes outside the integration tip must fail");
+        assert!(
+            error.message().contains("not the fetched integration tip"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn later_constitution_amendments_do_not_invalidate_the_accepted_predecessor() {
+        let fixture = HistoricalFixture::new("historical-predecessor-later-constitution");
+        fixture
+            .repository
+            .write(CONSTITUTION_PATH, "constitution 3.2.0\n");
+        fixture.repository.commit("later constitution amendment");
+        let later = fixture.repository.head();
+        fixture
+            .repository
+            .git(&["update-ref", D2B_INTEGRATION_REF, &later]);
+        let mut material = fixture.material.clone();
+        later.clone_into(&mut material.repository_set[0].base_oid);
+        later.clone_into(&mut material.repository_set[0].head_oid);
+        material.repository_set[0].integration_tree_oid =
+            git_rev_parse(&fixture.repository, "HEAD^{tree}");
+        later.clone_into(&mut material.repository_set[0].expected_pull_requests[0].head_oid);
+        validate_historical_predecessor(
+            &fixture.policy(),
+            &fixture.state,
+            &material,
+            &fixture.roots,
+        )
+        .expect("the first-parent history still contains the accepted amendment");
     }
 
     #[test]
@@ -834,25 +1043,11 @@ mod tests {
         let mut material = fixture.material.clone();
         "spec001w5".clone_into(&mut material.wave);
         require_adr046_w6_historical_predecessor_for_exit(
-            &fixture.current,
+            &fixture.state,
             &material,
             &BTreeMap::new(),
         )
         .expect("another wave does not consume the one-time W6 exception");
-    }
-
-    #[test]
-    fn committed_constitution_matches_the_historical_predecessor_policy() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest_dir
-            .parent()
-            .and_then(Path::parent)
-            .expect("xtask lives under packages/");
-        let constitution = fs::read(root.join(CONSTITUTION_PATH)).expect("read constitution");
-        assert_eq!(
-            sha256_bytes(&constitution),
-            ADR046_FR036_CONSTITUTION_SHA256
-        );
     }
 
     #[test]

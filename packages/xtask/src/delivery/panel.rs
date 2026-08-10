@@ -1013,6 +1013,7 @@ pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
     let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
     request_checked(
+        &state,
         &candidate,
         &snapshot,
         &repository_roots,
@@ -1027,6 +1028,7 @@ pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
 /// refuses a state root inside a Git working tree, and every hermetic fixture
 /// lives under the ignored build tree inside this repository.
 fn request_checked(
+    state: &StateRoot,
     candidate: &CandidateDir,
     snapshot: &SnapshotView,
     repository_roots: &BTreeMap<String, PathBuf>,
@@ -1037,7 +1039,7 @@ fn request_checked(
         repository_roots,
     )?;
     super::work_item_state::require_adr046_w6_historical_predecessor_for_exit(
-        candidate,
+        state,
         &snapshot.material,
         repository_roots,
     )?;
@@ -2598,9 +2600,9 @@ pub(crate) mod tests {
         let mut material = fixtures::material();
         "W1".clone_into(&mut material.wave);
         material.repository_set[0].integration_tree_oid = fixture.head();
-        let (_state, candidate, snapshot) = candidate_with_snapshot_from(&scratch, material);
+        let (state, candidate, snapshot) = candidate_with_snapshot_from(&scratch, material);
 
-        let error = request_checked(&candidate, &snapshot, &roots, None)
+        let error = request_checked(&state, &candidate, &snapshot, &roots, None)
             .expect_err("panel-request must refuse an unmerged predecessor");
         assert!(
             error
