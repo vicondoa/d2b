@@ -31,7 +31,7 @@ const FEATURE_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
 /// The pin keeps the full contract exact without copying its long ownership
 /// arrays into this policy.
 const FEATURE_TASK_CONTRACT_SHA256: &str =
-    "4d56dbc77c3dce63c23496ec95ebe882066e923199684a2bbd2a36fcb29b16e3";
+    "eaef20e9fd0541d6ae76b07071bff87265c95ae0ef7759de53c3e9c8f900c341";
 
 const EXPECTED_LOCAL_TASK_IDS: &[&str] = &["T606", "T607", "T608", "T609", "T604", "T479", "T480"];
 const EXPECTED_PERMITTED_LOCAL_DEPENDENCY_IDS: &[&str] = &[
