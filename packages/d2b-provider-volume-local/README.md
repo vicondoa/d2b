@@ -26,7 +26,7 @@ catalog data that never reaches this crate.
 
 | Field | Description | Default |
 | --- | --- | --- |
-| `sourcePolicies` | Allowlist of `{ id, root }` entries. `root` is private and is never returned to controller code. | empty; a Volume naming an unknown `id` fails closed |
+| `sourcePolicies` | Allowlist of `{ id, class, volumeKinds }` entries. The backing root is private bundle data and is never returned to controller code. | empty; a Volume naming an unknown `id` fails closed |
 
 ## Exported resource types
 
@@ -87,6 +87,13 @@ grant.
 - The controller holds no capability, opens no socket, and spawns no
   process.
 
+  Source admission also keeps source-specific policy in one place:
+  block-image Volumes require a byte ceiling and `virtio-blk` attachments,
+  tmpfs Volumes require byte and inode ceilings and render only the bounded
+  `size=` and `nr_inodes=` options, and policy IDs are checked against the
+  Provider's opaque source-policy catalog. ACL reconciliation is continuous
+  and reports foreign-child violations without clearing foreign state.
+
 ## State and telemetry
 
 Public status names an entry only by digest. No host path, source policy
@@ -119,7 +126,7 @@ a bootstrap storage cycle.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | controller, layout engine, views, store-view mode, TPM state mode, effect ports, colocated unit tests |
+| `src/` | controller, source/quota/ACL admission, Export intents, layout engine, views, store-view mode, TPM state mode, effect ports, colocated unit tests |
 | `tests/` | hermetic layout, view, sharing, store-view, TPM, and status-redaction conformance |
 | `integration/` | heavier Host-path and store-view filesystem fixtures |
 

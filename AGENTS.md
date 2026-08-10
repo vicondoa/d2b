@@ -187,8 +187,9 @@ Detail in [workflow.md](./docs/contributing/workflow.md). Binding rules:
 - **One logical change per commit.** Mechanical reformats or renames go in
   their own commit.
 - **Use worktrees for parallel scopes**, one per agent or concurrent scope.
-  When done and green, merge the branch back to the primary clone yourself;
-  finished side branch work still awaits integration.
+  Integrate finished slices into an owned feature/integration branch in the
+  primary clone; never merge a slice directly into protected `main` or `v3`.
+  The owned branch lands through the required pull request flow.
 - **Concurrent slices share one worktree, so destructive git is banned.**
   Never run `git checkout --` or `git restore` on an unowned path:
   uncommitted work has no reflog, so this unrecoverably deletes sibling work.
@@ -401,10 +402,10 @@ is warning, not contract.
   every consumer.
 - **Don't leak internal process markers into shipped artifacts.**
   Wave/phase/revision/follow-up/finding tags (`W3`, `W4-fu`, `P6`,
-  `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts,
-  pre-release `[Unreleased]`, ADRs, this file's process sections,
-  and feature-branch commits - never in shipped source comments,
-  shipped docs prose, CLI help/error text, or any CHANGELOG section.
+  `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts, ADRs, this
+  file's process sections, and feature-branch commits - never in shipped
+  source comments, shipped docs prose, CLI help/error text, or any CHANGELOG
+  section, including `[Unreleased]`.
   See [Changelog and commits](#changelog-and-commits).
   functional `d2b.defaultSwitchReadiness.<wave>` option
   surface is one deliberate exception.
@@ -434,14 +435,11 @@ is warning, not contract.
   cell for `ADR046-network-005` in
   `docs/specs/ADR-046-resources-network.md` for shape that survives
   normalization.
-- dash scanner has one exact admission for inert Caveman provenance:
-  `third_party/caveman/v1.10.0/LICENSE`,
-  `third_party/caveman/v1.10.0/skills/caveman/SKILL.md`, and
-  `third_party/caveman/v1.10.0/skills/caveman-compress/SKILL.md`, only while
-  each blob matches SHA-256 in
-  `third_party/caveman/v1.10.0/UPSTREAM.json`. changed blob or extra vendor
-  file loses admission; every other path remains covered by general rule.
-  No upstream runtime, script, external install, network access, or content
+- Vendored Caveman prose is normalized to ASCII hyphens and receives no dash
+  exception. The scanner covers every file under
+  `third_party/caveman/v1.10.0/`. `UPSTREAM.json` pins the normalized blobs,
+  and `check-bindings.mjs` rejects a changed blob or extra vendor file. No
+  upstream runtime, script, external install, network access, or content
   upload is permitted.
 - **Don't let host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider

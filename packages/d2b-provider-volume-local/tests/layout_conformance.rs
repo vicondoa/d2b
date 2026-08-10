@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use d2b_provider_volume_local::testing::{PortCall, ScriptedPort, block_on, fixtures};
 use d2b_provider_volume_local::{
-    ConditionSeverity, DriftClass, LayoutPhase, MarkerState, ObservedEntry, OwnerProof,
-    VolumeLocalController, VolumeLocalError, VolumeLocalProfile,
+    ConditionSeverity, DriftClass, EntryDigest, LayoutPhase, MarkerState, ObservedEntry,
+    OwnerProof, VolumeLocalController, VolumeLocalError, VolumeLocalProfile,
 };
 
 fn controller(port: &ScriptedPort) -> VolumeLocalController<&ScriptedPort, &ScriptedPort> {
@@ -67,9 +67,11 @@ fn unrepairable_drift_degrades_instead_of_silently_converging() {
     let mut drifted = ObservedEntry::conformant(OwnerProof::NotApplicable);
     drifted.drift = BTreeSet::from([DriftClass::Mode]);
     let port = ScriptedPort::converged().with_observation("", drifted);
-    let report =
-        block_on(controller(&port).reconcile(&fixtures::volume_uid(), &fixtures::state_volume()))
-            .expect("reconcile succeeds");
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["repairPolicy"] = serde_json::json!("none");
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+    let report = block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec))
+        .expect("reconcile succeeds");
     assert_eq!(report.layout_phase, LayoutPhase::Degraded);
     assert_eq!(
         report.layout_conditions[0].reason,
@@ -209,6 +211,37 @@ fn cleanup_preserves_every_never_policy_entry() {
 }
 
 #[test]
+fn cleanup_is_leaf_first_and_root_last() {
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["cleanupPolicy"] = serde_json::json!("boot");
+    let mut child = rendered["layout"][0].clone();
+    child["path"] = serde_json::json!("child");
+    let mut leaf = child.clone();
+    leaf["path"] = serde_json::json!("child/leaf");
+    rendered["layout"] = serde_json::json!([rendered["layout"][0].clone(), child, leaf]);
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+
+    let port = ScriptedPort::converged();
+    let removed =
+        block_on(controller(&port).cleanup(&fixtures::volume_uid(), &spec)).expect("cleanup");
+    let expected = vec![
+        EntryDigest::derive(&fixtures::volume_uid(), "child/leaf"),
+        EntryDigest::derive(&fixtures::volume_uid(), "child"),
+        EntryDigest::derive(&fixtures::volume_uid(), ""),
+    ];
+    let calls = port.calls();
+    let cleanup_calls: Vec<_> = calls
+        .iter()
+        .filter_map(|call| match call {
+            PortCall::Cleanup(digest) => Some(*digest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cleanup_calls, expected);
+    assert_eq!(removed, expected);
+}
+
+#[test]
 fn hard_quota_on_a_filesystem_that_cannot_enforce_it_fails_the_volume() {
     use d2b_provider_volume_local::QuotaCapability;
     let spec: d2b_contracts::v3::volume::VolumeSpec = serde_json::from_value(serde_json::json!({
@@ -226,5 +259,56 @@ fn hard_quota_on_a_filesystem_that_cannot_enforce_it_fails_the_volume() {
     assert_eq!(
         block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec)).unwrap_err(),
         VolumeLocalError::QuotaUnenforceable
+    );
+}
+
+#[test]
+fn fail_closed_repair_never_mutates_drifted_state() {
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["repairPolicy"] = serde_json::json!("fail-closed");
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+    let mut drifted = ObservedEntry::conformant(OwnerProof::NotApplicable);
+    drifted.drift = BTreeSet::from([DriftClass::Mode]);
+    let port = ScriptedPort::converged().with_observation("", drifted);
+    let report =
+        block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec)).expect("report");
+    assert_eq!(report.layout_phase, LayoutPhase::Failed);
+    assert_eq!(
+        report.layout_conditions[0].reason,
+        VolumeLocalError::InvariantViolated
+    );
+    assert!(!port.calls().iter().any(|call| matches!(
+        call,
+        PortCall::Repair(_) | PortCall::ApplyAcl(_) | PortCall::Cleanup(_)
+    )));
+}
+
+#[test]
+fn process_cleanup_requires_dead_owner_proof() {
+    let mut rendered = serde_json::to_value(fixtures::state_volume()).expect("fixture serializes");
+    rendered["layout"][0]["cleanupPolicy"] = serde_json::json!("process-exit-with-proof");
+    rendered["layout"][0]["leaseClass"] = serde_json::json!("process-pidfd");
+    let spec = serde_json::from_value(rendered).expect("fixture remains valid");
+
+    let live =
+        ScriptedPort::converged().with_observation("", ObservedEntry::conformant(OwnerProof::Live));
+    assert!(
+        block_on(controller(&live).cleanup(&fixtures::volume_uid(), &spec))
+            .expect("cleanup report")
+            .is_empty()
+    );
+
+    let dead =
+        ScriptedPort::converged().with_observation("", ObservedEntry::conformant(OwnerProof::Dead));
+    assert_eq!(
+        block_on(controller(&dead).cleanup(&fixtures::volume_uid(), &spec))
+            .expect("cleanup report")
+            .len(),
+        1
+    );
+    assert!(
+        dead.calls()
+            .iter()
+            .any(|call| matches!(call, PortCall::Cleanup(_)))
     );
 }

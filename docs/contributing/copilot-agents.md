@@ -210,9 +210,9 @@ so re-verify on every CLI upgrade.
 
 ### What follows from that
 
-**Dispatch parameters are the binding.** They live in the committed skill
-tables, which is why those tables are the configuration rather than
-documentation of it.
+**Dispatch parameters are the binding.** They live in the committed dispatch
+policy and its skill table projection, which is why those surfaces are
+configuration rather than documentation of it.
 
 **Nothing modifies the operator's settings.** Per-lane binding was measured
 sufficient with no `subagents` block in either scope.
@@ -221,20 +221,53 @@ sufficient with no `subagents` block in either scope.
 the fallback behaviours differ and one is dangerous. An agent that omits
 `model` and is hand-invoked inherits the caller's model, so a panel seat could
 run on an unrelated parent binding. An agent that pins it still runs the panel
-model and only loses the effort, which the record helper catches. One line per
-agent converts a false model attestation into something requiring two
-independent mistakes.
+model, but the model pin does not establish the runtime effort; the record
+helper validates only the declared effort. One line per agent converts a false
+model attestation into something requiring two independent mistakes.
 
 **The residual risk is the silent downgrade.** An unpinned panel lane runs at
 the model default while a record attests `xhigh`. That produces a
 plausible-looking artifact rather than an error, which is the worst shape a
 failure can take on an attestation gate. Three layers defend it:
 
-1. the dispatch tables, which make it rarely happen;
+1. the dispatch policy and its table projection, which make it rarely happen;
 2. `scripts/copilot/check-bindings.mjs`, which rejects a mispinned or illegal
    effort before a run;
-3. the record helper, which takes the **observed** effort as input and fails
-   closed rather than defaulting to the policy string.
+3. the record helper, which validates the **declared** observed effort against
+   the completion-bound policy and fails closed rather than defaulting to the
+   policy string; it cannot prove the runtime effort.
+
+### Agent definition provenance
+
+Dispatch every selected seat through a proper task subagent registered from
+the exact reviewed worktree. Never substitute an agent type, load a definition
+from a parent worktree, or spawn a nested `copilot` CLI reviewer. If the
+current session registry cannot supply every selected exact agent definition,
+park and restart the session in the reviewed worktree before dispatch.
+
+Each current `observed.json` seat entry must contain exactly these nine fields:
+`provider`, `model`, `reasoning_effort`, `context_tier`, `communication`,
+`agent_type`, `agent_definition_sha256`, `run_id`, and `receipt_locator`.
+Unknown fields are rejected. `make-records.mjs` compares the declared
+dispatch fields with the selected policy, compares the definition digest with
+the matching immutable `agent-definitions/panel-<seat>.agent.md` bytes bound by
+`.complete`, and checks run and receipt uniqueness and provider correlation.
+`make-records.mjs` validates declared same-user metadata against the
+completion-bound policy and bound definition bytes; it cannot detect a lying
+declaration or prove execution. That residual is accepted without
+authenticated receipts. `observed.json` is not authentication and does not establish
+a security boundary. A wrong, missing, parent-worktree, or
+substituted definition fails closed. Legacy imported records remain readable
+through their explicit legacy path; that compatibility does not weaken current
+workspace-schema records.
+
+The panel dispatch policy is one machine readable source for every seat's
+agent type, model, reasoning effort, context tier, and communication. Staging
+places the selected projection in the completion bound packet, and record
+generation compares observed same-user process metadata with that projection.
+These declared values are process evidence and correlation data, not
+authentication; the helper cannot establish that the corresponding process
+actually ran.
 
 New panel work uses `gpt-5.6-sol` at `xhigh`. Existing
 `gemini-3.1-pro-preview` records at `high` remain readable as one exact
@@ -285,37 +318,138 @@ byte-identical bytes:
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
   --discovery-request <request.json> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
-  --candidate <current-candidate.json>
+  --candidate <current-candidate.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
-Verification staging supplies the complete canonical handoff:
+Discovery-to-first-verification staging is marker-free because its previous
+selection is discovery. A later verification whose previous selection is
+verification must consume the finalized continuation handoff and the distinct
+completed-response file:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh <base> <prev-tip> <round> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
   --candidate <current-candidate.json> \
-  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes> \
+  --ledger <discovery-ledger.json> --responses <responses-completed.json> \
+  --handoff <handoff.json> \
   --self-verification <self-verification.json> \
   --verification-dir <verification-requests>
 ```
 
 Staging also writes `review-request.md`, `dispatch-prompt.txt`, and
-`reviewer-notes/<seat>.md`. The integrator edits the evidence and any
-seat-specific rebuttal, then dispatches every reviewer with the exact generated
-prompt. It materializes supplied exact artifacts as round-local
-`selection.json`, `current-candidate.json`, `discovery-request.json`,
-`discovery-ledger.json`,
-`responses.json`, and `self-verification.json` before `.complete`. Discovery
-staging requires a readable `--discovery-request`; verification staging
-requires a readable complete per-seat `--verification-dir`, which is staged
-under `verification/`. Once `.complete` exists, staging may compare or reuse
-canonical artifacts but never add a missing one. The dispatch prompt is usable
-only when the round's `.complete`
-marker exists; an unmarked scratch directory is non-authoritative and must be
-cleaned up before retrying. Later reviews fail closed unless `<prev-tip>` matches
-the previous recorded tip and every seat's prior verdict is available, so the
-incremental range and prior-finding instructions cannot be replaced by a
-free-form summary.
+`reviewer-notes/<seat>.md`. The integrator finalizes the non-empty evidence and
+any seat-specific rebuttal before staging, passes the evidence with the
+required `--evidence` argument, and passes integrator-authored notes with
+`--reviewer-notes-dir`. A supplied notes directory must contain exactly one
+non-empty regular `<seat>.md` file per selected seat and no other entries;
+omitting it uses generated defaults. The integrator then dispatches every
+reviewer with the exact generated prompt. Staging materializes supplied exact
+artifacts as round-local `selection.json`, `current-candidate.json`,
+`discovery-ledger.json`, `responses.json`, and `self-verification.json` before
+`.complete`. The supplied discovery request is the pre-evidence input:
+discovery staging preserves it and derives round-local
+`discovery-request.json` by appending the exact staged `evidence.md` SHA-256
+and byte-count descriptor to `validation_evidence`. An already matching
+descriptor is reused and a conflicting descriptor is rejected. The staged
+request, not the supplied request bytes, is the canonical evidence-bound
+request. Discovery staging requires a readable `--discovery-request`;
+verification staging requires a readable complete per-seat
+`--verification-dir`, which is staged under `verification/`.
+When the predecessor selection is verification, staging requires
+`--handoff` and validates it against the exact supplied ledger and
+completed-response bytes before publishing packet artifacts.
+
+The `.complete` marker byte-binds every reviewer-visible canonical artifact,
+including the finalized evidence and reviewer notes. Once it exists, the round
+is immutable: do not edit, replace, delete, or backfill a staged artifact.
+Staging may compare or reuse only the existing bytes; changed evidence or notes
+require a new qualified round. The dispatch prompt is usable only when the
+round's `.complete` marker exists; an unmarked scratch directory is
+non-authoritative and must be cleaned up before retrying. Later reviews fail
+closed unless `<prev-tip>` matches the previous recorded tip and every seat's
+prior verdict is available, so the incremental range and prior-finding
+instructions cannot be replaced by a free-form summary.
+
+Current completion packets use schema-version `4`, which binds the selected
+agent definitions and the roster-projected dispatch policy. Schema-version `2`
+predecessors are accepted only as one of two exact historical sets: the base
+set without agent definitions, or that same set plus every selected definition;
+neither contains `dispatch-binding.json`. Schema-version `3` requires exactly
+the definition-bound set without `dispatch-binding.json`. Missing, extra, or
+partial artifacts are never accepted, and schema versions `2` and `3` are
+predecessor-only. New staging emits schema-version `4`.
+
+If approval is blocked, preserve that immutable round and promote its exact
+handoff before dispatching fixes:
+
+```bash
+NEXT=.scratch/panel/<next-handoff>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+The command publishes only the immutable `NEXT/discovery-ledger.json` and
+partial `NEXT/responses.json` independently with create-or-compare semantics.
+It publishes those files independently. A retry after a partial publication
+compares every existing file byte-for-byte
+and creates only missing files; conflicting bytes fail. It appends admitted
+late findings and refuses duplicate sources, missing responses, candidate or
+selection mismatches, malformed statuses, and conflicting output. Copy the
+partial response template to a distinct completed-response file, preserve
+every carried non-null response unchanged, fill only reset or newly added null
+responses there, and finalize the handoff:
+
+```bash
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+```
+
+`handoff.json` is published last as completeness evidence. It binds the exact
+ledger and completed-response bytes, but it is not an atomic transaction or a
+security proof. The finalized continuation requires all three files before use:
+the ledger, completed responses, and `handoff.json`. Never edit the partial
+template, ledger, or completed responses after finalization. Rerun selection
+with the new fix delta, prepare
+verification from `NEXT/discovery-ledger.json` and
+`NEXT/responses-completed.json`, and stage the new packet with the finalized
+handoff. Do not hand-copy findings or responses.
+
+The continuation verification command must pass
+`--handoff "$NEXT/handoff.json"`; discovery-first verification remains
+marker-free without that flag.
+
+```bash
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/self-verification.json" \
+  "$NEXT/verification" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
+
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> \
+  --selection "$NEXT_SELECTION" --candidate "$CURRENT_CANDIDATE" \
+  --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
+  --self-verification "$NEXT/self-verification.json" \
+  --verification-dir "$NEXT/verification" \
+  --lifecycle <lifecycle-id> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
 
 After verification verdicts are collected, copy this sequence without changing
 the canonical ledger path or any of the artifact paths:

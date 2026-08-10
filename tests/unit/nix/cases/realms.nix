@@ -1,7 +1,10 @@
-# nix-unit coverage for realm option/schema foundations.
-{ mkEval, lib, flakeRoot, ... }:
+# nix-unit coverage for realm option/schema foundations and Zone-control
+# compiler constraints.
+{ mkEval, lib, flakeRoot, pkgs, casePartition ? "index", ... }:
 
 let
+  digestHelpers =
+    import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
   realmSchemaBase = {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -208,6 +211,170 @@ let
     })
   ];
 
+  zoneControlBase = {
+    d2b.artifacts.transport-unix = {
+      package = pkgs.writeText "d2b-test-transport-unix" "transport";
+      type = "provider";
+    };
+    d2b.zones.local-root = {
+      resources = {
+        alice.type = "User";
+        zone-reader = {
+          type = "Role";
+          spec = {
+            rules = [{
+              resourceTypes = [ "User" ];
+              verbs = [ "get" "list" "watch" ];
+              subresources = [ ];
+              resourceNames = [ ];
+              zones = [ ];
+              executionRefs = [ ];
+              sessionVerbs = [ ];
+            }];
+          };
+        };
+        zone-reader-alice = {
+          type = "RoleBinding";
+          spec = {
+            roleRef = "Role/zone-reader";
+            subjects = [ "User/alice" ];
+            externalPrincipalSelector = null;
+            scopeNarrowing = null;
+          };
+        };
+        default-quota = {
+          type = "Quota";
+          spec = {
+            ceilings = {
+              maxResources = 4096;
+              maxResourcesPerType = 512;
+              maxOwnerDepth = 8;
+              maxCpu = null;
+              maxMemoryMib = null;
+              maxStorageGib = null;
+            };
+            perTypeCeilings = { };
+            scope = "zone";
+            enforcementPolicy = "hard";
+          };
+        };
+        lockdown = {
+          type = "EmergencyPolicy";
+          spec = {
+            enabled = false;
+            scope = {
+              stopNewAdmissions = true;
+              disconnectZoneLinks = true;
+              stopProviderProcesses = false;
+              drainOngoingOperations = true;
+            };
+            drainDeadlineSeconds = 30;
+            reason = "";
+          };
+        };
+      };
+    };
+    d2b.zones.child = {
+      parentZone = "local-root";
+      resources = {
+        transport-unix = {
+          type = "Provider";
+          spec = {
+            artifactId = "transport-unix";
+            config = { };
+          };
+        };
+        child-uplink = {
+          type = "ZoneLink";
+          spec = {
+            childZoneName = "child";
+            transportProviderRef = "Provider/transport-unix";
+            transportSettings = { };
+            transportCredentials = [ ];
+            disabled = false;
+            limits = {
+              maxActiveStreams = 32;
+              maxPendingIntents = 256;
+              reconnectMaxAttempts = 10;
+              reconnectWindowSecs = 300;
+            };
+          };
+        };
+      };
+    };
+  };
+  zoneCatalogData = {
+    schemaVersion = 3;
+    entries = [ ];
+  };
+  zoneCatalogPreimageJson = builtins.toJSON zoneCatalogData;
+  zoneCatalogDigest = "sha256:${digestHelpers.framedDigest
+    "d2b:v3:artifact-catalog"
+    zoneCatalogPreimageJson}";
+  zoneCatalogDocument = zoneCatalogData // {
+    catalogDigest = zoneCatalogDigest;
+  };
+  zoneCatalogJson = builtins.toJSON zoneCatalogDocument;
+  zoneCatalogPath = pkgs.writeText
+    "d2b-zone-control-artifact-catalog-fixture"
+    "${zoneCatalogJson}\n";
+  zoneCatalogOverride = { lib, ... }: {
+    d2b._artifactCatalogV3 = lib.mkForce {
+      ids = [ ];
+      artifactRows = [ ];
+      preimage = zoneCatalogData;
+      preimageJson = zoneCatalogPreimageJson;
+      catalogDigest = zoneCatalogDigest;
+      catalogData = zoneCatalogDocument;
+      catalogJson = zoneCatalogJson;
+      path = zoneCatalogPath;
+      publicEntries = [ ];
+    };
+    d2b._bundle.extraArtifacts.artifactCatalog =
+      lib.mkOverride 0 {
+        data = zoneCatalogData;
+        jsonText = zoneCatalogJson;
+        path = zoneCatalogPath;
+        installFileName = "artifact-catalog.json";
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      };
+  };
+
+  # Zone-control compiler coverage is independent of the legacy env/VM
+  # topology. Keep the positive and negative vectors on the schema-only
+  # fixture so each assertion does not instantiate unrelated guest systems.
+  zoneControlCfg = (mkEval [
+    realmSchemaBase
+    zoneControlBase
+    zoneCatalogOverride
+  ]).config;
+  zoneControlFailures = override:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion)
+        (mkEval [
+          realmSchemaBase
+          zoneControlBase
+          zoneCatalogOverride
+          override
+        ]).config.assertions);
+  hasZoneControlFailure = needle: override:
+    lib.any (message: lib.hasInfix needle message)
+      (zoneControlFailures override);
+
+  deepZoneOverride = {
+    d2b.zones = lib.foldl'
+      (zones: index:
+        zones // {
+          "z${toString index}" = {
+            parentZone =
+              if index == 0 then "local-root" else "z${toString (index - 1)}";
+          };
+        })
+      { }
+      (lib.range 0 16);
+  };
+
   missingPlacementProviderMessages = failureMessages [
     (lib.recursiveUpdate realmSchemaBase {
       d2b.realms.work = {
@@ -397,7 +564,8 @@ let
     })
   ]).config;
 in
-{
+let
+  allCases = {
   "realms/valid-home-dev-work-keeps-env-substrate-active" = {
     expr = {
       assertionsPass = lib.all (a: a.assertion) cfg.assertions;
@@ -1613,4 +1781,177 @@ in
       launcherEnable = false;
     };
   };
-}
+
+  # --- Wave 5 Zone-control compiler coverage ---
+  "realms/zone-control-seals-parent-map-without-zone-spec-parent" = {
+    expr = {
+      sealed = zoneControlCfg.d2b._resourceCompiler.zoneControl.allocatorTopology.sealed;
+      parent = zoneControlCfg.d2b._resourceCompiler.zoneControl.parentMap.child;
+      zoneSpec = zoneControlCfg.d2b._zoneCompiler.selfResources.child.spec;
+      generationMatches =
+        zoneControlCfg.d2b._resourceCompiler.zoneControl.generations.child
+        == zoneControlCfg.d2b._bundle.zoneResourceBundlesV3.child.data.contentHash;
+      resourceTypes = map
+        (resource: resource.type)
+        zoneControlCfg.d2b._resourceCompiler.zoneControl.byZone.child;
+    };
+    expected = {
+      sealed = true;
+      parent = "local-root";
+      zoneSpec = { };
+      generationMatches = true;
+      resourceTypes = [ "Provider" "ZoneLink" ];
+    };
+  };
+  "realms/zone-control-zone-link-requires-transport-provider-shape" = {
+    expr = hasZoneControlFailure "same-Zone transport Provider ref" {
+      d2b.zones.child.resources.child-uplink.spec.transportProviderRef =
+        "Provider/not-transport";
+    };
+    expected = true;
+  };
+  "realms/zone-control-zone-link-child-name-is-local" = {
+    expr = hasZoneControlFailure "must equal the enclosing Zone name" {
+      d2b.zones.child.resources.child-uplink.spec.childZoneName = "other";
+    };
+    expected = true;
+  };
+  "realms/zone-control-zone-link-limits-are-bounded" = {
+    expr = hasZoneControlFailure "maxPendingIntents must be between" {
+      d2b.zones.child.resources.child-uplink.spec.limits.maxPendingIntents = 1025;
+    };
+    expected = true;
+  };
+  "realms/zone-control-role-keeps-resource-and-session-verbs-closed" = {
+    expr = {
+      unknown = hasZoneControlFailure "unknown resource verb" {
+        d2b.zones.local-root.resources.zone-reader.spec.rules = [{
+          resourceTypes = [ "User" ];
+          verbs = [ "read" ];
+          sessionVerbs = [ ];
+          subresources = [ ];
+          resourceNames = [ ];
+          zones = [ ];
+          executionRefs = [ ];
+        }];
+      };
+      relayInResource = hasZoneControlFailure "must keep session verbs separate" {
+        d2b.zones.local-root.resources.zone-reader.spec.rules = [{
+          resourceTypes = [ "ZoneLink" ];
+          verbs = [ "relay" ];
+          sessionVerbs = [ ];
+          subresources = [ ];
+          resourceNames = [ "child-uplink" ];
+          zones = [ "child" ];
+          executionRefs = [ ];
+        }];
+      };
+    };
+    expected = {
+      unknown = true;
+      relayInResource = true;
+    };
+  };
+  "realms/zone-control-relay-requires-exact-provenance-and-scope" = {
+    expr = hasZoneControlFailure "relay grants require exact ZoneLink-scoped bounds" {
+      d2b.zones.local-root.resources.zone-reader.spec.rules = [{
+        resourceTypes = [ "ZoneLink" ];
+        verbs = [ ];
+        sessionVerbs = [ "relay" ];
+        subresources = [ ];
+        resourceNames = [ ];
+        zones = [ ];
+        executionRefs = [ ];
+      }];
+    };
+    expected = true;
+  };
+  "realms/zone-control-role-binding-subjects-are-resolved-and-bounded" = {
+    expr = {
+      unknownSubject = hasZoneControlFailure "only resolved same-Zone subjects" {
+        d2b.zones.local-root.resources.zone-reader-alice.spec.subjects =
+          [ "Credential/alice" ];
+      };
+      duplicateSubject = hasZoneControlFailure "unique same-Zone ResourceRefs" {
+        d2b.zones.local-root.resources.zone-reader-alice.spec.subjects =
+          lib.mkForce [ "User/alice" "User/alice" ];
+      };
+    };
+    expected = {
+      unknownSubject = true;
+      duplicateSubject = true;
+    };
+  };
+  "realms/zone-control-role-binding-has-no-expiry-field" = {
+    expr = hasZoneControlFailure "must contain no expiry" {
+      d2b.zones.local-root.resources.zone-reader-alice.spec.expiry = 30;
+    };
+    expected = true;
+  };
+  "realms/zone-control-quota-and-emergency-bounds" = {
+    expr = {
+      quota = hasZoneControlFailure "maxOwnerDepth must be between" {
+        d2b.zones.local-root.resources.default-quota.spec.ceilings.maxOwnerDepth = 33;
+      };
+      emergency = hasZoneControlFailure "drainDeadlineSeconds must be between" {
+        d2b.zones.local-root.resources.lockdown.spec.drainDeadlineSeconds =
+          lib.mkForce 301;
+      };
+    };
+    expected = {
+      quota = true;
+      emergency = true;
+    };
+  };
+  "realms/zone-control-digest-fields-are-canonical" = {
+    expr = hasZoneControlFailure "must be a lowercase sha256 digest" {
+      d2b.zones.local-root.resources.zone-reader-alice.spec.externalPrincipalSelector =
+        lib.mkForce {
+        digest = "not-a-digest";
+      };
+    };
+    expected = true;
+  };
+  "realms/zone-control-parent-existence-self-cycle-and-root-rules" = {
+    expr = {
+      missing = hasZoneControlFailure "must resolve to a declared Zone" {
+        d2b.zones.child.parentZone = lib.mkForce "missing";
+      };
+      self = hasZoneControlFailure "must not name itself" {
+        d2b.zones.child.parentZone = lib.mkForce "child";
+      };
+      root = hasZoneControlFailure "forbidden on the local-root Zone" {
+        d2b.zones.local-root.parentZone = "child";
+      };
+      cycle = hasZoneControlFailure "forms a cycle" {
+        d2b.zones.alpha.parentZone = "beta";
+        d2b.zones.beta.parentZone = "alpha";
+      };
+      depth = hasZoneControlFailure "ancestry exceeds" deepZoneOverride;
+    };
+    expected = {
+      missing = true;
+      self = true;
+      root = true;
+      cycle = true;
+      depth = true;
+    };
+  };
+};
+  partitionFor = name:
+    if lib.hasInfix "zone-control-" name then "zone-control"
+    else if lib.hasInfix "accepted-" name
+      || lib.hasInfix "tombstone-" name then "workloads"
+    else if lib.hasInfix "rejects-" name
+      || lib.hasInfix "requires-" name then "rejections"
+    else if lib.hasInfix "allocator-artifact" name then "allocator"
+    else if lib.hasInfix "controller-config" name then "controller"
+    else if lib.hasInfix "identity-config" name
+      || lib.hasInfix "identity-key" name then "identity"
+    else if lib.hasInfix "host-local-" name then "host-local"
+    else if lib.hasInfix "examples-" name then "examples"
+    else "index";
+in
+lib.filterAttrs
+  (name: _: partitionFor name == casePartition)
+  allCases

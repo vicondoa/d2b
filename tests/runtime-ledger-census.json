@@ -70,7 +70,7 @@
     "d2b-core::contract_id::tests::path_templates_are_absolute",
     "d2b-core::contract_id::tests::slugs_are_lowercase",
     "d2b-core::default_v2_state_is_all_off_no_levels",
-    "d2b-core::error::tests::all_kinds_count_is_fifteen",
+    "d2b-core::error::tests::all_kinds_count_is_thirty_seven",
     "d2b-core::error::tests::all_kinds_records_are_unique_and_operator_visible",
     "d2b-core::error::tests::core_error_messages_never_contain_host_paths",
     "d2b-core::error::tests::error_serializes_as_operator_envelope",

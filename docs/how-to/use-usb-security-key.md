@@ -96,7 +96,7 @@ sudo systemctl restart d2bd.service
 
 ## Step 4: Verify the virtual device appears in the VM
 
-From inside the VM (or via `d2b vm exec personal-dev --`):
+From inside the VM (or via `d2b exec run Guest/personal-dev --`):
 
 ```bash
 fido2-token -L
@@ -111,7 +111,7 @@ Expected output includes an entry for the virtual device, for example:
 You can also run the built-in smoke check:
 
 ```bash
-d2b usb security-key test personal-dev
+d2b device security-key test personal-dev
 ```
 
 This verifies that the guest virtual HID exists and that the host broker can
@@ -136,21 +136,21 @@ guest frontend inherits.
 Check current lease and per-VM virtual-device health:
 
 ```bash
-d2b usb security-key status
+d2b device security-key status
 ```
 
 Show active and recent session requests:
 
 ```bash
-d2b usb security-key sessions
+d2b device security-key sessions
 ```
 
 Cancel a stuck or timed-out request:
 
 ```bash
-d2b usb security-key cancel --current --apply
+d2b device security-key cancel --current --apply
 # or by session ID:
-d2b usb security-key cancel <session-id> --apply
+d2b device security-key cancel <session-id> --apply
 ```
 
 ## Contention: two VMs requesting at the same time
@@ -180,11 +180,11 @@ d2b.host.usb.securityKey = {
 
 | Symptom | Likely cause | Remedy |
 |---------|-------------|--------|
-| `fido2-token -L` shows no virtual device | Guest frontend not started | Check `d2b usb security-key status` and `journalctl -u d2bd` |
-| `d2b usb security-key test` fails with "broker unreachable" | Host broker socket not ready | Restart `d2bd`; check `d2b.host.usb.securityKey.enable = true` is in the active bundle |
+| `fido2-token -L` shows no virtual device | Guest frontend not started | Check `d2b device security-key status` and `journalctl -u d2bd` |
+| `d2b device security-key test` fails with "broker unreachable" | Host broker socket not ready | Restart `d2bd`; check `d2b.host.usb.securityKey.enable = true` is in the active bundle |
 | Firefox sees no security key | Virtual device created but udev rules not applied in guest | Confirm the guest includes `services.udev.packages = [ pkgs.libfido2 ]` and the `plugdev` group is present |
 | `usbip.yubikey = true` eval assertion fires | USBIP and security-key proxy declared for the same device | Disable `usbip.yubikey` for VMs that use `usb.securityKey.enable`; see [migration guide](./migrate-usbip-yubikey-to-security-key.md) |
-| Physical key not found by broker | Stable selector does not match any present device | Run `d2b usb security-key status` on the host; verify the device is plugged in and the selector matches |
+| Physical key not found by broker | Stable selector does not match any present device | Run `d2b device security-key status` on the host; verify the device is plugged in and the selector matches |
 
 For USBIP-specific passthrough issues (PIV/CCID/OTP use cases that still use
 `usbip`), see [`troubleshoot-usbip.md`](./troubleshoot-usbip.md).

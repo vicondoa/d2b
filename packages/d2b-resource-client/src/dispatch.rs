@@ -219,6 +219,11 @@ impl<W: WallClock> CallDriver<W> {
         self.attempt
     }
 
+    /// Borrow the request identifier used to forward cancellation.
+    pub const fn request_id(&self) -> &[u8; crate::REQUEST_ID_BYTES] {
+        self.options.metadata.request_id()
+    }
+
     /// Admit the next attempt, or refuse with a typed reason.
     pub fn begin_attempt(
         &mut self,
@@ -277,6 +282,26 @@ impl<W: WallClock> CallDriver<W> {
                 None => terminal,
             },
             RetryClass::Never | RetryClass::Reauthorize => terminal,
+        }
+    }
+
+    /// Classify a peer verdict after the session adapter has reduced it to the
+    /// public client error shape.
+    ///
+    /// A reduced `AfterDelay` verdict has no delay scalar left to honor, so it
+    /// remains terminal rather than being retried with an invented interval.
+    pub fn record_remote_verdict(
+        &self,
+        kind: d2b_contracts::v3::ResourceErrorKind,
+        retry: RetryClass,
+    ) -> AttemptDisposition {
+        let terminal = AttemptDisposition::Fail(ClientError::Remote { kind, retry });
+        if self.has_attachments || !self.can_retry() {
+            return terminal;
+        }
+        match retry {
+            RetryClass::Immediate => AttemptDisposition::RetryNow,
+            RetryClass::Never | RetryClass::AfterDelay | RetryClass::Reauthorize => terminal,
         }
     }
 

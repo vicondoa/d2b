@@ -1,0 +1,38 @@
+{
+  "artifact_kind": "d2b-delivery/panel-request",
+  "schema_version": 2,
+  "program": "ADR046",
+  "wave": "W0",
+  "candidate_id": "b14017729b4312480b217eb378d89da8e629ca0ccb082a66230a297450d9270e",
+  "content_id": "2a7104db2b2fb08db7062bf0080594f4c002abede9328b579fee4700725a1c40",
+  "snapshot_sha256": "c6364dcb391510507604fbd15d5cc8fba1617ede694403fcb2296332cecd04c8",
+  "provider": "github-copilot",
+  "model_version": "gpt-5.6-sol",
+  "reasoning_effort": "xhigh",
+  "roles": [
+    "software",
+    "test",
+    "nixos",
+    "networking",
+    "security",
+    "rust",
+    "product",
+    "docs",
+    "observability",
+    "kernel"
+  ],
+  "record_artifact_kind": "d2b-delivery/panel-receipt",
+  "record_schema_version": 2,
+  "record_files": [
+    "software.json",
+    "test.json",
+    "nixos.json",
+    "networking.json",
+    "security.json",
+    "rust.json",
+    "product.json",
+    "docs.json",
+    "observability.json",
+    "kernel.json"
+  ]
+}

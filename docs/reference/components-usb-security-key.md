@@ -5,7 +5,7 @@
 > Source: [`nixos-modules/components/usb-security-key.nix`](../../nixos-modules/components/usb-security-key.nix)
 > Host-side wiring: [`nixos-modules/host-usb.nix`](../../nixos-modules/host-usb.nix)
 > CLI integration: [`packages/d2b/src/usb/security_key.rs`](../../packages/d2b/src/usb/security_key.rs)
-> (`d2b usb security-key status|sessions|cancel|test`)
+> (`d2b device security-key status|sessions|cancel|test`)
 
 ## What this component does
 
@@ -124,7 +124,7 @@ unit is declared in the guest or host NixOS config for this component.
 ## CLI surface
 
 ```
-d2b usb security-key <SUBCOMMAND>
+d2b device security-key <SUBCOMMAND>
 
 Subcommands:
   status    Show configured keys, virtual-device health per VM, active lease

@@ -309,6 +309,14 @@ in
       visible = false;
       description = "Internal typed per-Zone zones/<zone>/resource-bundle.json artifact metadata table.";
     };
+
+    zoneResourceBundlesCompatibility = lib.mkOption {
+      type = types.attrsOf types.anything;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal eval-only compatibility projection for pre-v3 Zone bundle consumers.";
+    };
   };
 
   config = {

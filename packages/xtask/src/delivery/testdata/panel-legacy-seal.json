@@ -1,0 +1,156 @@
+{
+  "artifact_kind": "d2b-delivery/wave-seal",
+  "schema_version": 2,
+  "program": "ADR046",
+  "wave": "W0",
+  "candidate_id": "b14017729b4312480b217eb378d89da8e629ca0ccb082a66230a297450d9270e",
+  "content_id": "2a7104db2b2fb08db7062bf0080594f4c002abede9328b579fee4700725a1c40",
+  "snapshot_sha256": "c6364dcb391510507604fbd15d5cc8fba1617ede694403fcb2296332cecd04c8",
+  "material": {
+    "program": "ADR046",
+    "wave": "W0",
+    "repository_set": [
+      {
+        "id": "github.com/example/d2b",
+        "object_format": "sha1",
+        "base_oid": "9fa78faf73a43a577c63ca9449ef4bca409c0667",
+        "head_oid": "9fa78faf73a43a577c63ca9449ef4bca409c0667",
+        "integration_tree_oid": "101265ec893b87f8ae6cd7698933459e10bd014e",
+        "expected_pull_requests": [
+          {
+            "number": 1,
+            "head_oid": "9fa78faf73a43a577c63ca9449ef4bca409c0667"
+          }
+        ]
+      }
+    ],
+    "dependency_graph": [
+      {
+        "from": "adr046-w0",
+        "to": "adr046-w1"
+      }
+    ],
+    "generated_artifacts": [
+      {
+        "name": "spec-set",
+        "repository": "github.com/example/d2b",
+        "path": "docs/spec.json",
+        "sha256": "54114018727f8609decf9d7057ccaacfc3cbf9b7bd395f1fc7a7e72a13c95d31"
+      }
+    ],
+    "dependency_fingerprints": [
+      {
+        "name": "cargo-lock",
+        "repository": "github.com/example/d2b",
+        "path": "Cargo.lock",
+        "sha256": "718475cd179c5fce5f3cbaf68fb45b15017015ebeec359c040cf704e3f1c86b6"
+      }
+    ],
+    "contract_fingerprints": [
+      {
+        "name": "schemas",
+        "repository": "github.com/example/d2b",
+        "path": "schemas",
+        "sha256": "53b84357c5e6088f295f3f1caa69dae8683952296a303c23e2773d5e1cda90a6"
+      }
+    ]
+  },
+  "panel": {
+    "roles": [
+      "software",
+      "test",
+      "nixos",
+      "networking",
+      "security",
+      "rust",
+      "product",
+      "docs",
+      "observability",
+      "kernel"
+    ],
+    "records": [
+      {
+        "role": "software",
+        "file": "software.json",
+        "sha256": "599b902b4b3cf2f246da9f10fb17f3e9da421b0061328d2e77a8aeff73d7df27",
+        "run_id": "legacy-software-0"
+      },
+      {
+        "role": "test",
+        "file": "test.json",
+        "sha256": "93b622cd483f28dbea75f1456796196416e66ccd619fd67d3be8288486822603",
+        "run_id": "legacy-test-1"
+      },
+      {
+        "role": "nixos",
+        "file": "nixos.json",
+        "sha256": "a46d7a069761c0d5d037e813e8518d124ab3aa65e2af50101ea1d608ee0f44d2",
+        "run_id": "legacy-nixos-2"
+      },
+      {
+        "role": "networking",
+        "file": "networking.json",
+        "sha256": "aece7488e8c2e11cb733691cd060d79281af4cd7ca2bebecff0e8af7b4dd2e49",
+        "run_id": "legacy-networking-3"
+      },
+      {
+        "role": "security",
+        "file": "security.json",
+        "sha256": "e79fe97c2bd908ca08d59035a445755353f610bab272879f1f0c1ee95da1e262",
+        "run_id": "legacy-security-4"
+      },
+      {
+        "role": "rust",
+        "file": "rust.json",
+        "sha256": "d2f1afb2d2343eebe485891a6d6826548eee006ea4d9a244a22f3d4c8df4a2b6",
+        "run_id": "legacy-rust-5"
+      },
+      {
+        "role": "product",
+        "file": "product.json",
+        "sha256": "4f60651b70df76960c4861988508ad1077f84cf2404116e6fd6d96320dbe444c",
+        "run_id": "legacy-product-6"
+      },
+      {
+        "role": "docs",
+        "file": "docs.json",
+        "sha256": "ca987bb4b21d1ec787ba647b5bb8aa2b5b575f496972bbb2f169bed5e00b8ecb",
+        "run_id": "legacy-docs-7"
+      },
+      {
+        "role": "observability",
+        "file": "observability.json",
+        "sha256": "e95bab5e251e278eebcef4f78817558fd7acd37abf87df0c3773001daa45cea8",
+        "run_id": "legacy-observability-8"
+      },
+      {
+        "role": "kernel",
+        "file": "kernel.json",
+        "sha256": "d630963f96e8e5e49458b5d0b0e553c78792f3158bbebfbcacf1e07e336d6eb6",
+        "run_id": "legacy-kernel-9"
+      }
+    ],
+    "unanimous": true
+  },
+  "panel_request_sha256": "f00ee21310e99dc99405e6954ec461309a34d21d27d80886ea8952b51c682e40",
+  "evidence": [
+    {
+      "lane": "github-ci",
+      "validations": [
+        {
+          "validation": "layer1-check",
+          "record_sha256": "42b4791a2c04079d867fd21d52f2d6522dbbe552c19bfd9f46aa777a3794df43"
+        }
+      ]
+    },
+    {
+      "lane": "local-host",
+      "validations": [
+        {
+          "validation": "host-integration",
+          "record_sha256": "81ebd4fc9a9ff2743a5272bf4779d2e61139ae682d36fb7976a66c07301db35c"
+        }
+      ]
+    }
+  ]
+}

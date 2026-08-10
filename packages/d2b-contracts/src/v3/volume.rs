@@ -38,6 +38,8 @@ pub const MAX_ATTACHMENTS: usize = 64;
 pub const MAX_LAYOUT_PATH_BYTES: usize = 255;
 /// Maximum ACL grants on one layout entry list.
 pub const MAX_ACL_GRANTS: usize = 64;
+/// Maximum virtiofs worker threads requested by one attachment.
+pub const MAX_THREAD_POOL_SIZE: u32 = 256;
 
 /// Semantic persistence class of a Volume.
 #[derive(
@@ -63,6 +65,16 @@ pub enum SourceKind {
     Tmpfs,
 }
 
+/// On-disk format managed for a `block-image` source.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlockImageFormat {
+    Raw,
+    Qcow2,
+}
+
 /// The Volume base source settings.
 ///
 /// `sourcePolicyId` is an opaque bounded ID, never a raw host path.
@@ -71,6 +83,10 @@ pub enum SourceKind {
 pub struct SourceSettings {
     kind: SourceKind,
     source_policy_id: Option<BoundedToken>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_format: Option<BlockImageFormat>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    preallocate: bool,
 }
 
 impl SourceSettings {
@@ -80,13 +96,28 @@ impl SourceSettings {
         kind: SourceKind,
         source_policy_id: Option<BoundedToken>,
     ) -> Result<Self, PrimitiveSpecError> {
+        Self::new_with_image(kind, source_policy_id, None, false)
+    }
+
+    /// Construct source settings with the block-image lifecycle options.
+    pub fn new_with_image(
+        kind: SourceKind,
+        source_policy_id: Option<BoundedToken>,
+        image_format: Option<BlockImageFormat>,
+        preallocate: bool,
+    ) -> Result<Self, PrimitiveSpecError> {
         let required = matches!(kind, SourceKind::LocalPath | SourceKind::BlockImage);
         match (required, source_policy_id.is_some()) {
             (true, false) => Err(PrimitiveSpecError::MissingRequiredField),
             (false, true) => Err(PrimitiveSpecError::ConflictingFields),
+            _ if kind != SourceKind::BlockImage && (image_format.is_some() || preallocate) => {
+                Err(PrimitiveSpecError::ConflictingFields)
+            }
             _ => Ok(Self {
                 kind,
                 source_policy_id,
+                image_format,
+                preallocate,
             }),
         }
     }
@@ -100,6 +131,19 @@ impl SourceSettings {
     pub const fn source_policy_id(&self) -> Option<&BoundedToken> {
         self.source_policy_id.as_ref()
     }
+
+    /// Return the selected block-image format, defaulting to raw.
+    pub const fn image_format(&self) -> BlockImageFormat {
+        match self.image_format {
+            Some(format) => format,
+            None => BlockImageFormat::Raw,
+        }
+    }
+
+    /// Whether a block-image is preallocated at creation.
+    pub const fn preallocate(&self) -> bool {
+        self.preallocate
+    }
 }
 
 redacted_debug!(SourceSettings);
@@ -112,10 +156,24 @@ impl<'de> Deserialize<'de> for SourceSettings {
             kind: SourceKind,
             #[serde(default)]
             source_policy_id: Option<BoundedToken>,
+            #[serde(default)]
+            image_format: Option<BlockImageFormat>,
+            #[serde(default)]
+            preallocate: bool,
         }
         let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.kind, wire.source_policy_id).map_err(serde::de::Error::custom)
+        Self::new_with_image(
+            wire.kind,
+            wire.source_policy_id,
+            wire.image_format,
+            wire.preallocate,
+        )
+        .map_err(serde::de::Error::custom)
     }
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Where the backing storage lives, and how it is selected.
@@ -185,6 +243,13 @@ pub enum EntryType {
 pub enum SensitivityClass {
     Public,
     Private,
+    /// State whose path and size are restricted to the broker audit trail.
+    SecretAdjacent,
+    /// A tamper-evident audit segment.
+    Audit,
+    /// State whose visibility is bounded by the Zone boundary.
+    ZoneScoped,
+    /// Compatibility spelling retained for already-landed fixtures.
     Secret,
 }
 
@@ -207,8 +272,13 @@ pub enum CreatePolicy {
 #[serde(rename_all = "kebab-case")]
 pub enum RepairPolicy {
     None,
+    NixActivation,
     ExactOwner,
+    FailClosed,
+    OperatorOnly,
+    /// Compatibility policy for callers that repair only mode bits.
     ExactMode,
+    /// Compatibility policy for callers that repair owner and ACLs.
     ExactOwnerAndAcl,
 }
 
@@ -219,7 +289,14 @@ pub enum RepairPolicy {
 #[serde(rename_all = "kebab-case")]
 pub enum CleanupPolicy {
     Never,
+    Boot,
+    ProcessExitWithProof,
+    VmStopWithProof,
+    CutoverOnly,
+    External,
+    /// Compatibility spelling for controller-owned cleanup.
     OwnerControlled,
+    /// Compatibility spelling for process-scoped cleanup.
     ProcessExit,
 }
 
@@ -230,6 +307,11 @@ pub enum CleanupPolicy {
 #[serde(rename_all = "kebab-case")]
 pub enum EntryAdoptionPolicy {
     AdoptWithLiveOwnerProof,
+    RecreateFromPersistent,
+    QuarantineOnAmbiguity,
+    DeleteIfOwnerDead,
+    NotAdoptable,
+    /// Compatibility spelling for a non-adoptable entry.
     NeverAdopt,
 }
 
@@ -240,6 +322,11 @@ pub enum EntryAdoptionPolicy {
 #[serde(rename_all = "kebab-case")]
 pub enum EntryRestartPolicy {
     PreserveAcrossControllerRestart,
+    RecreateAfterOwnerDeath,
+    CleanupAfterOwnerDeath,
+    ManualRecovery,
+    NotApplicable,
+    /// Compatibility spelling for restart recreation.
     RecreateOnControllerRestart,
 }
 
@@ -251,6 +338,10 @@ pub enum EntryRestartPolicy {
 pub enum LeaseClass {
     None,
     ProcessPidfd,
+    CgroupLeaf,
+    FileRecord,
+    External,
+    /// Compatibility spelling for a controller-owned lock.
     ControllerLock,
 }
 
@@ -261,7 +352,13 @@ pub enum LeaseClass {
 #[serde(rename_all = "kebab-case")]
 pub enum Invariant {
     NoSymlink,
+    NoMagicLink,
+    NoRecursiveMutation,
+    SameFilesystem,
+    HardlinkFarmNoRecursion,
     BrokerOpaqueIdOnly,
+    RootOwnedParent,
+    ScopeAuthorizationRequired,
 }
 
 /// How unlisted ACL entries on a directory's children are treated.
@@ -324,7 +421,8 @@ impl AclGrant {
         permissions: impl Into<String>,
     ) -> Result<Self, PrimitiveSpecError> {
         let permissions = permissions.into();
-        if permissions.len() > 3
+        if permissions.is_empty()
+            || permissions.len() > 3
             || permissions
                 .bytes()
                 .any(|byte| !matches!(byte, b'r' | b'w' | b'x'))
@@ -420,6 +518,62 @@ impl LayoutEntry {
         require_resource_type(&group_ref, "User")?;
         let mode = mode.into();
         validate_octal_mode(&mode, 4, 4)?;
+        let mut invariants = invariants;
+        let declared_invariants = invariants.len();
+        invariants.sort_unstable();
+        invariants.dedup();
+        if invariants.len() != declared_invariants {
+            return Err(PrimitiveSpecError::DuplicateEntry);
+        }
+        if recursive
+            && !matches!(
+                repair_policy,
+                RepairPolicy::ExactOwner
+                    | RepairPolicy::FailClosed
+                    | RepairPolicy::ExactOwnerAndAcl
+            )
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        if recursive
+            && invariants.iter().any(|invariant| {
+                matches!(
+                    invariant,
+                    Invariant::NoRecursiveMutation | Invariant::HardlinkFarmNoRecursion
+                )
+            })
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        if matches!(
+            cleanup_policy,
+            CleanupPolicy::ProcessExitWithProof | CleanupPolicy::ProcessExit
+        ) && !matches!(
+            lease_class,
+            LeaseClass::ProcessPidfd | LeaseClass::CgroupLeaf
+        ) {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        if cleanup_policy == CleanupPolicy::VmStopWithProof && lease_class != LeaseClass::CgroupLeaf
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        if lease_class == LeaseClass::FileRecord
+            && (entry_type != EntryType::File || cleanup_policy != CleanupPolicy::Never)
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        if create_policy == CreatePolicy::AlwaysRecreate
+            && !(matches!(
+                lease_class,
+                LeaseClass::ProcessPidfd | LeaseClass::CgroupLeaf
+            ) && matches!(
+                cleanup_policy,
+                CleanupPolicy::ProcessExitWithProof | CleanupPolicy::ProcessExit
+            ))
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
         match (entry_type, &target) {
             (EntryType::Symlink, None) => return Err(PrimitiveSpecError::MissingRequiredField),
             (EntryType::Symlink, Some(target)) => {
@@ -725,7 +879,7 @@ impl AttachmentSettings {
         thread_pool_size: Option<u32>,
         socket_group: Option<BoundedToken>,
     ) -> Result<Self, PrimitiveSpecError> {
-        if thread_pool_size == Some(0) {
+        if thread_pool_size.is_some_and(|size| size == 0 || size > MAX_THREAD_POOL_SIZE) {
             return Err(PrimitiveSpecError::OutOfRange);
         }
         Ok(Self {
@@ -820,11 +974,7 @@ impl VolumeAttachment {
     ) -> Result<Self, PrimitiveSpecError> {
         require_execution_ref(&execution_ref)?;
         let mount_path = mount_path.into();
-        if !mount_path.starts_with('/')
-            || mount_path.len() > MAX_LAYOUT_PATH_BYTES
-            || mount_path.split('/').any(|segment| segment == "..")
-            || mount_path.contains('\0')
-        {
+        if !validate_mount_path(&mount_path) {
             return Err(PrimitiveSpecError::InvalidPath);
         }
         Ok(Self {
@@ -1018,6 +1168,24 @@ impl VolumeSpec {
             if !views.contains_key(attachment.view.as_str()) {
                 return Err(PrimitiveSpecError::MissingRequiredField);
             }
+            let view = views
+                .get(attachment.view.as_str())
+                .ok_or(PrimitiveSpecError::MissingRequiredField)?;
+            if attachment.access != AttachmentAccess::ReadOnly
+                && !view.rights.contains(&ViewRight::Write)
+            {
+                return Err(PrimitiveSpecError::ConflictingFields);
+            }
+            let source_kind = source.settings().kind();
+            let transport_matches_source = match source_kind {
+                SourceKind::BlockImage => attachment.transport == AttachmentTransport::VirtioBlk,
+                SourceKind::LocalPath | SourceKind::Tmpfs => {
+                    attachment.transport == AttachmentTransport::Virtiofs
+                }
+            };
+            if !transport_matches_source {
+                return Err(PrimitiveSpecError::ConflictingFields);
+            }
         }
         if attachments
             .iter()
@@ -1027,6 +1195,16 @@ impl VolumeSpec {
         {
             return Err(PrimitiveSpecError::ConflictingFields);
         }
+        let mut execution_refs: Vec<String> = attachments
+            .iter()
+            .map(|attachment| attachment.execution_ref.to_canonical_string())
+            .collect();
+        let declared_execution_refs = execution_refs.len();
+        execution_refs.sort_unstable();
+        execution_refs.dedup();
+        if execution_refs.len() != declared_execution_refs {
+            return Err(PrimitiveSpecError::DuplicateEntry);
+        }
         if source.settings().kind() == SourceKind::Tmpfs {
             if !matches!(kind, VolumeKind::Ephemeral | VolumeKind::Tmp) {
                 return Err(PrimitiveSpecError::ConflictingFields);
@@ -1035,6 +1213,14 @@ impl VolumeSpec {
             if quota.max_bytes().is_none() || quota.max_inodes().is_none() {
                 return Err(PrimitiveSpecError::MissingRequiredField);
             }
+            if quota.enforcement() != QuotaEnforcement::Hard {
+                return Err(PrimitiveSpecError::ConflictingFields);
+            }
+        }
+        if source.settings().kind() == SourceKind::BlockImage
+            && quota.as_ref().and_then(QuotaSpec::max_bytes).is_none()
+        {
+            return Err(PrimitiveSpecError::MissingRequiredField);
         }
         Ok(Self {
             source,
@@ -1126,9 +1312,12 @@ fn validate_anchored_path(value: &str) -> Result<(), PrimitiveSpecError> {
         || value.starts_with('/')
         || value.contains('\0')
         || value.contains('\\')
+        || value.contains(':')
+        || value.chars().any(is_path_separator_homoglyph)
     {
         return Err(PrimitiveSpecError::InvalidPath);
     }
+
     if value.is_empty() {
         return Ok(());
     }
@@ -1139,6 +1328,39 @@ fn validate_anchored_path(value: &str) -> Result<(), PrimitiveSpecError> {
         return Err(PrimitiveSpecError::InvalidPath);
     }
     Ok(())
+}
+
+fn is_path_separator_homoglyph(character: char) -> bool {
+    matches!(
+        character,
+        '\u{2044}'
+            | '\u{2215}'
+            | '\u{29F8}'
+            | '\u{2AF8}'
+            | '\u{FF0F}'
+            | '\u{FF3C}'
+            | '\u{FE68}'
+            | '\u{FF0E}'
+            | '\u{2024}'
+    )
+}
+
+fn validate_mount_path(value: &str) -> bool {
+    if value.len() > MAX_LAYOUT_PATH_BYTES
+        || !value.starts_with('/')
+        || value.contains('\0')
+        || value.contains('\\')
+        || value.chars().any(is_path_separator_homoglyph)
+    {
+        return false;
+    }
+    if value == "/" {
+        return true;
+    }
+    value
+        .split('/')
+        .skip(1)
+        .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 const fn yes() -> bool {
@@ -1512,5 +1734,151 @@ mod tests {
                 "redundant or unsafe spelling admitted: {refused:?}"
             );
         }
+    }
+
+    #[test]
+    fn anchored_and_mount_paths_reject_drive_separator_and_homoglyph_forms() {
+        let owner = ResourceRef::parse("User/a").unwrap();
+        for refused in ["C:state", "state\u{2215}data", "state\u{FF0F}data"] {
+            assert!(
+                LayoutEntry::new(
+                    refused,
+                    EntryType::Directory,
+                    owner.clone(),
+                    owner.clone(),
+                    "0700",
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    ForeignChildPolicy::Preserve,
+                    true,
+                    false,
+                    SensitivityClass::Private,
+                    CreatePolicy::CreateIfAbsent,
+                    RepairPolicy::ExactOwner,
+                    CleanupPolicy::Never,
+                    EntryAdoptionPolicy::AdoptWithLiveOwnerProof,
+                    EntryRestartPolicy::PreserveAcrossControllerRestart,
+                    LeaseClass::None,
+                    vec![Invariant::NoSymlink],
+                )
+                .is_err(),
+                "unsafe anchored path accepted: {refused:?}"
+            );
+        }
+        for refused in [
+            "/state//data",
+            "/state/./data",
+            "/state/../data",
+            "/state\\data",
+        ] {
+            assert!(
+                VolumeAttachment::new(
+                    ResourceRef::parse("Guest/work-vm").unwrap(),
+                    AttachmentTransport::Virtiofs,
+                    BoundedToken::parse("controller").unwrap(),
+                    AttachmentAccess::ReadOnly,
+                    refused,
+                    AttachmentSettings::default(),
+                )
+                .is_err(),
+                "unsafe mount path accepted: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_kind_transport_and_quota_cross_fields_are_strict() {
+        let mut block = serde_json::to_value(minimal_volume()).unwrap();
+        block["source"]["settings"]["kind"] = serde_json::json!("block-image");
+        block["source"]["settings"]["sourcePolicyId"] = serde_json::json!("disk-root");
+        assert!(serde_json::from_value::<VolumeSpec>(block.clone()).is_err());
+
+        block["quota"] = serde_json::json!({ "maxBytes": 4096, "enforcement": "none" });
+        let no_attachment: VolumeSpec =
+            serde_json::from_value(block.clone()).expect("block image quota is sufficient");
+        assert_eq!(
+            no_attachment.source().settings().kind(),
+            SourceKind::BlockImage
+        );
+
+        block["attachments"] = serde_json::json!([{
+            "executionRef": "Guest/work-vm",
+            "transport": "virtiofs",
+            "view": "controller",
+            "access": "read-only",
+            "mountPath": "/disk"
+        }]);
+        assert!(serde_json::from_value::<VolumeSpec>(block).is_err());
+
+        let mut tmpfs = serde_json::to_value(minimal_volume()).unwrap();
+        tmpfs["source"]["settings"]["kind"] = serde_json::json!("tmpfs");
+        tmpfs["source"]["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sourcePolicyId");
+        tmpfs["kind"] = serde_json::json!("tmp");
+        tmpfs["quota"] =
+            serde_json::json!({ "maxBytes": 4096, "maxInodes": 32, "enforcement": "none" });
+        assert!(serde_json::from_value::<VolumeSpec>(tmpfs).is_err());
+    }
+
+    #[test]
+    fn block_image_format_and_preallocation_stay_typed_and_source_scoped() {
+        let settings = SourceSettings::new_with_image(
+            SourceKind::BlockImage,
+            Some(BoundedToken::parse("disk-root").unwrap()),
+            Some(BlockImageFormat::Qcow2),
+            true,
+        )
+        .unwrap();
+        let rendered = serde_json::to_value(&settings).unwrap();
+        assert_eq!(rendered["imageFormat"], "qcow2");
+        assert_eq!(rendered["preallocate"], true);
+        assert_eq!(settings.image_format(), BlockImageFormat::Qcow2);
+        assert!(settings.preallocate());
+        assert!(
+            SourceSettings::new_with_image(
+                SourceKind::LocalPath,
+                Some(BoundedToken::parse("state-root").unwrap()),
+                Some(BlockImageFormat::Raw),
+                false,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicate_invariants_and_empty_acl_permissions_are_rejected() {
+        let owner = ResourceRef::parse("User/a").unwrap();
+        assert_eq!(
+            LayoutEntry::new(
+                "state",
+                EntryType::Directory,
+                owner.clone(),
+                owner.clone(),
+                "0700",
+                None,
+                Vec::new(),
+                Vec::new(),
+                ForeignChildPolicy::Preserve,
+                true,
+                false,
+                SensitivityClass::Private,
+                CreatePolicy::CreateIfAbsent,
+                RepairPolicy::ExactOwner,
+                CleanupPolicy::Never,
+                EntryAdoptionPolicy::AdoptWithLiveOwnerProof,
+                EntryRestartPolicy::PreserveAcrossControllerRestart,
+                LeaseClass::None,
+                vec![Invariant::NoSymlink, Invariant::NoSymlink],
+            ),
+            Err(PrimitiveSpecError::DuplicateEntry)
+        );
+        let principal = AclPrincipal::new(owner).unwrap();
+        assert_eq!(
+            AclGrant::new(principal, ""),
+            Err(PrimitiveSpecError::InvalidText)
+        );
     }
 }

@@ -8,7 +8,8 @@
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
-    AttachmentAccess, AttachmentTransport, ViewRight, ViewSpec, VolumeAttachment, VolumeSpec,
+    AttachmentAccess, AttachmentSettings, AttachmentTransport, ViewRight, ViewSpec,
+    VolumeAttachment, VolumeSpec,
 };
 
 use crate::error::VolumeLocalError;
@@ -58,6 +59,10 @@ pub struct AttachmentPlan {
     pub view: BoundedToken,
     /// The admitted access level.
     pub access: AttachmentAccess,
+    /// The guest-side mount path copied from the base attachment.
+    pub mount_path: String,
+    /// The typed base mount settings copied from the base attachment.
+    pub settings: AttachmentSettings,
 }
 
 /// Admit every declared attachment of a Volume.
@@ -89,6 +94,8 @@ pub fn admit_attachments(
                 execution_ref: attachment.execution_ref().clone(),
                 view: attachment.view().clone(),
                 access: attachment.access(),
+                mount_path: attachment.mount_path().to_owned(),
+                settings: attachment.settings().clone(),
             });
         }
     }

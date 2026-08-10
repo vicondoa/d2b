@@ -101,7 +101,7 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
 | --- | --- | --- |
 | `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR046-store-001` → `ADR-046-resource-api-and-authorization` (serial contract sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema,error}.rs`; `packages/d2b-resource-store/`; `packages/d2b-resource-store-redb/src/{schema,keys,values,ownership}.rs`; `packages/d2b-controller-toolkit/src/owner_hints.rs`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
-| `ADR046-W1` | `ADR046-feasibility-001` alongside the engine-neutral `ADR046-reconcile-001`/`ADR046-reconcile-002` toolkit and the production-unwired `ADR046-session-001`/`ADR046-session-002`/`ADR046-bus-001` foundations. These are exactly the six merged work items; the failed RSS result defers the production backend, watch dispatcher, and real-backend reaction benchmark. | `proofs/redb-resource-store-spike/`; `packages/d2b-controller-toolkit/` except the real-backend reaction benchmark; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
+| `ADR046-W1` | `ADR046-feasibility-001` alongside the engine-neutral `ADR046-reconcile-001`/`ADR046-reconcile-002` toolkit and the production-unwired `ADR046-session-001`/`ADR046-session-002`/`ADR046-bus-001` foundations. These are exactly the six merged work items; the corrected SPIKE-01 RSS rerun is recorded in `proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md` at `18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction, and the production backend, watch dispatcher, and real-backend reaction benchmark remain `ADR046-W5` implementation work that still requires its own production validation. | `proofs/redb-resource-store-spike/`; `packages/d2b-controller-toolkit/` except the real-backend reaction benchmark; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
@@ -125,8 +125,8 @@ default position:
 | Work item | Assigned wave | Delivery determination |
 | --- | --- | --- |
 | `ADR046-store-001` | `ADR046-W0` | The engine-neutral trait, closed errors, schema/codecs, and golden vectors are present; this is the complete W0 store contract. |
-| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are present. Functional, watch, conflict, crash-recovery, and latency thresholds passed, but whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB; the failed outcome is the backend prep barrier evidence. |
-| `ADR046-store-004` | `ADR046-W5` | Only contract modules exist in the crate. The failed RSS gate requires the range-seek, streaming-decode, shared-fan-out design corrections before this production backend item starts, so it moves atomically with its watch consumer. |
+| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are present. Functional, watch, conflict, crash-recovery, and latency thresholds passed. The original `RESULTS.md` failure is superseded for this RSS row by the gated rerun at `18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction. The rerun is spike evidence only and does not make the production backend reachable or accepted. |
+| `ADR046-store-004` | `ADR046-W5` | Only contract modules exist in the crate. The originally failed RSS gate required the range-seek, streaming-decode, shared-fan-out design corrections before this production backend item starts, so it moves atomically with its watch consumer. The gated proof rerun confirms those corrections on a disposable fixture and supplies none of this item's production evidence. |
 | `ADR046-store-002` | `ADR046-W5` | Replay/live watch and API watch destinations are absent. It follows the corrected production backend and exclusively owns watch-budget saturation validation. |
 | `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
 | `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
@@ -309,23 +309,22 @@ clauses vacuously, but every remaining clause - snapshot immutability,
 validator lanes, exactly one binding selected-roster panel, seal, and merge
 eligibility - applies to it unchanged.
 
-Waves are **pipelined**, not strictly serial. A wave's implementation may
-begin before its predecessor's panel completes, under all four of these
-conditions:
+Waves are **pipelined**, not strictly serial. In accordance with the
+constitution's four permitted conditions, implementation of a successor wave
+may begin before its predecessor's panel completes only when:
 
 1. At least five of the predecessor's selected-roster reviews have returned.
 2. The predecessor's integration tests pass on its converged tree.
 3. The successor issues no panel request, produces no seal, and merges
-   nothing until the predecessor is sealed at unanimous selected-roster signoff with zero
-   recommendations **and** merged to the integration lineage.
-4. The successor rebases onto the updated integration lineage **before** its
-   own panel runs, so the panel binds to a snapshot that already contains
-   every predecessor finding.
+   nothing until the predecessor is sealed at full unanimity with zero
+   recommendations and merged to the integration lineage.
+4. The successor rebases onto the updated integration lineage after that
+   merge and before its own panel runs, so the panel binds to a snapshot that
+   already contains every predecessor finding.
 
-Panel, seal, and merge therefore remain **strictly ordered** between waves;
-only implementation start is pipelined. There is no partial-wave advance in
-the sense that matters: a wave is never *delivered* early, and its evidence is
-never accepted early.
+Only implementation start is pipelined. Successor panel request, seal, and
+merge remain strictly ordered behind predecessor completion; a wave is never
+delivered early and its evidence is never accepted early.
 
 Rework is the accepted price of the pipeline. When a predecessor finding
 invalidates work the successor already started, that rework is absorbed by the
@@ -342,8 +341,9 @@ known cost for an unbounded, unknown one.
    gate below is what requires their promotion after implementation.
 2. Every destination path this wave's work items name (§3.2, §7) is free of
    an open, unresolved contention flag from an earlier wave.
-3. The wave's Git Town stack (§5) has been proposed against the exact parent
-   commit named in its dependency edges (§3.4), not against a stale `v3`.
+3. The wave's Git Town stack (§5) has been proposed against the owned
+   feature/integration branch and exact parent commit named in its dependency
+   edges (§3.4), not against a stale protected branch.
 4. The heavy-gate semaphore (§11) is available (not held past
    its 30-minute timeout by a stale prior-wave validation run).
 5. The fast hermetic suite (§10.16) passes within its execution budgets on the
@@ -383,15 +383,18 @@ one occurrence per wave, run only against the wave's single immutable final
 snapshot (§12), never against interim implementation rounds within the wave.
 
 Every wave's work reaches `v3` through pull requests that pass the gates
-above. Direct commits to the integration lineage, and local merges that
+above. Direct commits to protected `main` or `v3`, and local merges that
 bypass the panel/seal/eligibility sequence, are prohibited regardless of how
 small or how mechanical the change looks.
 
 ## 5. Git Town stack shape and worktree/branch ownership
 
-Per D001, the protected `v3` branch is this work's integration branch. Every
-ADR 0046 slice branches from and merges back into `v3`; the v3 line never
-merges to `main`, so `main` is never a slice branch's base or target.
+Per D001, protected `v3` is this work's landing target, not a slice
+integration branch. The integrator creates an owned ADR 0046
+feature/integration branch from the applicable `v3` base. Every slice
+branches from and integrates into that owned branch; no slice targets or
+merges directly into protected `main` or `v3`. The `v3` line never merges to
+`main`.
 
 ADR 0046 implementation is large, cross-cutting, and only partially
 file-disjoint by default (`ADR046-W0` in particular is one shared contract
@@ -404,20 +407,21 @@ codebase's sibling ADR-0045 lineage):
 1. **One branch/worktree per file-disjoint slice**, never per person. A
    slice is one row of §3.2/§3.3 that shares no destination path with any
    other concurrently open slice (checked against §7's contention list).
-   Branch names are `adr046-w<n>-<slice>`, for example `adr046-w4-network`,
-   `adr046-w6-device-tpm`, `adr046-w6-credential-entra`.
-2. **Stack only real dependencies.** A slice branch targets `v3` if every
-   one of its `Depends on` specs already merged to `v3`; it targets the
-   exact prerequisite PR branch if that prerequisite is still open but
-   dependency-complete-enough per §6's speculative rule. `ADR046-W0`'s four
-   serial steps are one branch each, stacked linearly
+   Branch names are `adr046-w<n>-<slice>`, for example
+   `adr046-w4-network`, `adr046-w6-device-tpm`, `adr046-w6-credential-entra`.
+2. **Stack only real dependencies.** A slice branch targets the owned
+   feature/integration branch when its exact dependencies are available; it
+   may target the exact prerequisite slice branch when that prerequisite is
+   still open but dependency-complete-enough per §6's speculative rule.
+   `ADR046-W0`'s four serial steps are one branch each, stacked linearly
    (`adr046-w0-identities` → `adr046-w0-object-model` → `adr046-w0-store` →
    `adr046-w0-api`), proposed with
    `git town propose --stack --non-interactive --no-browser`.
 3. **`ADR046-W1`/`ADR046-W2`/`ADR046-W4`/`ADR046-W5`/`ADR046-W6` parallel
    slices** each branch from the exact merged (or, speculatively, exact
-   open) tip of their prerequisite branch and target `v3` once that
-   prerequisite merges - never targeting an unrelated parallel sibling slice.
+   open) tip of their prerequisite branch and integrate into the owned
+   feature/integration branch - never targeting an unrelated parallel sibling
+   slice or protected branch.
 4. **The integrator owns**: shared-prep commits (§7), Cargo.toml workspace
    member list and `flake.nix` output additions, `docs/specs/ADR-046-spec-set.json`
    / `ADR-046-work-items.json` regeneration, cross-slice conflict resolution,
@@ -649,12 +653,17 @@ Exact benchmark fixtures from `ADR-046-resource-store-redb`'s performance
 contract, run in `packages/d2b-resource-store-redb/benches/`:
 
 These rows are completion gates, not existing evidence. SPIKE-01 and SPIKE-02
-have both been executed. SPIKE-02 passed every profile; SPIKE-01 passed
-correctness, watch delivery, group commit and crash recovery but **failed its
-RSS gate** at a measured median of 25,216 KiB against a 24,576 KiB threshold.
-That failure is why `ADR046-store-004`, `ADR046-store-002` and
-`ADR046-reconcile-003` are scheduled in W5 rather than W1, and why the revised
-physical-schema plan in `ADR-046-resource-store-redb` is binding on them.
+have both been executed. SPIKE-02 passed every profile. SPIKE-01 passed
+correctness, watch delivery, group commit and crash recovery, and its
+originally failing RSS conclusion in `RESULTS.md` is superseded by the gated
+rerun recorded in
+`proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md` at
+`18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction.
+The original failure is why `ADR046-store-004`, `ADR046-store-002` and
+`ADR046-reconcile-003` are scheduled in `ADR046-W5` rather than `ADR046-W1`.
+That scheduling is unchanged by the rerun, because a disposable-proof result
+is not production evidence, and the revised physical-schema plan in
+`ADR-046-resource-store-redb` stays binding on them.
 
 Executing the spikes does not satisfy the rows below. They remain future
 completion gates for the production redb backend, watch and dispatcher
@@ -1202,10 +1211,12 @@ Nix store, cargo target, or KVM device.
 
 ### 12.1 Immutable candidate snapshot
 
-For each wave (§3.2), once its stack of PRs is open and has passed the
-smallest focused local preflight (`make check-tier0` plus the wave's
-directly affected `make test-*` shard), the integrator creates one immutable
-snapshot binding:
+For each Track A wave (§3.2), the integrator first completes the nonbinding
+Discover-Fix-Verify lifecycle through unanimous approval. Once no
+content-changing fix remains, its stack of PRs may be open and it has passed
+the smallest focused local preflight (`make check-tier0` plus the wave's
+directly affected `make test-*` shard), and the integrator creates one final
+immutable snapshot binding:
 
 - the exact base commit and every open PR's head commit in the wave's stack;
 - the wave's dependency graph edges (§3.4) and repository set;
@@ -1283,13 +1294,15 @@ copied into generated artifacts, or pasted into a PR body (§12.5).
 
 ADR 0055 makes the panel workflow one Discover-Fix-Verify lifecycle. The
 selected seats receive the full candidate and evidence for one comprehensive
-discovery. Findings merge into one stable shared ledger; implementation records
-batched dispositions and self-verification for every ledger issue; verification
-receives the complete ledger, responses, evidence, latest delta, and full
-candidate context. Selection reruns over the full candidate and each fix delta,
-but the lifecycle roster only widens. A complete zero-finding result is valid,
-while a missing selected-seat result is refused. Late pre-existing MINOR and
-NIT observations remain non-blocking history.
+discovery. All actionable findings, including `MINOR` and `NIT`, merge into
+one stable shared ledger; implementation records batched dispositions and
+self-verification for every ledger issue; verification receives the complete
+ledger, responses, evidence, latest delta, and full candidate context.
+Selection reruns over the full candidate and each fix delta, but the lifecycle
+roster only widens. A complete zero-finding result is valid, while a missing
+selected-seat result is refused. A `MINOR` or `NIT` becomes non-blocking
+history only after complete processing. Only an actual tree-content change
+requires a new candidate snapshot.
 
 ### 12.3 Selected-roster final panel, bound to the panel request
 
@@ -1336,11 +1349,14 @@ model. Keep the two pins distinct when either is changed.
 (binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ordered
 selected roster, and the required `gpt-5.6-sol` model at reasoning effort
 `xhigh`).
-It is the first of the wave's three exit gates: it refuses the request unless
-every prior-wave work item is `Merged` (§12.1), so reviewers cannot bind to a
-snapshot a predecessor finding can still invalidate. The selection artifact
-must use schema version `1` and selection-table version `2`, and its candidate
-digests and ordered roster must validate against the snapshot.
+This is the sole binding request for the wave, and it is created only after
+the nonbinding lifecycle has reached unanimous approval and the final
+snapshot/selection has been frozen. It is the first of the wave's three exit
+gates: it refuses the request unless every prior-wave work item is `Merged`
+(§12.1), so a successor cannot bind delivery while a predecessor finding can
+still invalidate its content. The selection artifact must use schema version
+`1` and selection-table version `2`, and its candidate digests and ordered
+roster must validate against the snapshot.
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest` validates a directory containing
 exactly one current record per role in the stored request, each shaped exactly
 as this repository's sibling ADR-0045-lineage panel-receipt artifact:
@@ -1365,9 +1381,11 @@ as this repository's sibling ADR-0045-lineage panel-receipt artifact:
 }
 ```
 
-`signoff` is `true` iff `recommendations` is `[]`; any finding requires a
-content change, which creates a new snapshot and invalidates every prior
-validation/panel record for that wave. Green tests never waive this gate.
+`signoff` is `true` iff `recommendations` is `[]`; a finding is handled through
+the lifecycle ledger and may be resolved with a content change or a supported
+non-content disposition. Only an actual content change creates a new snapshot
+and invalidates prior validation/panel records for that wave. Green tests never
+waive this gate.
 The selected roster must be unanimous before its exit criteria (§4) are met.
 Current request, record, attestation, and the embedded seal panel carry
 `panel_format_version: 1`. Legacy schema-version-2 request, record,
@@ -1488,12 +1506,14 @@ sibling-lineage history-proof tool per D001/D041.
 
 After a slice's candidate passes the smallest focused local preflight
 (`make check-tier0` + its directly affected `make test-*` shard), the
-integrator immediately opens or updates its PR and creates the wave's
-immutable snapshot (§12.1) from that exact open-PR/stack state - it does not
-wait for `make test-integration`, `make test-host-integration`, or the panel
-to finish first. This is the same ordering this repository's existing
-`AGENTS.md` "Landing changes (PR workflow)" section already requires; ADR
-0046 adds only the explicit snapshot-creation step at that same point.
+integrator may open or update its PR from the owned feature/integration
+branch. The PR may remain open while the nonbinding feedback lifecycle
+converges. Once that lifecycle is unanimously approved and no
+content-changing fix remains, the integrator creates the wave's final
+immutable snapshot and selection (§12.1) from the exact open-PR/stack state,
+then issues the sole `panel-request`. It does not wait for
+`make test-integration` or `make test-host-integration` before opening the PR,
+but binding delivery still waits for the final candidate packet.
 
 ### 13.2 Final lanes
 
@@ -1517,10 +1537,11 @@ merge (§13.3).
    validation for that retarget (full re-panel only if content changed, per
    §12.6).
 4. A wave does not advance to the next wave's entry criteria (§4) until
-   every PR in its own stack has merged through GitHub - never through a
-   local octopus merge or a direct push to `v3` for ADR-scale work
-   (per this repository's existing `AGENTS.md` "Finish-of-work invariant"
-   and "Stacked PR workflow" sections, which remain binding for ADR 0046).
+   every slice is integrated into the owned feature/integration branch and
+   that branch has landed through GitHub PRs - never through a local merge or
+   direct push to protected `main` or `v3` (per this repository's existing
+   `AGENTS.md` "Finish-of-work invariant" and "Stacked PR workflow" sections,
+   which remain binding for ADR 0046).
 
 ## 14. Post-wave cleanup (policy only - no deletion performed by this change)
 

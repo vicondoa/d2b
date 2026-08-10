@@ -13,6 +13,8 @@ use std::io::{IoSlice, IoSliceMut};
 pub enum FdPassingError {
     MissingPassedFd,
     DuplicateFdInSingleSend,
+    UnexpectedFdCount { expected: usize, actual: usize },
+    MissingCloexec,
     IOError,
 }
 
@@ -89,7 +91,10 @@ pub fn recv_fds(sock: RawFd) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
     let mut iov = [IoSliceMut::new(&mut payload)];
     let mut cmsg = cmsg_space!([RawFd; 8]);
     let (bytes, fds) = {
-        let message = recvmsg::<()>(sock, &mut iov, Some(&mut cmsg), MsgFlags::empty())
+        // `MSG_CMSG_CLOEXEC` is part of receipt, not a post-receipt repair:
+        // setting FD_CLOEXEC with F_SETFD after recvmsg races a concurrent
+        // fork+exec in the receiving process.
+        let message = recvmsg::<()>(sock, &mut iov, Some(&mut cmsg), MsgFlags::MSG_CMSG_CLOEXEC)
             .map_err(|_| FdPassingError::IOError)?;
         let bytes = message.bytes;
         let mut fds = Vec::new();
@@ -109,25 +114,53 @@ pub fn recv_fds(sock: RawFd) -> Result<(Vec<u8>, Vec<RawFd>), FdPassingError> {
 
     let mut seen = HashSet::new();
     for fd in &fds {
-        let stat = fstat(*fd).map_err(|_| FdPassingError::IOError)?;
+        let stat = match fstat(*fd) {
+            Ok(stat) => stat,
+            Err(_) => {
+                close_received_fds(&fds);
+                return Err(FdPassingError::IOError);
+            }
+        };
         let key = (stat.st_dev, stat.st_ino, stat.st_mode);
         if !seen.insert(key) {
-            for received in fds {
-                let _ = close(received);
-            }
+            close_received_fds(&fds);
             return Err(FdPassingError::DuplicateFdInSingleSend);
         }
-        set_cloexec(*fd).map_err(|_| FdPassingError::IOError)?;
+        if !cloexec_is_set(*fd) {
+            close_received_fds(&fds);
+            return Err(FdPassingError::MissingCloexec);
+        }
     }
 
     Ok((payload[..bytes].to_vec(), fds))
 }
 
-fn set_cloexec(fd: RawFd) -> io::Result<()> {
-    let current = fcntl(fd, FcntlArg::F_GETFD).map_err(io_error)?;
-    let flags = FdFlag::from_bits_truncate(current) | FdFlag::FD_CLOEXEC;
-    fcntl(fd, FcntlArg::F_SETFD(flags)).map_err(io_error)?;
-    Ok(())
+/// Receive exactly one descriptor. The operation-specific broker response
+/// uses this helper so a response carrying zero or multiple descriptors
+/// cannot be mistaken for a valid owned database handoff.
+pub fn recv_one_fd(sock: RawFd) -> Result<(Vec<u8>, RawFd), FdPassingError> {
+    let (payload, fds) = recv_fds(sock)?;
+    if fds.len() != 1 {
+        let actual = fds.len();
+        close_received_fds(&fds);
+        return Err(FdPassingError::UnexpectedFdCount {
+            expected: 1,
+            actual,
+        });
+    }
+    Ok((payload, fds[0]))
+}
+
+fn cloexec_is_set(fd: RawFd) -> bool {
+    fcntl(fd, FcntlArg::F_GETFD)
+        .map(|flags| FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC))
+        .unwrap_or(false)
+}
+
+fn close_received_fds(fds: &[RawFd]) {
+    for fd in fds {
+        let _ = close(*fd);
+    }
 }
 
 fn io_error(err: nix::errno::Errno) -> io::Error {
@@ -138,6 +171,7 @@ fn io_error(err: nix::errno::Errno) -> io::Error {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
+    use std::process::Command;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
@@ -178,12 +212,85 @@ mod tests {
         let (payload, received) = recv_fds(right.as_raw_fd()).expect("recv fd");
         assert_eq!(payload, b"fd");
         assert_eq!(received.len(), 1);
+        assert!(
+            cloexec_is_set(received[0]),
+            "SCM_RIGHTS receipt must atomically set FD_CLOEXEC"
+        );
 
         write(&write_end, b"ok").expect("pipe write");
         let mut buf = [0_u8; 2];
         read(received[0], &mut buf).expect("pipe read through passed fd");
         assert_eq!(&buf, b"ok");
         close(received[0]).expect("close received fd");
+    }
+
+    #[test]
+    fn scm_rights_receipt_fd_does_not_inherit_across_exec() {
+        let _guard = fd_test_lock();
+        let (left, right) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        let (read_end, _write_end) = pipe().expect("pipe");
+
+        send_fds(left.as_raw_fd(), b"exec", &[read_end.as_raw_fd()]).expect("send fd");
+        let (_payload, fd) = recv_one_fd(right.as_raw_fd()).expect("receive exactly one fd");
+        assert!(cloexec_is_set(fd), "received fd must have FD_CLOEXEC");
+
+        let mut child = Command::new("sleep")
+            .arg("2")
+            .spawn()
+            .expect("exec inheritance probe");
+        let child_fd = format!("/proc/{}/fd/{fd}", child.id());
+        let child_comm = format!("/proc/{}/comm", child.id());
+        let mut inherited = true;
+        let mut observed_exec = false;
+        for _ in 0..50 {
+            if let Ok(comm) = std::fs::read_to_string(&child_comm)
+                && comm.trim() == "sleep"
+            {
+                observed_exec = true;
+                inherited = std::path::Path::new(&child_fd).exists();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        close(fd).expect("close received fd");
+        assert!(observed_exec, "exec probe did not reach sleep");
+        assert!(!inherited, "received database-like fd leaked across exec");
+    }
+
+    #[test]
+    fn recv_one_fd_rejects_zero_and_multiple_descriptors() {
+        let (left, right) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        send_fds(left.as_raw_fd(), b"none", &[]).expect("send payload");
+        assert_eq!(
+            recv_one_fd(right.as_raw_fd()).expect_err("zero fds must fail"),
+            FdPassingError::MissingPassedFd
+        );
+
+        let (read_end, _write_end) = pipe().expect("pipe");
+        send_fds(
+            left.as_raw_fd(),
+            b"many",
+            &[read_end.as_raw_fd(), read_end.as_raw_fd()],
+        )
+        .expect("send duplicate fds");
+        assert_eq!(
+            recv_one_fd(right.as_raw_fd()).expect_err("duplicate fds must fail"),
+            FdPassingError::DuplicateFdInSingleSend
+        );
     }
 
     #[test]

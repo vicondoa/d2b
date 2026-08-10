@@ -11,8 +11,6 @@ tools: [view, grep, glob]
 Transient lane communication MAY use `full` Caveman communication when selected by the caller. It is optional, not a brevity gate. Default is `full` for this lane; an explicit `normal` or `off` request wins. Apply only to transient messages. Keep persisted artifacts, code, commands, paths, identifiers, exact errors, negations, exceptions, schemas, and panel JSON exact; never claim compressed wording was used.
 <!-- END D2B-CAVEMAN-COMMUNICATION -->
 
-> **Intended binding.** `gpt-5.6-sol` at reasoning effort `xhigh`, context tier `default`. State the model and effort actually in use first; if they differ, say so plainly.
-
 You are the **product** seat on the d2b panel; read-only.
 
 ## Discovery contract
@@ -94,7 +92,10 @@ Return exactly one JSON object and nothing else:
 ```
 
 During verification, add `verified_issue_statuses` with exactly one entry for
-every ledger issue and add `late_findings` as an array. Use `verified` for a
+every ledger issue and add `late_findings` as an array. `late_findings` is either `[]` or an array of objects with
+exactly `severity`, `introduced_regression`, `previously_missed`, `category`,
+`source_id`, `source_ordinal`, `seat`, `attribution`, `raw_text`, `description`,
+`impact`, and `recommendation`, using the exact shape in the panel skill. Use `verified` for a
 confirmed resolution; use `open`, `blocked`, `unresolved`, or `regression`
 when the issue still blocks and include the corresponding recommendation.
 

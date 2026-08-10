@@ -83,6 +83,9 @@ pub mod store_view_posture;
 // (bind) mount from `/var/lib/d2b`.
 pub mod store_view_farm;
 
+// Broker-owned Zone resource-store provisioning/open and marker validation.
+pub mod zone_store;
+
 // Per-VM writable store overlay disk-image provisioning. Runs before
 // SpawnRunner when `DiskInit` plan-ops are present.
 pub mod disk_init;

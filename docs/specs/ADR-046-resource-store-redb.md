@@ -404,14 +404,20 @@ On the pinned reference host/release profile:
 | p95 durable commit → matching controller handler start | <=5 ms |
 | p95 ready Process commit → launch-attempt start | <=20 ms |
 
-Evidence for the aggregate RSS row is staged. SPIKE-01 measured a
-whole-process maximum of 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above
-24,576 KiB at the 10,000-resource/100-watch fixture. This metric is the
+Evidence for the aggregate RSS row is staged. SPIKE-01's original
+whole-process RSS conclusion in `RESULTS.md` is superseded by the gated rerun
+in `proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md`, measured on
+the 10,000-resource/100-watch fixture at
+`18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction.
+This metric is the
 complete process maximum with no empty-process, runtime, allocator, or other
-baseline subtraction. After the range-seek,
+baseline subtraction. That rerun is a disposable-proof result. After the
+range-seek,
 streaming-decode, shared-fan-out, and global-budget corrections,
-`ADR046-store-004` records the same whole-process median against the unchanged
-<=24 MiB gate. That rerun gates backend and watch-dispatcher acceptance;
+`ADR046-store-004` records the same whole-process median on the production
+engine against the unchanged
+<=24 MiB gate. That production rerun, and not the proof result, gates backend
+and watch-dispatcher acceptance;
 contract-only store work has no RSS exit criterion and must not report the
 aggregate row as passing.
 The work items that land each fixed controller separately record
@@ -446,17 +452,18 @@ authorization, or audit cannot be weakened to pass.
 | Required delta | Dispatch the existing resource adapter from d2b-bus and wire a Zone runtime to the production backend; after the feasibility gate, implement the redb database, store actor, revisions, indexes, watches, conflicts, backup, and upgrade |
 | Reuse path | Extract exact storage/atomic/idempotency validators named below; redb only supplies ACID B-trees |
 | Replacement/deletion | No existing state file/ledger is removed until its owning resource/operation migration lands |
-| Feasibility proof | SPIKE-01 and SPIKE-02 executed. Functional, crash, watch, conflict, and commit-to-handler thresholds passed, but SPIKE-01 whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB. The redb pin remains proof-only and the production backend remains provisional until the corrected design passes the unchanged whole-process gate. |
+| Feasibility proof | SPIKE-01 and SPIKE-02 executed. Functional, crash, watch, conflict, and commit-to-handler thresholds passed, and the superseded SPIKE-01 whole-process RSS conclusion is replaced by the gated rerun at `18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction. The redb pin remains proof-only and the production backend remains provisional until the corrected design passes the unchanged whole-process gate on the production engine. |
 | Future owner | Work items below |
 
 ## Feasibility gate and implementable scope
 
 The exact redb 4.1.0 dependency is present so the disposable spike and
 spike-independent contract code compile against one reviewed API. Its presence
-is not evidence that redb meets this store's workload. SPIKE-02 passed, while
-SPIKE-01 failed the whole-process RSS gate. Production backend,
+is not evidence that redb meets this store's workload. SPIKE-02 passed, and
+the corrected SPIKE-01 proof rerun passed, but the production backend's own
+whole-process RSS evidence is still unrun. Production backend,
 post-commit-dispatcher, and watch adoption remain blocked until the corrected
-design passes an unchanged SPIKE-01 whole-process RSS rerun.
+design passes an unchanged whole-process RSS gate on the production engine.
 
 The following work is engine-neutral and may proceed before either spike:
 
@@ -472,17 +479,19 @@ The following work is engine-neutral and may proceed before either spike:
 
 The remainder is genuinely gated. `ADR046-store-004` may implement the redb
 backend and the measured-failure corrections, but cannot be accepted until the
-unchanged whole-process RSS gate passes. It owns big-endian revision-key
+unchanged whole-process RSS gate passes on the production engine. It owns
+big-endian revision-key
 range-seek replay, streaming decode without decoding older complete envelopes,
 shared immutable ChangeBatch fan-out, and the corresponding bounded backend
 signals. `ADR046-store-002` owns the one
 global bounded watch-admission budget, small per-watch cursor/filter state,
 typed backpressure, and deterministic slow-watcher eviction/resume. It also
-cannot be accepted until that RSS rerun passes and must alone export current
+cannot be accepted until that production RSS rerun passes and must alone export
+current
 registrations, budget used/capacity, admission rejections, slow-watcher
 evictions, and replay work. `ADR046-store-003` may author the storage-row source
 contract, but `ADR046-store-005` redb logical backup, restore, staged migration,
-and crash-publication acceptance waits for the corrected SPIKE-01 rerun.
+and crash-publication acceptance waits for that same production rerun.
 SPIKE-02 does not gate codecs, physical table definitions, error types, or the
 storage-row source contract.
 
@@ -515,10 +524,10 @@ storage-row source contract.
 | Detailed design | Adopt the already-pinned redb API only behind the failed-spike correction and rerun gate. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, and read lifetime 250 ms. Revision replay range-seeks the big-endian revision key, streams only rows after `afterRevision`, and never decodes older complete envelopes. Live delivery shares one immutable decoded ChangeBatch across matching watchers instead of cloning each envelope. The global admission budget and slow-watcher policy belong to `ADR046-store-002`, not this backend. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime owns the concrete backend; resource API is the sole caller through ADR046-store-001 |
 | Data migration | Full reset; logical backup belongs to ADR046-store-005 |
-| Validation | Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
+| Validation | Production whole-process RSS evidence measured on `packages/d2b-resource-store-redb` itself, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
 | Removal proof | Existing ledgers remain until their owning migration work items land |
 | Implementation state | Planned |
-| Evidence | `packages/d2b-resource-store-redb/src/actor.rs` and `transaction.rs` are absent. SPIKE-01 executed and failed the whole-process RSS threshold, so the existing `lib.rs` remains contract-only and no production backend is accepted. |
+| Evidence | `packages/d2b-resource-store-redb/src/actor.rs` and `transaction.rs` are absent. The superseded SPIKE-01 RSS failure is replaced by a passing gated proof rerun, but the production backend's own whole-process RSS evidence is still unrun, so the existing `lib.rs` remains contract-only and no production backend is accepted. |
 
 ### ADR046-store-002
 
@@ -531,10 +540,10 @@ storage-row source contract.
 | Detailed design | Implement replay/live no-gap watch, cursors, owner hints, compaction floor, and expired relist around one global bounded watch-admission budget. Registrations retain only small cursor/filter/accounting state. Budget exhaustion returns typed backpressure before registration; deterministic slow-watcher eviction releases its budget and resumes from the last acknowledged cursor. Export current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work with closed non-sensitive labels. Range-seek replay, streaming decode, and shared immutable ChangeBatch fan-out are supplied by `ADR046-store-004`. |
 | Integration | d2b-bus named streams; controller toolkit |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | SPIKE-02 latency evidence and a corrected SPIKE-01 rerun passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work |
+| Validation | SPIKE-02 latency evidence and production whole-process RSS evidence measured on the production backend, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work |
 | Removal proof | Not applicable |
 | Implementation state | Planned |
-| Evidence | Both destinations are absent: `packages/d2b-resource-store-redb/src/revision_log.rs` and `packages/d2b-resource-api/src/watch.rs`. SPIKE-02 passed, but SPIKE-01 failed the whole-process RSS threshold; production watch integration remains blocked pending the corrected rerun. |
+| Evidence | Both destinations are absent: `packages/d2b-resource-store-redb/src/revision_log.rs` and `packages/d2b-resource-api/src/watch.rs`. SPIKE-02 passed and the corrected SPIKE-01 proof rerun passed, but the production backend's own whole-process RSS evidence is still unrun; production watch integration remains blocked pending it. |
 
 ### ADR046-store-003
 
@@ -563,7 +572,7 @@ storage-row source contract.
 | Detailed design | Consume the D115 storage-row contract for fd-backed provision/open and marker identity; implement logical backup, staged restore/upgrade, crash-safe publication, replacement detection, and corruption quarantine. Add a typed broker `OpenZoneStore` operation that accepts only opaque storage-row ids, resolves and validates the signed row, provisions or opens the database without a caller path, and returns exactly one owned descriptor with atomic close-on-exec receipt. |
 | Integration | Broker storage owner passes the owned database File to the Zone runtime backend from ADR046-store-004 |
 | Data migration | Destructive v3 bootstrap; v3-to-v3 logical restore |
-| Validation | Corrected SPIKE-01 evidence passing the unchanged whole-process RSS gate; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path |
+| Validation | Production whole-process RSS evidence measured on the production backend, passing the unchanged RSS gate; the disposable proof's gated rerun does not discharge this row; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path |
 | Removal proof | Not applicable |
 | Implementation state | Planned |
-| Evidence | Backup/migration, broker wire operation, broker handler, fd-handoff integration, and broker tests are absent; SPIKE-01 executed but failed the whole-process RSS threshold. |
+| Evidence | Backup/migration, broker wire operation, broker handler, fd-handoff integration, and broker tests are absent, and the production backend's own whole-process RSS evidence is still unrun. |

@@ -119,6 +119,7 @@ const OPTIONAL_INPUTS = [
 ];
 
 const SELECTION_TABLE = ".github/skills/d2b-panel-round/selection-table.json";
+const DISPATCH_POLICY = ".github/skills/d2b-panel-round/dispatch-policy.json";
 const CURRENT_PANEL_SEATS = [
   "agentic", "build", "docs", "kernel", "networking", "nixos",
   "observability", "product", "reliability", "security", "simplicity",
@@ -273,6 +274,131 @@ const CASES = [
     expectExit: 0,
   },
   {
+    name: "dispatch policy agent type drift is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, DISPATCH_POLICY, (policy) => {
+        policy.seats.software.agent_type = "panel-test";
+      }),
+    expectExit: 1,
+    expectText: "dispatch-policy.json seat software agent_type",
+  },
+  {
+    name: "dispatch policy missing communication is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, DISPATCH_POLICY, (policy) => {
+        delete policy.seats.security.communication;
+      }),
+    expectExit: 1,
+    expectText: "dispatch-policy.json seat security must contain",
+  },
+  {
+    name: "dispatch policy seat omission is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, DISPATCH_POLICY, (policy) => {
+        delete policy.seats.build;
+      }),
+    expectExit: 1,
+    expectText: "must contain exactly one binding for every current",
+  },
+  {
+    name: "observed binding field documentation drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/d2b-panel-round/SKILL.md",
+        (text) => text.replaceAll("`receipt_locator`", "receipt locator"),
+      ),
+    expectExit: 1,
+    expectText: "observed binding documentation is missing receipt_locator",
+  },
+  {
+    name: "observed metadata residual documentation drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => text.replace(
+          "cannot detect a lying declaration",
+          "can detect a lying declaration",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "observed process metadata residual documentation is missing",
+  },
+  {
+    name: "a positive record-helper execution claim is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => `${text}\nmake-records catches actual reasoning-effort downgrade.\n`,
+      ),
+    expectExit: 1,
+    expectText: "forbidden observed process metadata claim",
+  },
+  {
+    name: "schema compatibility documentation drift is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => text.replace("Schema-version `3`", "schema version three"),
+      ),
+    expectExit: 1,
+    expectText: "panel-review.md: continuation documentation is missing required text: schema-version `3`",
+  },
+  {
+    name: "atomic continuation publication prose is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/copilot-agents.md",
+        (text) => `${text}\nThe ledger and response are one atomic directory.\n`,
+      ),
+    expectExit: 1,
+    expectText: "still promises atomic ledger/response publication",
+  },
+  {
+    name: "blank carried response guidance is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/panel-review.md",
+        (text) => text.replace(
+          "partial `NEXT/responses.json`",
+          "blank `NEXT/responses.json`",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "carried response envelope as blank",
+  },
+  {
+    name: "cross-line blank template guidance is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        "docs/contributing/copilot-agents.md",
+        (text) => text.replace(
+          "Never edit the partial\ntemplate",
+          "Never edit the blank\ntemplate",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "carried response envelope as blank",
+  },
+  {
+    name: "unsupported continuation lifecycle flag is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/skills/d2b-panel-round/SKILL.md",
+        (text) =>
+          `${text}\n\`\`\`bash\nadvance-verification input output --lifecycle <lifecycle-id>\n\`\`\`\n`,
+      ),
+    expectExit: 1,
+    expectText: "copyable advance-verification command carries unsupported",
+  },
+  {
     name: "modified admitted Caveman blob is rejected",
     mutate: (dir) =>
       mutateFile(dir, "third_party/caveman/v1.10.0/LICENSE", (text) => `${text}x`),
@@ -367,6 +493,34 @@ const CASES = [
       ),
     expectExit: 1,
     expectText: "panel verification output extension changed",
+  },
+  {
+    name: "integrator staging before finalized evidence and notes is rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/d2b-integrator.agent.md",
+        (text) => text.replace(
+          "Complete both before invoking `stage-diffs.sh`",
+          "Complete both after invoking `stage-diffs.sh`",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "immutable staging instruction is missing pre-staging input order guidance",
+  },
+  {
+    name: "integrator edits after the completion marker are rejected",
+    mutate: (dir) =>
+      mutateFile(
+        dir,
+        ".github/agents/d2b-integrator.agent.md",
+        (text) => text.replace(
+          "do not edit, replace,",
+          "may edit and replace,",
+        ),
+      ),
+    expectExit: 1,
+    expectText: "immutable staging instruction is missing immutable completion boundary guidance",
   },
   {
     name: "non-owner direct feature write claim is rejected",

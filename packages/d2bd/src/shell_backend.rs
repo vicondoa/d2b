@@ -1,14 +1,24 @@
 use crate::{
     daemon_audit,
-    terminal_session::{OutputStreamSel, TerminalBackend, TerminalKind},
+    terminal_session::{OutputStreamSel, TerminalBackend},
     typed_error::{TypedError, UnsafeLocalShellErrorKind},
     unsafe_local_terminal::{UnsafeLocalTerminalClient, UnsafeLocalTerminalError},
 };
-use d2b_contracts::{
-    public_wire::{self, ShellOp, ShellOpResponse},
-    terminal_wire as tw,
-};
+use d2b_contracts::{public_wire, terminal_wire as tw};
 use std::{fmt, sync::Arc, time::Duration};
+
+pub(crate) enum ShellTerminalOp {
+    WriteStdin(tw::TerminalWriteStdin),
+    ReadOutput(tw::TerminalReadOutput),
+    Resize(tw::TerminalResize),
+}
+
+#[derive(Debug)]
+pub(crate) enum ShellTerminalResponse {
+    WriteStdin(tw::TerminalWriteStdinResult),
+    ReadOutput(tw::TerminalReadOutputChunk),
+    Delivered,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellProvider {
@@ -30,8 +40,8 @@ pub(crate) trait ShellBackend: Send + Sync {
         &self,
         runtime: &tokio::runtime::Handle,
         control_sequence: &mut u64,
-        op: ShellOp,
-    ) -> Result<Option<ShellOpResponse>, TypedError>;
+        op: ShellTerminalOp,
+    ) -> Result<Option<ShellTerminalResponse>, TypedError>;
 
     fn close_attachment(
         &self,
@@ -104,10 +114,10 @@ impl ShellBackend for UnsafeLocalShellBackend {
         &self,
         runtime: &tokio::runtime::Handle,
         control_sequence: &mut u64,
-        op: ShellOp,
-    ) -> Result<Option<ShellOpResponse>, TypedError> {
+        op: ShellTerminalOp,
+    ) -> Result<Option<ShellTerminalResponse>, TypedError> {
         match op {
-            ShellOp::WriteStdin(args) => {
+            ShellTerminalOp::WriteStdin(args) => {
                 self.ensure_session(&args.session)?;
                 let data = d2b_core::base64_codec::decode(&args.chunk_base64)
                     .map_err(|_| unsafe_shell_failed(UnsafeLocalShellErrorKind::Protocol))?;
@@ -119,7 +129,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
                         shell_operation_timeout(),
                     ))
                     .map_err(map_terminal_error)?;
-                Ok(Some(ShellOpResponse::WriteStdin(
+                Ok(Some(ShellTerminalResponse::WriteStdin(
                     tw::TerminalWriteStdinResult {
                         accepted_len: result.accepted_len,
                         next_offset: result.next_offset,
@@ -128,7 +138,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
                     },
                 )))
             }
-            ShellOp::ReadOutput(args) => {
+            ShellTerminalOp::ReadOutput(args) => {
                 self.ensure_session(&args.session)?;
                 let (timeout_ms, deadline) = shell_poll_timeout(args.timeout_ms, args.wait);
                 let result = runtime
@@ -144,7 +154,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
                         deadline,
                     ))
                     .map_err(map_terminal_error)?;
-                Ok(Some(ShellOpResponse::ReadOutput(
+                Ok(Some(ShellTerminalResponse::ReadOutput(
                     tw::TerminalReadOutputChunk {
                         data_base64: d2b_core::base64_codec::encode(&result.data),
                         next_offset: result.next_offset,
@@ -155,7 +165,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
                     },
                 )))
             }
-            ShellOp::Resize(args) => {
+            ShellTerminalOp::Resize(args) => {
                 self.ensure_session(&args.session)?;
                 *control_sequence = control_sequence.saturating_add(1);
                 runtime
@@ -166,48 +176,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
                         shell_operation_timeout(),
                     ))
                     .map_err(map_terminal_error)?;
-                Ok(Some(ShellOpResponse::Resize(tw::TerminalControlResult {
-                    delivered: true,
-                })))
-            }
-            ShellOp::Wait(args) => {
-                self.ensure_session(&args.session)?;
-                let (timeout_ms, deadline) = shell_poll_timeout(args.timeout_ms, true);
-                let result = runtime
-                    .block_on(self.terminal.wait(timeout_ms, deadline))
-                    .map_err(map_terminal_error)?;
-                Ok(Some(ShellOpResponse::Wait(tw::TerminalWaitResult {
-                    running: result.running,
-                    terminal_status: result.terminal.map(|terminal| match terminal {
-                        TerminalKind::Exited(code) => tw::TerminalStatus::Exited { code },
-                        TerminalKind::Signaled(signal) => tw::TerminalStatus::Signaled { signal },
-                        TerminalKind::Error(slug) => tw::TerminalStatus::Error {
-                            slug: slug.to_owned(),
-                        },
-                    }),
-                })))
-            }
-            ShellOp::CloseStdin(args) => {
-                self.ensure_session(&args.session)?;
-                *control_sequence = control_sequence.saturating_add(1);
-                runtime
-                    .block_on(
-                        self.terminal
-                            .close_stdin(*control_sequence, shell_operation_timeout()),
-                    )
-                    .map_err(map_terminal_error)?;
-                Ok(Some(ShellOpResponse::CloseStdin(tw::TerminalCloseResult {
-                    stdin_closed: true,
-                })))
-            }
-            ShellOp::CloseAttach(args) => {
-                self.ensure_session(&args.session)?;
-                self.close_attachment(runtime, control_sequence)
-                    .map(ShellOpResponse::CloseAttach)
-                    .map(Some)
-            }
-            ShellOp::Attach(_) | ShellOp::List(_) | ShellOp::Detach(_) | ShellOp::Kill(_) => {
-                Err(unsafe_shell_failed(UnsafeLocalShellErrorKind::Protocol))
+                Ok(Some(ShellTerminalResponse::Delivered))
             }
         }
     }
@@ -316,8 +285,8 @@ pub(crate) fn unsafe_shell_failed(kind: UnsafeLocalShellErrorKind) -> TypedError
 mod tests {
     use super::*;
     use d2b_contracts::unsafe_local_wire::{
-        HelperTerminalAttachmentClosed, HelperTerminalControlResponse,
-        HelperTerminalOperationResult, HelperTerminalRequest, HelperTerminalResponse,
+        HelperTerminalAttachmentClosed, HelperTerminalControlResponse, HelperTerminalRequest,
+        HelperTerminalResponse,
     };
     use std::{
         io::{Read, Write},
@@ -368,9 +337,11 @@ mod tests {
             .handle_op(
                 runtime.handle(),
                 &mut 0,
-                ShellOp::Wait(tw::TerminalWait {
+                ShellTerminalOp::WriteStdin(tw::TerminalWriteStdin {
                     session: "wrong-handle".to_owned(),
-                    timeout_ms: 0,
+                    offset: 0,
+                    chunk_base64: String::new(),
+                    eof: false,
                 }),
             )
             .unwrap_err();
@@ -383,57 +354,16 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_backend_supports_wait_and_close_detach_without_kill() {
+    fn unsafe_backend_closes_attachment_without_kill() {
         let (backend, mut peer) = backend_pair();
         let backend = Arc::new(backend);
-        let wait_backend = Arc::clone(&backend);
-        let wait = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            wait_backend.handle_op(
-                runtime.handle(),
-                &mut 0,
-                ShellOp::Wait(tw::TerminalWait {
-                    session: "shell-public-handle".to_owned(),
-                    timeout_ms: 100,
-                }),
-            )
-        });
-        let wait_request = read_request(&mut peer);
-        let request_id = wait_request.request_id();
-        send_response(
-            &mut peer,
-            HelperTerminalResponse::Wait(HelperTerminalOperationResult {
-                request_id,
-                result: tw::TerminalWaitResult {
-                    running: true,
-                    terminal_status: None,
-                },
-            }),
-        );
-        assert!(matches!(
-            wait.join().unwrap().unwrap(),
-            Some(ShellOpResponse::Wait(tw::TerminalWaitResult {
-                running: true,
-                ..
-            }))
-        ));
-
         let close_backend = Arc::clone(&backend);
         let close = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            close_backend.handle_op(
-                runtime.handle(),
-                &mut 0,
-                ShellOp::CloseAttach(public_wire::ShellCloseAttachArgs {
-                    session: "shell-public-handle".to_owned(),
-                }),
-            )
+            close_backend.close_attachment(runtime.handle(), &mut 0)
         });
         let close_request = read_request(&mut peer);
         let HelperTerminalRequest::CloseAttachment(control) = close_request else {
@@ -452,13 +382,11 @@ mod tests {
         );
         assert!(matches!(
             close.join().unwrap().unwrap(),
-            Some(ShellOpResponse::CloseAttach(
-                public_wire::ShellDetachResult {
-                    detached: true,
-                    cause: Some(public_wire::ShellCloseCause::ClientDetach),
-                    ..
-                }
-            ))
+            public_wire::ShellDetachResult {
+                detached: true,
+                cause: Some(public_wire::ShellCloseCause::ClientDetach),
+                ..
+            }
         ));
     }
 }

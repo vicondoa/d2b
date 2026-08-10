@@ -158,11 +158,11 @@ Apply the configuration and restart the affected VM:
 
 ```bash
 sudo nixos-rebuild switch
-d2b vm stop work --apply
-d2b vm start work --apply
+d2b guest stop work --apply
+d2b guest start work --apply
 ```
 
-After `d2b vm start`, confirm the guest starts successfully and windows
+After `d2b guest start`, confirm the Guest starts successfully and windows
 appear on the host compositor.
 
 ## Verifying the migration
@@ -178,7 +178,7 @@ niri msg windows
 Every window from the VM should have `app_id` starting with
 `d2b.<vm>.`.  If the original app-id appears without the prefix,
 confirm `crossDomainTrusted = true` and that the Wayland proxy is
-running (`d2b vm status <vm>`).
+running (`d2b guest status <name>`).
 
 ### Check the proxy-drawn border
 
@@ -223,7 +223,7 @@ the migration:
 1. Set `graphics.crossDomainTrusted = false` and
    `graphics.waylandProxy.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
-3. Restart the VM: `d2b vm stop <vm> --apply && d2b vm start <vm> --apply`.
+3. Restart the Guest: `d2b guest stop <name> --apply && d2b guest start <name> --apply`.
 
 The VM will stop using the proxied cross-domain Wayland path until
 `crossDomainTrusted` is enabled again. Standard virtio-gpu display

@@ -182,7 +182,7 @@ existing per-VM store tree is healthy.
   filesystem;
 - confirm `current` / `booted` still resolve and the latest retained
   generation still has its marker file;
-- run `d2b generations <vm>` and a dry run (`d2b switch <vm>
+- run `d2b activation generations Guest/<name>` and a dry run (`d2b activation switch Guest/<name>
   --dry-run` or `d2b gc --dry-run`) before the first apply.
 
 ### Transition steps

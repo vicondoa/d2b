@@ -1,18 +1,24 @@
-# Waiver: W0 and W1 delivered without sealed wave records
+# Historical record: W0 and W1 delivered without sealed wave records
 
 | Field | Value |
 | --- | --- |
 | Scope | Waves W0 and W1 of the ADR-046 d2b 3.0 delivery program |
-| Satisfies | FR-034 |
+| Purpose | FR-034 historical evidence only |
 | Bounded by | FR-035, FR-036, FR-058 |
-| Status | Active, one-time, non-precedential |
-| Produced | Before W2 entry is declared met |
+| Status | Recorded, non-authorizing |
+| External prerequisite | Separate accepted Constitution Principle VI amendment under FR-036 |
 
-## 1. What this waiver records
+## 1. What this historical record contains
 
 Waves W0 and W1 were delivered **without** the delivery contract's sealed wave
-records. This document is the explicit written waiver that FR-034 requires, and
-it exists so that the gap is recorded rather than silently absorbed.
+records. This legacy-named file is the explicit historical record that FR-034
+requires, and it exists so that the gap is recorded rather than silently
+absorbed. It is not a constitutional waiver.
+
+This record does not cure the missing gates, authorize W2 entry, permit resumed
+implementation, or allow any phase to close or advance. Constitution Principle
+VI can be changed only through a separate constitution amendment outside this
+feature root. FR-036 requires that accepted amendment before any such action.
 
 ## 2. Missing artifacts, named precisely
 
@@ -42,9 +48,11 @@ In place of the sealed records, delivery of W0 and W1 rests on:
    | W0 | `ADR046-api-001`, `ADR046-api-002`, `ADR046-decisions-001`, `ADR046-feasibility-001`, `ADR046-identities-001`, `ADR046-identities-002`, `ADR046-object-001`, `ADR046-store-001` | 8 | all `Merged` |
    | W1 | `ADR046-bus-001`, `ADR046-object-002`, `ADR046-reconcile-001`, `ADR046-reconcile-002`, `ADR046-session-001`, `ADR046-session-002` | 6 | all `Merged` |
 
-   Across the entire manifest of 545 ADR-046 work items, exactly 14 carry
-   `implementationState = "Merged"`, and those 14 are precisely the W0 and W1
-   assignments above. Every other item is `Planned`.
+   At this record's capture point, across the entire manifest of 545 ADR-046 work items,
+   exactly 14 carried `implementationState = "Merged"`, and those 14 were precisely the W0
+   and W1 assignments above. The current manifest has advanced to 68 `Merged` and 477
+   `Planned`; that later progress does not change the record's historical evidence or its
+   fixed W0/W1 set.
 
 2. **The work landed through reviewed pull requests**, not by direct push or
    local merge. The integration lineage records:
@@ -66,40 +74,43 @@ a later auditor can re-verify against the exact delivered tree.
 
 ### Note on the claimed count
 
-The specification prose states "all 14 assigned work items". The generated
-manifests confirm that number exactly: 8 items in W0 plus 6 items in W1 equals
-14, and all 14 are `Merged`. No discrepancy was found, so no FR-046 amendment
-arises from this waiver.
+The specification prose states "all 14 assigned work items". The generated manifests confirm
+that fixed W0/W1 number exactly: 8 items in W0 plus 6 items in W1 equals 14, and all 14 remain
+`Merged`. The current whole-manifest census is intentionally larger, so the record does not
+describe 14 as the current repository-wide total.
 
-## 4. Timing relative to W2 entry
+## 4. Relationship to W2 entry
 
-This waiver is produced **before** W2 entry is declared met. Under FR-036 the
-absence of W0 and W1 seals does not block W2 entry; this document is the
-artifact that makes that non-blocking condition an audited decision rather than
-an omission.
+This record predates the attempted W2 entry disposition, but timing does not
+give it authority. Under FR-036, W2 and every later implementation, resume,
+fix, work-panel, seal, merge, and advance boundary remain blocked until a
+separate accepted Principle VI constitution amendment expressly dispositions
+the W0/W1 history and the W2-W4 late-remediation history. This file is evidence
+for that decision, not the decision itself.
 
-## 5. One-time exception, not a precedent
+## 5. Bounded historical record, not a precedent
 
-This waiver is a **one-time documented exception**. Under FR-035:
+Under FR-035:
 
-- Sealed delivery begins at W2.
+- Sealed delivery may begin at W2 only after FR-036's external prerequisite.
 - Every wave from W2 through W8 MUST produce a complete seal.
-- This waiver **MUST NOT** be extended to any other wave.
-- This waiver **MUST NOT** be reused, in whole or in part, for any other wave.
-- This waiver **MUST NOT** be cited as precedent, analogy, or mitigating
+- This record **MUST NOT** be extended to any other wave.
+- This record **MUST NOT** be reused, in whole or in part, for any other wave.
+- This record **MUST NOT** be cited as authorization, precedent, analogy, or mitigating
   context for any wave from W2 onward.
 
-Any future request to deliver a wave without a seal is a new specification
-amendment under FR-046, not an application of this document.
+Any request to continue despite the recorded Principle VI violations belongs in
+the separate constitution-amendment path, not in this document.
 
-## 6. Relationship to the tracked constitution deviation
+## 6. Relationship to the constitution violation
 
-This waiver is the **sole mitigation** recorded for the tracked constitution
-Principle VI deviation covering W0 and W1. There is no second compensating
-control, no retroactive panel, and no plan to reconstruct the missing receipts
-against the delivered snapshots.
+This file is the durable evidence record for the tracked Constitution Principle
+VI violation covering W0 and W1. There is no retroactive panel and no plan to
+reconstruct the missing receipts against delivered snapshots. The W2-W4
+late-remediation records likewise cannot become contemporaneous plan-panel
+evidence.
 
-Consequently: **without this document the deviation is undocumented in
-practice.** Removing, weakening, or superseding this waiver without replacing
-its record leaves the program with an unrecorded departure from Principle VI
-for the first two waves of the delivery.
+Consequently, removing this record would make the historical violation
+undocumented, while treating it as authorization would create a second
+violation. Only an accepted external Principle VI amendment can state whether
+and under what conditions the program may continue.

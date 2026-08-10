@@ -52,7 +52,7 @@ use std::{
     process::Command,
 };
 
-use d2b_contract_tests::repo_root;
+use d2b_contract_tests::{read_repo_file, repo_root};
 use regex::Regex;
 
 /// A single violation: the repo-relative file, 1-based line number, and the
@@ -1057,6 +1057,12 @@ impl MeasurementDocuments {
             .iter()
             .map(|(path, document)| (path.as_str(), document.normalized.as_str()))
     }
+
+    fn content_iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.documents
+            .iter()
+            .map(|(path, document)| (path.as_str(), document.content.as_str()))
+    }
 }
 
 #[derive(Debug)]
@@ -1073,6 +1079,12 @@ enum DerivedExpectation {
         derived: &'static str,
     },
     OutcomeSummary(&'static str),
+    /// A superseded literal a document deliberately retains as history - today
+    /// only the released changelog entry for the original RSS failure. Pinned
+    /// at its exact retained count so the copy can neither drift nor multiply,
+    /// and asserted **not** to be the current canonical measurement, so a
+    /// retained history row can never be mistaken for live evidence.
+    SupersededMeasurement(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -1097,6 +1109,9 @@ struct MeasurementInventoryPattern {
 
 struct MeasurementSpec {
     name: &'static str,
+    /// Which committed result artifact grounds this row. Closed selector, not a
+    /// path: see [`ResultSource`].
+    result_source: ResultSource,
     threshold: &'static str,
     expected_outcome: &'static str,
     fingerprint: &'static str,
@@ -1106,6 +1121,77 @@ struct MeasurementSpec {
     mutation_needle: &'static str,
     planted_unregistered_copy: &'static str,
 }
+
+/// The committed result artifacts that may ground a canonical spike
+/// measurement. This is a **closed selector**, deliberately not a path
+/// parameter: a prototype, scratch, or re-measured file cannot become
+/// authoritative by being handed to the parser. Adding a source is a code
+/// change that a reviewer sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ResultSource {
+    /// The original SPIKE-01/SPIKE-02 record. Historical and frozen; it still
+    /// grounds six of the seven rows.
+    Original,
+    /// The gated whole-process RSS rerun of 2026-08-02. It supersedes **only**
+    /// the RSS conclusion in [`ResultSource::Original`], which is preserved.
+    RssRerun20260802,
+}
+
+impl ResultSource {
+    const ALL: [ResultSource; 2] = [ResultSource::Original, ResultSource::RssRerun20260802];
+
+    fn path(self) -> &'static str {
+        match self {
+            ResultSource::Original => "proofs/redb-resource-store-spike/RESULTS.md",
+            ResultSource::RssRerun20260802 => {
+                "proofs/redb-resource-store-spike/RESULTS-rerun-2026-08-02.md"
+            }
+        }
+    }
+}
+
+/// The corrections prototype. It carries a full, plausible, MEASURED-PASS
+/// threshold table whose RSS figures (`18,468 KiB` / `6,108 KiB`) differ from
+/// the authoritative rerun (`18,428 KiB` / `6,148 KiB`) by a digit
+/// transposition. It is named here so the guard can assert it is excluded
+/// rather than merely happening not to be included.
+const PROTOTYPE_RESULT: &str = "proofs/redb-resource-store-spike/RESULTS-corrections.md";
+
+/// The exact superseded RSS measurement. Single-sourced so the pin on the
+/// historical `RESULTS.md` row and the pin on the retained `CHANGELOG.md` copy
+/// cannot drift apart: if the two were spelled separately, editing one would
+/// leave the other silently asserting a value that no longer exists anywhere.
+const SUPERSEDED_RSS_MEASUREMENT: &str =
+    "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB";
+
+/// A canonical row a result source deliberately still carries but that no
+/// [`MeasurementSpec`] registers, because a later source supersedes it.
+/// Preserving the record is required; citing it as current evidence is not.
+///
+/// The outcome and the measurement are pinned **exactly**, not merely required
+/// to parse. Requiring only parseability is the hole this closes: an author who
+/// edits `25,216 KiB` to any other well-formed figure, or flips `MEASURED-FAIL`
+/// to `MEASURED-PASS`, would leave a perfectly parseable row and satisfy a
+/// presence-only check while rewriting the very record this amendment promised
+/// to preserve byte for byte. The amendment's authority rests on the failure
+/// still being readable in its original form; a guard that cannot tell an
+/// intact history from a laundered one supplies no such authority.
+struct SupersededCanonicalRow {
+    source: ResultSource,
+    threshold: &'static str,
+    outcome: &'static str,
+    measurement: &'static str,
+}
+
+/// Every superseded row, with the values it must still record. Deleting a row
+/// fails the per-source row accounting above; rewriting one fails the exact
+/// comparison below; adding an unaccounted row fails the accounting too.
+const SUPERSEDED_CANONICAL_ROWS: &[SupersededCanonicalRow] = &[SupersededCanonicalRow {
+    source: ResultSource::Original,
+    threshold: "Median whole-process maximum RSS at or below 24 MiB",
+    outcome: "MEASURED-FAIL",
+    measurement: SUPERSEDED_RSS_MEASUREMENT,
+}];
 
 fn canonical_measurement(results: &str, threshold: &str) -> Result<CanonicalMeasurement, String> {
     let rows = results
@@ -1178,6 +1264,17 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
     const VALIDATION: &str = "docs/specs/ADR-046-validation-and-delivery.md";
     const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
 
+    /// The one canonical derived phrase for the passing RSS rerun. Every
+    /// specification site restates the measurement in exactly this shape, so a
+    /// drifted or rounded restatement fails at a single needle instead of
+    /// hiding among six near-identical paraphrases. `source` is required to be
+    /// a substring of the artifact's own measurement cell, which is what binds
+    /// the prose to the committed result rather than to this file.
+    const RSS_RERUN_SUMMARY: DerivedExpectation = DerivedExpectation::CanonicalFragment {
+        source: "Median `18,428 KiB`, `6,148 KiB` below the threshold",
+        derived: "`18,428 KiB`, `6,148 KiB` below 24,576 KiB, with no baseline subtraction",
+    };
+
     let spike_01_summary_sites = || {
         vec![
             DerivedMeasurementSite {
@@ -1249,6 +1346,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
     vec![
         MeasurementSpec {
             name: "10k correctness",
+            result_source: ResultSource::Original,
             threshold: "10,000 resources, 5 runs, zero oracle divergence",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "5/5 runs",
@@ -1264,6 +1362,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "watch no-gap",
+            result_source: ResultSource::Original,
             threshold: "100 watches, no misses, duplicates, or gaps",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "21,866 exact ChangeBatch comparisons",
@@ -1279,6 +1378,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "group commit",
+            result_source: ResultSource::Original,
             threshold: "More than half of non-conflicting storm writes use a batch larger than 1",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "48/50, 96%",
@@ -1345,6 +1445,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "crash boundaries",
+            result_source: ResultSource::Original,
             threshold: "All 13 crash boundaries recover atomically or refuse to open",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "13/13",
@@ -1427,118 +1528,130 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "median RSS",
-            threshold: "Median whole-process maximum RSS at or below 24 MiB",
-            expected_outcome: "MEASURED-FAIL",
-            fingerprint: "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB",
+            // Only this row moved to the rerun artifact. The other six still
+            // read the original record, which is preserved byte for byte.
+            result_source: ResultSource::RssRerun20260802,
+            threshold: "Whole-process maximum RSS for 10,000 resources and 100 watches at or below 24,576 KiB",
+            expected_outcome: "MEASURED-PASS",
+            // The complete measurement wording the rerun artifact emits. It is
+            // deliberately NOT the amendment draft's proposed
+            // "6,148 KiB below 24,576 KiB": the artifact is the canon and says
+            // "below the threshold". The threshold value itself is pinned by
+            // `threshold` above, which must occur exactly once in the source.
+            fingerprint: "Median `18,428 KiB`, `6,148 KiB` below the threshold",
             inventory_patterns: vec![
                 MeasurementInventoryPattern {
-                    description: "25,216 KiB whole-process RSS",
-                    regex: r"(?i)\b25,?216\s+KiB\b",
+                    description: "18,428 KiB whole-process RSS median",
+                    regex: r"(?i)\b18,?428\s+KiB\b",
                     copies: 11,
                 },
                 MeasurementInventoryPattern {
-                    description: "24.625 MiB whole-process RSS",
+                    description: "6,148 KiB headroom below the threshold",
+                    regex: r"(?i)\b6,?148\s+KiB\b",
+                    copies: 11,
+                },
+                // The gate literal itself. A rounded restatement (`24 MiB`) or
+                // a baseline-subtracted variant would have to move this count.
+                MeasurementInventoryPattern {
+                    description: "24,576 KiB whole-process gate",
+                    regex: r"(?i)\b24,?576\s+KiB\b",
+                    copies: 12,
+                },
+                // The superseded failure literals. They survive at exactly one
+                // registered site each - the released changelog entry - so
+                // reintroducing the failed figure into any specification, or
+                // quietly rewriting the shipped history, both fail closed.
+                MeasurementInventoryPattern {
+                    description: "superseded 25,216 KiB whole-process RSS",
+                    regex: r"(?i)\b25,?216\s+KiB\b",
+                    copies: 1,
+                },
+                MeasurementInventoryPattern {
+                    description: "superseded 24.625 MiB whole-process RSS",
                     regex: r"(?i)\b24\.625\s+MiB\b",
-                    copies: 10,
+                    copies: 1,
                 },
                 MeasurementInventoryPattern {
-                    description: "640 KiB threshold excess",
+                    description: "superseded 640 KiB threshold excess",
                     regex: r"(?i)\b640\s+KiB\b",
-                    copies: 10,
+                    copies: 1,
                 },
                 MeasurementInventoryPattern {
-                    description: "2.6 percent excess over 24,576 KiB",
+                    description: "superseded 2.6 percent excess over 24,576 KiB",
                     regex: r"(?i)\b2\.6%\s+above\s+24,?576\s+KiB\b",
-                    copies: 10,
+                    copies: 1,
                 },
             ],
             sites: vec![
+                // History. The released entry keeps the failure verbatim; it is
+                // registered, not suppressed, and is asserted not to be the
+                // current canonical measurement.
                 DerivedMeasurementSite {
                     path: "CHANGELOG.md",
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: DerivedExpectation::SupersededMeasurement(
+                        SUPERSEDED_RSS_MEASUREMENT,
+                    ),
                     copies: 1,
                 },
+                // Current evidence. One phrase, one shape, every site.
                 DerivedMeasurementSite {
                     path: FEASIBILITY,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 4,
                 },
                 DerivedMeasurementSite {
                     path: STORE,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 2,
                 },
                 DerivedMeasurementSite {
                     path: DECISIONS,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 1,
                 },
                 DerivedMeasurementSite {
                     path: VALIDATION,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
-                    copies: 1,
+                    expectation: RSS_RERUN_SUMMARY,
+                    copies: 3,
                 },
                 DerivedMeasurementSite {
                     path: WORK_ITEMS,
-                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    expectation: RSS_RERUN_SUMMARY,
                     copies: 1,
+                },
+                // The obligation the passing proof does NOT discharge. These
+                // replace the former "SPIKE-01 failed ..." summaries: the
+                // blocker moved from a failed spike to absent production
+                // evidence, and the guard pins that it is still stated.
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "the production backend's own whole-process RSS evidence is still unrun",
+                    ),
+                    copies: 4,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "the production backend's own whole-process RSS evidence is still unrun",
+                    ),
+                    copies: 3,
                 },
                 DerivedMeasurementSite {
                     path: FEASIBILITY,
                     expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01's whole-process RSS failure",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: STORE,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 failed the whole-process RSS",
-                    ),
-                    copies: 2,
-                },
-                DerivedMeasurementSite {
-                    path: STORE,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed and failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: STORE,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed but failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: WORK_ITEMS,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: WORK_ITEMS,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed and failed the whole-process RSS threshold",
-                    ),
-                    copies: 1,
-                },
-                DerivedMeasurementSite {
-                    path: WORK_ITEMS,
-                    expectation: DerivedExpectation::OutcomeSummary(
-                        "SPIKE-01 executed but failed the whole-process RSS threshold",
+                        "the production backend's own unrun whole-process RSS evidence",
                     ),
                     copies: 1,
                 },
             ],
             mutation_path: STORE,
-            mutation_needle: "25,216 KiB",
-            planted_unregistered_copy: "Independent RSS result: 25,216 KiB.",
+            mutation_needle: "18,428 KiB",
+            planted_unregistered_copy: "Independent RSS result: 18,428 KiB.",
         },
         MeasurementSpec {
             name: "SPIKE-02 p95",
+            result_source: ResultSource::Original,
             threshold: "Commit-to-handler p95 at or below 5,000 us in all profiles",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "115.043 us / 116.195 us / 128.902 us",
@@ -1625,6 +1738,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
         },
         MeasurementSpec {
             name: "SPIKE-02 p99",
+            result_source: ResultSource::Original,
             threshold: "Commit-to-handler p99 reported; document any value above 20 ms",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "134.834 us / 140.928 us / 1,009.871 us; none exceeded 20 ms",
@@ -1746,6 +1860,15 @@ fn validate_spike_measurement(
                 derived
             }
             DerivedExpectation::OutcomeSummary(summary) => summary,
+            DerivedExpectation::SupersededMeasurement(historical) => {
+                if canonical.measurement.contains(historical) {
+                    errors.push(format!(
+                        "{}: {:?} is registered as superseded history but is still the canonical measurement",
+                        spec.name, historical
+                    ));
+                }
+                historical
+            }
         };
         let normalized_needle = normalized_whitespace(needle);
         let actual = content.matches(&normalized_needle).count();
@@ -1787,20 +1910,120 @@ fn validate_spike_measurement(
     errors
 }
 
-fn validate_spike_measurements(results: &str, documents: &MeasurementDocuments) -> Vec<String> {
-    let specs = spike_measurement_specs();
-    let canonical_row_count = results
-        .lines()
-        .filter(|line| line.contains("| MEASURED-"))
+/// The number of `| MEASURED-` rows the guard accounts for in `source`, and
+/// the two components of that total. Derived from the registry rather than
+/// hardcoded, so a legitimately added row moves the expectation instead of
+/// rotting the control. Shared by the validator and its negative controls, so
+/// the reported scope of a missing source and the scope asserted against it
+/// cannot disagree.
+fn accounted_rows(source: ResultSource) -> (usize, usize, usize) {
+    let registered = spike_measurement_specs()
+        .iter()
+        .filter(|spec| spec.result_source == source)
         .count();
+    let superseded = SUPERSEDED_CANONICAL_ROWS
+        .iter()
+        .filter(|row| row.source == source)
+        .count();
+    (registered + superseded, registered, superseded)
+}
+
+fn validate_spike_measurements(
+    sources: &BTreeMap<ResultSource, String>,
+    documents: &MeasurementDocuments,
+) -> Vec<String> {
+    let specs = spike_measurement_specs();
     let mut errors = Vec::new();
-    if canonical_row_count != specs.len() {
+
+    // Resolve every required source once, before anything reads one. An absent
+    // source invalidates every check that would have read it, and the loops
+    // below cannot tell "nothing to check" from "nothing was checked" - a bare
+    // `continue` in any of them turns a missing artifact into a clean run.
+    //
+    // Reported here rather than inside each loop, and once per source rather
+    // than once per dependent item: a single missing file must deny loudly
+    // without burying the real findings under one restatement per spec and per
+    // superseded row. The error carries the scope it invalidated so the reader
+    // knows how much went unverified, not merely that something did.
+    for source in ResultSource::ALL {
+        if sources.contains_key(&source) {
+            continue;
+        }
+        let (accounted, registered, superseded) = accounted_rows(source);
         errors.push(format!(
-            "canonical final-threshold table has {canonical_row_count} measurement rows but the guard registers {}",
-            specs.len()
+            "missing required result source {}: {accounted} canonical row(s) could not be checked ({registered} registered + {superseded} superseded)",
+            source.path()
         ));
     }
+
+    // Row accounting is per source. Every `| MEASURED-` row in a result
+    // artifact is either registered by a spec or listed as superseded; an
+    // eighth unaccounted row and a deleted historical row both fail here.
+    for source in ResultSource::ALL {
+        let Some(results) = sources.get(&source) else {
+            // Already denied above; re-reporting here would duplicate.
+            continue;
+        };
+        let (accounted, registered, superseded) = accounted_rows(source);
+        let rows = results
+            .lines()
+            .filter(|line| line.contains("| MEASURED-"))
+            .count();
+        if rows != accounted {
+            errors.push(format!(
+                "{}: canonical final-threshold table has {rows} measurement row(s) but the guard accounts for {accounted} ({registered} registered + {superseded} superseded)",
+                source.path()
+            ));
+        }
+    }
+
+    for row in SUPERSEDED_CANONICAL_ROWS {
+        let path = row.source.path();
+        if specs
+            .iter()
+            .any(|spec| spec.result_source == row.source && spec.threshold == row.threshold)
+        {
+            errors.push(format!(
+                "{path}: superseded row {:?} is also registered as current evidence",
+                row.threshold
+            ));
+        }
+        let Some(results) = sources.get(&row.source) else {
+            // Already denied above; one missing file must not become one error
+            // per superseded row.
+            continue;
+        };
+        match canonical_measurement(results, row.threshold) {
+            Ok(canonical) => {
+                // Parseability is not preservation. Compare both recorded
+                // fields against the pinned history so a well-formed rewrite -
+                // a different figure, or a flipped verdict - fails here.
+                if canonical.outcome != row.outcome {
+                    errors.push(format!(
+                        "{path}: superseded row {:?} must be preserved verbatim: recorded outcome is {:?}, expected {:?}",
+                        row.threshold, canonical.outcome, row.outcome
+                    ));
+                }
+                if canonical.measurement != row.measurement {
+                    errors.push(format!(
+                        "{path}: superseded row {:?} must be preserved verbatim: recorded measurement is {:?}, expected {:?}",
+                        row.threshold, canonical.measurement, row.measurement
+                    ));
+                }
+            }
+            Err(error) => errors.push(format!(
+                "{path}: superseded row {:?} is no longer readable: {error}",
+                row.threshold
+            )),
+        }
+    }
+
     for spec in &specs {
+        let Some(results) = sources.get(&spec.result_source) else {
+            // Already denied above; one missing file must not become one error
+            // per registered measurement.
+            continue;
+        };
         match canonical_measurement(results, spec.threshold) {
             Ok(canonical) => {
                 errors.extend(validate_spike_measurement(spec, &canonical, documents));
@@ -1809,6 +2032,22 @@ fn validate_spike_measurements(results: &str, documents: &MeasurementDocuments) 
         }
     }
     errors
+}
+
+/// Read every registered result source. Deliberately not a directory scan: the
+/// proof directory also holds a non-authoritative corrections prototype, and a
+/// scan would pick it up the moment someone renamed it.
+fn result_sources() -> BTreeMap<ResultSource, String> {
+    let root = repo_root();
+    ResultSource::ALL
+        .into_iter()
+        .map(|source| {
+            let path = root.join(source.path());
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("cannot read {}: {err}", source.path()));
+            (source, content)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2407,14 +2646,1315 @@ fn docs_specs_use_the_frozen_retry_scalar() {
     assert!(violations.is_empty(), "{}", report("D108", &violations));
 }
 
+// ---------------------------------------------------------------------------
+// R55 - expected-base merge contract.
+//
+// This is deliberately a policy lint rather than delivery-tool coverage. The
+// lowest-layer contract is the contributor-facing ADR-046 procedure itself:
+// the active feature's quickstart is executable guidance, while plan.md and
+// tasks.md are the normative restatements that must not drift independently.
+// Read all three committed artifacts and validate both the prose contract and
+// the ordering of the quickstart's shell checks.
+// ---------------------------------------------------------------------------
+
+const R55_QUICKSTART: &str = "specs/001-adr046-d2b3-completion/quickstart.md";
+const R55_PLAN: &str = "specs/001-adr046-d2b3-completion/plan.md";
+const R55_TASKS: &str = "specs/001-adr046-d2b3-completion/tasks.md";
+const R55_FILES: [&str; 3] = [R55_QUICKSTART, R55_PLAN, R55_TASKS];
+
+type R55Documents = BTreeMap<&'static str, String>;
+
+fn r55_documents() -> R55Documents {
+    R55_FILES
+        .into_iter()
+        .map(|path| (path, read_repo_file(path)))
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum R55RequirementKind {
+    Raw,
+    Normalized,
+    Ordered,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct R55Requirement {
+    kind: R55RequirementKind,
+    file: &'static str,
+    requirement: &'static str,
+    needles: Vec<String>,
+}
+
+impl R55Requirement {
+    fn single(
+        kind: R55RequirementKind,
+        file: &'static str,
+        needle: &str,
+        requirement: &'static str,
+    ) -> Self {
+        Self {
+            kind,
+            file,
+            requirement,
+            needles: vec![needle.to_string()],
+        }
+    }
+
+    fn ordered(file: &'static str, needles: &[&str], requirement: &'static str) -> Self {
+        Self {
+            kind: R55RequirementKind::Ordered,
+            file,
+            requirement,
+            needles: needles.iter().map(|needle| (*needle).to_string()).collect(),
+        }
+    }
+
+    fn render_missing(&self, missing: &str) -> String {
+        match self.kind {
+            R55RequirementKind::Raw => format!(
+                "{}: R55 {} is missing required text {:?}",
+                self.file, self.requirement, missing
+            ),
+            R55RequirementKind::Normalized => format!(
+                "{}: R55 {} is missing normalized text {:?}",
+                self.file, self.requirement, missing
+            ),
+            R55RequirementKind::Ordered => format!(
+                "{}: R55 {} is missing ordered step {:?}",
+                self.file, self.requirement, missing
+            ),
+        }
+    }
+}
+
+#[derive(Default)]
+struct R55Validation {
+    findings: Vec<String>,
+    requirements: std::collections::BTreeSet<R55Requirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct R55ExpectedDiagnostic {
+    requirement: R55Requirement,
+    missing: String,
+}
+
+impl R55ExpectedDiagnostic {
+    fn render(&self) -> String {
+        self.requirement.render_missing(&self.missing)
+    }
+}
+
+struct R55ExpectedSet {
+    diagnostics: Vec<R55ExpectedDiagnostic>,
+}
+
+fn r55_require_raw(
+    validation: &mut R55Validation,
+    file: &'static str,
+    content: &str,
+    needle: &str,
+    requirement: &'static str,
+) {
+    let requirement_spec =
+        R55Requirement::single(R55RequirementKind::Raw, file, needle, requirement);
+    validation.requirements.insert(requirement_spec);
+    if !content.contains(needle) {
+        validation.findings.push(
+            R55Requirement::single(R55RequirementKind::Raw, file, needle, requirement)
+                .render_missing(needle),
+        );
+    }
+}
+
+fn r55_require_normalized(
+    validation: &mut R55Validation,
+    file: &'static str,
+    content: &str,
+    needle: &str,
+    requirement: &'static str,
+) {
+    let requirement_spec =
+        R55Requirement::single(R55RequirementKind::Normalized, file, needle, requirement);
+    validation.requirements.insert(requirement_spec);
+    let normalized = normalized_whitespace(content);
+    if !normalized.contains(needle) {
+        validation.findings.push(
+            R55Requirement::single(R55RequirementKind::Normalized, file, needle, requirement)
+                .render_missing(needle),
+        );
+    }
+}
+
+fn r55_require_order(
+    validation: &mut R55Validation,
+    file: &'static str,
+    content: &str,
+    needles: &[&str],
+    requirement: &'static str,
+) {
+    let requirement_spec = R55Requirement::ordered(file, needles, requirement);
+    validation.requirements.insert(requirement_spec.clone());
+    let mut cursor = 0;
+    for needle in needles {
+        let Some(relative) = content[cursor..].find(needle) else {
+            validation
+                .findings
+                .push(requirement_spec.render_missing(needle));
+            return;
+        };
+        cursor += relative + needle.len();
+    }
+}
+
+fn r55_require_normalized_order(
+    validation: &mut R55Validation,
+    file: &'static str,
+    content: &str,
+    needles: &[&str],
+    requirement: &'static str,
+) {
+    let normalized = normalized_whitespace(content);
+    r55_require_order(validation, file, &normalized, needles, requirement);
+}
+
+fn r55_mutate_once(
+    documents: &R55Documents,
+    path: &str,
+    needle: &str,
+    replacement: &str,
+) -> R55Documents {
+    let mut mutated = documents.clone();
+    let content = mutated
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("R55 mutation path is not loaded: {path}"));
+    assert_eq!(
+        content.matches(needle).count(),
+        1,
+        "R55 mutation needle must identify one planted fixture site: {needle:?} in {path}"
+    );
+    *content = content.replacen(needle, replacement, 1);
+    mutated
+}
+
+fn r55_mutate_all(
+    documents: &R55Documents,
+    path: &str,
+    needle: &str,
+    replacement: &str,
+) -> R55Documents {
+    let mut mutated = documents.clone();
+    let content = mutated
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("R55 mutation path is not loaded: {path}"));
+    let count = content.matches(needle).count();
+    assert!(
+        count > 1,
+        "R55 all-site mutation must identify duplicate planted fixture sites: \
+         {needle:?} in {path} (found {count})"
+    );
+    *content = content.replace(needle, replacement);
+    mutated
+}
+
+fn r55_mutate_forms(documents: &R55Documents, path: &str, edits: &[(&str, &str)]) -> R55Documents {
+    let mut mutated = documents.clone();
+    let content = mutated
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("R55 mutation path is not loaded: {path}"));
+    for (needle, replacement) in edits {
+        let count = content.matches(needle).count();
+        assert!(
+            count > 0,
+            "R55 form mutation must identify a planted fixture site: \
+             {needle:?} in {path}"
+        );
+        *content = content.replace(needle, replacement);
+    }
+    mutated
+}
+
+enum R55MutationEdit {
+    Once {
+        needle: &'static str,
+        replacement: &'static str,
+    },
+    All {
+        needle: &'static str,
+        replacement: &'static str,
+    },
+    Forms {
+        edits: &'static [(&'static str, &'static str)],
+    },
+}
+
+struct R55Mutation {
+    name: &'static str,
+    path: &'static str,
+    edit: R55MutationEdit,
+    expected: R55ExpectedSet,
+}
+
+const R55_PLAN_TREE_FORMS: &[(&str, &str)] = &[
+    (
+        "actual\nmerge-group integration tree",
+        "observed\nmerge-group candidate tree",
+    ),
+    (
+        "actual merge-group integration tree",
+        "observed merge-group candidate tree",
+    ),
+];
+
+const R55_QUEUE_ORDER_SWAP: &[(&str, &str)] = &[(
+    r#"  test -n "$MERGE_GROUP_TREE_CHECK" ||
+    fail "v3 uses a merge queue; set MERGE_GROUP_TREE_CHECK to its required snapshot-bound integration-tree check"
+  jq -e --arg context "$MERGE_GROUP_TREE_CHECK" '
+    any(.[];
+      .type == "required_status_checks" and
+      .parameters.strict_required_status_checks_policy == true and
+      any(.parameters.required_status_checks[]?;
+        .context == $context
+      )
+    )
+  ' <<<"$BRANCH_RULES" >/dev/null ||
+    fail "the merge queue check is not required by effective strict v3 protection"
+"#,
+    r#"  jq -e --arg context "$MERGE_GROUP_TREE_CHECK" '
+    any(.[];
+      .type == "required_status_checks" and
+      .parameters.strict_required_status_checks_policy == true and
+      any(.parameters.required_status_checks[]?;
+        .context == $context
+      )
+    )
+  ' <<<"$BRANCH_RULES" >/dev/null ||
+    fail "the merge queue check is not required by effective strict v3 protection"
+  test -n "$MERGE_GROUP_TREE_CHECK" ||
+    fail "v3 uses a merge queue; set MERGE_GROUP_TREE_CHECK to its required snapshot-bound integration-tree check"
+"#,
+)];
+
+fn r55_expected(
+    kind: R55RequirementKind,
+    file: &'static str,
+    needle: &str,
+    requirement: &'static str,
+) -> R55ExpectedSet {
+    r55_expected_many(vec![R55ExpectedDiagnostic {
+        requirement: R55Requirement::single(kind, file, needle, requirement),
+        missing: needle.to_string(),
+    }])
+}
+
+fn r55_expected_many(diagnostics: Vec<R55ExpectedDiagnostic>) -> R55ExpectedSet {
+    R55ExpectedSet { diagnostics }
+}
+
+fn r55_expected_order(
+    file: &'static str,
+    needles: &[&str],
+    requirement: &'static str,
+    missing: &str,
+) -> R55ExpectedSet {
+    r55_expected_many(vec![R55ExpectedDiagnostic {
+        requirement: R55Requirement::ordered(file, needles, requirement),
+        missing: missing.to_string(),
+    }])
+}
+
+fn validate_r55_contract_with_inventory(
+    documents: &R55Documents,
+) -> (Vec<String>, std::collections::BTreeSet<R55Requirement>) {
+    let quickstart = documents
+        .get(R55_QUICKSTART)
+        .expect("R55 quickstart must be loaded");
+    let plan = documents.get(R55_PLAN).expect("R55 plan must be loaded");
+    let tasks = documents.get(R55_TASKS).expect("R55 tasks must be loaded");
+    let mut findings = R55Validation::default();
+
+    // Every active feature artifact must retain the default server-side
+    // refusal, not merely a statement that a base is checked somewhere.
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "nonempty set of required status checks for strict up-to-date enforcement",
+        "default strict required-check policy",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "nonempty set of required status checks with strict up-to-date enforcement",
+        "plan strict required-check policy",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_TASKS,
+        tasks,
+        "nonempty required-check set with strict up-to-date enforcement",
+        "task strict required-check policy",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#"BRANCH_RULES="$(gh api"#,
+        "server-side branch-rule query",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#".type == "required_status_checks""#,
+        "required status-check rule selection",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        ".parameters.strict_required_status_checks_policy == true",
+        "strict up-to-date enforcement",
+    );
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#"((.parameters.required_status_checks // []) | length) > 0"#,
+        "nonempty required-check enforcement",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "This requirement applies whether or not a merge queue is enabled",
+        "server-side guard as the default, not a queue-only substitute",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            r#"BRANCH_RULES="$(gh api"#,
+            r#"MERGE_MODE="direct""#,
+            ".parameters.strict_required_status_checks_policy == true",
+            r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+            "SNAPSHOT_RESULT=",
+        ],
+        "default strict guard must run before the optional merge-queue branch and snapshot",
+    );
+
+    // The current artifacts mention merge queues, so they must also bind a
+    // required merge-group check to the snapshot's integration tree and reject
+    // a tree mismatch. The branch-rule context check is kept in the executable
+    // quickstart, not left as an unbound prose promise.
+    let queue_mentioned = [quickstart, plan, tasks].into_iter().any(|content| {
+        let normalized = normalized_whitespace(content).to_ascii_lowercase();
+        normalized.contains("merge queue")
+            || normalized.contains("merge_queue")
+            || normalized.contains("merge_group")
+            || normalized.contains("merge-group")
+    });
+    if queue_mentioned {
+        r55_require_normalized(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            "`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group`",
+            "required merge-group check",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+            "merge-group check must be configured",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            "any(.parameters.required_status_checks[]?;",
+            "merge-group check must be required by branch protection",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            ".context == $context",
+            "merge-group check must bind the configured required context",
+        );
+        r55_require_order(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            &[
+                r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                ".context == $context",
+                "SNAPSHOT_RESULT=",
+            ],
+            "required merge-group check must be established before snapshot binding",
+        );
+        r55_require_raw(
+            &mut findings,
+            R55_QUICKSTART,
+            quickstart,
+            "| .integration_tree_oid",
+            "snapshot must expose integration_tree_oid",
+        );
+
+        for (file, content) in [
+            (R55_QUICKSTART, quickstart),
+            (R55_PLAN, plan),
+            (R55_TASKS, tasks),
+        ] {
+            r55_require_normalized(
+                &mut findings,
+                file,
+                content,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            );
+            r55_require_normalized_order(
+                &mut findings,
+                file,
+                content,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+            );
+        }
+    }
+
+    // These are exact OID checks, in the three race windows named by R55:
+    // before snapshot, after the required checks, and immediately before merge.
+    r55_require_raw(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+        "BASE_OID capture",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+            r#"PR_IDENTITY="$(gh pr view"#,
+            r#"--arg base_oid "$BASE_OID""#,
+            ".baseRefOid == $base_oid",
+            "SNAPSHOT_RESULT=",
+        ],
+        "exact BASE_OID check before snapshot",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            r#"gh pr checks "$PR_NUMBER" --required --watch"#,
+            r#"REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)""#,
+            r#"jq -e 'length > 0 and all(.state == "SUCCESS")'"#,
+            r#"CURRENT_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)""#,
+            r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+            "EVIDENCE_GITHUB_CI_RESULT=",
+        ],
+        "exact BASE_OID check after required checks",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            "IMMEDIATE_BASE_OID=",
+            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+            "gh pr merge",
+        ],
+        "exact BASE_OID check immediately before merge",
+    );
+
+    // A base movement starts a new validation/binding sequence. The old
+    // post-merge comparison is deliberately retained only as defense in depth.
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "branch and restarts validation, selected-roster verification, snapshot creation, and candidate binding, then reruns the required checks in the same Track A order",
+        "base movement restart",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "base move requires the operator to update the integration branch and restart validation, selected-roster verification, snapshot creation, binding, and required checks in Track A order",
+        "plan base movement restart",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_TASKS,
+        tasks,
+        "On any base change, the operator updates the integration branch and restarts validation, selected-roster verification, snapshot creation, binding, and required checks in the existing Track A order",
+        "task base movement restart",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        "post-merge tree comparison is defense in depth, not the guard",
+        "post-merge comparison is not the preventive guard",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "post-merge tree comparison is defense in depth only",
+        "plan post-merge comparison is not the preventive guard",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_TASKS,
+        tasks,
+        "A head-only match and a post-merge tree comparison are insufficient",
+        "task post-merge comparison is not the preventive guard",
+    );
+    r55_require_normalized(
+        &mut findings,
+        R55_PLAN,
+        plan,
+        "No post-merge check substitutes",
+        "post-merge check cannot substitute",
+    );
+    r55_require_order(
+        &mut findings,
+        R55_QUICKSTART,
+        quickstart,
+        &[
+            "IMMEDIATE_BASE_OID=",
+            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+            "gh pr merge",
+            "MERGE_COMMIT=",
+            "${MERGE_COMMIT}^{tree}",
+        ],
+        "post-merge tree comparison must follow the preventive pre-merge guard",
+    );
+
+    (findings.findings, findings.requirements)
+}
+
+fn validate_r55_contract(documents: &R55Documents) -> Vec<String> {
+    validate_r55_contract_with_inventory(documents).0
+}
+
+#[test]
+fn r55_expected_base_merge_contract_matches_the_active_feature_artifacts() {
+    let documents = r55_documents();
+    let findings = validate_r55_contract(&documents);
+    assert!(
+        findings.is_empty(),
+        "R55 expected-base merge contract drift:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn r55_mutation_fixtures_reject_each_removed_merge_guard() {
+    let documents = r55_documents();
+    let (baseline, requirements) = validate_r55_contract_with_inventory(&documents);
+    assert!(
+        baseline.is_empty(),
+        "R55 mutation fixtures require a clean baseline:\n{}",
+        baseline.join("\n")
+    );
+
+    // Each row mutates one independently enforced requirement. The expected
+    // value is the complete diagnostic descriptor, not a substring: a mutation
+    // that trips a second branch is therefore a coverage failure. The
+    // all-site edits are intentional where one artifact repeats the same
+    // requirement; changing only one copy would leave that requirement valid.
+    let mutations = vec![
+        R55Mutation {
+            name: "quickstart strict required-check prose",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "nonempty set of required status checks for strict up-to-date enforcement",
+                replacement: "required set of required status checks for strict up-to-date enforcement",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "nonempty set of required status checks for strict up-to-date enforcement",
+                "default strict required-check policy",
+            ),
+        },
+        R55Mutation {
+            name: "plan strict required-check prose",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "nonempty set of required status checks with strict up-to-date\n",
+                replacement: "required set of required status checks with strict up-to-date\n",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "nonempty set of required status checks with strict up-to-date enforcement",
+                "plan strict required-check policy",
+            ),
+        },
+        R55Mutation {
+            name: "tasks strict required-check prose",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "nonempty required-check set with strict\nup-to-date enforcement",
+                replacement: "required-check set with strict\nup-to-date enforcement",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "nonempty required-check set with strict up-to-date enforcement",
+                "task strict required-check policy",
+            ),
+        },
+        R55Mutation {
+            name: "branch-rule query",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"BRANCH_RULES="$(gh api"#,
+                replacement: r#"BRANCH_RULES="$(gh endpoint"#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Normalized,
+                        R55_QUICKSTART,
+                        r#"BRANCH_RULES="$(gh api"#,
+                        "server-side branch-rule query",
+                    ),
+                    missing: r#"BRANCH_RULES="$(gh api"#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"BRANCH_RULES="$(gh api"#,
+                            r#"MERGE_MODE="direct""#,
+                            ".parameters.strict_required_status_checks_policy == true",
+                            r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "default strict guard must run before the optional merge-queue branch and snapshot",
+                    ),
+                    missing: r#"BRANCH_RULES="$(gh api"#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "required-status rule selection",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::All {
+                needle: r#".type == "required_status_checks""#,
+                replacement: r#".type != "required_status_checks""#,
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                r#".type == "required_status_checks""#,
+                "required status-check rule selection",
+            ),
+        },
+        R55Mutation {
+            name: "strict branch-rule enforcement",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::All {
+                needle: ".parameters.strict_required_status_checks_policy == true",
+                replacement: ".parameters.strict_required_status_checks_policy == false",
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        ".parameters.strict_required_status_checks_policy == true",
+                        "strict up-to-date enforcement",
+                    ),
+                    missing: ".parameters.strict_required_status_checks_policy == true".to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"BRANCH_RULES="$(gh api"#,
+                            r#"MERGE_MODE="direct""#,
+                            ".parameters.strict_required_status_checks_policy == true",
+                            r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "default strict guard must run before the optional merge-queue branch and snapshot",
+                    ),
+                    missing: ".parameters.strict_required_status_checks_policy == true".to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "nonempty branch-rule checks",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"((.parameters.required_status_checks // []) | length) > 0"#,
+                replacement: r#"((.parameters.required_status_checks // []) | length) >= 0"#,
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                r#"((.parameters.required_status_checks // []) | length) > 0"#,
+                "nonempty required-check enforcement",
+            ),
+        },
+        R55Mutation {
+            name: "server-side default prose",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "This requirement\napplies whether or not a merge queue is enabled",
+                replacement: "This requirement\napplies only when a merge queue is enabled",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "This requirement applies whether or not a merge queue is enabled",
+                "server-side guard as the default, not a queue-only substitute",
+            ),
+        },
+        R55Mutation {
+            name: "strict guard ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"BRANCH_RULES="$(gh api \
+  "repos/$GITHUB_REPOSITORY/rules/branches/$TARGET_BRANCH")"
+MERGE_MODE="direct""#,
+                replacement: r#"MERGE_MODE="direct"
+BRANCH_RULES="$(gh api \
+  "repos/$GITHUB_REPOSITORY/rules/branches/$TARGET_BRANCH")""#,
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"BRANCH_RULES="$(gh api"#,
+                    r#"MERGE_MODE="direct""#,
+                    ".parameters.strict_required_status_checks_policy == true",
+                    r#"if jq -e 'any(.[]; .type == "merge_queue")'"#,
+                    "SNAPSHOT_RESULT=",
+                ],
+                "default strict guard must run before the optional merge-queue branch and snapshot",
+                r#"MERGE_MODE="direct""#,
+            ),
+        },
+        R55Mutation {
+            name: "merge-group required-check context prose",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group`",
+                replacement: "MERGE_GROUP_TREE_CHECK names an optional check triggered for merge_group",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "`MERGE_GROUP_TREE_CHECK` names a required check triggered for `merge_group`",
+                "required merge-group check",
+            ),
+        },
+        R55Mutation {
+            name: "merge-group check nonempty configuration",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                replacement: r#"test -z "$MERGE_GROUP_TREE_CHECK""#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                        "merge-group check must be configured",
+                    ),
+                    missing: r#"test -n "$MERGE_GROUP_TREE_CHECK""#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                            ".context == $context",
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "required merge-group check must be established before snapshot binding",
+                    ),
+                    missing: r#"test -n "$MERGE_GROUP_TREE_CHECK""#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "merge-group check branch-protection requirement",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "any(.parameters.required_status_checks[]?;",
+                replacement: "all(.parameters.required_status_checks[]?;",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                "any(.parameters.required_status_checks[]?;",
+                "merge-group check must be required by branch protection",
+            ),
+        },
+        R55Mutation {
+            name: "merge-group context binding",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: ".context == $context",
+                replacement: ".context != $context",
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        ".context == $context",
+                        "merge-group check must bind the configured required context",
+                    ),
+                    missing: ".context == $context".to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                            ".context == $context",
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "required merge-group check must be established before snapshot binding",
+                    ),
+                    missing: ".context == $context".to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "merge-group check ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Forms {
+                edits: R55_QUEUE_ORDER_SWAP,
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"test -n "$MERGE_GROUP_TREE_CHECK""#,
+                    ".context == $context",
+                    "SNAPSHOT_RESULT=",
+                ],
+                "required merge-group check must be established before snapshot binding",
+                ".context == $context",
+            ),
+        },
+        R55Mutation {
+            name: "snapshot integration-tree projection",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "| .integration_tree_oid",
+                replacement: "| .integration_tree_digest",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Raw,
+                R55_QUICKSTART,
+                "| .integration_tree_oid",
+                "snapshot must expose integration_tree_oid",
+            ),
+        },
+        R55Mutation {
+            name: "quickstart merge-group integration-tree subject",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "actual merge-group integration tree",
+                replacement: "actual merge-group candidate tree",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            ),
+        },
+        R55Mutation {
+            name: "plan merge-group integration-tree subject",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Forms {
+                edits: R55_PLAN_TREE_FORMS,
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            ),
+        },
+        R55Mutation {
+            name: "tasks merge-group integration-tree subject",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "actual merge-group integration tree",
+                replacement: "actual merge-group candidate tree",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "actual merge-group integration tree",
+                "merge-group integration-tree subject",
+            ),
+        },
+        R55Mutation {
+            name: "quickstart merge-group tree mismatch ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "refuses a mismatch",
+                replacement: "permits a mismatch",
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+                "refuses a mismatch",
+            ),
+        },
+        R55Mutation {
+            name: "plan merge-group tree mismatch ordering",
+            path: R55_PLAN,
+            edit: R55MutationEdit::All {
+                needle: "refuses a mismatch",
+                replacement: "permits a mismatch",
+            },
+            expected: r55_expected_order(
+                R55_PLAN,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+                "refuses a mismatch",
+            ),
+        },
+        R55Mutation {
+            name: "tasks merge-group tree mismatch ordering",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "refuses a mismatch",
+                replacement: "permits a mismatch",
+            },
+            expected: r55_expected_order(
+                R55_TASKS,
+                &[
+                    "snapshot-bound expected",
+                    "integration_tree_oid",
+                    "refuses a mismatch",
+                ],
+                "merge-group check must compare the snapshot-bound integration tree and refuse mismatch",
+                "refuses a mismatch",
+            ),
+        },
+        R55Mutation {
+            name: "BASE_OID capture",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                replacement: r#"BASE_OID="$TARGET_BRANCH""#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::single(
+                        R55RequirementKind::Raw,
+                        R55_QUICKSTART,
+                        r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                        "BASE_OID capture",
+                    ),
+                    missing: r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                            r#"PR_IDENTITY="$(gh pr view"#,
+                            r#"--arg base_oid "$BASE_OID""#,
+                            ".baseRefOid == $base_oid",
+                            "SNAPSHOT_RESULT=",
+                        ],
+                        "exact BASE_OID check before snapshot",
+                    ),
+                    missing: r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "BASE_OID before-snapshot checkpoint",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::All {
+                needle: "  .baseRefOid == $base_oid and\n",
+                replacement: "  .baseRefOid != $base_oid and\n",
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"BASE_OID="$(git rev-parse "origin/$TARGET_BRANCH")""#,
+                    r#"PR_IDENTITY="$(gh pr view"#,
+                    r#"--arg base_oid "$BASE_OID""#,
+                    ".baseRefOid == $base_oid",
+                    "SNAPSHOT_RESULT=",
+                ],
+                "exact BASE_OID check before snapshot",
+                ".baseRefOid == $base_oid",
+            ),
+        },
+        R55Mutation {
+            name: "BASE_OID after-required-checks checkpoint",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+                replacement: r#"test "$CURRENT_BASE_OID" != "$BASE_OID""#,
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    r#"gh pr checks "$PR_NUMBER" --required --watch"#,
+                    r#"REQUIRED_CHECKS="$(gh pr checks "$PR_NUMBER" --required --json name,state)""#,
+                    r#"jq -e 'length > 0 and all(.state == "SUCCESS")'"#,
+                    r#"CURRENT_BASE_OID="$(gh pr view "$PR_NUMBER" --json baseRefOid --jq .baseRefOid)""#,
+                    r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+                    "EVIDENCE_GITHUB_CI_RESULT=",
+                ],
+                "exact BASE_OID check after required checks",
+                r#"test "$CURRENT_BASE_OID" = "$BASE_OID""#,
+            ),
+        },
+        R55Mutation {
+            name: "BASE_OID immediately-before-merge checkpoint",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                replacement: r#"test "$IMMEDIATE_BASE_OID" != "$BASE_OID""#,
+            },
+            expected: r55_expected_many(vec![
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            "IMMEDIATE_BASE_OID=",
+                            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                            "gh pr merge",
+                        ],
+                        "exact BASE_OID check immediately before merge",
+                    ),
+                    missing: r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#.to_string(),
+                },
+                R55ExpectedDiagnostic {
+                    requirement: R55Requirement::ordered(
+                        R55_QUICKSTART,
+                        &[
+                            "IMMEDIATE_BASE_OID=",
+                            r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                            "gh pr merge",
+                            "MERGE_COMMIT=",
+                            "${MERGE_COMMIT}^{tree}",
+                        ],
+                        "post-merge tree comparison must follow the preventive pre-merge guard",
+                    ),
+                    missing: r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#.to_string(),
+                },
+            ]),
+        },
+        R55Mutation {
+            name: "quickstart base-movement restart",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "branch and restarts validation, selected-roster verification, snapshot creation, and\ncandidate binding, then reruns the required checks in the same Track A order",
+                replacement: "branch and restarts validation, selected-roster verification, snapshot creation, and\ncandidate review, then reruns the required checks in the same Track A order",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "branch and restarts validation, selected-roster verification, snapshot creation, and candidate binding, then reruns the required checks in the same Track A order",
+                "base movement restart",
+            ),
+        },
+        R55Mutation {
+            name: "plan base-movement restart",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "base move requires the operator to update the integration branch and\nrestart validation, selected-roster verification, snapshot creation, binding, and required\nchecks in Track A order",
+                replacement: "base move requires the operator to update the integration branch and\nrestart validation, selected-roster verification, snapshot review, binding, and required\nchecks in Track A order",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "base move requires the operator to update the integration branch and restart validation, selected-roster verification, snapshot creation, binding, and required checks in Track A order",
+                "plan base movement restart",
+            ),
+        },
+        R55Mutation {
+            name: "tasks base-movement restart",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "On any base change, the operator updates the integration\nbranch and restarts validation, selected-roster verification, snapshot creation, binding,\nand required checks in the existing Track A order",
+                replacement: "On any base change, the operator updates the integration\nbranch and restarts validation, selected-roster verification, snapshot review, binding,\nand required checks in the existing Track A order",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "On any base change, the operator updates the integration branch and restarts validation, selected-roster verification, snapshot creation, binding, and required checks in the existing Track A order",
+                "task base movement restart",
+            ),
+        },
+        R55Mutation {
+            name: "quickstart post-merge classification",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "post-merge tree comparison is defense in depth, not the guard",
+                replacement: "post-merge tree comparison is the guard",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_QUICKSTART,
+                "post-merge tree comparison is defense in depth, not the guard",
+                "post-merge comparison is not the preventive guard",
+            ),
+        },
+        R55Mutation {
+            name: "plan post-merge classification",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "post-merge tree comparison is defense in depth only",
+                replacement: "post-merge tree comparison is the guard",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "post-merge tree comparison is defense in depth only",
+                "plan post-merge comparison is not the preventive guard",
+            ),
+        },
+        R55Mutation {
+            name: "tasks post-merge classification",
+            path: R55_TASKS,
+            edit: R55MutationEdit::Once {
+                needle: "A head-only match and a post-merge\ntree comparison are insufficient",
+                replacement: "A head-only match and a post-merge\ntree comparison are sufficient",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_TASKS,
+                "A head-only match and a post-merge tree comparison are insufficient",
+                "task post-merge comparison is not the preventive guard",
+            ),
+        },
+        R55Mutation {
+            name: "plan post-merge substitution prohibition",
+            path: R55_PLAN,
+            edit: R55MutationEdit::Once {
+                needle: "No post-merge check substitutes",
+                replacement: "A post-merge check substitutes",
+            },
+            expected: r55_expected(
+                R55RequirementKind::Normalized,
+                R55_PLAN,
+                "No post-merge check substitutes",
+                "post-merge check cannot substitute",
+            ),
+        },
+        R55Mutation {
+            name: "post-merge tree comparison ordering",
+            path: R55_QUICKSTART,
+            edit: R55MutationEdit::Once {
+                needle: "MERGE_COMMIT=",
+                replacement: "MERGE_COMMIT_BEFORE=",
+            },
+            expected: r55_expected_order(
+                R55_QUICKSTART,
+                &[
+                    "IMMEDIATE_BASE_OID=",
+                    r#"test "$IMMEDIATE_BASE_OID" = "$BASE_OID""#,
+                    "gh pr merge",
+                    "MERGE_COMMIT=",
+                    "${MERGE_COMMIT}^{tree}",
+                ],
+                "post-merge tree comparison must follow the preventive pre-merge guard",
+                "MERGE_COMMIT=",
+            ),
+        },
+    ];
+
+    let mutation_requirements: std::collections::BTreeSet<_> = mutations
+        .iter()
+        .flat_map(|mutation| {
+            mutation
+                .expected
+                .diagnostics
+                .iter()
+                .map(|expected| expected.requirement.clone())
+        })
+        .collect();
+    assert_eq!(
+        requirements.len(),
+        mutation_requirements.len(),
+        "R55 mutation table must cover each validation requirement exactly once in the \
+         expected-diagnostic inventory"
+    );
+    assert_eq!(
+        mutation_requirements, requirements,
+        "R55 mutation table is out of sync with validate_r55_contract; every validation \
+         requirement needs one exact mutation (missing/extra entries are shown)"
+    );
+
+    for mutation in &mutations {
+        let mutated = match &mutation.edit {
+            R55MutationEdit::Once {
+                needle,
+                replacement,
+            } => r55_mutate_once(&documents, mutation.path, needle, replacement),
+            R55MutationEdit::All {
+                needle,
+                replacement,
+            } => r55_mutate_all(&documents, mutation.path, needle, replacement),
+            R55MutationEdit::Forms { edits } => r55_mutate_forms(&documents, mutation.path, edits),
+        };
+        let findings = validate_r55_contract(&mutated);
+        let expected: Vec<_> = mutation
+            .expected
+            .diagnostics
+            .iter()
+            .map(R55ExpectedDiagnostic::render)
+            .collect();
+        assert_eq!(
+            findings,
+            expected.clone(),
+            "{} mutation must yield exactly {expected:?}; findings:\n{}",
+            mutation.name,
+            findings.join("\n")
+        );
+    }
+}
+
 #[test]
 fn spike_measurement_contracts_match_and_reject_mutations() {
     let root = repo_root();
-    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
-    let results = std::fs::read_to_string(&results_path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
+    let sources = result_sources();
     let documents = measurement_documents();
-    let errors = validate_spike_measurements(&results, &documents);
+    let errors = validate_spike_measurements(&sources, &documents);
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 
     let feasibility =
@@ -2430,7 +3970,8 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
     ));
 
     for spec in spike_measurement_specs() {
-        let canonical = canonical_measurement(&results, spec.threshold)
+        let results = &sources[&spec.result_source];
+        let canonical = canonical_measurement(results, spec.threshold)
             .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
         let original = documents
             .content(spec.mutation_path)
@@ -2456,6 +3997,32 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
         );
     }
 
+    // Perturbing the *result row itself* must fail too. Without this the guard
+    // would only prove that the documents agree with each other, which a single
+    // edit to the source artifact could satisfy while changing the measurement.
+    for spec in spike_measurement_specs() {
+        let original = &sources[&spec.result_source];
+        assert!(
+            original.contains(spec.fingerprint),
+            "{} fingerprint {:?} is absent from {}",
+            spec.name,
+            spec.fingerprint,
+            spec.result_source.path()
+        );
+        let mut mutated_sources = sources.clone();
+        mutated_sources.insert(
+            spec.result_source,
+            original.replacen(spec.fingerprint, "[mutated result row]", 1),
+        );
+        let errors = validate_spike_measurements(&mutated_sources, &documents);
+        assert!(
+            !errors.is_empty(),
+            "{} guard accepted a perturbed canonical row in {}",
+            spec.name,
+            spec.result_source.path()
+        );
+    }
+
     const UNREGISTERED_DOCUMENT: &str = "docs/explanation/unregistered-spike-copy.md";
     assert!(
         !documents.contains_key(UNREGISTERED_DOCUMENT),
@@ -2470,7 +4037,7 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
             "{} plant path is unexpectedly registered",
             spec.name
         );
-        let canonical = canonical_measurement(&results, spec.threshold)
+        let canonical = canonical_measurement(&sources[&spec.result_source], spec.threshold)
             .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
         let mut mutated = documents.clone();
         mutated.insert(
@@ -2486,6 +4053,566 @@ fn spike_measurement_contracts_match_and_reject_mutations() {
             spec.name,
             spec.planted_unregistered_copy,
             errors.join("\n")
+        );
+    }
+}
+
+/// Rewrite the single canonical row for `threshold`, keeping it well-formed.
+/// Line-targeted rather than a substring replace, because the superseded
+/// figures also appear in `RESULTS.md` prose and a substring edit would prove
+/// nothing about the row.
+fn rewrite_canonical_row(
+    results: &str,
+    threshold: &str,
+    outcome: &str,
+    measurement: &str,
+) -> String {
+    let mut rewritten = Vec::new();
+    let mut hits = 0usize;
+    for line in results.lines() {
+        let cells = line.split('|').map(str::trim).collect::<Vec<_>>();
+        if cells.get(1) == Some(&threshold) {
+            hits += 1;
+            rewritten.push(format!("| {threshold} | {outcome} | {measurement} |"));
+        } else {
+            rewritten.push(line.to_string());
+        }
+    }
+    assert_eq!(
+        hits, 1,
+        "expected exactly one canonical row for {threshold:?}"
+    );
+    rewritten.join("\n")
+}
+
+/// Remove the single canonical row for `threshold`, leaving the rest of the
+/// table intact and well-formed.
+fn delete_canonical_row(results: &str, threshold: &str) -> String {
+    let mut kept = Vec::new();
+    let mut removed = 0usize;
+    for line in results.lines() {
+        let cells = line.split('|').map(str::trim).collect::<Vec<_>>();
+        if cells.get(1) == Some(&threshold) {
+            removed += 1;
+            continue;
+        }
+        kept.push(line.to_string());
+    }
+    assert_eq!(
+        removed, 1,
+        "expected exactly one canonical row for {threshold:?}"
+    );
+    kept.join("\n")
+}
+
+/// Assert that some single error carries every needle. Checking the needles
+/// against one error rather than against the joined set is the point: a test
+/// that accepts "these phrases appear somewhere" would pass on two unrelated
+/// failures and prove nothing about either.
+fn assert_one_error_with(errors: &[String], label: &str, needles: &[&str]) {
+    assert!(
+        errors
+            .iter()
+            .any(|error| needles.iter().all(|needle| error.contains(needle))),
+        "{label}: expected one error containing all of {needles:?}; got: {}",
+        if errors.is_empty() {
+            "<no errors at all>".to_string()
+        } else {
+            errors.join("\n")
+        }
+    );
+}
+
+/// Pinned canonical-row accounting per result source, spelled out rather than
+/// computed.
+///
+/// The controls below must not derive their expectations from
+/// [`accounted_rows`]: that is the validator's own helper, so an emptied
+/// registry would drive both sides of the comparison to zero and every
+/// count-based assertion would agree with itself while checking nothing. A
+/// deleted `MeasurementSpec` would not move a single expectation. These
+/// literals are the independent truth the helper and the registry are both
+/// measured against, and changing one is a visible edit a reviewer sees.
+const EXPECTED_ACCOUNTING: &[(ResultSource, usize, usize, usize)] = &[
+    // source, accounted, registered, superseded
+    (ResultSource::Original, 7, 6, 1),
+    (ResultSource::RssRerun20260802, 1, 1, 0),
+];
+
+/// The pinned `(accounted, registered, superseded)` baseline for `source`.
+/// Fails closed on a missing or duplicated baseline, so adding a
+/// [`ResultSource`] without pinning its counts breaks the controls rather than
+/// silently exempting the new source from them.
+fn expected_accounting(source: ResultSource) -> (usize, usize, usize) {
+    let mut found = None;
+    for (candidate, accounted, registered, superseded) in EXPECTED_ACCOUNTING {
+        if *candidate != source {
+            continue;
+        }
+        assert!(
+            found.is_none(),
+            "duplicate pinned baseline for {}",
+            source.path()
+        );
+        found = Some((*accounted, *registered, *superseded));
+    }
+    found.unwrap_or_else(|| panic!("no pinned baseline for {}", source.path()))
+}
+
+/// The registry itself, measured against the pinned baseline by direct
+/// iteration rather than through the validator's helper.
+///
+/// This is the test that makes every other count-based control non-vacuous. If
+/// `spike_measurement_specs` returned an empty vector, or
+/// `SUPERSEDED_CANONICAL_ROWS` were emptied, or a single spec lost its source
+/// binding, the controls that consume these counts would still be internally
+/// consistent - they would simply be checking nothing. Pinning the counts as
+/// literals is what turns "the numbers agree" into "the numbers are right".
+#[test]
+fn the_measurement_registry_matches_its_pinned_baseline() {
+    let specs = spike_measurement_specs();
+    assert!(
+        !specs.is_empty(),
+        "an empty measurement registry would let every count-derived control agree at zero"
+    );
+    assert!(
+        !SUPERSEDED_CANONICAL_ROWS.is_empty(),
+        "an empty superseded set would let the preservation controls agree at zero"
+    );
+    assert_eq!(
+        EXPECTED_ACCOUNTING.len(),
+        ResultSource::ALL.len(),
+        "every result source must carry a pinned baseline"
+    );
+
+    let mut total_registered = 0usize;
+    let mut total_superseded = 0usize;
+    for source in ResultSource::ALL {
+        let (accounted, registered, superseded) = expected_accounting(source);
+        assert_eq!(
+            accounted,
+            registered + superseded,
+            "the pinned baseline for {} is internally inconsistent",
+            source.path()
+        );
+
+        // Counted by direct iteration over the registry, not through
+        // `accounted_rows`, so the helper is measured rather than trusted.
+        let counted_registered = specs
+            .iter()
+            .filter(|spec| spec.result_source == source)
+            .count();
+        let counted_superseded = SUPERSEDED_CANONICAL_ROWS
+            .iter()
+            .filter(|row| row.source == source)
+            .count();
+        assert_eq!(
+            counted_registered,
+            registered,
+            "{} registers {counted_registered} measurement(s); the pinned baseline says {registered}",
+            source.path()
+        );
+        assert_eq!(
+            counted_superseded,
+            superseded,
+            "{} carries {counted_superseded} superseded row(s); the pinned baseline says {superseded}",
+            source.path()
+        );
+
+        // And the shared helper must agree with the pinned truth. This is the
+        // one place `accounted_rows` is an assertion subject rather than an
+        // assertion source.
+        assert_eq!(
+            accounted_rows(source),
+            (accounted, registered, superseded),
+            "accounted_rows disagrees with the pinned baseline for {}",
+            source.path()
+        );
+
+        total_registered += counted_registered;
+        total_superseded += counted_superseded;
+    }
+
+    // Every registered measurement and every superseded row is attributed to
+    // exactly one source, so a spec that quietly loses its binding cannot hide
+    // behind a per-source count that still balances.
+    assert_eq!(
+        total_registered,
+        specs.len(),
+        "every registered measurement must be attributed to exactly one source"
+    );
+    assert_eq!(
+        total_superseded,
+        SUPERSEDED_CANONICAL_ROWS.len(),
+        "every superseded row must be attributed to exactly one source"
+    );
+}
+
+/// A missing required source must deny, not evaporate. Every loop in the
+/// validator reads `sources` through an `Option`, so an absent artifact is one
+/// bare `continue` away from producing a clean run - the check would simply not
+/// happen, and nothing would say so. This walks each required source out of the
+/// map in turn and requires the exact denial, including the scope it
+/// invalidated.
+#[test]
+fn a_missing_result_source_is_denied_and_never_silently_skipped() {
+    let sources = result_sources();
+    let documents = measurement_documents();
+    assert!(
+        validate_spike_measurements(&sources, &documents).is_empty(),
+        "the committed tree must be clean before removing a source"
+    );
+
+    for source in ResultSource::ALL {
+        let mut without = sources.clone();
+        assert!(
+            without.remove(&source).is_some(),
+            "{} must be present before the control removes it",
+            source.path()
+        );
+
+        let (accounted, registered, superseded) = expected_accounting(source);
+        let errors = validate_spike_measurements(&without, &documents);
+        assert_one_error_with(
+            &errors,
+            source.path(),
+            &[
+                &format!("missing required result source {}", source.path()),
+                &format!("{accounted} canonical row(s) could not be checked"),
+                &format!("({registered} registered + {superseded} superseded)"),
+            ],
+        );
+
+        // Exactly one error, and exactly one mention of the absent path. One
+        // missing file must not multiply into an error per dependent spec and
+        // superseded row, which would bury any genuine finding beside it.
+        assert_eq!(
+            errors.len(),
+            1,
+            "removing {} must produce exactly one error; got: {}",
+            source.path(),
+            errors.join("\n")
+        );
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains(source.path()))
+                .count(),
+            1,
+            "removing {} must be reported once, not once per dependent check",
+            source.path()
+        );
+    }
+
+    // The degenerate case: nothing to read at all. This is the one an empty or
+    // mis-rooted map produces, and it must be the loudest failure rather than
+    // the quietest.
+    let errors = validate_spike_measurements(&BTreeMap::new(), &documents);
+    assert_eq!(
+        errors.len(),
+        ResultSource::ALL.len(),
+        "an empty source map must deny once per required source; got: {}",
+        if errors.is_empty() {
+            "<no errors at all>".to_string()
+        } else {
+            errors.join("\n")
+        }
+    );
+    for source in ResultSource::ALL {
+        assert_one_error_with(
+            &errors,
+            "empty source map",
+            &[&format!("missing required result source {}", source.path())],
+        );
+    }
+}
+
+/// A superseded row that still parses is not a preserved row. This proves the
+/// guard pins the recorded verdict and figure rather than the row's existence:
+/// each rewrite below leaves a syntactically perfect table that a
+/// presence-only check would wave through.
+#[test]
+fn a_rewritten_superseded_row_fails_even_though_it_still_parses() {
+    let sources = result_sources();
+    let documents = measurement_documents();
+    assert!(
+        validate_spike_measurements(&sources, &documents).is_empty(),
+        "the committed tree must be clean before planting a rewrite"
+    );
+    assert!(
+        !SUPERSEDED_CANONICAL_ROWS.is_empty(),
+        "an empty superseded set would make this test vacuous"
+    );
+
+    for row in SUPERSEDED_CANONICAL_ROWS {
+        let original = &sources[&row.source];
+        let rewrites = [
+            // A different, entirely well-formed figure.
+            (
+                "restated figure",
+                row.outcome,
+                "25,600 KiB (25.0 MiB), 1,024 KiB or about 4.2% above 24,576 KiB",
+            ),
+            // The verdict flipped, the figure untouched.
+            ("flipped verdict", "MEASURED-PASS", row.measurement),
+            // History laundered to match the superseding result - the case the
+            // amendment exists to make impossible.
+            (
+                "laundered history",
+                "MEASURED-PASS",
+                "18,428 KiB, 6,148 KiB below 24,576 KiB",
+            ),
+        ];
+
+        for (label, outcome, measurement) in rewrites {
+            let mutated = rewrite_canonical_row(original, row.threshold, outcome, measurement);
+            // The rewrite must remain readable, or the test would be proving
+            // that a malformed table fails rather than that a rewritten one does.
+            assert!(
+                canonical_measurement(&mutated, row.threshold).is_ok(),
+                "{label}: the planted row must still parse"
+            );
+
+            let mut mutated_sources = sources.clone();
+            mutated_sources.insert(row.source, mutated);
+            let errors = validate_spike_measurements(&mutated_sources, &documents);
+            assert_one_error_with(
+                &errors,
+                label,
+                &[
+                    row.source.path(),
+                    "superseded row",
+                    "must be preserved verbatim",
+                ],
+            );
+        }
+
+        // Deleting the row is the other half of the obligation. It fails on two
+        // independent legs - the row accounting and the readability check - and
+        // both are asserted, because either one alone silently becoming
+        // ineffective would leave the deletion detectable only by accident.
+        let deleted = delete_canonical_row(original, row.threshold);
+        let (accounted, registered, superseded) = expected_accounting(row.source);
+        let baseline = original
+            .lines()
+            .filter(|line| line.contains("| MEASURED-"))
+            .count();
+        assert_eq!(
+            baseline,
+            accounted,
+            "the committed {} must already balance before deleting a row",
+            row.source.path()
+        );
+
+        let mut deleted_sources = sources.clone();
+        deleted_sources.insert(row.source, deleted);
+        let errors = validate_spike_measurements(&deleted_sources, &documents);
+        assert_one_error_with(
+            &errors,
+            "deleted superseded row",
+            &[
+                row.source.path(),
+                &format!(
+                    "canonical final-threshold table has {} measurement row(s)",
+                    baseline - 1
+                ),
+                &format!(
+                    "the guard accounts for {accounted} ({registered} registered + {superseded} superseded)"
+                ),
+            ],
+        );
+        assert_one_error_with(
+            &errors,
+            "deleted superseded row",
+            &[
+                row.source.path(),
+                "superseded row",
+                "is no longer readable",
+                "must occur exactly once, found 0",
+            ],
+        );
+    }
+}
+
+/// An extra `| MEASURED-` row in a registered artifact is a measurement nobody
+/// registered. Unregistered rows are how a result set grows a claim that no
+/// specification restates and no lint pins, so the accounting must reject one
+/// even when it is perfectly well-formed.
+#[test]
+fn an_unaccounted_measured_row_in_a_result_artifact_fails_closed() {
+    const UNACCOUNTED_ROW: &str = "| Unaccounted synthetic threshold | MEASURED-PASS | 1 KiB, planted by a negative control |";
+
+    let sources = result_sources();
+    let documents = measurement_documents();
+
+    for source in ResultSource::ALL {
+        let original = &sources[&source];
+        let (accounted, registered, superseded) = expected_accounting(source);
+        let baseline = original
+            .lines()
+            .filter(|line| line.contains("| MEASURED-"))
+            .count();
+        assert_eq!(
+            baseline,
+            accounted,
+            "the committed {} must already balance before injecting a row",
+            source.path()
+        );
+
+        let mut mutated_sources = sources.clone();
+        mutated_sources.insert(source, format!("{original}\n{UNACCOUNTED_ROW}\n"));
+        let errors = validate_spike_measurements(&mutated_sources, &documents);
+        assert_one_error_with(
+            &errors,
+            source.path(),
+            &[
+                source.path(),
+                &format!(
+                    "canonical final-threshold table has {} measurement row(s)",
+                    baseline + 1
+                ),
+                &format!(
+                    "the guard accounts for {accounted} ({registered} registered + {superseded} superseded)"
+                ),
+            ],
+        );
+    }
+}
+
+/// The superseded failure literals survive at exactly one registered site: the
+/// released changelog entry. That pin is load-bearing in both directions, so
+/// both are controlled here - a new copy anywhere under `docs/**`, and a
+/// duplicate of the retained copy inside `CHANGELOG.md` itself. Without the
+/// second control, the retained history could be quietly doubled and the
+/// inventory would be the only thing left objecting.
+#[test]
+fn extra_copies_of_the_superseded_literals_fail_closed() {
+    const UNREGISTERED_DOCUMENT: &str = "docs/explanation/unregistered-superseded-copy.md";
+
+    let sources = result_sources();
+    let documents = measurement_documents();
+    assert!(
+        !documents.contains_key(UNREGISTERED_DOCUMENT),
+        "plant path must not replace a real documentation file"
+    );
+    assert!(
+        spike_measurement_specs().iter().all(|spec| spec
+            .sites
+            .iter()
+            .all(|site| site.path != UNREGISTERED_DOCUMENT)),
+        "plant path is unexpectedly registered"
+    );
+
+    // One plant carrying every superseded literal, so a single validation pass
+    // exercises all four inventory patterns.
+    let mut planted = documents.clone();
+    planted.insert(
+        UNREGISTERED_DOCUMENT.to_string(),
+        format!("Independent historical note: {SUPERSEDED_RSS_MEASUREMENT}."),
+    );
+    let errors = validate_spike_measurements(&sources, &planted);
+    for description in [
+        "superseded 25,216 KiB whole-process RSS",
+        "superseded 24.625 MiB whole-process RSS",
+        "superseded 640 KiB threshold excess",
+        "superseded 2.6 percent excess over 24,576 KiB",
+    ] {
+        assert_one_error_with(
+            &errors,
+            description,
+            &[
+                "global docs/** and CHANGELOG.md inventory",
+                description,
+                "must contain exactly 1 copy/copies, found 2",
+                UNREGISTERED_DOCUMENT,
+            ],
+        );
+    }
+
+    // Duplicating the retained changelog copy must trip the site pin as well as
+    // the inventory, so the registered count cannot drift by duplication.
+    let changelog = documents
+        .content("CHANGELOG.md")
+        .expect("CHANGELOG.md is an inventoried document");
+    let mut doubled = documents.clone();
+    doubled.insert(
+        "CHANGELOG.md".to_string(),
+        format!("{changelog}\n\nDuplicate: {SUPERSEDED_RSS_MEASUREMENT}\n"),
+    );
+    let errors = validate_spike_measurements(&sources, &doubled);
+    assert_one_error_with(
+        &errors,
+        "doubled changelog history",
+        &[
+            "median RSS: CHANGELOG.md must contain",
+            SUPERSEDED_RSS_MEASUREMENT,
+            "exactly 1 time(s), found 2",
+        ],
+    );
+    assert_one_error_with(
+        &errors,
+        "doubled changelog history",
+        &[
+            "global docs/** and CHANGELOG.md inventory",
+            "superseded 25,216 KiB whole-process RSS",
+            "must contain exactly 1 copy/copies, found 2",
+            "CHANGELOG.md",
+        ],
+    );
+}
+
+/// The corrections prototype is a near-miss of the authoritative rerun: same
+/// table shape, same MEASURED-PASS verdict, RSS figures transposed to
+/// `18,468 KiB` / `6,108 KiB`. It is exactly the artifact a hurried author
+/// would cite. This test asserts the exclusion mechanically instead of relying
+/// on nobody reaching for it.
+#[test]
+fn the_corrections_prototype_is_never_an_authoritative_result() {
+    let root = repo_root();
+    let prototype_path = root.join(PROTOTYPE_RESULT);
+    let prototype = std::fs::read_to_string(&prototype_path)
+        .unwrap_or_else(|err| panic!("cannot read {PROTOTYPE_RESULT}: {err}"));
+
+    assert!(
+        ResultSource::ALL
+            .into_iter()
+            .all(|source| source.path() != PROTOTYPE_RESULT),
+        "the corrections prototype must not be a registered result source"
+    );
+
+    let documents = measurement_documents();
+    assert!(
+        !documents.contains_key(PROTOTYPE_RESULT),
+        "the corrections prototype must stay outside the docs/** inventory"
+    );
+
+    // Its own threshold table is written against the *original* threshold key,
+    // so a lazy repoint would silently swap in the prototype's numbers. Assert
+    // that the rerun's threshold key - the one the RSS row now reads - simply
+    // is not present in the prototype, so the repoint fails closed instead.
+    let rss = spike_measurement_specs()
+        .into_iter()
+        .find(|spec| spec.name == "median RSS")
+        .expect("the median RSS row is registered");
+    assert!(
+        canonical_measurement(&prototype, rss.threshold).is_err(),
+        "the corrections prototype must not satisfy the canonical measurement parser"
+    );
+    assert!(
+        !prototype.contains(rss.fingerprint),
+        "the corrections prototype must not carry the authoritative fingerprint"
+    );
+
+    // The prototype's transposed figures must appear in no shipped document.
+    for figure in ["18,468 KiB", "6,108 KiB"] {
+        let leaks = documents
+            .content_iter()
+            .filter(|(_, content)| normalized_whitespace(content).contains(figure))
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>();
+        assert!(
+            leaks.is_empty(),
+            "prototype figure {figure:?} leaked into {leaks:?}"
         );
     }
 }

@@ -80,7 +80,7 @@ pkgs.testers.runNixOSTest {
                 return int(line.split(":", 1)[1].strip(), 16)
         raise AssertionError(f"process {pid} has no CapEff status field")
 
-    def privileged_host_processes():
+    def host_namespace_capabilities():
         rows = machine.succeed(
             "host_ns=$(readlink /proc/1/ns/net); "
             "for status in /proc/[0-9]*/status; do "
@@ -93,15 +93,33 @@ pkgs.testers.runNixOSTest {
             "printf '%s %s %s\\n' \"$pid\" \"$start\" \"$cap\"; "
             "done"
         )
-        result = set()
+        result = {}
         for row in rows.splitlines():
             pid, start, cap = row.split()
-            if int(cap, 16) & capability_mask:
-                result.add((pid, start))
+            result[(pid, start)] = int(cap, 16)
         return result
 
+    def service_processes(unit):
+        control_group = machine.succeed(
+            f"systemctl show -P ControlGroup {unit}"
+        ).strip()
+        assert control_group.startswith("/"), (
+            f"{unit} has invalid control group {control_group!r}"
+        )
+        rows = machine.succeed(
+            f"find /sys/fs/cgroup{control_group} -name cgroup.procs "
+            "-type f -exec cat {} +"
+        )
+        identities = set()
+        for pid in rows.splitlines():
+            start = machine.succeed(
+                f"cut -d' ' -f22 /proc/{pid}/stat"
+            ).strip()
+            identities.add((pid, start))
+        return identities
+
     host_namespace = network_namespace(1)
-    baseline = privileged_host_processes()
+    baseline = host_namespace_capabilities()
 
     machine.succeed("systemctl start d2b-test-guest-agent.service")
     machine.wait_for_unit("d2b-test-guest-agent.service")
@@ -128,11 +146,38 @@ pkgs.testers.runNixOSTest {
         "network agent received an undeclared effective capability"
     )
 
-    after = privileged_host_processes()
-    leaked = after - baseline
-    assert not leaked, (
+    service_identities = service_processes("d2b-test-guest-agent.service")
+    assert (agent_pid, machine.succeed(
+        f"cut -d' ' -f22 /proc/{agent_pid}/stat"
+    ).strip()) in service_identities, (
+        "network agent main process is outside its service control group"
+    )
+
+    after = host_namespace_capabilities()
+    gained = sorted(
+        (
+            pid,
+            start,
+            before & capability_mask,
+            after[(pid, start)] & capability_mask,
+        )
+        for (pid, start), before in baseline.items()
+        if (pid, start) in after
+        and after[(pid, start)] & capability_mask & ~before
+    )
+    assert not gained, (
         "starting the network agent added effective network capabilities to "
-        f"host-network-namespace processes: {sorted(leaked)}"
+        f"an existing host-network-namespace process: {gained}"
+    )
+
+    service_leaks = sorted(
+        (pid, start, after[(pid, start)] & capability_mask)
+        for pid, start in service_identities
+        if (pid, start) in after and after[(pid, start)] & capability_mask
+    )
+    assert not service_leaks, (
+        "network agent service left a capability-bearing process in the host "
+        f"network namespace: {service_leaks}"
     )
   '';
 }

@@ -170,8 +170,8 @@ The audio runner is part of the daemon-supervised VM DAG. A
 running `vhost-user-sound` sidecar in place - vhost-user-sound's socket
 connection to cloud-hypervisor cannot survive a restart, and killing the
 sidecar mid-VM produces silent speakers and mic state drift. After a rebuild,
-`d2b list` flags the VM with `[pending restart]` if its `current` closure has
-drifted from `booted`; apply with `d2b vm restart <vm> --apply` (clean down+up
+`d2b guest list` exposes update currency if the Guest's current closure has
+drifted from its observed generation; apply with `d2b guest restart <name> --apply` (clean stop/start
 cycles the audio sidecar and CH together so the socket gets re-established). See
 [`docs/reference/cli-contract.md` - Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
@@ -265,7 +265,7 @@ sidecar. Compared to the GPU sidecar profile:
 
 - **VM silent / no soundcard in `aplay -l`.** Both mic and speaker
   are off - `d2b audio status <vm>` will confirm. Toggle one on
-  and restart the VM (`d2b vm stop <vm> --apply && d2b vm start <vm> --apply`) so
+  and restart the Guest (`d2b guest stop <name> --apply && d2b guest start <name> --apply`) so
   `audioArgsScript` re-emits `--generic-vhost-user`.
 - **Audible static / dropped frames on the host's own playback
   while a d2b VM is running.** Almost always a WirePlumber
@@ -277,7 +277,7 @@ sidecar. Compared to the GPU sidecar profile:
   those match HARDWARE devices, not client streams.
 - **`autostart = true` + `audio.enable = true` eval failure.**
   Intentional. Set one or the other. The sidecar lifecycle is
-  bound to `d2b vm start <vm> --apply` from an operator session.
+  bound to `d2b guest start <name> --apply` from an operator session.
 - **vhost-device-sound times out waiting for snd.sock.** Most
   often a PipeWire connect failure: the sidecar dials
   `/run/user/<uid>/pipewire-0` and gives up if the operator's

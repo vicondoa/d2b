@@ -4,8 +4,9 @@
 #   stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json>
 #                  [--candidate <current-candidate.json>]
 #                  [--lifecycle <lifecycle-id>] [--discovery-request PATH]
+#                  --evidence PATH [--reviewer-notes-dir PATH]
 #                  [--ledger PATH] [--responses PATH] [--self-verification PATH]
-#                  [--verification-dir PATH] [--approval PATH]
+#                  [--handoff PATH] [--verification-dir PATH] [--approval PATH]
 #
 # <base>      branch base commit or ref
 # <prev-tip>  commit the previous round reviewed; pass <base> for round 1
@@ -15,7 +16,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
+  echo "usage: stage-diffs.sh <base> <prev-tip> <round-id> --selection <selection.json> --evidence PATH [--reviewer-notes-dir PATH] [--candidate <current-candidate.json>] [--lifecycle <lifecycle-id>] [--discovery-request PATH] [--ledger PATH] [--responses PATH] [--handoff PATH] [--self-verification PATH] [--verification-dir PATH] [--approval PATH]" >&2
   exit 2
 fi
 
@@ -32,8 +33,11 @@ lifecycle=""
 selection_path=""
 candidate_path=""
 discovery_request_path=""
+evidence_path=""
+reviewer_notes_dir=""
 ledger_path=""
 responses_path=""
+handoff_path=""
 self_verification_path=""
 verification_dir=""
 approval_path=""
@@ -63,6 +67,16 @@ while [ "$#" -gt 0 ]; do
       discovery_request_path="$2"
       shift 2
       ;;
+    --evidence)
+      [ "$#" -ge 2 ] || { echo "--evidence requires a path" >&2; exit 2; }
+      evidence_path="$2"
+      shift 2
+      ;;
+    --reviewer-notes-dir)
+      [ "$#" -ge 2 ] || { echo "--reviewer-notes-dir requires a path" >&2; exit 2; }
+      reviewer_notes_dir="$2"
+      shift 2
+      ;;
     --ledger)
       [ "$#" -ge 2 ] || { echo "--ledger requires a path" >&2; exit 2; }
       ledger_path="$2"
@@ -71,6 +85,11 @@ while [ "$#" -gt 0 ]; do
     --responses)
       [ "$#" -ge 2 ] || { echo "--responses requires a path" >&2; exit 2; }
       responses_path="$2"
+      shift 2
+      ;;
+    --handoff)
+      [ "$#" -ge 2 ] || { echo "--handoff requires a path" >&2; exit 2; }
+      handoff_path="$2"
       shift 2
       ;;
     --self-verification)
@@ -97,6 +116,10 @@ done
 
 if [ -z "$selection_path" ]; then
   echo "--selection is required; staging without the authoritative lifecycle selection is refused" >&2
+  exit 2
+fi
+if [ -z "$evidence_path" ]; then
+  echo "--evidence is required; finalized validation evidence must be supplied before .complete" >&2
   exit 2
 fi
 
@@ -126,52 +149,1187 @@ if [[ "$candidate_path" == *\"* || "$candidate_path" == *\\* || "$candidate_path
   echo "refusing candidate path with JSON control characters: $candidate_path" >&2
   exit 2
 fi
+for finalized_path in "$evidence_path" "$reviewer_notes_dir"; do
+  if [[ "$finalized_path" == *\"* || "$finalized_path" == *\\* || "$finalized_path" == *$'\n'* ]]; then
+    echo "refusing finalized review input path with JSON control characters: $finalized_path" >&2
+    exit 2
+  fi
+done
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+lifecycle_helper="$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+dispatch_policy_path="$root/.github/skills/d2b-panel-round/dispatch-policy.json"
 
 tip="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse "$base")"
 prev_sha="$(git rev-parse "$prev")"
 
-out="$root/.scratch/panel/$round"
+display_panel_root="$root/.scratch/panel"
+panel_root="$display_panel_root"
+out="$panel_root/$round"
 completion_marker="$out/.complete"
 staged_selection_path="$out/selection.json"
 staged_candidate_path="$out/current-candidate.json"
+staged_dispatch_binding_path="$out/dispatch-binding.json"
 staged_discovery_request_path="$out/discovery-request.json"
 staged_ledger_path="$out/discovery-ledger.json"
 staged_responses_path="$out/responses.json"
+staged_handoff_path="$out/handoff.json"
 staged_self_verification_path="$out/self-verification.json"
 staged_approval_path="$out/approval.json"
 staged_verification_dir="$out/verification"
+staged_agent_definitions_dir="$out/agent-definitions"
+display_out="$out"
+display_completion_marker="$completion_marker"
+display_staged_selection_path="$staged_selection_path"
+display_staged_candidate_path="$staged_candidate_path"
+display_staged_dispatch_binding_path="$staged_dispatch_binding_path"
+display_staged_discovery_request_path="$staged_discovery_request_path"
+display_staged_ledger_path="$staged_ledger_path"
+display_staged_responses_path="$staged_responses_path"
+display_staged_handoff_path="$staged_handoff_path"
+display_staged_self_verification_path="$staged_self_verification_path"
+display_staged_approval_path="$staged_approval_path"
+display_staged_verification_dir="$staged_verification_dir"
+display_staged_agent_definitions_dir="$staged_agent_definitions_dir"
+mkdir -p "$display_panel_root"
+panel_root="$display_panel_root"
+out="$panel_root/$round"
+completion_marker="$out/.complete"
+staged_selection_path="$out/selection.json"
+staged_candidate_path="$out/current-candidate.json"
+staged_dispatch_binding_path="$out/dispatch-binding.json"
+staged_discovery_request_path="$out/discovery-request.json"
+staged_ledger_path="$out/discovery-ledger.json"
+staged_responses_path="$out/responses.json"
+staged_handoff_path="$out/handoff.json"
+staged_self_verification_path="$out/self-verification.json"
+staged_approval_path="$out/approval.json"
+staged_verification_dir="$out/verification"
+staged_agent_definitions_dir="$out/agent-definitions"
 
-partial_cleanup_hint() {
-  echo "partial pre-dispatch scratch directory is non-authoritative: $out" >&2
-  echo "clean it up before retrying: rm -rf -- '$out'" >&2
-}
-
-if [ -e "$out" ] && [ ! -f "$completion_marker" ]; then
-  partial_cleanup_hint
-  exit 2
-fi
-
-stage_exit() {
-  local status="$?"
-  if [ "$status" -ne 0 ] && [ -d "$out" ] && [ ! -f "$completion_marker" ]; then
-    partial_cleanup_hint
+canonical_artifact_names() {
+  local artifact_phase="$1"
+  local artifact_roster="$2"
+  local include_handoff="${3:-false}"
+  printf '%s\n' \
+    "address.json" \
+    "commits.txt" \
+    "current-candidate.json" \
+    "delta.diff" \
+    "dispatch-binding.json" \
+    "dispatch-prompt.txt" \
+    "evidence.md" \
+    "full.diff" \
+    "review-request.md" \
+    "selection.json"
+  if [ "$artifact_phase" = "discovery" ]; then
+    printf '%s\n' "discovery-request.json"
+  elif [ "$artifact_phase" = "verification" ]; then
+    printf '%s\n' \
+      "discovery-ledger.json" \
+      "responses.json" \
+      "self-verification.json"
+    if [ "$include_handoff" = "true" ]; then
+      printf '%s\n' "handoff.json"
+    fi
+  else
+    echo "unknown panel phase for canonical artifact names: $artifact_phase" >&2
+    return 2
   fi
-  exit "$status"
+  local -a artifact_seats=()
+  local seat
+  IFS=',' read -r -a artifact_seats <<<"$artifact_roster"
+  for seat in "${artifact_seats[@]}"; do
+    [ -n "$seat" ] || {
+      echo "empty panel seat in canonical artifact roster" >&2
+      return 2
+    }
+    printf '%s\n' "agent-definitions/panel-$seat.agent.md"
+    printf '%s\n' "reviewer-notes/$seat.md"
+    if [ "$artifact_phase" = "verification" ]; then
+      printf '%s\n' "verification/$seat.json"
+    fi
+  done
 }
-trap stage_exit EXIT
+
+validate_bound_completion() {
+  local marker="$1"
+  local expected_phase="$2"
+  shift 2
+  node --input-type=module - "$marker" "$expected_phase" "$@" <<'NODE'
+import crypto from "node:crypto";
+import path from "node:path";
+import { readFileSync, statSync } from "node:fs";
+const markerPath = process.argv[2];
+const expectedPhase = process.argv[3];
+const expectedNames = process.argv.slice(4).sort();
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_BOUND_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
+const readBounded = (file, label, maximum) => {
+  const stat = statSync(file);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a regular file`);
+  }
+  if (stat.size > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  const bytes = readFileSync(file);
+  if (bytes.length > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  return bytes;
+};
+let marker;
+try {
+  marker = JSON.parse(
+    readBounded(
+      markerPath,
+      "completion marker",
+      MAX_COMPLETION_MARKER_BYTES,
+    ).toString("utf8"),
+  );
+} catch (error) {
+  console.error(`${markerPath}: invalid completion marker: ${error.message}`);
+  process.exit(1);
+}
+const exactKeys = [
+  "artifact_bytes",
+  "artifact_kind",
+  "artifact_sha256",
+  "base",
+  "complete",
+  "delta_sha256",
+  "full_sha256",
+  "lifecycle_id",
+  "phase",
+  "previous_tip",
+  "round",
+  "schema_version",
+  "selection_sha256",
+  "tip",
+].sort();
+if (
+  marker.artifact_kind !== "d2b-panel/stage-completion" ||
+  marker.complete !== true ||
+  !marker.artifact_sha256 ||
+  !marker.artifact_bytes ||
+  Object.keys(marker).sort().join("\0") !== exactKeys.join("\0")
+) {
+  console.error(
+    `${markerPath}: completion marker is not a supported canonical byte-bound marker`,
+  );
+  process.exit(1);
+}
+if (![2, 3, 4].includes(marker.schema_version)) {
+  console.error(
+    `${markerPath}: unsupported completion marker schema_version ` +
+    `${JSON.stringify(marker.schema_version)}; expected 2, 3, or current 4`,
+  );
+  process.exit(1);
+}
+const digests = marker.artifact_sha256;
+const sizes = marker.artifact_bytes;
+if (
+  !digests || Array.isArray(digests) || typeof digests !== "object" ||
+  !sizes || Array.isArray(sizes) || typeof sizes !== "object" ||
+  Object.keys(digests).sort().join("\0") !== Object.keys(sizes).sort().join("\0")
+) {
+  console.error(`${markerPath}: completion artifact maps disagree`);
+  process.exit(1);
+}
+const actualNames = Object.keys(digests).sort();
+const withoutDefinitions = expectedNames.filter(
+  (name) =>
+    !name.startsWith("agent-definitions/") &&
+    name !== "dispatch-binding.json",
+);
+const withDefinitions = expectedNames.filter(
+  (name) => name !== "dispatch-binding.json",
+);
+const allowedSets = marker.schema_version === 2
+  ? [withoutDefinitions, withDefinitions]
+  : marker.schema_version === 3
+    ? [withDefinitions]
+    : [expectedNames];
+const matchesAllowedSet = (expected) =>
+  expected.length === actualNames.length &&
+  expected.every((name, index) => name === actualNames[index]);
+if (marker.phase !== expectedPhase) {
+  console.error(
+    `${markerPath}: completion marker phase ${JSON.stringify(marker.phase)} ` +
+    `does not match the expected ${JSON.stringify(expectedPhase)} phase`,
+  );
+  process.exit(1);
+}
+if (!allowedSets.some(matchesAllowedSet)) {
+  const schemaDescription = marker.schema_version === 2
+    ? "schema_version 2 requires exactly the historical base set, or that set plus every selected agent definition; it must not contain dispatch-binding.json"
+    : marker.schema_version === 3
+      ? "schema_version 3 requires the historical set plus every selected agent definition and must not contain dispatch-binding.json"
+      : "schema_version 4 requires the current set including every selected agent definition and dispatch-binding.json";
+  const expectedDescriptions = allowedSets
+    .map((names) => `[${names.join(", ")}]`)
+    .join(" or ");
+  const missing = allowedSets[0].filter((name) => !actualNames.includes(name));
+  const extra = actualNames.filter((name) => !allowedSets.some((names) => names.includes(name)));
+  console.error(
+    `${markerPath}: completion artifact set is invalid for ${schemaDescription}; ` +
+    `expected exactly ${expectedDescriptions}; ` +
+    `missing [${missing.join(", ")}], extra [${extra.join(", ")}]`,
+  );
+  process.exit(1);
+}
+const root = path.dirname(markerPath);
+for (const relative of actualNames) {
+  if (
+    relative === "" ||
+    path.isAbsolute(relative) ||
+    relative.split("/").includes("..") ||
+    !/^[0-9a-f]{64}$/.test(digests[relative]) ||
+    !Number.isSafeInteger(sizes[relative]) ||
+    sizes[relative] < 0 ||
+    sizes[relative] >
+      (relative.startsWith("agent-definitions/")
+        ? MAX_AGENT_DEFINITION_BYTES
+        : MAX_BOUND_ARTIFACT_BYTES)
+  ) {
+    console.error(`${markerPath}: invalid bound artifact entry ${relative}`);
+    process.exit(1);
+  }
+  let bytes;
+  try {
+    bytes = readBounded(
+      path.join(root, relative),
+      `bound artifact ${relative}`,
+      relative.startsWith("agent-definitions/")
+        ? MAX_AGENT_DEFINITION_BYTES
+        : MAX_BOUND_ARTIFACT_BYTES,
+    );
+  } catch (error) {
+    console.error(`${markerPath}: bound artifact ${relative} is unavailable: ${error.message}`);
+    process.exit(1);
+  }
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (digest !== digests[relative] || bytes.length !== sizes[relative]) {
+    console.error(
+      `${markerPath}: post-completion mutation of ${relative} is refused; ` +
+      "its bytes disagree with the completion marker",
+    );
+    process.exit(1);
+  }
+}
+NODE
+}
+
+validate_bound_selection_entry() {
+  local marker="$1"
+  local selection="$2"
+  node --input-type=module - "$marker" "$selection" <<'NODE'
+import crypto from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+
+const markerPath = process.argv[2];
+const selectionPath = process.argv[3];
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_SELECTION_BYTES = 64 * 1024 * 1024;
+const readBounded = (path, label, maximum) => {
+  const stat = statSync(path);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a regular file`);
+  }
+  if (stat.size > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maximum) {
+    throw new Error(`${label} exceeds ${maximum} bytes`);
+  }
+  return bytes;
+};
+
+let marker;
+try {
+  marker = JSON.parse(
+    readBounded(
+      markerPath,
+      "completion marker",
+      MAX_COMPLETION_MARKER_BYTES,
+    ).toString("utf8"),
+  );
+} catch (error) {
+  console.error(`${markerPath}: invalid completion marker: ${error.message}`);
+  process.exit(1);
+}
+if (
+  !marker ||
+  typeof marker !== "object" ||
+  Array.isArray(marker) ||
+  marker.artifact_kind !== "d2b-panel/stage-completion" ||
+  marker.complete !== true
+) {
+  console.error(
+    `${markerPath}: completion marker is not a supported canonical byte-bound marker`,
+  );
+  process.exit(1);
+}
+if (![2, 3, 4].includes(marker.schema_version)) {
+  console.error(
+    `${markerPath}: unsupported completion marker schema_version ` +
+    `${JSON.stringify(marker.schema_version)}; expected 2, 3, or current 4`,
+  );
+  process.exit(1);
+}
+const digest = marker.artifact_sha256?.["selection.json"];
+const size = marker.artifact_bytes?.["selection.json"];
+if (
+  typeof digest !== "string" ||
+  !/^[0-9a-f]{64}$/u.test(digest) ||
+  !Number.isSafeInteger(size) ||
+  size < 0 ||
+  size > MAX_SELECTION_BYTES
+) {
+  console.error(
+    `${markerPath}: completion marker does not carry a valid selection.json binding`,
+  );
+  process.exit(1);
+}
+let bytes;
+try {
+  bytes = readBounded(selectionPath, "bound selection.json", MAX_SELECTION_BYTES);
+} catch (error) {
+  console.error(
+    `${markerPath}: bound selection.json is unavailable: ${error.message}`,
+  );
+  process.exit(1);
+}
+const actual = crypto.createHash("sha256").update(bytes).digest("hex");
+if (actual !== digest || bytes.length !== size) {
+  console.error(
+    `${markerPath}: bound selection.json has a different size or digest`,
+  );
+  process.exit(1);
+}
+NODE
+}
+
+reject_completed_discovery_packet() {
+  local panel_root="$1"
+  local current_out="$2"
+  local lifecycle_id="$3"
+  node --input-type=module - \
+    "$panel_root" "$current_out" "$lifecycle_id" "$lifecycle_helper" <<'NODE'
+import crypto from "node:crypto";
+import path from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  opendirSync,
+  readFileSync,
+} from "node:fs";
+import { TextDecoder } from "node:util";
+import { pathToFileURL } from "node:url";
+
+const panelRoot = process.argv[2];
+const currentOut = path.resolve(process.argv[3]);
+const lifecycle = process.argv[4];
+const lifecycleHelper = process.argv[5];
+const MAX_DIRECTORY_ENTRIES = 4096;
+const MAX_COMPLETION_MARKER_BYTES = 256 * 1024;
+const MAX_BOUND_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const MAX_AGENT_DEFINITION_BYTES = 1024 * 1024;
+const MAX_HANDOFF_MARKER_BYTES = 256 * 1024;
+
+class DiscoveryScanFailure extends Error {
+  constructor(category, count = 1) {
+    super(category);
+    this.category = category;
+    this.count = count;
+  }
+}
+
+const failScan = (category, count = 1) => {
+  throw new DiscoveryScanFailure(category, count);
+};
+
+const readBounded = (file, label, maximum) => {
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.size > maximum) {
+    throw new Error(`${label} is not a bounded regular file`);
+  }
+  const bytes = readFileSync(file);
+  if (bytes.length > maximum) {
+    throw new Error(`${label} is oversized`);
+  }
+  return bytes;
+};
+
+const exactKeys = (value, expected) =>
+  value &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.keys(value).sort().join("\0") === [...expected].sort().join("\0");
+
+const canonicalNames = (phase, roster, includeHandoff = false) => {
+  const common = [
+    "address.json",
+    "commits.txt",
+    "current-candidate.json",
+    "delta.diff",
+    "dispatch-prompt.txt",
+    "evidence.md",
+    "full.diff",
+    "review-request.md",
+    "selection.json",
+  ];
+  if (phase === "discovery") {
+    common.push("discovery-request.json");
+  } else if (phase === "verification") {
+    common.push(
+      "discovery-ledger.json",
+      "responses.json",
+      "self-verification.json",
+    );
+    if (includeHandoff) common.push("handoff.json");
+  } else {
+    throw new Error("unsupported packet phase");
+  }
+  for (const seat of roster) {
+    common.push(
+      `agent-definitions/panel-${seat}.agent.md`,
+      `reviewer-notes/${seat}.md`,
+    );
+    if (phase === "verification") {
+      common.push(`verification/${seat}.json`);
+    }
+  }
+  common.push("dispatch-binding.json");
+  return common.sort();
+};
+
+const sameNames = (left, right) =>
+  left.length === right.length &&
+  left.every((name, index) => name === right[index]);
+
+const canonicalFileNames = new Set([
+  "address.json",
+  "approval.json",
+  "commits.txt",
+  "current-candidate.json",
+  "delta.diff",
+  "dispatch-binding.json",
+  "dispatch-prompt.txt",
+  "discovery-ledger.json",
+  "discovery-request.json",
+  "discovery-results.json",
+  "evidence.md",
+  "full.diff",
+  "metrics.json",
+  "review-request.md",
+  "responses.json",
+  "responses-completed.json",
+  "self-verification.json",
+  "selection.json",
+  "verification-results.json",
+]);
+const canonicalContentDirectories = new Set([
+  "agent-definitions",
+  "records",
+  "reviewer-notes",
+  "verification",
+  "verdicts",
+]);
+
+const continuationCoreFiles = new Set([
+  "handoff.json",
+  "discovery-ledger.json",
+  "responses.json",
+  "responses-completed.json",
+]);
+const continuationRetainedFiles = new Set([
+  "candidate.json",
+  "current-candidate.json",
+  "delta.json",
+  "fix-delta.json",
+  "actual-delta.json",
+  "self-verification.json",
+  "evidence.md",
+  "validation-evidence.md",
+]);
+const continuationRetainedDirectories = new Set(["verification"]);
+
+const relevantTopLevelNames = new Set([
+  ".complete",
+  ...canonicalFileNames,
+  ...canonicalContentDirectories,
+  ...continuationCoreFiles,
+  ...continuationRetainedFiles,
+  ...continuationRetainedDirectories,
+]);
+
+const entryKind = (directory, entry) => {
+  if (entry.isFile()) return "file";
+  if (entry.isDirectory()) return "directory";
+  if (!relevantTopLevelNames.has(entry.name)) return "other";
+  const stat = lstatSync(path.join(directory, entry.name));
+  if (stat.isFile()) return "file";
+  if (stat.isDirectory()) return "directory";
+  return "other";
+};
+
+const scanTopLevel = (directory) => {
+  const result = {
+    total: 0,
+    entries: [],
+    complete: false,
+    completeRegular: false,
+    handoff: false,
+    ledger: false,
+    responses: false,
+    completedResponses: false,
+    handoffRegular: false,
+    ledgerRegular: false,
+    responsesRegular: false,
+    completedResponsesRegular: false,
+    canonicalFiles: 0,
+    canonicalDirectories: 0,
+  };
+  const entries = opendirSync(directory);
+  try {
+    let entry;
+    while ((entry = entries.readSync()) !== null) {
+      result.total += 1;
+      if (result.total > MAX_DIRECTORY_ENTRIES) {
+        failScan("top-level-entry-limit", result.total);
+      }
+      const kind = entryKind(directory, entry);
+      const regular = kind === "file";
+      result.entries.push({ name: entry.name, kind });
+      if (entry.name === ".complete") {
+        result.complete = true;
+        result.completeRegular = regular;
+      } else if (entry.name === "handoff.json") {
+        result.handoff = true;
+        result.handoffRegular = regular;
+      } else if (entry.name === "discovery-ledger.json") {
+        result.ledger = true;
+        result.ledgerRegular = regular;
+      } else if (entry.name === "responses.json") {
+        result.responses = true;
+        result.responsesRegular = regular;
+      } else if (entry.name === "responses-completed.json") {
+        result.completedResponses = true;
+        result.completedResponsesRegular = regular;
+      } else if (canonicalFileNames.has(entry.name)) {
+        result.canonicalFiles += 1;
+      } else if (canonicalContentDirectories.has(entry.name)) {
+        result.canonicalDirectories += 1;
+      }
+    }
+  } finally {
+    try {
+      entries.closeSync();
+    } catch (cause) {
+      if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+    }
+  }
+  return result;
+};
+
+async function validateCompletedPacket(packet, markerPath) {
+  const {
+    readSelectionTable,
+    validateAdvanceVerificationHandoff,
+    validateSelection,
+  } =
+    await import(pathToFileURL(lifecycleHelper).href);
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const markerBytes = readBounded(
+    markerPath,
+    "completion marker",
+    MAX_COMPLETION_MARKER_BYTES,
+  );
+  let marker;
+  try {
+    marker = JSON.parse(markerBytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`invalid completion marker JSON: ${error.message}`);
+  }
+  const markerKeys = [
+    "artifact_bytes",
+    "artifact_kind",
+    "artifact_sha256",
+    "base",
+    "complete",
+    "delta_sha256",
+    "full_sha256",
+    "lifecycle_id",
+    "phase",
+    "previous_tip",
+    "round",
+    "schema_version",
+    "selection_sha256",
+    "tip",
+  ];
+  assert(
+    exactKeys(marker, markerKeys),
+    "completion marker has an unexpected schema",
+  );
+  assert(
+    marker.artifact_kind === "d2b-panel/stage-completion",
+    "completion marker has the wrong artifact kind",
+  );
+  assert(
+    [2, 3, 4].includes(marker.schema_version),
+    `completion marker has unsupported schema_version ${JSON.stringify(marker.schema_version)}`,
+  );
+  assert(marker.complete === true, "completion marker does not claim completion");
+  assert(
+    marker.phase === "discovery" || marker.phase === "verification",
+    `completion marker has unsupported phase ${JSON.stringify(marker.phase)}`,
+  );
+  for (const key of ["round", "lifecycle_id"]) {
+    assert(
+      typeof marker[key] === "string" &&
+        marker[key].length > 0 &&
+        !marker[key].includes("/") &&
+        !marker[key].includes("\\") &&
+        !marker[key].includes("\0"),
+      `completion marker has invalid ${key}`,
+    );
+  }
+  for (const key of ["base", "previous_tip", "tip"]) {
+    assert(
+      typeof marker[key] === "string" &&
+        /^[0-9a-f]{40}$/u.test(marker[key]),
+      `completion marker has invalid ${key}`,
+    );
+  }
+  for (const key of ["selection_sha256", "delta_sha256", "full_sha256"]) {
+    assert(
+      typeof marker[key] === "string" &&
+        /^[0-9a-f]{64}$/u.test(marker[key]),
+      `completion marker has invalid ${key}`,
+    );
+  }
+
+  const digests = marker.artifact_sha256;
+  const sizes = marker.artifact_bytes;
+  assert(
+    digests &&
+      !Array.isArray(digests) &&
+      typeof digests === "object" &&
+      sizes &&
+      !Array.isArray(sizes) &&
+      typeof sizes === "object" &&
+      Object.keys(digests).sort().join("\0") ===
+        Object.keys(sizes).sort().join("\0"),
+    "completion marker artifact size and digest maps disagree",
+  );
+  const actualNames = Object.keys(digests).sort();
+  const selectionDigest = digests["selection.json"];
+  const selectionSize = sizes["selection.json"];
+  assert(
+    typeof selectionDigest === "string" &&
+      /^[0-9a-f]{64}$/u.test(selectionDigest) &&
+      Number.isSafeInteger(selectionSize) &&
+      selectionSize >= 0 &&
+      selectionSize <= MAX_BOUND_ARTIFACT_BYTES,
+    "completion marker does not carry a valid selection.json binding",
+  );
+
+  const artifacts = new Map();
+  for (const relative of actualNames) {
+    assert(
+      relative.length > 0 &&
+        relative.length <= 1024 &&
+        !path.isAbsolute(relative) &&
+        !relative.includes("\\") &&
+        relative.split("/").every(
+          (component) =>
+            component !== "" && component !== "." && component !== "..",
+        ) &&
+        /^[0-9a-f]{64}$/u.test(digests[relative]) &&
+        Number.isSafeInteger(sizes[relative]) &&
+        sizes[relative] >= 0,
+      `completion marker has an invalid bound artifact entry ${relative}`,
+    );
+    const maximum = relative.startsWith("agent-definitions/")
+      ? MAX_AGENT_DEFINITION_BYTES
+      : MAX_BOUND_ARTIFACT_BYTES;
+    assert(
+      sizes[relative] <= maximum,
+      `completion marker bound artifact ${relative} exceeds its size limit`,
+    );
+    let bytes;
+    try {
+      bytes = readBounded(
+        path.join(packet, relative),
+        `bound artifact ${relative}`,
+        maximum,
+      );
+    } catch (error) {
+      throw new Error(
+        `bound artifact ${relative} is unavailable: ${error.message}`,
+      );
+    }
+    assert(
+      bytes.length === sizes[relative] &&
+        crypto.createHash("sha256").update(bytes).digest("hex") ===
+          digests[relative],
+      `bound artifact ${relative} has a different size or digest`,
+    );
+    artifacts.set(relative, bytes);
+  }
+
+  const selectedRoster = (() => {
+    const bytes = artifacts.get("selection.json");
+    assert(bytes, "completion packet has no bound selection.json");
+    let value;
+    try {
+      value = JSON.parse(bytes.toString("utf8"));
+    } catch (error) {
+      throw new Error(`bound selection.json is not valid JSON: ${error.message}`);
+    }
+    assert(
+      value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Array.isArray(value.roster) &&
+        value.roster.length > 0 &&
+        value.roster.every(
+          (seat) =>
+            typeof seat === "string" &&
+            seat.length > 0 &&
+            !seat.includes("/") &&
+            !seat.includes("\\") &&
+            !seat.includes("\0"),
+        ) &&
+        new Set(value.roster).size === value.roster.length,
+      "bound selection.json has an invalid selected roster",
+    );
+    try {
+      validateSelection(value, readSelectionTable());
+    } catch (error) {
+      throw new Error(`bound selection.json is invalid: ${error.message}`);
+    }
+    assert(
+      value.lifecycle_id === marker.lifecycle_id,
+      "bound selection.json lifecycle_id disagrees with the completion marker",
+    );
+    assert(
+      value.phase === marker.phase,
+      "bound selection.json phase disagrees with the completion marker",
+    );
+    return value.roster;
+  })();
+  const expectedNames = canonicalNames(marker.phase, selectedRoster);
+  const expectedNamesWithHandoff = canonicalNames(
+    marker.phase,
+    selectedRoster,
+    true,
+  );
+  const withoutDefinitions = expectedNames.filter(
+    (name) =>
+      !name.startsWith("agent-definitions/") &&
+      name !== "dispatch-binding.json",
+  );
+  const withDefinitions = expectedNames.filter(
+    (name) => name !== "dispatch-binding.json",
+  );
+  const allowedSets = marker.schema_version === 2
+    ? [withoutDefinitions, withDefinitions]
+    : marker.schema_version === 3
+      ? [withDefinitions]
+      : [
+          expectedNames,
+          ...(marker.phase === "verification"
+            ? [expectedNamesWithHandoff]
+            : []),
+        ];
+  assert(
+    allowedSets.some((names) => sameNames(names, actualNames)),
+    `completion artifact set is invalid for schema_version ${marker.schema_version}`,
+  );
+  const diskArtifactNames = [];
+  const walkPacket = (directory, prefix = "") => {
+    const packetEntries = opendirSync(directory);
+    try {
+      let entry;
+      while ((entry = packetEntries.readSync()) !== null) {
+        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (relative === ".complete") continue;
+        if (diskArtifactNames.length >= MAX_DIRECTORY_ENTRIES) {
+          throw new Error("completion packet has too many directory entries");
+        }
+        let directoryEntry = entry.isDirectory();
+        if (!directoryEntry && !entry.isFile()) {
+          const stat = lstatSync(path.join(directory, entry.name));
+          directoryEntry = stat.isDirectory();
+        }
+        if (directoryEntry) {
+          diskArtifactNames.push(relative);
+          walkPacket(path.join(directory, entry.name), relative);
+        } else {
+          diskArtifactNames.push(relative);
+        }
+      }
+    } finally {
+      try {
+        packetEntries.closeSync();
+      } catch (cause) {
+        if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+      }
+    }
+  };
+  walkPacket(packet);
+  diskArtifactNames.sort();
+  const postCompletionTopLevelNames = new Set([
+    "approval.json",
+    "discovery-results.json",
+    "metrics.json",
+    "observed.json",
+    "records",
+    "verification-results.json",
+    "verdicts",
+  ]);
+  const unboundPacketNames = diskArtifactNames.filter(
+    (name) => {
+      const isBoundArtifact =
+        actualNames.includes(name) ||
+        actualNames.some((artifact) => artifact.startsWith(`${name}/`));
+      return (
+        !isBoundArtifact &&
+        !postCompletionTopLevelNames.has(name.split("/")[0])
+      );
+    },
+  );
+  assert(
+    unboundPacketNames.length === 0,
+    "completion packet contains an unbound packet remnant",
+  );
+
+  const selectionBytes = artifacts.get("selection.json");
+  const selectionActualDigest = crypto
+    .createHash("sha256")
+    .update(selectionBytes)
+    .digest("hex");
+  assert(
+    selectionActualDigest === marker.selection_sha256 &&
+      selectionActualDigest === selectionDigest,
+    "completion packet selection_sha256 does not match selection.json",
+  );
+
+  const readArtifactJson = (relative, label) => {
+    const bytes = artifacts.get(relative);
+    assert(bytes, `completion packet has no bound ${relative}`);
+    try {
+      return JSON.parse(bytes.toString("utf8"));
+    } catch (error) {
+      throw new Error(`${label} is not valid JSON: ${error.message}`);
+    }
+  };
+  const address = readArtifactJson("address.json", "bound address.json");
+  const addressKeys = [
+    "base",
+    "delta_sha256",
+    "full_sha256",
+    "lifecycle_id",
+    "phase",
+    "previous_tip",
+    "round",
+    "selection_path",
+    "selection_sha256",
+    "tip",
+  ];
+  assert(
+    exactKeys(address, addressKeys),
+    "bound address.json has an unexpected schema",
+  );
+  assert(
+    address.round === marker.round &&
+      address.lifecycle_id === marker.lifecycle_id &&
+      address.base === marker.base &&
+      address.previous_tip === marker.previous_tip &&
+      address.tip === marker.tip &&
+      address.phase === marker.phase &&
+      address.selection_sha256 === marker.selection_sha256 &&
+      address.delta_sha256 === marker.delta_sha256 &&
+      address.full_sha256 === marker.full_sha256,
+    "bound address.json metadata disagrees with the completion marker",
+  );
+  assert(
+    typeof address.selection_path === "string" &&
+      path.resolve(address.selection_path) ===
+        path.resolve(packet, "selection.json"),
+    "bound address.json selection_path does not identify the packet selection",
+  );
+
+  const deltaBytes = artifacts.get("delta.diff");
+  const fullBytes = artifacts.get("full.diff");
+  const deltaActualDigest = crypto
+    .createHash("sha256")
+    .update(deltaBytes)
+    .digest("hex");
+  const fullActualDigest = crypto
+    .createHash("sha256")
+    .update(fullBytes)
+    .digest("hex");
+  assert(
+    deltaActualDigest === marker.delta_sha256 &&
+      deltaActualDigest === address.delta_sha256,
+    "completion packet delta_sha256 does not match delta.diff",
+  );
+  assert(
+    fullActualDigest === marker.full_sha256 &&
+      fullActualDigest === address.full_sha256,
+    "completion packet full_sha256 does not match full.diff",
+  );
+  if (actualNames.includes("handoff.json")) {
+    assert(
+      marker.phase === "verification",
+      "completion packet handoff.json is only valid for verification packets",
+    );
+    try {
+      validateAdvanceVerificationHandoff(
+        readArtifactJson("handoff.json", "bound handoff.json"),
+        {
+          ledger_bytes: artifacts.get("discovery-ledger.json"),
+          responses_bytes: artifacts.get("responses.json"),
+        },
+      );
+    } catch (error) {
+      throw new Error(`bound handoff.json is invalid: ${error.message}`);
+    }
+  }
+
+  return marker.phase === "discovery" && marker.lifecycle_id === lifecycle;
+}
+
+async function readContinuationHandoff(packet) {
+  const { validateAdvanceVerificationHandoff, validateResponseHandoff } =
+    await import(pathToFileURL(lifecycleHelper).href);
+  const decodeJson = (bytes) =>
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  try {
+    const markerBytes = readBounded(
+      path.join(packet, "handoff.json"),
+      "continuation handoff marker",
+      MAX_HANDOFF_MARKER_BYTES,
+    );
+    const ledgerBytes = readBounded(
+      path.join(packet, "discovery-ledger.json"),
+      "continuation handoff ledger",
+      MAX_BOUND_ARTIFACT_BYTES,
+    );
+    const responsesBytes = readBounded(
+      path.join(packet, "responses-completed.json"),
+      "continuation handoff completed responses",
+      MAX_BOUND_ARTIFACT_BYTES,
+    );
+    const blankResponsePath = path.join(packet, "responses.json");
+    const blankResponseBytes = existsSync(blankResponsePath)
+      ? readBounded(
+          blankResponsePath,
+          "continuation handoff blank responses",
+          MAX_BOUND_ARTIFACT_BYTES,
+        )
+      : undefined;
+    const marker = decodeJson(markerBytes);
+    validateAdvanceVerificationHandoff(marker, {
+      ledger_bytes: ledgerBytes,
+      responses_bytes: responsesBytes,
+    });
+    if (blankResponseBytes !== undefined) {
+      const ledger = decodeJson(ledgerBytes);
+      const blankResponses = decodeJson(blankResponseBytes);
+      validateResponseHandoff(ledger, blankResponses);
+    }
+    return marker;
+  } catch {
+    failScan("invalid-handoff", 1);
+  }
+}
+
+const diagnostic = (category, count) => {
+  console.error(`discovery scan blocked: category=${category} count=${count}`);
+};
+
+if (!existsSync(panelRoot)) process.exit(0);
+try {
+  const rootStat = lstatSync(panelRoot);
+  if (!rootStat.isDirectory()) {
+    failScan("panel-root-not-directory", 1);
+  }
+  const packets = opendirSync(panelRoot);
+  let packetCount = 0;
+  try {
+    let entry;
+    while ((entry = packets.readSync()) !== null) {
+      packetCount += 1;
+      if (packetCount > MAX_DIRECTORY_ENTRIES) {
+        failScan("panel-root-entry-limit", packetCount);
+      }
+      let packetIsDirectory = entry.isDirectory();
+      if (!packetIsDirectory && !entry.isFile()) {
+        packetIsDirectory = lstatSync(path.join(panelRoot, entry.name)).isDirectory();
+      }
+      if (!packetIsDirectory) continue;
+      const packet = path.join(panelRoot, entry.name);
+      if (path.resolve(packet) === currentOut) continue;
+
+      const state = scanTopLevel(packet);
+
+      if (state.complete) {
+        if (state.total === 1 && state.completeRegular) {
+          continue;
+        }
+        const markerPath = path.join(packet, ".complete");
+        let markerStat;
+        try {
+          markerStat = lstatSync(markerPath);
+        } catch {
+          failScan("invalid-completion-packet", 1);
+        }
+        if (!markerStat.isFile()) {
+          failScan("invalid-completion-packet", 1);
+        }
+        let blocksDiscovery;
+        try {
+          blocksDiscovery = await validateCompletedPacket(packet, markerPath);
+        } catch {
+          failScan("invalid-completion-packet", 1);
+        }
+        if (blocksDiscovery) {
+          failScan("completed-discovery", 1);
+        }
+        continue;
+      }
+
+      const continuationCount =
+        Number(state.handoff) +
+        Number(state.ledger) +
+        Number(state.responses) +
+        Number(state.completedResponses);
+      const completeHandoff =
+        state.handoff &&
+        state.ledger &&
+        state.completedResponses &&
+        state.handoffRegular &&
+        state.ledgerRegular &&
+        state.completedResponsesRegular &&
+        (!state.responses || state.responsesRegular);
+      if (completeHandoff) {
+        const allowedContinuationNames = new Set([
+          ...continuationCoreFiles,
+          ...continuationRetainedFiles,
+          ...continuationRetainedDirectories,
+        ]);
+        const unexpectedContinuationEntries = state.entries.filter(
+          ({ name }) => !allowedContinuationNames.has(name),
+        );
+        const invalidContinuationEntryKinds = state.entries.filter(
+          ({ name, kind }) =>
+            (continuationRetainedDirectories.has(name) && kind !== "directory") ||
+            (continuationRetainedFiles.has(name) && kind !== "file"),
+        );
+        if (
+          unexpectedContinuationEntries.length > 0 ||
+          invalidContinuationEntryKinds.length > 0
+        ) {
+          failScan(
+            "damaged-handoff",
+            unexpectedContinuationEntries.length +
+              invalidContinuationEntryKinds.length,
+          );
+        }
+        const marker = await readContinuationHandoff(packet);
+        if (marker.lifecycle_id === lifecycle) {
+          failScan("same-lifecycle-handoff", 1);
+        }
+        continue;
+      }
+      if (
+        state.handoff &&
+        state.ledger &&
+        (state.responses || state.completedResponses) &&
+        !completeHandoff
+      ) {
+        failScan("damaged-handoff", continuationCount);
+      }
+      if (
+        !state.handoff &&
+        state.ledger &&
+        state.responses &&
+        state.total === 2
+      ) {
+        failScan("damaged-handoff", continuationCount);
+      }
+      if (continuationCount > 0) {
+        failScan("partial-handoff", continuationCount);
+      }
+      const canonicalCount =
+        state.canonicalFiles + state.canonicalDirectories;
+      if (canonicalCount > 0) {
+        failScan("canonical-remnant", canonicalCount);
+      }
+    }
+  } finally {
+    try {
+      packets.closeSync();
+    } catch (cause) {
+      if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+    }
+  }
+} catch (cause) {
+  if (cause instanceof DiscoveryScanFailure) {
+    diagnostic(cause.category, cause.count);
+  } else {
+    diagnostic("scan-error", 1);
+  }
+  process.exit(1);
+}
+NODE
+}
+
+secure_digest_size() {
+  node --input-type=module - "$1" <<'NODE'
+import crypto from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+const path = process.argv[2];
+const maximum = 64 * 1024 * 1024;
+const stat = statSync(path);
+if (!stat.isFile() || stat.size > maximum) {
+  throw new Error(`${path}: digest input is not a bounded regular file`);
+}
+const bytes = readFileSync(path);
+if (bytes.length > maximum) {
+  throw new Error(`${path}: digest input is oversized`);
+}
+process.stdout.write(
+  `${crypto.createHash("sha256").update(bytes).digest("hex")}\t${bytes.length}`,
+);
+NODE
+}
 
 read_address() {
-  node - "$1" <<'NODE'
-const fs = require("node:fs");
-const crypto = require("node:crypto");
+  node --input-type=module - "$1" <<'NODE'
+import { readFileSync, statSync } from "node:fs";
 const path = process.argv[2];
 let value;
 try {
-  value = JSON.parse(fs.readFileSync(path, "utf8"));
+  const maximum = 1024 * 1024;
+  const stat = statSync(path);
+  if (!stat.isFile() || stat.size > maximum) {
+    throw new Error(`address.json is not a bounded regular file`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maximum) throw new Error("address.json is oversized");
+  value = JSON.parse(bytes.toString("utf8"));
 } catch (error) {
   console.error(`${path}: invalid address.json: ${error.message}`);
   process.exit(1);
@@ -182,31 +1340,17 @@ for (const key of ["round", "lifecycle_id", "base", "previous_tip", "tip"]) {
     process.exit(1);
   }
 }
-let phase = value.phase;
-const selectionPath = value.selection_path ?? "";
-let selectionSha256 = value.selection_sha256;
+const phase = value.phase;
+const selectionPath = value.selection_path;
+const selectionSha256 = value.selection_sha256;
 if (
-  selectionPath &&
-  fs.existsSync(selectionPath) &&
-  (!phase || !selectionSha256)
+  typeof phase !== "string" ||
+  typeof selectionPath !== "string" ||
+  typeof selectionSha256 !== "string" ||
+  selectionPath.length === 0 ||
+  selectionSha256.length === 0
 ) {
-  const selectionBytes = fs.readFileSync(selectionPath);
-  let selection;
-  try {
-    selection = JSON.parse(selectionBytes);
-  } catch (error) {
-    console.error(`${selectionPath}: invalid lifecycle selection: ${error.message}`);
-    process.exit(1);
-  }
-  phase ||= selection.phase;
-  selectionSha256 ||=
-    crypto.createHash("sha256").update(selectionBytes).digest("hex");
-}
-if (!phase || !selectionPath || !selectionSha256) {
-  console.error(
-    `${path}: legacy address cannot derive phase and selection digest; ` +
-    "record a readable selection_path or start a new lifecycle",
-  );
+  console.error(`${path}: address.json must record phase, selection_path, and selection_sha256`);
   process.exit(1);
 }
 process.stdout.write(
@@ -220,7 +1364,10 @@ NODE
 
 previous_round=""
 previous_dir=""
+display_previous_dir=""
+op_previous_dir=""
 previous_selection_path=""
+previous_phase=""
 if [ "$round_number" -eq 1 ]; then
   if [ "$prev_sha" != "$base_sha" ]; then
     echo "round 1 must use the branch base as <prev-tip>" >&2
@@ -230,23 +1377,176 @@ if [ "$round_number" -eq 1 ]; then
   fi
 else
   previous_round="$wave-r$((round_number - 1))"
-  previous_dir="$root/.scratch/panel/$previous_round"
-  previous_address="$previous_dir/address.json"
+  display_previous_dir="$display_panel_root/$previous_round"
+  previous_dir="$display_previous_dir"
+  op_previous_dir="$previous_dir"
+  previous_selection_path="$op_previous_dir/selection.json"
+fi
+
+if [ ! -f "$selection_path" ]; then
+  echo "missing lifecycle selection: $selection_path" >&2
+  exit 2
+fi
+
+selection_identity="$(
+  node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [selectionPath, helperPath, lifecycle] = process.argv.slice(1);
+const {
+  readSelection,
+  selectionDigest,
+} = await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+if (selection.lifecycle_id !== lifecycle) {
+  throw new Error(
+    `selection lifecycle ${selection.lifecycle_id} disagrees with staging lifecycle ${lifecycle}`,
+  );
+}
+process.stdout.write([
+  selection.phase,
+  selectionDigest(selectionPath),
+  selection.roster.join(","),
+].join("\t"));
+' "$selection_path" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" "$lifecycle"
+)" || {
+  echo "selection validation failed" >&2
+  exit 2
+}
+IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_identity"
+if [ -z "$candidate_path" ]; then
+  echo "--candidate is required so current-candidate.json can be materialized from exact bytes" >&2
+  exit 2
+fi
+if [ "$phase" = "discovery" ] && [ -z "$discovery_request_path" ]; then
+  echo "--discovery-request is required before a discovery round can be marked complete" >&2
+  exit 2
+fi
+if [ "$phase" = "discovery" ] && [ -n "$handoff_path" ]; then
+  echo "--handoff is valid only for verification continuation staging" >&2
+  exit 2
+fi
+if [ "$phase" = "verification" ]; then
+  if [ -z "$previous_selection_path" ]; then
+    echo "verification staging requires a recorded prior selection and verdict directory" >&2
+    exit 2
+  fi
+  if [ -z "$ledger_path" ]; then
+    echo "--ledger is required for verification staging so discovery-ledger.json is exact" >&2
+    exit 2
+  fi
+  if [ -z "$responses_path" ]; then
+    echo "--responses is required for verification staging so responses.json is exact" >&2
+    exit 2
+  fi
+  if [ -z "$self_verification_path" ]; then
+    echo "--self-verification is required for verification staging so self-verification.json is exact" >&2
+    exit 2
+  fi
+  if [ -z "$verification_dir" ]; then
+    echo "--verification-dir is required for verification staging so every selected seat has a request before .complete" >&2
+    exit 2
+  fi
+fi
+
+if [ "$round_number" -gt 1 ] && [ "$phase" != "verification" ]; then
+  echo "round $round requires a verification selection after the completed discovery packet" >&2
+  echo "subsequent staging must not run a second discovery" >&2
+  exit 2
+fi
+
+if [ "$phase" = "discovery" ]; then
+  if ! reject_completed_discovery_packet \
+    "$display_panel_root" "$out" "$lifecycle"; then
+    echo "discovery staging requires exactly one completed packet for this lifecycle" >&2
+    exit 2
+  fi
+fi
+
+if [ "$round_number" -gt 1 ]; then
+  if [ ! -f "$op_previous_dir/.complete" ]; then
+    echo "missing canonical predecessor packet: $display_previous_dir/.complete" >&2
+    echo "later-round staging requires the predecessor completion marker before reading its artifacts" >&2
+    exit 2
+  fi
+  previous_selection_path="$op_previous_dir/selection.json"
+  if ! validate_bound_selection_entry \
+    "$op_previous_dir/.complete" "$previous_selection_path"; then
+    echo "previous review is not a supported canonical completion packet" >&2
+    exit 2
+  fi
+  previous_selection_meta="$(
+    node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [selectionPath, lifecycle, helperPath] = process.argv.slice(1);
+const { readSelection } = await import(pathToFileURL(helperPath).href);
+const selection = readSelection(selectionPath);
+if (selection.lifecycle_id !== lifecycle) {
+  throw new Error(
+    `previous selection lifecycle ${selection.lifecycle_id} disagrees with staging lifecycle ${lifecycle}`,
+  );
+}
+process.stdout.write([selection.phase, selection.roster.join(",")].join("\t"));
+' "$previous_selection_path" "$lifecycle" \
+      "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  )" || {
+    echo "previous review does not record a readable lifecycle selection" >&2
+    exit 2
+  }
+  IFS=$'\t' read -r previous_phase previous_roster <<<"$previous_selection_meta"
+  previous_has_handoff="$(
+    node --input-type=module - "$op_previous_dir/.complete" <<'NODE'
+import { readFileSync, statSync } from "node:fs";
+const path = process.argv[2];
+const stat = statSync(path);
+if (!stat.isFile() || stat.size > 256 * 1024) {
+  throw new Error("completion marker is not bounded");
+}
+const marker = JSON.parse(readFileSync(path, "utf8"));
+process.stdout.write(
+  marker.artifact_sha256 &&
+  Object.hasOwn(marker.artifact_sha256, "handoff.json")
+    ? "true"
+    : "false",
+);
+NODE
+  )" || {
+    echo "previous review completion marker is unreadable" >&2
+    exit 2
+  }
+  previous_canonical_artifacts=()
+  while IFS= read -r artifact_name; do
+    previous_canonical_artifacts+=("$artifact_name")
+  done < <(
+    canonical_artifact_names "$previous_phase" "$previous_roster" \
+      "$previous_has_handoff"
+  )
+  if ! validate_bound_completion \
+    "$op_previous_dir/.complete" "$previous_phase" \
+    "${previous_canonical_artifacts[@]}"; then
+    echo "previous review is not a supported canonical completion packet" >&2
+    exit 2
+  fi
+  previous_address="$op_previous_dir/address.json"
   if [ ! -f "$previous_address" ]; then
-    echo "missing previous review address: $previous_address" >&2
+    echo "missing previous review address: $display_previous_dir/address.json" >&2
     echo "stage reviews sequentially so the incremental range is derived from recorded evidence" >&2
     exit 2
   fi
   if ! previous_fields="$(read_address "$previous_address")"; then
     exit 2
   fi
-  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip _recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
+  IFS=$'\t' read -r recorded_round recorded_lifecycle _ _ recorded_tip recorded_phase recorded_selection recorded_selection_sha <<<"$previous_fields"
   if [ "$recorded_round" != "$previous_round" ]; then
-    echo "$previous_address records round $recorded_round, expected $previous_round" >&2
+    echo "$display_previous_dir/address.json records round $recorded_round, expected $previous_round" >&2
     exit 2
   fi
   if [ "$recorded_lifecycle" != "$lifecycle" ]; then
-    echo "$previous_address records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
+    echo "$display_previous_dir/address.json records lifecycle $recorded_lifecycle, expected $lifecycle" >&2
+    exit 2
+  fi
+  if [ "$recorded_phase" != "$previous_phase" ]; then
+    echo "$display_previous_dir/address.json records phase $recorded_phase, expected $previous_phase" >&2
     exit 2
   fi
   if [ "$prev_sha" != "$recorded_tip" ]; then
@@ -256,47 +1556,34 @@ else
     echo "  supplied tip    $prev_sha" >&2
     exit 2
   fi
-  if [ -z "$recorded_selection" ] || [ ! -f "$recorded_selection" ]; then
+  if [ -z "$recorded_selection" ] ||
+     [ "$recorded_selection" != "$display_previous_dir/selection.json" ]; then
     echo "previous review does not record a readable lifecycle selection" >&2
     exit 2
   fi
-  previous_selection_path="$recorded_selection"
-  actual_recorded_selection_sha="$(sha256sum "$recorded_selection" | cut -d' ' -f1)"
+  IFS=$'\t' read -r actual_recorded_selection_sha _recorded_selection_bytes \
+    <<<"$(secure_digest_size "$previous_selection_path")"
   if [ "$actual_recorded_selection_sha" != "$recorded_selection_sha" ]; then
     echo "previous review selection bytes disagree with address.json" >&2
     exit 2
   fi
-  previous_roster="$(
-    node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const { readSelection } = await import(pathToFileURL(process.argv[2]).href);
-process.stdout.write(readSelection(process.argv[1]).roster.join(","));
-' "$recorded_selection" "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
-  )"
 fi
 
-if [ ! -f "$selection_path" ]; then
-  echo "missing lifecycle selection: $selection_path" >&2
+if [ "$phase" = "verification" ] &&
+   [ "$previous_phase" = "verification" ] &&
+   [ -z "$handoff_path" ]; then
+  echo "verification staging requires --handoff when the previous selection phase is verification" >&2
   exit 2
 fi
 
-selection_meta="$(
-  node --input-type=module -e '
+if ! node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, fullRange, deltaRange, helperPath, lifecycle] = process.argv.slice(1);
+const [selectionPath, fullRange, deltaRange, helperPath] = process.argv.slice(1);
 const {
   changedPathsFromGitRange,
   readSelection,
-  selectionDigest,
-  validateSelectionAgainstTable,
 } = await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
-if (selection.lifecycle_id !== lifecycle) {
-  throw new Error(
-    `selection lifecycle ${selection.lifecycle_id} disagrees with staging lifecycle ${lifecycle}`,
-  );
-}
-validateSelectionAgainstTable(selection);
 const actualFull = changedPathsFromGitRange(fullRange);
 if (selection.phase === "verification") {
   const actualDelta = changedPathsFromGitRange(deltaRange);
@@ -324,48 +1611,13 @@ if (selection.phase === "verification") {
     `actual [${actualFull.join(", ")}]`,
   );
 }
-process.stdout.write([
-  selection.phase,
-  selectionDigest(selectionPath),
-  selection.roster.join(","),
-].join("\t"));
 ' "$selection_path" "$base_sha..$tip" "$prev_sha..$tip" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" "$lifecycle"
-)" || {
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+then
   echo "selection validation or git-range derivation failed" >&2
   exit 2
-}
-IFS=$'\t' read -r phase selection_sha256 selected_roster <<<"$selection_meta"
-if [ -z "$candidate_path" ]; then
-  echo "--candidate is required so current-candidate.json can be materialized from exact bytes" >&2
-  exit 2
 fi
-if [ "$phase" = "discovery" ] && [ -z "$discovery_request_path" ]; then
-  echo "--discovery-request is required before a discovery round can be marked complete" >&2
-  exit 2
-fi
-if [ "$phase" = "verification" ]; then
-  if [ -z "$previous_selection_path" ]; then
-    echo "verification staging requires a recorded prior selection and verdict directory" >&2
-    exit 2
-  fi
-  if [ -z "$ledger_path" ]; then
-    echo "--ledger is required for verification staging so discovery-ledger.json is exact" >&2
-    exit 2
-  fi
-  if [ -z "$responses_path" ]; then
-    echo "--responses is required for verification staging so responses.json is exact" >&2
-    exit 2
-  fi
-  if [ -z "$self_verification_path" ]; then
-    echo "--self-verification is required for verification staging so self-verification.json is exact" >&2
-    exit 2
-  fi
-  if [ -z "$verification_dir" ]; then
-    echo "--verification-dir is required for verification staging so every selected seat has a request before .complete" >&2
-    exit 2
-  fi
-fi
+
 IFS=',' read -r -a panel_seats <<<"$selected_roster"
 if [ "${#panel_seats[@]}" -eq 0 ]; then
   echo "no panel seat agents found under $root/.github/agents" >&2
@@ -378,20 +1630,121 @@ for seat in "${panel_seats[@]}"; do
   fi
 done
 
+canonical_artifacts=()
+while IFS= read -r artifact_name; do
+  canonical_artifacts+=("$artifact_name")
+done < <(
+  canonical_artifact_names "$phase" "$selected_roster" \
+    "$([ "$phase" = "verification" ] && [ -n "$handoff_path" ] && echo true || echo false)"
+)
+
+reuse_existing=false
+existing_completion_schema=""
+if [ -e "$out" ]; then
+  reuse_existing=true
+  if [ ! -f "$completion_marker" ]; then
+    echo "round $round already has an incomplete packet; remove that exact directory before retrying" >&2
+    exit 2
+  fi
+  if ! validate_bound_completion \
+    "$completion_marker" "$phase" "${canonical_artifacts[@]}"; then
+    echo "complete review $round failed canonical completion validation" >&2
+    exit 2
+  fi
+  existing_completion_schema="$(
+    node --input-type=module - "$completion_marker" <<'NODE'
+import { readFileSync, statSync } from "node:fs";
+const path = process.argv[2];
+const maximum = 256 * 1024;
+const stat = statSync(path);
+if (!stat.isFile() || stat.size > maximum) {
+  throw new Error("completion marker is not a bounded regular file");
+}
+const bytes = readFileSync(path);
+if (bytes.length > maximum) throw new Error("completion marker is oversized");
+const marker = JSON.parse(bytes.toString("utf8"));
+process.stdout.write(String(marker.schema_version));
+NODE
+  )" || {
+    echo "complete review $round has an unreadable completion marker" >&2
+    exit 2
+  }
+fi
+
+if [ ! -f "$evidence_path" ] || [ ! -r "$evidence_path" ] ||
+   [ ! -s "$evidence_path" ]; then
+  echo "missing, unreadable, or empty finalized validation evidence: $evidence_path" >&2
+  exit 2
+fi
+
+if [ -n "$reviewer_notes_dir" ]; then
+  if ! node --input-type=module - \
+    "$reviewer_notes_dir" "$selected_roster" <<'NODE'
+import { lstatSync, opendirSync } from "node:fs";
+const source = process.argv[2];
+const selected = process.argv[3].split(",").filter(Boolean);
+const files = [];
+try {
+  const directory = opendirSync(source);
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      if (files.length >= selected.length) {
+        throw new Error("reviewer-notes directory exceeds its entry limit");
+      }
+      const stat = lstatSync(`${source}/${entry.name}`);
+      files.push({ name: entry.name, size: stat.size, regular: stat.isFile() });
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (error) {
+      if (error.code !== "ERR_DIR_CLOSED") throw error;
+    }
+  }
+} catch (error) {
+  console.error(`missing or unreadable finalized reviewer-notes directory: ${source}: ${error.message}`);
+  process.exit(1);
+}
+files.sort((left, right) => left.name.localeCompare(right.name));
+const expected = selected.map((seat) => `${seat}.md`).sort();
+const actual = files.map((entry) => entry.name);
+if (
+  files.length !== expected.length ||
+  actual.some((name, index) => name !== expected[index]) ||
+  files.some((entry) => !entry.regular || entry.size === 0)
+) {
+  console.error(
+    `finalized reviewer-notes directory must contain exactly one regular Markdown file per selected seat; ` +
+    `expected [${expected.join(", ")}], found [${actual.join(", ")}]`,
+  );
+  process.exit(1);
+}
+NODE
+  then
+    exit 2
+  fi
+fi
+
 readable_json_file() {
   local path="$1"
   local label="$2"
-  if [ ! -f "$path" ] || [ ! -r "$path" ]; then
-    echo "missing or unreadable supplied $label: $path" >&2
-    exit 2
-  fi
-  if ! node - "$path" <<'NODE'
-const fs = require("node:fs");
-const path = process.argv[2];
+  if ! node --input-type=module - "$path" "$label" <<'NODE'
+import { lstatSync, readFileSync } from "node:fs";
+import { TextDecoder } from "node:util";
+const [path, label] = process.argv.slice(2);
 try {
-  JSON.parse(fs.readFileSync(path, "utf8"));
+  const maximum = 64 * 1024 * 1024;
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.size > maximum) {
+    throw new Error("not a bounded regular file");
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maximum) throw new Error("oversized");
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  JSON.parse(text);
 } catch (error) {
-  console.error(`${path}: supplied JSON artifact is not readable: ${error.message}`);
+  console.error(`${path}: supplied ${label} is not readable: ${error.message}`);
   process.exit(1);
 }
 NODE
@@ -400,31 +1753,105 @@ NODE
   fi
 }
 
+validate_handoff_binding() {
+    node --input-type=module - \
+      "$handoff_path" "$ledger_path" "$responses_path" "$lifecycle_helper" <<'NODE'
+import { lstatSync, readFileSync } from "node:fs";
+import { TextDecoder } from "node:util";
+import { pathToFileURL } from "node:url";
+
+const [handoffPath, ledgerPath, responsesPath, helperPath] =
+    process.argv.slice(2);
+const readBoundedJson = (path, label, maximum) => {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > maximum) {
+      throw new Error(`${label} is not a bounded regular file`);
+    }
+    const bytes = readFileSync(path);
+    if (bytes.length > maximum) {
+      throw new Error(`${label} is oversized`);
+    }
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { bytes, value: JSON.parse(text) };
+};
+const handoff = readBoundedJson(
+    handoffPath,
+    "continuation handoff marker",
+    256 * 1024,
+);
+const ledger = readBoundedJson(
+    ledgerPath,
+    "continuation handoff ledger",
+    64 * 1024 * 1024,
+);
+const responses = readBoundedJson(
+    responsesPath,
+    "continuation handoff responses",
+    64 * 1024 * 1024,
+);
+const { validateAdvanceVerificationHandoff } =
+    await import(pathToFileURL(helperPath).href);
+validateAdvanceVerificationHandoff(handoff.value, {
+    ledger: ledger.value,
+    responses: responses.value,
+    ledger_bytes: ledger.bytes,
+    responses_bytes: responses.bytes,
+});
+NODE
+}
+
 if [ "$phase" = "discovery" ]; then
-  readable_json_file "$discovery_request_path" "discovery request"
+    readable_json_file "$discovery_request_path" "discovery request"
 else
-  readable_json_file "$ledger_path" "discovery ledger"
-  readable_json_file "$responses_path" "implementation responses"
-  readable_json_file "$self_verification_path" "self-verification"
-  if ! node - "$verification_dir" "$selected_roster" <<'NODE'
-const fs = require("node:fs");
+    readable_json_file "$ledger_path" "discovery ledger"
+    readable_json_file "$responses_path" "implementation responses"
+    readable_json_file "$self_verification_path" "self-verification"
+    if [ -n "$handoff_path" ]; then
+      if ! validate_handoff_binding; then
+        echo "supplied continuation handoff does not bind the exact ledger and completed responses" >&2
+        exit 2
+      fi
+    fi
+  if ! node --input-type=module - \
+    "$verification_dir" "$selected_roster" <<'NODE'
+import { lstatSync, opendirSync, readFileSync } from "node:fs";
 const source = process.argv[2];
 const selected = process.argv[3].split(",").filter(Boolean);
-let entries;
+const entries = [];
 try {
-  if (!fs.statSync(source).isDirectory()) throw new Error("not a directory");
-  entries = fs.readdirSync(source, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name));
+    const directory = opendirSync(source);
+    try {
+      let entry;
+      while ((entry = directory.readSync()) !== null) {
+        if (entries.length >= selected.length) {
+          throw new Error("verification request directory exceeds its entry limit");
+        }
+        const path = `${source}/${entry.name}`;
+        const stat = lstatSync(path);
+        entries.push({
+          name: entry.name,
+          bytes: readFileSync(path),
+          regular: stat.isFile(),
+        });
+      }
+    } finally {
+      try {
+        directory.closeSync();
+      } catch (error) {
+        if (error.code !== "ERR_DIR_CLOSED") throw error;
+      }
+    }
 } catch (error) {
-  console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
-  process.exit(1);
+    console.error(`missing or unreadable verification request directory: ${source}: ${error.message}`);
+    process.exit(1);
 }
+entries.sort((left, right) => left.name.localeCompare(right.name));
 const expected = selected.map((seat) => `${seat}.json`).sort();
 const actual = entries.map((entry) => entry.name);
 if (
   entries.length !== expected.length ||
-  entries.some((entry) => !entry.isFile()) ||
-  actual.some((name, index) => name !== expected[index])
+  actual.some((name, index) => name !== expected[index]) ||
+  entries.some((entry) => !entry.regular)
 ) {
   console.error(
     `verification request directory must contain exactly one readable JSON request per selected seat; ` +
@@ -433,11 +1860,10 @@ if (
   process.exit(1);
 }
 for (const entry of entries) {
-  const path = `${source}/${entry.name}`;
   try {
-    JSON.parse(fs.readFileSync(path, "utf8"));
+    JSON.parse(entry.bytes.toString("utf8"));
   } catch (error) {
-    console.error(`${path}: verification request is not readable JSON: ${error.message}`);
+    console.error(`${source}/${entry.name}: verification request is not readable JSON: ${error.message}`);
     process.exit(1);
   }
 }
@@ -451,7 +1877,7 @@ if [ "$round_number" -gt 1 ]; then
   for seat in "${panel_seats[@]}"; do
     case ",$previous_roster," in
       *,"$seat",*)
-        prior_verdict="$previous_dir/verdicts/$seat.json"
+        prior_verdict="$op_previous_dir/verdicts/$seat.json"
         if [ ! -s "$prior_verdict" ]; then
           echo "missing previous verdict for incumbent seat $seat: $prior_verdict" >&2
           echo "later reviews must give every incumbent seat its own prior verdict to verify" >&2
@@ -466,8 +1892,9 @@ if [ "$round_number" -gt 1 ]; then
   done
 fi
 
-for path_value in "$candidate_path" "$discovery_request_path" "$ledger_path" "$responses_path" \
-  "$self_verification_path" "$verification_dir" "$approval_path"; do
+for path_value in "$candidate_path" "$discovery_request_path" "$evidence_path" \
+  "$reviewer_notes_dir" "$ledger_path" "$responses_path" \
+  "$handoff_path" "$self_verification_path" "$verification_dir" "$approval_path"; do
   if [[ "$path_value" == *\"* || "$path_value" == *\\* || "$path_value" == *$'\n'* ]]; then
     echo "artifact path contains JSON control characters: $path_value" >&2
     exit 2
@@ -485,7 +1912,7 @@ if [ -f "$out/address.json" ]; then
      [ "$existing_prev" != "$prev_sha" ] ||
      [ "$existing_tip" != "$tip" ] ||
      [ "$existing_phase" != "$phase" ] ||
-     [ "$existing_selection" != "$staged_selection_path" ] ||
+     [ "$existing_selection" != "$display_staged_selection_path" ] ||
      [ "$existing_selection_sha" != "$selection_sha256" ]; then
     echo "review address $round was already staged for different commits" >&2
     echo "use the next review id instead of changing evidence beneath an existing address" >&2
@@ -500,28 +1927,9 @@ if [ -d "$out/verdicts" ] &&
   exit 2
 fi
 
-reuse_existing=false
-claim_round_directory() {
-  mkdir -p "$root/.scratch/panel"
-  if [ -e "$out" ]; then
-    if [ ! -f "$completion_marker" ]; then
-      partial_cleanup_hint
-      exit 2
-    fi
-    reuse_existing=true
-    return
-  fi
-  if ! mkdir "$out"; then
-    if [ -f "$completion_marker" ]; then
-      reuse_existing=true
-      return
-    fi
-    partial_cleanup_hint
-    exit 2
-  fi
-}
-
-claim_round_directory
+if [ "$reuse_existing" != true ]; then
+  mkdir -p "$out/verdicts" "$out/reviewer-notes"
+fi
 
 require_reused_path() {
   local path="$1"
@@ -545,6 +1953,13 @@ if [ "$reuse_existing" = true ]; then
     "$out/verdicts"; do
     require_reused_path "$required_path" || exit 2
   done
+  if [ "$existing_completion_schema" = "4" ]; then
+    require_reused_path "$staged_dispatch_binding_path" || exit 2
+  fi
+  if [ "$existing_completion_schema" = "3" ] || \
+     [ "$existing_completion_schema" = "4" ]; then
+    require_reused_path "$staged_agent_definitions_dir" || exit 2
+  fi
   if [ "$phase" = "discovery" ]; then
     require_reused_path "$staged_discovery_request_path" || exit 2
   else
@@ -555,42 +1970,49 @@ if [ "$reuse_existing" = true ]; then
       "$staged_verification_dir"; do
       require_reused_path "$required_path" || exit 2
     done
+    if [ -n "$handoff_path" ]; then
+      require_reused_path "$staged_handoff_path" || exit 2
+    fi
   fi
   for seat in "${panel_seats[@]}"; do
+    if [ "$existing_completion_schema" = "3" ] || \
+       [ "$existing_completion_schema" = "4" ]; then
+      require_reused_path "$staged_agent_definitions_dir/panel-$seat.agent.md" || exit 2
+    fi
     require_reused_path "$out/reviewer-notes/$seat.md" || exit 2
   done
-else
-  mkdir -p "$out/verdicts" "$out/reviewer-notes"
 fi
 
-publish_no_replace() {
-  local tmp="$1"
-  local dest="$2"
-  if [ "$reuse_existing" = true ] && [ ! -e "$dest" ]; then
-    echo "complete review $round is missing canonical artifact $dest; refusing to add it after .complete" >&2
-    rm -f -- "$tmp"
-    return 1
-  fi
-  if [ -e "$dest" ]; then
-    if ! cmp -s "$tmp" "$dest"; then
-      echo "conflicting generated bytes at $dest; refusing to overwrite" >&2
-      echo "staging stopped at the first conflict; restore the expected bytes or use a new review id before retrying" >&2
-      rm -f -- "$tmp"
-      return 1
-    fi
-    rm -f -- "$tmp"
-    return 0
-  fi
-  if ! ln "$tmp" "$dest"; then
-    if [ -e "$dest" ] && cmp -s "$tmp" "$dest"; then
-      rm -f -- "$tmp"
-      return 0
-    fi
-    echo "staging stopped at the first publication conflict; use a new review id before retrying" >&2
-    rm -f -- "$tmp"
-    return 1
-  fi
-  rm -f -- "$tmp"
+publish_stdin_no_replace() {
+  local dest="$1"
+  node --input-type=module -e '
+import { dirname } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+const destination = process.argv[1];
+const expected = readFileSync(0);
+mkdirSync(dirname(destination), { recursive: true });
+let actual;
+try {
+  actual = readFileSync(destination);
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+if (actual !== undefined) {
+  if (!actual.equals(expected)) {
+    throw new Error(`conflicting generated bytes at ${destination}`);
+  }
+  process.exit(0);
+}
+try {
+  writeFileSync(destination, expected, { flag: "wx" });
+} catch (error) {
+  if (error.code !== "EEXIST") throw error;
+  actual = readFileSync(destination);
+  if (!actual.equals(expected)) {
+    throw new Error(`conflicting generated bytes at ${destination}`);
+  }
+}
+' "$dest"
 }
 
 materialize_exact() {
@@ -601,60 +2023,248 @@ materialize_exact() {
     echo "missing or unreadable supplied $label: $source" >&2
     return 1
   fi
-  if [ "$reuse_existing" = true ]; then
-    if ! cmp -s -- "$source" "$destination"; then
-      echo "conflicting generated bytes at $destination; refusing to overwrite" >&2
-      echo "complete review $round can only compare/reuse existing canonical artifacts" >&2
-      return 1
-    fi
-    return 0
-  fi
-  local tmp="$destination.$$.copy.tmp"
-  if ! cp -- "$source" "$tmp"; then
-    rm -f -- "$tmp"
-    echo "cannot copy supplied $label: $source" >&2
-    return 1
-  fi
-  if ! publish_no_replace "$tmp" "$destination"; then
+  if ! publish_stdin_no_replace "$destination" < "$source"; then
     echo "could not materialize supplied $label at $destination" >&2
     return 1
   fi
 }
 
+publish_directory() {
+  local source="$1"
+  local destination="$2"
+  local selected="$3"
+  node --input-type=module -e '
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  opendirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  renameSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+const [source, destination, selectedText] = process.argv.slice(1);
+const expectedNames = selectedText.split(",").filter(Boolean).map((seat) => `${seat}.json`).sort();
+const streamNames = (path, maximum) => {
+  const directory = opendirSync(path);
+  const names = [];
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      if (names.length >= maximum) {
+        throw new Error(`directory exceeds its ${maximum} entry limit`);
+      }
+      names.push(entry.name);
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (error) {
+      if (error.code !== "ERR_DIR_CLOSED") throw error;
+    }
+  }
+  return names.sort();
+};
+const entries = streamNames(source, expectedNames.length + 1);
+if (
+  entries.length !== expectedNames.length ||
+  entries.some((name, index) => name !== expectedNames[index]) ||
+  entries.some((name) => !lstatSync(join(source, name)).isFile())
+) {
+  throw new Error(
+    `verification request directory must contain exactly one regular JSON file per selected seat; ` +
+    `expected [${expectedNames.join(", ")}], found [${entries.join(", ")}]`,
+  );
+}
+const expected = new Map(entries.map((name) => [name, readFileSync(join(source, name))]));
+const compare = (path) => {
+  const actualNames = streamNames(path, expectedNames.length + 1);
+  if (
+    actualNames.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index])
+  ) {
+    throw new Error(`existing artifact family at ${destination} is incomplete or has extra entries`);
+  }
+  for (const name of expectedNames) {
+    if (!readFileSync(join(path, name)).equals(expected.get(name))) {
+      throw new Error(`conflicting generated bytes at ${join(destination, name)}`);
+    }
+  }
+};
+mkdirSync(dirname(destination), { recursive: true });
+if (existsSync(destination)) {
+  if (!lstatSync(destination).isDirectory()) {
+    throw new Error(`existing artifact family at ${destination} is not a directory`);
+  }
+  compare(destination);
+  process.exit(0);
+}
+const temporary = `${destination}.stage-${process.pid}-${Date.now()}`;
+mkdirSync(temporary);
+try {
+  for (const name of expectedNames) {
+    writeFileSync(join(temporary, name), expected.get(name), { flag: "wx" });
+  }
+  try {
+    renameSync(temporary, destination);
+  } catch (error) {
+    if (!existsSync(destination)) throw error;
+    compare(destination);
+  }
+} finally {
+  if (existsSync(temporary)) rmSync(temporary, { recursive: true, force: true });
+}
+' "$source" "$destination" "$selected"
+}
+
+stage_dispatch_binding() {
+  local destination="$1"
+  node --input-type=module - \
+    "$dispatch_policy_path" "$lifecycle" "$phase" "$selected_roster" \
+    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE' |
+import { readFileSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const [
+  policyPath,
+  lifecycle,
+  phase,
+  rosterText,
+  helperPath,
+] = process.argv.slice(2);
+const MAX_POLICY_BYTES = 1024 * 1024;
+const readBounded = (path, label) => {
+  const stat = statSync(path);
+  if (!stat.isFile()) throw new Error(`${label} is not a regular file`);
+  if (stat.size > MAX_POLICY_BYTES) {
+    throw new Error(`${label} exceeds ${MAX_POLICY_BYTES} bytes`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > MAX_POLICY_BYTES) {
+    throw new Error(`${label} exceeds ${MAX_POLICY_BYTES} bytes`);
+  }
+  return bytes;
+};
+const policy = JSON.parse(
+  readBounded(policyPath, "dispatch policy").toString("utf8"),
+);
+const { readSelectionTable, stableStringify } =
+  await import(pathToFileURL(helperPath).href);
+const table = readSelectionTable();
+const allSeats = [...table.mandatory_seats, ...table.optional_seats];
+const exactKeys = (value, expected, label) => {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join("\0") !== [...expected].sort().join("\0")
+  ) {
+    throw new Error(`${label} has an unexpected shape`);
+  }
+};
+exactKeys(policy, ["artifact_kind", "schema_version", "seats"], "dispatch policy");
+if (
+  policy.artifact_kind !== "d2b-panel/dispatch-policy" ||
+  policy.schema_version !== 1
+) {
+  throw new Error("dispatch policy has an unsupported artifact kind or schema");
+}
+exactKeys(policy.seats, allSeats, "dispatch policy seats");
+const bindingKeys = [
+  "agent_type",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+];
+for (const seat of allSeats) {
+  const binding = policy.seats[seat];
+  exactKeys(binding, bindingKeys, `dispatch policy seat ${seat}`);
+  for (const key of bindingKeys) {
+    if (typeof binding[key] !== "string" || binding[key].trim() === "") {
+      throw new Error(`dispatch policy seat ${seat} has no ${key}`);
+    }
+  }
+  if (binding.agent_type !== `panel-${seat}`) {
+    throw new Error(
+      `dispatch policy seat ${seat} agent_type must be panel-${seat}`,
+    );
+  }
+  if (
+    binding.model !== "gpt-5.6-sol" ||
+    binding.reasoning_effort !== "xhigh" ||
+    binding.context_tier !== "default" ||
+    binding.communication !== "caveman-full-optional"
+  ) {
+    throw new Error(
+      `dispatch policy seat ${seat} disagrees with the current panel binding`,
+    );
+  }
+}
+const roster = rosterText.split(",").filter(Boolean);
+if (
+  roster.length === 0 ||
+  new Set(roster).size !== roster.length ||
+  roster.some((seat) => !allSeats.includes(seat))
+) {
+  throw new Error("selected roster cannot be projected into dispatch binding");
+}
+process.stdout.write(
+  stableStringify({
+    artifact_kind: "d2b-panel/dispatch-binding",
+    schema_version: 1,
+    lifecycle_id: lifecycle,
+    phase,
+    roster,
+    bindings: Object.fromEntries(
+      roster.map((seat) => [seat, policy.seats[seat]]),
+    ),
+  }),
+);
+NODE
+    publish_stdin_no_replace "$destination"
+}
+
 stage() {
   local dest="$1"
   shift
-  local tmp="$dest.$$.tmp"
-  if ! "$@" > "$tmp"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  publish_no_replace "$tmp" "$dest"
+  "$@" | publish_stdin_no_replace "$dest"
 }
 
 stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"
 stage "$out/full.diff" git --no-pager diff "$base_sha..$tip"
 stage "$out/commits.txt" git --no-pager log --no-decorate --oneline "$base_sha..$tip"
 
-delta_sha="$(sha256sum "$out/delta.diff" | cut -d' ' -f1)"
-full_sha="$(sha256sum "$out/full.diff" | cut -d' ' -f1)"
+IFS=$'\t' read -r delta_sha _delta_bytes \
+  <<<"$(secure_digest_size "$out/delta.diff")"
+IFS=$'\t' read -r full_sha _full_bytes \
+  <<<"$(secure_digest_size "$out/full.diff")"
 
 materialize_exact "$selection_path" "$staged_selection_path" "lifecycle selection"
+IFS=$'\t' read -r staged_selection_sha256 _staged_selection_bytes \
+  <<<"$(secure_digest_size "$staged_selection_path")"
+if [ "$staged_selection_sha256" != "$selection_sha256" ]; then
+  echo "lifecycle selection changed between validation and exact materialization" >&2
+  exit 2
+fi
 if [ -n "$candidate_path" ]; then
   materialize_exact "$candidate_path" "$staged_candidate_path" "current candidate"
 else
   node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
-const { candidateFromSelection, readSelection, writeCreateOrCompare } =
+const [selectionPath, helperPath] = process.argv.slice(1);
+const { candidateFromSelection, readSelection, stableStringify } =
   await import(pathToFileURL(helperPath).href);
 const selection = readSelection(selectionPath);
-writeCreateOrCompare(candidatePath, candidateFromSelection(selection));
-' "$staged_selection_path" "$staged_candidate_path" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+process.stdout.write(stableStringify(candidateFromSelection(selection)));
+' "$staged_selection_path" \
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" |
+  publish_stdin_no_replace "$staged_candidate_path"
 fi
 node --input-type=module -e '
-import fs from "node:fs";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const [selectionPath, candidatePath, helperPath] = process.argv.slice(1);
 const { readSelection, validateSelectionCandidate } =
@@ -662,14 +2272,80 @@ const { readSelection, validateSelectionCandidate } =
 const selection = readSelection(selectionPath);
 validateSelectionCandidate(
   selection,
-  JSON.parse(fs.readFileSync(candidatePath, "utf8")),
+  JSON.parse(readFileSync(candidatePath, "utf8")),
 );
 ' "$staged_selection_path" "$staged_candidate_path" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
 
+if [ "$reuse_existing" != true ] || [ "$existing_completion_schema" = "4" ]; then
+  if ! stage_dispatch_binding "$staged_dispatch_binding_path"; then
+    echo "could not materialize the roster-projected dispatch binding" >&2
+    exit 2
+  fi
+fi
+
+materialize_exact "$evidence_path" "$out/evidence.md" \
+  "finalized validation evidence"
+IFS=$'\t' read -r evidence_sha evidence_bytes \
+  <<<"$(secure_digest_size "$out/evidence.md")"
+
+if [ "$reuse_existing" != true ]; then
+  for seat in "${panel_seats[@]}"; do
+    materialize_exact \
+      "$root/.github/agents/panel-$seat.agent.md" \
+      "$staged_agent_definitions_dir/panel-$seat.agent.md" \
+      "panel agent definition for $seat"
+  done
+fi
+
 if [ -n "$discovery_request_path" ]; then
-  materialize_exact "$discovery_request_path" "$staged_discovery_request_path" \
-    "discovery request"
+  if ! node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [source, evidenceSha256, evidenceBytesText, helperPath] =
+  process.argv.slice(1);
+const { stableStringify } =
+  await import(pathToFileURL(helperPath).href);
+const request = JSON.parse(readFileSync(source, "utf8"));
+if (!Array.isArray(request.validation_evidence)) {
+  throw new Error("generated discovery request validation_evidence must be an array");
+}
+const descriptor = {
+  artifact_kind: "d2b-panel/validation-evidence",
+  path: "evidence.md",
+  sha256: evidenceSha256,
+  size_bytes: Number(evidenceBytesText),
+};
+const priorDescriptors = request.validation_evidence.filter((entry) =>
+  entry?.artifact_kind === descriptor.artifact_kind &&
+  entry?.path === descriptor.path
+);
+const descriptorMatches = (entry) =>
+  entry &&
+  typeof entry === "object" &&
+  !Array.isArray(entry) &&
+  Object.keys(entry).sort().join("\0") ===
+    Object.keys(descriptor).sort().join("\0") &&
+  Object.entries(descriptor).every(([key, value]) => entry[key] === value);
+if (
+  priorDescriptors.length > 1 ||
+  (priorDescriptors.length === 1 && !descriptorMatches(priorDescriptors[0]))
+) {
+  throw new Error(
+    "generated discovery request carries conflicting validation-evidence bytes",
+  );
+}
+if (priorDescriptors.length === 0) {
+  request.validation_evidence.push(descriptor);
+}
+process.stdout.write(stableStringify(request));
+' "$discovery_request_path" "$evidence_sha" "$evidence_bytes" \
+    "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" |
+    publish_stdin_no_replace "$staged_discovery_request_path"
+  then
+    echo "cannot generate evidence-bound discovery request from $discovery_request_path" >&2
+    exit 2
+  fi
 fi
 if [ -n "$ledger_path" ]; then
   materialize_exact "$ledger_path" "$staged_ledger_path" "discovery ledger"
@@ -677,6 +2353,10 @@ fi
 if [ -n "$responses_path" ]; then
   materialize_exact "$responses_path" "$staged_responses_path" \
     "implementation responses"
+fi
+if [ -n "$handoff_path" ]; then
+  materialize_exact "$handoff_path" "$staged_handoff_path" \
+    "finalized continuation handoff"
 fi
 if [ -n "$self_verification_path" ]; then
   materialize_exact "$self_verification_path" "$staged_self_verification_path" \
@@ -690,35 +2370,58 @@ if [ -n "$verification_dir" ]; then
     echo "complete review $round is missing canonical verification requests at $staged_verification_dir; refusing to add them after .complete" >&2
     exit 1
   fi
-  node --input-type=module -e '
-import fs from "node:fs";
-import { pathToFileURL } from "node:url";
-const [source, destination, helperPath] = process.argv.slice(1);
-const entries = fs.readdirSync(source, { withFileTypes: true })
-  .sort((left, right) => left.name.localeCompare(right.name));
-if (entries.length === 0 || entries.some((entry) =>
-  !entry.isFile() || !entry.name.endsWith(".json")
-)) {
-  throw new Error("verification directory must contain only regular JSON files");
+
+  publish_directory "$verification_dir" "$staged_verification_dir" "$selected_roster"
+fi
+
+if [ "$phase" = "discovery" ]; then
+  if ! node --input-type=module -e '
+import { readFileSync } from "node:fs";
+const [requestPath, evidenceSha256, evidenceBytesText] = process.argv.slice(1);
+const request = JSON.parse(readFileSync(requestPath, "utf8"));
+const evidenceBytes = Number(evidenceBytesText);
+const expected = {
+  artifact_kind: "d2b-panel/validation-evidence",
+  path: "evidence.md",
+  sha256: evidenceSha256,
+  size_bytes: evidenceBytes,
+};
+const matches = request.validation_evidence?.filter((entry) =>
+  entry &&
+  typeof entry === "object" &&
+  !Array.isArray(entry) &&
+  Object.keys(entry).sort().join("\0") ===
+    Object.keys(expected).sort().join("\0") &&
+  Object.entries(expected).every(([key, value]) => entry[key] === value)
+) ?? [];
+if (matches.length !== 1) {
+  console.error(
+    `${requestPath}: discovery request must contain exactly one canonical ` +
+    "validation-evidence descriptor for the finalized evidence.md bytes",
+  );
+  process.exit(1);
 }
-const { writeDirectoryCreateOrCompare } =
-  await import(pathToFileURL(helperPath).href);
-writeDirectoryCreateOrCompare(destination, entries.map((entry) => ({
-  name: entry.name,
-  bytes: fs.readFileSync(`${source}/${entry.name}`),
-})));
-' "$verification_dir" "$staged_verification_dir" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+' "$staged_discovery_request_path" "$evidence_sha" "$evidence_bytes"
+  then
+    echo "generated discovery request does not bind finalized validation evidence" >&2
+    exit 2
+  fi
 fi
 
 if ! node --input-type=module - \
   "$phase" "$lifecycle" "$staged_selection_path" "$staged_candidate_path" \
   "$staged_discovery_request_path" "$staged_ledger_path" \
-  "$staged_responses_path" "$staged_self_verification_path" \
+  "$staged_responses_path" "$handoff_path" \
+  "$staged_self_verification_path" \
   "$staged_verification_dir" \
-  "$previous_selection_path" "$previous_dir" \
+  "$previous_selection_path" "$op_previous_dir" \
   "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" <<'NODE'
-import fs from "node:fs";
+import {
+  lstatSync,
+  opendirSync,
+  readFileSync,
+} from "node:fs";
+import { TextDecoder } from "node:util";
 import { pathToFileURL } from "node:url";
 
 const [
@@ -729,13 +2432,20 @@ const [
   discoveryRequestPath,
   ledgerPath,
   responsesPath,
+  handoffPath,
   selfVerificationPath,
   verificationDir,
   previousSelectionPath,
   previousDir,
   helperPath,
 ] = process.argv.slice(2);
-const readJson = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
+const { validateStagedRoundArtifacts } =
+  await import(pathToFileURL(helperPath).href);
+const readBytes = (path) => readFileSync(path);
+const readJson = (path, label = "staged panel artifact") =>
+  JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(readBytes(path)),
+  );
 const selection = readJson(selectionPath);
 const artifacts = {
   phase,
@@ -746,22 +2456,64 @@ const artifacts = {
 if (phase === "discovery") {
   artifacts.discovery_request = readJson(discoveryRequestPath);
 } else {
+  const ledgerBytes = readBytes(ledgerPath);
+  const responsesBytes = readBytes(responsesPath);
   artifacts.ledger = readJson(ledgerPath);
   artifacts.responses = readJson(responsesPath);
+  if (handoffPath) {
+    artifacts.handoff = readJson(handoffPath);
+  }
   artifacts.self_verification = readJson(selfVerificationPath);
-  const entries = fs.readdirSync(verificationDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .sort((left, right) => left.name.localeCompare(right.name));
+  const directory = opendirSync(verificationDir);
+  const entries = [];
+  try {
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      if (entries.length >= selection.roster.length) {
+        throw new Error("staged verification request directory exceeds its entry limit");
+      }
+      let regular = entry.isFile();
+      if (!regular && !entry.isDirectory()) {
+        regular = lstatSync(`${verificationDir}/${entry.name}`).isFile();
+      }
+      entries.push({
+        name: entry.name,
+        bytes: readBytes(`${verificationDir}/${entry.name}`),
+        regular,
+      });
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (error) {
+      if (error.code !== "ERR_DIR_CLOSED") throw error;
+    }
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  const expectedNames = selection.roster.map((seat) => `${seat}.json`).sort();
+  const actualNames = entries.map((entry) => entry.name);
+  if (
+    entries.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index]) ||
+    entries.some((entry) => !entry.regular)
+  ) {
+    throw new Error(
+      `staged verification request directory is incomplete or has extra entries; ` +
+      `expected [${expectedNames.join(", ")}], found [${actualNames.join(", ")}]`,
+    );
+  }
   artifacts.verification_requests = Object.fromEntries(
     entries.map((entry) => [
       entry.name.slice(0, -5),
-      readJson(`${verificationDir}/${entry.name}`),
+      JSON.parse(entry.bytes.toString("utf8")),
     ]),
   );
 }
-const { validateStagedRoundArtifacts } =
-  await import(pathToFileURL(helperPath).href);
 const validationOptions = {};
+if (phase === "verification" && handoffPath) {
+  validationOptions.ledger_bytes = readBytes(ledgerPath);
+  validationOptions.responses_bytes = readBytes(responsesPath);
+}
 if (phase === "verification" && previousSelectionPath) {
   const priorSelection = readJson(previousSelectionPath);
   validationOptions.prior_selection = priorSelection;
@@ -781,12 +2533,10 @@ fi
 
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
-const args = process.argv.slice(1);
-const helperPath = args.pop();
-const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
-const [path, round, lifecycle, selectionPath, base, previousTip, tip, phase,
-  selectionSha, deltaSha, fullSha] = args;
-writeCreateOrCompare(path, {
+const [round, lifecycle, selectionPath, base, previousTip, tip, phase,
+  selectionSha, deltaSha, fullSha, helperPath] = process.argv.slice(1);
+const { stableStringify } = await import(pathToFileURL(helperPath).href);
+process.stdout.write(stableStringify({
   round,
   lifecycle_id: lifecycle,
   selection_path: selectionPath,
@@ -797,45 +2547,24 @@ writeCreateOrCompare(path, {
   tip,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
-});
-' "$out/address.json" "$round" "$lifecycle" "$staged_selection_path" "$base_sha" \
+}));
+' "$round" "$lifecycle" "$display_staged_selection_path" "$base_sha" \
   "$prev_sha" "$tip" "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
-
-if [ ! -f "$out/evidence.md" ]; then
-  evidence_tmp="$out/evidence.md.$$.tmp"
-  cat > "$evidence_tmp" <<'MD'
-# Validation evidence
-
-Replace this file before dispatching. Reviewers are told to treat missing or
-insufficient evidence as a finding, so an unedited template will fail the
-round on purpose.
-
-## Commands run
-
-| Command | Result |
-|---|---|
-|  |  |
-
-## What this evidence does not cover
-
-State it plainly. A green `test-rust` does not cover the fixture-dependent
-contract crate, and an advisory job's pass is not evidence at all.
-
-## Deliverable for this phase
-
-One or two sentences. Reviewers confine findings to defects in the delta that
-would break this deliverable or mask a regression.
-MD
-  publish_no_replace "$evidence_tmp" "$out/evidence.md"
-fi
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" |
+  publish_stdin_no_replace "$out/address.json"
 
 for seat in "${panel_seats[@]}"; do
   note="$out/reviewer-notes/$seat.md"
-  if [ -f "$note" ]; then
+  if [ -n "$reviewer_notes_dir" ]; then
+    materialize_exact "$reviewer_notes_dir/$seat.md" "$note" \
+      "finalized reviewer note for $seat"
     continue
   fi
-  note_tmp="$note.$$.tmp"
+  if [ "$reuse_existing" = true ]; then
+    # Canonical completion validation above already proved the generated
+    # default note's exact bytes. Reuse never recreates or edits it.
+    continue
+  fi
   if [ "$round_number" -gt 1 ]; then
     case ",$previous_roster," in
       *,"$seat",*)
@@ -848,7 +2577,7 @@ for seat in "${panel_seats[@]}"; do
   else
     prior_note="This is the first review. There is no prior verdict; perform the complete discovery obligation for this phase."
   fi
-  cat > "$note_tmp" <<MD
+  publish_stdin_no_replace "$note" <<MD
 # Reviewer notes for $seat
 
 ## Integrator rebuttals
@@ -868,28 +2597,95 @@ validations unless this section explicitly asks this seat to do so.
 
 $prior_note
 MD
-  publish_no_replace "$note_tmp" "$note"
 done
 
 discovery_request_path="$staged_discovery_request_path"
 ledger_path="$staged_ledger_path"
 responses_path="$staged_responses_path"
+if [ -n "$handoff_path" ]; then
+  handoff_path="$staged_handoff_path"
+fi
 self_verification_path="$staged_self_verification_path"
 verification_dir="$staged_verification_dir"
 approval_path="$staged_approval_path"
+display_discovery_request_path="$display_staged_discovery_request_path"
+display_ledger_path="$display_staged_ledger_path"
+display_responses_path="$display_staged_responses_path"
+display_handoff_path="$display_staged_handoff_path"
+display_self_verification_path="$display_staged_self_verification_path"
+display_verification_dir="$display_staged_verification_dir"
+display_approval_path="$display_staged_approval_path"
 
-request_tmp="$out/review-request.md.$$.tmp"
-dispatch_tmp="$out/dispatch-prompt.txt.$$.tmp"
-request_exit() {
-  local status="$?"
-  rm -f -- "$request_tmp" "$dispatch_tmp"
-  if [ "$status" -ne 0 ] && [ -d "$out" ] && [ ! -f "$completion_marker" ]; then
-    partial_cleanup_hint
-  fi
-  exit "$status"
+emit_verdict_contract() {
+  if [ "$phase" = "discovery" ]; then
+    cat <<'MD'
+The discovery verdict has exactly four top-level fields. It does not contain
+`verified_issue_statuses` or `late_findings`. Replace `<your-seat>` with the
+selected seat named by the bound panel agent definition:
+
+```json
+{
+  "engineer": "<your-seat>",
+  "signoff": true,
+  "summary": "What was reviewed and the overall posture.",
+  "recommendations": []
 }
-trap request_exit EXIT
-cat > "$request_tmp" <<MD
+```
+
+Each non-empty `recommendations` entry has exactly `severity`, `where`, `what`,
+`why`, and `fix`. Severity is exactly `critical`, `high`, `medium`, or `low`.
+`signoff` is true if and only if `recommendations` is empty.
+MD
+    return
+  fi
+
+  cat <<'MD'
+The verification verdict has exactly six top-level fields:
+`engineer`, `signoff`, `summary`, `verified_issue_statuses`, `late_findings`,
+and `recommendations`. Use this exact schema:
+
+MD
+  node --input-type=module - "$ledger_path" "$lifecycle_helper" <<'NODE'
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [ledgerPath, helperPath] = process.argv.slice(2);
+const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+const statuses = Object.fromEntries(
+  ledger.issues.map((issue) => [issue.id, "verified"]),
+);
+const example = {
+  engineer: "<your-seat>",
+  signoff: true,
+  summary: "What was verified and the overall posture.",
+  verified_issue_statuses: statuses,
+  late_findings: [],
+  recommendations: [],
+};
+process.stdout.write(`\`\`\`json\n${JSON.stringify(example, null, 2)}\n\`\`\`\n`);
+NODE
+  cat <<'MD'
+
+Replace `<your-seat>` with the selected seat named by the bound panel agent
+definition.
+
+`verified_issue_statuses` has exactly one entry for every ledger issue. Use
+`verified` or `resolved` only when confirmed; every other status remains
+blocking. `late_findings` is always present and is either `[]` or an array of
+objects with exactly `severity`, `introduced_regression`, `previously_missed`,
+`category`,
+`source_id`, `source_ordinal`, `seat`, `attribution`, `raw_text`,
+`description`, `impact`, and `recommendation`. For a non-empty entry,
+`introduced_regression` is `true` or `previously_missed` is `true`, and
+`severity` is `critical`, `high`, `medium`, or `low`; `category` is one of
+`correctness`, `security`, `data-loss`, or `reliability`. Each non-empty
+`recommendations` entry has exactly `severity`, `where`, `what`, `why`, and
+`fix`. `signoff` is true if and only if `recommendations` is empty.
+MD
+}
+verdict_contract="$(emit_verdict_contract)"
+
+{
+cat <<MD
 # Panel review request
 
 This is the complete shared request for \`$round\` in lifecycle \`$lifecycle\`. Read the artifacts below
@@ -897,18 +2693,21 @@ with \`view\`; do not substitute a prose summary for them.
 
 ## Review address
 
-- Stage completion marker: \`$completion_marker\` (this request is usable only
+- Stage completion marker: \`$display_completion_marker\` (this request is usable only
   when that marker exists)
-- Delta to review: \`$out/delta.diff\`
+- Delta to review: \`$display_out/delta.diff\`
 - Delta range: \`$prev_sha..$tip\`
-- Full branch context: \`$out/full.diff\`
+- Full branch context: \`$display_out/full.diff\`
 - Full range: \`$base_sha..$tip\`
 - Phase: \`$phase\`
-- Lifecycle selection: \`$staged_selection_path\` (sha256 \`$selection_sha256\`)
-- Staged current candidate: \`$staged_candidate_path\`
-- Validation evidence and phase deliverable: \`$out/evidence.md\`
-- Seat-specific notes: \`$out/reviewer-notes/<your-seat>.md\`
-- Commit list: \`$out/commits.txt\`
+- Lifecycle selection: \`$display_staged_selection_path\` (sha256 \`$selection_sha256\`)
+- Staged current candidate: \`$display_staged_candidate_path\`
+- Roster-projected dispatch binding: \`$display_staged_dispatch_binding_path\`
+- Bound panel agent definition: \`$display_staged_agent_definitions_dir/panel-<your-seat>.agent.md\`
+- Validation evidence and phase deliverable: \`$display_out/evidence.md\`
+  (sha256 \`$evidence_sha\`, bound by the completion marker)
+- Seat-specific notes: \`$display_out/reviewer-notes/<your-seat>.md\`
+- Commit list: \`$display_out/commits.txt\`
 
 ## Generated lifecycle artifacts
 
@@ -916,40 +2715,51 @@ The canonical generated artifacts for this phase are:
 
 $(if [ "$phase" = "discovery" ]; then
   printf '%s\n' \
-    "- Discovery request: \`$discovery_request_path\`"
+  "- Discovery request: \`$display_discovery_request_path\`"
 else
   printf '%s\n' \
-    "- Immutable discovery ledger: \`$ledger_path\`" \
-    "- Implementation responses: \`$responses_path\`" \
-    "- Self-verification: \`$self_verification_path\`" \
-    "- Verification requests: \`$verification_dir/<your-seat>.json\`" \
-    "- Approval output after verdict collection: \`$approval_path\`"
+  "- Immutable discovery ledger: \`$display_ledger_path\`" \
+  "- Implementation responses: \`$display_responses_path\`"
+  if [ -n "$handoff_path" ]; then
+    printf '%s\n' \
+      "- Finalized continuation handoff: \`$display_handoff_path\`"
+  fi
+  printf '%s\n' \
+  "- Self-verification: \`$display_self_verification_path\`" \
+  "- Verification requests: \`$display_verification_dir/<your-seat>.json\`" \
+  "- Approval output after verdict collection: \`$display_approval_path\`"
 fi)
 
 ## Required review behaviour
 
-1. Read the full candidate in \`$out/full.diff\` in full. On discovery, this
+1. Read the full candidate in \`$display_out/full.diff\` in full. On discovery, this
    full candidate is the review target, not only the incremental delta. Report
    every reasonably discoverable actionable finding now; do not save
    observations for later rounds.
-2. Read the incremental delta in \`$out/delta.diff\` as well. On verification,
+2. Read the incremental delta in \`$display_out/delta.diff\` as well. On verification,
    review it for resolution, regressions, and unsafe late BLOCKER or MAJOR
    findings without reopening comprehensive discovery.
 3. Read the validation evidence and phase deliverable. Missing or insufficient
    coverage is a finding. Do not rerun validation unless your seat-specific
    notes explicitly ask you to.
 4. Read your seat-specific notes. Judge any rebuttal on its merits.
-5. Inspect the tree and the diff rather than trusting a summary of what was
+5. Read your bound panel agent definition for the seat focus, finding bar, and
+   read-only review rules. The active phase and verdict schema in this request
+   are authoritative over any inactive-phase example in that definition.
+6. Inspect the tree and the diff rather than trusting a summary of what was
    intended to change.
-6. Confine findings to defects in the candidate or delta that would cause incorrect
+7. Confine findings to defects in the candidate or delta that would cause incorrect
    behaviour, mask a regression, or weaken a stated invariant. Put other
    observations in the summary.
-7. Return exactly the JSON verdict required by your panel agent and no other
-   text. \`signoff\` is true if and only if \`recommendations\` is empty.
+8. Return exactly the phase-specific JSON verdict below and no other text.
+
+## Required $phase verdict contract
+
+$verdict_contract
 MD
 
 if [ "$round_number" -gt 1 ]; then
-  cat >> "$request_tmp" <<MD
+  cat <<MD
 
 ## Prior verdict obligation
 
@@ -964,29 +2774,65 @@ if [ "$round_number" -gt 1 ]; then
 Do not mark a finding resolved because the integrator says it was fixed. Any content change invalidated every prior sign-off, including a sign-off from a seat whose area appears unaffected.
 MD
 else
-  cat >> "$request_tmp" <<'MD'
+  cat <<'MD'
 
 ## Prior verdict obligation
 
 This is the first review. There is no prior verdict to verify.
 MD
 fi
+} | publish_stdin_no_replace "$out/review-request.md"
 
-publish_no_replace "$request_tmp" "$out/review-request.md"
+{
+cat <<MD
+Use this dispatch prompt only when the stage completion marker exists at $display_completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying.
 
-cat > "$dispatch_tmp" <<MD
-Use this dispatch prompt only when the stage completion marker exists at $completion_marker. If it is absent, the scratch directory is non-authoritative and must be cleaned up before retrying. Read and follow the complete phase-aware review request at $out/review-request.md. Use view to read every artifact it names, including the staged current candidate, generated lifecycle artifacts, the delta and your seat-specific notes. Review the delta rather than a prose summary, and return only your seat's required JSON verdict.
+This is the $phase phase. Read and follow the complete review request at $display_out/review-request.md. Use view to read every artifact it names, including the bound panel agent definition at $display_staged_agent_definitions_dir/panel-<your-seat>.agent.md, the staged current candidate, generated lifecycle artifacts, the delta, and your seat-specific notes. The active phase and verdict contract below are authoritative over any inactive-phase example in the agent definition. Review the delta rather than a prose summary, and return only the exact JSON object required below.
+
+Required $phase verdict contract:
+
+$verdict_contract
 MD
-publish_no_replace "$dispatch_tmp" "$out/dispatch-prompt.txt"
+} | publish_stdin_no_replace "$out/dispatch-prompt.txt"
 
-node --input-type=module -e '
+node --input-type=module - "$out" "$existing_completion_schema" \
+  "${canonical_artifacts[@]}" <<'NODE'
+import { chmodSync } from "node:fs";
+const [root, schema, ...relativePaths] = process.argv.slice(2);
+for (const relative of relativePaths) {
+  if (
+    (schema === "2" &&
+      (relative === "dispatch-binding.json" ||
+        relative.startsWith("agent-definitions/"))) ||
+    (schema === "3" && relative === "dispatch-binding.json")
+  ) {
+    continue;
+  }
+  chmodSync(`${root}/${relative}`, 0o444);
+}
+NODE
+
+if [ "$reuse_existing" = true ] && \
+   { [ "$existing_completion_schema" = "2" ] || \
+     [ "$existing_completion_schema" = "3" ]; }; then
+  :
+elif ! node --input-type=module -e '
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const [path, round, lifecycle, base, previousTip, tip, phase, selectionSha,
-  deltaSha, fullSha, helperPath] = process.argv.slice(1);
-const { writeCreateOrCompare } = await import(pathToFileURL(helperPath).href);
-writeCreateOrCompare(path, {
+  deltaSha, fullSha, helperPath, ...artifactPaths] = process.argv.slice(1);
+const { stableStringify } = await import(pathToFileURL(helperPath).href);
+const artifactSha256 = {};
+const artifactBytes = {};
+for (const relative of artifactPaths) {
+  const bytes = readFileSync(`${path}/${relative}`);
+  artifactSha256[relative] = createHash("sha256").update(bytes).digest("hex");
+  artifactBytes[relative] = bytes.length;
+}
+process.stdout.write(stableStringify({
   artifact_kind: "d2b-panel/stage-completion",
-  schema_version: 1,
+  schema_version: 4,
   complete: true,
   round,
   lifecycle_id: lifecycle,
@@ -997,15 +2843,27 @@ writeCreateOrCompare(path, {
   selection_sha256: selectionSha,
   delta_sha256: deltaSha,
   full_sha256: fullSha,
-});
-' "$completion_marker" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
+  artifact_sha256: artifactSha256,
+  artifact_bytes: artifactBytes,
+}));
+' "$out" "$round" "$lifecycle" "$base_sha" "$prev_sha" "$tip" \
   "$phase" "$selection_sha256" "$delta_sha" "$full_sha" \
-  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs"
+  "$root/.github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs" \
+  "${canonical_artifacts[@]}" |
+  publish_stdin_no_replace "$completion_marker"
+then
+  echo "could not publish the completion marker" >&2
+  exit 2
+fi
+node --input-type=module -e '
+import { chmodSync } from "node:fs";
+chmodSync(process.argv[1], 0o444);
+' "$completion_marker"
 
-echo "staged $out"
+echo "staged $display_out"
 echo "  tip          $tip"
 echo "  delta        $prev_sha..$tip  ($delta_sha)"
 echo "  full         $base_sha..$tip  ($full_sha)"
 echo
-echo "Edit $out/evidence.md and any seat-specific notes before dispatching."
-echo "Dispatch every seat with the exact contents of $out/dispatch-prompt.txt."
+echo "Finalized evidence and reviewer notes are byte-bound by $display_completion_marker."
+echo "Dispatch every seat with the exact contents of $display_out/dispatch-prompt.txt."

@@ -5,8 +5,8 @@
 //! the selected current roles with the required provider, model, and reasoning
 //! effort from [`PANEL_PROVIDER_POLICY`], [`PANEL_MODEL_POLICY`], and
 //! [`PANEL_REASONING_EFFORT_POLICY`]. Existing fixed-ten request-record sets
-//! on the legacy Gemini/high pair remain readable for delivery-state
-//! compatibility.
+//! on the prior unversioned model/effort pair remain readable for
+//! delivery-state compatibility.
 //!
 //! `panel-attest` validates a directory holding exactly one strict record per
 //! role named by the stored request, each bound to the same `candidate_id`,
@@ -38,7 +38,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::Read,
+    io::Write,
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
 
@@ -64,6 +65,7 @@ use super::{
 /// Upper bound on findings carried by one record. A record is a verdict, not a
 /// transcript; anything larger is a malformed artifact rather than a review.
 const MAX_RECOMMENDATIONS: usize = 64;
+const MAX_PANEL_RECORD_SET_BYTES: usize = MAX_JSON_BYTES;
 
 /// Every panel record file is named after the role that produced it, so a
 /// mislabeled or duplicated role is refused by name as well as by content.
@@ -269,10 +271,12 @@ impl<'de> Deserialize<'de> for PanelRequest {
 }
 
 impl PanelRequest {
+    #[cfg(test)]
     pub fn for_snapshot(snapshot: &SnapshotView) -> Self {
         Self::for_snapshot_with_roles(snapshot, &PANEL_CURRENT_ROLES, PanelFormat::Current)
     }
 
+    #[cfg(test)]
     fn legacy_for_snapshot(snapshot: &SnapshotView) -> Self {
         Self::for_snapshot_with_roles(snapshot, &PANEL_ROLES, PanelFormat::Legacy)
     }
@@ -1034,24 +1038,35 @@ fn request_checked(
     )?;
     match selection_path {
         Some(path) => request_with_selection(candidate, snapshot, path),
-        None => request(candidate, snapshot),
+        None => {
+            #[cfg(test)]
+            {
+                request(candidate, snapshot)
+            }
+            #[cfg(not(test))]
+            {
+                Err(DeliveryError::new(
+                    "current panel request requires an authoritative lifecycle selection",
+                ))
+            }
+        }
     }
 }
 
 /// Writes the candidate-bound current request for internal callers and tests.
 ///
-/// The CLI path always calls [`request_with_selection`] and therefore cannot
-/// bypass the selection artifact. Keeping this small helper lets existing
-/// hermetic delivery tests exercise the current format without manufacturing a
-/// lifecycle file for every unrelated stage test.
+/// Test-only helper for delivery stages whose subject is not panel selection.
+///
+/// The production CLI has no path around [`request_with_selection`].
+#[cfg(test)]
 pub fn request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<WorkflowOutput> {
     let request = PanelRequest::for_snapshot(snapshot);
     write_request(candidate, snapshot, request)
 }
 
 /// Reads and validates the one lifecycle selection consumed by
-/// `panel-request`, then writes its exact ordered roster into the existing
-/// request fields.
+/// `panel-request`, then writes its exact ordered roster into the closed
+/// version-1 request fields.
 pub fn request_with_selection(
     candidate: &CandidateDir,
     snapshot: &SnapshotView,
@@ -1071,7 +1086,8 @@ fn write_request(
 ) -> Result<WorkflowOutput> {
     request.validate()?;
     candidate.validate_artifact_address(&request.wave, &request.candidate_id, "panel request")?;
-    candidate.write_json(PANEL_REQUEST_FILE, &request)?;
+    let bytes = serde_json::to_vec(&request)?;
+    publish_candidate_file_no_replace(candidate, PANEL_REQUEST_FILE, &bytes, "panel request")?;
     WorkflowOutput::ok(WaveCommand::PanelRequest)
         .with_digests(&snapshot.digests())
         .with_artifact(candidate, &candidate.panel_request_path())
@@ -1091,12 +1107,10 @@ pub fn attest(
     records_dir: &Path,
 ) -> Result<WorkflowOutput> {
     let request = stored_request(candidate, snapshot)?;
-    let files = read_record_dir(records_dir)?;
+    let files = read_record_dir(records_dir, &request.record_files)?;
     let attestation = validate_record_set(candidate, &request, &files)?;
 
-    for (name, bytes) in &files {
-        candidate.write_bytes(Path::new(PANEL_DIR).join(name), bytes)?;
-    }
+    publish_record_set_no_replace(candidate, &files)?;
     let imported = candidate
         .list(PANEL_DIR)?
         .into_iter()
@@ -1121,29 +1135,78 @@ pub fn attest(
 
 /// Reads every record file from an operator-supplied directory.
 ///
-/// The directory holds records and nothing else: a subdirectory, a symlink, a
-/// dotfile, or a non-JSON file is a rejection, so an unnoticed extra file
-/// cannot dilute the request's exact roster requirement.
-fn read_record_dir(dir: &Path) -> Result<Vec<RecordFile>> {
-    let metadata = fs::symlink_metadata(dir)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+/// The directory holds exactly the request's record names and nothing else, so
+/// an unnoticed extra file cannot dilute the request's exact roster
+/// requirement.
+fn read_record_dir(dir: &Path, expected_files: &[String]) -> Result<Vec<RecordFile>> {
+    let metadata = fs::metadata(dir).map_err(|error| {
+        DeliveryError::environment(format!("cannot read panel record directory: {error}"))
+    })?;
+    if !metadata.is_dir() {
         return Err(DeliveryError::new("panel record path is not a directory"));
     }
-    let mut files = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry
-            .file_name()
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| DeliveryError::new("panel record file name is not UTF-8"))?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() || !file_type.is_file() || !name.ends_with(".json") {
+    let mut names = fs::read_dir(dir)
+        .map_err(|error| {
+            DeliveryError::environment(format!("cannot list panel record directory: {error}"))
+        })?
+        .map(|entry| {
+            let entry = entry.map_err(|error| {
+                DeliveryError::environment(format!(
+                    "cannot read panel record directory entry: {error}"
+                ))
+            })?;
+            entry
+                .file_name()
+                .into_string()
+                .map_err(|_| DeliveryError::new("panel record file name is not UTF-8"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if names.len() > expected_files.len() {
+        return Err(DeliveryError::new(format!(
+            "panel record directory contains more than the exact {}-entry bound",
+            expected_files.len()
+        )));
+    }
+    names.sort();
+    let mut expected_names = expected_files.to_vec();
+    expected_names.sort();
+    if names != expected_names {
+        return Err(DeliveryError::new(format!(
+            "panel record directory must contain exactly {} requested record entries before \
+             record bytes are read",
+            expected_files.len()
+        )));
+    }
+
+    let mut aggregate_bytes = 0usize;
+    for name in &names {
+        if !name.ends_with(".json") {
             return Err(DeliveryError::new(format!(
                 "panel record directory holds {name:?}, which is not a regular record file"
             )));
         }
-        files.push((name, read_file_limited(&entry.path(), "panel record")?));
+        let size = fs::metadata(dir.join(name))
+            .map_err(|error| {
+                DeliveryError::environment(format!("cannot stat panel record: {error}"))
+            })?
+            .len() as usize;
+        aggregate_bytes = aggregate_bytes
+            .checked_add(size)
+            .ok_or_else(|| DeliveryError::new("panel record aggregate byte count overflowed"))?;
+        if aggregate_bytes > MAX_PANEL_RECORD_SET_BYTES {
+            return Err(DeliveryError::new(format!(
+                "panel record directory exceeds the aggregate \
+                 {MAX_PANEL_RECORD_SET_BYTES}-byte bound before record bytes are read"
+            )));
+        }
+    }
+
+    let mut files = Vec::with_capacity(names.len());
+    for name in names {
+        files.push((
+            name.clone(),
+            read_file_limited(&dir.join(&name), "panel record")?,
+        ));
     }
     files.sort();
     Ok(files)
@@ -1254,20 +1317,82 @@ pub(crate) fn read_json_file<T: DeserializeOwned>(path: &Path, label: &str) -> R
 }
 
 fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(DeliveryError::new(format!("{label} is not a regular file")));
-    }
-    let mut bytes = Vec::new();
-    File::open(path)?
-        .take(MAX_JSON_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
+    let bytes = fs::read(path)
+        .map_err(|error| DeliveryError::environment(format!("cannot read {label}: {error}")))?;
     if bytes.len() > MAX_JSON_BYTES {
         return Err(DeliveryError::new(format!(
             "{label} exceeds {MAX_JSON_BYTES} bytes"
         )));
     }
     Ok(bytes)
+}
+
+fn publish_record_set_no_replace(candidate: &CandidateDir, files: &[RecordFile]) -> Result<()> {
+    let panel_dir = candidate.panel_dir();
+    if !panel_dir.exists() {
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        match builder.create(&panel_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(DeliveryError::environment(format!(
+                    "cannot create candidate panel directory: {error}"
+                )));
+            }
+        }
+    }
+    for (name, bytes) in files {
+        write_panel_file_no_replace(&panel_dir.join(name), bytes, "panel record")?;
+    }
+    Ok(())
+}
+
+fn publish_candidate_file_no_replace(
+    candidate: &CandidateDir,
+    name: &str,
+    bytes: &[u8],
+    label: &str,
+) -> Result<()> {
+    write_panel_file_no_replace(&candidate.path().join(name), bytes, label)
+}
+
+fn write_panel_file_no_replace(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
+    if let Ok(existing) = fs::read(path) {
+        if existing != bytes {
+            return Err(DeliveryError::new(format!(
+                "conflicting {label}; refusing to replace it"
+            )));
+        }
+        return Ok(());
+    }
+
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = fs::read(path).map_err(|read_error| {
+                DeliveryError::environment(format!("cannot read existing {label}: {read_error}"))
+            })?;
+            if existing != bytes {
+                return Err(DeliveryError::new(format!(
+                    "conflicting {label}; refusing to replace it"
+                )));
+            }
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(DeliveryError::environment(format!(
+                "cannot create {label}: {error}"
+            )));
+        }
+    };
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| DeliveryError::environment(format!("cannot write {label}: {error}")))
 }
 
 #[cfg(test)]
@@ -1281,7 +1406,6 @@ pub(crate) mod tests {
             tests::{Scratch, assert_no_absolute_path, repo_root},
         },
     };
-
     pub(crate) fn snapshot() -> SnapshotView {
         snapshot_from(fixtures::material())
     }
@@ -1449,6 +1573,77 @@ pub(crate) mod tests {
         assert!(
             message.contains("panel record"),
             "the diagnostic must name the semantic label: {message}"
+        );
+    }
+
+    #[test]
+    fn record_directory_rejects_aggregate_bound_before_reads() {
+        let scratch = Scratch::new("panel-record-aggregate-bounds");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let request = requested(&candidate, &snapshot);
+        let files = record_files(&snapshot);
+        let dir = write_record_dir(&scratch, &files);
+
+        for (name, _) in files.iter().take(2) {
+            File::options()
+                .write(true)
+                .open(dir.join(name))
+                .expect("open aggregate fixture")
+                .set_len((MAX_PANEL_RECORD_SET_BYTES / 2 + 1) as u64)
+                .expect("extend aggregate fixture");
+        }
+        let aggregate_error = read_record_dir(&dir, &request.record_files)
+            .expect_err("an oversized aggregate must be rejected before record reads");
+        assert!(
+            aggregate_error
+                .message()
+                .contains("aggregate 2097152-byte bound before record bytes are read"),
+            "{aggregate_error}"
+        );
+    }
+
+    #[test]
+    fn record_publication_compares_existing_bytes_without_replacement() {
+        let scratch = Scratch::new("panel-record-no-replace");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        requested(&candidate, &snapshot);
+        let files = record_files(&snapshot);
+        let dir = write_record_dir(&scratch, &files);
+        let first_name = &files[0].0;
+
+        let conflicting = b"{\"foreign\":true}\n";
+        candidate
+            .write_bytes(Path::new(PANEL_DIR).join(first_name), conflicting)
+            .expect("plant conflicting destination");
+        let conflict_error = attest(&candidate, &snapshot, &dir).expect_err("replacement rejected");
+        assert!(
+            conflict_error.message().contains("refusing to replace"),
+            "{conflict_error}"
+        );
+        assert_eq!(
+            candidate
+                .read_bytes(Path::new(PANEL_DIR).join(first_name))
+                .expect("read preserved destination"),
+            conflicting,
+            "no-replace publication must preserve the pre-existing bytes"
+        );
+    }
+
+    #[test]
+    fn panel_request_publication_refuses_to_replace_existing_bytes() {
+        let scratch = Scratch::new("panel-request-no-replace");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let conflicting = b"{\"foreign\":true}\n";
+        candidate
+            .write_bytes(PANEL_REQUEST_FILE, conflicting)
+            .expect("plant conflicting panel request");
+        let error = request(&candidate, &snapshot).expect_err("request replacement rejected");
+        assert!(error.message().contains("refusing to replace"), "{error}");
+        assert_eq!(
+            candidate
+                .read_bytes(PANEL_REQUEST_FILE)
+                .expect("read preserved request"),
+            conflicting,
         );
     }
 
@@ -1708,8 +1903,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_legacy_gemini_request_and_record_set_remain_accepted() {
-        let scratch = Scratch::new("panel-legacy-gemini");
+    fn a_prior_unversioned_fixed_ten_request_and_record_set_remain_accepted() {
+        let scratch = Scratch::new("panel-legacy-fixed-ten");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let mut request = PanelRequest::legacy_for_snapshot(&snapshot);
         request.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
@@ -1723,16 +1918,15 @@ pub(crate) mod tests {
         }
 
         let attestation = validate_record_set(&candidate, &request, &files)
-            .expect("legacy Gemini records remain compatible");
+            .expect("prior unversioned records remain compatible");
         assert!(attestation.unanimous);
     }
 
     #[test]
-    fn current_records_reject_the_legacy_binding() {
+    fn current_records_reject_an_unsupported_binding() {
         let error = reject(|files, _| {
             rewrite(files, PanelRole::Security, |record| {
-                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
-                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
+                record.model_version = "other-model".to_owned();
             });
         });
         assert!(
@@ -1744,14 +1938,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_legacy_fixed_ten_family_rejects_the_current_binding() {
+    fn the_prior_unversioned_fixed_ten_family_rejects_an_unsupported_binding() {
         let scratch = Scratch::new("panel-legacy-current-binding");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let mut request = PanelRequest::legacy_for_snapshot(&snapshot);
-        request.model_version = PANEL_MODEL_POLICY.to_owned();
-        request.reasoning_effort = PANEL_REASONING_EFFORT_POLICY.to_owned();
+        request.model_version = "other-model".to_owned();
         let error = validate_record_set(&candidate, &request, &legacy_record_files(&snapshot))
-            .expect_err("legacy requests must retain the legacy binding");
+            .expect_err("prior unversioned requests must retain their fixed binding");
         assert!(
             error
                 .message()
@@ -1762,12 +1955,13 @@ pub(crate) mod tests {
 
     #[test]
     fn a_record_binding_must_match_its_request_binding() {
-        let error = reject(|files, _| {
-            rewrite(files, PanelRole::Security, |record| {
-                record.model_version = PANEL_LEGACY_MODEL_POLICY.to_owned();
-                record.reasoning_effort = PANEL_LEGACY_REASONING_EFFORT_POLICY.to_owned();
-            });
-        });
+        let scratch = Scratch::new("panel-record-request-binding");
+        let (_state, _candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let mut request = PanelRequest::for_snapshot(&snapshot);
+        request.provider = "other-provider".to_owned();
+        let error = record(PanelRole::Security, &snapshot)
+            .validate(&request)
+            .expect_err("a record must match its request binding");
         assert!(error.message().contains("exactly match"), "{error}");
     }
 
@@ -2035,6 +2229,160 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn legacy_attestation_requires_strict_record_order() {
+        let mut bundle: FixtureBundle =
+            serde_json::from_str(include_str!("testdata/panel-legacy-ten.json"))
+                .expect("legacy fixture");
+        bundle.attestation.records.swap(0, 1);
+        let error = bundle
+            .attestation
+            .validate()
+            .expect_err("legacy records must stay in roster order");
+        assert!(error.message().contains("not in roster order"), "{error}");
+
+        let mut seal_panel = bundle.seal_panel;
+        seal_panel.records.swap(0, 1);
+        let error = seal_panel
+            .validate()
+            .expect_err("legacy seal records must stay in roster order");
+        assert!(error.message().contains("not in roster order"), "{error}");
+    }
+
+    #[test]
+    fn byte_real_legacy_request_and_seal_deserialize_and_validate() {
+        let request_bytes = include_bytes!("testdata/panel-legacy-request.json");
+        let request: PanelRequest =
+            serde_json::from_slice(request_bytes).expect("legacy request fixture");
+        request.validate().expect("legacy request");
+        assert_eq!(
+            request.format().expect("request format"),
+            PanelFormat::Legacy
+        );
+        assert_eq!(request.roles, PANEL_ROLES);
+
+        let seal_bytes = include_bytes!("testdata/panel-legacy-seal.json");
+        let seal: crate::delivery::seal::SealRecord =
+            serde_json::from_slice(seal_bytes).expect("legacy seal fixture");
+        assert_eq!(
+            seal.panel.format().expect("seal panel format"),
+            PanelFormat::Legacy
+        );
+        assert_eq!(
+            seal.panel_request_sha256,
+            sha256_bytes(request_bytes),
+            "the seal must bind the exact request fixture bytes"
+        );
+        assert_eq!(request.program, seal.program);
+        assert_eq!(request.wave, seal.wave);
+        assert_eq!(request.candidate_id, seal.candidate_id);
+        assert_eq!(request.content_id, seal.content_id);
+        assert_eq!(request.snapshot_sha256, seal.snapshot_sha256);
+
+        let scratch = Scratch::new("panel-byte-real-legacy");
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let candidate = state
+            .candidate(&seal.wave, &seal.candidate_id)
+            .expect("legacy candidate");
+        candidate
+            .write_bytes(PANEL_REQUEST_FILE, request_bytes)
+            .expect("write exact legacy request bytes");
+        seal.validate(&candidate).expect("legacy seal");
+    }
+
+    #[test]
+    fn lifecycle_fields_and_malformed_panel_families_fail_closed() {
+        let legacy_request_bytes = include_bytes!("testdata/panel-legacy-request.json");
+        let legacy_request: Value =
+            serde_json::from_slice(legacy_request_bytes).expect("legacy request value");
+        let current_bundle: Value =
+            serde_json::from_str(include_str!("testdata/panel-current-variable.json"))
+                .expect("current fixture bundle");
+
+        for field in ["lifecycle_binding", "selection", "selection_bytes_sha256"] {
+            let mut legacy = legacy_request.clone();
+            legacy[field] = serde_json::json!({});
+            assert!(
+                serde_json::from_value::<PanelRequest>(legacy).is_err(),
+                "legacy requests must reject unversioned {field}"
+            );
+
+            let mut current = current_bundle["request"].clone();
+            current[field] = serde_json::json!({});
+            assert!(
+                serde_json::from_value::<PanelRequest>(current).is_err(),
+                "version-1 requests must reject out-of-contract {field}"
+            );
+
+            let mut attestation = current_bundle["attestation"].clone();
+            attestation[field] = serde_json::json!({});
+            assert!(
+                serde_json::from_value::<PanelAttestation>(attestation).is_err(),
+                "version-1 attestations must reject out-of-contract {field}"
+            );
+        }
+
+        let seal_value: Value =
+            serde_json::from_slice(include_bytes!("testdata/panel-legacy-seal.json"))
+                .expect("legacy seal value");
+        for discriminator in [serde_json::json!(2), serde_json::json!("1")] {
+            let mut malformed = seal_value.clone();
+            malformed["panel"]["panel_format_version"] = discriminator;
+            assert!(
+                serde_json::from_value::<crate::delivery::seal::SealRecord>(malformed).is_err(),
+                "malformed or unknown seal panel versions must not fall back to legacy"
+            );
+        }
+
+        let mut unversioned_selection = seal_value.clone();
+        unversioned_selection["panel"]["selection"] = serde_json::json!({});
+        assert!(
+            serde_json::from_value::<crate::delivery::seal::SealRecord>(unversioned_selection)
+                .is_err(),
+            "legacy seal panels must reject unversioned selection state"
+        );
+
+        let mut seal: crate::delivery::seal::SealRecord =
+            serde_json::from_value(seal_value).expect("legacy seal");
+        let mut current_request_value = legacy_request;
+        current_request_value["panel_format_version"] = serde_json::json!(1);
+        current_request_value["model_version"] = serde_json::json!(PANEL_MODEL_POLICY);
+        current_request_value["reasoning_effort"] =
+            serde_json::json!(PANEL_REASONING_EFFORT_POLICY);
+        let current_roles = PANEL_CURRENT_ROLES[..10].to_vec();
+        current_request_value["roles"] =
+            serde_json::to_value(&current_roles).expect("current roles");
+        current_request_value["record_files"] = serde_json::to_value(
+            current_roles
+                .iter()
+                .copied()
+                .map(record_file_name)
+                .collect::<Vec<_>>(),
+        )
+        .expect("current record files");
+        let current_request: PanelRequest =
+            serde_json::from_value(current_request_value).expect("current request");
+        current_request.validate().expect("valid current request");
+
+        let scratch = Scratch::new("panel-mixed-seal-family");
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let candidate = state
+            .candidate(&seal.wave, &seal.candidate_id)
+            .expect("candidate");
+        candidate
+            .write_json(PANEL_REQUEST_FILE, &current_request)
+            .expect("write current request");
+        seal.panel_request_sha256 =
+            sha256_bytes(&serde_json::to_vec(&current_request).expect("current request bytes"));
+        let error = seal
+            .validate(&candidate)
+            .expect_err("a legacy seal must not validate against a current request");
+        assert!(
+            error.message().contains("different format or roster"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn malformed_unknown_and_mixed_panel_families_are_refused_before_fallback() {
         let legacy: FixtureBundle =
             serde_json::from_str(include_str!("testdata/panel-legacy-ten.json"))
@@ -2092,10 +2440,7 @@ pub(crate) mod tests {
         let dir = write_record_dir(&scratch, &files);
         fs::create_dir(dir.join("nested")).expect("nested directory");
         let error = attest(&candidate, &snapshot, &dir).expect_err("nested entry");
-        assert!(
-            error.message().contains("not a regular record file"),
-            "{error}"
-        );
+        assert!(error.message().contains("exact 13-entry bound"), "{error}");
     }
 
     #[test]
@@ -2271,7 +2616,7 @@ pub(crate) mod tests {
     /// `#[cfg(test)]`-only redirection for the duration of the run. The
     /// production refusal is untouched.
     #[test]
-    fn the_panel_request_entrypoint_runs_end_to_end_from_its_argument_vector() {
+    fn the_panel_request_entrypoint_consumes_the_javascript_selection_fixture() {
         use crate::delivery::{
             snapshot::{self, tests::GitFixture},
             storage::test_root_override,
@@ -2287,9 +2632,15 @@ pub(crate) mod tests {
         assert!(snapshot_ref.ends_with(SNAPSHOT_FILE), "{snapshot_ref}");
         let state = StateRoot::for_tests(&fixture.state()).expect("test state");
         let snapshot_path = state.resolve_artifact_ref(Path::new(&snapshot_ref));
-        let (_candidate, snapshot) = open_candidate(&state, &snapshot_path).expect("open snapshot");
-        let selection_path = fixture.state().join("selection.json");
-        write_current_selection(&selection_path, &snapshot);
+        let (candidate, snapshot) = open_candidate(&state, &snapshot_path).expect("open snapshot");
+        let selection_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/delivery/testdata/panel-selection-js.json");
+        let selection: PanelSelectionV1 =
+            read_json_file(&selection_path, "JavaScript panel selection fixture")
+                .expect("selection fixture");
+        selection
+            .validate_for_snapshot(snapshot.program(), snapshot.wave(), &snapshot.digests())
+            .expect("fixture must bind the Rust snapshot");
 
         let args = vec![
             "--snapshot".to_owned(),
@@ -2303,6 +2654,17 @@ pub(crate) mod tests {
         assert_eq!(output.operation.as_str(), "panel-request");
         let artifact = output.artifact.expect("panel request artifact reference");
         assert!(artifact.ends_with(PANEL_REQUEST_FILE), "{artifact}");
+        let request: PanelRequest = candidate
+            .read_json(PANEL_REQUEST_FILE)
+            .expect("generated panel request");
+        assert_eq!(request.roles, selection.roster);
+        let request_json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(request_json["panel_format_version"], 1);
+        assert!(
+            request_json.get("lifecycle_binding").is_none()
+                && request_json.get("selection").is_none(),
+            "selection input must not expand the closed panel request contract"
+        );
     }
 
     /// The same entrypoint, driven the same way, must still refuse an unmerged

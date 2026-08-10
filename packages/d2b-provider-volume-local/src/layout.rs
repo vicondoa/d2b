@@ -295,6 +295,11 @@ pub fn plan_entry(
     }
 
     if entry.create_policy() == CreatePolicy::AlwaysRecreate {
+        if observed.owner_proof == OwnerProof::Unknown
+            || (entry.lease_class() != LeaseClass::None && observed.owner_proof != OwnerProof::Dead)
+        {
+            return degraded(VolumeLocalError::EntryQuarantined, EntryPlan::default());
+        }
         return EntryPlan {
             recreate: true,
             provision: true,
@@ -304,23 +309,52 @@ pub fn plan_entry(
     }
 
     let adoptable = match entry.adoption_policy() {
-        EntryAdoptionPolicy::NeverAdopt => false,
-        EntryAdoptionPolicy::AdoptWithLiveOwnerProof => match entry.lease_class() {
+        EntryAdoptionPolicy::NeverAdopt | EntryAdoptionPolicy::NotAdoptable => false,
+        EntryAdoptionPolicy::AdoptWithLiveOwnerProof
+        | EntryAdoptionPolicy::QuarantineOnAmbiguity => match entry.lease_class() {
             LeaseClass::None => observed.owner_proof != OwnerProof::Unknown,
             _ => observed.owner_proof == OwnerProof::Live,
         },
+        EntryAdoptionPolicy::RecreateFromPersistent => observed.owner_proof != OwnerProof::Unknown,
+        EntryAdoptionPolicy::DeleteIfOwnerDead => {
+            if observed.owner_proof == OwnerProof::Dead {
+                return EntryPlan {
+                    recreate: true,
+                    provision: true,
+                    apply_acl: entry.has_acl(),
+                    ..EntryPlan::default()
+                };
+            }
+            observed.owner_proof != OwnerProof::Unknown
+        }
     };
     if !adoptable {
         return degraded(VolumeLocalError::EntryQuarantined, EntryPlan::default());
     }
+    if entry.adoption_policy() == EntryAdoptionPolicy::RecreateFromPersistent {
+        return EntryPlan {
+            recreate: true,
+            provision: true,
+            apply_acl: entry.has_acl(),
+            ..EntryPlan::default()
+        };
+    }
 
     let repair: BTreeSet<DriftClass> = match entry.repair_policy() {
-        RepairPolicy::None => BTreeSet::new(),
-        RepairPolicy::ExactOwner => [DriftClass::Owner].into_iter().collect(),
-        RepairPolicy::ExactMode => [DriftClass::Mode].into_iter().collect(),
-        RepairPolicy::ExactOwnerAndAcl => {
-            [DriftClass::Owner, DriftClass::Acl].into_iter().collect()
+        RepairPolicy::None | RepairPolicy::NixActivation | RepairPolicy::OperatorOnly => {
+            BTreeSet::new()
         }
+        RepairPolicy::ExactOwner => [DriftClass::Owner, DriftClass::Mode].into_iter().collect(),
+        RepairPolicy::FailClosed => {
+            if !observed.drift.is_empty() {
+                return failed(VolumeLocalError::InvariantViolated);
+            }
+            BTreeSet::new()
+        }
+        RepairPolicy::ExactMode => [DriftClass::Mode].into_iter().collect(),
+        RepairPolicy::ExactOwnerAndAcl => [DriftClass::Owner, DriftClass::Mode, DriftClass::Acl]
+            .into_iter()
+            .collect(),
     };
     let repair: BTreeSet<DriftClass> = repair.intersection(&observed.drift).copied().collect();
     let unrepaired: BTreeSet<DriftClass> = observed.drift.difference(&repair).copied().collect();
@@ -347,7 +381,13 @@ pub fn plan_entry(
 pub fn plan_cleanup(entry: &EntryRequest, observed: &ObservedEntry) -> bool {
     match entry.cleanup_policy() {
         CleanupPolicy::Never => false,
-        CleanupPolicy::OwnerControlled => observed.present,
-        CleanupPolicy::ProcessExit => observed.present && observed.owner_proof == OwnerProof::Dead,
+        CleanupPolicy::Boot
+        | CleanupPolicy::VmStopWithProof
+        | CleanupPolicy::CutoverOnly
+        | CleanupPolicy::External
+        | CleanupPolicy::OwnerControlled => observed.present,
+        CleanupPolicy::ProcessExitWithProof | CleanupPolicy::ProcessExit => {
+            observed.present && observed.owner_proof == OwnerProof::Dead
+        }
     }
 }

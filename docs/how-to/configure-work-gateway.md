@@ -25,7 +25,7 @@ d2b.gateways.work = {
 Then start the gateway like any other VM:
 
 ```bash
-d2b vm start sys-work-gateway --apply
+d2b guest start sys-work-gateway --apply
 ```
 
 ## Inspect the policy

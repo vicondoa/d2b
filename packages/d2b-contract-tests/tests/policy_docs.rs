@@ -14,6 +14,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    path::Path,
+    sync::OnceLock,
 };
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
@@ -368,7 +370,7 @@ fn agents_md_routes_to_paths_that_exist() {
 // Migrated from tests/manpage-completeness-eval.sh.
 //
 // Asserts that every top-level clap subcommand declared in
-// `packages/d2b/src/lib.rs` (`enum NativeCommand { ... }`) is documented as
+// `packages/d2b/src/dispatch.rs` (`enum ModernCommand { ... }`) is documented as
 // a section in the committed d2b(1) manpage at `docs/manpages/d2b.1`.
 // clap_mangen emits one `.TP` entry per subcommand under the SUBCOMMANDS block
 // (rendered as `d2b-<name>(1)`); a new verb that lands without rerunning
@@ -377,7 +379,7 @@ fn agents_md_routes_to_paths_that_exist() {
 // ---------------------------------------------------------------------------
 #[test]
 fn manpage_documents_every_top_level_subcommand() {
-    let cli_rel = "packages/d2b/src/lib.rs";
+    let cli_rel = "packages/d2b/src/dispatch.rs";
     let manpage_rel = "docs/manpages/d2b.1";
     assert!(
         repo_path_exists(cli_rel),
@@ -532,7 +534,203 @@ fn activation_docs_do_not_describe_host_side_guest_activation() {
     );
 }
 
-/// Faithful port of the bash gate's `awk` extraction of the `enum NativeCommand`
+const CLI_DOC_ROOTS: &[&str] = &[
+    "README.md",
+    "templates/default",
+    "examples",
+    "docs/how-to",
+    "docs/reference",
+    "docs/explanation",
+    "tests/integration/live/live-vm-smoke.sh",
+];
+
+/// `docs/reference/cli-output/` and `docs/reference/error-codes.md` are
+/// drift-governed artifact sets. Their committed compatibility prose/schemas
+/// are emitted from legacy DTOs; the current typed command contract lives in
+/// `docs/reference/cli-contract.md`. Do not broaden this exemption to other
+/// reference docs.
+fn generated_cli_compatibility_artifact(rel: &str) -> bool {
+    rel.starts_with("docs/reference/cli-output/") || rel == "docs/reference/error-codes.md"
+}
+
+/// Explicitly historical how-tos retain the old command as migration input.
+/// Keep this list narrow: current how-tos under the same directory remain
+/// governed by the scan below.
+fn historical_cli_document(rel: &str) -> bool {
+    matches!(
+        rel,
+        "docs/how-to/migrate-d2b-v0-to-v1.md"
+            | "docs/how-to/migrate-d2b-v1-0-to-v1-1.md"
+            | "docs/how-to/migrate-d2b-v1-1-to-v1-2.md"
+            | "docs/how-to/migrate-d2b-v1-2-to-v1-3.md"
+            | "docs/how-to/migrate-d2b-v1-2-to-v2.md"
+            | "docs/how-to/migrate-nixos-to-daemon.md"
+            | "docs/how-to/migrate-usbip-yubikey-to-security-key.md"
+    )
+}
+
+fn cli_doc_path_is_governed(rel: &str) -> bool {
+    if rel.starts_with("docs/reference/schemas/") {
+        return false;
+    }
+    if generated_cli_compatibility_artifact(rel) {
+        return false;
+    }
+    if historical_cli_document(rel) {
+        return false;
+    }
+    matches!(
+        std::path::Path::new(rel)
+            .extension()
+            .and_then(|ext| ext.to_str()),
+        Some("md" | "nix" | "sh")
+    )
+}
+
+fn collect_cli_doc_paths(repo_root: &Path, rel: &str, paths: &mut Vec<String>) {
+    let root = repo_root.join(rel);
+    let metadata = std::fs::metadata(&root)
+        .unwrap_or_else(|err| panic!("CLI policy path is unreadable: {rel}: {err}"));
+    if metadata.is_file() {
+        if cli_doc_path_is_governed(rel) {
+            paths.push(rel.to_owned());
+        }
+        return;
+    }
+    let entries = std::fs::read_dir(&root)
+        .unwrap_or_else(|err| panic!("CLI policy directory is unreadable: {rel}: {err}"));
+    for entry in entries {
+        let entry = entry
+            .unwrap_or_else(|err| panic!("CLI policy directory entry is unreadable: {rel}: {err}"));
+        let child = entry.path();
+        let child_rel = child
+            .strip_prefix(repo_root)
+            .expect("CLI policy child stays under repo root")
+            .to_string_lossy()
+            .into_owned();
+        if child.is_dir() {
+            collect_cli_doc_paths(repo_root, &child_rel, paths);
+        } else if cli_doc_path_is_governed(&child_rel) {
+            paths.push(child_rel);
+        }
+    }
+}
+
+fn historical_cli_line(line: &str) -> bool {
+    static MARKER: OnceLock<Regex> = OnceLock::new();
+    MARKER
+        .get_or_init(|| {
+            Regex::new(
+                r"(?i)\bhistorical\b|\blegacy\b|\bretired\b|\bremoved\b|\bdeleted\b|\bsuccessor\b|\bmigrat(?:e|ion)\b|\barchived\b|\bdeprecated\b|\bno longer\b|\bpredates\b|\bsupersedes\b",
+            )
+            .expect("valid CLI history marker regex")
+        })
+        .is_match(line)
+}
+
+/// Return the untyped `d2b list` occurrences on one line. A positional
+/// ResourceType keeps the generic command valid; flags, prose, and an omitted
+/// positional are the retired inventory form.
+fn has_untyped_list_occurrence(line: &str) -> bool {
+    let mut offset = 0;
+    while let Some(relative) = line[offset..].find("d2b list") {
+        let start = offset + relative;
+        if start > 0
+            && (line.as_bytes()[start - 1].is_ascii_alphanumeric()
+                || matches!(line.as_bytes()[start - 1], b'.' | b'-' | b'_'))
+        {
+            offset = start + "d2b list".len();
+            continue;
+        }
+        let after = &line[start + "d2b list".len()..];
+        let token = after.split_whitespace().next().unwrap_or("");
+        let token = token.trim_matches(|ch: char| matches!(ch, '`' | '\'' | '"' | ')' | ']' | ','));
+        let generic_type = token == "<RESOURCE_TYPE>"
+            || token
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+            || token.contains(".d2bus.org/");
+        if !generic_type {
+            return true;
+        }
+        offset = start + "d2b list".len();
+    }
+    false
+}
+
+#[test]
+fn governed_cli_docs_use_typed_guest_inventory_and_lifecycle_commands() {
+    let vm_re = Regex::new(r"\bd2b\s+vm\s+(?:start|stop|restart|list|status|exec)\b")
+        .expect("valid retired VM command regex");
+    let status_re =
+        Regex::new(r"\bd2b\s+status(?:\s|`|$)").expect("valid retired status command regex");
+    let mut paths = Vec::new();
+    let repo_root = d2b_contract_tests::repo_root();
+    for root in CLI_DOC_ROOTS {
+        collect_cli_doc_paths(&repo_root, root, &mut paths);
+    }
+    paths.sort();
+    paths.dedup();
+    assert!(
+        !paths.is_empty(),
+        "CLI policy scan found no governed documentation or live script paths"
+    );
+
+    let mut violations = Vec::new();
+    for rel in paths {
+        let content = std::fs::read_to_string(repo_root.join(&rel))
+            .unwrap_or_else(|err| panic!("CLI policy file is unreadable: {rel}: {err}"));
+        for (line_number, line) in content.lines().enumerate() {
+            if historical_cli_line(line) {
+                continue;
+            }
+            if has_untyped_list_occurrence(line) {
+                violations.push(format!(
+                    "{rel}:{} uses untyped `d2b list`; use `d2b guest list` or `d2b list <RESOURCE_TYPE>`",
+                    line_number + 1
+                ));
+            }
+            if vm_re.is_match(line) {
+                violations.push(format!(
+                    "{rel}:{} uses a retired `d2b vm` lifecycle/exec form",
+                    line_number + 1
+                ));
+            }
+            if status_re.is_match(line) {
+                violations.push(format!(
+                    "{rel}:{} uses retired untyped `d2b status`",
+                    line_number + 1
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "current governed docs or live scripts reintroduced retired CLI forms:\n{}",
+        violations.join("\n")
+    );
+
+    let readme = read_repo_file("README.md");
+    let smoke = read_repo_file("tests/integration/live/live-vm-smoke.sh");
+    assert!(
+        readme.contains("d2b guest list"),
+        "README must document typed Guest inventory"
+    );
+    assert!(
+        smoke.contains("d2b exec run \"Guest/$vm\""),
+        "live VM smoke must use typed Guest exec ResourceRefs"
+    );
+    assert!(
+        smoke.contains("resources.d2bus.org/v3")
+            && smoke.contains(".status.phase")
+            && smoke.contains(".status.conditions"),
+        "live VM smoke must parse v3 Guest status and readiness fields"
+    );
+}
+
+/// Faithful port of the bash gate's `awk` extraction of the `enum ModernCommand`
 /// subcommand set. Two forms are recognised inside the enum block:
 ///   1. An explicit override `#[command(name = "...")]` on the line immediately
 ///      preceding a variant.
@@ -542,7 +740,10 @@ fn activation_docs_do_not_describe_host_side_guest_activation() {
 /// Only variants of the form `^<ws>Ident(` (a tuple-data variant) are detected,
 /// exactly as the bash awk parser did.
 fn expected_subcommands(cli_src: &str) -> BTreeSet<String> {
-    let enum_start = Regex::new(r"^enum NativeCommand[[:space:]]*\{").unwrap();
+    let enum_start = Regex::new(
+        r"^[[:space:]]*(?:pub(?:\([^)]*\))?[[:space:]]+)?enum ModernCommand[[:space:]]*\{",
+    )
+    .unwrap();
     let enum_end = Regex::new(r"^\}").unwrap();
     let override_re =
         Regex::new(r#"^[[:space:]]*#\[command\(name[[:space:]]*=[[:space:]]*"[^"]+"\)\]"#).unwrap();
@@ -1167,8 +1368,16 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     assert!(
         nix_driver.contains("nix-eval-jobs")
             && nix_driver.contains("--no-instantiate")
-            && nix_driver.contains("nixUnitJobs"),
+            && nix_driver.contains("nixUnitJobShards"),
         "execution-manifest-policy: Nix-unit emitter must use the evaluation-only nix-eval-jobs surface"
+    );
+    assert!(
+        nix_driver.contains("nixUnitCheckJobShards.${system}")
+            && nix_driver.contains("builtins.getAttr \\\"${check}\\\" shards")
+            && nix_driver.contains("selected_jobs_file")
+            && nix_driver.contains("mapfile -t selected_jobs")
+            && nix_driver.contains("for job in \"${selected_jobs[@]}\"; do"),
+        "execution-manifest-policy: selected Nix-unit shards must evaluate partitioned jobs one at a time"
     );
     assert!(
         nix_jobs.contains("builtins.tryEval")
@@ -1182,6 +1391,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && !nix_jobs.contains("jobsFor")
             && !nix_jobs.contains("derivationName")
             && flake.contains("nixUnitJobs = forAllSystems")
+            && flake.contains("nixUnitCheckJobShards = forAllSystems")
             && flake.contains("nixUnitInventory = forAllSystems")
             && flake.contains("nixUnitCorpus.caseNames")
             && flake.contains("nixUnitCorpus.jobNames")
@@ -1194,10 +1404,13 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && !flake.contains("__nix_unit_integrity"),
         "execution-manifest-policy: Nix-unit aggregate, file-job, and inventory surfaces drifted"
     );
-    let jobs_block = flake
+    let jobs_region = flake
         .split("nixUnitJobs = forAllSystems")
         .nth(1)
-        .and_then(|region| region.split("nixUnitInventory = forAllSystems").next())
+        .expect("execution-manifest-policy: Nix-unit jobs block is missing");
+    let jobs_block = jobs_region
+        .split("nixUnitJobShards = forAllSystems")
+        .next()
         .expect("execution-manifest-policy: Nix-unit jobs block is missing");
     assert!(
         jobs_block.contains("fileJobs")
@@ -1207,6 +1420,35 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && !jobs_block.contains("nixUnitCorpus.jobs")
             && !jobs_block.contains("jobsFor"),
         "execution-manifest-policy: Nix-unit jobs must expose per-file fileJobs, not seven self.checks-only attrs"
+    );
+    let shard_region = jobs_region
+        .split("nixUnitJobShards = forAllSystems")
+        .nth(1)
+        .expect("execution-manifest-policy: Nix-unit shard jobs block is missing");
+    let shard_block = shard_region
+        .split("nixUnitCheckJobShards = forAllSystems")
+        .next()
+        .expect("execution-manifest-policy: Nix-unit shard jobs block is missing");
+    assert!(
+        shard_block.contains("jobsFor")
+            && shard_block.contains("fileGroups")
+            && shard_block.contains("nixUnitCorpus.fileJobs")
+            && shard_block.contains("integrity")
+            && shard_block.matches("self.checks").count() == 1
+            && !shard_block.contains("nixUnitCorpus.jobs"),
+        "execution-manifest-policy: Nix-unit shard jobs must partition fileJobs and retain integrity"
+    );
+    let topical_shard_block = shard_region
+        .split("nixUnitCheckJobShards = forAllSystems")
+        .nth(1)
+        .and_then(|region| region.split("nixUnitInventory = forAllSystems").next())
+        .expect("execution-manifest-policy: topical Nix-unit shard jobs block is missing");
+    assert!(
+        topical_shard_block.contains("mapAttrs")
+            && topical_shard_block.contains("nixUnitShardCaseFiles")
+            && topical_shard_block.contains("nix-unit")
+            && topical_shard_block.contains("integrity"),
+        "execution-manifest-policy: topical Nix-unit shard mapping must cover the rollup"
     );
     for marker in [
         "nix-eval-jobs",
@@ -1293,7 +1535,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Nix-unit full runs must not dump raw JSONL results"
     );
     assert!(
-        nix_driver.contains("2>\"$tool_stderr\"")
+        nix_driver.contains("2>\"$shard_stderr\"")
+            && nix_driver.contains("cat \"$shard_dir/$shard.stderr\" >>\"$tool_stderr\"")
             && nix_driver.contains("emit_sanitized_tool_stderr()")
             && nix_driver.contains("while IFS= read -r line || [ -n \"$line\" ]; do")
             && nix_driver.contains("sanitize_observable_line()")

@@ -62,12 +62,12 @@ the existing taps), stop here and shrink the scope first.
 | Egress firewall      | host nftables                                      | nftables inside the net VM (`hostBlocklist` + RFC1918 DROP)          |
 | VM-to-VM isolation   | shared bridge by default                           | one bridge per env, no inter-env forwarding                          |
 | SSH into the VM      | bake keys into the guest's nixos config            | framework-managed per-VM Ed25519 key under `d2b.site.keysDir`    |
-| Lifecycle commands   | `systemctl start microvm@<vm>` + `microvm -R`      | `d2b vm start\|vm stop\|switch\|build\|boot\|test\|status <vm>` (dispatches through `d2bd` → `d2b-priv-broker` per ADR 0015 v1.0 daemon-only) |
+| Lifecycle commands   | `systemctl start microvm@<vm>` + `microvm -R`      | `d2b guest start\|stop\|restart\|list\|status <name>` plus `d2b activation switch\|build\|boot\|test Guest/<name>` (dispatches through the v3 Resource API) |
 | Autostart            | `microvm.autostart` list                           | `d2b.vms.<vm>.autostart` per-VM bool                             |
 | Graphics             | hand-rolled crosvm + virtio-gpu wiring             | `d2b.vms.<vm>.graphics.enable = true` (component toggle)         |
 | TPM                  | hand-rolled `swtpm`, manual socket plumbing        | `d2b.vms.<vm>.tpm.enable = true`                                 |
 | Audio                | hand-rolled vhost-user-sound                       | `d2b.vms.<vm>.audio.enable = true` + `d2b audio mic/speaker` |
-| USBIP                | manual `usbipd` + `usbip attach` on the host       | `d2b usb attach <vm> <busid> --apply` (dispatches through d2bd → broker `SpawnRunner` per-env usbipd runner; legacy systemd `d2b-sys-<env>-usbipd-proxy.{service,socket}` was retired in v1.0 per ADR 0015) |
+| USBIP                | manual `usbipd` + `usbip attach` on the host       | `d2b device usb attach <name> <busid> --apply` (dispatches through d2bd → broker `SpawnRunner` per-env usbipd runner; legacy systemd `d2b-sys-<env>-usbipd-proxy.{service,socket}` was retired in v1.0 per ADR 0015) |
 | Non-root start/stop  | sudo every time                                    | `d2b` group + SO_PEERCRED at `public.sock` accept time (v1.0 daemon-only per ADR 0015; the polkit per-VM allowlist was retired in v1.0) |
 | Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `d2bd` supervisor DAG + broker `SpawnRunner` per-runner pidfd ownership (the legacy `d2b@<vm>.service` wrapper was retired in v1.0) |
 
@@ -243,7 +243,7 @@ cross-domain goes away.
 `graphics.enable = true` implicitly pins `microvm.hypervisor =
 "cloud-hypervisor"` - the only hypervisor wired for the GPU sidecar.
 Do not also start it with `systemctl start microvm@workstation`: use
-`d2b vm start workstation` from a Plasma/sway/Hyprland terminal so the
+`d2b guest start workstation --apply` from a Plasma/sway/Hyprland terminal so the
 sidecar can reach `$WAYLAND_DISPLAY`. See `examples/graphics-workstation/`.
 
 ### Pattern: TPM-backed VM
@@ -276,7 +276,7 @@ d2b.vms.work-app = {
 };
 ```
 
-Then `d2b usb attach work-app <busid> --apply` from the host
+Then `d2b device usb attach work-app <busid> --apply` from the host
 attaches a plugged-in YubiKey via the per-env usbipd broker-spawned
 runner under `d2b.slice/sys-work/usbipd-proxy` (v1.0 per ADR
 0015; the legacy `d2b usb work-app` bash orchestrator + the
@@ -474,15 +474,15 @@ has built cleanly. See "Rollback" at the end of this section.
 9. **Verify.**
 
    ```bash
-   d2b list                       # what's declared + status
-   d2b status <vm>                # per-VM health
-   d2b vm start <vm> --apply      # bring up (graphics: needs Wayland)
-   d2b switch <vm> --apply        # push a new closure live
+   d2b guest list                 # typed Guest inventory
+   d2b guest status <name>        # per-Guest health
+   d2b guest start <name> --apply # bring up (graphics: needs Wayland)
+   d2b activation switch Guest/<name> --apply # push a new closure live
    ```
 
    For headless VMs, `autostart = true` plus
-   `d2b vm list` will show the broker-spawned runner state
-   (`d2b vm start <vm>` registers the runner in the supervisor
+   `d2b guest list` will show Guest status
+   (`d2b guest start <name> --apply` registers the Guest in the Resource API
    pidfd table). SSH into each migrated VM to confirm reachability.
 
 ### After every subsequent `nixos-rebuild switch` (v1.0)
@@ -493,18 +493,18 @@ the systemd unit files and `/etc/d2b/{bundle,host,processes,
 privileges}.json` but the broker's per-runner pidfd ownership
 protects in-flight session state (interactive Wayland clients,
 in-RAM Entra device-bound tokens, virtiofsd socket handshakes) -
-the runners are not respawned. Use `d2b vm restart <vm> --apply`
+the runners are not respawned. Use `d2b guest restart <name> --apply`
 to explicitly cycle a VM after a rebuild.
 
 After `nixos-rebuild switch`, check whether any VM has pending
 changes:
 
 ```bash
-d2b list
+d2b guest list
 ```
 
-A VM with a drift between its declared closure and its booted
-closure is flagged in the STATUS column:
+A Guest with an update between its declared and observed generations
+exposes that currency in `status.update`:
 
 ```
 NAME             ENV    GRAPHICS TPM   USBIP   STATIC_IP       STATUS
@@ -514,15 +514,15 @@ work             work   true     true  true    10.20.0.10      running [pending 
 Apply with:
 
 ```bash
-d2b vm restart <vm> --apply
+d2b guest restart <name> --apply
 ```
 
-(Or `d2b switch <vm> --apply` if you want a per-VM closure rebuild +
-live activation via SSH; restart cycles the existing closure
+(Or `d2b activation switch Guest/<name> --apply` if you want a Guest closure rebuild +
+live activation via guest control; restart cycles the existing closure
 cleanly.)
 
-`d2b status <vm>` prints both the `booted` and `current`
-store paths plus the exact remediation command, so the user
+`d2b guest status <name>` prints the Guest phase, conditions, and
+`status.update` currency, so the user
 doesn't have to memorize which command applies which kind of
 change. For the full predicate semantics see
 [`docs/reference/cli-contract.md` - Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015).
@@ -542,7 +542,7 @@ change. For the full predicate semantics see
   before.
 - **Step 9 verification fails on a specific VM** but activation
   succeeded: prefer fixing forward (the per-env net VM may take a
-  few seconds to come up; check `d2b status sys-<env>-net` and
+  few seconds to come up; check `d2b guest status sys-<env>-net` and
   the troubleshooting section). If a deeper rollback is needed,
   `nixos-rebuild switch --rollback` reverts to the previous
   generation, then move state back as above.
@@ -554,22 +554,22 @@ change. For the full predicate semantics see
 - **Per-VM /nix/store.** Each guest sees only its own closure plus
   the microvm.nix runner - a closure-limited `/nix/store` view backed
   by a per-VM hardlink farm under `/var/lib/d2b/vms/<vm>/store/`.
-  Zero byte duplication. `d2b switch <vm> --apply` updates it live
+  Zero byte duplication. `d2b activation switch Guest/<name> --apply` updates it live
   without a VM reboot. Back up `/var/lib/d2b/` only to encrypted,
   access-controlled media.
-- **Explicit lifecycle.** In v1.0 (per ADR 0015) `d2b vm start /
-  stop / restart` dispatch through `d2bd` → `d2b-priv-broker`;
+- **Explicit lifecycle.** `d2b guest start / stop / restart` dispatch
+  through the v3 Resource API and d2bd;
   the broker's `SpawnRunner` / `SignalRunner` ops + supervisor pidfd
   table are the lifecycle-of-record. Single commands, clear exit
   codes (`docs/reference/cli-contract.md`).
-- **CLI ergonomics.** `d2b vm start / vm stop / status / list /
-  audio / usb` - no more remembering tap names, MAC byte counts, or
+- **CLI ergonomics.** `d2b guest start / guest stop / guest status /
+  guest list / audio / device usb` - no more remembering tap names, MAC byte counts, or
   which env's usbipd is bound to which `192.0.2.X`.
 - **SSH key management.** Per-VM Ed25519 keys generated at activation,
   ACL'd to the `d2b` group, injected into the guest
   at boot via `d2b-load-host-keys.service`. No flake-baked keys.
 - **Permission boundary.** Members of `d2b` can drive
-  `vm start` / `vm stop` / `vm restart` against `d2bd`'s public
+  `guest start` / `guest stop` / `guest restart` against `d2bd`'s public
   socket (mode 0660, group `d2b`); `SO_PEERCRED` at
   accept time is the authorisation surface. The legacy polkit per-VM
   allowlist was retired in v1.0 (ADR 0015).
@@ -600,7 +600,7 @@ change. For the full predicate semantics see
 - **The daemon owns VM lifecycle.** In v1.0 (per ADR 0015) per-VM
   lifecycle moved fully to `d2bd` -> `d2b-priv-broker` via the
   supervisor DAG; the legacy systemd wrapper path was retired. Use
-  `d2b vm start / vm stop / vm restart` for day-to-day lifecycle.
+  `d2b guest start / guest stop / guest restart` for day-to-day lifecycle.
 
 ## Naming conventions you'll see post-migration
 
@@ -619,8 +619,8 @@ change. For the full predicate semantics see
   [`docs/reference/privileges.md`](../reference/privileges.md)).
 - broker-spawned VM runners - in v1.0 the broker `SpawnRunner` path is
   the lifecycle of record.
-- `d2b` - host group whose members can drive `vm start
-  / vm stop / vm restart` against `d2bd`'s public socket (mode
+- `d2b` - host group whose members can drive `guest start
+  / guest stop / guest restart` against `d2bd`'s public socket (mode
   0660, group `d2b`).
 
 ## Backup / state directories
@@ -651,9 +651,9 @@ another env's `lanSubnet`. Pick a disjoint `/24`.
 **Eval fails with `graphics.enable = true` but `waylandUser = null`.**
 Set `d2b.site.waylandUser = "<your-user>"` and declare that user
 in `users.users`. The user must have a running Wayland session at the
-time `d2b vm start <vm>` runs.
+time `d2b guest start <name> --apply` runs.
 
-**`d2b vm start <vm>` fails: `cannot find $WAYLAND_DISPLAY`.**
+**`d2b guest start <name> --apply` fails: `cannot find $WAYLAND_DISPLAY`.**
 You ran it over SSH or as root. Graphics VMs require a terminal
 inside the host's Wayland session. Headless VMs work over SSH and
 as root.
@@ -662,13 +662,13 @@ as root.
 `ip link delete vm-<oldname>` and rerun `nixos-rebuild switch`. The
 framework only manages the taps it declares.
 
-**`d2b switch <vm> --apply` errors with `cross-FS hardlink refused`.**
+**`d2b activation switch Guest/<name> --apply` errors with `cross-FS hardlink refused`.**
 `/var/lib/d2b` and `/nix/store` are on different filesystems.
 The per-VM store needs same-FS hardlinks; move
 `/var/lib/d2b` to the same FS as `/nix/store` (typically by
 remounting or relocating).
 
-**`d2b vm start` is denied by the daemon socket.**
+**`d2b guest start` is denied by the daemon socket.**
 The invoking user is not in `d2b`. Add them to
 `d2b.site.launcherUsers` (which only adjoins the group; you must
 still declare the user) and re-log-in so the group membership
@@ -676,8 +676,8 @@ takes effect.
 
 **SSH into the VM still uses your old key.**
 The guest's `authorized_keys` is populated at boot by
-`d2b-load-host-keys.service`. Restart the VM
-(`d2b vm stop <vm> --apply && d2b vm start <vm> --apply`) or, inside the guest,
+`d2b-load-host-keys.service`. Restart the Guest
+(`d2b guest stop <name> --apply && d2b guest start <name> --apply`) or, inside the guest,
 `systemctl restart d2b-load-host-keys.service`.
 
 **`microvm.vms.<vm>` declared in two places.**
@@ -686,7 +686,7 @@ You left an old `microvm.vms.<name>` block alongside the new
 the translation.
 
 **Per-env net VM (`sys-<env>-net`) won't start.**
-Check `d2b vm status sys-<env>-net` first. The most common cause is
+Check `d2b guest status sys-<env>-net` first. The most common cause is
 that the env's `lanSubnet` is not a `/24` ending in `.0`, or
 `uplinkSubnet` is not a `/30`. Eval should have caught this; if it
 didn't, file an issue.

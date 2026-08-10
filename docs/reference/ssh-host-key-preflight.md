@@ -9,7 +9,7 @@ Related preflight: per-VM state-directory ownership matrix - see
 
 ## What it checks
 
-For every VM the daemon starts (`d2b vm start <vm>`) the daemon
+For every Guest the daemon starts (`d2b guest start <name>`) the daemon
 runs the preflight against
 `/var/lib/d2b/vms/<vm>/sshd-host-keys/` before dispatching any
 broker op:
@@ -58,7 +58,7 @@ SSH endpoint. Two failure modes drove this preflight:
   "kind": "sshd-host-key-drift",
   "exitCode": 62,
   "message": "vm 'work' refused: sshd host key drift: ssh host key mode 644 != expected 400: /var/lib/d2b/vms/work/sshd-host-keys/ssh_host_ed25519_key",
-  "remediation": "regenerate or chown/chmod the per-VM sshd host keys so each ssh_host_*_key under /var/lib/d2b/vms/<vm>/sshd-host-keys is a regular file owned root:root with mode 0400 (no symlinks); see docs/reference/ssh-host-key-preflight.md. Recovery: nixos-rebuild switch (re-runs the host-activation key sync), or remove the offending key and let d2b keys rotate <vm> reprovision it."
+  "remediation": "regenerate or chown/chmod the per-Guest sshd host keys so each ssh_host_*_key under /var/lib/d2b/vms/<name>/sshd-host-keys is a regular file owned root:root with mode 0400 (no symlinks); see docs/reference/ssh-host-key-preflight.md. Recovery: nixos-rebuild switch (re-runs the host-activation key sync), or remove the offending key and let d2b activation keys rotate Guest/<name> reprovision it."
 }
 ```
 

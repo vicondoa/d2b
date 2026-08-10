@@ -1,29 +1,17 @@
-//! W3 CLI-contract integration test, migrated from
-//! tests/cli-vm-verbs-eval.sh.
+//! W5 CLI-contract integration coverage for the v3 `ModernCli` surface.
 //!
-//! Spawns the real `d2b` binary against a synthetic inline manifest and a
-//! deliberately-missing public socket, and asserts that the Rust CLI's
-//! mutating verbs (`up`/`down`/`restart` plus their `vm start`/`vm stop`/
-//! `vm restart` aliases), `list`/`vm list`, and the guest-control surface
-//! (`vm exec`) are fully daemon-native with NO bash fallback:
+//! The old test exercised the retired v2 `up`/`vm` verbs and the manifest
+//! inventory shape.  v3 addresses Zone resources instead: lifecycle uses
+//! `guest`, execution uses `exec`, and inventory uses generic
+//! `list <ResourceType>`.  These tests keep the historical libtest names
+//! because the migration census pins them, but their assertions are all over
+//! the committed v3 parser and JSON envelope.
 //!
-//!   1. With d2bd's public socket missing, every mutating verb surfaces
-//!      the typed `daemon-down` envelope (`code == "daemon-down"`,
-//!      `exitCode == 1`) and exits 1 - even when the removed
-//!      `D2B_LEGACY_BASH_OPT_IN=1` escape hatch is set.
-//!   2. The `D2B_LEGACY_CLI_PATH` / `D2B_LEGACY_CLI` poison-pill is
-//!      NEVER invoked: it is wired to an executable sentinel that would
-//!      `exit 99` if ever exec'd, so any exit code of 99 fails the assertion.
-//!   3. `vm list` / `list` return the rust-native JSON envelopes without
-//!      touching bash.
-//!   4. `vm exec` reaches `cmd_vm_exec` through real clap parsing + dispatch.
-//!
-//! Layer 1: no live daemon, no microvm spawn, no D2B_FIXTURES. Self-contained -
-//! always runs. Runs in seconds.
-//!
-//! The `daemon-down` envelope is the private `HostErrorEnvelope` DTO (not part
-//! of the crate's public surface), so the JSON is asserted over
-//! `serde_json::Value` rather than a typed deserialize.
+//! Every runtime probe uses a missing Zone socket and missing legacy artifacts.
+//! The v3 error envelope therefore proves that the command reached ModernCli
+//! dispatch without contacting SSH, executing a legacy CLI, or leaking the
+//! command's private canary.  Clap rejections intentionally remain plain usage
+//! errors: they happen before a v3 JSON envelope exists.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -32,349 +20,353 @@ use std::process::{Command, Output};
 use serde_json::Value;
 use tempfile::TempDir;
 
-// Synthetic inline manifest reproduced verbatim from the bash gate's heredoc
-// (a single workload VM). Pointed at via D2B_MANIFEST_PATH; NOT a Nix eval.
-const VM_MANIFEST_JSON: &str = r#"{
-  "test-vm": {
-    "name": "test-vm",
-    "env": "work",
-    "graphics": false,
-    "tpm": false,
-    "audio": false,
-    "audioService": "none",
-    "usbipYubikey": false,
-    "staticIp": null,
-    "isNetVm": false,
-    "stateDir": "/var/lib/d2b/vms/test-vm",
-    "bridge": "d2b-work",
-    "sshUser": null
-  }
-}"#;
+const SECRET_CANARY: &str = "zone-private-canary";
+const EXEC_SECRET_ENV: &str = "D2B_EXEC_SECRET=zone-private-canary";
 
-// Synthetic manifest for the guest-control (`vm exec`) surface.
-const KONSOLE_MANIFEST_JSON: &str = r#"{
-  "konsole-vm": {
-    "name": "konsole-vm",
-    "env": "work",
-    "graphics": false,
-    "tpm": false,
-    "audio": false,
-    "audioService": "none",
-    "usbipYubikey": false,
-    "staticIp": "10.30.0.99",
-    "isNetVm": false,
-    "stateDir": "/var/lib/d2b/vms/konsole-vm",
-    "bridge": "d2b-work",
-    "sshUser": "alice"
-  }
-}"#;
+// If any retired fallback path is reached, the distinctive status is visible
+// to the parent test process.
+const LEGACY_CLI_POISON: &str = "#!/bin/sh\nexit 99\n";
+const SSH_POISON: &str = "#!/bin/sh\nexit 98\n";
 
-// A poison-pill "legacy bash CLI": if the rust CLI ever exec's it the process
-// exits 99, a distinctive code no native verb path returns.
-const POISON_PILL: &str = "#!/usr/bin/env bash\n\
-echo \"FAIL: rust CLI exec'd the legacy bash poison-pill with args: $*\" >&2\n\
-exit 99\n";
-
-// Minimal hermetic system-state so `list` does not probe the real host's
-// systemctl / daemon-state (which would make the gate non-hermetic).
-const SYSTEM_STATE_JSON: &str = r#"{ "units": {}, "bridges": {} }"#;
+const V3_ERROR_KEYS: &[&str] = &["errorClass", "message", "ok", "schemaVersion", "zoneRef"];
 
 struct ScratchPaths {
+    // These deliberately do not exist.  ModernCli must not recover by reading
+    // the retired v2 manifest/bundle or a host runtime path.
     manifest: PathBuf,
     bundle: PathBuf,
     socket: PathBuf,
-    poison: PathBuf,
-    realm_entrypoints: PathBuf,
-    system_state: PathBuf,
-    daemon_state: PathBuf,
+    legacy_cli: PathBuf,
+    tool_path: PathBuf,
 }
 
-/// Build a scratch sandbox: the synthetic manifest, a never-bound public-socket
-/// path, the exit-99 poison-pill, a minimal system-state fixture, and an empty
-/// daemon-state dir. The returned `TempDir` guard must be kept alive for the
-/// duration of the test.
-fn scratch(manifest_json: &str) -> (TempDir, ScratchPaths) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let manifest = tmp.path().join("vms.json");
-    std::fs::write(&manifest, manifest_json).expect("write manifest");
-    let bundle = tmp.path().join("missing-bundle.json");
-
-    let poison = tmp.path().join("legacy-poison.sh");
-    std::fs::write(&poison, POISON_PILL).expect("write poison-pill");
-    let mut perms = std::fs::metadata(&poison)
-        .expect("stat poison-pill")
+fn write_executable(path: &PathBuf, contents: &str) {
+    std::fs::write(path, contents).expect("write executable fixture");
+    let mut permissions = std::fs::metadata(path)
+        .expect("stat executable fixture")
         .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&poison, perms).expect("chmod poison-pill");
-
-    let realm_entrypoints = tmp.path().join("missing-realm-entrypoints.json");
-
-    let system_state = tmp.path().join("system-state.json");
-    std::fs::write(&system_state, SYSTEM_STATE_JSON).expect("write system-state");
-
-    let daemon_state = tmp.path().join("daemon-state");
-    std::fs::create_dir_all(&daemon_state).expect("mk daemon-state dir");
-
-    // A path under the tempdir that is never created -> the public socket is
-    // missing, so every daemon-backed verb fails the connectivity check.
-    let socket = tmp.path().join("never-bound.sock");
-    let _ = std::fs::remove_file(&socket);
-
-    (
-        tmp,
-        ScratchPaths {
-            manifest,
-            bundle,
-            socket,
-            poison,
-            realm_entrypoints,
-            system_state,
-            daemon_state,
-        },
-    )
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("chmod executable fixture");
 }
 
-/// Spawn the real `d2b` binary with the missing socket, the poison-pill
-/// legacy-CLI env (and the removed `D2B_LEGACY_BASH_OPT_IN` opt-in) set, and
-/// the hermetic state fixtures. Every invocation therefore doubles as a proof
-/// that no verb falls back to the poison-pill.
-fn run_cli(p: &ScratchPaths, args: &[&str]) -> Output {
+/// Build a hermetic v3 CLI sandbox.  The legacy and SSH paths are executable
+/// sentinels, while the Zone socket and old manifest artifacts are absent.
+fn scratch() -> (TempDir, ScratchPaths) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let tool_path = tmp.path().join("tools");
+    std::fs::create_dir(&tool_path).expect("mk tool fixture dir");
+
+    let legacy_cli = tmp.path().join("legacy-cli-poison");
+    write_executable(&legacy_cli, LEGACY_CLI_POISON);
+    write_executable(&tool_path.join("ssh"), SSH_POISON);
+    write_executable(&tool_path.join("scp"), SSH_POISON);
+
+    let paths = ScratchPaths {
+        manifest: tmp.path().join("retired-v2-manifest.json"),
+        bundle: tmp.path().join("retired-v2-bundle.json"),
+        socket: tmp.path().join("missing-zone.sock"),
+        legacy_cli,
+        tool_path,
+    };
+    (tmp, paths)
+}
+
+fn run_cli(paths: &ScratchPaths, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .env_clear()
         .args(args)
-        .env("D2B_MANIFEST_PATH", &p.manifest)
-        .env("D2B_BUNDLE_PATH", &p.bundle)
-        .env("D2B_PUBLIC_SOCKET", &p.socket)
-        .env("D2B_LEGACY_CLI_PATH", &p.poison)
-        .env("D2B_LEGACY_CLI", &p.poison)
+        .env("PATH", &paths.tool_path)
+        .env("D2B_PUBLIC_SOCKET", &paths.socket)
+        .env("D2B_MANIFEST_PATH", &paths.manifest)
+        .env("D2B_BUNDLE_PATH", &paths.bundle)
+        .env("D2B_LEGACY_CLI_PATH", &paths.legacy_cli)
+        .env("D2B_LEGACY_CLI", &paths.legacy_cli)
         .env("D2B_LEGACY_BASH_OPT_IN", "1")
         .env("D2B_SUPPRESS_LEGACY_BASH_WARNING", "1")
-        .env("D2B_REALM_ENTRYPOINTS_PATH", &p.realm_entrypoints)
-        .env("D2B_TEST_SYSTEM_STATE_JSON", &p.system_state)
-        .env("D2B_DAEMON_STATE_DIR", &p.daemon_state)
         .output()
         .expect("spawn d2b")
 }
 
-fn stderr_of(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
+fn stderr_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn stdout_json(out: &Output, label: &str) -> Value {
-    serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+fn combined_output(output: &Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr_of(output)
+    )
+}
+
+fn stdout_json(output: &Output, label: &str) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
-            "{label}: stdout was not valid JSON: {err}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            stderr_of(out),
+            "{label}: stdout was not valid JSON: {error}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr_of(output),
         )
     })
 }
 
-/// Assert the typed `daemon-down` envelope on stdout with exit 1, and that the
-/// poison-pill was never exec'd (exit code is never 99).
-fn assert_daemon_down(out: &Output, label: &str) {
-    let code = out.status.code();
+/// Assert that no retired execution route ran and no private test canary was
+/// reflected in a user-facing response.
+fn assert_no_retired_transport(output: &Output, paths: &ScratchPaths, label: &str) {
     assert_ne!(
-        code,
+        output.status.code(),
         Some(99),
-        "{label}: rust CLI exec'd the legacy bash poison-pill \
-         (D2B_LEGACY_BASH_OPT_IN must NOT be honoured)\nstderr:\n{}",
-        stderr_of(out),
+        "{label}: executed the legacy CLI poison-pill\n{}",
+        combined_output(output)
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(98),
+        "{label}: executed the SSH/SCP poison-pill\n{}",
+        combined_output(output)
+    );
+    let rendered = combined_output(output);
+    assert!(
+        !rendered.contains(SECRET_CANARY),
+        "{label}: leaked the private canary\n{rendered}"
+    );
+    assert!(
+        !rendered.to_ascii_lowercase().contains("ssh"),
+        "{label}: exposed an SSH fallback in its output\n{rendered}"
+    );
+    assert!(
+        !rendered.to_ascii_lowercase().contains("bash"),
+        "{label}: exposed a bash fallback in its output\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(&paths.socket.display().to_string()),
+        "{label}: leaked the Zone socket path\n{rendered}"
+    );
+}
+
+fn assert_v3_error(
+    output: &Output,
+    paths: &ScratchPaths,
+    label: &str,
+    exit_code: i32,
+    error_class: &str,
+    message: &str,
+) {
+    assert_no_retired_transport(output, paths, label);
+    assert_eq!(
+        output.status.code(),
+        Some(exit_code),
+        "{label}: unexpected exit code; stderr:\n{}",
+        stderr_of(output)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{label}: JSON errors must keep stderr empty; got:\n{}",
+        stderr_of(output)
+    );
+
+    let envelope = stdout_json(output, label);
+    let object = envelope
+        .as_object()
+        .unwrap_or_else(|| panic!("{label}: JSON error must be an object: {envelope}"));
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, V3_ERROR_KEYS,
+        "{label}: v3 error envelope keys drifted: {envelope}"
+    );
+    assert_eq!(envelope["ok"], false, "{label}: expected ok=false");
+    assert_eq!(
+        envelope["zoneRef"], "Zone/local-root",
+        "{label}: unexpected Zone reference"
     );
     assert_eq!(
-        code,
-        Some(1),
-        "{label}: expected the daemon-down typed envelope (exit 1)\nstderr:\n{}",
-        stderr_of(out),
-    );
-    let envelope = stdout_json(out, label);
-    assert_eq!(
-        envelope.get("code").and_then(Value::as_str),
-        Some("daemon-down"),
-        "{label}: expected .code == \"daemon-down\"; got {envelope}",
+        envelope["schemaVersion"], 1,
+        "{label}: unexpected JSON schema version"
     );
     assert_eq!(
-        envelope.get("exitCode").and_then(Value::as_i64),
-        Some(1),
-        "{label}: expected .exitCode == 1; got {envelope}",
+        envelope["errorClass"], error_class,
+        "{label}: unexpected error class"
+    );
+    assert_eq!(envelope["message"], message, "{label}: unexpected message");
+}
+
+fn assert_usage_rejection(output: &Output, paths: &ScratchPaths, label: &str, marker: &str) {
+    assert_no_retired_transport(output, paths, label);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{label}: expected clap usage exit 2; stderr:\n{}",
+        stderr_of(output)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "{label}: clap rejection must not emit a JSON document"
+    );
+    let stderr = stderr_of(output);
+    assert!(
+        stderr.contains(marker),
+        "{label}: usage error did not contain {marker:?}; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Usage: d2b"),
+        "{label}: usage error did not identify d2b; got:\n{stderr}"
+    );
+}
+
+fn assert_retired_subcommand(output: &Output, paths: &ScratchPaths, label: &str, command: &str) {
+    assert_usage_rejection(
+        output,
+        paths,
+        label,
+        &format!("unrecognized subcommand '{command}'"),
     );
 }
 
 #[test]
 fn mutating_verbs_emit_daemon_down_without_bash_fallback() {
-    let (_guard, paths) = scratch(VM_MANIFEST_JSON);
+    // Historical test id retained for the migration pin.  v3 lifecycle
+    // operations are Guest resource updates, not daemon-down v2 verbs.
+    let (_guard, paths) = scratch();
 
-    let verbs: &[(&str, &[&str])] = &[
-        ("up", &["up", "test-vm", "--apply", "--json"]),
-        ("down", &["down", "test-vm", "--apply", "--json"]),
-        ("restart", &["restart", "test-vm", "--apply", "--json"]),
-        ("vm-start", &["vm", "start", "test-vm", "--apply", "--json"]),
-        ("vm-stop", &["vm", "stop", "test-vm", "--apply", "--json"]),
-        (
-            "vm-restart",
-            &["vm", "restart", "test-vm", "--apply", "--json"],
-        ),
-    ];
-
-    for (label, args) in verbs {
-        let out = run_cli(&paths, args);
-        assert_daemon_down(&out, label);
+    for action in ["start", "stop", "restart"] {
+        let args = ["guest", action, "corp-vm", "--apply", "--json"];
+        let output = run_cli(&paths, &args);
+        assert_v3_error(
+            &output,
+            &paths,
+            &format!("guest {action}"),
+            1,
+            "zone-unavailable",
+            "Zone runtime is unavailable",
+        );
     }
 }
 
 #[test]
 fn legacy_bash_opt_in_is_a_no_op() {
-    // Spot-check: D2B_LEGACY_BASH_OPT_IN=1 + a poison-pill legacy path must
-    // never reach the poison-pill. The escape hatch is removed.
-    let (_guard, paths) = scratch(VM_MANIFEST_JSON);
-    let out = run_cli(&paths, &["up", "test-vm", "--apply", "--json"]);
-    assert_ne!(
-        out.status.code(),
-        Some(99),
-        "D2B_LEGACY_BASH_OPT_IN was honoured - the escape hatch must be removed\nstderr:\n{}",
-        stderr_of(&out),
+    // Both retired namespaces must fail at the ModernCli parser.  In
+    // particular, --json does not manufacture a v3 envelope for clap errors.
+    let (_guard, paths) = scratch();
+
+    let up = run_cli(
+        &paths,
+        &["up", "corp-vm", "--apply", "--json", SECRET_CANARY],
     );
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "opt-in spot-check: expected daemon-down exit 1\nstderr:\n{}",
-        stderr_of(&out),
-    );
+    assert_retired_subcommand(&up, &paths, "retired up", "up");
+
+    let vm = run_cli(&paths, &["vm", "start", "corp-vm", "--apply", "--json"]);
+    assert_retired_subcommand(&vm, &paths, "retired vm", "vm");
 }
 
 #[test]
 fn vm_list_is_daemon_native_json() {
-    let (_guard, paths) = scratch(VM_MANIFEST_JSON);
-    let out = run_cli(&paths, &["vm", "list", "--json"]);
-    assert_ne!(
-        out.status.code(),
-        Some(99),
-        "vm list exec'd the legacy bash poison-pill\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "vm list expected exit 0\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let envelope = stdout_json(&out, "vm list");
-    assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm list"),
-        "vm list did not emit the rust-native JSON envelope; got {envelope}",
+    // Historical test id retained for the migration pin.  Generic v3 list
+    // takes a standard ResourceType and returns the Zone envelope on transport
+    // failure.
+    let (_guard, paths) = scratch();
+    let output = run_cli(&paths, &["list", "Guest", "--phase", "Ready", "--json"]);
+    assert_v3_error(
+        &output,
+        &paths,
+        "list Guest",
+        1,
+        "zone-unavailable",
+        "Zone runtime is unavailable",
     );
 }
 
 #[test]
 fn top_level_list_is_daemon_native_json() {
-    // `d2b list` is the native manifest view; re-assert with the same
-    // poison-pill setup to keep the no-bash-fallback contract honest.
-    let (_guard, paths) = scratch(VM_MANIFEST_JSON);
-    let out = run_cli(&paths, &["list", "--json"]);
-    assert_ne!(
-        out.status.code(),
-        Some(99),
-        "top-level list exec'd the legacy bash poison-pill\nstderr:\n{}",
-        stderr_of(&out),
+    let (_guard, paths) = scratch();
+
+    let output = run_cli(
+        &paths,
+        &[
+            "list",
+            "EphemeralProcess",
+            "--execution-ref",
+            "Guest/corp-vm",
+            "--domain",
+            "user",
+            "--json",
+        ],
     );
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "list expected exit 0\nstderr:\n{}",
-        stderr_of(&out),
+    assert_v3_error(
+        &output,
+        &paths,
+        "list EphemeralProcess",
+        1,
+        "zone-unavailable",
+        "Zone runtime is unavailable",
     );
-    let inventory = stdout_json(&out, "list");
-    let items = inventory.as_array().unwrap_or_else(|| {
-        panic!("list --json must emit the native manifest array; got {inventory}")
-    });
-    assert!(
-        items
-            .iter()
-            .any(|i| i.get("name").and_then(Value::as_str) == Some("test-vm")),
-        "list --json must include the synthetic test-vm; got {inventory}",
+
+    // The old top-level inventory shape is no longer a command: ResourceType
+    // is required by ModernCli.
+    let retired_shape = run_cli(&paths, &["list", "--json"]);
+    assert_usage_rejection(
+        &retired_shape,
+        &paths,
+        "retired list shape",
+        "<RESOURCE_TYPE>",
     );
 }
 
 #[test]
 fn vm_exec_missing_command_emits_cli_usage_envelope() {
-    // Exercises `d2b vm exec` through real clap parsing + dispatch: a
-    // missing command surfaces the cli/usage envelope (exit 2).
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let out = run_cli(&paths, &["vm", "exec", "konsole-vm", "--json"]);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "vm exec (no command) should exit 2\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let envelope = stdout_json(&out, "vm exec usage");
-    assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm exec")
-    );
-    assert_eq!(envelope.get("source").and_then(Value::as_str), Some("cli"));
-    assert_eq!(
-        envelope.get("reason").and_then(Value::as_str),
-        Some("usage")
-    );
+    let (_guard, paths) = scratch();
+    let output = run_cli(&paths, &["exec", "run", "Guest/corp-vm", "--json"]);
+
+    // Missing command is rejected by clap before a Zone context can emit a
+    // JSON envelope.
+    assert_usage_rejection(&output, &paths, "exec run missing command", "<COMMAND>");
 }
 
 #[test]
 fn vm_exec_no_daemon_emits_transport_unavailable_envelope() {
-    // With the daemon socket absent, `vm exec` surfaces the guest-control
-    // transport-unavailable envelope (proving it reaches cmd_vm_exec and never
-    // falls back to SSH/bash).
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let out = run_cli(
+    let (_guard, paths) = scratch();
+    let output = run_cli(
         &paths,
-        &["vm", "exec", "konsole-vm", "--json", "--", "/bin/true"],
+        &[
+            "exec",
+            "run",
+            "Guest/corp-vm",
+            "--env",
+            EXEC_SECRET_ENV,
+            "--json",
+            "--",
+            "/bin/true",
+        ],
     );
-    assert_ne!(
-        out.status.code(),
-        Some(99),
-        "vm exec exec'd the legacy bash poison-pill\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    assert_ne!(
-        out.status.code(),
-        Some(0),
-        "vm exec with no daemon should exit non-zero\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let envelope = stdout_json(&out, "vm exec transport");
-    assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm exec")
-    );
-    assert_eq!(
-        envelope.get("source").and_then(Value::as_str),
-        Some("transport"),
-    );
-    assert_eq!(
-        envelope.get("reason").and_then(Value::as_str),
-        Some("guest-control-transport-unavailable"),
+    assert_v3_error(
+        &output,
+        &paths,
+        "exec run Guest/corp-vm",
+        1,
+        "zone-unavailable",
+        "Zone runtime is unavailable",
     );
 }
 
 #[test]
 fn vm_exec_rejects_interactive_without_tty() {
-    // -i/--interactive without -t/--tty must fail-fast with a usage error
-    // (guestd forwards stdin only in PTY mode).
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let out = run_cli(
+    let (_guard, paths) = scratch();
+    let output = run_cli(
         &paths,
-        &["vm", "exec", "konsole-vm", "-i", "--", "/bin/true"],
+        &[
+            "exec",
+            "attach",
+            "EphemeralProcess/run-1",
+            "--interactive",
+            "--tty",
+            "--json",
+        ],
     );
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "vm exec -i without -t should exit 2\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let stderr = stderr_of(&out);
-    assert!(
-        stderr.contains("-t/--tty") || stderr.to_lowercase().contains("requires -t"),
-        "vm exec -i without -t error must cite the -t/--tty requirement; got:\n{stderr}",
+    assert_v3_error(
+        &output,
+        &paths,
+        "exec attach tty with JSON",
+        2,
+        "ref-invalid",
+        "--tty is incompatible with --json",
     );
 }

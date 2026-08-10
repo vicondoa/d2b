@@ -6,11 +6,12 @@
 #      failures; option values are set as expected.
 #   B. The eval-time assertion fires correctly for each of the three
 #      assertion categories (checked here as boolean expressions over
-#      `config.assertions`, not via mkBatch - the batch evaluator in
-#      eval-cases/assertions.nix covers the failure-message surface).
+#      the module's canonical assertion records, not via mkBatch - the batch
+#      evaluator in eval-cases/assertions.nix covers the general failure
+#      message surface).
 #   C. Host-enabled with empty devices evaluates without error.
 #   D. The option defaults: host disabled, VM disabled.
-{ mkEval, lib, ... }:
+{ mkEval, lib, pkgs, ... }:
 
 let
   # Minimal system fixture.
@@ -124,6 +125,101 @@ let
   # Eval D: default state - both options off.
   defaultState = evalWith [ ];
 
+  # The v3 Device ResourceType uses only a stable selector shape here. It
+  # deliberately does not assign a vendor/product backing set; that semantic
+  # authority is a separate contract.
+  deviceProviderArtifact = pkgs.writeText "d2b-test-security-key-provider" "security-key-provider";
+  deviceSpec = {
+    providerRef = "Provider/device-security-key";
+    deviceClass = "physical";
+    arbitration = "exclusive";
+    maxConcurrentClaims = 1;
+    inventory.selector = {
+      busClass = "hidraw";
+      label = "security-key";
+    };
+    provider = {
+      schemaId = "device-security-key.d2bus.org/Device/spec";
+      schemaVersion = "v1.0";
+      settings = {
+        vsockPort = 14320;
+        sessionRingSize = 32;
+        leaseTimeoutSecs = 300;
+        boundedBurst = 2;
+      };
+    };
+  };
+
+  deviceSettingsSchema = {
+    schemaId = "device-security-key.d2bus.org/Device/spec";
+    schemaVersion = "v1.0";
+    settingsSchema = {
+      type = "object";
+      additionalProperties = false;
+      properties = {
+        vsockPort = {
+          type = "integer";
+          minimum = 1;
+          maximum = 65535;
+        };
+        sessionRingSize = {
+          type = "integer";
+          minimum = 8;
+          maximum = 256;
+        };
+        leaseTimeoutSecs = {
+          type = "integer";
+          minimum = 30;
+          maximum = 3600;
+        };
+        boundedBurst = {
+          type = "integer";
+          minimum = 1;
+          maximum = 4;
+        };
+      };
+    };
+  };
+
+  deviceBase = { ... }: {
+    d2b.artifacts.device-security-key = {
+      package = deviceProviderArtifact;
+      type = "provider";
+    };
+    d2b._providerSettingsValidation.schemas =
+      { "device-security-key.d2bus.org/Device/spec" = deviceSettingsSchema; };
+    d2b.zones.local-root.resources = {
+      device-security-key = {
+        type = "Provider";
+        spec = {
+          artifactId = "device-security-key";
+          config = { };
+        };
+      };
+      security-key = {
+        type = "Device";
+        spec = deviceSpec;
+      };
+    };
+  };
+
+  deviceEvalWith = overrides:
+    # Device ResourceType checks do not need a legacy VM or host network
+    # fixture. Keeping this scenario attr-local avoids instantiating the
+    # per-VM evaluator for every projection/validation vector.
+    mkEval ([ deviceBase ] ++ overrides);
+  deviceValid = deviceEvalWith [ ];
+  deviceAssertionsOf = sys: sys.config.d2b._resourceCompiler.deviceValidation;
+  deviceFailures = sys:
+    lib.filter
+      (a: !a.assertion
+        && lib.hasInfix "d2b.zones.local-root.resources.security-key" a.message)
+      (deviceAssertionsOf sys);
+  deviceHasFailure = needle: sys:
+    lib.any
+      (a: !a.assertion && lib.hasInfix needle a.message)
+      (deviceAssertionsOf sys);
+
   assertionMessageContains = sys: needle:
     lib.any
       (a: !a.assertion && lib.hasInfix needle a.message)
@@ -184,6 +280,20 @@ in
     expected = true;
   };
 
+  "usb-security-key/qemu-media-conflict-fires" = {
+    expr = assertionMessageContains
+      (evalWith [
+        ({ lib, ... }: {
+          d2b.host.usb.securityKey.enable = lib.mkForce true;
+          d2b.host.usb.securityKey.devices = [ fidoDevice ];
+          d2b.vms.corp-vm.runtime.kind = lib.mkForce "qemu-media";
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
+        })
+      ])
+      "runtime.kind = \"qemu-media\" is incompatible";
+    expected = true;
+  };
+
   # --- C: host enabled, empty devices - no assertion failures ---
   "usb-security-key/host-enabled-empty-devices-valid" = {
     expr = hasNoFailures hostEnabledEmptyDevices;
@@ -204,5 +314,89 @@ in
   "usb-security-key/host-default-devices-empty" = {
     expr = defaultState.config.d2b.host.usb.securityKey.devices;
     expected = [ ];
+  };
+
+  # --- v3 Device ResourceType shape and projection vectors ---
+  "usb-security-key/device-valid-config-has-no-device-failures" = {
+    expr = {
+      projection = deviceValid.config.d2b._resourceCompiler.devices.byZone.local-root.security-key.type;
+      failures = deviceFailures deviceValid;
+    };
+    expected = {
+      projection = "Device";
+      failures = [ ];
+    };
+  };
+
+  "usb-security-key/device-security-key-requires-hidraw-exclusive-physical" = {
+    expr = deviceHasFailure "security-key-device-shape-invalid"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.deviceClass = "emulated";
+        d2b.zones.local-root.resources.security-key.spec.arbitration = "shared";
+        d2b.zones.local-root.resources.security-key.spec.inventory.selector = { };
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-selector-rejects-unsafe-serial-filter" = {
+    expr = deviceHasFailure "physical Devices require a valid closed inventory selector"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.inventory.selector.serial =
+          "key/with-slash";
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-settings-range-is-enforced" = {
+    expr = deviceHasFailure "invalid-provider-settings"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.settings.vsockPort = 0;
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-provider-schema-binds-to-provider" = {
+    expr = deviceHasFailure "spec-provider-schema-invalid"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.schemaId =
+          "device-usbip.d2bus.org/Device/spec";
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-settings-cannot-carry-store-material" = {
+    expr = deviceHasFailure "spec-provider-shadow"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.settings.path =
+          "/nix/store/not-a-backing-set";
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-signed-schema-rejects-unknown-setting" = {
+    expr = deviceHasFailure "invalid-provider-settings"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.settings.notDeclared =
+          true;
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-signed-schema-bounds-are-enforced" = {
+    expr = deviceHasFailure "invalid-provider-settings"
+      (deviceEvalWith [{
+        d2b.zones.local-root.resources.security-key.spec.provider.settings.boundedBurst =
+          0;
+      }]);
+    expected = true;
+  };
+
+  "usb-security-key/device-signed-schema-version-must-match" = {
+    expr = deviceHasFailure "spec-provider-schema-invalid"
+      (deviceEvalWith [{
+        d2b._providerSettingsValidation.schemas."device-security-key.d2bus.org/Device/spec".schemaVersion =
+          lib.mkForce "v2.0";
+      }]);
+    expected = true;
   };
 }

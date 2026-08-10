@@ -127,6 +127,26 @@ Rules acceptance tests must enforce:
 Owning specs: `ADR-046-resource-reconciliation`, `ADR-046-core-controllers`,
 `ADR-046-provider-state`.
 
+### 4a. Mutation operation identity and expiry
+
+Mutation recovery is Zone-scoped:
+
+| Element | Representation | Rule |
+| --- | --- | --- |
+| operation key | `(ZoneUid, OperationId)` | The selected Zone is mandatory for mutation, retry, and inspection. No host-global operation-ID index or reservation exists. |
+| `OperationId` | 16 UUIDv7-layout bytes, rendered as lowercase 32-hex without separators | Opaque to callers. The same bytes are valid as independent operation identities in different Zones. |
+| replay binding | typed fixed digest over the registrar-derived subject, Zone, semantic request, target, verb, expected revision, operation ID, and idempotency data | A mismatch within the selected Zone is non-observing and never reapplies. |
+| `expiresAt` | checked UUIDv7 issuance time plus the fixed 30-day operation recovery retention | The active or final operation record may be pruned only at this boundary. |
+| expired lookup | typed `operation-expired` refusal derived from UUIDv7 time and the durable per-Zone clock | Inspection and mutation both deny. No post-expiry tombstone or host-global index is required, and pruning never turns the old ID into a fresh mutation. |
+
+The per-Zone durable retention clock is monotonic across restart. A malformed, future,
+expired, overflowed, or clock-discontinuous ID is denied before observation or mutation.
+Concurrent use of one ID in two Zones may commit once in each Zone; same-Zone response loss
+and restart return the original pending or final result without another mutation.
+
+Owning specs: `ADR-046-resource-store-redb`, `ADR-046-cli-and-operations`,
+`ADR-046-telemetry-audit-and-support`.
+
 ---
 
 ## 5. Access and authorization
@@ -171,9 +191,9 @@ them (FR-025 through FR-045).
 | Entity | Key attributes | State |
 | --- | --- | --- |
 | **Wave** | id `W0`-`W8`, member specs, parallel groups, entry and exit criteria | entered, snapshotted, panelled, sealed, merged |
-| **Work item** | `workItemId`, owning `specId`, exact destination paths, validation obligations, `reuseAction` | `Planned` -> `Merged` (14 of 545 today) |
+| **Work item** | `workItemId`, owning `specId`, exact destination paths, validation obligations, `reuseAction` | `Planned` -> `Merged` (68 of 545 at receipt HEAD; 477 remain `Planned`) |
 | **Candidate snapshot** | `candidate_id`, `content_id`, `snapshot_sha256`, base and head OIDs, expected pull requests | immutable; any content change invalidates it |
-| **Panel receipt** | one per role, 10 roles, 14 fields, pinned provider/model/reasoning effort | `signoff` true iff `recommendations` is empty |
+| **Panel receipt** | one current `PanelRecord` per selected seat from the current thirteen-seat role domain, 15 fields including required `panel_format_version`, with pinned provider/model/reasoning effort; legacy historical records have 14 fields and no `panel_format_version` | `signoff` true iff `recommendations` is empty; candidate-bound selection may only widen over fix deltas; current writers and validators require 15 fields while legacy readers retain the 14-field compatibility path |
 | **Seal** | binds candidate, content, and snapshot digests after all lanes and the panel pass | requires every wave work item `Merged` |
 
 Delivery state lives outside the repository at `$XDG_STATE_HOME/d2b/delivery` and the tooling
@@ -194,6 +214,137 @@ Owning spec: `ADR-046-validation-and-delivery`.
 | Cross-Zone ordinary reference refused | FR-009 | resource API authorization |
 | Caller-supplied subject refused | FR-008 | Zone registrar, compile-time seal |
 | No secret, path, or PII in telemetry or audit | FR-018 | redaction policy lints |
+| Mutation identity is `(Zone, operation_id)` and old IDs fail closed after bounded expiry | FR-070 | store/CLI restart, cross-Zone concurrency, response-loss, and expiry tests |
+| Raw Zone/resource/operation/correlation/trace identity is absent from telemetry and audit | FR-070 | typed-digest, redaction, cardinality, and no-relabel tests |
 | Generated artifact matches source | FR-031 | `make test-drift`, fail-closed |
 | Capability with promised successor reaches parity | FR-041 | per-path removal proof + parity check |
 | Capability without successor is listed and justified | FR-042 | explicit retirement list + release notes |
+
+---
+
+## 9. SC-002 Version 2 authority reference
+
+This feature artifact is not the SC-002 protocol authority. The sole normative source is the
+accepted Version 2 of
+[`ADR-046-validation-and-delivery`](../../docs/specs/ADR-046-validation-and-delivery.md),
+together with its generated schemas, fixtures, and generated traceability artifacts:
+`docs/specs/ADR-046-validation-and-delivery-traceability.{json,md}`. The current external
+specification is Version 1, so every consumer below remains blocked until Version 2 is
+accepted, the generated artifacts are present, Gate 0 passes, and that commit is an ancestor
+of the consumer base.
+
+Version 2 and the generated traceability table MUST publish these stable identifiers:
+
+| Identifier | Sole owned subject |
+| --- | --- |
+| `VD2-SC002-RECEIPT` | activation receipt, evidence-record reference, and close-stage validation |
+| `VD2-SC002-PUBLICATION` | candidate-local publication, locking, retention, and crash recovery |
+| `VD2-SC002-INCIDENT` | incident preimage, state, evidence, and redaction |
+| `VD2-SC002-DISPOSITION` | successor freeze, authority request, signed disposition, apply, and admission |
+| `VD2-SC002-RECOVERY` | inspectable states, emitted actions, exact invocations, exits, and convergence |
+| `VD2-SC002-SOURCE-FLOOR` | installed source-generation compatibility evidence and capability consumption |
+| `VD2-SC002-REGISTRIES` | independently authored fixture and poison registries with generated ownership traceability |
+| `VD2-SC002-TRACEABILITY` | bijection from every identifier to schema, fixture, implementation owner, task, and gate |
+
+The generated JSON is the machine authority and the generated Markdown is its review view.
+Generation MUST fail on a missing, duplicate, extra, or ownerless identifier and drift gates
+MUST compare both artifacts byte-for-byte. T589 implements only rows assigned to T589. T604
+emits only its W6 acceptance evidence and T479 imports that exact-F6 result. T220 verifies
+every generated Wave 5 row. No feature-local field list, count, digest recipe, state table,
+fixture registry, or transition matrix may substitute for generated rows.
+
+---
+
+## 10. Installed source-floor evidence
+
+`SourceGenerationCompatibilityFloorV1` is a stable type identifier, not a feature-local
+schema. Its canonical encoding, fields, digests, signatures, capability rules, receipts,
+fixtures, poison registries, and transitions are owned solely by accepted Version 2 through
+`VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
+`VD2-SC002-TRACEABILITY`.
+
+The accepted external compatibility disposition names the producer/installer and typed
+import/validation owners. T589 and T592 are read-only consumers of their generated
+assignments and own no source-floor protocol. A missing, duplicate, stale, wrong-owner,
+non-enforcing, non-ancestor, or failing generated row blocks dispatch with remediation to
+accept Version 2, regenerate traceability, and pass Gate 0. No field list, digest recipe,
+fixture census, registry count, or transition copy in this feature can satisfy that gate.
+
+---
+
+## 11. Retained Wave 5 request disposition
+
+The retained Wave 5 binding request can be dispositioned only by an external
+delivery-contract/tooling owner. That owner must land an accepted delivery-contract change
+and its typed validator outside this feature before T219 may import anything. The external
+record is evidence of allowed process, not panel sign-off and not a constitutional waiver.
+No in-feature task produces, installs, or validates the authority.
+
+`Wave5RetainedRequestDispositionV1` contains exactly:
+
+| Field | Type and rule |
+| --- | --- |
+| `schemaVersion` | integer `1` |
+| `kind` | literal `adr046w5-retained-request-disposition` |
+| `program` | literal `ADR046` |
+| `wave` | literal `adr046w5` |
+| `authorityDispositionSha256` | digest of the accepted external authority artifact that authorizes this record; it is not a self-digest |
+| `authorityCommitOid` | full commit object id of the accepted external delivery-contract change |
+| `authorityTreeOid` | full tree object id of that change |
+| `validatorArtifactSha256` | digest of the installed external typed validator |
+| `deliveryContractVersion` | nonzero `u32` version accepted by the external change |
+| `toolingVersion` | nonzero `u32` validator/tooling version accepted by the external change |
+| `principleViAmendmentCommitOid` | full commit object id of the accepted FR-036 constitutional predecessor |
+| `t072DispositionSha256` | digest of the one accepted T072 historical/current remedial disposition |
+| `retainedCandidateId` | literal `d20267eec23f90b9cd6931e4bd322b66e259533849c8170617fbd002381493a4` |
+| `retainedSnapshotSha256` | literal `7a04d9b86df6c8b8704b4bd79ddc25603fedae47d1a521f0b6fa420451816c3a` |
+| `retainedRequestSha256` | digest of the retained binding request envelope |
+| `retainedPanelRequestSha256` | digest of the byte-preserved `panel-request.json` |
+| `retainedAttestationCount` | integer `0` |
+| `retainedSealState` | literal `absent` |
+| `finalCandidateId` | exact F candidate id |
+| `finalCommitOid` | full commit object id of F |
+| `finalTreeOid` | full tree object id of F |
+| `closeAction` | one of `remain-blocked`, `abandon-without-merge`, or `recover-panel-without-new-request` |
+| `requestPolicy` | literal `no-second-request` |
+| `historyPolicy` | literal `preserve-retained-request-bytes` |
+| `panelPolicy` | literal `unanimous-selected-roster-exact-final-candidate`, using the current thirteen-seat role domain and widen-only fix deltas |
+
+The installed external validator is the sole import authority. It derives the Git and
+delivery-state identities, verifies the authority and prerequisite commits are ancestors of
+F, once-opens and hashes the retained request, compares every fixed field, rejects unknown
+fields or enum values, and emits one immutable import result bound to the disposition digest
+and F. A caller-supplied statement, feature-local receipt, phase-plan receipt, or self-named
+authority is ineligible.
+
+That `Wave5RetainedRequestDispositionImportV1` result contains exactly
+`schemaVersion = 1`, `kind = "adr046w5-retained-request-disposition-import"`,
+`recordSha256`, `authorityDispositionSha256`, `validatorArtifactSha256`,
+`finalCandidateId`, `finalCommitOid`, `finalTreeOid`, `closeAction`, and
+`verdict = "accepted"`. It is accepted only when every value equals the validated record;
+`recordSha256` is computed over that complete record and is not stored inside it.
+
+Disposition has these closed transitions:
+
+```text
+absent -> externally-accepted -> imported
+imported + remain-blocked -> blocked
+imported + abandon-without-merge -> abandoned-unmerged
+imported + recover-panel-without-new-request -> panel-pending
+panel-pending + exact unanimous selected-roster F-bound attestations -> panel-satisfied
+panel-satisfied -> seal-eligible -> merge-eligible -> merged-byte-identical-F
+panel-pending + completed/terminal panel with any missing role, recommendation,
+  disagreement, or stale binding
+  -> panel-refused
+```
+
+`blocked`, `abandoned-unmerged`, and `panel-refused` authorize no seal, merge, successor
+wave, or release. `recover-panel-without-new-request` authorizes only the externally defined
+recovery-attestation surface linked to the retained request; it creates no second request and
+cannot itself satisfy the panel. The validator requires a candidate-bound selection from the
+current thirteen-seat role domain, permits that selection only to widen over fix deltas,
+requires `signoff = true` iff recommendations are empty, and requires identical
+F/commit/tree/disposition bindings plus every constitutional predecessor. No action or field
+can encode `waived`, partial, force, reduced roster, stale-candidate attestation, or panel
+substitution. A content or history change after F, or any failed recovered panel, returns to
+external escalation rather than admitting another feature-local request.

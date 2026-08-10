@@ -55,11 +55,11 @@ pub const EVIDENCE_ARTIFACT_KIND: &str = "d2b-delivery/validation-evidence";
 pub const PANEL_PROVIDER_POLICY: &str = "github-copilot";
 pub const PANEL_MODEL_POLICY: &str = "gpt-5.6-sol";
 pub const PANEL_REASONING_EFFORT_POLICY: &str = "xhigh";
-/// Historical panel records used this exact model and effort pair. Keep it
-/// readable so existing delivery state remains attestable after the policy
-/// moves forward; new panel requests always use the current constants above.
-pub const PANEL_LEGACY_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
-pub const PANEL_LEGACY_REASONING_EFFORT_POLICY: &str = "high";
+/// Prior unversioned panel records used the current model and effort pair with
+/// the fixed ten-role roster. Keep that exact wire family readable; new panel
+/// requests always carry the versioned selected-roster format above.
+pub const PANEL_LEGACY_MODEL_POLICY: &str = "gpt-5.6-sol";
+pub const PANEL_LEGACY_REASONING_EFFORT_POLICY: &str = "xhigh";
 
 pub const MAX_REPOSITORIES: usize = 16;
 /// Upper bound on the pull requests a single repository may bind, shared by the
@@ -1164,6 +1164,18 @@ impl PanelSelectionV1 {
                     .then(|| current_role_named(seat).expect("validated selection table seat"))
             })
             .collect::<Vec<_>>();
+        let floor = table
+            .floors
+            .get(&self.candidate_class)
+            .copied()
+            .expect("candidate class was checked against the authoritative table")
+            as usize;
+        let mut canonical_floor_roster = mandatory.clone();
+        for role in table_order.iter().copied().skip(mandatory.len()) {
+            if triggered_optional.contains(&role) || canonical_floor_roster.len() < floor {
+                canonical_floor_roster.push(role);
+            }
+        }
 
         if self.roster.is_empty() {
             return Err(DeliveryError::new(
@@ -1185,18 +1197,32 @@ impl PanelSelectionV1 {
                 )));
             }
         }
-        for role in mandatory {
-            if !seen.contains(&role) {
+        for role in &mandatory {
+            if !seen.contains(role) {
                 return Err(DeliveryError::new(format!(
                     "panel selection roster omits mandatory seat {}",
                     role.as_str()
                 )));
             }
         }
-        for role in triggered_optional {
-            if !seen.contains(&role) {
+        for role in &triggered_optional {
+            if !seen.contains(role) {
                 return Err(DeliveryError::new(format!(
                     "panel selection roster omits triggered optional seat {}",
+                    role.as_str()
+                )));
+            }
+        }
+        if self.roster.len() < floor {
+            return Err(DeliveryError::new(format!(
+                "panel selection roster has {} seats but this candidate class requires at least {floor}",
+                self.roster.len()
+            )));
+        }
+        for role in &canonical_floor_roster {
+            if !seen.contains(role) {
+                return Err(DeliveryError::new(format!(
+                    "panel selection roster omits canonical floor-filled seat {}",
                     role.as_str()
                 )));
             }
@@ -1208,20 +1234,9 @@ impl PanelSelectionV1 {
             .collect::<Vec<_>>();
         if self.roster != canonical {
             return Err(DeliveryError::new(
-                "panel selection roster is not in selection-table order",
+                "panel selection roster is not in deterministic selection-table order; \
+                 extras may only be monotonic carry-over",
             ));
-        }
-        let floor = table
-            .floors
-            .get(&self.candidate_class)
-            .copied()
-            .expect("candidate class was checked against the authoritative table")
-            as usize;
-        if self.roster.len() < floor {
-            return Err(DeliveryError::new(format!(
-                "panel selection roster has {} seats but this candidate class requires at least {floor}",
-                self.roster.len()
-            )));
         }
 
         if self.profiles.len() != self.roster.len() {
@@ -2244,8 +2259,11 @@ mod tests {
         assert_eq!(PANEL_PROVIDER_POLICY, "github-copilot");
         assert_eq!(PANEL_MODEL_POLICY, "gpt-5.6-sol");
         assert_eq!(PANEL_REASONING_EFFORT_POLICY, "xhigh");
-        assert_eq!(PANEL_LEGACY_MODEL_POLICY, "gemini-3.1-pro-preview");
-        assert_eq!(PANEL_LEGACY_REASONING_EFFORT_POLICY, "high");
+        assert_eq!(PANEL_LEGACY_MODEL_POLICY, PANEL_MODEL_POLICY);
+        assert_eq!(
+            PANEL_LEGACY_REASONING_EFFORT_POLICY,
+            PANEL_REASONING_EFFORT_POLICY
+        );
     }
 
     fn selection(
@@ -2338,6 +2356,29 @@ mod tests {
         documentation
             .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
             .expect("documentation floor and mandatory seats come from the table");
+    }
+
+    #[test]
+    fn selection_validation_requires_the_canonical_floor_filled_subset() {
+        let wrong_floor_fill = [
+            PANEL_CURRENT_ROLES[..7].to_vec(),
+            vec![PanelRole::Nixos, PanelRole::Networking, PanelRole::Kernel],
+        ]
+        .concat();
+        let error = selection(&wrong_floor_fill, "code", &[], &[], &[])
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect_err("a roster must contain the deterministic floor-filled seats");
+        assert!(
+            error
+                .message()
+                .contains("canonical floor-filled seat reliability"),
+            "{error}"
+        );
+
+        let widened = selection(&PANEL_CURRENT_ROLES, "code", &[], &[], &[]);
+        widened
+            .validate_for_snapshot("ADR046", "W0", &mandatory_only_snapshot_digests())
+            .expect("a wider roster is valid monotonic carry-over");
     }
 
     #[test]

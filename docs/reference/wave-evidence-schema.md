@@ -159,7 +159,7 @@ The intended path from a fresh host to a wave's
 
    The daemon also opportunistically writes evidence on its
    first successful op for the corresponding wave (e.g. the first
-   end-to-end `d2b vm start --apply` writes `p4.json`),
+   end-to-end `d2b guest start <name> --apply` writes `p4.json`),
    bootstrapping operators who do not run `host validate`
    explicitly.
 

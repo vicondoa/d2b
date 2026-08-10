@@ -15,10 +15,10 @@
 //   * Repo-scope `.github/copilot/settings.json` cannot carry `subagents`.
 //
 // So the only working per-lane binding is the dispatch parameters written in
-// the skill tables, and a panel record attests `reasoning_effort`. A lane
-// dispatched without an explicit effort therefore produces a false
-// attestation rather than an error. This script is the cheap place to catch
-// the mistakes that lead there.
+// the skill tables, and a panel record carries declared `reasoning_effort`
+// metadata. A lane dispatched without an explicit effort therefore produces a
+// false attestation rather than an error. This script is the cheap place to
+// catch the mistakes that lead there.
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -29,7 +29,11 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const agentsDir = join(root, ".github", "agents");
 const skillsDir = join(root, ".github", "skills");
+const adrSkill = join(skillsDir, "d2b-adr", "SKILL.md");
 const selectionTableJson = join(root, ".github", "skills", "d2b-panel-round", "selection-table.json");
+const dispatchPolicyJson = join(root, ".github", "skills", "d2b-panel-round", "dispatch-policy.json");
+const panelReviewDoc = join(root, "docs", "contributing", "panel-review.md");
+const copilotAgentsDoc = join(root, "docs", "contributing", "copilot-agents.md");
 const modelRs = join(root, "packages", "xtask", "src", "delivery", "model.rs");
 const tier0DashGate = join(root, "tests", "tools", "tier0-first-pass.sh");
 const dashPolicyTest = join(root, "packages", "d2b-contract-tests", "tests", "policy_dash_gate.rs");
@@ -40,8 +44,8 @@ const panelPromptSource = join(root, "docs", "adr", "specs", "0053-panel-prompt-
 const CAVEMAN_VENDOR_ROOT = join(root, "third_party", "caveman", "v1.10.0");
 const CAVEMAN_VENDOR_FILES = {
   "LICENSE": "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
-  "skills/caveman/SKILL.md": "daf9cec496ebd039809d8236f99f17fa1b4beaadf8ce4e2d532d0da51d70afce",
-  "skills/caveman-compress/SKILL.md": "3167d62440eee99c0e5b224d7f8b8ebcfe37efba38bc5bbee24f0d00da72a688",
+  "skills/caveman/SKILL.md": "d33253598ef3a40054e2b539e6f94654bcd3b801f58046277dfbb0180068f1c8",
+  "skills/caveman-compress/SKILL.md": "6d64f8261f65a95bb7d7411b2dbd4acaa65e0989f553e89e6786f47d3f2a8f0c",
 };
 const CAVEMAN_VENDOR_METADATA = {
   repository: "https://github.com/JuliusBrussee/caveman",
@@ -293,6 +297,101 @@ function readSelectionPolicy() {
   };
 }
 
+const DISPATCH_POLICY_KEYS = [
+  "agent_type",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+];
+
+function readDispatchPolicy(selectionPolicy) {
+  if (!existsSync(dispatchPolicyJson)) {
+    fail(
+      `${dispatchPolicyJson} does not exist. The selected panel seats must use ` +
+      `one committed machine-readable dispatch policy.`,
+    );
+    return null;
+  }
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(dispatchPolicyJson, "utf8"));
+  } catch (e) {
+    fail(`${dispatchPolicyJson} is not valid JSON: ${e.message}.`);
+    return null;
+  }
+  if (
+    !policy ||
+    typeof policy !== "object" ||
+    Array.isArray(policy) ||
+    Object.keys(policy).sort().join("\0") !==
+      ["artifact_kind", "schema_version", "seats"].sort().join("\0")
+  ) {
+    fail(`${dispatchPolicyJson} must contain exactly its policy envelope fields.`);
+    return null;
+  }
+  if (
+    policy.artifact_kind !== "d2b-panel/dispatch-policy" ||
+    policy.schema_version !== 1
+  ) {
+    fail(`${dispatchPolicyJson} must declare dispatch-policy schema version 1.`);
+  }
+  const expectedSeats = selectionPolicy?.roles ?? [];
+  const actualSeats =
+    policy.seats &&
+    typeof policy.seats === "object" &&
+    !Array.isArray(policy.seats)
+      ? Object.keys(policy.seats)
+      : [];
+  if (actualSeats.sort().join(",") !== [...expectedSeats].sort().join(",")) {
+    fail(
+      `${dispatchPolicyJson} must contain exactly one binding for every current ` +
+      `selection-table seat; expected [${expectedSeats.join(", ")}], found ` +
+      `[${actualSeats.join(", ")}].`,
+    );
+  }
+  for (const seat of expectedSeats) {
+    const binding = policy.seats?.[seat];
+    if (
+      !binding ||
+      typeof binding !== "object" ||
+      Array.isArray(binding) ||
+      Object.keys(binding).sort().join("\0") !==
+        [...DISPATCH_POLICY_KEYS].sort().join("\0")
+    ) {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} must contain exactly ` +
+        `${DISPATCH_POLICY_KEYS.join(", ")}.`,
+      );
+      continue;
+    }
+    for (const key of DISPATCH_POLICY_KEYS) {
+      if (typeof binding[key] !== "string" || binding[key].trim() === "") {
+        fail(`${dispatchPolicyJson} seat ${seat} has no non-blank ${key}.`);
+      }
+    }
+    if (binding.agent_type !== `panel-${seat}`) {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} agent_type must be exactly ` +
+        `"panel-${seat}".`,
+      );
+    }
+    if (binding.context_tier !== "default") {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} context_tier must be exactly ` +
+        `"default".`,
+      );
+    }
+    if (binding.communication !== "caveman-full-optional") {
+      fail(
+        `${dispatchPolicyJson} seat ${seat} communication must be exactly ` +
+        `"caveman-full-optional".`,
+      );
+    }
+  }
+  return policy;
+}
+
 function parseFrontmatter(text, label) {
   if (!text.startsWith("---\n")) {
     fail(`${label}: no YAML frontmatter. Begin the file with a "---" line, the name, description, model and tools keys, and a closing "---".`);
@@ -361,7 +460,7 @@ if (!existsSync(agentsDir)) {
       if (/\b(bash|edit|create|write|task|sql)\b/.test(tools)) {
         fail(
           `${file}: panel agents are read-only by construction. "tools:" must not grant ` +
-          `${tools}. Reviewers read staged diffs; granting shell also puts ten lanes on ` +
+          `${tools}. Reviewers read staged diffs; granting shell also puts selected lanes on ` +
           `the shared Nix store and the heavy-gate semaphore. Remove those entries from \n          "tools:".`,
         );
       }
@@ -409,6 +508,7 @@ const panelAgents = [...agents.entries()].filter(([n]) => n.startsWith("panel-")
 const INVARIANT_CHECKLIST_MARKERS = {
   "panel-nixos": "<!-- panel nixos invariant checklist -->",
   "panel-observability": "<!-- panel observability invariant checklist -->",
+  "panel-security": "<!-- panel security invariant checklist -->",
 };
 for (const [agentName, marker] of Object.entries(INVARIANT_CHECKLIST_MARKERS)) {
   const agent = agents.get(agentName);
@@ -436,6 +536,17 @@ const SUBSTANTIVE_SEAT_CHECKLISTS = {
     "**Sensitive values in observable surfaces.**",
     "**Audit records that lose their properties.**",
     "**Degraded reporting.**",
+  ],
+  "panel-security": [
+    "**A second authorization surface.**",
+    "**A privileged effect that bypasses the broker.**",
+    "**Capability mint surfaces.**",
+    "**Caller-supplied identity.**",
+    "**Sandbox profile regressions.**",
+    "**Store exposure.**",
+    "**Secrets and identifiers in observable surfaces.**",
+    "**State that looks like tampering when lost.**",
+    "**Fail-open error handling.**",
   ],
   "panel-networking": [
     "**Environment isolation weakened.**",
@@ -514,8 +625,8 @@ if (bars.size > 1) {
     if (bar !== refBar) {
       fail(
         `${agents.get(name).file}: its "${BAR_HEADING}" section differs from ` +
-        `${agents.get(refName).file}. All ten seats must apply one identical bar; a ` +
-        `per-seat variant is how the panel starts returning findings at ten different ` +
+        `${agents.get(refName).file}. All panel seats must apply one identical bar; a ` +
+        `per-seat variant is how the panel starts returning findings at different ` +
         `severities. Make them byte-identical.`,
       );
     }
@@ -533,9 +644,17 @@ if (existsSync(skillsDir)) {
       if (!line.trim().startsWith("|")) continue;
       const cells = line.split("|").slice(1, -1).map((c) => c.trim().replace(/^`|`$/g, ""));
       if (cells.length < 5) continue;
-      const [, agent, model, effort, tier] = cells;
+      const [, agent, model, effort, tier, communication] = cells;
       if (!agents.has(agent)) continue;
-      rows.push({ skill, agent, model, effort, tier, line: line.trim() });
+      rows.push({
+        skill,
+        agent,
+        model,
+        effort,
+        tier,
+        communication,
+        line: line.trim(),
+      });
     }
   }
 }
@@ -554,6 +673,7 @@ for (const name of agents.keys()) {
 
 const policy = readPolicy();
 const selectionPolicy = readSelectionPolicy();
+const dispatchPolicy = readDispatchPolicy(selectionPolicy);
 
 for (const r of rows) {
   const a = agents.get(r.agent);
@@ -586,6 +706,30 @@ for (const r of rows) {
       `${r.skill}/SKILL.md: context_tier "${r.tier}" is not valid for "${r.model}" ` +
       `(valid: ${caps.tiers.join(", ")}). Change the row to one of those tiers.`,
     );
+  }
+  if (r.agent.startsWith("panel-") && dispatchPolicy) {
+    const seat = r.agent.slice("panel-".length);
+    const binding = dispatchPolicy.seats?.[seat];
+    if (!binding) {
+      fail(
+        `${r.skill}/SKILL.md: row for "${r.agent}" has no dispatch-policy seat binding.`,
+      );
+    } else {
+      for (const [field, value] of [
+        ["agent_type", r.agent],
+        ["model", r.model],
+        ["reasoning_effort", r.effort],
+        ["context_tier", r.tier],
+        ["communication", r.communication],
+      ]) {
+        if (value !== binding[field]) {
+          fail(
+            `${r.skill}/SKILL.md: row for "${r.agent}" ${field} "${value}" ` +
+            `disagrees with dispatch policy "${binding[field]}".`,
+          );
+        }
+      }
+    }
   }
   if (policy && r.agent.startsWith("panel-")) {
     if (policy.model && r.model !== policy.model) {
@@ -1012,9 +1156,12 @@ if (!existsSync(initOptionsJson)) {
       // The current roster is deliberately not mirrored as a second array.
       // make-records must consume the same lifecycle-selection artifact as
       // delivery rather than reintroducing a fixed helper roster.
-      if (!src.includes('readSelection(selectionPath)') ||
+      if (!src.includes('validateSelection(selectionArtifact.value)') ||
+          !src.includes('selectionArtifact.text') ||
           !src.includes('selection.roster') ||
-          !src.includes("panel_format_version")) {
+          !src.includes("panel_format_version") ||
+          !src.includes("dispatch-binding.json") ||
+          !src.includes("validateDispatchBinding")) {
         // The last marker is checked below as a spelling guard. It is kept
         // separate so a future refactor cannot accidentally remove the
         // selected-roster handoff while leaving the import in place.
@@ -1129,6 +1276,145 @@ function requireText(path, text, label = path) {
   }
 }
 
+// The continuation contract is spread across the operator-facing skill and
+// contributor docs. Keep the executable command, packet-version migration,
+// independent publication, and honest observed-binding boundary in lockstep.
+const panelContinuationDocs = [
+  ["d2b-panel-round", join(skillsDir, "d2b-panel-round", "SKILL.md")],
+  ["panel-review.md", panelReviewDoc],
+  ["copilot-agents.md", copilotAgentsDoc],
+];
+const observedBindingFields = [
+  "provider",
+  "model",
+  "reasoning_effort",
+  "context_tier",
+  "communication",
+  "agent_type",
+  "agent_definition_sha256",
+  "run_id",
+  "receipt_locator",
+];
+for (const [label, path] of panelContinuationDocs) {
+  if (!existsSync(path)) {
+    fail(`${label}: continuation documentation is missing.`);
+    continue;
+  }
+  const source = readFileSync(path, "utf8");
+  const normalizedSource = source.toLowerCase();
+  const normalizedWhitespace = normalizedSource.replace(/\s+/g, " ");
+  for (const field of observedBindingFields) {
+    if (!source.includes(`\`${field}\``)) {
+      fail(`${label}: observed binding documentation is missing ${field}.`);
+    }
+  }
+  for (const phrase of [
+    "same-user process metadata",
+    "not authentication",
+    "schema-version `2`",
+    "schema-version `3`",
+    "schema-version `4`",
+    "independently",
+    "all three files before",
+    "partial `next/responses.json`",
+  ]) {
+    if (!normalizedSource.includes(phrase.toLowerCase())) {
+      fail(`${label}: continuation documentation is missing required text: ${phrase}`);
+    }
+  }
+  if (
+    /\bblank(?:\/partial)?\b[^.]{0,80}(?:response|responses\.json|template)/i
+      .test(normalizedWhitespace)
+  ) {
+    fail(
+      `${label}: continuation documentation still describes the carried response envelope as blank`,
+    );
+  }
+  if (/atomic (?:directory|ledger\/response|handoff)/i.test(source)) {
+    fail(
+      `${label}: continuation documentation still promises atomic ledger/response publication; ` +
+      "document independent per-file create-or-compare publication instead",
+    );
+  }
+  const lines = source.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const block = lines.slice(index, index + 8).join(" ");
+    if (line.includes("advance-verification") &&
+      block.includes("--lifecycle <lifecycle-id>")) {
+      fail(
+        `${label}: copyable advance-verification command carries unsupported ` +
+        "--lifecycle; retain that flag only on staging",
+      );
+    }
+  }
+}
+
+// ADR review uses the same current selected-roster contract as every panel
+// candidate. Fixed counts and the retired Rust seat remain valid only in
+// explicitly historical compatibility prose.
+if (!existsSync(adrSkill)) {
+  fail(`${adrSkill} is missing; the ADR panel contract cannot be checked.`);
+} else {
+  const source = readFileSync(adrSkill, "utf8");
+  for (const required of [
+    "selected-roster panel",
+    "versioned table",
+    "roster and profiles",
+    "lifecycle selection",
+  ]) {
+    if (!source.toLowerCase().includes(required.toLowerCase())) {
+      fail(`d2b-adr is missing required selected-roster guidance: ${required}`);
+    }
+  }
+  for (const [label, pattern] of [
+    ["fixed panel count", /\bten[- ](?:lane|role|seat)s?\b/i],
+    ["full-roster instruction", /\bfull roster\b/i],
+    ["retired Rust seat", /`rust`(?:\s+seat)?/i],
+  ]) {
+    if (pattern.test(source)) {
+      fail(`d2b-adr keeps an operative ${label}; dispatch the lifecycle selection instead`);
+    }
+  }
+}
+const observedBindingResidualDocs = [
+  ["panel-review.md", panelReviewDoc],
+  ["copilot-agents.md", copilotAgentsDoc],
+];
+const forbiddenObservedBindingClaims = [
+  [
+    "direct record-helper catch/proof claim",
+    /\b(?:make-records(?:\.mjs)?|record helper)\s+(?:catches?|detects?|proves?|verifies?|authenticates?)\b/i,
+  ],
+  [
+    "conjoined record-helper catch/proof claim",
+    /\b(?:make-records(?:\.mjs)?|record helper)\b[^.!?]{0,160}\b(?:and|but)\s+(?:it\s+)?(?:catches?|detects?|proves?|verifies?|authenticates?)\b/i,
+  ],
+];
+for (const [label, path] of observedBindingResidualDocs) {
+  if (!existsSync(path)) continue;
+  const source = readFileSync(path, "utf8").toLowerCase().replace(/\s+/g, " ");
+  for (const phrase of [
+    "validates declared same-user metadata against the completion-bound policy",
+    "cannot detect a lying declaration or prove execution",
+    "residual is accepted without authenticated receipts",
+  ]) {
+    if (!source.includes(phrase)) {
+      fail(
+        `${label}: observed process metadata residual documentation is missing ` +
+        `required text: ${phrase}`,
+      );
+    }
+  }
+  for (const [description, pattern] of forbiddenObservedBindingClaims) {
+    if (pattern.test(source)) {
+      fail(
+        `${label}: forbidden observed process metadata claim (${description}); ` +
+        "make-records validates declarations but cannot establish runtime execution",
+      );
+    }
+  }
+}
+
 // ADR 0055 replaces the old fixed-seat verdict contract. Keep this small
 // source check next to the binding gate so a prompt corpus refresh cannot
 // accidentally preserve an operative legacy instruction.
@@ -1183,29 +1469,37 @@ if (!existsSync(panelPromptSource)) {
 }
 
 if (!existsSync(tier0DashGate)) {
-  fail(`${tier0DashGate} is missing; the hash-scoped vendor dash admission has no gate.`);
+  fail(`${tier0DashGate} is missing; the repository dash policy has no gate.`);
 } else {
   const source = readFileSync(tier0DashGate, "utf8");
-  requireText(tier0DashGate, "CAVEMAN_DASH_ADMISSIONS", "tier-0 dash gate");
-  requireText(tier0DashGate, "validate_caveman_dash_admissions", "tier-0 dash gate");
-  for (const [relative, hash] of Object.entries(CAVEMAN_VENDOR_FILES)) {
-    requireText(tier0DashGate, `${relative} ${hash}`, "tier-0 dash gate");
-  }
-  if (!source.includes("is_caveman_dash_admission")) {
-    fail("tier-0 dash gate does not filter only validated Caveman admissions; the general dash rule may be weakened.");
+  requireText(
+    tier0DashGate,
+    "Historical regression sentinel, not a scan admission: Caveman LICENSE",
+    "tier-0 dash gate",
+  );
+  requireText(
+    tier0DashGate,
+    "5eb826cd03151bcc7cce3f80d40e87733237fedfc6c36d6908aca5fd650a0bdb",
+    "tier-0 dash gate",
+  );
+  for (const retired of [
+    "CAVEMAN_DASH_ADMISSIONS",
+    "validate_caveman_dash_admissions",
+    "is_caveman_dash_admission",
+  ]) {
+    if (source.includes(retired)) {
+      fail(`tier-0 dash gate restores retired vendor bypass ${retired}; vendor files must be scanned normally.`);
+    }
   }
 }
 if (!existsSync(dashPolicyTest)) {
-  fail(`${dashPolicyTest} is missing; the vendor dash admission lacks policy-test coverage.`);
+  fail(`${dashPolicyTest} is missing; the repository dash policy lacks policy-test coverage.`);
 } else {
-  const source = readFileSync(dashPolicyTest, "utf8");
-  for (const testName of [
-    "scan_passes_on_exact_caveman_vendor_admissions",
-    "modified_caveman_vendor_blob_loses_dash_admission",
-    "missing_caveman_vendor_blob_fails_closed",
-    "extra_caveman_vendor_file_is_not_admitted",
+  for (const required of [
+    "the_repository_carries_no_non_ascii_dash",
+    "must not restore retired vendor bypass",
   ]) {
-    requireText(dashPolicyTest, testName, "dash policy test");
+    requireText(dashPolicyTest, required, "dash policy test");
   }
 }
 
@@ -1277,6 +1571,66 @@ for (const [label, path] of [
 ]) {
   if (existsSync(path) && occurrenceCount(readFileSync(path, "utf8"), "D2B-CAVEMAN-DISPATCH: caveman-full-optional") !== 1) {
     fail(`${label}: expected exactly one optional communication dispatch marker.`);
+  }
+}
+
+// The integrator must order reviewer-input preparation before staging and
+// preserve the completion marker as the skill's byte-binding boundary. Check
+// both sides so weakening either the canonical contract or its operator-facing
+// instruction fails closed.
+const normalizedPromptText = (text) => text.replace(/\s+/g, " ").trim();
+const immutableStagingRequirements = [
+  {
+    label: "finalized validation evidence",
+    canonical:
+      "Finalize the non-empty validation evidence before staging and pass it with the required `--evidence` argument.",
+    integrator:
+      "Finalize the non-empty validation evidence before staging and pass it with the required `--evidence` argument.",
+  },
+  {
+    label: "finalized reviewer notes",
+    canonical:
+      "To supply integrator-authored notes, finalize them before staging and pass `--reviewer-notes-dir`;",
+    integrator:
+      "Finalize the complete selected-roster reviewer-note set before staging and pass it with `--reviewer-notes-dir`.",
+  },
+  {
+    label: "pre-staging input order",
+    canonical: "Stage the candidate with the same lifecycle and selection:",
+    integrator: "Complete both before invoking `stage-diffs.sh`",
+  },
+  {
+    label: "immutable completion boundary",
+    canonical:
+      "Once `.complete` exists, the round is immutable: do not edit, replace, delete, or backfill a staged artifact.",
+    integrator:
+      "Once `.complete` exists, the round is immutable: do not edit, replace, delete, or backfill a staged artifact.",
+  },
+  {
+    label: "changed-input restaging",
+    canonical: "changed evidence or reviewer notes require a new qualified round.",
+    integrator: "changed evidence or reviewer notes require a new qualified round.",
+  },
+];
+const integratorAgent = agents.get("d2b-integrator");
+if (!existsSync(panelSkill)) {
+  fail("d2b-panel-round: immutable staging contract is missing.");
+} else if (!integratorAgent) {
+  fail("d2b-integrator: immutable staging guidance cannot be checked.");
+} else {
+  const canonical = normalizedPromptText(readFileSync(panelSkill, "utf8"));
+  const integrator = normalizedPromptText(integratorAgent.text);
+  for (const requirement of immutableStagingRequirements) {
+    if (!canonical.includes(normalizedPromptText(requirement.canonical))) {
+      fail(
+        `d2b-panel-round: immutable staging contract is missing ${requirement.label} guidance.`,
+      );
+    }
+    if (!integrator.includes(normalizedPromptText(requirement.integrator))) {
+      fail(
+        `d2b-integrator: immutable staging instruction is missing ${requirement.label} guidance.`,
+      );
+    }
   }
 }
 

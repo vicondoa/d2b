@@ -7,12 +7,15 @@
 //! override them, and a Host with a different execution policy does not
 //! receive the field at all.
 
+use std::{collections::BTreeSet, future::Future};
+
 use d2b_contracts::v3::execution_policy::ExecutionDomain;
 use d2b_contracts::v3::host::IsolationPosture;
 use d2b_contracts::v3::resource_status::ResourcePhase;
-use d2b_provider_system_core::testing::fixtures;
+use d2b_provider_system_core::testing::{block_on, fixtures};
 use d2b_provider_system_core::{
-    HostReconciler, ISOLATION_POSTURE_MESSAGE, NO_ISOLATION_STATUS_FIELDS, SystemCoreError,
+    HostCapabilityClass, HostProbeEffectPort, HostProbeMetadata, HostReconciler,
+    ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS, SystemCoreError,
 };
 
 #[test]
@@ -170,4 +173,74 @@ fn host_status_is_redacted() {
     // The Host and User references render redacted even though they are
     // serialized, so a diagnostic cannot echo a resource name.
     assert_eq!(format!("{:?}", status.host_ref), "ResourceRef(<redacted>)");
+}
+
+struct Probe {
+    capabilities: BTreeSet<HostCapabilityClass>,
+    metadata: HostProbeMetadata,
+    gate: MinijailPlatformGate,
+}
+
+impl HostProbeEffectPort for Probe {
+    async fn probe(&self, capability: HostCapabilityClass) -> Result<bool, SystemCoreError> {
+        Ok(self.capabilities.contains(&capability))
+    }
+
+    async fn platform(&self) -> Result<MinijailPlatformGate, SystemCoreError> {
+        Ok(self.gate)
+    }
+
+    fn metadata(&self) -> impl Future<Output = Result<HostProbeMetadata, SystemCoreError>> {
+        std::future::ready(Ok(self.metadata.clone()))
+    }
+}
+
+#[test]
+fn bounded_probe_reconciles_all_capabilities_and_gates_minijail() {
+    let probe = Probe {
+        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
+        metadata: HostProbeMetadata {
+            kernel_release: "6.1".to_owned(),
+            os_name: "test-os".to_owned(),
+            user_manager_available: true,
+            active_process_count: 3,
+        },
+        gate: MinijailPlatformGate::new(6, 1, true),
+    };
+    let result = block_on(HostReconciler::new().reconcile_with_probe(
+        &fixtures::host_ref(),
+        &fixtures::system_core_provider_ref(),
+        &fixtures::system_host_spec(),
+        &probe,
+        &BTreeSet::from([HostCapabilityClass::Pidfd]),
+        true,
+    ))
+    .expect("the complete bounded probe passes");
+    assert_eq!(result.capabilities.len(), HostCapabilityClass::ALL.len());
+    assert_eq!(result.active_process_count, 3);
+    assert!(result.minijail_ready);
+}
+
+#[test]
+fn user_capable_host_without_user_manager_is_degraded() {
+    let probe = Probe {
+        capabilities: HostCapabilityClass::ALL.into_iter().collect(),
+        metadata: HostProbeMetadata {
+            kernel_release: "6.1".to_owned(),
+            os_name: "test-os".to_owned(),
+            user_manager_available: false,
+            active_process_count: 0,
+        },
+        gate: MinijailPlatformGate::new(6, 1, true),
+    };
+    let result = block_on(HostReconciler::new().reconcile_with_probe(
+        &fixtures::user_only_host_ref(),
+        &fixtures::system_core_provider_ref(),
+        &fixtures::user_only_host_spec(),
+        &probe,
+        &BTreeSet::new(),
+        false,
+    ))
+    .expect("the host policy itself is valid");
+    assert_eq!(result.status.phase, ResourcePhase::Degraded);
 }

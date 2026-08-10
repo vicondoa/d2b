@@ -1,6 +1,6 @@
 ---
 name: d2b-autopilot
-description: Run a completed d2b plan end to end, unattended. Executes every wave - implement, validate, panel, fix, commit, PR, merge, seal, memory - and stops only on a mechanical condition. Use once a spec and plan exist and the plan has passed its panel gate.
+description: Run a completed d2b plan end to end, unattended. Executes every wave - implement, validate, feedback, fix, bind, PR, merge, seal, memory - and stops only on a mechanical condition. Use once a spec and plan exist and the plan has passed its panel gate.
 user-invocable: true
 ---
 
@@ -83,13 +83,23 @@ rewrite an existing legacy address.
 
 ## The per-wave loop
 
-Track A runs all steps. Track B runs steps 1 through 6 once, then 7 and 8.
+Track A runs the feedback lifecycle, binding delivery, PR/merge, and seal.
+Track B runs one feedback lifecycle followed by one PR/merge and has no seal.
 
 **1. Plan the slices.** Read the wave tasks and plan's file-ownership map. Give every
 slice disjoint files; serialize slices that would write the same file.
 
-**2. Dispatch implementer lanes.** Send one `d2b-implementer` per slice in one
-batch. Each prompt carries the task, file-ownership list, and acceptance criteria.
+Prep commits and worktree slice commits are integrated into an owned
+feature/integration branch. Never commit, merge, or push them directly to
+protected `main` or `v3`; the owned branch reaches those targets only through
+the required PR flow.
+
+**2. Dispatch implementer lanes.** Send one `d2b-implementer` task subagent per
+slice in one batch from the exact reviewed worktree. Each prompt carries the
+task, file-ownership list, and acceptance criteria. Never substitute a
+different agent type and never spawn a nested `copilot` CLI session. If the
+current session registry cannot supply every selected exact agent definition,
+park with a restart-in-worktree instruction before dispatch.
 **Commit each slice as it lands**, staging only its paths. Do not accumulate
 slices or run `git add -A` while a gate writes scratch.
 
@@ -106,29 +116,88 @@ Two traps to avoid asserting past:
 
 Heavy lanes use public gated targets so the two-slot semaphore is respected.
 
-**4. Discover-Fix-Verify.** `/d2b-panel-round work`: create one lifecycle
-selection, dispatch one comprehensive discovery to its selected read-only
-roster, merge the shared ledger, and hand every issue to implementation with
-batch response and self-verification templates. Reselect over the full
-candidate and every fix delta, unioning the roster without narrowing it.
-Record the reviewed tip and supplied evidence for scoped verification.
+**4. Nonbinding Discover-Fix-Verify.** `/d2b-panel-round work`: create one
+lifecycle selection, dispatch one comprehensive discovery to its selected
+read-only roster, merge the shared ledger, and hand every issue to
+implementation with batch response and self-verification templates. Reselect
+over the full candidate and every fix delta, unioning the roster without
+narrowing it. Record the reviewed tip and supplied evidence for scoped
+verification. This is feedback only: do not create the delivery
+`panel-request`, final records, or attestation while content may still change.
 
-**5. Fix and verify.** If verification returns findings, dispatch fix lanes
-**scoped strictly to those findings**. A genuine defect found while fixing
-something else goes to `/d2b-memory record`, not this lifecycle. Revalidate
-and run scoped verification again. Any content change invalidates every prior
-phase sign-off; do not reopen comprehensive discovery.
+**5. Continue fixes and verification.** If verification returns findings, run
+the exact continuation sequence below. The advance command publishes the
+immutable ledger and partial response template; copy that template to a
+distinct completed-response file and fill only the copy:
 
-**6. Advance only on a unanimous panel and green enforcing validation.**
-Otherwise park.
+```bash
+ROUND=.scratch/panel/<round>
+NEXT=.scratch/panel/<next-handoff>
 
-**7. PR.** Push the branch and open the PR to `v3`. Record the change,
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+FIX_DELTA=.scratch/panel/<next-fix-delta>.json
+CURRENT_CANDIDATE=.scratch/panel/<next-current-candidate>.json
+NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select "$CURRENT_CANDIDATE" <lifecycle-id> --phase verification \
+  --previous-selection "$ROUND/selection.json" --fix-delta "$FIX_DELTA")
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/self-verification.json" \
+  "$NEXT/verification" --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> --selection "$NEXT_SELECTION" \
+  --candidate "$CURRENT_CANDIDATE" --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
+  --self-verification "$NEXT/self-verification.json" \
+  --verification-dir "$NEXT/verification" --lifecycle <lifecycle-id> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
+
+Never edit `$NEXT/responses.json`; it remains the immutable partial
+template. A verification whose prior selection is discovery is the one
+marker-free exception. Dispatch fix lanes **scoped strictly to those findings**
+as proper task subagents from the exact reviewed worktree. A genuine defect
+found while fixing something else goes to `/d2b-memory record`, not this
+lifecycle. Revalidate and run scoped verification again. Any content change
+invalidates every prior phase sign-off; do not reopen comprehensive discovery.
+A blocked continuation requires a fresh self-verification artifact for the new
+candidate and an explicit lifecycle when staging. Never use a parent-worktree
+or legacy agent definition as a fallback.
+
+**6. Freeze and bind the final delivery packet (Track A only).** After the
+feedback lifecycle is unanimously approved and no content-changing fix
+remains, create the final
+snapshot and candidate-bound selection. Then create the sole delivery
+`panel-request`, run `make-records` from that final packet, and run
+`panel-attest` against the same final candidate. This feedback approval is
+nonbinding and does not authorize a PR merge. Never issue the request before
+the content-changing lifecycle; if content changes after a request, stop with
+an invalid candidate rather than creating a second request. A successor wave
+may do this only after its predecessor has completed the required panel, seal,
+and merge.
+
+**7. PR.** Push the owned feature/integration branch and open the PR to the
+protected integration target (`v3` or `main`, as applicable). Record the change,
 validation evidence, and substantive review outcomes; no AI, tool, or model
 attribution.
 
 **8. Merge.** See below.
 
-**9. Seal.** `/d2b-wave-delivery seal <wave>`. Track A only.
+**9. Seal.** `/d2b-wave-delivery seal <wave>`. Track A only, after the wave's
+items have merged through the PR flow.
 
 **10. Record wave memory**, write the checkpoint, advance.
 
@@ -150,9 +219,10 @@ status, and panel verdict. The operator merges; autopilot resumes at seal.
 
 That is the right human stop: panel verdict and CI result are already visible.
 
-`--auto-merge` permits an unattended run after required checks pass and the
-panel is unanimous: `gh pr merge --auto --squash`. It is off by default because
-the integrator owns merge order and conflict resolution.
+`--auto-merge` permits an unattended run after the final packet is attested,
+required checks pass, and the panel is unanimous:
+`gh pr merge --auto --squash`. It is off by default because the integrator owns
+merge order and conflict resolution.
 
 ## Stopping
 

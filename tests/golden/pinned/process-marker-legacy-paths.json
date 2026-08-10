@@ -54,13 +54,10 @@
     "packages/d2b-realm-router/src/display_transport.rs",
     "packages/d2b-realm-router/src/secure_session.rs",
     "packages/d2b-realm-router/src/session_lifecycle.rs",
-    "packages/d2b/src/lib.rs",
     "packages/d2b/tests/auth_status_contract.rs",
     "packages/d2b/tests/cli_contract.rs",
     "packages/d2b/tests/cli_json_contract.rs",
     "packages/d2b/tests/host_doctor_contract.rs",
-    "packages/d2b/tests/status_contract.rs",
-    "packages/d2b/tests/usb_contract.rs",
     "packages/d2b/tests/vm_verbs_contract.rs",
     "packages/d2bd/Cargo.toml",
     "packages/d2bd/src/guest_control_health.rs",
@@ -73,5 +70,9 @@
     "tests/golden/l3-matrix/w3-fedora.txt",
     "tests/golden/l3-matrix/w3-ubuntu.txt"
   ],
-  "retiredPaths": []
+  "retiredPaths": [
+    "packages/d2b/src/lib.rs",
+    "packages/d2b/tests/status_contract.rs",
+    "packages/d2b/tests/usb_contract.rs"
+  ]
 }

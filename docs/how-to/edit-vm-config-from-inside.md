@@ -7,7 +7,7 @@ control of the runner substrate (mounts, devices, hypervisor args, …).
 
 But sometimes you want to iterate on what's *installed inside* a VM
 from inside the VM, then persist that change on the host with review.
-That's what `guestConfigFile` + `d2b config` are for.
+That's what `guestConfigFile` + `d2b activation config` are for.
 
 ## The split: host-owned vs guest-editable
 
@@ -42,7 +42,7 @@ d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
 }
 ```
 
-Rebuild the host once (`d2b switch work --apply`). The guest now carries:
+Rebuild the host once (`d2b activation switch Guest/work --apply`). The guest now carries:
 
 - `/etc/d2b/guest-config.nix` - a **read-only** copy of the current
   approved guest config (always reflects what's live).
@@ -89,7 +89,7 @@ When `ssh.user` is unset the working copy is owned by `root`.
 2. **Sync it back to the host (on-demand).** From the host:
 
    ```bash
-   d2b config sync work
+   d2b activation config sync Guest/work
    ```
 
    This pulls the edited file over the authenticated guest-control
@@ -100,16 +100,16 @@ When `ssh.user` is unset the working copy is owned by `root`.
 3. **Review the change.**
 
    ```bash
-   d2b config diff work --against ./vms/work.guest.nix
+   d2b activation config diff Guest/work --against ./vms/work.guest.nix
    ```
 
 4. **Approve (or reject).** Approve writes the staged copy onto your
    guest file:
 
    ```bash
-   d2b config approve work --to ./vms/work.guest.nix
+   d2b activation config approve Guest/work --to ./vms/work.guest.nix
    # or, to discard:
-   d2b config reject work
+   d2b activation config reject Guest/work
    ```
 
    `approve` is atomic and only validates the bytes; the **real**
@@ -118,7 +118,7 @@ When `ssh.user` is unset the working copy is owned by `root`.
 5. **Build + activate.**
 
    ```bash
-   d2b switch work --apply
+   d2b activation switch Guest/work --apply
    ```
 
    The `guestConfigFile` containment assertion runs during this eval -
@@ -128,14 +128,14 @@ When `ssh.user` is unset the working copy is owned by `root`.
 ## You can also build on the host
 
 Nothing forces the in-VM loop. Editing `./vms/work.guest.nix` directly
-on the host and running `d2b switch work --apply` works exactly the same -
+on the host and running `d2b activation switch Guest/work --apply` works exactly the same -
 the same file, the same containment. The in-VM loop is just an
 ergonomic way to iterate from inside the workspace.
 
 ## Status
 
-`d2b config status --all` lists VMs with a pending (un-approved)
-staged config. `d2b status` and `d2b vm start` also print a
+`d2b activation config status Guest/work` lists a Guest with a pending (un-approved)
+staged config. `d2b guest status <name>` and `d2b guest start <name>` also print a
 note when a VM has a pending edit (human output only), so an in-progress
 edit isn't silently forgotten before you approve it.
 

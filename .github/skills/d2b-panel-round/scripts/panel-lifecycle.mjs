@@ -12,16 +12,13 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { TextDecoder } from "node:util";
 import {
-  existsSync,
-  linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  opendirSync,
   readFileSync,
-  readdirSync,
+  renameSync,
   rmSync,
-  statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, posix, resolve } from "node:path";
@@ -38,6 +35,9 @@ export const DISCOVERY_REQUEST_ARTIFACT = "d2b-panel/discovery-request";
 export const DISCOVERY_RESULT_ARTIFACT = "d2b-panel/discovery-result";
 export const LEDGER_ARTIFACT = "d2b-panel/issue-ledger";
 export const RESPONSE_ARTIFACT = "d2b-panel/implementation-responses";
+export const CONTINUATION_HANDOFF_ARTIFACT =
+  "d2b-panel/continuation-handoff";
+export const CONTINUATION_HANDOFF_SCHEMA_VERSION = 1;
 export const VERIFICATION_ARTIFACT = "d2b-panel/verification";
 export const LEGACY_IMPORT_ARTIFACT = "d2b-panel/legacy-import";
 export const APPROVAL_ARTIFACT = "d2b-panel/approval";
@@ -97,8 +97,6 @@ const SEVERITY_RANK = Object.freeze({
 const error = (message) => {
   throw new Error(message);
 };
-
-let temporaryCounter = 0;
 
 /*
  * Rust's ordered sets compare the UTF-8 representation of valid strings.
@@ -164,22 +162,182 @@ export const stableStringify = (value) =>
 
 export const sha256 = (value) =>
   createHash("sha256")
-    .update(typeof value === "string" ? value : stableStringify(value))
+    .update(
+      Buffer.isBuffer(value) || value instanceof Uint8Array
+        ? value
+        : typeof value === "string"
+          ? value
+          : stableStringify(value),
+    )
     .digest("hex");
 
-const readJson = (path, label = path) => {
-  if (!existsSync(path)) error(`missing ${label} at ${path}`);
+const MAX_PANEL_READ_BYTES = 64 * 1024 * 1024;
+const MAX_DIRECTORY_ENTRIES = 4096;
+
+function regularFileStat(path, label) {
+  const stat = lstatSync(path);
+  if (!stat.isFile()) error(`${label} is not a regular file`);
+  return stat;
+}
+
+function readRegularFile(path, options = {}) {
+  const label = options.label ?? path;
+  const maxBytes = options.maxBytes ?? MAX_PANEL_READ_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    error(`${label} byte limit is malformed`);
+  }
+  const stat = regularFileStat(path, label);
+  if (stat.size > maxBytes) {
+    error(`${label} exceeds ${maxBytes} bytes`);
+  }
+  const bytes = readFileSync(path);
+  if (bytes.length > maxBytes) {
+    error(`${label} exceeds ${maxBytes} bytes`);
+  }
+  if (options.nonEmpty && bytes.length === 0) {
+    error(`${label} is empty`);
+  }
+  return bytes;
+}
+
+function streamDirectoryNames(path, maxEntries, label) {
+  const directory = opendirSync(path);
+  const names = [];
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      names.push(entry.name);
+      if (names.length > maxEntries) {
+        error(`${label} has more than ${maxEntries} entries`);
+      }
+    }
+  } finally {
+    try {
+      directory.closeSync();
+    } catch (cause) {
+      if (cause.code !== "ERR_DIR_CLOSED") throw cause;
+    }
+  }
+  return sortUtf8(names);
+}
+
+export function readFileNoFollow(path, options = {}) {
+  const bytes = readRegularFile(path, options);
+  return options.encoding ? bytes.toString(options.encoding) : bytes;
+}
+
+function expectedDirectoryNames(value, label) {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((name) => typeof name !== "string" || name.length === 0)
+  ) {
+    error(`${label} expected entry names must be non-empty strings`);
+  }
+  const names = sortUtf8(value);
+  if (new Set(names).size !== names.length) {
+    error(`${label} expected entry names must be unique`);
+  }
+  if (names.length > MAX_DIRECTORY_ENTRIES) {
+    error(
+      `${label} expected entry names exceed the ${MAX_DIRECTORY_ENTRIES} entry limit`,
+    );
+  }
+  return names;
+}
+
+function requireExactDirectoryNames(actual, expected, label) {
+  if (
+    expected !== undefined &&
+    (
+      actual.length !== expected.length ||
+      actual.some((name, index) => name !== expected[index])
+    )
+  ) {
+    error(
+      `${label} is incomplete or has extra entries; ` +
+      `expected exactly [${expected.join(", ")}]; ` +
+      `found [${actual.join(", ")}]`,
+    );
+  }
+}
+
+export function readDirectoryNoFollow(path, options = {}) {
+  const label = options.label ?? path;
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) error(`${label} is not a directory`);
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
+  const maxBytes = options.maxBytes ?? MAX_PANEL_READ_BYTES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+    error(`${label} entry limit is malformed`);
+  }
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    error(`${label} aggregate byte limit is malformed`);
+  }
+  const names = streamDirectoryNames(path, maxEntries, label);
+  requireExactDirectoryNames(
+    names,
+    expectedDirectoryNames(options.expectedNames, label),
+    label,
+  );
+  let remaining = maxBytes;
+  const entries = [];
+  for (const name of names) {
+    const bytes = readFileNoFollow(join(path, name), {
+      ...options,
+      label: `${label}/${name}`,
+      maxBytes: remaining,
+    });
+    remaining -= bytes.length;
+    entries.push({ name, bytes });
+  }
+  return entries;
+}
+
+export function pathKindNoFollow(path, label = path) {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) return "directory";
+    if (stat.isFile()) return "file";
+    return "other";
   } catch (cause) {
+    if (cause.code === "ENOENT") return "missing";
+    throw cause;
+  }
+}
+
+export function listDirectoryNamesNoFollow(path, label = path, options = {}) {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) error(`${label} is not a directory`);
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+    error(`${label} entry limit is malformed`);
+  }
+  return streamDirectoryNames(path, maxEntries, label);
+}
+
+function readJsonWithBytes(path, label = path) {
+  try {
+    const bytes = readFileNoFollow(path, { label });
+    const text = artifactText(bytes, label);
+    return { value: JSON.parse(text), bytes };
+  } catch (cause) {
+    if (cause.code === "ENOENT") {
+      error(`missing ${label} at ${path}`);
+    }
     error(`invalid ${label} at ${path}: ${cause.message}`);
   }
-};
+}
+
+const readJson = (path, label = path) => readJsonWithBytes(path, label).value;
 
 export function changedPathsFromGitRange(range, cwd = process.cwd()) {
   nonBlank(range, "git range");
   if (CONTROL_CHARACTER_PATTERN.test(range)) {
     error("git range contains a control character");
+  }
+  if (range.startsWith("-")) {
+    error("git range must not be option-like");
   }
   let output;
   try {
@@ -230,107 +388,76 @@ export function changedPathsFromGitRange(range, cwd = process.cwd()) {
 }
 
 /*
- * Every generated file is create-or-compare. A caller can safely retry a
- * command, but cannot silently replace an artifact that another step already
- * consumed.
+ * Generated files are published with ordinary Node create-or-compare
+ * operations. Retries compare the complete bytes and never overwrite an
+ * existing artifact.
  */
 export function writeCreateOrCompare(path, value) {
   const expected = stableStringify(value);
   mkdirSync(dirname(path), { recursive: true });
-  if (existsSync(path)) {
-    const actual = readFileSync(path, "utf8");
+  try {
+    const actual = readFileNoFollow(path, {
+      encoding: "utf8",
+      label: "existing generated artifact",
+    });
     if (actual !== expected) {
       error(
         `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
       );
     }
-
     return { path, created: false, bytes: expected };
+  } catch (cause) {
+    if (cause.code !== "ENOENT") throw cause;
   }
-  const temporary = `${path}.${process.pid}.${temporaryCounter += 1}.tmp`;
+
   try {
-    writeFileSync(temporary, expected, { encoding: "utf8", flag: "wx" });
-    /*
-     * A hard link is the no-replace commit primitive. Unlike rename, it
-     * cannot replace a file created by a concurrent retry. The temporary name
-     * is never the published artifact, so a failed write cannot look complete
-     * to a reader.
-     */
-    linkSync(temporary, path);
-    unlinkSync(temporary);
+    writeFileSync(path, expected, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
     return { path, created: true, bytes: expected };
   } catch (cause) {
-    try {
-      unlinkSync(temporary);
-    } catch {
-      // The temporary file may not have been created.
-    }
-    if (cause.code === "EEXIST" && existsSync(path)) {
-      const actual = readFileSync(path, "utf8");
-      if (actual !== expected) {
-        error(
-          `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
-        );
-      }
-      return { path, created: false, bytes: expected };
-    }
-    throw cause;
-  }
-}
-
-let atomicDirectoryMoveAvailable;
-
-function requireAtomicDirectoryMove() {
-  if (atomicDirectoryMoveAvailable !== undefined) {
-    if (!atomicDirectoryMoveAvailable) {
+    if (cause.code !== "EEXIST") throw cause;
+    const actual = readFileNoFollow(path, {
+      encoding: "utf8",
+      label: "concurrently published generated artifact",
+    });
+    if (actual !== expected) {
       error(
-        "directory publication requires GNU mv with --no-clobber and " +
-        "--no-target-directory; the atomic no-clobber primitive is unavailable",
+        `conflicting generated bytes at ${path}; refusing to overwrite the existing artifact`,
       );
     }
-    return;
-  }
-  try {
-    const help = execFileSync("mv", ["--help"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    atomicDirectoryMoveAvailable =
-      help.includes("--no-clobber") && help.includes("--no-target-directory");
-  } catch {
-    atomicDirectoryMoveAvailable = false;
-  }
-  if (!atomicDirectoryMoveAvailable) {
-    error(
-      "directory publication requires GNU mv with --no-clobber and " +
-      "--no-target-directory; the atomic no-clobber primitive is unavailable",
-    );
+    return { path, created: false, bytes: expected };
   }
 }
 
-function atomicNoClobberDirectoryMove(source, destination) {
-  requireAtomicDirectoryMove();
-  try {
-    execFileSync(
-      "mv",
-      ["--no-clobber", "--no-target-directory", "--", source, destination],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-  } catch (cause) {
-    error(
-      `atomic no-clobber directory publication failed for ${destination}: ` +
-      `${cause.message}`,
-    );
+function compareExistingDirectory(directory, expected, expectedNames) {
+  if (pathKindNoFollow(directory, "existing artifact family") !== "directory") {
+    error(`existing artifact family at ${directory} is not a directory`);
   }
+  const actualEntries = readDirectoryNoFollow(directory, {
+    label: `existing artifact family at ${directory}`,
+    expectedNames,
+  });
+  for (const entry of actualEntries) {
+    const expectedBytes = expected.get(entry.name);
+    const expectedBuffer = Buffer.isBuffer(expectedBytes)
+      ? expectedBytes
+      : Buffer.from(expectedBytes);
+    if (!entry.bytes.equals(expectedBuffer)) {
+      error(
+        `conflicting generated bytes at ${join(directory, entry.name)}; refusing to overwrite`,
+      );
+    }
+  }
+  return { path: directory, created: false };
 }
 
 /*
- * A directory is the publication unit for an artifact family. Build every
- * member in a complete sibling temporary directory, claim a separate sibling
- * claim directory, and publish with Linux's atomic no-clobber move. The
- * destination therefore changes from absent to complete, never from absent to
- * partially populated. A claim left by a crashed publisher is not reclaimed
- * implicitly: its error names the cleanup needed before retrying.
+ * Artifact families are the one place where a complete sibling directory is
+ * published as a unit. Standard Node rename makes the finished directory
+ * visible in one operation; ordinary retries compare every member.
  */
 export function writeDirectoryCreateOrCompare(directory, entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -346,111 +473,38 @@ export function writeDirectoryCreateOrCompare(directory, entries) {
     }
     expected.set(name, entry.bytes);
   }
-  const expectedNames = [...expected.keys()].sort();
-
-  const pathExists = (path) => {
-    try {
-      lstatSync(path);
-      return true;
-    } catch (cause) {
-      if (cause.code === "ENOENT") return false;
-      throw cause;
-    }
-  };
-
-  const compareExisting = (path) => {
-    if (!pathExists(path) || !lstatSync(path).isDirectory()) {
-      error(`existing artifact family at ${path} is not a directory`);
-    }
-    const actualEntries = readdirSync(path, { withFileTypes: true })
-      .sort((left, right) => left.name.localeCompare(right.name));
-    const actualNames = actualEntries.map((entry) => entry.name);
-    if (
-      actualNames.length !== expectedNames.length ||
-      actualNames.some((name, index) => name !== expectedNames[index])
-    ) {
-      error(
-        `existing artifact family at ${path} is incomplete or has extra entries; ` +
-        `expected [${expectedNames.join(", ")}], found [${actualNames.join(", ")}]`,
-      );
-    }
-    for (const entry of actualEntries) {
-      if (!entry.isFile()) {
-        error(`existing artifact family entry ${join(path, entry.name)} is not a regular file`);
-      }
-      const actual = readFileSync(join(path, entry.name));
-      const expectedBytes = expected.get(entry.name);
-      const expectedBuffer = Buffer.isBuffer(expectedBytes)
-        ? expectedBytes
-        : Buffer.from(expectedBytes);
-      if (!actual.equals(expectedBuffer)) {
-        error(`conflicting generated bytes at ${join(path, entry.name)}; refusing to overwrite`);
-      }
-    }
-    return { path, created: false };
-  };
+  const expectedNames = sortUtf8([...expected.keys()]);
+  if (expectedNames.length > MAX_DIRECTORY_ENTRIES) {
+    error(
+      `directory publication contains more than ${MAX_DIRECTORY_ENTRIES} entries`,
+    );
+  }
 
   mkdirSync(dirname(directory), { recursive: true });
+  if (pathKindNoFollow(directory, "artifact family") !== "missing") {
+    return compareExistingDirectory(directory, expected, expectedNames);
+  }
+
   const temporary = mkdtempSync(
-    join(dirname(directory), `.${basename(directory)}.stage-${process.pid}-`),
+    join(dirname(directory), `.${basename(directory)}.stage-`),
   );
-  const claim = `${directory}.claim`;
-  let claimOwned = false;
   try {
     for (const name of expectedNames) {
-      writeFileSync(join(temporary, name), expected.get(name), { flag: "wx" });
+      writeFileSync(join(temporary, name), expected.get(name), {
+        flag: "wx",
+        mode: 0o600,
+      });
     }
-    const stagedNames = readdirSync(temporary).sort();
-    if (
-      stagedNames.length !== expectedNames.length ||
-      stagedNames.some((name, index) => name !== expectedNames[index])
-    ) {
-      error(`staged artifact family at ${temporary} is incomplete before publication`);
-    }
-
     try {
-      mkdirSync(claim);
-      claimOwned = true;
+      renameSync(temporary, directory);
+      return { path: directory, created: true };
     } catch (cause) {
-      if (cause.code === "EEXIST") {
-        if (pathExists(directory)) return compareExisting(directory);
-        error(
-          `sibling publication claim ${claim} already exists while ` +
-          `destination ${directory} is absent; it may be stale. ` +
-          `Clean up the stale claim before retrying: rm -rf -- '${claim}'`,
-        );
-      }
-      throw cause;
+      if (cause.code !== "EEXIST" && cause.code !== "ENOTEMPTY") throw cause;
+      return compareExistingDirectory(directory, expected, expectedNames);
     }
-
-    if (pathExists(directory)) {
-      return compareExisting(directory);
-    }
-
-    /*
-     * The staged directory is complete and the claim serializes compliant
-     * publishers. The no-clobber move is still required: a publisher that
-     * does not take the claim must not win a check-then-rename race.
-     */
-    atomicNoClobberDirectoryMove(temporary, directory);
-    if (pathExists(temporary)) {
-      /*
-       * GNU mv leaves the source in place when --no-clobber declines an
-       * existing destination. Compare only after that atomic decision.
-       */
-      return compareExisting(directory);
-    }
-    if (!pathExists(directory)) {
-      error(
-        `atomic directory publication moved ${temporary} but destination ` +
-        `${directory} is absent`,
-      );
-    }
-    return { path: directory, created: true };
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
-    if (claimOwned) {
-      rmSync(claim, { recursive: true, force: true });
+    if (pathKindNoFollow(temporary, "staged artifact family") === "directory") {
+      rmSync(temporary, { recursive: true, force: true });
     }
   }
 }
@@ -473,12 +527,60 @@ function assertDigest(value, label) {
   return value;
 }
 
+const MAX_STRING_BYTES = 4 * 1024;
+const ADR046_PROGRAM = "ADR046";
+const ADR046_WAVES = new Set([
+  "W0",
+  "W1",
+  "W2",
+  "W3",
+  "W4",
+  "W5",
+  "W6",
+  "W7",
+  "W8",
+]);
+
+function validateBoundedString(value, label) {
+  const result = nonBlank(value, label);
+  if (utf8Bytes(result, label).length > MAX_STRING_BYTES) {
+    error(`${label} must be non-empty and at most ${MAX_STRING_BYTES} bytes`);
+  }
+  return result;
+}
+
 function safePathPart(value, label) {
-  nonBlank(value, label);
-  if (value === "." || value === ".." || /[\\/]/.test(value)) {
+  validateBoundedString(value, label);
+  if (
+    value === "." ||
+    value === ".." ||
+    /[\\/]/u.test(value) ||
+    CONTROL_CHARACTER_PATTERN.test(value)
+  ) {
     error(`${label} must be a single path component`);
   }
   return value;
+}
+
+function validateProgramWave(program, wave) {
+  validateBoundedString(program, "candidate.program");
+  validateBoundedString(wave, "candidate.wave");
+  const qualified = /^([a-z][a-z0-9]{2,15})w([0-8])$/u.exec(wave);
+  if (qualified !== null) {
+    if (program.toLowerCase() !== qualified[1]) {
+      error(
+        `candidate wave "${wave}" names program "${qualified[1]}", ` +
+        `which disagrees with candidate program "${program}"`,
+      );
+    }
+    return;
+  }
+  if (program !== ADR046_PROGRAM || !ADR046_WAVES.has(wave)) {
+    error(
+      `candidate wave must be one of ${[...ADR046_WAVES].join(", ")} for ` +
+      `${ADR046_PROGRAM}, or a qualified lowercase token such as spec004w1`,
+    );
+  }
 }
 
 function candidateAddress(input) {
@@ -490,11 +592,12 @@ function candidateAddress(input) {
     input?.fullCandidate ??
     input;
   if (!isPlainObject(candidate)) error("candidate address must be an object");
+  validateProgramWave(candidate.program, candidate.wave);
   const address = {
-    program: nonBlank(candidate.program, "candidate.program"),
-    wave: nonBlank(candidate.wave, "candidate.wave"),
-    candidate_id: safePathPart(candidate.candidate_id, "candidate.candidate_id"),
-    content_id: nonBlank(candidate.content_id, "candidate.content_id"),
+    program: candidate.program,
+    wave: candidate.wave,
+    candidate_id: assertDigest(candidate.candidate_id, "candidate.candidate_id"),
+    content_id: assertDigest(candidate.content_id, "candidate.content_id"),
     snapshot_sha256: assertDigest(
       candidate.snapshot_sha256,
       "candidate.snapshot_sha256",
@@ -931,6 +1034,14 @@ export function validateSelectionAgainstTable(
     );
   }
   for (const seat of expected.roster) {
+    if (!selected.has(seat)) {
+      error(
+        `selection roster omits canonical floor-fill seat "${seat}" for ` +
+        `${selection.candidate_class}`,
+      );
+    }
+  }
+  for (const seat of expected.roster) {
     for (const profile of expected.profiles[seat] ?? []) {
       if (!selection.profiles[seat]?.includes(profile)) {
         error(`selection profile ${seat}/${profile} is missing for its classification inputs`);
@@ -991,9 +1102,57 @@ function selectionPath(root, lifecycleId, candidateId, snapshotSha256, phase = "
   );
 }
 
+function rejectSecondDiscovery(root, lifecycleId, expectedPath) {
+  const selectionsRoot = join(root, ".scratch", "panel", lifecycleId, "selections");
+  const rootKind = pathKindNoFollow(selectionsRoot, "lifecycle selections");
+  if (rootKind === "missing") return;
+  if (rootKind !== "directory") {
+    error("lifecycle selections is not a directory");
+  }
+  const expected = resolve(expectedPath);
+  const candidateDirectories = listDirectoryNamesNoFollow(
+    selectionsRoot,
+    "lifecycle selections",
+    { maxEntries: MAX_DIRECTORY_ENTRIES },
+  );
+  for (const candidateId of candidateDirectories) {
+    if (candidateId === "verification") continue;
+    safePathPart(candidateId, "lifecycle selection candidate directory");
+    const candidateDirectory = join(selectionsRoot, candidateId);
+    if (pathKindNoFollow(candidateDirectory, "lifecycle candidate selections") !== "directory") {
+      error("lifecycle candidate selections contains a non-directory entry");
+    }
+    const files = listDirectoryNamesNoFollow(
+      candidateDirectory,
+      "lifecycle candidate selections",
+      { maxEntries: MAX_DIRECTORY_ENTRIES },
+    );
+    for (const fileName of files) {
+      if (!fileName.endsWith(".json")) {
+        error("lifecycle candidate selections contains a non-JSON entry");
+      }
+      const path = join(candidateDirectory, fileName);
+      if (resolve(path) === expected) continue;
+      const existing = readJson(path, "lifecycle selection");
+      validateSelection(existing);
+      if (existing.lifecycle_id !== lifecycleId) {
+        error("lifecycle selections contain a selection for another lifecycle");
+      }
+      if (existing.phase === "discovery") {
+        error(
+          `lifecycle "${lifecycleId}" already has a discovery selection; ` +
+          "subsequent selections must use phase verification",
+        );
+      }
+    }
+  }
+}
+
 export function selectionDigest(path) {
-  if (!existsSync(path)) error(`missing lifecycle selection at ${path}`);
-  return sha256(readFileSync(path, "utf8"));
+  return sha256(readFileNoFollow(path, {
+    encoding: "utf8",
+    label: "lifecycle selection",
+  }));
 }
 
 export function candidateFromSelection(selection, options = {}) {
@@ -1043,6 +1202,7 @@ function canonicalClassificationArray(value, label, kind) {
     if (typeof entry !== "string" || entry.trim() === "") {
       error(`${label} must contain non-blank strings`);
     }
+    validateBoundedString(entry, label);
     if (CONTROL_CHARACTER_PATTERN.test(entry)) {
       error(`${label} must not contain control characters`);
     }
@@ -1109,7 +1269,10 @@ function parseClassificationInputs(
   if (typeof value.candidate_class !== "string" || value.candidate_class.trim() === "") {
     error(`${label}.candidate_class must be a non-blank string`);
   }
-  const candidateClass = value.candidate_class;
+  const candidateClass = validateBoundedString(
+    value.candidate_class,
+    `${label}.candidate_class`,
+  );
   if (!CANDIDATE_CLASSES.includes(candidateClass)) {
     error(`${label}.candidate_class "${candidateClass}" is unsupported`);
   }
@@ -1212,14 +1375,13 @@ export function validateSelection(selection, table = readSelectionTable()) {
   if (selection.schema_version !== SELECTION_SCHEMA_VERSION) {
     error(`lifecycle selection schema_version must be ${SELECTION_SCHEMA_VERSION}`);
   }
-  nonBlank(selection.lifecycle_id, "selection.lifecycle_id");
+  safePathPart(selection.lifecycle_id, "selection.lifecycle_id");
   if (!["discovery", "verification"].includes(selection.phase)) {
     error("selection.phase must be discovery or verification");
   }
-  nonBlank(selection.program, "selection.program");
-  nonBlank(selection.wave, "selection.wave");
-  safePathPart(selection.candidate_id, "selection.candidate_id");
-  nonBlank(selection.content_id, "selection.content_id");
+  validateProgramWave(selection.program, selection.wave);
+  assertDigest(selection.candidate_id, "selection.candidate_id");
+  assertDigest(selection.content_id, "selection.content_id");
   assertDigest(selection.snapshot_sha256, "selection.snapshot_sha256");
   if (selection.selection_table_version !== SELECTION_TABLE_VERSION) {
     error(
@@ -1273,10 +1435,19 @@ export function validateSelection(selection, table = readSelectionTable()) {
       error(`selection.profiles is missing an array for ${seat}`);
     }
     const knownProfiles = new Set(Object.keys(table.seats[seat].profiles));
+    const seenProfiles = new Set();
     for (const profile of selection.profiles[seat]) {
-      if (typeof profile !== "string" || !knownProfiles.has(profile)) {
+      if (typeof profile !== "string") {
         error(`selection profile ${seat}/${profile} is not defined by the selection table`);
       }
+      validateBoundedString(profile, `selection profile ${seat}`);
+      if (!knownProfiles.has(profile)) {
+        error(`selection profile ${seat}/${profile} is not defined by the selection table`);
+      }
+      if (seenProfiles.has(profile)) {
+        error(`selection repeats profile for seat ${seat}`);
+      }
+      seenProfiles.add(profile);
     }
     const expectedProfiles = profilesForSeat(table, seat, {
       changed_paths: selection.classification_inputs.changed_paths,
@@ -1523,6 +1694,9 @@ export function createSelection(input, options = {}) {
       address.snapshot_sha256,
       phase,
     );
+  if (phase === "discovery") {
+    rejectSecondDiscovery(root, lifecycleId, path);
+  }
   const result = writeCreateOrCompare(path, selection);
   return { selection, path: result.path, created: result.created, plan: selectionPlan };
 }
@@ -1530,6 +1704,17 @@ export function createSelection(input, options = {}) {
 export function readSelection(path, options = {}) {
   const selection = readJson(path, "lifecycle selection");
   return validateSelection(selection, options.table ?? readSelectionTable(options.table_path));
+}
+
+function readSelectionWithBytes(path, options = {}) {
+  const { value, bytes } = readJsonWithBytes(path, "lifecycle selection");
+  return {
+    selection: validateSelection(
+      value,
+      options.table ?? readSelectionTable(options.table_path),
+    ),
+    bytes,
+  };
 }
 
 function selectionSummary(selection, table) {
@@ -1652,7 +1837,7 @@ function verdictEntries(input) {
 
 function validateActualVerdict(verdict, label = "verdict") {
   if (!isPlainObject(verdict)) error(`${label} must be a JSON object`);
-  const seat = verdict.engineer ?? verdict.seat;
+  const seat = verdict.engineer;
   nonBlank(seat, `${label}.engineer`);
   if (typeof verdict.signoff !== "boolean") {
     error(`${label}.signoff must be a boolean`);
@@ -1663,61 +1848,105 @@ function validateActualVerdict(verdict, label = "verdict") {
   if (!Array.isArray(verdict.recommendations)) {
     error(`${label}.recommendations must be an array`);
   }
+  verdict.recommendations.forEach((recommendation, index) =>
+    validateCurrentRecommendation(
+      recommendation,
+      `${label}.recommendations[${index}]`,
+    ),
+  );
   if (verdict.signoff !== (verdict.recommendations.length === 0)) {
     error(`${label}.signoff must be true if and only if recommendations is empty`);
   }
   return seat;
 }
 
+const DISCOVERY_VERDICT_KEYS = [
+  "engineer",
+  "signoff",
+  "summary",
+  "recommendations",
+];
+
+const VERIFICATION_VERDICT_KEYS = [
+  "engineer",
+  "signoff",
+  "summary",
+  "verified_issue_statuses",
+  "late_findings",
+  "recommendations",
+];
+
+function validateDiscoveryVerdict(verdict, label = "discovery verdict") {
+  assertExactKeys(verdict, DISCOVERY_VERDICT_KEYS, label);
+  return validateActualVerdict(verdict, label);
+}
+
+function validateVerificationVerdict(
+  verdict,
+  label = "verification verdict",
+) {
+  assertExactKeys(verdict, VERIFICATION_VERDICT_KEYS, label);
+  const seat = validateActualVerdict(verdict, label);
+  if (!isPlainObject(verdict.verified_issue_statuses)) {
+    error(`${label}.verified_issue_statuses must be an object`);
+  }
+  if (!Array.isArray(verdict.late_findings)) {
+    error(`${label}.late_findings must be an array`);
+  }
+  return seat;
+}
+
+const CURRENT_RECOMMENDATION_KEYS = [
+  "severity",
+  "where",
+  "what",
+  "why",
+  "fix",
+];
+
+function validateCurrentRecommendation(recommendation, label) {
+  if (!isPlainObject(recommendation)) {
+    error(`${label} must be an object`);
+  }
+  assertExactKeys(recommendation, CURRENT_RECOMMENDATION_KEYS, label);
+  if (!["critical", "high", "medium", "low"].includes(recommendation.severity)) {
+    error(`${label}.severity must be exactly critical, high, medium, or low`);
+  }
+  for (const key of ["where", "what", "why", "fix"]) {
+    nonBlank(recommendation[key], `${label}.${key}`);
+  }
+  return recommendation;
+}
+
 function recommendationFinding(seat, recommendation, index) {
   const label = `verdict ${seat} recommendation ${index + 1}`;
-  let value = recommendation;
-  if (typeof recommendation === "string") {
-    nonBlank(recommendation, label);
-    value = {
-      severity: "MAJOR",
-      raw_text: recommendation,
-      impact: "Impact supplied by the reviewer.",
-      recommendation,
-    };
-  } else if (!isPlainObject(recommendation)) {
-    error(`${label} must be a string or object`);
-  }
-  const sourceOrdinal = value.source_ordinal ?? value.ordinal ?? index + 1;
-  if (!Number.isInteger(sourceOrdinal) || sourceOrdinal < 1) {
-    error(`${label}.source_ordinal must be a positive integer`);
-  }
-  const severity = verdictSeverity(value.severity ?? "MAJOR", `${label}.severity`);
-  const where = value.where;
-  const what = value.what ?? value.description;
-  const why = value.why ?? value.impact;
-  const fix = value.fix ?? value.recommendation;
-  const rawText = value.raw_text ??
-    (typeof recommendation === "string"
-      ? recommendation
-      : [where, what, why, fix].filter((part) => typeof part === "string" && part !== "").join(": "));
-  nonBlank(rawText, `${label}.raw_text`);
-  const impact = why ?? "Impact supplied by the reviewer.";
-  const recommendationText = fix ?? what ?? rawText;
-  nonBlank(impact, `${label}.impact`);
-  nonBlank(recommendationText, `${label}.recommendation`);
-  const rendered = {
-    source_id: value.source_id ?? `${seat}:${sourceOrdinal}`,
+  const value = validateCurrentRecommendation(recommendation, label);
+  const sourceOrdinal = index + 1;
+  return {
+    source_id: `${seat}:${sourceOrdinal}`,
     seat,
     source_ordinal: sourceOrdinal,
-    raw_text: rawText,
-    attribution: value.attribution ?? seat,
-    severity,
-    impact,
-    recommendation: recommendationText,
+    raw_text: [value.where, value.what, value.why, value.fix].join(": "),
+    attribution: seat,
+    severity: verdictSeverity(value.severity, `${label}.severity`),
+    impact: value.why,
+    recommendation: value.fix,
   };
-  nonBlank(rendered.source_id, `${label}.source_id`);
-  nonBlank(rendered.attribution, `${label}.attribution`);
-  return rendered;
+}
+
+function rejectDuplicateVerdictSeats(adapted, label) {
+  const seen = new Set();
+  for (const result of adapted) {
+    if (seen.has(result.seat)) {
+      error(`duplicate ${label} for seat "${result.seat}"`);
+    }
+    seen.add(result.seat);
+  }
+  return adapted;
 }
 
 export function adaptDiscoveryVerdict(verdict, options = {}) {
-  const seat = validateActualVerdict(verdict, "discovery verdict");
+  const seat = validateDiscoveryVerdict(verdict);
   const expectedSeat = options.seat ?? seat;
   if (seat !== expectedSeat) {
     error(`discovery verdict engineer "${seat}" disagrees with selected seat "${expectedSeat}"`);
@@ -1732,8 +1961,11 @@ export function adaptDiscoveryVerdict(verdict, options = {}) {
 }
 
 export function adaptDiscoveryResults(input, options = {}) {
-  const adapted = verdictEntries(input).map(([seat, verdict]) =>
-    adaptDiscoveryVerdict(verdict, { ...options, seat }),
+  const adapted = rejectDuplicateVerdictSeats(
+    verdictEntries(input).map(([seat, verdict]) =>
+      adaptDiscoveryVerdict(verdict, { ...options, seat }),
+    ),
+    "discovery verdict",
   );
   return adapted.sort((left, right) =>
     (options.selection?.roster?.indexOf(left.seat) ?? Number.MAX_SAFE_INTEGER) -
@@ -1742,33 +1974,205 @@ export function adaptDiscoveryResults(input, options = {}) {
   );
 }
 
+const ADAPTED_DISCOVERY_KEYS = [
+  "artifact_kind",
+  "schema_version",
+  "phase",
+  "lifecycle_id",
+  "selection_sha256",
+  "current_candidate",
+  "results",
+];
+
+const ADAPTED_DISCOVERY_RESULT_KEYS = [
+  "seat",
+  "complete",
+  "findings",
+];
+
+const ADAPTED_DISCOVERY_FINDING_KEYS = [
+  "source_id",
+  "seat",
+  "source_ordinal",
+  "raw_text",
+  "attribution",
+  "severity",
+  "impact",
+  "recommendation",
+];
+
+function validateAdaptedDiscoveryShape(results) {
+  if (!Array.isArray(results)) {
+    error("adapted discovery result results must be an array");
+  }
+  for (const [resultIndex, result] of results.entries()) {
+    const resultLabel = `adapted discovery result results[${resultIndex}]`;
+    assertExactKeys(result, ADAPTED_DISCOVERY_RESULT_KEYS, resultLabel);
+    if (!Array.isArray(result.findings)) {
+      error(`${resultLabel}.findings must be an array`);
+    }
+    for (const [findingIndex, finding] of result.findings.entries()) {
+      assertExactKeys(
+        finding,
+        ADAPTED_DISCOVERY_FINDING_KEYS,
+        `${resultLabel}.findings[${findingIndex}]`,
+      );
+    }
+  }
+  return results;
+}
+
+function validateExactJsonBytes(bytes, value, label) {
+  return exactArtifactBytes(bytes, value, label);
+}
+
+function exactSelectionBytes(selection, bytes, label) {
+  return validateExactJsonBytes(
+    bytes ?? stableStringify(selection),
+    selection,
+    label,
+  );
+}
+
+export function createDiscoveryResultArtifact(input, options = {}) {
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection = input.selection ??
+    (input.selection_path ? readSelection(input.selection_path, { table }) : undefined);
+  if (!selection) error("adapted discovery requires the discovery selection");
+  validateSelection(selection, table);
+  if (selection.phase !== "discovery") {
+    error("adapted discovery requires a discovery selection");
+  }
+  const selectionBytes = validateExactJsonBytes(
+    input.selection_bytes,
+    selection,
+    "adapted discovery selection",
+  );
+  const currentCandidate = input.current_candidate ??
+    input.currentCandidate ??
+    input.candidate;
+  if (!currentCandidate) {
+    error("adapted discovery requires the current candidate");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  const results = adaptDiscoveryResults(
+    input.verdicts ?? input.results,
+    { selection },
+  );
+  validateAdaptedDiscoveryShape(results);
+  validateDiscoveryResults(selection, results, { table });
+  return sortedObject({
+    artifact_kind: DISCOVERY_RESULT_ARTIFACT,
+    schema_version: SELECTION_SCHEMA_VERSION,
+    phase: "discovery",
+    lifecycle_id: selection.lifecycle_id,
+    selection_sha256: sha256(selectionBytes),
+    current_candidate: candidateAddress(currentCandidate),
+    results,
+  });
+}
+
+export function validateDiscoveryResultArtifact(artifact, options = {}) {
+  assertExactKeys(
+    artifact,
+    ADAPTED_DISCOVERY_KEYS,
+    "adapted discovery result",
+  );
+  if (artifact.artifact_kind !== DISCOVERY_RESULT_ARTIFACT) {
+    error("adapted discovery result has an unexpected artifact_kind");
+  }
+  if (artifact.schema_version !== SELECTION_SCHEMA_VERSION) {
+    error("adapted discovery result schema_version is unsupported");
+  }
+  if (artifact.phase !== "discovery") {
+    error("adapted discovery result phase must be discovery");
+  }
+  const selection = options.selection;
+  if (!selection) {
+    error("adapted discovery validation requires the discovery selection");
+  }
+  const table = options.table ?? readSelectionTable(options.table_path);
+  validateSelection(selection, table);
+  if (selection.phase !== "discovery") {
+    error("adapted discovery validation requires a discovery selection");
+  }
+  const selectionBytes = validateExactJsonBytes(
+    options.selection_bytes,
+    selection,
+    "adapted discovery selection",
+  );
+  if (artifact.lifecycle_id !== selection.lifecycle_id) {
+    error("adapted discovery result lifecycle_id disagrees with selection");
+  }
+  if (artifact.selection_sha256 !== sha256(selectionBytes)) {
+    error("adapted discovery result is not bound to the exact selection bytes");
+  }
+  const currentCandidate = options.current_candidate ??
+    options.currentCandidate ??
+    options.candidate;
+  if (!currentCandidate) {
+    error("adapted discovery validation requires the current candidate");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  assertCanonicalEqual(
+    artifact.current_candidate,
+    candidateAddress(currentCandidate),
+    "adapted discovery result current_candidate",
+  );
+  validateAdaptedDiscoveryShape(artifact.results);
+  return validateDiscoveryResults(selection, artifact.results, { table });
+}
+
 export function adaptVerificationVerdict(verdict, options = {}) {
-  const seat = validateActualVerdict(verdict, "verification verdict");
+  const seat = validateVerificationVerdict(verdict);
   const expectedSeat = options.seat ?? seat;
   if (seat !== expectedSeat) {
     error(`verification verdict engineer "${seat}" disagrees with selected seat "${expectedSeat}"`);
   }
-  const statuses = verdict.verified_issue_statuses ??
-    verdict.issue_statuses ??
-    verdict.verification_statuses;
-  if (options.issue_ids && statuses === undefined) {
-    error(`verification verdict ${seat} must contain exact per-issue verification status`);
+  const statuses = verdict.verified_issue_statuses;
+  if (options.issue_ids !== undefined) {
+    if (
+      !Array.isArray(options.issue_ids) ||
+      options.issue_ids.some((issueId) => typeof issueId !== "string")
+    ) {
+      error("verification verdict issue_ids must be an array of strings");
+    }
+    if (!isPlainObject(statuses)) {
+      error(`verification verdict ${seat}.verified_issue_statuses must be an object`);
+    }
+    const expected = [...new Set(options.issue_ids)].sort();
+    const actual = Object.keys(statuses).sort();
+    if (
+      actual.length !== expected.length ||
+      actual.some((issueId, index) => issueId !== expected[index])
+    ) {
+      error(
+        `verification verdict ${seat}.verified_issue_statuses must cover ` +
+        "each issue exactly once",
+      );
+    }
   }
+  const lateFindings = verdict.late_findings.map((finding, index) =>
+    lateFindingAdmission(finding, `verification verdict ${seat}.late_findings[${index}]`),
+  );
   return {
     seat,
     complete: true,
     summary: verdict.summary,
     signoff: verdict.signoff,
-    verified_issue_statuses: statuses ?? {},
+    verified_issue_statuses: statuses,
     blocking_recommendations: verdict.recommendations,
     recommendations: verdict.recommendations,
-    late_findings: verdict.late_findings ?? [],
+    late_findings: lateFindings,
   };
 }
 
 export function adaptVerificationResults(input, options = {}) {
-  const adapted = verdictEntries(input).map(([seat, verdict]) =>
-    adaptVerificationVerdict(verdict, { ...options, seat }),
+  const adapted = rejectDuplicateVerdictSeats(
+    verdictEntries(input).map(([seat, verdict]) =>
+      adaptVerificationVerdict(verdict, { ...options, seat }),
+    ),
+    "verification verdict",
   );
   return adapted.sort((left, right) =>
     (options.selection?.roster?.indexOf(left.seat) ?? Number.MAX_SAFE_INTEGER) -
@@ -1797,20 +2201,26 @@ export function createVerificationResultArtifact(input, options = {}) {
   if (selection.phase !== "verification") {
     error("adapted verification requires a verification selection");
   }
+  const selectionBytes = exactSelectionBytes(
+    selection,
+    input.selection_bytes,
+    "adapted verification selection",
+  );
   const ledgerBytes = input.ledger_bytes ?? input.discovery_ledger_bytes;
-  if (typeof ledgerBytes !== "string" || ledgerBytes.length === 0) {
+  if (
+    (typeof ledgerBytes !== "string" && !Buffer.isBuffer(ledgerBytes)) ||
+    ledgerBytes.length === 0
+  ) {
     error("adapted verification requires the exact immutable discovery ledger bytes");
   }
   const ledger = input.ledger ?? input.discovery_ledger;
   if (!ledger) error("adapted verification requires the immutable discovery ledger");
-  validateLedger(ledger);
-  try {
-    if (stableStringify(JSON.parse(ledgerBytes)) !== stableStringify(ledger)) {
-      error("adapted verification ledger object disagrees with the exact ledger bytes");
-    }
-  } catch (cause) {
-    error(`adapted verification ledger bytes are not valid JSON: ${cause.message}`);
-  }
+  validateLedger(ledger, { table, selection });
+  validateExactJsonBytes(
+    ledgerBytes,
+    ledger,
+    "adapted verification ledger",
+  );
   const currentCandidate = input.current_candidate ??
     input.currentCandidate ??
     input.candidate;
@@ -1828,9 +2238,7 @@ export function createVerificationResultArtifact(input, options = {}) {
     schema_version: SELECTION_SCHEMA_VERSION,
     phase: "verification",
     lifecycle_id: selection.lifecycle_id,
-    selection_sha256: sha256(
-      input.selection_bytes ?? stableStringify(selection),
-    ),
+    selection_sha256: sha256(selectionBytes),
     current_candidate: candidateAddress(currentCandidate),
     discovery_ledger_sha256: sha256(ledgerBytes),
     results,
@@ -1858,20 +2266,29 @@ export function validateVerificationResultArtifact(
   if (artifact.lifecycle_id !== selection.lifecycle_id) {
     error("adapted verification result lifecycle_id disagrees with selection");
   }
-  const selectionBytes = options.selection_bytes;
-  if (typeof selectionBytes === "string") {
-    if (artifact.selection_sha256 !== sha256(selectionBytes)) {
-      error("adapted verification result is not bound to the exact selection bytes");
-    }
-  } else if (artifact.selection_sha256 !== sha256(selection)) {
-    error("adapted verification result selection digest does not match selection");
+  const selectionBytes = exactSelectionBytes(
+    selection,
+    options.selection_bytes,
+    "adapted verification selection",
+  );
+  if (artifact.selection_sha256 !== sha256(selectionBytes)) {
+    error("adapted verification result is not bound to the exact selection bytes");
   }
   const ledger = options.ledger;
   if (!ledger) error("adapted verification validation requires the immutable discovery ledger");
-  validateLedger(ledger);
-  if (typeof options.ledger_bytes !== "string" || options.ledger_bytes.length === 0) {
+  validateLedger(ledger, { table, selection });
+  if (
+    (typeof options.ledger_bytes !== "string" &&
+      !Buffer.isBuffer(options.ledger_bytes)) ||
+    options.ledger_bytes.length === 0
+  ) {
     error("adapted verification validation requires exact ledger bytes");
   }
+  validateExactJsonBytes(
+    options.ledger_bytes,
+    ledger,
+    "adapted verification ledger",
+  );
   if (artifact.discovery_ledger_sha256 !== sha256(options.ledger_bytes)) {
     error("adapted verification result is not bound to the exact ledger bytes");
   }
@@ -2011,7 +2428,21 @@ export function mergeDiscoveryLedger(input, options = {}) {
   const table = options.table ?? readSelectionTable(options.table_path);
   const selection = input.selection ?? readSelection(input.selection_path, { table });
   validateSelection(selection, table);
-  const sources = validateDiscoveryResults(selection, input.results ?? input.discovery_results, { table });
+  const discoveryResult = input.discovery_result ??
+    input.discovery_results ??
+    input.results;
+  if (!discoveryResult) {
+    error("merge-ledger requires the adapted discovery result artifact");
+  }
+  const sources = validateDiscoveryResultArtifact(discoveryResult, {
+    table,
+    selection,
+    selection_bytes: input.selection_bytes,
+    current_candidate:
+      input.current_candidate ??
+      input.currentCandidate ??
+      input.candidate,
+  });
   if (!Array.isArray(input.groups ?? input.dedup_groups)) {
     error("orchestrator-supplied dedup_groups are required");
   }
@@ -2173,8 +2604,8 @@ export function validateLedger(ledger, options = {}) {
   safePathPart(ledger.lifecycle_id, "ledger.lifecycle_id");
   nonBlank(ledger.program, "ledger.program");
   nonBlank(ledger.wave, "ledger.wave");
-  safePathPart(ledger.candidate_id, "ledger.candidate_id");
-  nonBlank(ledger.content_id, "ledger.content_id");
+  assertDigest(ledger.candidate_id, "ledger.candidate_id");
+  assertDigest(ledger.content_id, "ledger.content_id");
   assertDigest(ledger.snapshot_sha256, "ledger.snapshot_sha256");
   if (ledger.complete !== true) error("ledger.complete must be true");
   const table = options.table ?? readSelectionTable(options.table_path);
@@ -2268,6 +2699,7 @@ export function validateLedger(ledger, options = {}) {
   }
   if (mapped.size !== sourceIds.size) error("ledger does not map every source finding exactly once");
   if (options.selection) {
+    validateSelection(options.selection, table);
     for (const key of ["lifecycle_id", "program", "wave"]) {
       if (options.selection[key] !== ledger[key]) {
         error(`ledger and selection ${key} disagree`);
@@ -2515,10 +2947,9 @@ function validateSelectionSummary(summary, table, label = "selection summary") {
     error(`${label}.phase must be discovery or verification`);
   }
   safePathPart(summary.lifecycle_id, `${label}.lifecycle_id`);
-  nonBlank(summary.program, `${label}.program`);
-  nonBlank(summary.wave, `${label}.wave`);
-  safePathPart(summary.candidate_id, `${label}.candidate_id`);
-  nonBlank(summary.content_id, `${label}.content_id`);
+  validateProgramWave(summary.program, summary.wave);
+  assertDigest(summary.candidate_id, `${label}.candidate_id`);
+  assertDigest(summary.content_id, `${label}.content_id`);
   assertDigest(summary.snapshot_sha256, `${label}.snapshot_sha256`);
   if (summary.selection_schema_version !== SELECTION_SCHEMA_VERSION) {
     error(`${label}.selection_schema_version is unsupported`);
@@ -2548,7 +2979,19 @@ function validateSelectionSummary(summary, table, label = "selection summary") {
       error(`${label}.profiles.${seat} must be an array`);
     }
     const knownProfiles = new Set(Object.keys(table.seats[seat].profiles));
-    if (profiles.some((profile) => typeof profile !== "string" || !knownProfiles.has(profile))) {
+    const seenProfiles = new Set();
+    if (profiles.some((profile) => {
+      if (
+        typeof profile !== "string" ||
+        !knownProfiles.has(profile) ||
+        seenProfiles.has(profile)
+      ) {
+        return true;
+      }
+      validateBoundedString(profile, `${label}.profiles.${seat}`);
+      seenProfiles.add(profile);
+      return false;
+    })) {
       error(`${label}.profiles.${seat} contains an unknown profile`);
     }
     const sortedProfiles = [...new Set(profiles)].sort();
@@ -2849,9 +3292,7 @@ export function validateVerificationRequest(request, options = {}) {
     selection.classification_inputs.fix_delta.changed_paths;
   if (
     !Array.isArray(request.latest_delta_paths) ||
-    request.latest_delta_paths.length === 0 ||
-    (declaredDeltaPaths.length > 0 &&
-      request.latest_delta_paths.join("\u0000") !== declaredDeltaPaths.join("\u0000"))
+    request.latest_delta_paths.join("\u0000") !== declaredDeltaPaths.join("\u0000")
   ) {
     error("verification request latest_delta_paths disagree with selection");
   }
@@ -2919,6 +3360,14 @@ export function validateVerificationRequest(request, options = {}) {
     !isPlainObject(request.previous_status)
   ) {
     error("verification request previous_status must be null or an object");
+  }
+  if (incumbent) {
+    validatePriorVerdict(
+      request.previous_status,
+      request.seat,
+      request.prior_selection,
+      ledger,
+    );
   }
   if (hasCanonicalPreviousStatus) {
     assertCanonicalEqual(
@@ -3098,6 +3547,30 @@ export function validateStagedRoundArtifacts(input, options = {}) {
   validateLedger(ledger, { table, selection });
   validateResponses(ledger, input.responses);
   validateSelfVerification(input.self_verification ?? input.selfVerification);
+  if (input.handoff !== undefined) {
+    const ledgerBytes =
+      options.ledger_bytes ??
+      options.ledgerBytes ??
+      input.ledger_bytes ??
+      input.ledgerBytes;
+    const responseBytes =
+      options.responses_bytes ??
+      options.responsesBytes ??
+      input.responses_bytes ??
+      input.responsesBytes;
+    if (ledgerBytes === undefined || responseBytes === undefined) {
+      error(
+        "staged verification artifacts with a handoff require exact ledger and response bytes",
+      );
+    }
+    validateAdvanceVerificationHandoff(input.handoff, {
+      ledger,
+      responses: input.responses,
+      ledger_bytes: ledgerBytes,
+      responses_bytes: responseBytes,
+      table,
+    });
+  }
   const verificationRequests =
     input.verification_requests ?? input.verificationRequests;
   if (!verificationRequests) {
@@ -3182,31 +3655,95 @@ export function validateFixScope(input) {
   };
 }
 
-export function lateFindingAdmission(finding) {
-  if (!isPlainObject(finding)) error("late finding must be an object");
-  const severity = verdictSeverity(finding.severity, "late finding severity");
-  const introduced = finding.introduced_regression === true || finding.introduced === true;
-  const missed = finding.previously_missed === true || finding.missed_discovery === true;
-  const unsafeClass = ["correctness", "security", "data-loss", "reliability"].includes(
-    String(finding.category ?? "").toLowerCase(),
-  );
-  const admitted = introduced || (missed && ["BLOCKER", "MAJOR"].includes(severity)) ||
-    (unsafeClass && ["BLOCKER", "MAJOR"].includes(severity));
+export const LATE_FINDING_SCHEMA = Object.freeze({
+  required: Object.freeze([
+    "severity",
+    "introduced_regression",
+    "previously_missed",
+    "category",
+    "source_id",
+    "source_ordinal",
+    "seat",
+    "attribution",
+    "raw_text",
+    "description",
+    "impact",
+    "recommendation",
+  ]),
+});
+
+const LATE_FINDING_CATEGORIES = Object.freeze([
+  "correctness",
+  "security",
+  "data-loss",
+  "reliability",
+]);
+
+function validateLateFindingShape(finding, label = "late finding") {
+  if (!isPlainObject(finding)) error(`${label} must be an object`);
+  assertExactKeys(finding, LATE_FINDING_SCHEMA.required, label);
+  for (const key of LATE_FINDING_SCHEMA.required) {
+    if (!Object.hasOwn(finding, key)) {
+      error(`${label} must contain ${key}`);
+    }
+  }
+  if (
+    typeof finding.introduced_regression !== "boolean" ||
+    typeof finding.previously_missed !== "boolean"
+  ) {
+    error(`${label} admission flags must be booleans`);
+  }
+  if (!finding.introduced_regression && !finding.previously_missed) {
+    error(`${label} must be introduced_regression or previously_missed`);
+  }
+  if (!LATE_FINDING_CATEGORIES.includes(finding.category)) {
+    error(`${label}.category must be one of ${LATE_FINDING_CATEGORIES.join(", ")}`);
+  }
+  if (!Number.isInteger(finding.source_ordinal) || finding.source_ordinal < 1) {
+    error(`${label}.source_ordinal must be a positive integer`);
+  }
+  const severity = verdictSeverity(finding.severity, `${label}.severity`);
+  const seat = validateBoundedString(finding.seat, `${label}.seat`);
+  const sourceId = nonBlank(finding.source_id, `${label}.source_id`);
+  const attribution = nonBlank(finding.attribution, `${label}.attribution`);
+  const rawText = nonBlank(finding.raw_text, `${label}.raw_text`);
+  const description = nonBlank(finding.description, `${label}.description`);
+  const impact = nonBlank(finding.impact, `${label}.impact`);
+  const recommendation = nonBlank(finding.recommendation, `${label}.recommendation`);
+  return {
+    severity,
+    introduced_regression: finding.introduced_regression,
+    previously_missed: finding.previously_missed,
+    category: finding.category,
+    source_id: sourceId,
+    source_ordinal: finding.source_ordinal,
+    seat,
+    attribution,
+    raw_text: rawText,
+    description,
+    impact,
+    recommendation,
+  };
+}
+
+export function lateFindingAdmission(finding, label = "late finding") {
+  const normalized = validateLateFindingShape(finding, label);
+  const admitted =
+    normalized.introduced_regression ||
+    ["BLOCKER", "MAJOR"].includes(normalized.severity);
   if (!admitted) {
     error(
-      `late ${severity} finding is not admissible during scoped verification; pre-existing MINOR/NIT and optional improvements do not reopen discovery`,
+      `${label} with severity ${normalized.severity} is not admissible during scoped verification; ` +
+      "pre-existing MINOR/NIT and optional improvements do not reopen discovery",
     );
   }
-  return {
-    ...finding,
-    severity,
-    late: true,
-    admission_reason: introduced
-      ? "introduced-regression"
-      : missed
-        ? "previously-missed-merge-risk"
-        : "unsafe-merge-risk",
-  };
+  return normalized;
+}
+
+function publicLateFinding(finding) {
+  return finding?.late === true
+    ? Object.fromEntries(Object.entries(finding).filter(([key]) => key !== "late"))
+    : finding;
 }
 
 export function appendLateFindings(ledger, findings) {
@@ -3214,30 +3751,36 @@ export function appendLateFindings(ledger, findings) {
   if (!Array.isArray(findings)) error("late findings must be an array");
   const issues = ledger.issues.map((issue) => ({ ...issue }));
   const sources = ledger.sources.map((source) => ({ ...source }));
+  const admittedSourceIds = new Set();
   let nextId = issues.length + 1;
   for (const finding of findings) {
-    const admitted = lateFindingAdmission(finding);
-    const rawLateText = admitted.raw_text ?? admitted.text ?? admitted.description;
+    const admitted = lateFindingAdmission(publicLateFinding(finding));
+    const rawLateText = admitted.raw_text;
     const sourceId =
       admitted.source_id ??
       `late:${sha256({
         seat: admitted.seat ?? "verification",
         raw_text: rawLateText,
       })}`;
+    nonBlank(sourceId, "late finding source_id");
+    if (admittedSourceIds.has(sourceId)) {
+      error(`late source finding ${sourceId} already exists`);
+    }
     if (sources.some((source) => source.source_id === sourceId)) {
       error(`late source finding ${sourceId} already exists`);
     }
+    admittedSourceIds.add(sourceId);
     const rawText = rawLateText;
     nonBlank(rawText, `late finding ${sourceId}.raw_text`);
     const source = {
       source_id: sourceId,
-      seat: nonBlank(admitted.seat ?? "verification", `late finding ${sourceId}.seat`),
-      source_ordinal: admitted.source_ordinal ?? nextId,
+      seat: admitted.seat,
+      source_ordinal: admitted.source_ordinal,
       raw_text: rawText,
-      attribution: admitted.attribution ?? admitted.seat ?? "verification",
+      attribution: admitted.attribution,
       severity: admitted.severity,
       impact: nonBlank(admitted.impact ?? "Late finding makes approval unsafe.", `late finding ${sourceId}.impact`),
-      recommendation: nonBlank(admitted.recommendation ?? admitted.fix ?? rawText, `late finding ${sourceId}.recommendation`),
+      recommendation: nonBlank(admitted.recommendation, `late finding ${sourceId}.recommendation`),
     };
     sources.push(source);
     issues.push({
@@ -3255,6 +3798,546 @@ export function appendLateFindings(ledger, findings) {
     ...ledger,
     sources,
     issues,
+  };
+}
+
+export function validateResponseHandoff(ledger, envelope) {
+  validateResponseEnvelope(ledger, envelope);
+  if (!Array.isArray(envelope.responses)) {
+    error("next implementation response envelope responses must be an array");
+  }
+  const expected = ledger.issues.map((issue) => issue.id);
+  const actual = envelope.responses.map((response) => response?.issue_id);
+  if (
+    actual.length !== expected.length ||
+    actual.some((issueId, index) => issueId !== expected[index])
+  ) {
+    error(
+      "next implementation response envelope must contain one response for every " +
+      "ledger issue in ledger order",
+    );
+  }
+  for (const [index, response] of envelope.responses.entries()) {
+    if (!isPlainObject(response)) {
+      error(`next implementation response ${expected[index]} must be an object`);
+    }
+    if (response.disposition === null) {
+      assertExactKeys(
+        response,
+        [
+          "issue_id",
+          "disposition",
+          "changed_surface",
+          "justification",
+          "evidence",
+          "verified_factual_status",
+        ],
+        `blank implementation response ${expected[index]}`,
+      );
+      if (
+        !Array.isArray(response.changed_surface) ||
+        response.changed_surface.length !== 0 ||
+        response.justification !== "" ||
+        response.evidence !== "" ||
+        response.verified_factual_status !== null
+      ) {
+        error(`blank implementation response ${expected[index]} is not canonical`);
+      }
+      continue;
+    }
+  }
+  const validationResponses = envelope.responses.map((response) =>
+    response.disposition === null
+      ? {
+          issue_id: response.issue_id,
+          disposition: "Fixed",
+          changed_surface: ["handoff-validation-placeholder"],
+          justification: "Handoff validation placeholder.",
+          evidence: "Handoff validation placeholder.",
+          verified_factual_status: null,
+        }
+      : response
+  );
+  validateResponses(ledger, validationResponses);
+  return envelope;
+}
+
+function validateCompletedResponseEnvelope(ledger, envelope) {
+  validateResponseEnvelope(ledger, envelope);
+  const responses = validateResponses(ledger, envelope);
+  if (responses.some((response) => response.disposition === null)) {
+    error(
+      "completed implementation responses must provide a disposition for every " +
+      "ledger issue",
+    );
+  }
+  return envelope;
+}
+
+function artifactByteLength(bytes, label) {
+  if (typeof bytes === "string") {
+    if (bytes.length === 0) error(`${label} requires exact JSON bytes`);
+    return Buffer.byteLength(bytes, "utf8");
+  }
+  if (Buffer.isBuffer(bytes)) {
+    if (bytes.length === 0) error(`${label} requires exact JSON bytes`);
+    return bytes.length;
+  }
+  error(`${label} requires exact JSON bytes`);
+}
+
+function artifactText(bytes, label) {
+  artifactByteLength(bytes, label);
+  try {
+    const raw = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
+    return new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch (cause) {
+    error(`${label} bytes are not valid UTF-8: ${cause.message}`);
+  }
+}
+
+function parseArtifactJson(bytes, label) {
+  const text = artifactText(bytes, label);
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    error(`${label} bytes are not valid JSON: ${cause.message}`);
+  }
+}
+
+function exactArtifactBytes(bytes, value, label) {
+  const decoded = parseArtifactJson(bytes, label);
+  if (stableStringify(decoded) !== stableStringify(value)) {
+    error(`${label} object disagrees with its exact JSON bytes`);
+  }
+  return bytes;
+}
+
+const CONTINUATION_HANDOFF_KEYS = Object.freeze([
+  "artifact_kind",
+  "schema_version",
+  "lifecycle_id",
+  "program",
+  "wave",
+  "candidate_id",
+  "content_id",
+  "snapshot_sha256",
+  "ledger_sha256",
+  "ledger_bytes",
+  "responses_sha256",
+  "responses_bytes",
+]);
+
+function validateHandoffFileBinding(marker, bytes, digestKey, sizeKey, label) {
+  const size = artifactByteLength(bytes, label);
+  if (
+    size > MAX_PANEL_READ_BYTES ||
+    marker[sizeKey] !== size ||
+    marker[digestKey] !== sha256(bytes)
+  ) {
+    error(`${label} does not match the continuation handoff marker`);
+  }
+}
+
+export function validateAdvanceVerificationHandoff(marker, options = {}) {
+  assertExactKeys(
+    marker,
+    CONTINUATION_HANDOFF_KEYS,
+    "continuation handoff marker",
+  );
+  if (marker.artifact_kind !== CONTINUATION_HANDOFF_ARTIFACT) {
+    error("continuation handoff marker has an unexpected artifact_kind");
+  }
+  if (marker.schema_version !== CONTINUATION_HANDOFF_SCHEMA_VERSION) {
+    error("continuation handoff marker schema_version is unsupported");
+  }
+  safePathPart(marker.lifecycle_id, "continuation handoff lifecycle_id");
+  validateProgramWave(marker.program, marker.wave);
+  for (const key of ["candidate_id", "content_id", "snapshot_sha256"]) {
+    assertDigest(marker[key], `continuation handoff ${key}`);
+  }
+  for (const [digestKey, sizeKey] of [
+    ["ledger_sha256", "ledger_bytes"],
+    ["responses_sha256", "responses_bytes"],
+  ]) {
+    assertDigest(marker[digestKey], `continuation handoff ${digestKey}`);
+    if (
+      !Number.isSafeInteger(marker[sizeKey]) ||
+      marker[sizeKey] < 0 ||
+      marker[sizeKey] > MAX_PANEL_READ_BYTES
+    ) {
+      error(`continuation handoff ${sizeKey} is out of bounds`);
+    }
+  }
+
+  const suppliedLedgerBytes =
+    options.ledger_bytes ?? options.ledgerBytes;
+  const suppliedResponseBytes =
+    options.responses_bytes ??
+    options.response_bytes ??
+    options.responsesBytes ??
+    options.responseBytes;
+  if (
+    suppliedLedgerBytes === undefined ||
+    suppliedResponseBytes === undefined
+  ) {
+    error("continuation handoff requires both bound artifact files");
+  }
+
+  validateHandoffFileBinding(
+    marker,
+    suppliedLedgerBytes,
+    "ledger_sha256",
+    "ledger_bytes",
+    "continuation handoff discovery ledger",
+  );
+  validateHandoffFileBinding(
+    marker,
+    suppliedResponseBytes,
+    "responses_sha256",
+    "responses_bytes",
+    "continuation handoff responses",
+  );
+
+  const ledger = parseArtifactJson(
+    suppliedLedgerBytes,
+    "continuation handoff discovery ledger",
+  );
+  const responses = parseArtifactJson(
+    suppliedResponseBytes,
+    "continuation handoff responses",
+  );
+  const optionalLedger =
+    Object.hasOwn(options, "ledger") ? options.ledger : options.discovery_ledger;
+  const optionalResponses =
+    Object.hasOwn(options, "responses") ? options.responses : options.response;
+  if (
+    (Object.hasOwn(options, "ledger") ||
+      Object.hasOwn(options, "discovery_ledger")) &&
+    stableStringify(optionalLedger) !== stableStringify(ledger)
+  ) {
+    error(
+      "continuation handoff supplied ledger disagrees with its marker-bound bytes",
+    );
+  }
+  if (
+    (Object.hasOwn(options, "responses") ||
+      Object.hasOwn(options, "response")) &&
+    stableStringify(optionalResponses) !== stableStringify(responses)
+  ) {
+    error(
+      "continuation handoff supplied responses disagree with its marker-bound bytes",
+    );
+  }
+  validateLedger(ledger, { table: options.table });
+  validateCompletedResponseEnvelope(ledger, responses);
+  for (const key of [
+    "lifecycle_id",
+    "program",
+    "wave",
+    "candidate_id",
+    "content_id",
+    "snapshot_sha256",
+  ]) {
+    if (ledger[key] !== marker[key] || responses[key] !== marker[key]) {
+      error(`continuation handoff ${key} disagrees with its artifact envelopes`);
+    }
+  }
+  return { marker, ledger, responses };
+}
+
+export const validateContinuationHandoff =
+  validateAdvanceVerificationHandoff;
+
+export function createContinuationHandoff(input, options = {}) {
+  if (!isPlainObject(input)) {
+    error("continuation handoff input must be an object");
+  }
+  const ledger = input.ledger ?? input.discovery_ledger;
+  const responses = input.responses;
+  const ledgerBytes =
+    input.ledger_bytes ?? input.discovery_ledger_bytes;
+  const responseBytes =
+    input.responses_bytes ?? input.response_bytes;
+  if (!ledger || !responses) {
+    error("continuation handoff requires ledger and responses");
+  }
+  exactArtifactBytes(ledgerBytes, ledger, "continuation handoff ledger");
+  exactArtifactBytes(responseBytes, responses, "continuation handoff responses");
+  validateLedger(ledger, { table: options.table });
+  validateCompletedResponseEnvelope(ledger, responses);
+  const marker = sortedObject({
+    artifact_kind: CONTINUATION_HANDOFF_ARTIFACT,
+    schema_version: CONTINUATION_HANDOFF_SCHEMA_VERSION,
+    lifecycle_id: ledger.lifecycle_id,
+    program: ledger.program,
+    wave: ledger.wave,
+    candidate_id: ledger.candidate_id,
+    content_id: ledger.content_id,
+    snapshot_sha256: ledger.snapshot_sha256,
+    ledger_sha256: sha256(ledgerBytes),
+    ledger_bytes: artifactByteLength(ledgerBytes, "continuation handoff ledger"),
+    responses_sha256: sha256(responseBytes),
+    responses_bytes: artifactByteLength(
+      responseBytes,
+      "continuation handoff responses",
+    ),
+  });
+  validateAdvanceVerificationHandoff(marker, {
+    ledger,
+    responses,
+    ledger_bytes: ledgerBytes,
+    responses_bytes: responseBytes,
+    table: options.table,
+  });
+  return marker;
+}
+
+export function advanceVerification(input, options = {}) {
+  if (!isPlainObject(input)) error("advance-verification input must be an object");
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selection =
+    input.current_selection ??
+    input.currentSelection ??
+    input.selection ??
+    (input.selection_path
+      ? readSelection(input.selection_path, { table })
+      : undefined);
+  if (!selection) {
+    error("advance-verification requires the exact current verification selection");
+  }
+  validateSelection(selection, table);
+  if (selection.phase !== "verification") {
+    error("advance-verification requires a verification selection");
+  }
+  const selectionBytes =
+    input.selection_bytes ?? input.selectionBytes ?? stableStringify(selection);
+  exactArtifactBytes(selectionBytes, selection, "advance-verification selection");
+
+  const currentCandidate =
+    input.current_candidate ??
+    input.currentCandidate ??
+    input.candidate;
+  if (!currentCandidate) {
+    error("advance-verification requires the exact current candidate");
+  }
+  validateCandidateAgainstSelection(selection, currentCandidate, table);
+  const currentCandidateAddress = candidateAddress(currentCandidate);
+
+  const ledger =
+    input.discovery_ledger ??
+    input.discoveryLedger ??
+    input.ledger;
+  if (!ledger) {
+    error("advance-verification requires the exact prior immutable ledger");
+  }
+  const ledgerBytes =
+    input.discovery_ledger_bytes ??
+    input.discoveryLedgerBytes ??
+    input.ledger_bytes ??
+    stableStringify(ledger);
+  exactArtifactBytes(ledgerBytes, ledger, "advance-verification ledger");
+  validateLedger(ledger, { table, selection });
+  for (const key of ["lifecycle_id", "program", "wave"]) {
+    if (ledger[key] !== selection[key]) {
+      error(`advance-verification ledger and selection ${key} disagree`);
+    }
+  }
+  validateMonotonicRoster(ledger.roster, selection.roster, table);
+
+  const responses = input.responses;
+  if (
+    !isPlainObject(responses) ||
+    responses.artifact_kind !== RESPONSE_ARTIFACT
+  ) {
+    error(
+      "advance-verification requires the prior implementation response envelope",
+    );
+  }
+  const responseBytes =
+    input.responses_bytes ??
+    input.response_bytes ??
+    stableStringify(responses);
+  exactArtifactBytes(
+    responseBytes,
+    responses,
+    "advance-verification responses",
+  );
+  validateResponses(ledger, responses);
+  validateResponseEnvelope(ledger, responses);
+
+  const verificationResults =
+    input.verification_results ??
+    input.verificationResults;
+  if (!verificationResults) {
+    error("advance-verification requires adapted verification results");
+  }
+  const verificationResultsBytes =
+    input.verification_results_bytes ??
+    input.verificationBytes ??
+    stableStringify(verificationResults);
+  exactArtifactBytes(
+    verificationResultsBytes,
+    verificationResults,
+    "advance-verification verification results",
+  );
+  const verification = validateVerificationResultArtifact(
+    verificationResults,
+    {
+      selection,
+      selection_bytes: selectionBytes,
+      ledger,
+      ledger_bytes: ledgerBytes,
+    },
+  );
+  if (
+    stableStringify(candidateAddress(verificationResults.current_candidate)) !==
+    stableStringify(currentCandidateAddress)
+  ) {
+    error(
+      "advance-verification verification results current candidate disagrees " +
+      "with the exact current candidate",
+    );
+  }
+  if (verificationResults.lifecycle_id !== selection.lifecycle_id) {
+    error("advance-verification verification lifecycle_id disagrees with selection");
+  }
+
+  const lateFindings = lateFindingsFromVerification(verification);
+  const appended = appendLateFindings(ledger, lateFindings);
+  const nextLedger = sortedObject({
+    ...appended,
+    program: selection.program,
+    wave: selection.wave,
+    candidate_id: currentCandidateAddress.candidate_id,
+    content_id: currentCandidateAddress.content_id,
+    snapshot_sha256: currentCandidateAddress.snapshot_sha256,
+    roster: [...selection.roster],
+  });
+  validateLedger(nextLedger);
+
+  const priorByIssue = new Map(
+    responses.responses.map((response) => [response.issue_id, response]),
+  );
+  const statusByIssue = new Map(
+    ledger.issues.map((issue) => [
+      issue.id,
+      verification.every((result) =>
+        PASSING_VERIFICATION_STATUSES.has(
+          statusName(result.verified_issue_statuses[issue.id]),
+        )),
+    ]),
+  );
+  const priorIssueIds = new Set(ledger.issues.map((issue) => issue.id));
+  const carriedIssueIds = [];
+  const resetIssueIds = [];
+  const template = createResponseTemplate(nextLedger);
+  const blankByIssue = new Map(
+    template.responses.map((response) => [response.issue_id, response]),
+  );
+  template.responses = nextLedger.issues.map((issue) => {
+    if (
+      priorIssueIds.has(issue.id) &&
+      statusByIssue.get(issue.id) === true
+    ) {
+      const response = priorByIssue.get(issue.id);
+      if (!response) {
+        error(`advance-verification has no prior response for ${issue.id}`);
+      }
+      carriedIssueIds.push(issue.id);
+      return response;
+    }
+    resetIssueIds.push(issue.id);
+    return blankByIssue.get(issue.id);
+  });
+  const nextResponses = sortedObject(template);
+  validateResponseHandoff(nextLedger, nextResponses);
+  return {
+    ledger: nextLedger,
+    responses: nextResponses,
+    carried_issue_ids: carriedIssueIds,
+    reset_issue_ids: resetIssueIds,
+    late_findings: lateFindings,
+  };
+}
+
+export function writeAdvanceVerification(outputDir, input, options = {}) {
+  const advanced = advanceVerification(input, options);
+  const publication = {
+    ledger: writeCreateOrCompare(
+      join(outputDir, "discovery-ledger.json"),
+      advanced.ledger,
+    ),
+    responses: writeCreateOrCompare(
+      join(outputDir, "responses.json"),
+      advanced.responses,
+    ),
+  };
+  return {
+    ...advanced,
+    publication,
+    ledger_path: join(outputDir, "discovery-ledger.json"),
+    responses_path: join(outputDir, "responses.json"),
+  };
+}
+
+export function finalizeHandoff(input, options = {}) {
+  if (!isPlainObject(input)) error("finalize-handoff input must be an object");
+  const ledger =
+    input.discovery_ledger ??
+    input.discoveryLedger ??
+    input.ledger;
+  if (!ledger) {
+    error("finalize-handoff requires the exact continuation ledger");
+  }
+  const ledgerBytes =
+    input.discovery_ledger_bytes ??
+    input.discoveryLedgerBytes ??
+    input.ledger_bytes ??
+    stableStringify(ledger);
+  exactArtifactBytes(ledgerBytes, ledger, "finalize-handoff ledger");
+  validateLedger(ledger, { table: options.table });
+
+  const responses =
+    input.completed_responses ??
+    input.completedResponses ??
+    input.responses;
+  if (!responses) {
+    error("finalize-handoff requires completed implementation responses");
+  }
+  const responseBytes =
+    input.completed_responses_bytes ??
+    input.completedResponsesBytes ??
+    input.responses_bytes ??
+    input.response_bytes ??
+    stableStringify(responses);
+  exactArtifactBytes(
+    responseBytes,
+    responses,
+    "finalize-handoff completed responses",
+  );
+  validateCompletedResponseEnvelope(ledger, responses);
+
+  const handoff = createContinuationHandoff({
+    ledger,
+    ledger_bytes: ledgerBytes,
+    responses,
+    responses_bytes: responseBytes,
+  }, options);
+  return {
+    ledger,
+    responses,
+    handoff,
+  };
+}
+
+export function writeFinalizeHandoff(path, input, options = {}) {
+  const finalized = finalizeHandoff(input, options);
+  const publication = writeCreateOrCompare(path, finalized.handoff);
+  return {
+    ...finalized,
+    publication,
+    handoff_path: path,
   };
 }
 
@@ -3330,15 +4413,27 @@ export function validateVerificationResults(selection, results, options = {}) {
   validateSelection(selection, table);
   const ledger = options.ledger;
   if (!ledger) error("verification validation requires the immutable discovery ledger");
-  validateLedger(ledger);
+  validateLedger(ledger, { table, selection });
   validateMonotonicRoster(ledger.roster, selection.roster, table);
   const rawEntries = verificationEntries(results);
-  const actualVerdicts = rawEntries.length > 0 &&
-    rawEntries.every(([, result]) =>
-      isPlainObject(result) &&
-      Object.hasOwn(result, "engineer") &&
-      !Object.hasOwn(result, "complete"),
+  const currentVerdictEntries = rawEntries.filter(([, result]) =>
+    isPlainObject(result) && Object.hasOwn(result, "engineer"),
+  );
+  if (
+    currentVerdictEntries.length > 0 &&
+    currentVerdictEntries.length !== rawEntries.length
+  ) {
+    error("verification results must not mix current verdict JSON with verification result shapes");
+  }
+  if (
+    currentVerdictEntries.some(([, result]) => Object.hasOwn(result, "complete"))
+  ) {
+    error(
+      "current verification verdicts must use exactly the six canonical top-level fields",
     );
+  }
+  const actualVerdicts = currentVerdictEntries.length === rawEntries.length &&
+    rawEntries.length > 0;
   const adapted = actualVerdicts
     ? Object.fromEntries(
         adaptVerificationResults(results, {
@@ -3346,15 +4441,6 @@ export function validateVerificationResults(selection, results, options = {}) {
         }).map((result) => [result.seat, result]),
       )
     : results;
-  if (
-    rawEntries.some(([, result]) =>
-      isPlainObject(result) &&
-      Object.hasOwn(result, "engineer") &&
-      !Object.hasOwn(result, "complete"),
-    ) !== actualVerdicts
-  ) {
-    error("verification results must not mix actual verdict JSON with verification result shapes");
-  }
   const expected = new Set(selection.roster);
   const seen = new Set();
   const normalized = [];
@@ -3368,6 +4454,11 @@ export function validateVerificationResults(selection, results, options = {}) {
     if (typeof result.signoff !== "boolean") {
       error(`verification result for ${seat} must explicitly set signoff`);
     }
+    if (Object.hasOwn(result, "engineer")) {
+      error(
+        `current verification verdict for ${seat} must use exactly the six canonical top-level fields`,
+      );
+    }
     if (!Array.isArray(result.recommendations)) {
       error(`verification result for ${seat} must explicitly contain recommendations`);
     }
@@ -3375,18 +4466,36 @@ export function validateVerificationResults(selection, results, options = {}) {
     if (!Array.isArray(recommendations)) {
       error(`verification result for ${seat} recommendations must be an array`);
     }
+    recommendations.forEach((recommendation, index) =>
+      validateCurrentRecommendation(
+        recommendation,
+        `verification result for ${seat} recommendations[${index}]`,
+      ),
+    );
     if (result.signoff !== (recommendations.length === 0)) {
       error(`verification result for ${seat} signoff must equal recommendations.isEmpty`);
     }
-    const statuses = result.verified_issue_statuses ??
-      result.issue_statuses ??
-      result.verification_statuses;
+    if (!Object.hasOwn(result, "verified_issue_statuses")) {
+      error(
+        `verification result for ${seat} must explicitly contain ` +
+        "verified_issue_statuses",
+      );
+    }
+    const statuses = result.verified_issue_statuses;
     const verifiedIssueStatuses = exactIssueStatuses(
       ledger,
       statuses,
       `verification ${seat}.verified_issue_statuses`,
     );
-    const late = (result.late_findings ?? []).map(lateFindingAdmission);
+    if (!Object.hasOwn(result, "late_findings") || !Array.isArray(result.late_findings)) {
+      error(`verification result for ${seat} must explicitly contain late_findings`);
+    }
+    const late = result.late_findings.map((finding, index) =>
+      lateFindingAdmission(
+        publicLateFinding(finding),
+        `verification result ${seat}.late_findings[${index}]`,
+      ),
+    );
     normalized.push({
       seat,
       complete: true,
@@ -3395,7 +4504,7 @@ export function validateVerificationResults(selection, results, options = {}) {
       verified_issue_statuses: verifiedIssueStatuses,
       blocking_recommendations: recommendations,
       late_findings: late,
-      summary: nonBlank(result.summary ?? "Verification complete.", `verification ${seat}.summary`),
+      summary: nonBlank(result.summary, `verification ${seat}.summary`),
     });
   }
   for (const seat of selection.roster) {
@@ -3406,9 +4515,55 @@ export function validateVerificationResults(selection, results, options = {}) {
   );
 }
 
-function normalizePriorVerdicts(input, priorSelection) {
+function validatePriorVerdict(verdict, seat, priorSelection, ledger) {
+  if (!isPlainObject(verdict)) {
+    error(`verification preparation prior verdict for ${seat} must be an object`);
+  }
+  const label = `verification preparation prior verdict ${seat}`;
+  if (priorSelection.phase === "discovery") {
+    validateDiscoveryVerdict(verdict, label);
+  } else {
+    validateVerificationVerdict(verdict, label);
+    const statusCount = Object.keys(verdict.verified_issue_statuses).length;
+    const requiredPrefixLength = ledger.issues.reduce(
+      (length, issue, index) => issue.late === true ? length : index + 1,
+      0,
+    );
+    if (
+      statusCount < requiredPrefixLength ||
+      statusCount > ledger.issues.length
+    ) {
+      error(
+        `${label}.verified_issue_statuses must cover a prior-ledger prefix ` +
+        `between ${requiredPrefixLength} and ${ledger.issues.length} issues`,
+      );
+    }
+    const expectedIssues = ledger.issues.slice(0, statusCount);
+    exactIssueStatuses(
+      { issues: expectedIssues },
+      verdict.verified_issue_statuses,
+      `${label}.verified_issue_statuses`,
+    );
+    verdict.late_findings.forEach((finding, index) =>
+      lateFindingAdmission(
+        finding,
+        `${label}.late_findings[${index}]`,
+      ),
+    );
+  }
+  if (verdict.engineer !== seat) {
+    error(
+      `verification preparation prior verdict ${seat} declares seat "${verdict.engineer}"`,
+    );
+  }
+  return verdict;
+}
+
+function normalizePriorVerdicts(input, priorSelection, ledger) {
   const verdicts = typeof input === "string"
-    ? readJsonDirectory(input, "prior verdicts")
+    ? readJsonDirectory(input, "prior verdicts", {
+        expectedNames: priorSelection.roster.map((seat) => `${seat}.json`),
+      })
     : input;
   if (!isPlainObject(verdicts)) {
     error("verification preparation prior verdicts must be an object keyed by seat");
@@ -3425,15 +4580,7 @@ function normalizePriorVerdicts(input, priorSelection) {
   }
   for (const seat of priorSelection.roster) {
     const verdict = verdicts[seat];
-    if (!isPlainObject(verdict)) {
-      error(`verification preparation prior verdict for ${seat} must be an object`);
-    }
-    const declaredSeat = verdict.engineer ?? verdict.seat;
-    if (declaredSeat !== seat) {
-      error(
-        `verification preparation prior verdict ${seat} declares seat "${declaredSeat}"`,
-      );
-    }
+    validatePriorVerdict(verdict, seat, priorSelection, ledger);
   }
   return verdicts;
 }
@@ -3460,7 +4607,7 @@ export function prepareVerification(input, options = {}) {
     error("verification preparation requires an explicit current candidate");
   }
   const discoveryLedger = input.discovery_ledger ?? input.discoveryLedger ?? input.ledger;
-  validateLedger(discoveryLedger);
+  validateLedger(discoveryLedger, { table, selection });
   if (discoveryLedger.lifecycle_id !== selection.lifecycle_id) {
     error("discovery ledger and verification selection lifecycle_id disagree");
   }
@@ -3498,32 +4645,74 @@ export function prepareVerification(input, options = {}) {
   const priorVerdicts = normalizePriorVerdicts(
     priorVerdictsInput,
     priorSelection,
+    discoveryLedger,
   );
   const responses = validateResponses(discoveryLedger, input.responses);
+  const handoff =
+    input.handoff ??
+    input.continuation_handoff ??
+    input.continuationHandoff;
+  if (priorSelection.phase === "verification" && handoff === undefined) {
+    error(
+      "verification preparation requires --handoff when prior selection phase is verification",
+    );
+  }
+  if (handoff !== undefined) {
+    const ledgerBytes =
+      input.discovery_ledger_bytes ??
+      input.discoveryLedgerBytes ??
+      input.ledger_bytes ??
+      input.ledgerBytes;
+    const responseBytes =
+      input.responses_bytes ??
+      input.responseBytes ??
+      input.response_bytes;
+    if (ledgerBytes === undefined || responseBytes === undefined) {
+      error(
+        "verification preparation with a handoff requires exact ledger and completed-response bytes",
+      );
+    }
+    validateAdvanceVerificationHandoff(handoff, {
+      ledger: discoveryLedger,
+      responses: input.responses,
+      ledger_bytes: ledgerBytes,
+      responses_bytes: responseBytes,
+      table,
+    });
+  }
   const selfVerification = validateSelfVerification(
     input.self_verification ?? input.selfVerification,
   );
-  const actualDeltaPaths =
+  const actualDeltaInput =
     input.actual_delta_paths ??
     input.latest_delta_paths ??
     input.fix_delta_paths ??
     undefined;
-  if (!Array.isArray(actualDeltaPaths) || actualDeltaPaths.length === 0) {
-    error("verification preparation requires a non-empty actual delta");
+  if (!Array.isArray(actualDeltaInput)) {
+    error("verification preparation requires an explicit actual delta array");
   }
-  if (actualDeltaPaths.some(
-    (path) =>
-      typeof path !== "string" ||
-      path.trim() === "" ||
-      CONTROL_CHARACTER_PATTERN.test(path),
-  )) {
-    error("verification preparation actual delta paths must be non-blank strings");
+  const actualDeltaPaths = canonicalClassificationArray(
+    actualDeltaInput,
+    "verification preparation actual delta paths",
+    "changed_paths",
+  );
+  const declaredDeltaPaths =
+    selection.classification_inputs.fix_delta.changed_paths;
+  if (actualDeltaPaths.join("\u0000") !== declaredDeltaPaths.join("\u0000")) {
+    error(
+      "verification preparation actual delta paths must equal the declared " +
+      "selection fix delta paths",
+    );
   }
   const scope = validateFixScope({
     ...input,
     latest_delta_paths: actualDeltaPaths,
     responses,
   });
+  const fixDelta = input.fix_delta ?? input.fixDelta ?? {
+    changed_paths: scope.latest_delta_paths,
+  };
+  validateVerificationFixDelta(fixDelta, declaredDeltaPaths, selection);
   const requests = selection.roster.map((seat) => ({
     artifact_kind: VERIFICATION_ARTIFACT,
     schema_version: SELECTION_SCHEMA_VERSION,
@@ -3545,9 +4734,7 @@ export function prepareVerification(input, options = {}) {
     current_candidate: candidateAddress(currentCandidate),
     full_candidate: candidateAddress(currentCandidate),
     current_selection: selectionSummary(selection, table),
-    fix_delta: input.fix_delta ?? input.fixDelta ?? {
-      changed_paths: scope.latest_delta_paths,
-    },
+    fix_delta: fixDelta,
     prior_selection: priorSelection
       ? selectionSummary(priorSelection, table)
       : null,
@@ -3573,9 +4760,7 @@ export function prepareVerification(input, options = {}) {
     current_candidate: candidateAddress(currentCandidate),
     full_candidate: candidateAddress(currentCandidate),
     current_selection: selectionSummary(selection, table),
-    fix_delta: input.fix_delta ?? input.fixDelta ?? {
-      changed_paths: scope.latest_delta_paths,
-    },
+    fix_delta: fixDelta,
     prior_selection: priorSelection
       ? selectionSummary(priorSelection, table)
       : null,
@@ -3629,7 +4814,6 @@ function lateFindingsFromVerification(verification) {
     result.late_findings.map((finding) => ({
       ...finding,
       seat: finding.seat ?? result.seat,
-      attribution: finding.attribution ?? result.seat,
     })),
   );
 }
@@ -3663,6 +4847,11 @@ export function evaluateApproval(input) {
   const table = input.table ?? readSelectionTable(input.table_path);
   const selection = input.current_selection ?? input.selection;
   validateSelection(selection, table);
+  const selectionBytes = exactSelectionBytes(
+    selection,
+    input.selection_bytes,
+    "approval selection",
+  );
   const currentCandidate =
     input.current_candidate ??
     input.currentCandidate ??
@@ -3670,7 +4859,7 @@ export function evaluateApproval(input) {
     candidateFromSelection(selection, { table });
   validateSelectionCandidate(selection, currentCandidate);
   const ledger = input.discovery_ledger ?? input.ledger;
-  validateLedger(ledger);
+  validateLedger(ledger, { table, selection });
   validateMonotonicRoster(ledger.roster, selection.roster, table);
   const responses = validateResponses(ledger, input.responses);
   const responseById = new Map(responses.map((response) => [response.issue_id, response]));
@@ -3693,9 +4882,7 @@ export function evaluateApproval(input) {
   const lateIssues = ledgerWithLate.issues.filter(
     (issue) => issue.late && !ledger.issues.some((existing) => existing.id === issue.id),
   );
-  const lateBlockingIssues = lateIssues
-    .filter((issue) => ["BLOCKER", "MAJOR"].includes(issue.severity))
-    .map((issue) => issue.id);
+  const lateBlockingIssues = lateIssues.map((issue) => issue.id);
   const statusBlocks = verificationStatusBlocks(verification);
   const missingVerification = selection.roster.filter(
     (seat) => !verification.some((result) => result.seat === seat),
@@ -3727,7 +4914,7 @@ export function evaluateApproval(input) {
     signoff: approved,
     selection: selectionSummary(selection, table),
     current_candidate: candidateAddress(currentCandidate),
-    selection_sha256: sha256(selection),
+    selection_sha256: sha256(selectionBytes),
     discovery_ledger_sha256: sha256(ledger),
     response_sha256: null,
     verification_results_sha256: null,
@@ -3802,26 +4989,43 @@ export function validateApprovalArtifact(approval, options = {}) {
     approval.verification_results_sha256,
     "approval verification_results_sha256",
   );
-  validateLedger(approval.ledger);
+  const table = options.table ?? readSelectionTable();
   if (options.selection) {
-    validateSelection(options.selection, options.table ?? readSelectionTable());
+    validateSelection(options.selection, table);
     if (approval.lifecycle_id !== options.selection.lifecycle_id) {
       error("approval artifact lifecycle_id disagrees with selection");
     }
+    validateSelectionSummary(
+      approval.selection,
+      table,
+      "approval artifact selection",
+    );
+    assertCanonicalEqual(
+      approval.selection,
+      selectionSummary(options.selection, table),
+      "approval artifact selection",
+    );
     if (
       approval.selection?.candidate_id !== options.selection.candidate_id ||
       approval.selection?.snapshot_sha256 !== options.selection.snapshot_sha256
     ) {
       error("approval artifact selection disagrees with current selection");
     }
-    const selectionDigest = options.selectionBytes
-      ? sha256(options.selectionBytes)
-      : sha256(options.selection);
+    const selectionBytes = exactSelectionBytes(
+      options.selection,
+      options.selectionBytes,
+      "approval selection",
+    );
+    const selectionDigest = sha256(selectionBytes);
     if (approval.selection_sha256 !== selectionDigest) {
       error("approval artifact is not bound to the current selection bytes");
     }
     validateSelectionCandidate(options.selection, approval.current_candidate);
   }
+  validateLedger(
+    approval.ledger,
+    options.selection ? { table, selection: options.selection } : { table },
+  );
   if (options.ledgerBytes) {
     const actual = sha256(options.ledgerBytes);
     if (actual !== approval.discovery_ledger_sha256) {
@@ -3857,18 +5061,18 @@ export function createApprovalArtifact(input, options = {}) {
   const responseBytes = input.responses_bytes ?? input.response_bytes;
   const verificationResultsBytes =
     input.verification_results_bytes ?? input.verification_bytes;
-  if (typeof ledgerBytes !== "string" || ledgerBytes.length === 0) {
-    error("approval requires the exact immutable discovery ledger bytes");
-  }
-  if (typeof responseBytes !== "string" || responseBytes.length === 0) {
-    error("approval requires the exact implementation response bytes");
-  }
-  if (
-    typeof verificationResultsBytes !== "string" ||
-    verificationResultsBytes.length === 0
-  ) {
-    error("approval requires the exact adapted verification-result bytes");
-  }
+  artifactByteLength(
+    ledgerBytes,
+    "approval requires the exact immutable discovery ledger bytes",
+  );
+  artifactByteLength(
+    responseBytes,
+    "approval requires the exact implementation response bytes",
+  );
+  artifactByteLength(
+    verificationResultsBytes,
+    "approval requires the exact adapted verification-result bytes",
+  );
   const selection = input.current_selection ?? input.selection;
   const ledger = input.discovery_ledger ?? input.ledger;
   const responses = input.responses;
@@ -3876,28 +5080,23 @@ export function createApprovalArtifact(input, options = {}) {
   if (!selection || !ledger || responses === undefined || verificationResults === undefined) {
     error("approval requires selection, ledger, responses, and verification results");
   }
-  try {
-    if (stableStringify(JSON.parse(ledgerBytes)) !== stableStringify(ledger)) {
-      error("approval ledger object disagrees with the exact ledger bytes");
-    }
-    if (stableStringify(JSON.parse(responseBytes)) !== stableStringify(responses)) {
-      error("approval response object disagrees with the exact response bytes");
-    }
-    if (
-      stableStringify(JSON.parse(verificationResultsBytes)) !==
-      stableStringify(verificationResults)
-    ) {
-      error(
-        "approval verification result object disagrees with the exact adapted verification-result bytes",
-      );
-    }
-  } catch (cause) {
-    error(`approval input bytes are not valid JSON: ${cause.message}`);
-  }
+  const selectionBytes = exactSelectionBytes(
+    selection,
+    input.selection_bytes,
+    "approval selection",
+  );
+  validateExactJsonBytes(ledgerBytes, ledger, "approval ledger");
+  validateExactJsonBytes(responseBytes, responses, "approval responses");
+  validateExactJsonBytes(
+    verificationResultsBytes,
+    verificationResults,
+    "approval verification results",
+  );
   const table = options.table ?? input.table;
   const approval = evaluateApproval({
     ...input,
     current_selection: selection,
+    selection_bytes: selectionBytes,
     discovery_ledger: ledger,
     responses,
     verification_results: verificationResults,
@@ -3907,17 +5106,15 @@ export function createApprovalArtifact(input, options = {}) {
     table,
     ledger,
     ledger_bytes: ledgerBytes,
-    selection_bytes: input.selection_bytes,
+    selection_bytes: selectionBytes,
   });
-  approval.selection_sha256 = typeof input.selection_bytes === "string"
-    ? sha256(input.selection_bytes)
-    : sha256(selection);
+  approval.selection_sha256 = sha256(selectionBytes);
   approval.discovery_ledger_sha256 = sha256(ledgerBytes);
   approval.response_sha256 = sha256(responseBytes);
   approval.verification_results_sha256 = sha256(verificationResultsBytes);
   validateApprovalArtifact(approval, {
     selection,
-    selectionBytes: input.selection_bytes,
+    selectionBytes,
     table,
     ledgerBytes,
     responseBytes,
@@ -3932,7 +5129,14 @@ export function writeApprovalArtifact(path, input, options = {}) {
 
 export function calculateMetrics(input) {
   const ledger = input.ledger;
-  if (ledger) validateLedger(ledger);
+  if (ledger) {
+    if (input.selection) {
+      const table = input.table ?? readSelectionTable(input.table_path);
+      validateLedger(ledger, { table, selection: input.selection });
+    } else {
+      validateLedger(ledger);
+    }
+  }
   const issues = ledger?.issues ?? input.issues ?? [];
   const lateIssues = issues.filter((issue) => issue.late === true);
   const verificationValues = input.verification_results?.results ??
@@ -4020,42 +5224,38 @@ export function createMetricsArtifact(input, options = {}) {
   const ledgerBytes = input.ledger_bytes;
   const responseBytes = input.responses_bytes;
   const verificationResultsBytes = input.verification_results_bytes;
-  if (typeof ledgerBytes !== "string" || ledgerBytes.length === 0) {
-    error("final metrics require exact immutable discovery ledger bytes");
-  }
-  if (typeof responseBytes !== "string" || responseBytes.length === 0) {
-    error("final metrics require exact implementation response bytes");
-  }
-  if (
-    typeof verificationResultsBytes !== "string" ||
-    verificationResultsBytes.length === 0
-  ) {
-    error("final metrics require exact adapted verification-result bytes");
-  }
-  validateLedger(ledger);
+  artifactByteLength(
+    ledgerBytes,
+    "final metrics require exact immutable discovery ledger bytes",
+  );
+  artifactByteLength(
+    responseBytes,
+    "final metrics require exact implementation response bytes",
+  );
+  artifactByteLength(
+    verificationResultsBytes,
+    "final metrics require exact adapted verification-result bytes",
+  );
   const table = options.table ?? input.table;
   validateSelection(selection, table);
+  const selectionBytes = exactSelectionBytes(
+    selection,
+    input.selection_bytes,
+    "metrics selection",
+  );
+  validateLedger(ledger, { table, selection });
   const responses = input.responses;
   const verificationResults = input.verification_results;
   if (responses === undefined || verificationResults === undefined) {
     error("final metrics require ledger, responses, and verification artifacts");
   }
-  try {
-    if (stableStringify(JSON.parse(ledgerBytes)) !== stableStringify(ledger)) {
-      error("metrics ledger object disagrees with exact ledger bytes");
-    }
-    if (stableStringify(JSON.parse(responseBytes)) !== stableStringify(responses)) {
-      error("metrics response object disagrees with exact response bytes");
-    }
-    if (
-      stableStringify(JSON.parse(verificationResultsBytes)) !==
-      stableStringify(verificationResults)
-    ) {
-      error("metrics verification result object disagrees with exact artifact bytes");
-    }
-  } catch (cause) {
-    error(`metrics input bytes are not valid JSON: ${cause.message}`);
-  }
+  validateExactJsonBytes(ledgerBytes, ledger, "metrics ledger");
+  validateExactJsonBytes(responseBytes, responses, "metrics responses");
+  validateExactJsonBytes(
+    verificationResultsBytes,
+    verificationResults,
+    "metrics verification results",
+  );
   validateResponses(ledger, responses);
   const verifiedResults = validateVerificationResultArtifact(verificationResults, {
     selection,
@@ -4092,9 +5292,7 @@ export function createMetricsArtifact(input, options = {}) {
     candidate_id: ledger.candidate_id,
     content_id: ledger.content_id,
     snapshot_sha256: ledger.snapshot_sha256,
-    selection_sha256: typeof input.selection_bytes === "string"
-      ? sha256(input.selection_bytes)
-      : sha256(selection),
+    selection_sha256: sha256(selectionBytes),
     discovery_ledger_sha256: sha256(ledgerBytes),
     response_sha256: sha256(responseBytes),
     verification_results_sha256: sha256(verificationResultsBytes),
@@ -4160,44 +5358,69 @@ const LEGACY_ATTESTATION_KEYS = ["roles", "records", "unanimous"];
 function legacyBundle(input) {
   if (typeof input === "string") {
     const path = resolve(input);
-    if (!existsSync(path)) error(`missing legacy round at ${path}`);
-    if (statSync(path).isFile()) {
+    const kind = pathKindNoFollow(path, "legacy round");
+    if (kind === "missing") error(`missing legacy round at ${path}`);
+    if (kind === "file") {
       const parsed = readJson(path, "legacy JSON");
       if (!isPlainObject(parsed) || !Array.isArray(parsed.records) && !isPlainObject(parsed.records)) {
         error("legacy JSON must contain a coherent request and records");
       }
       return legacyBundle(parsed);
     }
+    if (kind !== "directory") error("legacy round is not a regular file or directory");
     const requestPath = ["panel-request.json", "request.json"]
       .map((name) => join(path, name))
-      .find((candidate) => existsSync(candidate));
+      .find((candidate) => pathKindNoFollow(candidate, "legacy panel request") !== "missing");
     const recordDir = join(path, "records");
-    if (!existsSync(recordDir) || !statSync(recordDir).isDirectory()) {
+    if (pathKindNoFollow(recordDir, "legacy records") !== "directory") {
       error("legacy round is missing its records directory");
     }
-    const entries = readdirSync(recordDir, { withFileTypes: true });
-    const jsonEntries = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json"));
-    if (jsonEntries.length !== entries.length) {
-      error("legacy records directory contains a non-JSON or non-regular entry");
+    const entries = readDirectoryNoFollow(recordDir, {
+      label: "legacy records",
+      maxEntries: LEGACY_ROSTER.length,
+    });
+    if (entries.length === 0) {
+      error("legacy records directory must contain at least one legacy record");
     }
-    const records = jsonEntries
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .map((entry) => ({
-        name: entry.name,
-        record: readJson(join(recordDir, entry.name), `legacy record ${entry.name}`),
-        bytes: readFileSync(join(recordDir, entry.name)),
-      }));
+    const expectedNames = new Set(LEGACY_ROSTER.map((role) => `${role}.json`));
+    for (const entry of entries) {
+      if (!expectedNames.has(entry.name)) {
+        error(
+          `legacy records directory contains unexpected entry ${entry.name}; ` +
+          "expected a validated subset of fixed-ten record filenames",
+        );
+      }
+    }
+    const records = entries
+      .map((entry) => {
+        try {
+          return {
+            name: entry.name,
+            record: JSON.parse(entry.bytes.toString("utf8")),
+            bytes: entry.bytes,
+          };
+        } catch (cause) {
+          error(
+            `legacy records directory ${recordDir} entry ${entry.name} ` +
+            `contains malformed JSON: ${cause.message}`,
+          );
+        }
+      });
     const attestationPath = join(path, "attestation.json");
     const sealPath = join(path, "seal.json");
+    const optionalJson = (artifactPath, label) => {
+      const artifactKind = pathKindNoFollow(artifactPath, label);
+      if (artifactKind === "missing") return undefined;
+      if (artifactKind !== "file") error(`${label} is not a regular file`);
+      return readJson(artifactPath, label);
+    };
     return {
       request: requestPath
         ? readJson(requestPath, "legacy panel request")
         : undefined,
       records,
-      attestation: existsSync(attestationPath)
-        ? readJson(attestationPath, "legacy panel attestation")
-        : undefined,
-      seal: existsSync(sealPath) ? readJson(sealPath, "legacy seal") : undefined,
+      attestation: optionalJson(attestationPath, "legacy panel attestation"),
+      seal: optionalJson(sealPath, "legacy seal"),
       exactBytes: true,
     };
   }
@@ -4317,10 +5540,16 @@ function validateLegacyAttestation(attestation, recordsByRole, exactBytes = fals
     error("legacy panel attestation unanimous must be boolean");
   }
   const seen = new Set();
-  for (const item of attestation.records) {
+  for (const [index, item] of attestation.records.entries()) {
     assertExactKeys(item, ["role", "file", "sha256", "run_id"], "legacy attested record");
     if (!LEGACY_ROSTER.includes(item.role) || seen.has(item.role)) {
       error("legacy panel attestation repeats or omits a fixed-ten role");
+    }
+    if (item.role !== LEGACY_ROSTER[index]) {
+      error(
+        `legacy panel attestation record ${index + 1} must retain roster order; ` +
+        `expected ${LEGACY_ROSTER[index]}`,
+      );
     }
     seen.add(item.role);
     assertDigest(item.sha256, "legacy attested record sha256");
@@ -4408,8 +5637,8 @@ export function importLegacyRound(input, options = {}) {
       error(`legacy record filename ${entry.name} does not match role ${role}`);
     }
     const address = {
-      candidate_id: safePathPart(record.candidate_id, `legacy record ${role}.candidate_id`),
-      content_id: nonBlank(record.content_id, `legacy record ${role}.content_id`),
+      candidate_id: assertDigest(record.candidate_id, `legacy record ${role}.candidate_id`),
+      content_id: assertDigest(record.content_id, `legacy record ${role}.content_id`),
       snapshot_sha256: assertDigest(
         record.snapshot_sha256,
         `legacy record ${role}.snapshot_sha256`,
@@ -4639,64 +5868,352 @@ export function importLegacyRound(input, options = {}) {
   });
 }
 
+function validateLegacyImportArtifact(imported) {
+  if (!isPlainObject(imported)) {
+    error("legacy continuation requires a legacy import artifact");
+  }
+  if (imported.artifact_kind !== LEGACY_IMPORT_ARTIFACT) {
+    error("legacy continuation requires d2b-panel/legacy-import");
+  }
+  if (imported.schema_version !== SELECTION_SCHEMA_VERSION) {
+    error("legacy continuation import schema_version is unsupported");
+  }
+  if (imported.format !== "legacy" || imported.discovery_input !== true) {
+    error("legacy continuation import is not a discovery input");
+  }
+  if (!Array.isArray(imported.sources) || !Array.isArray(imported.dedup_groups)) {
+    error("legacy continuation import must contain sources and dedup_groups");
+  }
+  if (typeof imported.discovery_required !== "boolean") {
+    error("legacy continuation import discovery_required must be boolean");
+  }
+  return imported;
+}
+
+function ledgerFromLegacySources(selection, sources, groups, table) {
+  const sourceById = new Map();
+  for (const source of sources) {
+    if (!isPlainObject(source)) error("legacy continuation source must be an object");
+    if (sourceById.has(source.source_id)) {
+      error(`legacy continuation repeats source ${source.source_id}`);
+    }
+    sourceById.set(source.source_id, source);
+  }
+  const mapped = new Set();
+  const issues = [];
+  for (const [index, group] of groups.entries()) {
+    if (!isPlainObject(group)) {
+      error(`legacy continuation group ${index + 1} must be an object`);
+    }
+    const sourceIds = groupSourceIds(group);
+    if (sourceIds.length === 0) {
+      error(`legacy continuation group ${index + 1} is empty`);
+    }
+    for (const sourceId of sourceIds) {
+      if (!sourceById.has(sourceId)) {
+        error(`legacy continuation group references unknown source ${sourceId}`);
+      }
+      if (mapped.has(sourceId)) {
+        error(`legacy continuation source ${sourceId} maps more than once`);
+      }
+      mapped.add(sourceId);
+    }
+    const id = group.id ?? group.ledger_id ?? group.issue_id ?? `R${index + 1}`;
+    if (id !== `R${index + 1}`) {
+      error("legacy continuation issue identifiers must be contiguous in source order");
+    }
+    const groupedSources = sourceIds.map((sourceId) => sourceById.get(sourceId));
+    const severity = maxSeverity(groupedSources);
+    const description = group.description ?? groupedSources[0].raw_text;
+    const impact = group.impact ?? groupedSources[0].impact;
+    const recommendation =
+      group.recommendation ?? group.fix ?? groupedSources[0].recommendation;
+    nonBlank(description, `${id}.description`);
+    nonBlank(impact, `${id}.impact`);
+    nonBlank(recommendation, `${id}.recommendation`);
+    if (group.severity !== undefined && group.severity !== severity) {
+      error(`${id}.severity must be the maximum source severity ${severity}`);
+    }
+    issues.push({
+      id,
+      description,
+      severity,
+      impact,
+      recommendation,
+      source_finding_ids: sourceIds,
+      late: group.late === true,
+    });
+  }
+  if (mapped.size !== sources.length) {
+    const missing = sources
+      .map((source) => source.source_id)
+      .filter((sourceId) => !mapped.has(sourceId));
+    error(
+      `legacy continuation source-to-ledger mapping is incomplete; ` +
+      `unmapped sources: ${missing.join(", ")}`,
+    );
+  }
+  const ledger = sortedObject({
+    artifact_kind: LEDGER_ARTIFACT,
+    schema_version: SELECTION_SCHEMA_VERSION,
+    lifecycle_id: selection.lifecycle_id,
+    selection_schema_version: selection.schema_version,
+    selection_table_version: selection.selection_table_version,
+    program: selection.program,
+    wave: selection.wave,
+    candidate_id: selection.candidate_id,
+    content_id: selection.content_id,
+    snapshot_sha256: selection.snapshot_sha256,
+    roster: [...selection.roster],
+    sources,
+    issues,
+    complete: true,
+  });
+  validateLedger(ledger, { table, selection });
+  return ledger;
+}
+
+export function continueLegacyImport(input, options = {}) {
+  const imported = validateLegacyImportArtifact(
+    typeof input === "string" ? readJson(input, "legacy import") : input,
+  );
+  const table = options.table ?? readSelectionTable(options.table_path);
+  const selectionInput = typeof options.selection === "string"
+    ? readSelectionWithBytes(options.selection)
+    : options.selection ??
+      (options.selection_path
+        ? readSelectionWithBytes(options.selection_path)
+        : undefined);
+  const selection = selectionInput?.selection ?? selectionInput;
+  const selectionBytes =
+    selectionInput?.bytes ??
+    options.selection_bytes ??
+    (selection ? stableStringify(selection) : undefined);
+  if (!selection) {
+    error("legacy continuation requires the current discovery selection");
+  }
+  validateSelection(selection, table);
+  if (selection.phase !== "discovery") {
+    error("legacy continuation requires a discovery selection");
+  }
+  const candidate = options.candidate ?? imported.candidate;
+  if (!candidate) {
+    error("legacy continuation requires the current candidate");
+  }
+  validateCandidateAgainstSelection(selection, candidate, table);
+  const exactBytes = exactSelectionBytes(
+    selection,
+    selectionBytes,
+    "legacy continuation selection",
+  );
+  let currentSources = [];
+  let currentGroups = [];
+  const discoveryResults =
+    options.discovery_results ??
+    options.discoveryResults;
+  if (discoveryResults !== undefined) {
+    currentSources = validateDiscoveryResultArtifact(discoveryResults, {
+      table,
+      selection,
+      selection_bytes: exactBytes,
+      current_candidate: candidate,
+    });
+    currentGroups = options.groups ?? options.dedup_groups;
+    if (!Array.isArray(currentGroups)) {
+      currentGroups = currentSources.map((source) => ({
+        source_finding_ids: [source.source_id],
+        description: source.raw_text,
+        severity: source.severity,
+        impact: source.impact,
+        recommendation: source.recommendation,
+        late: false,
+      }));
+    }
+  }
+  if (imported.discovery_required && discoveryResults === undefined) {
+    const request = createDiscoveryRequest({
+      selection,
+      candidate,
+      context: {
+        legacy_import: imported,
+      },
+      validation_evidence: ["completed legacy sources are retained as discovery input"],
+    }, { table });
+    return {
+      discovery_required: true,
+      imported,
+      artifact: request,
+    };
+  }
+  const sources = [...imported.sources, ...currentSources];
+  const groups = [...imported.dedup_groups, ...currentGroups.map((group, index) => ({
+    ...group,
+    id: `R${imported.dedup_groups.length + index + 1}`,
+  }))];
+  const ledger = ledgerFromLegacySources(selection, sources, groups, table);
+  return {
+    discovery_required: false,
+    imported,
+    artifact: ledger,
+  };
+}
+
+export const continueLegacyRound = continueLegacyImport;
+export const legacyImportContinuation = continueLegacyImport;
+
 function readOptionalJson(path) {
   return path ? readJson(path) : undefined;
 }
 
-function flagValue(argv, name) {
-  const index = argv.indexOf(name);
-  if (index === -1) return undefined;
-  if (!argv[index + 1] || argv[index + 1].startsWith("--")) {
-    error(`${name} requires a value`);
+function parseCommandArguments(argv, command, positionalCount, flagAliases = {}) {
+  const aliases = new Map(Object.entries(flagAliases));
+  const values = {};
+  const positionals = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument.startsWith("-")) {
+      const canonical = aliases.get(argument);
+      if (!canonical) {
+        error(`${command} does not recognize argument "${argument}"`);
+      }
+      if (Object.hasOwn(values, canonical)) {
+        error(`${command} does not allow duplicate flag "${argument}"`);
+      }
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        error(`${argument} requires a value`);
+      }
+      values[canonical] = value;
+      index += 1;
+      continue;
+    }
+    positionals.push(argument);
   }
-  return argv[index + 1];
+  if (positionals.length !== positionalCount) {
+    error(
+      `${command} requires exactly ${positionalCount} positional argument(s); ` +
+      `received ${positionals.length}`,
+    );
+  }
+  return { positionals, values };
 }
 
-function readJsonDirectory(path, label) {
-  if (!existsSync(path) || !statSync(path).isDirectory()) {
+function readJsonDirectory(path, label, options = {}) {
+  if (pathKindNoFollow(path, label) !== "directory") {
     return readJson(path, label);
   }
-  const entries = readdirSync(path, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name));
-  if (entries.some((entry) => !entry.isFile() || !entry.name.endsWith(".json"))) {
+  const entries = readDirectoryNoFollow(path, { ...options, label });
+  if (entries.some((entry) => !entry.name.endsWith(".json"))) {
     error(`${label} directory must contain only regular JSON files`);
   }
   if (entries.length === 0) error(`${label} directory contains no JSON artifacts`);
   return Object.fromEntries(
-    entries.map((entry) => [
-      entry.name.slice(0, -5),
-      readJson(join(path, entry.name), `${label}/${entry.name}`),
-    ]),
+    entries.map((entry) => {
+      let value;
+      try {
+        value = JSON.parse(entry.bytes.toString("utf8"));
+      } catch (cause) {
+        error(
+          `${label} directory ${path} entry ${entry.name} contains malformed JSON: ` +
+          cause.message,
+        );
+      }
+      return [entry.name.slice(0, -5), value];
+    }),
   );
 }
 
-function readVerificationVerdicts(path, selection) {
-  const isDirectory = existsSync(path) && statSync(path).isDirectory();
-  const verdicts = readJsonDirectory(path, "actual verification verdicts");
-  if (!isDirectory) return verdicts;
+function validateSelectedVerdictDirectory(verdicts, selection, label) {
   const expected = new Set(selection.roster);
   const actual = Object.keys(verdicts);
   for (const seat of actual) {
     if (!expected.has(seat)) {
-      error(
-        `actual verification verdict directory contains unselected seat "${seat}"`,
-      );
+      error(`${label} directory contains unselected seat "${seat}"`);
     }
-    const declared = verdicts[seat]?.engineer ?? verdicts[seat]?.seat;
+  }
+  const declaredSeats = new Set();
+  for (const seat of actual) {
+    const declared = verdicts[seat]?.engineer;
+    if (declaredSeats.has(declared)) {
+      error(`${label} directory contains duplicate declared seat "${declared}"`);
+    }
+    declaredSeats.add(declared);
+  }
+  for (const seat of actual) {
+    const declared = verdicts[seat]?.engineer;
     if (declared !== seat) {
       error(
-        `actual verification verdict ${seat}.json declares seat "${declared}"; ` +
+        `${label} ${seat}.json declares seat "${declared}"; ` +
         "filename and selected seat must agree",
       );
     }
   }
   const missing = selection.roster.filter((seat) => !actual.includes(seat));
   if (missing.length > 0) {
-    error(
-      `actual verification verdict directory is missing selected seat(s): ${missing.join(", ")}`,
-    );
+    error(`${label} directory is missing selected seat(s): ${missing.join(", ")}`);
   }
   return verdicts;
+}
+
+function selectedVerdictDirectoryNames(path, selection, label) {
+  const names = listDirectoryNamesNoFollow(
+    path,
+    `${label} directory`,
+    { maxEntries: selection.roster.length },
+  );
+  const expected = new Set(selection.roster);
+  const actual = new Set();
+  for (const name of names) {
+    const seat = name.endsWith(".json") ? name.slice(0, -5) : name;
+    if (!expected.has(seat)) {
+      error(`${label} directory contains unselected seat "${seat}"`);
+    }
+    actual.add(seat);
+  }
+  const missing = selection.roster.filter((seat) => !actual.has(seat));
+  if (missing.length > 0) {
+    error(`${label} directory is missing selected seat(s): ${missing.join(", ")}`);
+  }
+  return selection.roster.map((seat) => `${seat}.json`).sort();
+}
+
+function readDiscoveryVerdicts(path, selection) {
+  if (pathKindNoFollow(path, "actual discovery verdicts") !== "directory") {
+    error("actual discovery verdicts must be a canonical per-seat verdict directory");
+  }
+  const expectedNames = selectedVerdictDirectoryNames(
+    path,
+    selection,
+    "actual discovery verdict",
+  );
+  return validateSelectedVerdictDirectory(
+    readJsonDirectory(path, "actual discovery verdicts", { expectedNames }),
+    selection,
+    "actual discovery verdict",
+  );
+}
+
+function readVerificationVerdicts(path, selection) {
+  const isDirectory =
+    pathKindNoFollow(path, "actual verification verdicts") === "directory";
+  const expectedNames = isDirectory
+    ? selectedVerdictDirectoryNames(
+        path,
+        selection,
+        "actual verification verdict",
+      )
+    : undefined;
+  const verdicts = readJsonDirectory(
+    path,
+    "actual verification verdicts",
+    { expectedNames },
+  );
+  if (!isDirectory) return verdicts;
+  return validateSelectedVerdictDirectory(
+    verdicts,
+    selection,
+    "actual verification verdict",
+  );
 }
 
 function usage() {
@@ -4704,14 +6221,17 @@ function usage() {
     "usage:",
     "  panel-lifecycle.mjs select <candidate.json> <lifecycle-id> [--phase discovery|verification] [--previous-selection PATH] [--fix-delta PATH] [--git-range RANGE]",
     "  panel-lifecycle.mjs discovery-request <selection.json> <candidate.json> <output.json>",
-    "  panel-lifecycle.mjs adapt-discovery <verdicts.json> <output.json>",
-    "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json>",
+    "  panel-lifecycle.mjs adapt-discovery <verdicts-dir> <output.json> --selection PATH --candidate PATH",
+    "  panel-lifecycle.mjs merge-ledger <selection.json> <results.json> <groups.json> <output.json> --candidate PATH",
     "  panel-lifecycle.mjs response-template <ledger.json> <output.json>",
     "  panel-lifecycle.mjs adapt-verification <ledger.json> <verdicts.json|verdicts-dir> <output.json> --selection PATH --candidate PATH",
-    "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH",
+    "  panel-lifecycle.mjs verification <selection.json> <ledger.json> <responses.json> <self-verification.json> <output-dir> --candidate PATH --prior-selection PATH --prior-verdicts DIR --delta PATH [--handoff PATH]",
+    "  panel-lifecycle.mjs advance-verification <selection.json> <ledger.json> <responses.json> <verification-results.json> <output-dir> --candidate PATH",
     "  panel-lifecycle.mjs approval <selection.json> <ledger.json> <responses.json> <verification-results.json> <output.json> --candidate PATH",
+    "    approval exit codes: 0 approved; 3 valid but blocked; 2 invalid invocation or input",
     "  panel-lifecycle.mjs metrics --selection PATH --ledger PATH --responses PATH --verification-results PATH --output PATH [--implementation-history PATH] [--verification-history PATH]",
     "  panel-lifecycle.mjs import-legacy <legacy-dir-or-json> [candidate.json] <output.json>",
+    "  panel-lifecycle.mjs continue-legacy <import.json> <selection.json> <candidate.json> <output.json> [--discovery-results PATH] [--groups PATH]",
     "  panel-lifecycle.mjs validate-selection <selection.json>",
   ].join("\n");
 }
@@ -4725,26 +6245,33 @@ async function main(argv) {
   }
   try {
     if (command === "select") {
-      const candidatePath = argv[1];
-      const lifecycleId = argv[2];
-      if (!candidatePath || !lifecycleId) error(usage());
-      const phaseIndex = argv.indexOf("--phase");
-      const phase = phaseIndex === -1 ? "discovery" : argv[phaseIndex + 1];
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        "select",
+        2,
+        {
+          "--phase": "phase",
+          "--previous-selection": "previous_selection",
+          "--prior-selection": "previous_selection",
+          "--fix-delta": "fix_delta",
+          "--git-range": "git_range",
+        },
+      );
+      const [candidatePath, lifecycleId] = parsed.positionals;
+      const phase = parsed.values.phase ?? "discovery";
       if (!["discovery", "verification"].includes(phase)) {
         error("--phase must be discovery or verification");
       }
       const candidate = readJson(candidatePath, "candidate address");
-      const gitRange = flagValue(argv, "--git-range");
+      const gitRange = parsed.values.git_range;
       if (gitRange) {
         candidate.changed_paths = changedPathsFromGitRange(gitRange);
       }
-      const previousPath =
-        flagValue(argv, "--previous-selection") ??
-        flagValue(argv, "--prior-selection");
+      const previousPath = parsed.values.previous_selection;
       const previousSelection = previousPath
         ? readSelection(previousPath)
         : undefined;
-      const fixDeltaPath = flagValue(argv, "--fix-delta");
+      const fixDeltaPath = parsed.values.fix_delta;
       const fixDelta = fixDeltaPath
         ? readJson(fixDeltaPath, "fix delta")
         : undefined;
@@ -4772,95 +6299,242 @@ async function main(argv) {
       return;
     }
     if (command === "validate-selection") {
-      const selection = readSelection(argv[1]);
+      const parsed = parseCommandArguments(argv.slice(1), command, 1);
+      const selection = readSelection(parsed.positionals[0]);
       console.log(stableStringify(selection));
       return;
     }
     if (command === "discovery-request") {
-      const selection = readSelection(argv[1]);
-      const candidate = readJson(argv[2], "candidate address");
+      const parsed = parseCommandArguments(argv.slice(1), command, 3);
+      const [selectionPath, candidatePath, outputPath] = parsed.positionals;
+      const selection = readSelection(selectionPath);
+      const candidate = readJson(candidatePath, "candidate address");
       const request = createDiscoveryRequest({ selection, candidate });
-      writeCreateOrCompare(argv[3], request);
-      console.log(argv[3]);
+      writeCreateOrCompare(outputPath, request);
+      console.log(outputPath);
       return;
     }
     if (command === "adapt-discovery") {
-      const verdicts = readJson(argv[1], "actual discovery verdicts");
-      writeCreateOrCompare(argv[2], {
-        artifact_kind: DISCOVERY_RESULT_ARTIFACT,
-        schema_version: SELECTION_SCHEMA_VERSION,
-        results: adaptDiscoveryResults(verdicts),
-      });
-      console.log(argv[2]);
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        2,
+        { "--selection": "selection", "--candidate": "candidate" },
+      );
+      const [verdictsPath, outputPath] = parsed.positionals;
+      const selectionPath = parsed.values.selection;
+      const candidatePath = parsed.values.candidate;
+      if (!selectionPath || !candidatePath) {
+        error("adapt-discovery requires --selection and --candidate");
+      }
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      if (selection.phase !== "discovery") {
+        error("adapt-discovery requires a discovery selection");
+      }
+      const candidate = readJson(candidatePath, "current candidate");
+      const verdicts = readDiscoveryVerdicts(verdictsPath, selection);
+      writeCreateOrCompare(outputPath, createDiscoveryResultArtifact({
+        selection,
+        selection_bytes: selectionBytes,
+        candidate,
+        verdicts,
+      }));
+      console.log(outputPath);
       return;
     }
     if (command === "merge-ledger") {
-      const selection = readSelection(argv[1]);
-      const results = readJson(argv[2], "discovery results");
-      const groups = readJson(argv[3], "deduplication groups");
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        4,
+        { "--candidate": "candidate" },
+      );
+      const [selectionPath, resultsPath, groupsPath, outputPath] =
+        parsed.positionals;
+      const candidatePath = parsed.values.candidate;
+      if (!candidatePath) {
+        error("merge-ledger requires --candidate");
+      }
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const candidate = readJson(candidatePath, "current candidate");
+      const results = readJson(resultsPath, "discovery results");
+      const groups = readJson(groupsPath, "deduplication groups");
       const ledger = mergeDiscoveryLedger({
         selection,
-        results: results.results ?? results.verdicts ?? results,
+        selection_bytes: selectionBytes,
+        candidate,
+        discovery_results: results,
         groups,
       });
-      writeCreateOrCompare(argv[4], ledger);
-      console.log(argv[4]);
+      writeCreateOrCompare(outputPath, ledger);
+      console.log(outputPath);
       return;
     }
     if (command === "response-template") {
-      const ledger = readJson(argv[1], "issue ledger");
-      writeResponseTemplate(argv[2], ledger);
-      console.log(argv[2]);
+      const parsed = parseCommandArguments(argv.slice(1), command, 2);
+      const [ledgerPath, outputPath] = parsed.positionals;
+      const ledger = readJson(ledgerPath, "issue ledger");
+      writeResponseTemplate(outputPath, ledger);
+      console.log(outputPath);
       return;
     }
     if (command === "verification") {
-      const selection = readSelection(argv[1]);
-      const ledger = readJson(argv[2], "issue ledger");
-      const responses = readJson(argv[3], "implementation responses");
-      const selfVerification = readJson(argv[4], "self-verification");
-      const optionsArgv = argv.slice(6);
-      const candidatePath = flagValue(optionsArgv, "--candidate");
-      const priorPath =
-        flagValue(optionsArgv, "--prior-selection") ??
-        flagValue(optionsArgv, "--previous-selection");
-      const priorVerdictsPath = flagValue(optionsArgv, "--prior-verdicts");
-      const deltaPath = flagValue(optionsArgv, "--delta");
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        5,
+        {
+          "--candidate": "candidate",
+          "--prior-selection": "prior_selection",
+          "--previous-selection": "prior_selection",
+          "--prior-verdicts": "prior_verdicts",
+          "--delta": "delta",
+          "--handoff": "handoff",
+        },
+      );
+      const [
+        selectionPath,
+        ledgerPath,
+        responsesPath,
+        selfVerificationPath,
+        outputDir,
+      ] = parsed.positionals;
+      const selection = readSelection(selectionPath);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(responsesPath, "implementation responses");
+      const selfVerification = readJson(selfVerificationPath, "self-verification");
+      const candidatePath = parsed.values.candidate;
+      const priorPath = parsed.values.prior_selection;
+      const priorVerdictsPath = parsed.values.prior_verdicts;
+      const deltaPath = parsed.values.delta;
+      const handoffPath = parsed.values.handoff;
       if (!candidatePath || !priorPath || !priorVerdictsPath || !deltaPath) {
         error(
           "verification requires --candidate, --prior-selection, --prior-verdicts, and --delta",
         );
       }
+      const priorSelection = readSelection(priorPath);
       const delta = readJson(deltaPath, "actual fix delta");
       const actualDeltaPaths = Array.isArray(delta)
         ? delta
         : delta?.changed_paths ?? delta?.paths ?? [];
-      const result = writeVerificationArtifacts(argv[5], {
+      const result = writeVerificationArtifacts(outputDir, {
         current_selection: selection,
         discovery_ledger: ledger,
         responses,
         self_verification: selfVerification,
         current_candidate: readJson(candidatePath, "current candidate"),
-        prior_selection: readSelection(priorPath),
-        prior_verdicts: readJsonDirectory(priorVerdictsPath, "prior verdicts"),
+        prior_selection: priorSelection,
+        prior_verdicts: readJsonDirectory(priorVerdictsPath, "prior verdicts", {
+          expectedNames: priorSelection.roster.map((seat) => `${seat}.json`),
+        }),
         actual_delta_paths: actualDeltaPaths,
+        ...(handoffPath
+          ? {
+              handoff: readJsonWithBytes(
+                handoffPath,
+                "continuation handoff marker",
+              ).value,
+              discovery_ledger_bytes: ledgerBytes,
+              responses_bytes: responseBytes,
+            }
+          : {}),
       });
-      console.log(`wrote ${result.written.length} verification artifacts to ${argv[5]}`);
+      console.log(`wrote ${result.written.length} verification artifacts to ${outputDir}`);
+      return;
+    }
+    if (command === "advance-verification") {
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        5,
+        { "--candidate": "candidate" },
+      );
+      const [
+        selectionPath,
+        ledgerPath,
+        responsesPath,
+        verificationResultsPath,
+        outputDir,
+      ] = parsed.positionals;
+      const candidatePath = parsed.values.candidate;
+      if (!candidatePath) {
+        error("advance-verification requires --candidate");
+      }
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "prior immutable ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(responsesPath, "prior implementation responses");
+      const {
+        value: verificationResults,
+        bytes: verificationResultsBytes,
+      } = readJsonWithBytes(verificationResultsPath, "adapted verification results");
+      const result = writeAdvanceVerification(outputDir, {
+        current_selection: selection,
+        selection_bytes: selectionBytes,
+        discovery_ledger: ledger,
+        discovery_ledger_bytes: ledgerBytes,
+        responses,
+        responses_bytes: responseBytes,
+        verification_results: verificationResults,
+        verification_results_bytes: verificationResultsBytes,
+        current_candidate: readJson(candidatePath, "current candidate"),
+      });
+      console.log(
+        `wrote next ledger and partial response envelope to ${outputDir}; ` +
+        `carried [${result.carried_issue_ids.join(", ")}], ` +
+        `reset [${result.reset_issue_ids.join(", ")}]`,
+      );
+      return;
+    }
+    if (command === "finalize-handoff") {
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        3,
+      );
+      const [ledgerPath, completedResponsesPath, handoffPath] =
+        parsed.positionals;
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "continuation ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(
+          completedResponsesPath,
+          "completed implementation responses",
+        );
+      writeFinalizeHandoff(handoffPath, {
+        discovery_ledger: ledger,
+        discovery_ledger_bytes: ledgerBytes,
+        completed_responses: responses,
+        completed_responses_bytes: responseBytes,
+      });
+      console.log(handoffPath);
       return;
     }
     if (command === "adapt-verification") {
-      const ledgerPath = argv[1];
-      const ledgerBytes = readFileSync(ledgerPath, "utf8");
-      const ledger = JSON.parse(ledgerBytes);
-      validateLedger(ledger);
-      const optionsArgv = argv.slice(4);
-      const selectionPath = flagValue(optionsArgv, "--selection");
-      const candidatePath = flagValue(optionsArgv, "--candidate");
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        3,
+        { "--selection": "selection", "--candidate": "candidate" },
+      );
+      const [ledgerPath, verdictsPath, outputPath] = parsed.positionals;
+      const selectionPath = parsed.values.selection;
+      const candidatePath = parsed.values.candidate;
       if (!selectionPath || !candidatePath) {
         error("adapt-verification requires --selection and --candidate");
       }
-      const selectionBytes = readFileSync(selectionPath, "utf8");
-      const selection = readSelection(selectionPath);
-      const verdicts = readVerificationVerdicts(argv[2], selection);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const verdicts = readVerificationVerdicts(verdictsPath, selection);
       const artifact = createVerificationResultArtifact({
         selection,
         selection_bytes: selectionBytes,
@@ -4869,21 +6543,35 @@ async function main(argv) {
         current_candidate: readJson(candidatePath, "current candidate"),
         results: verdicts,
       });
-      writeCreateOrCompare(argv[3], artifact);
-      console.log(argv[3]);
+      writeCreateOrCompare(outputPath, artifact);
+      console.log(outputPath);
       return;
     }
     if (command === "approval" || command === "approve") {
-      const selection = readSelection(argv[1]);
-      const selectionBytes = readFileSync(argv[1], "utf8");
-      const ledgerPath = argv[2];
-      const ledgerBytes = readFileSync(ledgerPath, "utf8");
-      const ledger = JSON.parse(ledgerBytes);
-      const responseBytes = readFileSync(argv[3], "utf8");
-      const verificationResultsBytes = readFileSync(argv[4], "utf8");
-      const responses = JSON.parse(responseBytes);
-      const verificationResults = JSON.parse(verificationResultsBytes);
-      const candidatePath = flagValue(argv.slice(6), "--candidate");
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        5,
+        { "--candidate": "candidate" },
+      );
+      const [
+        selectionPath,
+        ledgerPath,
+        responsesPath,
+        verificationResultsPath,
+        outputPath,
+      ] = parsed.positionals;
+      const candidatePath = parsed.values.candidate;
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(responsesPath, "implementation responses");
+      const {
+        value: verificationResults,
+        bytes: verificationResultsBytes,
+      } = readJsonWithBytes(verificationResultsPath, "verification results");
       if (!candidatePath) error("approval requires --candidate");
       const currentCandidate = readJson(candidatePath, "current candidate");
       const approval = createApprovalArtifact({
@@ -4897,31 +6585,46 @@ async function main(argv) {
         verification_results: verificationResults,
         verification_results_bytes: verificationResultsBytes,
       });
-      writeCreateOrCompare(argv[5], sortedObject(approval));
-      console.log(argv[5]);
+      writeCreateOrCompare(outputPath, sortedObject(approval));
+      console.log(outputPath);
       if (!approval.approved) process.exitCode = 3;
       return;
     }
     if (command === "metrics") {
-      const selectionPath = flagValue(argv, "--selection");
-      const ledgerPath = flagValue(argv, "--ledger");
-      const responsesPath = flagValue(argv, "--responses");
-      const verificationPath = flagValue(argv, "--verification-results");
-      const outputPath = flagValue(argv, "--output");
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        0,
+        {
+          "--selection": "selection",
+          "--ledger": "ledger",
+          "--responses": "responses",
+          "--verification-results": "verification_results",
+          "--output": "output",
+          "--implementation-history": "implementation_history",
+          "--verification-history": "verification_history",
+        },
+      );
+      const selectionPath = parsed.values.selection;
+      const ledgerPath = parsed.values.ledger;
+      const responsesPath = parsed.values.responses;
+      const verificationPath = parsed.values.verification_results;
+      const outputPath = parsed.values.output;
       if (!selectionPath || !ledgerPath || !responsesPath || !verificationPath || !outputPath) {
         error(usage());
       }
-      const selectionBytes = readFileSync(selectionPath, "utf8");
-      const selection = readSelection(selectionPath);
-      const ledgerBytes = readFileSync(ledgerPath, "utf8");
-      const ledger = JSON.parse(ledgerBytes);
-      const responseBytes = readFileSync(responsesPath, "utf8");
-      const verificationResultsBytes = readFileSync(verificationPath, "utf8");
-      const responses = JSON.parse(responseBytes);
-      const verificationResults = JSON.parse(verificationResultsBytes);
-      const optionsArgv = argv;
-      const implementationHistoryPath = flagValue(optionsArgv, "--implementation-history");
-      const verificationHistoryPath = flagValue(optionsArgv, "--verification-history");
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const { value: ledger, bytes: ledgerBytes } =
+        readJsonWithBytes(ledgerPath, "issue ledger");
+      const { value: responses, bytes: responseBytes } =
+        readJsonWithBytes(responsesPath, "implementation responses");
+      const {
+        value: verificationResults,
+        bytes: verificationResultsBytes,
+      } = readJsonWithBytes(verificationPath, "verification results");
+      const implementationHistoryPath = parsed.values.implementation_history;
+      const verificationHistoryPath = parsed.values.verification_history;
       const artifact = createMetricsArtifact({
         selection,
         selection_bytes: selectionBytes,
@@ -4945,18 +6648,70 @@ async function main(argv) {
       return;
     }
     if (command === "import-legacy") {
-      const candidatePath = argv.length >= 4 ? argv[2] : undefined;
-      const outputPath = argv.length >= 4 ? argv[3] : argv[2];
+      const positionalCount = argv.length === 3 ? 2 : argv.length === 4 ? 3 : -1;
+      if (positionalCount === -1) {
+        error(
+          "import-legacy requires <legacy-dir-or-json> [candidate.json] <output.json>",
+        );
+      }
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        positionalCount,
+      );
+      const candidatePath = positionalCount === 3
+        ? parsed.positionals[1]
+        : undefined;
+      const outputPath = parsed.positionals.at(-1);
       const candidate = readOptionalJson(candidatePath);
-      const imported = importLegacyRound(argv[1], { candidate });
+      const imported = importLegacyRound(parsed.positionals[0], { candidate });
       writeCreateOrCompare(outputPath, imported);
+      console.log(outputPath);
+      return;
+    }
+    if (command === "continue-legacy" || command === "legacy-continuation") {
+      const parsed = parseCommandArguments(
+        argv.slice(1),
+        command,
+        4,
+        {
+          "--discovery-results": "discovery_results",
+          "--groups": "groups",
+        },
+      );
+      const [
+        importPath,
+        selectionPath,
+        candidatePath,
+        outputPath,
+      ] = parsed.positionals;
+      const { selection, bytes: selectionBytes } =
+        readSelectionWithBytes(selectionPath);
+      const discoveryResultsPath = parsed.values.discovery_results;
+      const groupsPath = parsed.values.groups;
+      const continuation = continueLegacyImport(
+        readJson(importPath, "legacy import"),
+        {
+          selection,
+          selection_bytes: selectionBytes,
+          candidate: readJson(candidatePath, "current candidate"),
+          ...(discoveryResultsPath
+            ? { discovery_results: readJson(discoveryResultsPath, "discovery results") }
+            : {}),
+          ...(groupsPath
+            ? { groups: readJson(groupsPath, "deduplication groups") }
+            : {}),
+        },
+      );
+      writeCreateOrCompare(outputPath, continuation.artifact);
       console.log(outputPath);
       return;
     }
     error(`unknown command "${command}"\n${usage()}`);
   } catch (cause) {
     console.error(`error: ${cause.message}`);
-    process.exitCode = 1;
+    process.exitCode =
+      command === "approval" || command === "approve" ? 2 : 1;
   }
 }
 

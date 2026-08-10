@@ -12,11 +12,8 @@
 //! Endpoint inside the implementation's strict `spec.provider` extension.
 //!
 //! Consequences of that placement. Because no semantic base field names a
-//! backing resource, this family's closed `allowedBackingRefTypes` set cannot
-//! be derived from the base alone, and
-//! [`super::SemanticProjectionBinding::projection_factory`] fails closed with
-//! [`super::SemanticContractError::BackingRefTypesUndetermined`] rather than
-//! substituting a plausible set.
+//! backing resource, this family's closed `allowedBackingRefTypes` set is
+//! determinate and empty.
 //!
 //! Interiors this catalog does not model. `authority` is the D097 descriptor,
 //! `target` carries the consuming Guest and User references, and `policy`
@@ -27,8 +24,8 @@
 use std::sync::OnceLock;
 
 use super::{
-    super::provider::BindingTargetType, SemanticFamily, SemanticPairContract,
-    SemanticPairDeclaration,
+    super::provider::BindingTargetType, SemanticBackingDeclaration, SemanticFamily,
+    SemanticPairContract, SemanticPairDeclaration,
 };
 
 /// The dot-qualified API ResourceType of the security-key owner authority and
@@ -73,7 +70,7 @@ const DECLARATION: SemanticPairDeclaration = SemanticPairDeclaration {
     binding_spec_allowed: BINDING_SPEC_ALLOWED,
     binding_spec_required: BINDING_SPEC_REQUIRED,
     binding_status_allowed: BINDING_STATUS_ALLOWED,
-    allowed_backing_ref_types: None,
+    backing: SemanticBackingDeclaration::NoBacking,
     allowed_binding_target_ref_types: ALLOWED_BINDING_TARGET_REF_TYPES,
     projection_spec_allowed: PROJECTION_SPEC_ALLOWED,
     projection_spec_required: PROJECTION_SPEC_REQUIRED,
@@ -91,6 +88,7 @@ mod tests {
     use crate::v3::semantic_services::SemanticContractError;
     use crate::v3::semantic_services::tests_support::{
         assert_base_is_provider_neutral, assert_minimal_base_round_trips, object, provider_ref,
+        resource_envelope,
     };
 
     #[test]
@@ -179,19 +177,37 @@ mod tests {
         );
     }
 
-    /// The backing reference set is undetermined for this family, so the
-    /// derived factory fails closed instead of inventing one.
+    /// The backing declaration is determinate and empty, so the derived
+    /// factory is constructible and denies every backing reference.
     #[test]
-    fn the_backing_ref_set_is_undetermined_and_fails_closed() {
+    fn the_backing_declaration_is_no_backing_and_the_factory_is_constructible() {
         assert!(
             contract()
                 .projection()
                 .allowed_backing_ref_types()
-                .is_none()
+                .is_empty()
         );
-        assert_eq!(
-            contract().projection().projection_factory().unwrap_err(),
-            SemanticContractError::BackingRefTypesUndetermined
+        assert!(contract().projection().projection_factory().is_ok());
+    }
+
+    /// The empty allowlist is a deny-all, not an unconstrained value.
+    #[test]
+    fn the_empty_backing_set_admits_no_backing_reference() {
+        let factory = contract().projection().projection_factory().unwrap();
+        for resource_type in ["Device", "Endpoint", SECURITY_KEY_SERVICE_RESOURCE_TYPE] {
+            assert_eq!(
+                factory.admits_backing_ref(&resource_envelope(resource_type, None)),
+                Err(crate::v3::ProviderContractError::ProjectionFactoryInvalid)
+            );
+        }
+        let usb = super::super::usb::contract()
+            .projection()
+            .projection_factory()
+            .unwrap();
+        assert!(
+            usb.allowed_backing_ref_types()
+                .iter()
+                .any(|name| name.as_str() == "Device")
         );
     }
 }

@@ -49,8 +49,31 @@ pub enum VolumeLocalError {
     /// Hard quota enforcement was requested and the backing filesystem
     /// cannot enforce it.
     QuotaUnenforceable,
+    /// A write would exceed the declared byte or inode ceiling.
+    QuotaExceeded,
     /// The effect adapter could not complete the requested layout effect.
     EffectFailed,
+    /// The opaque source-policy ID is not present in the Provider policy
+    /// catalog.
+    SourcePolicyNotFound,
+    /// A source policy exists, but its class or allowed Volume kind does not
+    /// match the Volume spec.
+    SourcePolicyMismatch,
+    /// A block-image Volume did not declare a byte ceiling.
+    BlockImageQuotaMissing,
+    /// A tmpfs Volume did not declare both kernel-enforced ceilings.
+    TmpfsQuotaMissing,
+    /// A source kind was paired with an incompatible Volume kind.
+    SourceKindVolumeKindMismatch,
+    /// A block-image attachment selected a filesystem transport.
+    BlockImageTransportMismatch,
+    /// A path used a Unicode separator lookalike rather than an anchored
+    /// filesystem separator.
+    UnicodePathSeparator,
+    /// A store-view readiness marker was not present.
+    StoreViewMarkerMissing,
+    /// A shared-write attachment is not supported by the selected Provider.
+    SharedWriteCapabilityMissing,
 }
 
 impl VolumeLocalError {
@@ -73,12 +96,22 @@ impl VolumeLocalError {
             Self::SingleWriterConflict => "single-writer-conflict",
             Self::SharedWriteUnsupported => "shared-write-unsupported",
             Self::QuotaUnenforceable => "quota-unenforceable",
+            Self::QuotaExceeded => "volume-quota-exceeded",
             Self::EffectFailed => "effect-failed",
+            Self::SourcePolicyNotFound => "volume-source-policy-not-found",
+            Self::SourcePolicyMismatch => "volume-source-policy-mismatch",
+            Self::BlockImageQuotaMissing => "volume-block-image-quota-missing",
+            Self::TmpfsQuotaMissing => "volume-tmpfs-quota-missing",
+            Self::SourceKindVolumeKindMismatch => "volume-source-kind-mismatch",
+            Self::BlockImageTransportMismatch => "volume-block-image-transport-mismatch",
+            Self::UnicodePathSeparator => "volume-unicode-path-separator",
+            Self::StoreViewMarkerMissing => "volume-store-view-marker-missing",
+            Self::SharedWriteCapabilityMissing => "volume-shared-write-capability-missing",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 27] = [
         Self::InvalidSpec,
         Self::ProviderMismatch,
         Self::SourceKindUnsupported,
@@ -95,7 +128,17 @@ impl VolumeLocalError {
         Self::SingleWriterConflict,
         Self::SharedWriteUnsupported,
         Self::QuotaUnenforceable,
+        Self::QuotaExceeded,
         Self::EffectFailed,
+        Self::SourcePolicyNotFound,
+        Self::SourcePolicyMismatch,
+        Self::BlockImageQuotaMissing,
+        Self::TmpfsQuotaMissing,
+        Self::SourceKindVolumeKindMismatch,
+        Self::BlockImageTransportMismatch,
+        Self::UnicodePathSeparator,
+        Self::StoreViewMarkerMissing,
+        Self::SharedWriteCapabilityMissing,
     ];
 }
 

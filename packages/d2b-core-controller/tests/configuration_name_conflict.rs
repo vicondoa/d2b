@@ -112,12 +112,40 @@ fn configuration_owned_same_name_is_reapplied_after_prior_delete_completed() {
     assert_eq!(plan.upserts().len(), 2);
 }
 
-fn assert_conflict(metadata: PersistedResourceMetadata) {
+#[test]
+fn foreign_same_name_with_different_resource_type_does_not_conflict() {
     let plan = plan_generation_transition(
         &bundle(),
         committed(),
         &[PersistedResourceRecord::new(
             key("Guest", "conflict"),
+            PersistedResourceMetadata::controller(),
+        )],
+        &BTreeMap::new(),
+        &Timestamp::parse("2026-07-31T00:01:00.000Z").unwrap(),
+    )
+    .unwrap();
+    assert!(plan.name_conflicts().is_empty());
+    assert_eq!(plan.upserts().len(), 2);
+    assert!(
+        plan.upserts()
+            .iter()
+            .any(|upsert| upsert.key() == &key("Volume", "conflict"))
+    );
+    assert!(
+        !plan.audits().iter().any(|audit| matches!(
+            audit,
+            d2b_core_controller::configuration::generation_transition::GenerationTransitionAudit::ResourceConflictSkipped
+        ))
+    );
+}
+
+fn assert_conflict(metadata: PersistedResourceMetadata) {
+    let plan = plan_generation_transition(
+        &bundle(),
+        committed(),
+        &[PersistedResourceRecord::new(
+            key("Volume", "conflict"),
             metadata,
         )],
         &BTreeMap::new(),

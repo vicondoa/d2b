@@ -77,7 +77,6 @@ const NAMED_INVERSIONS: &[(&str, &str)] = &[
     ("d2b-bus", "the Zone message bus"),
     ("d2b-zone-routing", "the Zone routing plane"),
     ("d2b-host", "the host lifecycle primitives"),
-    ("d2b-daemon-access", "the daemon access layer"),
 ];
 
 /// Crates exempt from the naming rule and therefore from this whole policy,
@@ -736,6 +735,35 @@ fn non_provider_crates_are_exempt() {
         assert!(
             !is_in_scope(name),
             "{name} is the SDK or the toolkit, not a Provider"
+        );
+    }
+}
+
+/// Every `d2b-provider-*` workspace name belongs to exactly one visible
+/// classification: a non-Provider helper, one of the two recorded legacy
+/// exemptions, a conforming Provider identity, or a malformed name that must
+/// be rejected. Keeping the partition explicit prevents a new prefixed crate
+/// from becoming silently unclassified.
+#[test]
+fn every_provider_prefixed_workspace_name_has_one_classification() {
+    for name in workspace_members()
+        .into_iter()
+        .filter(|name| name.starts_with("d2b-provider"))
+    {
+        let non_provider = NON_PROVIDER_PREFIXED.contains(&name.as_str());
+        let legacy = EXEMPT_CRATES.iter().any(|(exempt, _)| *exempt == name);
+        let provider = provider_identity(&name).is_some();
+        let malformed = name.starts_with("d2b-provider-")
+            && !non_provider
+            && !legacy
+            && split_provider_name(&name).is_none();
+        let classifications = [non_provider, legacy, provider, malformed]
+            .into_iter()
+            .filter(|classified| *classified)
+            .count();
+        assert_eq!(
+            classifications, 1,
+            "{name} must have exactly one Provider-name classification"
         );
     }
 }

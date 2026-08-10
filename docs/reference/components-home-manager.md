@@ -13,7 +13,7 @@ wires it with the framework's sensible defaults (`useGlobalPkgs`,
 `extraSpecialArgs`), and exposes a `d2b.homeManager.users`
 attrset whose per-user values are forwarded into upstream
 `home-manager.users`. One `nixos-rebuild switch` (or, for
-VM-only changes, one `d2b switch <vm> --apply`) rebuilds the guest's
+Guest-only changes, one `d2b activation switch Guest/<name> --apply`) rebuilds the guest's
 system + home environment atomically - there is no separate
 `home-manager switch` invocation inside the VM.
 

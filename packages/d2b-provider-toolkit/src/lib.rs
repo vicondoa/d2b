@@ -28,8 +28,9 @@
 //!   or effect. Authorization stays with ComponentSession admission and the
 //!   Zone RBAC binding.
 //! - It imports no daemon, broker, Zone-store, Nix-emitter, or Provider
-//!   implementation internals. Its only dependency is the shared v3
-//!   contract catalog.
+//!   implementation internals. It depends on the shared v3 contract catalog,
+//!   the neutral Provider registry SDK, and the transport-agnostic
+//!   ComponentSession driver.
 //!
 //! No file descriptor, numeric UID or GID, device node, store path, socket
 //! path, or host path appears in any type here. A bootstrap binding names a
@@ -38,16 +39,30 @@
 
 #![deny(missing_docs)]
 
+// The adapter module retains its transport-loop helper for compatibility;
+// the lifecycle-owning generated server lives in `server`.
+#[allow(dead_code)]
+mod agent;
 mod audit;
 mod bootstrap;
 mod dispatch;
 mod error;
+mod fixture;
 mod redaction;
+mod registration;
+mod server;
+mod values;
 
 pub mod conformance;
 pub mod fakes;
+pub mod manifest;
+pub mod schema;
 pub mod testing;
 
+pub use agent::{
+    ProviderAgentAdapter, ProviderAgentProcess, ProviderFrameCodec, ProviderRequest,
+    ProviderService, validate_attachment_indexes,
+};
 pub use audit::{
     DEFAULT_AUDIT_CAPACITY, ProviderAgentAuditEvent, ProviderAgentAuditLog,
     ProviderAgentAuditOutcome,
@@ -55,6 +70,19 @@ pub use audit::{
 pub use bootstrap::{
     AllocatorSessionBinding, PROVIDER_RESOURCE_TYPE, ProviderAgentBootstrap, ProviderAgentIdentity,
 };
+pub use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
 pub use dispatch::{DispatchLimiter, DispatchPermit, MAX_DISPATCH_IN_FLIGHT};
 pub use error::ProviderToolkitError;
+pub use fixture::{
+    DeterministicClock, FakeProvider, Fixture, SampleLeaseRequest, sample_lease_request,
+};
 pub use redaction::Redacted;
+pub use registration::{ExactRegistration, ToolkitError, register_exact_instances};
+pub use server::{
+    GeneratedProviderServiceServer, GeneratedServiceDescriptor, MAX_SERVER_IN_FLIGHT, ServerError,
+    ServerRequestPermit,
+};
+pub use values::{
+    ProviderHealth, ProviderHealthState, ProviderInspection, ProviderObservability, ProviderValues,
+    ValuesError,
+};

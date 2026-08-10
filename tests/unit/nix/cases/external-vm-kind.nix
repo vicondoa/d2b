@@ -5,7 +5,7 @@
 # qemu-media incompatibility assertions, the structural skip that keeps
 # external media VMs out of the per-VM NixOS evaluator / store emitters, and
 # the QMP-ready qemu-media runner contract.
-{ mkEval, lib, flakeRoot, system, ... }:
+{ mkEval, lib, flakeRoot, system, casePartition ? "core", ... }:
 
 let
   cleanGuest = flakeRoot + "/tests/unit/nix/eval-cases/guest-fixtures/clean-guest.nix";
@@ -316,7 +316,8 @@ let
     processes = positiveQemuProcess;
   };
 in
-{
+let
+  allCases = {
   "external-vm-kind/default-runtime-kind" = {
     expr = positiveCfg.d2b.vms."sys-work-net".runtime.kind;
     expected = "nixos";
@@ -963,4 +964,20 @@ in
       falseAssertionsGreen = qemuMediaPlatformAssertionsGreen;
     };
   };
-}
+  };
+  partitionFor = name:
+    if lib.hasInfix "rejects-" name
+      || lib.hasInfix "requires-" name
+      || lib.hasInfix "source-rejects" name
+      || lib.hasInfix "slot-rejects" name
+      || lib.hasInfix "qemuMedia-rejects" name then "rejections"
+    else if lib.hasInfix "qemu-media-" name
+      || lib.hasInfix "host-json-" name
+      || lib.hasInfix "no-raw-media" name
+      || lib.hasInfix "no-physical-usb" name
+      || lib.hasInfix "qemuMedia-" name then "runtime"
+    else "core";
+in
+lib.filterAttrs
+  (name: _: partitionFor name == casePartition)
+  allCases

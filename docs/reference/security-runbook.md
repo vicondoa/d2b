@@ -98,7 +98,7 @@ immediate containment.
 Prefer the public CLI first:
 
 ```bash
-sudo d2b usb detach work-entra 1-3 --apply
+sudo d2b device usb detach work-entra 1-3 --apply
 ```
 
 If the guest still holds the device and you need the low-level
@@ -111,7 +111,7 @@ In v1.0 (per ADR 0015) the per-env usbipd backend + proxy run as
 broker-spawned runners on the per-env DAG under
 `d2b.slice/sys-<env>/usbipd-*`. Stop them via the broker
 `SignalRunner` op dispatched through the daemon - e.g. detach
-the device through `d2b usb detach <vm> --apply` which the
+the device through `d2b device usb detach <name> --apply` which the
 broker translates into a SIGTERM on the per-env usbipd runner.
 (The legacy `d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}`
 systemd units were retired in v1.0; the equivalent operator action
@@ -130,7 +130,7 @@ owner.
 ### 4. Validate the recovered state
 
 ```bash
-d2b usb probe --json
+d2b device usb probe --json
 d2b audit --json
 sudo journalctl -u d2bd.service --since "-15m"
 ```
@@ -147,7 +147,7 @@ Pick the narrowest effective move first:
 
 - remove the affected user from `launcherUsers` / `adminUsers` and rebuild;
 - or stop `d2bd` while you investigate;
-- or, on NixOS, stop the affected VMs (`d2b vm stop <vm> --apply`)
+- or, on NixOS, stop the affected Guests (`d2b guest stop <name> --apply`)
   and stop/mask `d2bd.service` to halt reconciliation.
 
 ### 2. Preserve evidence before cleanup
@@ -164,11 +164,11 @@ TPM identity and re-enroll it everywhere.
 
 ### 3. Rotate the affected trust material
 
-- **Framework-managed SSH identity compromised:** run `d2b keys rotate <vm>`.
+- **Framework-managed SSH identity compromised:** run `d2b activation keys rotate Guest/<name>`.
 - **Consumer-supplied `ssh.keyPath` compromised:** rotate that key out-of-band;
   d2b deliberately will not overwrite it.
 - **Guest SSH host key changed or suspected compromised:** run
-  `d2b rotate-known-host <vm>` and then `d2b trust <vm>` once the guest
+  `d2b activation rotate-known-host <name>` and then `d2b activation trust <name>` once the Guest
   is back with its replacement host key.
 - **Bundle/config tampering:** re-render and re-land the trusted bundle, then
   restart the daemon.

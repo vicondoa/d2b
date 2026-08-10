@@ -7,6 +7,8 @@
 //! plan; the private argv renderer below is the only place a resolved
 //! path is joined to it, and it is not part of the public surface.
 
+use std::fmt;
+
 use serde::Serialize;
 
 use d2b_contracts::v3::execution_policy::BoundedToken;
@@ -157,13 +159,19 @@ impl WorkerSandbox {
 /// meet, and none of them may reach the public surface. Its callers are
 /// the in-crate renderer below and, once ProviderSupervisor hosts it,
 /// the effect adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct ResolvedWorkerPaths {
     pub(crate) binary_path: String,
     pub(crate) socket_path: String,
     pub(crate) socket_group: String,
     pub(crate) shared_dir: String,
+}
+
+impl fmt::Debug for ResolvedWorkerPaths {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ResolvedWorkerPaths(<redacted>)")
+    }
 }
 
 /// Render one virtiofsd argv.
@@ -188,6 +196,9 @@ pub(crate) fn render_argv(
         if value.is_empty() {
             return Err(VirtiofsExportError::InvalidExport);
         }
+    }
+    if !is_inherited_fd_path(&paths.shared_dir) {
+        return Err(VirtiofsExportError::InvalidExport);
     }
     if plan.thread_pool_size == 0 {
         return Err(VirtiofsExportError::InvalidExport);
@@ -220,6 +231,15 @@ pub(crate) fn render_argv(
     Ok(argv)
 }
 
+fn is_inherited_fd_path(value: &str) -> bool {
+    let Some(number) = value.strip_prefix("/proc/self/fd/") else {
+        return false;
+    };
+    !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+        && number.parse::<i32>().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,7 +251,7 @@ mod tests {
                 .to_owned(),
             socket_path: "/run/d2b/zones/dev/exports/0.sock".to_owned(),
             socket_group: "d2b-virtiofs".to_owned(),
-            shared_dir: "/var/lib/d2b/vms/work-vm/store-view/live".to_owned(),
+            shared_dir: "/proc/self/fd/17".to_owned(),
         }
     }
 
@@ -255,7 +275,7 @@ mod tests {
         let joined = argv.join(" ");
         assert!(joined.contains("--socket-path=/run/d2b/zones/dev/exports/0.sock"));
         assert!(joined.contains("--socket-group=d2b-virtiofs"));
-        assert!(joined.contains("--shared-dir=/var/lib/d2b/vms/work-vm/store-view/live"));
+        assert!(joined.contains("--shared-dir=/proc/self/fd/17"));
         assert!(joined.contains("--thread-pool-size=4"));
         assert!(joined.contains("--cache=auto"));
         assert!(joined.contains("--sandbox=chroot"));
@@ -354,19 +374,18 @@ mod tests {
 
     #[test]
     fn the_store_view_share_is_the_farm_and_never_the_host_store() {
-        let mut store = paths();
-        store.shared_dir = "/nix/store".to_owned();
-        let argv = render_argv(&plan(true), &store).expect("renders");
-        // The renderer emits what the adapter resolved; the store-view
-        // redirect is asserted where the Volume declares its view, so
-        // this case only pins that no flag rewrites the shared dir.
-        assert!(argv.iter().any(|arg| arg == "--shared-dir=/nix/store"));
-        assert_eq!(
-            argv.iter()
-                .filter(|arg| arg.starts_with("--shared-dir="))
-                .count(),
-            1
-        );
+        for shared_dir in [
+            "/nix/store",
+            "/nix/store/live",
+            "/var/lib/d2b/store-view/live",
+        ] {
+            let mut store = paths();
+            store.shared_dir = shared_dir.to_owned();
+            assert_eq!(
+                render_argv(&plan(true), &store).unwrap_err(),
+                VirtiofsExportError::InvalidExport
+            );
+        }
     }
 
     #[test]

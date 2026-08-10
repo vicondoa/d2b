@@ -21,7 +21,7 @@
 # projection strips it, because a resource spec, status, or audit record never
 # exposes one.
 
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 
 let
   types = lib.types;
@@ -53,7 +53,12 @@ let
       };
 
       type = lib.mkOption {
-        type = types.enum [ "provider" "nixos-system" ];
+        type = types.enum [
+          "provider"
+          "nixos-system"
+          "nixos-module-set"
+          "config-bundle"
+        ];
         default = "provider";
         description = ''
           The artifact kind. Provider packages and generic NixOS systems are
@@ -63,8 +68,8 @@ let
       };
 
       catalog = lib.mkOption {
-        type = types.attrsOf types.anything;
-        default = { };
+        type = types.nullOr (types.attrsOf types.anything);
+        default = null;
         description = ''
           The catalog entry for this artifact: the frozen field set from the
           specification's "Package catalog" section. Every field in
@@ -96,7 +101,10 @@ let
         inherit id;
         inherit (artifact) type;
         storePath = "${artifact.package}";
-        entry = lib.filterAttrs (fieldName: _: lib.elem fieldName shape.fields) artifact.catalog;
+        entry =
+          if artifact.catalog == null
+          then { }
+          else lib.filterAttrs (fieldName: _: lib.elem fieldName shape.fields) artifact.catalog;
       })
     artifactIds;
 
@@ -105,24 +113,110 @@ let
   # record never exposes a store path.
   publicEntries = map (e: { inherit (e) id type entry; }) entries;
 
+  # The provider catalog is a separate public document.  It carries only the
+  # frozen package metadata; private store locations remain in the artifact
+  # catalog used by activation.
+  providerCatalogEntries = lib.sort
+    (left: right:
+      let
+        leftName = left.entry.providerName or left.id;
+        rightName = right.entry.providerName or right.id;
+      in leftName < rightName)
+    entries;
+  providerCatalogData = {
+    schemaVersion = "v1";
+    entries = map
+      (entry: {
+        providerName = entry.entry.providerName or entry.id;
+        artifactId = entry.id;
+      } // entry.entry)
+      providerCatalogEntries;
+  };
+  providerCatalogJson = builtins.toJSON providerCatalogData;
+  providerCatalogPath = pkgs.writeText "d2b-provider-catalog.json" providerCatalogJson;
+
   catalogJson = builtins.toJSON {
     excludedMechanisms = shape.excludedMechanisms;
     entries = publicEntries;
   };
 
   missingFields = id:
-    lib.filter (field: !(artifacts.${id}.catalog ? ${field})) shape.fields;
+    if artifacts.${id}.catalog == null
+    then [ ]
+    else lib.filter (field: !(artifacts.${id}.catalog ? ${field})) shape.fields;
 
   unknownFields = id:
-    lib.filter (field: !(lib.elem field shape.fields))
+    if artifacts.${id}.catalog == null
+    then [ ]
+    else lib.filter (field: !(lib.elem field shape.fields))
       (lib.attrNames artifacts.${id}.catalog);
 
   badDigests = id:
-    lib.filter
+    if artifacts.${id}.catalog == null
+    then [ ]
+    else lib.filter
       (field:
         let value = artifacts.${id}.catalog.${field} or null;
         in value == null || builtins.match digestPattern (toString value) == null)
       shape.digestFields;
+
+  maxOutputNameLength = 16;
+  maxOutputNamesInMessage = 4;
+
+  shortenOutputName = output:
+    if builtins.stringLength output <= maxOutputNameLength
+    then output
+    else builtins.substring 0 (maxOutputNameLength - 3) output + "...";
+
+  outputNamesSummary = outputs:
+    let
+      rendered = map (name: "\"${name}\"") (map shortenOutputName outputs);
+      complete = lib.concatStringsSep ", " rendered;
+      shown = lib.take maxOutputNamesInMessage (map shortenOutputName outputs);
+      omitted = builtins.length outputs - builtins.length shown;
+      abbreviated =
+        lib.concatStringsSep ", " (map (name: "\"${name}\"") shown)
+        + (if omitted > 0
+          then ", ... (${toString omitted} more; ${toString (builtins.length outputs)} total)"
+          else "");
+    in
+    if builtins.stringLength complete <= 96 then complete else abbreviated;
+
+  providerOutputSelection = id:
+    let
+      artifact = artifacts.${id};
+    in
+    if artifact.type != "provider" then
+      {
+        assertion = true;
+        message = "";
+      }
+    else
+      let
+        package = artifact.package;
+        declaredOutputs = package.outputs or [ "out" ];
+        shapeRecognised =
+          builtins.isList declaredOutputs
+          && declaredOutputs != [ ]
+          && builtins.all builtins.isString declaredOutputs;
+        outputSelectionRecognised =
+          if !shapeRecognised then false
+          else if builtins.length declaredOutputs == 1 then true
+          else if (package.outputSpecified or false) == true then true
+          else (package.outputName or null) != builtins.head declaredOutputs;
+        outputSummary =
+          if !shapeRecognised then ""
+          else outputNamesSummary declaredOutputs;
+      in
+      {
+        assertion = outputSelectionRecognised;
+        message =
+          if !shapeRecognised then
+            "d2b.artifacts.\"${id}\".package: provider-artifact-output-shape-unknown: outputs must be a non-empty list of strings; supply a derivation or store path, not a hand-built attrset."
+          else if outputSelectionRecognised then ""
+          else
+            "d2b.artifacts.\"${id}\".package: provider-artifact-output-ambiguous: declared outputs [ ${outputSummary} ] have no selection evidence; stdenv.mkDerivation: select any output (for example package = pkgs.<name>.out; sets outputSpecified). builtins.derivation: select a non-first output (outputName); its first output requires repackaging with stdenv.mkDerivation.";
+      };
 
 in
 {
@@ -151,12 +245,30 @@ in
     internal = true;
     visible = false;
     default = {
-      inherit entries publicEntries;
+      inherit entries publicEntries providerCatalogEntries providerCatalogData providerCatalogJson providerCatalogPath;
       json = catalogJson;
       ids = artifactIds;
       shape = shape;
     };
     description = "Internal compiled artifact catalog.";
+  };
+
+  config = {
+    d2b._providerCatalog = {
+      inherit entries publicEntries providerCatalogEntries providerCatalogData providerCatalogJson providerCatalogPath;
+      json = catalogJson;
+      ids = artifactIds;
+      shape = shape;
+    };
+
+    d2b._bundle.extraArtifacts.providerCatalog = {
+      data = providerCatalogData;
+      jsonText = providerCatalogJson;
+      path = providerCatalogPath;
+      installFileName = "provider-catalog.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
   };
 
   config.assertions =
@@ -210,5 +322,9 @@ in
           there is no version-range solving and no latest.
         '';
       })
-      artifactIds);
+      artifactIds)
+
+    # Provider packages must name one determinate output before any later
+    # required-output validation can diagnose the artifact layout.
+    ++ (map providerOutputSelection artifactIds);
 }

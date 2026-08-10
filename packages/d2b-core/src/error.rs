@@ -54,6 +54,50 @@ pub enum Kind {
     /// agent absent). Operator remediation required.
     #[serde(rename = "provider-misconfigured")]
     ProviderMisconfigured,
+    #[serde(rename = "provider-artifact-output-ambiguous")]
+    ProviderArtifactOutputAmbiguous,
+    #[serde(rename = "provider-artifact-output-shape-unknown")]
+    ProviderArtifactOutputShapeUnknown,
+    #[serde(rename = "provider-required-output-absent")]
+    ProviderRequiredOutputAbsent,
+    #[serde(rename = "provider-required-output-not-regular")]
+    ProviderRequiredOutputNotRegular,
+    #[serde(rename = "provider-layout-entry-unexpected")]
+    ProviderLayoutEntryUnexpected,
+    #[serde(rename = "provider-executable-not-elf")]
+    ProviderExecutableNotElf,
+    #[serde(rename = "provider-launch-format-rejected")]
+    ProviderLaunchFormatRejected,
+    #[serde(rename = "provider-launch-permission-denied")]
+    ProviderLaunchPermissionDenied,
+    #[serde(rename = "provider-component-execution-invalid")]
+    ProviderComponentExecutionInvalid,
+    #[serde(rename = "provider-executable-declaration-inconsistent")]
+    ProviderExecutableDeclarationInconsistent,
+    #[serde(rename = "provider-executable-not-executable")]
+    ProviderExecutableNotExecutable,
+    #[serde(rename = "provider-signature-publisher-unregistered")]
+    ProviderSignaturePublisherUnregistered,
+    #[serde(rename = "provider-signature-id-unresolvable")]
+    ProviderSignatureIdUnresolvable,
+    #[serde(rename = "provider-signature-malformed")]
+    ProviderSignatureMalformed,
+    #[serde(rename = "provider-signature-verification-failed")]
+    ProviderSignatureVerificationFailed,
+    #[serde(rename = "provider-digest-mismatch")]
+    ProviderDigestMismatch,
+    #[serde(rename = "provider-manifest-not-canonical")]
+    ProviderManifestNotCanonical,
+    #[serde(rename = "provider-executable-name-invalid")]
+    ProviderExecutableNameInvalid,
+    #[serde(rename = "provider-executable-set-empty")]
+    ProviderExecutableSetEmpty,
+    #[serde(rename = "provider-executable-not-regular")]
+    ProviderExecutableNotRegular,
+    #[serde(rename = "provider-executable-set-mismatch")]
+    ProviderExecutableSetMismatch,
+    #[serde(rename = "provider-binary-ref-unresolved")]
+    ProviderBinaryRefUnresolved,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,7 +110,7 @@ pub struct ErrorKindRecord {
     pub docs_anchor: &'static str,
 }
 
-static ERROR_KIND_RECORDS: [ErrorKindRecord; 15] = [
+static ERROR_KIND_RECORDS: [ErrorKindRecord; 37] = [
     ErrorKindRecord {
         kind: Kind::AuthzNotALauncher,
         exit_code: 10,
@@ -187,6 +231,182 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 15] = [
         remediation: "Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running.",
         docs_anchor: "#provider-misconfigured",
     },
+    ErrorKindRecord {
+        kind: Kind::ProviderArtifactOutputAmbiguous,
+        exit_code: 81,
+        owning_command: "provider-catalog",
+        message_template: "provider artifact {artifact} pins an ambiguous Nix output ({outputs})",
+        remediation: "Select the Provider-carrying output explicitly; a non-first raw derivation output is accepted, while a raw derivation's first output must be repackaged.",
+        docs_anchor: "#provider-artifact-output-ambiguous",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderArtifactOutputShapeUnknown,
+        exit_code: 82,
+        owning_command: "provider-catalog",
+        message_template: "provider artifact {artifact} has an unrecognized Nix output shape",
+        remediation: "Supply a derivation or a store path rather than a hand-built package attribute set.",
+        docs_anchor: "#provider-artifact-output-shape-unknown",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderRequiredOutputAbsent,
+        exit_code: 83,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} is missing required output {layout}",
+        remediation: "Install the required Provider artifact file at its fixed layout-relative path and rebuild.",
+        docs_anchor: "#provider-required-output-absent",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderRequiredOutputNotRegular,
+        exit_code: 84,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} output {layout} is not a regular file ({file_type})",
+        remediation: "Materialize the required Provider artifact output as a regular file and rebuild.",
+        docs_anchor: "#provider-required-output-not-regular",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderLayoutEntryUnexpected,
+        exit_code: 85,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} has unexpected layout entry {entry}",
+        remediation: "Remove unpinned entries from share/d2b/provider and rebuild the Provider artifact.",
+        docs_anchor: "#provider-layout-entry-unexpected",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableNotElf,
+        exit_code: 86,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} executable {entry} is not a supported ELF image ({magic})",
+        remediation: "Package interpreted entry points with d2b.lib.buildProviderElfShim and rebuild.",
+        docs_anchor: "#provider-executable-not-elf",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderLaunchFormatRejected,
+        exit_code: 87,
+        owning_command: "provider-launcher",
+        message_template: "provider artifact {artifact} component {component} binary {binary_ref} was rejected by the kernel ({errno})",
+        remediation: "Install a valid executable image for the component and rebuild the Provider artifact.",
+        docs_anchor: "#provider-launch-format-rejected",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderLaunchPermissionDenied,
+        exit_code: 88,
+        owning_command: "provider-launcher",
+        message_template: "provider artifact {artifact} component {component} binary {binary_ref} could not be executed ({errno})",
+        remediation: "Set the execute bit in the Provider derivation install step and rebuild.",
+        docs_anchor: "#provider-launch-permission-denied",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderComponentExecutionInvalid,
+        exit_code: 89,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} component {component} has an invalid execution declaration",
+        remediation: "Name the component binary or remove the component when it is not launchable.",
+        docs_anchor: "#provider-component-execution-invalid",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableDeclarationInconsistent,
+        exit_code: 90,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} has an inconsistent executable declaration ({side})",
+        remediation: "Make package.executableDigests agree with the Provider component execution declarations.",
+        docs_anchor: "#provider-executable-declaration-inconsistent",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableNotExecutable,
+        exit_code: 91,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} executable {entry} has no execute bit ({mode})",
+        remediation: "Set the execute bit in the Provider derivation install step and rebuild.",
+        docs_anchor: "#provider-executable-not-executable",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderSignaturePublisherUnregistered,
+        exit_code: 92,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} publisher {publisher} is not registered",
+        remediation: "Register the public publisher key at d2b.zones.<zone>.trustedPublishers.<publisher> or use a registered publisher.",
+        docs_anchor: "#provider-signature-publisher-unregistered",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderSignatureIdUnresolvable,
+        exit_code: 93,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} signature {signature_id} cannot be resolved for publisher {publisher}",
+        remediation: "Republish with a registered signature or correct the catalog entry.",
+        docs_anchor: "#provider-signature-id-unresolvable",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderSignatureMalformed,
+        exit_code: 94,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} signature has {observed} bytes; expected 64",
+        remediation: "Fix the detached signature file so it contains exactly 64 octets and rebuild.",
+        docs_anchor: "#provider-signature-malformed",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderSignatureVerificationFailed,
+        exit_code: 95,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} signature verification failed for {signature_id}",
+        remediation: "Re-sign the canonical Provider manifest with the registered publisher key and rebuild.",
+        docs_anchor: "#provider-signature-verification-failed",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderDigestMismatch,
+        exit_code: 96,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} digest {digest_name} differs between {source_a} and {source_b}",
+        remediation: "Regenerate the canonical Provider artifact and update the corresponding trusted digest before rebuilding.",
+        docs_anchor: "#provider-digest-mismatch",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderManifestNotCanonical,
+        exit_code: 97,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} output {layout} is not canonical at byte {offset}",
+        remediation: "Run d2b-provider-toolkit manifest emit --out <path>, then d2b-provider-toolkit manifest verify <path>, and rebuild.",
+        docs_anchor: "#provider-manifest-not-canonical",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableNameInvalid,
+        exit_code: 98,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} executable name {entry} is invalid",
+        remediation: "Use a UTF-8 executable name matching ^[a-z][a-z0-9-]*$ and rebuild.",
+        docs_anchor: "#provider-executable-name-invalid",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableSetEmpty,
+        exit_code: 99,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} has an empty executable set",
+        remediation: "Remove bin/ and declare an empty executable set, or install a launchable ELF and declare its digest.",
+        docs_anchor: "#provider-executable-set-empty",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableNotRegular,
+        exit_code: 12,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} executable {entry} is not a regular file ({file_type})",
+        remediation: "Materialize each Provider executable as a regular file and rebuild.",
+        docs_anchor: "#provider-executable-not-regular",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderExecutableSetMismatch,
+        exit_code: 13,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} executable set differs ({count} entries)",
+        remediation: "Make the bin/ entry set equal the signed package.executableDigests key set and rebuild.",
+        docs_anchor: "#provider-executable-set-mismatch",
+    },
+    ErrorKindRecord {
+        kind: Kind::ProviderBinaryRefUnresolved,
+        exit_code: 14,
+        owning_command: "resource-compiler",
+        message_template: "provider artifact {artifact} component {component} references unknown binary {binary_ref}",
+        remediation: "Set binaryRef to a key in package.executableDigests or add the matching executable to the artifact.",
+        docs_anchor: "#provider-binary-ref-unresolved",
+    },
 ];
 
 impl Kind {
@@ -211,6 +431,32 @@ impl Kind {
             Self::InternalIo => "internal-io",
             Self::BundleTampered => "bundle-tampered",
             Self::ProviderMisconfigured => "provider-misconfigured",
+            Self::ProviderArtifactOutputAmbiguous => "provider-artifact-output-ambiguous",
+            Self::ProviderArtifactOutputShapeUnknown => "provider-artifact-output-shape-unknown",
+            Self::ProviderRequiredOutputAbsent => "provider-required-output-absent",
+            Self::ProviderRequiredOutputNotRegular => "provider-required-output-not-regular",
+            Self::ProviderLayoutEntryUnexpected => "provider-layout-entry-unexpected",
+            Self::ProviderExecutableNotElf => "provider-executable-not-elf",
+            Self::ProviderLaunchFormatRejected => "provider-launch-format-rejected",
+            Self::ProviderLaunchPermissionDenied => "provider-launch-permission-denied",
+            Self::ProviderComponentExecutionInvalid => "provider-component-execution-invalid",
+            Self::ProviderExecutableDeclarationInconsistent => {
+                "provider-executable-declaration-inconsistent"
+            }
+            Self::ProviderExecutableNotExecutable => "provider-executable-not-executable",
+            Self::ProviderSignaturePublisherUnregistered => {
+                "provider-signature-publisher-unregistered"
+            }
+            Self::ProviderSignatureIdUnresolvable => "provider-signature-id-unresolvable",
+            Self::ProviderSignatureMalformed => "provider-signature-malformed",
+            Self::ProviderSignatureVerificationFailed => "provider-signature-verification-failed",
+            Self::ProviderDigestMismatch => "provider-digest-mismatch",
+            Self::ProviderManifestNotCanonical => "provider-manifest-not-canonical",
+            Self::ProviderExecutableNameInvalid => "provider-executable-name-invalid",
+            Self::ProviderExecutableSetEmpty => "provider-executable-set-empty",
+            Self::ProviderExecutableNotRegular => "provider-executable-not-regular",
+            Self::ProviderExecutableSetMismatch => "provider-executable-set-mismatch",
+            Self::ProviderBinaryRefUnresolved => "provider-binary-ref-unresolved",
         }
     }
 
@@ -255,6 +501,28 @@ impl Kind {
             Self::InternalIo => &ERROR_KIND_RECORDS[12],
             Self::BundleTampered => &ERROR_KIND_RECORDS[13],
             Self::ProviderMisconfigured => &ERROR_KIND_RECORDS[14],
+            Self::ProviderArtifactOutputAmbiguous => &ERROR_KIND_RECORDS[15],
+            Self::ProviderArtifactOutputShapeUnknown => &ERROR_KIND_RECORDS[16],
+            Self::ProviderRequiredOutputAbsent => &ERROR_KIND_RECORDS[17],
+            Self::ProviderRequiredOutputNotRegular => &ERROR_KIND_RECORDS[18],
+            Self::ProviderLayoutEntryUnexpected => &ERROR_KIND_RECORDS[19],
+            Self::ProviderExecutableNotElf => &ERROR_KIND_RECORDS[20],
+            Self::ProviderLaunchFormatRejected => &ERROR_KIND_RECORDS[21],
+            Self::ProviderLaunchPermissionDenied => &ERROR_KIND_RECORDS[22],
+            Self::ProviderComponentExecutionInvalid => &ERROR_KIND_RECORDS[23],
+            Self::ProviderExecutableDeclarationInconsistent => &ERROR_KIND_RECORDS[24],
+            Self::ProviderExecutableNotExecutable => &ERROR_KIND_RECORDS[25],
+            Self::ProviderSignaturePublisherUnregistered => &ERROR_KIND_RECORDS[26],
+            Self::ProviderSignatureIdUnresolvable => &ERROR_KIND_RECORDS[27],
+            Self::ProviderSignatureMalformed => &ERROR_KIND_RECORDS[28],
+            Self::ProviderSignatureVerificationFailed => &ERROR_KIND_RECORDS[29],
+            Self::ProviderDigestMismatch => &ERROR_KIND_RECORDS[30],
+            Self::ProviderManifestNotCanonical => &ERROR_KIND_RECORDS[31],
+            Self::ProviderExecutableNameInvalid => &ERROR_KIND_RECORDS[32],
+            Self::ProviderExecutableSetEmpty => &ERROR_KIND_RECORDS[33],
+            Self::ProviderExecutableNotRegular => &ERROR_KIND_RECORDS[34],
+            Self::ProviderExecutableSetMismatch => &ERROR_KIND_RECORDS[35],
+            Self::ProviderBinaryRefUnresolved => &ERROR_KIND_RECORDS[36],
         }
     }
 }
@@ -1065,7 +1333,7 @@ mod tests {
     fn all_kinds_records_are_unique_and_operator_visible() {
         let records = Error::all_kinds();
         // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(records.len(), 15);
+        assert_eq!(records.len(), 37);
 
         let mut codes = BTreeSet::new();
         let mut anchors = BTreeSet::new();
@@ -1174,8 +1442,8 @@ mod tests {
     }
 
     #[test]
-    fn all_kinds_count_is_fifteen() {
+    fn all_kinds_count_is_thirty_seven() {
         // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(Error::all_kinds().len(), 15);
+        assert_eq!(Error::all_kinds().len(), 37);
     }
 }

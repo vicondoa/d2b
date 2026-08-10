@@ -3,6 +3,9 @@
 This crate implements the USBIP Device Provider without importing the daemon,
 broker, host effect implementation, or another Provider crate.
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 The Provider identity is `Provider/device-usbip`. Its implementation artifact,

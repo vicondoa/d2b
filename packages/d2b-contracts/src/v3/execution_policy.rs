@@ -547,6 +547,18 @@ impl BudgetSpec {
         network_egress_bps: Option<u64>,
         thread_limit: Option<u32>,
     ) -> Result<Self, PrimitiveSpecError> {
+        if let Some(cpu) = cpu
+            && let (Some(request), Some(limit)) = (cpu.request, cpu.limit)
+            && request > limit
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        if let Some(memory) = &memory
+            && let (Some(request), Some(limit)) = (&memory.request, &memory.limit)
+            && request.as_bytes() > limit.as_bytes()
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
         check_optional_range(pids.and_then(|budget| budget.limit), 1, MAX_PIDS_LIMIT)?;
         check_optional_range(fds.and_then(|budget| budget.limit), 1, MAX_FDS_LIMIT)?;
         check_optional_range(io_weight, 1, MAX_IO_WEIGHT)?;
@@ -883,7 +895,7 @@ impl<'de> Deserialize<'de> for ExecutionPolicy {
 /// The wire mirror of `ExecutionPolicy`, flattened into the Host and Guest
 /// base specs so both render exactly one copy of the shared fields.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExecutionPolicyWire {
     #[serde(default = "default_system_domain")]
     pub(crate) default_domain: ExecutionDomain,
@@ -1133,6 +1145,50 @@ mod tests {
                 None,
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn budget_requests_cannot_exceed_limits() {
+        assert_eq!(
+            BudgetSpec::new(
+                Some(CpuBudget {
+                    request: Some(MilliCpu::parse("2m").unwrap()),
+                    limit: Some(MilliCpu::parse("1m").unwrap()),
+                }),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Err(PrimitiveSpecError::ConflictingFields)
+        );
+        assert_eq!(
+            BudgetSpec::new(
+                None,
+                Some(MemoryBudget {
+                    request: Some(ByteQuantity::parse("2Mi").unwrap()),
+                    limit: Some(ByteQuantity::parse("1Mi").unwrap()),
+                }),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Err(PrimitiveSpecError::ConflictingFields)
+        );
+    }
+
+    #[test]
+    fn direct_execution_policy_deserialization_rejects_unknown_fields() {
+        assert!(
+            serde_json::from_slice::<ExecutionPolicy>(
+                br#"{"defaultDomain":"system","unknown":true}"#
+            )
+            .is_err()
         );
     }
 

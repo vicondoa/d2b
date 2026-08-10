@@ -21,6 +21,9 @@ Rules:
 - The roster may widen after discovery but never narrow.
 - Identical inputs render identical bytes.
 - Existing conflicting bytes are never overwritten.
+- Only a repository tree change creates a new candidate snapshot. Disposition,
+  acceptance, response, and evidence-only updates retain the current candidate
+  digest triple.
 
 ## Lifecycle selection artifact
 
@@ -48,6 +51,8 @@ Rules:
   equal the artifact's ordered roster exactly.
 - A mismatch in candidate, either version, or roster is refused before
   dispatch, request generation, record generation, or attestation.
+- The selection is deterministic process evidence, not a signature,
+  authentication claim, or cryptographic authority.
 
 ## Reviewer selection
 
@@ -72,6 +77,30 @@ Rules:
 - The lifecycle roster is the set union of every accepted selection artifact
   in that lifecycle; it never narrows.
 
+## Discovery reviewer verdict
+
+Fields:
+
+- `engineer`: selected reviewer seat
+- `signoff`: boolean, true exactly when recommendations are empty
+- `summary`: non-blank string
+- `recommendations`: ordered array
+
+Each recommendation contains exactly:
+
+- `severity`: `critical`, `high`, `medium`, or `low`
+- `where`
+- `what`
+- `why`
+- `fix`
+
+Rules:
+
+- This is the exact reviewer-produced discovery layer.
+- It contains no `seat`, `complete`, or `findings` field.
+- The adapter validates the selected seat and closed schema before producing a
+  discovery seat result.
+
 ## Discovery seat result
 
 Fields:
@@ -82,6 +111,7 @@ Fields:
 
 Rules:
 
+- This is adapter-produced normalized output, not reviewer output.
 - Every seat in the selection artifact has exactly one complete discovery
   result.
 - Absence is an error; it is never interpreted as zero findings.
@@ -125,8 +155,12 @@ Rules:
 
 - Identifiers never change or get reused.
 - Every source appears exactly once across issue mappings.
+- Every actionable discovery finding enters the ledger regardless of
+  severity.
 - Every issue has a disposition before verification.
 - Late findings append new identifiers without renumbering prior issues.
+- MINOR and NIT remain non-blocking only after complete response and
+  verification processing.
 
 ## Implementation response
 
@@ -173,6 +207,28 @@ Rules:
   out-of-enum capacity cannot approve.
 - MINOR and NIT responses remain in the ledger but do not block after their
   required response data is complete.
+- Changing only a disposition, acceptance, response, or evidence does not
+  create a new candidate snapshot. It does require a new qualified reviewer
+  round when any completed reviewer packet input changes.
+
+## Verification reviewer verdict
+
+Fields:
+
+- `engineer`
+- `signoff`
+- `summary`
+- `verified_issue_statuses`
+- `late_findings`
+- `recommendations`
+
+Rules:
+
+- This is the exact reviewer-produced verification layer.
+- It extends the four discovery base fields with exactly
+  `verified_issue_statuses` and `late_findings`.
+- `verified_issue_statuses` covers every ledger issue exactly once.
+- `signoff` is true exactly when recommendations are empty.
 
 ## Verification result
 
@@ -188,9 +244,47 @@ Fields:
 
 Rules:
 
+- This is adapter-produced normalized output with exactly `seat`, `complete`,
+  `summary`, `signoff`, `verified_issue_statuses`,
+  `blocking_recommendations`, `recommendations`, and `late_findings`.
 - `signoff` is true exactly when blocking recommendations are empty.
-- Pre-existing late MINOR and NIT observations cannot become blockers.
+- Actionable late MINOR and NIT observations enter the ledger and become
+  non-blocking only after complete processing.
 - Approval evaluates the response rules above before reviewer unanimity.
+
+## Completed reviewer packet
+
+Fields:
+
+- qualified round identifier
+- `.complete` marker metadata
+- exact relative path to SHA-256 map
+- exact relative path to byte-count map
+- candidate, selection, delta, and full-range bindings
+
+Rules:
+
+- The marker is created last and enumerates every reviewer-visible immutable
+  packet input.
+- Absence means the directory is incomplete and non-authoritative.
+- A present marker requires every enumerated path to retain its exact bound
+  bytes.
+- Packet content is never edited in place. Any correction uses a new qualified
+  round while preserving the completed prior packet.
+- Packet digests are process-integrity checks, not signatures,
+  authentication, secrecy, or adversarial same-UID protection.
+
+## Publication
+
+Rules:
+
+- Single files use create-or-compare: create absent, accept byte-identical, and
+  refuse conflict.
+- Atomic sibling-directory rename is limited to the complete selected-seat
+  verification request family and complete selected-seat delivery record
+  family.
+- No generic lock, fsync, raw-syscall, procfs-pinning, retention, quota, or
+  filesystem transaction framework is part of the data model.
 
 ## Delivery panel format integration
 

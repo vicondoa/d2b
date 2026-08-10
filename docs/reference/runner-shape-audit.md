@@ -156,7 +156,7 @@ TAP handling, notify relay, and future observability roles. That violates
 the requirements for per-role minijail profiles, per-role uid/capability
 sets, cgroup leaves, readiness predicates, and runtime oracles.
 
-### B. Generate d2b-owned CH argv from evaluated microvm/d2b config
+### B. Generate d2b-owned CH argv from evaluated microvm/d2b configuration
 
 Preferred. D2b should evaluate the existing Nix module graph, then
 serialize enough runner data for `d2bd` to launch each role itself.
@@ -187,7 +187,7 @@ a shell-runner ABI and less direct control over role supervision.
 ## Decision
 
 Choose option B: generate d2b-owned Cloud Hypervisor argv from the
-evaluated microvm/d2b config and keep `declaredRunner` only as a
+evaluated microvm/d2b configuration and keep `declaredRunner` only as a
 parity oracle during the transition.
 
 ## Parity oracle contract

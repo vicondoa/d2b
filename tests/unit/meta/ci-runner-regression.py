@@ -14,6 +14,7 @@ import signal
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -28,6 +29,27 @@ MAKEFILE = ROOT / "Makefile"
 RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
 NIX_UNIT_DRIVER = ROOT / "tests" / "test-nix-unit.sh"
 EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
+API_INPUT_FINGERPRINT = (
+    ROOT / "tests" / "tools" / "api-surface-input-fingerprint.sh"
+)
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-host-binaries.yml"
+RELEASE_BINARY_SELECTORS = (
+    ("d2bd", "d2bd", "packages/Cargo.toml"),
+    ("d2b", "d2b", "packages/Cargo.toml"),
+    ("d2b-wayland-proxy", "d2b-wayland-proxy", "packages/Cargo.toml"),
+    ("d2b-unsafe-local-helper", "d2b-unsafe-local-helper", "packages/Cargo.toml"),
+    ("d2b-host", "d2b-activation-helper", "packages/Cargo.toml"),
+    ("d2b-priv-broker", "d2b-priv-broker", "packages/d2b-priv-broker/Cargo.toml"),
+)
+RELEASE_ASSET_NAMES = (
+    "d2b-{version}-x86_64-linux.tar.gz",
+    "d2b-activation-helper-{version}-x86_64-linux.tar.gz",
+    "d2b-priv-broker-{version}-x86_64-linux.tar.gz",
+    "d2b-unsafe-local-helper-{version}-x86_64-linux.tar.gz",
+    "d2b-wayland-proxy-{version}-x86_64-linux.tar.gz",
+    "d2bd-{version}-x86_64-linux.tar.gz",
+    "SHA256SUMS",
+)
 
 
 EXECUTION_MANIFEST_HARNESS = r"""
@@ -282,6 +304,567 @@ def workflow_job_block(workflow: str, job_id: str) -> str:
     return workflow[match.start() : end]
 
 
+def workflow_step_blocks(job: str) -> list[str]:
+    """Return workflow steps without making assertions depend on step names."""
+    lines = job.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^      - ", line)
+    ]
+    return [
+        "\n".join(lines[start:end])
+        for start, end in zip(starts, starts[1:] + [len(lines)])
+    ]
+
+
+def workflow_step_run_source(step: str) -> str | None:
+    """Extract one step's literal run body, independent of its display name."""
+    lines = step.splitlines()
+    run_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.match(r"^        run:\s*", line)
+        ),
+        None,
+    )
+    if run_index is None:
+        return None
+    body = lines[run_index + 1 :]
+    return "\n".join(
+        line[10:] if line.startswith("          ") else line for line in body
+    )
+
+
+def workflow_shell_steps(job: str) -> list[tuple[int, str, str]]:
+    """Return (step index, step text, executable shell body) tuples."""
+    result: list[tuple[int, str, str]] = []
+    for index, step in enumerate(workflow_step_blocks(job)):
+        run_source = workflow_step_run_source(step)
+        if run_source is not None:
+            result.append((index, step, executable_shell_source(run_source)))
+    return result
+
+
+def cargo_build_blocks(source: str) -> list[str]:
+    """Split a release shell body at its explicitly pinned cargo commands."""
+    starts = list(
+        re.finditer(
+            r'(?m)^[ \t]*rustup run "\$PINNED" cargo build\b',
+            source,
+        )
+    )
+    return [
+        source[start.start() : (next_start.start() if next_start else len(source))]
+        for start, next_start in zip(starts, starts[1:] + [None])
+    ]
+
+
+def move_workflow_step_before(
+    workflow: str, step_marker: str, before_marker: str
+) -> str:
+    """Move one top-level workflow step for an ordering mutation fixture."""
+    lines = workflow.splitlines(keepends=True)
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^      - ", line)
+    ]
+    step_start = next(
+        index for index in starts if step_marker in lines[index]
+    )
+    step_end = next(
+        (index for index in starts if index > step_start),
+        len(lines),
+    )
+    step_lines = lines[step_start:step_end]
+    del lines[step_start:step_end]
+    before_start = next(index for index, line in enumerate(lines) if before_marker in line)
+    lines[before_start:before_start] = step_lines
+    return "".join(lines)
+
+
+def release_tag_fixture_result(
+    tag: dict[str, str] | None,
+    *,
+    expected_name: str,
+    expected_target: str,
+) -> str:
+    """Model the tag branch used by the publication retry fixture."""
+    if tag is None:
+        return "create"
+    if (
+        tag.get("type") != "tag"
+        or tag.get("target") != expected_target
+        or tag.get("name") != expected_name
+        or tag.get("subject") != expected_name
+    ):
+        return "reject"
+    return "adopt"
+
+
+def release_api_fixture_result(
+    release: dict[str, object] | None,
+    *,
+    expected_tag: str,
+    expected_target: str,
+    local_assets: dict[str, tuple[int, str]],
+    expected_body: str = "release notes\n",
+    downloaded_digests: dict[str, str] | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """Model release adoption, completion, and conflict decisions."""
+    if release is None:
+        return "create", tuple(sorted(local_assets))
+    if (
+        release.get("tag_name") != expected_tag
+        or release.get("target_commitish") != expected_target
+        or release.get("name") != expected_tag
+        or release.get("prerelease") is not False
+        or not isinstance(release.get("draft"), bool)
+        or release.get("body") != expected_body
+    ):
+        return "reject", ()
+
+    expected_names = set(local_assets)
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        return "reject", ()
+    seen: set[str] = set()
+    missing: list[str] = []
+    for raw_asset in assets:
+        if not isinstance(raw_asset, dict):
+            return "reject", ()
+        name = raw_asset.get("name")
+        if not isinstance(name, str) or name not in expected_names or name in seen:
+            return "reject", ()
+        seen.add(name)
+        if raw_asset.get("state") != "uploaded":
+            return "reject", ()
+        expected_size, expected_digest = local_assets[name]
+        if raw_asset.get("size") != expected_size:
+            return "reject", ()
+        remote_digest = raw_asset.get("digest")
+        if remote_digest is None:
+            if (
+                downloaded_digests is None
+                or downloaded_digests.get(name) != expected_digest
+            ):
+                return "reject", ()
+        elif remote_digest != f"sha256:{expected_digest}":
+            return "reject", ()
+    missing.extend(sorted(expected_names - seen))
+    return ("complete" if release["draft"] else "adopt"), tuple(missing)
+
+
+def release_privileged_shell_contract_violations(release: str) -> list[str]:
+    """Keep write-token steps on runner-owned shells and code only."""
+    violations: list[str] = []
+    if not re.search(
+        r"(?m)^\s{4}defaults:\s*\{\s*run:\s*\{\s*shell:\s*bash\s*\}\s*\}\s*$",
+        release,
+    ):
+        violations.append(
+            "contents:write release job must default to the runner-owned bash shell"
+        )
+    if "tests/tools/ci-shell" in release:
+        violations.append(
+            "contents:write release job must not invoke the repository CI shell"
+        )
+    if re.search(r"(?m)^\s*-?\s*uses:\s+\./", release):
+        violations.append(
+            "contents:write release job must not invoke a local action"
+        )
+    for step in workflow_step_blocks(release):
+        if not re.search(r"(?m)^\s+(?:GITHUB_TOKEN|GH_TOKEN):", step):
+            continue
+        body = workflow_step_run_source(step) or ""
+        if re.search(
+            r"(?m)^\s*(?:bash|sh|source|\.)\s+(?:tests|scripts)/",
+            body,
+        ) or re.search(r"(?m)^\s*(?:tests|scripts)/", body):
+            violations.append(
+                "contents:write token steps must not invoke repository scripts"
+            )
+    return violations
+
+
+def release_workflow_contract_violations(workflow: str) -> list[str]:
+    violations: list[str] = []
+    dispatch = workflow.split("permissions:", 1)[0]
+    if "workflow_dispatch:" not in dispatch:
+        violations.append("release publication must be manual-only")
+    if re.search(r"(?m)^\s+push:", dispatch):
+        violations.append("release publication must not have a push trigger")
+    for input_name in ("version", "merged_v3_head", "sealed_tree"):
+        if f"      {input_name}:" not in dispatch:
+            violations.append(f"manual input {input_name} is missing")
+    if "gh pr create" in workflow or "release/prebuilt" in workflow:
+        violations.append("release workflow must not repair the prebuilt manifest")
+
+    try:
+        identity = workflow_job_block(workflow, "prepublication-identity")
+        build = workflow_job_block(workflow, "build")
+        release = workflow_job_block(workflow, "release")
+    except AssertionError as error:
+        violations.append(str(error))
+        return violations
+
+    identity_steps = workflow_step_blocks(identity)
+    identity_runs = workflow_shell_steps(identity)
+    identity_checkout_indices = [
+        index
+        for index, step in enumerate(identity_steps)
+        if "actions/checkout@" in step
+    ]
+    if not identity_checkout_indices:
+        violations.append("prepublication identity has no checkout step")
+    else:
+        checkout_step = identity_steps[identity_checkout_indices[0]]
+        if "ref: v3" not in checkout_step:
+            violations.append("prepublication identity must begin from the trusted v3 checkout")
+        if "${{ inputs.merged_v3_head }}" in checkout_step:
+            violations.append("prepublication identity must not checkout the caller-selected ref")
+
+    identity_candidates = [
+        (index, step, source)
+        for index, step, source in identity_runs
+        if "git fetch origin v3 --no-tags --force" in source
+        and "GITHUB_OUTPUT" in source
+    ]
+    if len(identity_candidates) != 1:
+        violations.append("prepublication identity must have one executable validation step")
+        identity_index = None
+        identity_source = ""
+    else:
+        identity_index, _, identity_source = identity_candidates[0]
+        first_run = min((index for index, _, _ in identity_runs), default=None)
+        if first_run != identity_index:
+            violations.append("prepublication identity must validate before any shell step")
+        for required in [
+            "trusted_checkout_head",
+            "current_v3_head",
+            "current_v3_tree",
+            '[ "$trusted_checkout_head" = "$current_v3_head" ]',
+            '[ "$MERGED_V3_HEAD" = "$current_v3_head" ]',
+            '[ "$SEALED_TREE" = "$current_v3_tree" ]',
+            'git cat-file -e "$SEALED_TREE^{tree}"',
+            'tag_kind=$(git cat-file -t "$tag_ref"',
+            'tag_target=$(git rev-parse "$tag_ref^{commit}"',
+            "tag_header=$(git cat-file tag",
+            "tag_subject=$(git for-each-ref --format='%(subject)'",
+            'git fetch origin "$tag_ref:$tag_ref"',
+            "existing release tag",
+            "Existing annotated tag",
+            "package_version",
+            '[ "$package_version" = "$VERSION" ]',
+            "nix/prebuilt.json",
+            "CHANGELOG.md",
+            "flake_versions",
+            "printf 'merged_v3_head=%s\\n' \"$current_v3_head\"",
+            "printf 'sealed_tree=%s\\n' \"$current_v3_tree\"",
+            "printf 'v3_tree=%s\\n' \"$current_v3_tree\"",
+        ]:
+            if required not in identity_source:
+                violations.append(
+                    f"prepublication identity validation is missing executable `{required}`"
+                )
+
+    for required in [
+        "version: ${{ steps.identity.outputs.version }}",
+        "merged_v3_head: ${{ steps.identity.outputs.merged_v3_head }}",
+        "sealed_tree: ${{ steps.identity.outputs.sealed_tree }}",
+        "v3_tree: ${{ steps.identity.outputs.v3_tree }}",
+    ]:
+        if required not in identity:
+            violations.append(f"validated identity output is missing `{required}`")
+
+    for job_name, block in (("build", build), ("release", release)):
+        if "needs: [prepublication-identity" not in block:
+            violations.append(f"{job_name} is not behind prepublication identity")
+        for required in ("MERGED_V3_HEAD", "SEALED_TREE", "refs/remotes/origin/v3"):
+            if required not in block:
+                violations.append(f"{job_name} does not recheck {required}")
+        if "^{tree}" not in block:
+            violations.append(f"{job_name} does not recheck the sealed tree")
+        if "nix/prebuilt.json" not in block:
+            violations.append(f"{job_name} does not recheck the prebuilt manifest")
+        if "${{ inputs." in block:
+            violations.append(f"{job_name} consumes caller inputs instead of validated outputs")
+
+        output_prefix = "needs.prepublication-identity.outputs."
+        for required in [
+            f"ref: ${{{{ {output_prefix}merged_v3_head }}}}",
+            f"VERSION: ${{{{ {output_prefix}version }}}}",
+            f"host-binaries-${{{{ {output_prefix}version }}}}",
+            f"CURRENT_V3_TREE: ${{{{ {output_prefix}v3_tree }}}}",
+        ]:
+            if required not in block:
+                violations.append(f"{job_name} does not consume validated `{required}`")
+
+    build_steps = workflow_step_blocks(build)
+    build_runs = workflow_shell_steps(build)
+    build_verifications = [
+        (index, step, source)
+        for index, step, source in build_runs
+        if "git fetch origin v3 --no-tags --force" in source
+        and "MERGED_V3_HEAD" in source
+        and "SEALED_TREE" in source
+    ]
+    if len(build_verifications) != 1:
+        violations.append("release build must have one executable identity verification step")
+        build_verify_index = None
+        build_verify_source = ""
+    else:
+        build_verify_index, _, build_verify_source = build_verifications[0]
+        for required in [
+            "package_version",
+            '[ "$package_version" = "$VERSION" ]',
+            "CHANGELOG.md",
+            "flake_versions",
+            "manifest_version",
+            'tag_kind=$(git cat-file -t "$tag_ref"',
+            'tag_target=$(git rev-parse "$tag_ref^{commit}"',
+            "tag_header=$(git cat-file tag",
+            "tag_subject=$(git for-each-ref --format='%(subject)'",
+            "Existing annotated tag",
+        ]:
+            if required not in build_verify_source:
+                violations.append(
+                    f"release build identity verification is missing executable `{required}`"
+                )
+        if any(index < build_verify_index for index, _, _ in build_runs):
+            violations.append("release build executes a shell step before identity validation")
+
+    activation_candidates = [
+        (index, source)
+        for index, _, source in build_runs
+        if "rustup toolchain install" in source
+    ]
+    active_assertions = [
+        (index, source)
+        for index, _, source in build_runs
+        if "rustup show active-toolchain" in source
+    ]
+    build_candidates = [
+        (index, source)
+        for index, _, source in build_runs
+        if "cargo build" in source
+    ]
+    cache_indices = [
+        index
+        for index, step in enumerate(build_steps)
+        if "Swatinem/rust-cache@" in step
+    ]
+    if (
+        build_verify_index is None
+        or len(activation_candidates) != 1
+        or len(active_assertions) != 1
+        or len(build_candidates) != 1
+        or len(cache_indices) != 1
+    ):
+        violations.append("release build ordering steps are incomplete")
+    else:
+        activation_index, activation_source = activation_candidates[0]
+        active_assertion_index, active_assertion_source = active_assertions[0]
+        build_index, build_source = build_candidates[0]
+        cache_index = cache_indices[0]
+        if not (
+            build_verify_index
+            < activation_index
+            < active_assertion_index
+            < cache_index
+            < build_index
+        ):
+            violations.append(
+                "identity validation, pinned toolchain, active assertion, cache, and build are out of order"
+            )
+        for required in [
+            "packages/rust-toolchain.toml",
+            "rustup toolchain install",
+            'rustup default "$PINNED"',
+        ]:
+            if required not in activation_source:
+                violations.append(
+                    f"release build toolchain activation is missing executable `{required}`"
+                )
+        for required in [
+            "rustup show active-toolchain",
+            'rustup run "$PINNED" cargo --version',
+            'rustup run "$PINNED" rustc --version',
+            "actual_cargo",
+            "actual_rustc",
+        ]:
+            if required not in active_assertion_source:
+                violations.append(
+                    f"release build toolchain assertion is missing executable `{required}`"
+                )
+        if build_source.count('rustup run "$PINNED" cargo build') != len(
+            RELEASE_BINARY_SELECTORS
+        ):
+            violations.append("every release build must invoke cargo through the pinned toolchain")
+
+        command_blocks = cargo_build_blocks(build_source)
+        if len(command_blocks) != len(RELEASE_BINARY_SELECTORS):
+            violations.append("release build does not have exactly six pinned cargo commands")
+        for package_name, binary_name, manifest_path in RELEASE_BINARY_SELECTORS:
+            selector = f"--package {package_name} --bin {binary_name}"
+            matches = [block for block in command_blocks if selector in block]
+            if len(matches) != 1:
+                violations.append(f"release selector is not unique: {selector}")
+                continue
+            block = matches[0]
+            if "--release" not in block or "--locked" not in block:
+                violations.append(f"release selector is missing release/locked mode: {selector}")
+            if f"--manifest-path {manifest_path}" not in block:
+                violations.append(
+                    f"release selector has the wrong manifest path: {selector}"
+                )
+            if re.search(r"(?<![A-Za-z0-9_-])--(?:all-)?features(?:[ =]|$)", block):
+                violations.append(f"release selector enables an extra feature: {selector}")
+            if package_name == "d2b-priv-broker":
+                if "--no-default-features" not in block:
+                    violations.append(f"broker release selector enables default features: {selector}")
+            elif "--no-default-features" in block:
+                violations.append(f"ordinary release selector disables default features: {selector}")
+
+    release_steps = workflow_step_blocks(release)
+    release_runs = workflow_shell_steps(release)
+    violations.extend(release_privileged_shell_contract_violations(release))
+    release_verifications = [
+        (index, step, source)
+        for index, step, source in release_runs
+        if "git fetch origin v3 --no-tags --force" in source
+        and "MERGED_V3_HEAD" in source
+        and "SEALED_TREE" in source
+    ]
+    if len(release_verifications) != 1:
+        violations.append("release publication must have one executable identity verification step")
+        release_verify_index = None
+        release_verify_source = ""
+    else:
+        release_verify_index, _, release_verify_source = release_verifications[0]
+        for required in [
+            "package_version",
+            '[ "$package_version" = "$VERSION" ]',
+            "CHANGELOG.md",
+            "flake_versions",
+            "manifest_version",
+        ]:
+            if required not in release_verify_source:
+                violations.append(
+                    f"release publication identity verification is missing executable `{required}`"
+                )
+        if any(index < release_verify_index for index, _, _ in release_runs):
+            violations.append("release publication executes a shell step before identity validation")
+
+    tag_candidates = [
+        (index, step, source)
+        for index, step, source in release_runs
+        if "git tag -a" in source and "git push" in source
+    ]
+    release_creation_candidates = [
+        (index, source)
+        for index, _, source in release_runs
+        if "gh release create" in source
+    ]
+    artifact_candidates = [
+        (index, source)
+        for index, _, source in release_runs
+        if "sha256sum --check --strict SHA256SUMS" in source
+    ]
+    if len(tag_candidates) != 1:
+        violations.append("release publication must have one executable annotated-tag push")
+    else:
+        tag_index, tag_step, tag_source = tag_candidates[0]
+        if "contents: write" not in release:
+            violations.append("release tag push job must grant contents:write")
+        for required in [
+            "GITHUB_TOKEN: ${{ github.token }}",
+            '[ -n "$GITHUB_TOKEN" ]',
+            "http.https://github.com/.extraheader",
+            "AUTHORIZATION: bearer $GITHUB_TOKEN",
+            'tag_name="v$VERSION"',
+            'tag_ref="refs/tags/$tag_name"',
+            'git tag -a "$tag_name" "$MERGED_V3_HEAD" -m "$tag_name"',
+            'git push origin "$tag_name"',
+            "validate_tag()",
+            'git cat-file -t "$tag_ref"',
+            'git rev-parse "$tag_ref^{commit}"',
+            "git cat-file tag",
+            "%(subject)",
+            'git fetch origin "+$tag_ref:$tag_ref"',
+            "Existing annotated tag",
+            "conflicts with the validated merged HEAD or annotation",
+            'annotation." >&2\n    return 1',
+            "Tag push did not report success",
+        ]:
+            if required not in tag_step and required not in tag_source:
+                violations.append(f"annotated-tag push is missing executable `{required}`")
+        if (
+            release_verify_index is not None
+            and (tag_index <= release_verify_index)
+        ):
+            violations.append("annotated tag must be created after release identity verification")
+        if len(release_creation_candidates) != 1:
+            violations.append("release publication must have one executable GitHub release step")
+        elif tag_index >= release_creation_candidates[0][0]:
+            violations.append("annotated tag must be pushed before the GitHub release")
+        if len(artifact_candidates) != 1 or tag_index <= artifact_candidates[0][0]:
+            violations.append("release artifacts must be verified before annotated tag push")
+
+        if len(release_creation_candidates) == 1:
+            release_index, release_source = release_creation_candidates[0]
+            for required in [
+                "gh api --include",
+                "target_commitish",
+                '[ "$release_target" = "$MERGED_V3_HEAD" ] || reject_release_conflict',
+                "release_endpoint",
+                "release_exists=0",
+                "gh release create",
+                "--target \"$MERGED_V3_HEAD\"",
+                "--verify-tag",
+                "gh release upload",
+                "missing_assets",
+                "gh release edit",
+                "--draft=false",
+                "release_draft_state",
+                ".body",
+                "release_body_file",
+                "cmp -s",
+                ".digest",
+                '[ "$remote_digest" = "sha256:$expected_digest" ]',
+                "remote_digest_state",
+                "asset_download_dir",
+                "mktemp -d",
+                "application/octet-stream",
+                "remote_asset_url",
+                "remote_asset_id",
+                "remote_download",
+                "remote_download_digest",
+                'sha256sum "$remote_download"',
+                '[ "$remote_download_digest" = "$expected_digest" ] || {',
+                'rm -rf "$asset_download_dir"',
+                "no provable bytes",
+                "conflicting bytes",
+                "conflicting size",
+                "conflicting digest",
+                "existing GitHub release conflicts",
+                "unexpected asset",
+                "duplicate asset identity",
+            ]:
+                if required not in release_source:
+                    violations.append(
+                        f"resumable release publication is missing executable `{required}`"
+                    )
+            if release_index <= tag_index:
+                violations.append(
+                    "release state comparison must happen after annotated tag adoption"
+                )
+
+    return violations
+
+
 def executable_shell_source(source: str) -> str:
     """Drop full-line shell comments before checking executable contracts."""
     return "\n".join(
@@ -337,6 +920,94 @@ class CiRunnerRegressionTests(unittest.TestCase):
                 leaf,
             ],
             cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+    def make_api_fingerprint_tree(self) -> pathlib.Path:
+        tree = self.scratch / "api-fingerprint-tree"
+        fixture_files = {
+            "packages/Cargo.toml": (
+                '[workspace]\nmembers = ["example", "d2b-api-surface"]\n'
+                'resolver = "2"\n'
+            ),
+            "packages/Cargo.lock": "# fixture lock\n",
+            "packages/.cargo/config.toml": "[build]\n",
+            "packages/rust-toolchain.toml": (
+                '[toolchain]\nchannel = "1.97.0"\n'
+            ),
+            "packages/d2b-api-surface/rust-toolchain.toml": (
+                '[toolchain]\nchannel = "nightly-test"\n'
+            ),
+            "packages/d2b-api-surface/Cargo.toml": (
+                '[package]\nname = "d2b-api-surface"\nversion = "0.0.0"\n'
+            ),
+            "packages/example/Cargo.toml": (
+                '[package]\nname = "example"\nversion = "0.0.0"\n'
+            ),
+            "packages/example/src/lib.rs": "pub struct Example;\n",
+            "tests/golden/api-surface/roots.json": "{}\n",
+            "tests/tools/api-surface-json.sh": "#!/usr/bin/env bash\n",
+            "tests/tools/gen-api-surface-metadata.sh": "#!/usr/bin/env bash\n",
+        }
+        for relative, content in fixture_files.items():
+            path = tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        tool_dir = tree / "test-bin"
+        tool_dir.mkdir()
+        cargo = tool_dir / "cargo"
+        cargo.write_text(
+            "#!/usr/bin/env sh\n"
+            'if [ "${1:-}" = metadata ]; then\n'
+            "  printf '{\"workspace_root\":\"%s/packages\","
+            "\"workspace_members\":[\"path+file://%s/packages/example#0.0.0\","
+            "\"path+file://%s/packages/d2b-api-surface#0.0.0\"],"
+            "\"packages\":[{\"id\":\"path+file://%s/packages/example#0.0.0\","
+            "\"name\":\"example\","
+            "\"manifest_path\":\"%s/packages/example/Cargo.toml\"},"
+            "{\"id\":\"path+file://%s/packages/d2b-api-surface#0.0.0\","
+            "\"name\":\"d2b-api-surface\","
+            "\"manifest_path\":\"%s/packages/d2b-api-surface/Cargo.toml\"}]}\\n' "
+            '"$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT" "$ROOT"\n'
+            "  exit 0\n"
+            "fi\n"
+            "exit 91\n",
+            encoding="utf-8",
+        )
+        cargo.chmod(0o755)
+        fingerprint = tree / "tests/tools/api-surface-input-fingerprint.sh"
+        shutil.copy2(API_INPUT_FINGERPRINT, fingerprint)
+        return tree
+
+    def run_api_fingerprint(
+        self,
+        tree: pathlib.Path,
+        mode: str,
+        *,
+        path_prefix: pathlib.Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        path = os.environ.get("PATH", "")
+        fixture_tools = tree / "test-bin"
+        path = f"{fixture_tools}{os.pathsep}{path}"
+        if path_prefix is not None:
+            path = f"{path_prefix}{os.pathsep}{path}"
+        env = {
+            "HOME": str(self.scratch),
+            "LC_ALL": "C",
+            "PATH": path,
+            "ROOT": str(tree),
+        }
+        return subprocess.run(
+            [
+                "bash",
+                str(tree / "tests/tools/api-surface-input-fingerprint.sh"),
+                mode,
+            ],
+            cwd=tree,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -531,6 +1202,447 @@ set -euo pipefail
         self.assertIn("tests/test-rust.sh\" fast-lint", lint_driver)
         self.assertIn("run_fast_lint_gate", RUST_DRIVER.read_text(encoding="utf-8"))
 
+    def test_api_fingerprint_rejects_stale_and_missing_pins(self) -> None:
+        tree = self.make_api_fingerprint_tree()
+        update = self.run_api_fingerprint(tree, "--write")
+        self.assertEqual(update.returncode, 0, msg=update.stderr)
+
+        source = tree / "packages/example/src/lib.rs"
+        original_source = source.read_text(encoding="utf-8")
+        source.write_text(f"{original_source}pub struct Changed;\n", encoding="utf-8")
+        stale = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("api-surface inputs changed", stale.stderr)
+        self.assertIn("make api-surface-pin", stale.stderr)
+
+        source.write_text(original_source, encoding="utf-8")
+        (tree / "tests/golden/api-surface/input-fingerprint.txt").unlink()
+        missing = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("api-surface inputs changed", missing.stderr)
+        self.assertIn("make api-surface-pin", missing.stderr)
+
+    def test_api_fingerprint_tracks_toolchain_and_cargo_config_independently(
+        self,
+    ) -> None:
+        for relative in (
+            "packages/.cargo/config.toml",
+            "packages/d2b-api-surface/rust-toolchain.toml",
+        ):
+            tree = self.make_api_fingerprint_tree()
+            update = self.run_api_fingerprint(tree, "--write")
+            self.assertEqual(update.returncode, 0, msg=update.stderr)
+            path = tree / relative
+            original = path.read_text(encoding="utf-8")
+            path.write_text(f"{original}# independent mutation\n", encoding="utf-8")
+            stale = self.run_api_fingerprint(tree, "--check")
+            self.assertNotEqual(stale.returncode, 0, msg=relative)
+            self.assertIn("api-surface inputs changed", stale.stderr)
+            self.assertIn("make api-surface-pin", stale.stderr)
+            shutil.rmtree(tree)
+
+    def test_api_fingerprint_rejects_unknown_top_level_and_nested_workspaces(
+        self,
+    ) -> None:
+        for name, relative in (
+            (
+                "unknown-top-level-workspace",
+                "packages/unknown-workspace/src/lib.rs",
+            ),
+            (
+                "unknown-nested-workspace",
+                "packages/example/unknown-workspace/src/lib.rs",
+            ),
+        ):
+            tree = self.make_api_fingerprint_tree()
+            update = self.run_api_fingerprint(tree, "--write")
+            self.assertEqual(update.returncode, 0, msg=update.stderr)
+            source = tree / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            (source.parent / "Cargo.toml").write_text(
+                "[workspace]\n",
+                encoding="utf-8",
+            )
+            source.write_text("pub struct Unknown;\n", encoding="utf-8")
+            stale = self.run_api_fingerprint(tree, "--check")
+            self.assertNotEqual(stale.returncode, 0, msg=name)
+            self.assertIn(
+                "api-surface unknown independent workspace root",
+                stale.stderr,
+            )
+            shutil.rmtree(tree)
+
+    def test_api_fingerprint_rejects_enumerator_failures_and_special_entries(
+        self,
+    ) -> None:
+        tree = self.make_api_fingerprint_tree()
+        update = self.run_api_fingerprint(tree, "--write")
+        self.assertEqual(update.returncode, 0, msg=update.stderr)
+
+        shim_dir = self.scratch / "failing-enumerator"
+        shim_dir.mkdir()
+        find_shim = shim_dir / "find"
+        find_shim.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
+        find_shim.chmod(0o755)
+        producer_failure = self.run_api_fingerprint(
+            tree,
+            "--check",
+            path_prefix=shim_dir,
+        )
+        self.assertNotEqual(producer_failure.returncode, 0)
+        self.assertIn(
+            "api-surface package enumeration failed",
+            producer_failure.stderr,
+        )
+
+        generated_entry = tree / "packages/policy-inputs"
+        generated_entry.mkdir()
+        generated = self.run_api_fingerprint(tree, "--check")
+        self.assertEqual(generated.returncode, 0, msg=generated.stderr)
+        generated_entry.rmdir()
+
+        unexpected_entry = tree / "packages/unexpected-entry"
+        os.mkfifo(unexpected_entry)
+        unknown_entry = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(unknown_entry.returncode, 0)
+        self.assertIn(
+            "api-surface package entry is not a workspace member",
+            unknown_entry.stderr,
+        )
+        unexpected_entry.unlink()
+
+        source_link = tree / "packages/example/src/linked.rs"
+        source_link.symlink_to("lib.rs")
+        linked_source = self.run_api_fingerprint(tree, "--check")
+        self.assertNotEqual(linked_source.returncode, 0)
+        self.assertIn(
+            "api-surface input has an unexpected type: "
+            "packages/example/src/linked.rs",
+            linked_source.stderr,
+        )
+
+    def test_fast_lint_changed_scope_selection_is_hermetic(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        function_start = driver.index("run_fast_lint_gate() {")
+        function_end = driver.index(
+            "\n}\n\n# The compiler-derived API census",
+            function_start,
+        )
+        fast_lint_function = driver[function_start : function_end + 2]
+        harness = self.scratch / "fast-lint-scope-harness.sh"
+        harness.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+ROOT=$1
+D2B_CARGO_LOG=$2
+manifest="$ROOT/packages/Cargo.toml"
+broker_manifest="$ROOT/packages/d2b-priv-broker/Cargo.toml"
+guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
+no_bash_manifest="$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml"
+workspace_target_dir="$ROOT/packages/target"
+guest_shell_runner_target_dir="$ROOT/packages/d2b-guest-shell-runner/target"
+D2B_RUST_CARGO_JOBS=1
+suite_started=$SECONDS
+fail() { printf 'FAIL: %s\\n' "$*" >&2; }
+log() { :; }
+ok() { :; }
+cargo() {
+  if [ "${1:-}" = metadata ]; then
+    printf '{"workspace_root":"%s/packages","workspace_members":["path+file://%s/packages/d2b-core#0.0.0"],"packages":[{"id":"path+file://%s/packages/d2b-core#0.0.0","name":"d2b-core","manifest_path":"%s/packages/d2b-core/Cargo.toml"}]}\n' \
+      "$ROOT" "$ROOT" "$ROOT" "$ROOT"
+    return 0
+  fi
+  {
+    printf '%q ' "$@"
+    printf '\\n'
+  } >>"$D2B_CARGO_LOG"
+}
+"""
+            + fast_lint_function
+            + "\nrun_fast_lint_gate\n",
+            encoding="utf-8",
+        )
+        harness.chmod(0o755)
+
+        def run_scenario(
+            name: str,
+            changed_path: str,
+            *,
+            extra_env: dict[str, str] | None = None,
+            expect_success: bool = True,
+        ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+            tree = self.scratch / f"fast-lint-{name}"
+            fixture_files = {
+                "packages/Cargo.toml": (
+                    '[workspace]\nmembers = ["d2b-core"]\nresolver = "2"\n'
+                ),
+                "packages/Cargo.lock": "# fixture lock\n",
+                "packages/rust-toolchain.toml": (
+                    '[toolchain]\nchannel = "1.97.0"\n'
+                ),
+                "packages/.cargo/config.toml": "[build]\n",
+                "packages/d2b-core/Cargo.toml": (
+                    '[package]\nname = "d2b-core"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-core/src/lib.rs": "pub struct Core;\n",
+                "packages/d2b-core/fuzz/Cargo.toml": (
+                    "[workspace]\n"
+                    '[package]\nname = "d2b-core-fuzz"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-priv-broker/Cargo.toml": (
+                    '[package]\nname = "broker"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-priv-broker/src/lib.rs": "pub struct Broker;\n",
+                "packages/d2b-guest-shell-runner/Cargo.toml": (
+                    '[package]\nname = "guest"\nversion = "0.0.0"\n'
+                ),
+                "packages/d2b-guest-shell-runner/src/lib.rs": (
+                    "pub struct Guest;\n"
+                ),
+                "tests/tools/no-bash-ast-walker/Cargo.toml": (
+                    '[package]\nname = "walker"\nversion = "0.0.0"\n'
+                ),
+            }
+            for relative, content in fixture_files.items():
+                path = tree / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            def run_git(*args: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=d2b test",
+                        "-c",
+                        "user.email=d2b@example.invalid",
+                        *args,
+                    ],
+                    cwd=tree,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                )
+
+            run_git("init", "-q")
+            run_git("add", ".")
+            run_git("commit", "-q", "-m", "fixture")
+            base = run_git("rev-parse", "HEAD").stdout.strip()
+
+            if name == "unknown-top-level-workspace":
+                unknown_manifest = tree / "packages/unknown-workspace/Cargo.toml"
+                unknown_manifest.parent.mkdir(parents=True, exist_ok=True)
+                unknown_manifest.write_text("[workspace]\n", encoding="utf-8")
+            elif name == "unknown-nested-workspace":
+                unknown_manifest = (
+                    tree / "packages/d2b-core/unknown-workspace/Cargo.toml"
+                )
+                unknown_manifest.parent.mkdir(parents=True, exist_ok=True)
+                unknown_manifest.write_text("[workspace]\n", encoding="utf-8")
+
+            changed = tree / changed_path
+            changed.parent.mkdir(parents=True, exist_ok=True)
+            if changed.exists():
+                changed.write_text(
+                    f"{changed.read_text(encoding='utf-8')}# changed\n",
+                    encoding="utf-8",
+                )
+            else:
+                changed.write_text("changed\n", encoding="utf-8")
+
+            cargo_log = self.scratch / f"fast-lint-{name}.log"
+            env = {
+                "D2B_LINT_BASE": base,
+                "HOME": str(self.scratch),
+                "LC_ALL": "C",
+                "PATH": os.environ.get("PATH", ""),
+                "ROOT": str(tree),
+            }
+            if extra_env is not None:
+                env.update(extra_env)
+            result = subprocess.run(
+                ["bash", str(harness), str(tree), str(cargo_log)],
+                cwd=tree,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if expect_success:
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    msg=(
+                        f"{name} changed-scope probe failed\n"
+                        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                    ),
+                )
+            commands = (
+                cargo_log.read_text(encoding="utf-8").splitlines()
+                if cargo_log.exists()
+                else []
+            )
+            return result, commands
+
+        _, unrelated = run_scenario("unrelated", "docs/note.md")
+        _, broker = run_scenario(
+            "broker",
+            "packages/d2b-priv-broker/src/lib.rs",
+        )
+        _, main = run_scenario("main", "packages/d2b-core/src/lib.rs")
+        _, workspace = run_scenario("workspace", "packages/Cargo.toml")
+        _, independent = run_scenario(
+            "independent",
+            "packages/d2b-core/fuzz/src/lib.rs",
+        )
+        unknown_result, unknown = run_scenario(
+            "unknown",
+            "packages/not-a-member/src/lib.rs",
+            expect_success=False,
+        )
+        unknown_top_result, unknown_top = run_scenario(
+            "unknown-top-level-workspace",
+            "packages/unknown-workspace/src/lib.rs",
+            expect_success=False,
+        )
+        unknown_nested_result, unknown_nested = run_scenario(
+            "unknown-nested-workspace",
+            "packages/d2b-core/unknown-workspace/src/lib.rs",
+            expect_success=False,
+        )
+        _, guest = run_scenario(
+            "guest",
+            "packages/d2b-guest-shell-runner/src/lib.rs",
+        )
+
+        for commands in (unrelated, broker, main, workspace, independent, guest):
+            self.assertEqual(
+                sum(command.startswith("fmt ") for command in commands),
+                4,
+            )
+        self.assertFalse(
+            any(command.startswith("clippy ") for command in unrelated)
+        )
+        self.assertFalse(any(command.startswith("clippy ") for command in broker))
+
+        main_clippy = [
+            command for command in main if command.startswith("clippy ")
+        ]
+        self.assertEqual(len(main_clippy), 1)
+        self.assertIn("-p d2b-core", main_clippy[0])
+        self.assertNotIn("--workspace", main_clippy[0])
+        workspace_clippy = [
+            command
+            for command in workspace
+            if command.startswith("clippy ")
+            and "packages/Cargo.toml" in command
+        ]
+        self.assertEqual(len(workspace_clippy), 1)
+        self.assertIn("--workspace", workspace_clippy[0])
+        self.assertFalse(
+            any(command.startswith("clippy ") for command in independent)
+        )
+        self.assertNotEqual(unknown_result.returncode, 0)
+        self.assertIn(
+            "changed Rust path is not a main workspace member",
+            unknown_result.stderr,
+        )
+        self.assertFalse(any(command.startswith("clippy ") for command in unknown))
+        for result, commands in (
+            (unknown_top_result, unknown_top),
+            (unknown_nested_result, unknown_nested),
+        ):
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown independent workspace root", result.stderr)
+            self.assertFalse(any(command.startswith("clippy ") for command in commands))
+
+        guest_clippy = [
+            command for command in guest if command.startswith("clippy ")
+        ]
+        self.assertEqual(len(guest_clippy), 1)
+        self.assertIn(
+            "packages/d2b-guest-shell-runner/Cargo.toml",
+            guest_clippy[0],
+        )
+        self.assertIn("--features real-libshpool", guest_clippy[0])
+
+        real_git = shutil.which("git")
+        real_sort = shutil.which("sort")
+        self.assertIsNotNone(real_git)
+        self.assertIsNotNone(real_sort)
+        assert real_git is not None
+        assert real_sort is not None
+        shim_dir = self.scratch / "fast-lint-producer-shims"
+        shim_dir.mkdir()
+        git_shim = shim_dir / "git"
+        git_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ -n "${D2B_FAIL_GIT_COMMAND:-}" ] '
+            '&& [ "${1:-}" = "$D2B_FAIL_GIT_COMMAND" ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            f"exec {shlex.quote(real_git)} \"$@\"\n",
+            encoding="utf-8",
+        )
+        git_shim.chmod(0o755)
+        sort_shim = shim_dir / "sort"
+        sort_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "${D2B_FAIL_SORT_STAGE:-}" = paths ] '
+            '&& [ "${1:-}" = -u ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            'if [ "${D2B_FAIL_SORT_STAGE:-}" = packages ] '
+            '&& [ "$#" -eq 0 ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            f"exec {shlex.quote(real_sort)} \"$@\"\n",
+            encoding="utf-8",
+        )
+        sort_shim.chmod(0o755)
+
+        shim_path = f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        producer_failures = (
+            (
+                "git-diff-failure",
+                {"D2B_FAIL_GIT_COMMAND": "diff"},
+                "git diff failed while enumerating changed-scope clippy paths",
+            ),
+            (
+                "git-ls-files-failure",
+                {"D2B_FAIL_GIT_COMMAND": "ls-files"},
+                "git ls-files failed while enumerating changed-scope clippy paths",
+            ),
+            (
+                "path-sort-failure",
+                {"D2B_FAIL_SORT_STAGE": "paths"},
+                "sort failed while ordering changed-scope clippy paths",
+            ),
+            (
+                "package-sort-failure",
+                {"D2B_FAIL_SORT_STAGE": "packages"},
+                "sort failed while ordering changed-scope clippy packages",
+            ),
+        )
+        for name, failure_env, diagnostic in producer_failures:
+            result, commands = run_scenario(
+                name,
+                "packages/d2b-core/src/lib.rs",
+                extra_env={"PATH": shim_path, **failure_env},
+                expect_success=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(diagnostic, result.stderr)
+            self.assertEqual(
+                sum(command.startswith("fmt ") for command in commands),
+                4,
+            )
+            self.assertFalse(
+                any(command.startswith("clippy ") for command in commands)
+            )
+
     def test_rust_gate_is_three_required_shards_with_one_stable_rollup(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()
@@ -624,7 +1736,7 @@ set -euo pipefail
         self.assertIn("nix-unit-shards", rollup_job)
         self.assertIn("Every discovered Nix-unit shard passed.", rollup_job)
 
-    def test_nix_unit_driver_uses_one_full_corpus_eval_jobs_path(self) -> None:
+    def test_nix_unit_driver_uses_bounded_topical_eval_jobs_paths(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         eval_jobs = (ROOT / "tests" / "unit" / "nix" / "eval-jobs.nix").read_text(
@@ -632,7 +1744,10 @@ set -euo pipefail
         )
 
         runner_calls = list(
-            re.finditer(r"(?m)^\s*(?:if\s+)?nix-eval-jobs\b", driver)
+            re.finditer(
+                r"(?m)^\s*(?:if\s+)?(?:setsid\s+)?nix-eval-jobs\b",
+                driver,
+            )
         )
         self.assertEqual(
             len(runner_calls),
@@ -647,8 +1762,8 @@ set -euo pipefail
         self.assertIn("--no-instantiate", invocation)
         self.assertRegex(
             invocation,
-            r"--flake\s+[^\n]*nixUnitJobs[^\n]*"
-            r"--workers\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?[^\n]*"
+            r"--flake\s+[^\n]*nixUnitJobShards[^\n]*"
+            r"--workers\s+1[^\n]*"
             r"--max-memory-size\s+[\"']?\$[A-Za-z_][A-Za-z0-9_]*[\"']?",
         )
 
@@ -667,11 +1782,12 @@ set -euo pipefail
         jobs_block = flake[jobs_match.start() : inventory_match.start()]
         self.assertIn("fileJobs", jobs_block)
         self.assertIn("nixUnitCorpus.fileJobs", jobs_block)
+        self.assertIn("nixUnitJobShards", jobs_block)
+        self.assertIn("jobsFor", jobs_block)
         self.assertIn("nix-unit = self.checks.${system}.nix-unit", jobs_block)
-        self.assertEqual(jobs_block.count("self.checks"), 1)
+        self.assertGreaterEqual(jobs_block.count("self.checks"), 1)
         self.assertNotIn("nixUnitCorpus.jobs", jobs_block)
         self.assertNotIn("__nix_unit_integrity", jobs_block)
-        self.assertNotIn("jobsFor", flake)
 
         inventory_block = flake[inventory_match.start() :]
         self.assertIn("nixUnitInventory = forAllSystems", inventory_block)
@@ -759,7 +1875,7 @@ set -euo pipefail
             driver,
             "successful full runs must not dump the raw JSONL result file",
         )
-        self.assertIn('2>"$tool_stderr"', driver)
+        self.assertIn('2>"$shard_stderr"', driver)
         self.assertIn("emit_sanitized_tool_stderr()", driver)
         self.assertIn(
             'while IFS= read -r line || [ -n "$line" ]; do',
@@ -1127,7 +2243,11 @@ printf '%s\n' "$sanitized_line"
             }
             env.update(overrides)
             result = subprocess.run(
-                ["bash", str(NIX_UNIT_DRIVER)],
+                [
+                    "bash",
+                    str(NIX_UNIT_DRIVER),
+                    "--internal-peak-rss-guarded",
+                ],
                 cwd=ROOT,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -1139,31 +2259,52 @@ printf '%s\n' "$sanitized_line"
             self.assertEqual(result.stdout, "")
             self.assertEqual(result.stderr, expected_stderr)
 
-    def test_nix_unit_does_not_add_a_repository_specific_scheduler(self) -> None:
+    def test_nix_unit_uses_a_bounded_process_group_scheduler(self) -> None:
         driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
-        for marker in (
-            "declare -a pids",
-            "launch_check()",
-            "reap_next()",
-            "next_to_wait",
-            'while [ "$running"',
-            'kill "$pid"',
-            'pids+=("$!")',
-        ):
-            self.assertNotIn(
-                marker,
-                driver,
-                msg=f"repository-specific Nix scheduler marker remains: {marker}",
-            )
-        self.assertNotRegex(
+        exit_handler = driver[
+            driver.index("nix_unit_exit()") : driver.index("trap nix_unit_exit EXIT")
+        ]
+        self.assertIn("shard_pids=()", driver)
+        self.assertIn("shard_group_files=()", driver)
+        self.assertIn("shard_statuses=()", driver)
+        self.assertIn("shard_workers", driver)
+        self.assertIn("harvest_nix_unit_shard()", driver)
+        self.assertIn("settle_nix_unit_process_group()", driver)
+        self.assertIn("terminate_nix_unit_process_group()", driver)
+        self.assertIn("terminate_active_nix_unit_shard_groups()", driver)
+        self.assertIn("setsid nix-eval-jobs", driver)
+        self.assertIn('kill -TERM -- "-$process_group"', driver)
+        self.assertIn('terminate_nix_unit_process_group "$pid"', driver)
+        self.assertIn(
+            'trap \'terminate_nix_unit_process_group "$pid" || true; exit 143\' TERM INT HUP',
             driver,
-            r"(?m)^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?[^#\n]*&\s*$",
-            "the Nix-unit driver must not launch a shell worker pool",
         )
+        self.assertIn("terminate_active_nix_unit_shard_groups || true", exit_handler)
         self.assertRegex(
             driver,
             r"(?i)(?:nix-unit|lix-unit|nix-eval-jobs|"
             r"\bnix\s+(?:eval|build|flake\s+check)\b)",
+        )
+
+    def test_nix_unit_preserves_nonzero_evaluator_status_files(self) -> None:
+        driver = executable_shell_source(source_text(NIX_UNIT_DRIVER))
+        run_region = driver[
+            driver.index("run_nix_unit_shard()") : driver.index("harvest_nix_unit_shard()")
+        ]
+        harvest_start = driver.index("harvest_nix_unit_shard()")
+        harvest_region = driver[
+            harvest_start : driver.index('while [ "${#shard_pids[@]}" -gt 0 ]; do', harvest_start)
+        ]
+
+        self.assertIn('printf \'%s\\n\' "$rc" >"$shard_status_file"', run_region)
+        self.assertIn('return "$rc"', run_region)
+        self.assertIn('recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)', harvest_region)
+        self.assertIn('[ "$recorded_rc" -ne 0 ]; then', harvest_region)
+        self.assertIn("rc=$recorded_rc", harvest_region)
+        self.assertLess(
+            harvest_region.index('recorded_rc=$(head -n 1 "$status_file" 2>/dev/null || true)'),
+            harvest_region.index('printf \'%s\\n\' "$rc" >"$status_file"'),
+            "harvest must consult the evaluator status file before rewriting it",
         )
 
     def test_fixture_driver_realizes_minimal_and_excludes_real_binary_probe(self) -> None:
@@ -1189,6 +2330,294 @@ printf '%s\n' "$sanitized_line"
         self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
         self.assertIn("nix eval", fixture_driver)
         self.assertNotIn("nix build", fixture_driver)
+
+    def test_eval_fixture_keeps_full_contracts_off_vm_closure_and_ifd_paths(self) -> None:
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
+            encoding="utf-8"
+        )
+
+        # The full fixture validates feature-specific process and minijail
+        # records, not closure JSON. Keep the eval-only projection from
+        # traversing the legacy VM closure table.
+        self.assertRegex(
+            flake,
+            r"full\s*=\s*renderEvalFixture\s*\{\s*"
+            r"evaluated\s*=\s*fullEvalFixture;\s*"
+            r"includeClosures\s*=\s*false;\s*"
+            r"processData\s*=\s*fullProcessFixtureData;\s*\};",
+        )
+        full_fixture = re.search(
+            r"fullFixture\s*=.*?(?=\n\s*# Rust tests reach)",
+            flake,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(full_fixture)
+        assert full_fixture is not None
+        self.assertNotIn("config.d2b._bundle.closures", full_fixture.group(0))
+
+        # The production catalog remains IFD-backed, but empty eval fixtures
+        # must replace it at the fixture boundary with deterministic data.
+        self.assertIn("fixtureArtifactCatalogOverride", flake)
+        self.assertIn(
+            "d2b._bundle.extraArtifacts.artifactCatalog =\n"
+            "            lib.mkOverride 0 fixtureArtifactCatalogArtifact",
+            flake,
+        )
+        self.assertIn("fullProcessFixtureData", flake)
+        self.assertIn('"corp-full" "sys-work-usbipd" "sys-obs"', flake)
+        self.assertIn('node.id == "otel-host-bridge"', flake)
+        self.assertIn("processData = fullProcessFixtureData", flake)
+        self.assertIn("d2b_flake_ref", fixture_driver)
+        self.assertNotIn("fixture-smoke-full", fixture_driver)
+
+    def test_peak_rss_guards_fail_and_pass_for_both_eval_lanes(self) -> None:
+        helper = ROOT / "tests" / "tools" / "peak-rss.py"
+        self.assertTrue(helper.is_file(), "peak RSS helper is missing")
+
+        common_cause = (
+            "full NixOS/VM system.build.toplevel",
+            "pkgs.closureInfo",
+            "derivation realization/IFD",
+            "narrow attr-local fixture",
+            "shared evaluated scenario",
+            "stubbed evaluation boundary",
+        )
+        for lane in ("nix-unit", "flake"):
+            failed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; x = [0] * 1000000; time.sleep(1)",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                failed.returncode,
+                125,
+                msg=f"{lane} low-threshold guard unexpectedly passed:\n{failed.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", failed.stderr)
+            self.assertIn("observed", failed.stderr)
+            self.assertIn("maximum", failed.stderr)
+            for phrase in common_cause:
+                self.assertIn(phrase, failed.stderr)
+
+            active_code = (
+                "import os, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "child = os.fork(); "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print(child, flush=True); time.sleep(30)"
+            )
+            started = time.monotonic()
+            active = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "1",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    active_code,
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                active.returncode,
+                125,
+                msg=f"{lane} active-termination guard unexpectedly passed:\n"
+                f"{active.stderr}",
+            )
+            self.assertLess(
+                time.monotonic() - started,
+                5,
+                msg=f"{lane} guard did not actively terminate promptly:\n"
+                f"{active.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS guard failed", active.stderr)
+
+            nested_pid = self.scratch / f"{lane}-nested-setsid.pid"
+            nested_driver = self.scratch / f"{lane}-nested-setsid.sh"
+            nested_python = (
+                "import os, pathlib, signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "pathlib.Path(os.environ['D2B_CHILD_PID_FILE']).write_text(str(os.getpgrp())); "
+                "x = bytearray(64 * 1024 * 1024); time.sleep(30)"
+            )
+            nested_driver.write_text(
+                f"""#!/usr/bin/env bash
+set -euo pipefail
+child_pid_file=$1
+settle_group() {{
+  local pg="$1" attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if ! kill -0 -- "-$pg" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  return 1
+}}
+terminate_group() {{
+  local pg="$1" attempt=1
+  kill -TERM -- "-$pg" 2>/dev/null || true
+  while [ "$attempt" -le 10 ]; do
+    if ! kill -0 -- "-$pg" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  kill -KILL -- "-$pg" 2>/dev/null || true
+  settle_group "$pg"
+}}
+cleanup() {{
+  local pg
+  [ -r "$child_pid_file" ] || return 0
+  pg=$(cat "$child_pid_file")
+  case "$pg" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  terminate_group "$pg" || true
+}}
+trap cleanup EXIT
+export D2B_CHILD_PID_FILE="$child_pid_file"
+setsid {shlex.quote(sys.executable)} -c {shlex.quote(nested_python)} &
+wait
+""",
+                encoding="utf-8",
+            )
+            nested_driver.chmod(0o755)
+            nested = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "32768",
+                    "--",
+                    "bash",
+                    str(nested_driver),
+                    str(nested_pid),
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                nested.returncode,
+                125,
+                msg=f"{lane} nested-setsid guard unexpectedly passed:\n{nested.stderr}",
+            )
+            self.assertTrue(
+                nested_pid.is_file(),
+                f"{lane} nested-setsid worker never published its process-group id",
+            )
+            nested_group = int(nested_pid.read_text(encoding="utf-8").strip())
+            for _ in range(40):
+                try:
+                    os.killpg(nested_group, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail(
+                    f"{lane} nested-setsid worker process group {nested_group} "
+                    f"survived the guard:\n{nested.stderr}"
+                )
+
+            passed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--lane",
+                    lane,
+                    "--max-kib",
+                    "100000",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; print('rss-self-test'); time.sleep(1)",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                passed.returncode,
+                0,
+                msg=f"{lane} normal-threshold guard failed:\n{passed.stderr}",
+            )
+            self.assertIn(f"{lane} peak RSS:", passed.stderr)
+
+            unmeasured_code = (
+                "import importlib.util, sys; "
+                f"s = importlib.util.spec_from_file_location('peak_rss_test', "
+                f"{str(helper)!r}); "
+                "m = importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "m.process_rss_kib = lambda root: None; "
+                "m.cgroup_current_kib = lambda pid: None; "
+                f"sys.argv = ['peak-rss.py', '--lane', {lane!r}, "
+                "'--max-kib', '100000', '--', sys.executable, '-c', "
+                "'import time; time.sleep(1)']; "
+                "raise SystemExit(m.main())"
+            )
+            unmeasured = subprocess.run(
+                [sys.executable, "-c", unmeasured_code],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                unmeasured.returncode,
+                125,
+                msg=f"{lane} unmeasured guard unexpectedly passed:\n"
+                f"{unmeasured.stderr}",
+            )
+            self.assertIn(
+                "could not obtain process-tree or cgroup resident memory",
+                unmeasured.stderr,
+            )
+
+        nix_runner = (ROOT / "tests" / "test-nix-unit.sh").read_text(
+            encoding="utf-8"
+        )
+        flake_runner = (ROOT / "tests" / "test-flake.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("NIX_UNIT_RSS_MAX_KIB=10683720", nix_runner)
+        self.assertIn("FLAKE_RSS_MAX_KIB=14665373", flake_runner)
+        self.assertIn("tests/tools/peak-rss.py", nix_runner)
+        self.assertIn("tests/tools/peak-rss.py", flake_runner)
+        self.assertIn("--lane nix-unit", nix_runner)
+        self.assertIn("--lane flake", flake_runner)
 
     def test_realized_flake_check_gets_its_own_unblocked_lane(self) -> None:
         manifest = load_layer1_jobs().load_manifest()
@@ -1289,7 +2718,17 @@ printf '%s\n' "$sanitized_line"
         self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
         self.assertIn("--document-hidden-items", api_driver)
         self.assertIn("--document-private-items", api_driver)
-        self.assertIn("--workspace --lib --no-deps", api_driver)
+        self.assertIn(
+            'cargo "+$pin" metadata --locked --offline --no-deps --format-version 1',
+            api_driver,
+        )
+        self.assertIn("workspace_doc_args+=(--package \"$package_name\")", api_driver)
+        self.assertIn('"${workspace_doc_args[@]}" --lib --no-deps', api_driver)
+        self.assertIn(
+            '--package "$api_surface_package" --bin d2b-api-surface '
+            '--no-default-features',
+            api_driver,
+        )
         self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
         self.assertIn('D2B_API_SURFACE_TARGET_DIR must be an absolute path', api_driver)
         self.assertIn('D2B_API_SURFACE_UPDATE must be 0 or 1', api_driver)
@@ -1297,6 +2736,382 @@ printf '%s\n' "$sanitized_line"
         self.assertIn("api-surface-pin:", makefile)
         self.assertIn("D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh", makefile)
         self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+
+    def test_release_workflow_is_manual_identity_bound_and_feature_safe(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(
+            release_workflow_contract_violations(workflow),
+            [],
+        )
+
+        renamed_step = workflow.replace(
+            "      - name: Activate pinned Rust toolchain",
+            "      - name: Toolchain setup",
+            1,
+        )
+        self.assertEqual(
+            release_workflow_contract_violations(renamed_step),
+            [],
+            "release policy must inspect executable step contents rather than names",
+        )
+
+        mutations = (
+            (
+                workflow.replace("workflow_dispatch:", "workflow_manual:", 1),
+                "manual trigger",
+            ),
+            (
+                workflow.replace(
+                    'rustup run "$PINNED" cargo build',
+                    "cargo build",
+                    1,
+                ),
+                "ambient toolchain",
+            ),
+            (
+                move_workflow_step_before(
+                    workflow,
+                    "Swatinem/rust-cache@",
+                    "      - name: Activate pinned Rust toolchain",
+                ),
+                "cache before toolchain",
+            ),
+            (
+                workflow.replace(
+                    '[ "$package_version" = "$VERSION" ]',
+                    '[ "$package_version" = "$EXPECTED_VERSION" ]',
+                ),
+                "missing version assertion",
+            ),
+            (
+                workflow.replace(
+                    "--package d2bd --bin d2bd",
+                    "--package d2bd --bin d2bd --features extra",
+                    1,
+                ),
+                "extra feature",
+            ),
+            (
+                workflow.replace(
+                    "--package d2b --bin d2b",
+                    "--package d2b",
+                    1,
+                ),
+                "ordinary selector",
+            ),
+            (
+                workflow.replace(
+                    "--package d2bd --bin d2bd",
+                    "--package d2bd --bin d2bd --no-default-features",
+                    1,
+                ),
+                "ordinary default features",
+            ),
+            (
+                workflow.replace(
+                    "--package d2b-priv-broker --bin d2b-priv-broker "
+                    "--no-default-features",
+                    "--package d2b-priv-broker --bin d2b-priv-broker",
+                    1,
+                ),
+                "broker default features",
+            ),
+            (
+                workflow.replace(
+                    "--manifest-path packages/Cargo.toml",
+                    "--manifest-path packages/other/Cargo.toml",
+                    1,
+                ),
+                "manifest path",
+            ),
+            (
+                workflow.replace(
+                    "ref: v3",
+                    "ref: ${{ inputs.merged_v3_head }}",
+                    1,
+                ),
+                "unvalidated ref execution",
+            ),
+            (
+                workflow.replace(
+                    "GITHUB_TOKEN: ${{ github.token }}",
+                    "",
+                    1,
+                ),
+                "tag authentication",
+            ),
+            (
+                workflow.replace(
+                    "      contents: write",
+                    "      contents: read",
+                    1,
+                ),
+                "tag contents permission",
+            ),
+            (
+                workflow.replace(
+                    'tag_target=$(git rev-parse "$tag_ref^{commit}" 2>/dev/null || true)',
+                    'tag_target=""',
+                    1,
+                ),
+                "exact existing tag adoption",
+            ),
+            (
+                workflow.replace(
+                    "              return 1\n",
+                    "              :\n",
+                    1,
+                ),
+                "conflicting tag rejection",
+            ),
+            (
+                workflow.replace(
+                    'gh release upload "$tag_name" "${missing_assets[@]}"',
+                    "true",
+                    1,
+                ),
+                "partial release completion",
+            ),
+            (
+                workflow.replace(
+                    '[ "$release_target" = "$MERGED_V3_HEAD" ] || reject_release_conflict',
+                    "true",
+                    1,
+                ),
+                "conflicting release rejection",
+            ),
+            (
+                workflow.replace(
+                    '[ "$remote_digest" = "sha256:$expected_digest" ] || {',
+                    "true || {",
+                    1,
+                ),
+                "conflicting asset rejection",
+            ),
+            (
+                workflow.replace(
+                    "defaults: { run: { shell: bash } }",
+                    "defaults: { run: { shell: sh tests/tools/ci-shell {0} } }",
+                    1,
+                ),
+                "repository shell token isolation",
+            ),
+            (
+                workflow.replace(
+                    "cmp -s \"$release_body_file\" release-notes.md || reject_release_conflict",
+                    "true",
+                    1,
+                ),
+                "release body rejection",
+            ),
+            (
+                workflow.replace(
+                    "gh api \\\n"
+                    "                      --header 'Accept: application/octet-stream'",
+                    "true",
+                    1,
+                ),
+                "absent digest byte download",
+            ),
+            (
+                workflow.replace(
+                    '[ "$remote_download_digest" = "$expected_digest" ] || {',
+                    "true || {",
+                    1,
+                ),
+                "absent digest same-size byte conflict",
+            ),
+        )
+        for mutated, label in mutations:
+            self.assertNotEqual(
+                release_workflow_contract_violations(mutated),
+                [],
+                msg=f"workflow mutation escaped the {label} regression check",
+            )
+
+        repository_shell_mutation = workflow.replace(
+            "shell: sh tests/tools/ci-shell {0}",
+            "shell: sh tests/tools/ci-shell-token-observer {0}",
+            1,
+        )
+        self.assertEqual(
+            release_workflow_contract_violations(repository_shell_mutation),
+            [],
+            "changing the repository shell must not affect the runner-owned "
+            "contents:write publication steps",
+        )
+        local_action_mutation = workflow.replace(
+            "      - uses: actions/download-artifact@",
+            "      - uses: ./tests/tools/token-observer\n"
+            "      - uses: actions/download-artifact@",
+            1,
+        )
+        self.assertNotEqual(
+            release_workflow_contract_violations(local_action_mutation),
+            [],
+            "a local action must not enter the contents:write job",
+        )
+        repository_script_mutation = workflow.replace(
+            "          bash -s <<'RELEASE_TAG_SCRIPT'",
+            '          bash tests/tools/token-observer "$GITHUB_TOKEN"\n'
+            "          bash -s <<'RELEASE_TAG_SCRIPT'",
+            1,
+        )
+        self.assertNotEqual(
+            release_workflow_contract_violations(repository_script_mutation),
+            [],
+            "a token-bearing step must not invoke a checked-out repository script",
+        )
+
+    def test_release_retry_tag_and_api_fixtures_are_fail_closed(self) -> None:
+        version = "9.8.7"
+        tag_name = f"v{version}"
+        merged_head = "a" * 40
+        self.assertEqual(
+            release_tag_fixture_result(
+                {
+                    "type": "tag",
+                    "target": merged_head,
+                    "name": tag_name,
+                    "subject": tag_name,
+                },
+                expected_name=tag_name,
+                expected_target=merged_head,
+            ),
+            "adopt",
+        )
+        for conflicting_tag in (
+            {
+                "type": "commit",
+                "target": merged_head,
+                "name": tag_name,
+                "subject": tag_name,
+            },
+            {
+                "type": "tag",
+                "target": "b" * 40,
+                "name": tag_name,
+                "subject": tag_name,
+            },
+            {
+                "type": "tag",
+                "target": merged_head,
+                "name": tag_name,
+                "subject": "wrong release",
+            },
+        ):
+            self.assertEqual(
+                release_tag_fixture_result(
+                    conflicting_tag,
+                    expected_name=tag_name,
+                    expected_target=merged_head,
+                ),
+                "reject",
+            )
+
+        asset_names = tuple(
+            template.format(version=version) for template in RELEASE_ASSET_NAMES
+        )
+        local_assets = {
+            name: (100 + index, f"{index + 1:064x}")
+            for index, name in enumerate(asset_names)
+        }
+        partial = {
+            "tag_name": tag_name,
+            "target_commitish": merged_head,
+            "name": tag_name,
+            "prerelease": False,
+            "draft": True,
+            "body": "release notes\n",
+            "assets": [
+                {
+                    "name": asset_names[0],
+                    "state": "uploaded",
+                    "size": local_assets[asset_names[0]][0],
+                    "digest": f"sha256:{local_assets[asset_names[0]][1]}",
+                }
+            ],
+        }
+        outcome, missing = release_api_fixture_result(
+            partial,
+            expected_tag=tag_name,
+            expected_target=merged_head,
+            local_assets=local_assets,
+        )
+        self.assertEqual(outcome, "complete")
+        self.assertEqual(set(missing), set(asset_names[1:]))
+
+        absent_digest = dict(partial)
+        absent_digest["assets"] = [
+            dict(partial["assets"][0], digest=None)
+        ]
+        downloaded_digests = {
+            asset_names[0]: local_assets[asset_names[0]][1],
+        }
+        outcome, missing = release_api_fixture_result(
+            absent_digest,
+            expected_tag=tag_name,
+            expected_target=merged_head,
+            local_assets=local_assets,
+            downloaded_digests=downloaded_digests,
+        )
+        self.assertEqual(outcome, "complete")
+        self.assertEqual(set(missing), set(asset_names[1:]))
+        self.assertEqual(
+            release_api_fixture_result(
+                absent_digest,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
+        self.assertEqual(
+            release_api_fixture_result(
+                absent_digest,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+                downloaded_digests={asset_names[0]: "f" * 64},
+            )[0],
+            "reject",
+        )
+
+        conflicting_body = dict(partial, body="different release notes\n")
+        self.assertEqual(
+            release_api_fixture_result(
+                conflicting_body,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
+
+        conflicting_release = dict(partial)
+        conflicting_release["target_commitish"] = "c" * 40
+        self.assertEqual(
+            release_api_fixture_result(
+                conflicting_release,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
+        conflicting_asset = dict(partial)
+        conflicting_asset["assets"] = [
+            dict(partial["assets"][0], digest="sha256:" + "f" * 64)
+        ]
+        self.assertEqual(
+            release_api_fixture_result(
+                conflicting_asset,
+                expected_tag=tag_name,
+                expected_target=merged_head,
+                local_assets=local_assets,
+            )[0],
+            "reject",
+        )
 
     def test_rust_aggregate_is_a_make_owned_keep_going_dag(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
@@ -1779,12 +3594,19 @@ esac
 
     def test_harness_free_binaries_receive_no_libtest_arguments(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
-        command = next(
-            line
-            for line in driver.splitlines()
-            if 'cargo test --jobs "$D2B_RUST_CARGO_JOBS"' in line
-            and '--test "$bin"' in line
+        command_match = re.search(
+            r'cargo test --jobs "\$D2B_RUST_CARGO_JOBS" '
+            r'"\$\{cargo_profile\[@\]\}" \\\n'
+            r'\s+--manifest-path "\$manifest_path" "\$@" -p "\$pkg" '
+            r'"\$cargo_selector" "\$target"',
+            driver,
         )
+        self.assertIsNotNone(command_match)
+        command = command_match.group(0)
+        self.assertIn("cargo_selector=--test", driver)
+        self.assertIn("cargo_selector=--bench", driver)
+        self.assertIn("cargo_profile=(--release)", driver)
+        self.assertIn('"${cargo_profile[@]}"', command)
         self.assertNotIn("--test-threads", command)
         self.assertFalse(command.rstrip().endswith(" --"))
 

@@ -3,7 +3,7 @@
 > Reference for the machine-readable events emitted by the d2b USB
 > security-key proxy through the d2b notification subsystem.
 > Event files are written to `/run/d2b/usb-sk/events.jsonl` (one JSON object
-> per line) and consumed by `d2b usb security-key sessions`, the Waybar
+> per line) and consumed by `d2b device security-key sessions`, the Waybar
 > helper, and `d2b-wlcontrol`.
 
 ## Event envelope
@@ -148,7 +148,7 @@ Desktop notification actions (when supported by the notification daemon):
 
 | Action ID | Label | Effect |
 |-----------|-------|--------|
-| `cancel_active` | `Cancel active request` | Sends `d2b usb security-key cancel <active-session>` with a single-use nonce bound to the session/action/expiry. |
+| `cancel_active` | `Cancel active request` | Sends `d2b device security-key cancel <active-session>` with a single-use nonce bound to the session/action/expiry. |
 | `open_status` | `Open status` | Opens `d2b-wlcontrol` at the USB security-key panel. |
 
 ### `queue_wait_expired`
@@ -206,7 +206,7 @@ actions by replaying or crafting notification callbacks.
 ## Lease state file
 
 The current lease state is also available as a machine-readable JSON file at
-`/run/d2b/usb-sk/lease.json`. `d2b usb security-key status` reads this file
+`/run/d2b/usb-sk/lease.json`. `d2b device security-key status` reads this file
 directly when `d2bd` is not reachable, enabling offline inspection.
 
 ```json

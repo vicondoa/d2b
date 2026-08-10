@@ -14,7 +14,7 @@
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -48,6 +48,21 @@ const check = (name, ok, detail) => {
 function buildRound(mutate) {
   const dir = mkdtempSync(join(tmpdir(), "d2b-panel-"));
   mkdirSync(join(dir, "verdicts"), { recursive: true });
+  mkdirSync(join(dir, "agent-definitions"), { recursive: true });
+  mkdirSync(join(dir, "reviewer-notes"), { recursive: true });
+  mkdirSync(join(dir, "verification"), { recursive: true });
+  const agentDefinitions = Object.fromEntries(
+    ROLES.map((role) => [
+      role,
+      Buffer.from(`# synthetic definition for panel-${role}\n`, "utf8"),
+    ]),
+  );
+  const agentDefinitionDigests = Object.fromEntries(
+    Object.entries(agentDefinitions).map(([role, bytes]) => [
+      role,
+      sha256(bytes.toString("utf8")),
+    ]),
+  );
 
   const state = {
     address: {
@@ -62,8 +77,8 @@ function buildRound(mutate) {
       selection_path: join(dir, "selection.json"),
     },
     candidate: {
-      candidate_id: "cand-0001",
-      content_id: "content-0001",
+      candidate_id: "c".repeat(64),
+      content_id: "d".repeat(64),
       snapshot_sha256: "f".repeat(64),
       program: "SPEC001",
       wave: "spec001w1",
@@ -78,8 +93,8 @@ function buildRound(mutate) {
       phase: "verification",
       program: "SPEC001",
       wave: "spec001w1",
-      candidate_id: "cand-0001",
-      content_id: "content-0001",
+      candidate_id: "c".repeat(64),
+      content_id: "d".repeat(64),
       snapshot_sha256: "f".repeat(64),
       selection_table_version: 2,
       candidate_class: "code",
@@ -105,6 +120,20 @@ function buildRound(mutate) {
       profiles: Object.fromEntries(ROLES.map((role) => [role, role === "software" ? ["rust"] : []])),
       roster: ROLES,
     },
+    dispatchBinding: {
+      artifact_kind: "d2b-panel/dispatch-binding",
+      schema_version: 1,
+      lifecycle_id: "spec001w1",
+      phase: "verification",
+      roster: ROLES,
+      bindings: Object.fromEntries(ROLES.map((role) => [role, {
+        agent_type: `panel-${role}`,
+        model: "gpt-5.6-sol",
+        reasoning_effort: "xhigh",
+        context_tier: "default",
+        communication: "caveman-full-optional",
+      }])),
+    },
     ledger: {
       artifact_kind: "d2b-panel/issue-ledger",
       schema_version: 1,
@@ -113,21 +142,27 @@ function buildRound(mutate) {
       selection_table_version: 2,
       program: "SPEC001",
       wave: "spec001w1",
-      candidate_id: "cand-0001",
-      content_id: "content-0001",
+      candidate_id: "c".repeat(64),
+      content_id: "d".repeat(64),
       snapshot_sha256: "f".repeat(64),
       roster: ROLES,
       sources: [],
       issues: [],
       complete: true,
     },
-    observed: Object.fromEntries(ROLES.map((r, i) => [r, {
-      provider: "github-copilot",
-      model: "gpt-5.6-sol",
-      reasoning_effort: "xhigh",
-      run_id: `run-${i}`,
-      receipt_locator: `github-copilot://receipt/${i}`,
-    }])),
+    observed: Object.fromEntries(ROLES.map((r, i) => {
+      return [r, {
+        provider: "github-copilot",
+        model: "gpt-5.6-sol",
+        reasoning_effort: "xhigh",
+        agent_type: `panel-${r}`,
+        context_tier: "default",
+        communication: "caveman-full-optional",
+        agent_definition_sha256: agentDefinitionDigests[r],
+        run_id: `run-${i}`,
+        receipt_locator: `github-copilot://receipt/${i}`,
+      }];
+    })),
     verdicts: Object.fromEntries(ROLES.map((r) => [r, {
       engineer: r,
       signoff: true,
@@ -148,8 +183,8 @@ function buildRound(mutate) {
     lifecycle_id: "spec001w1",
     program: "SPEC001",
     wave: "spec001w1",
-    candidate_id: "cand-0001",
-    content_id: "content-0001",
+    candidate_id: "c".repeat(64),
+    content_id: "d".repeat(64),
     snapshot_sha256: "f".repeat(64),
     roster: ROLES,
     responses: [],
@@ -189,44 +224,146 @@ function buildRound(mutate) {
   if (mutate) mutate(state);
   const finalSelectionBytes = stableStringify(state.selection);
   const finalLedgerBytes = stableStringify(state.ledger);
+  const finalResponseBytes = stableStringify(state.responses);
   writeFileSync(join(dir, "address.json"), stableStringify(state.address));
   writeFileSync(join(dir, "current-candidate.json"), stableStringify(state.candidate));
   writeFileSync(join(dir, "selection.json"), finalSelectionBytes);
-  writeFileSync(join(dir, "ledger.json"), finalLedgerBytes);
+  writeFileSync(join(dir, "dispatch-binding.json"), stableStringify(state.dispatchBinding));
+  writeFileSync(join(dir, "discovery-ledger.json"), finalLedgerBytes);
   writeFileSync(join(dir, "approval.json"), stableStringify(state.approval));
-  writeFileSync(join(dir, "responses.json"), stableStringify(state.responses));
+  writeFileSync(join(dir, "responses.json"), finalResponseBytes);
+  writeFileSync(
+    join(dir, "handoff.json"),
+    stableStringify({
+      artifact_kind: "d2b-panel/continuation-handoff",
+      schema_version: 1,
+      lifecycle_id: state.ledger.lifecycle_id,
+      program: state.ledger.program,
+      wave: state.ledger.wave,
+      candidate_id: state.ledger.candidate_id,
+      content_id: state.ledger.content_id,
+      snapshot_sha256: state.ledger.snapshot_sha256,
+      ledger_sha256: sha256(finalLedgerBytes),
+      ledger_bytes: Buffer.byteLength(finalLedgerBytes),
+      responses_sha256: sha256(finalResponseBytes),
+      responses_bytes: Buffer.byteLength(finalResponseBytes),
+    }),
+  );
   writeFileSync(join(dir, "verification-results.json"), stableStringify(state.verificationResults));
+  writeFileSync(join(dir, "self-verification.json"), stableStringify({
+    tests: ["fixture"],
+    lint: "passed",
+    formatting: "passed",
+    static_analysis: "passed",
+    build: "not applicable",
+    uncovered_areas: ["none"],
+    self_review: "passed",
+  }));
+  for (const [relativePath, contents] of Object.entries({
+    "commits.txt": "fixture commit\n",
+    "delta.diff": "fixture delta\n",
+    "dispatch-prompt.txt": "fixture dispatch\n",
+    "evidence.md": "# Fixture evidence\n",
+    "full.diff": "fixture full diff\n",
+    "review-request.md": "# Fixture request\n",
+  })) {
+    writeFileSync(join(dir, relativePath), contents);
+  }
   writeFileSync(join(dir, "observed.json"), stableStringify(state.observed));
+  for (const [role, bytes] of Object.entries(agentDefinitions)) {
+    writeFileSync(join(dir, "agent-definitions", `panel-${role}.agent.md`), bytes);
+    writeFileSync(join(dir, "reviewer-notes", `${role}.md`), `# Notes for ${role}\n`);
+    writeFileSync(
+      join(dir, "verification", `${role}.json`),
+      stableStringify({ seat: role, fixture: true }),
+    );
+  }
+  const artifactSha256 = {};
+  const artifactBytes = {};
+  for (const relativePath of [
+    "address.json",
+    "commits.txt",
+    "current-candidate.json",
+    "delta.diff",
+    "dispatch-prompt.txt",
+    "evidence.md",
+    "full.diff",
+    "handoff.json",
+    "review-request.md",
+    "selection.json",
+    "dispatch-binding.json",
+    "discovery-ledger.json",
+    "responses.json",
+    "self-verification.json",
+  ]) {
+    const bytes = readFileSync(join(dir, relativePath));
+    artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
+    artifactBytes[relativePath] = bytes.length;
+  }
+  for (const role of ROLES) {
+    for (const relativePath of [
+      `agent-definitions/panel-${role}.agent.md`,
+      `reviewer-notes/${role}.md`,
+      `verification/${role}.json`,
+    ]) {
+      const bytes = readFileSync(join(dir, relativePath));
+      artifactSha256[relativePath] = sha256(bytes.toString("utf8"));
+      artifactBytes[relativePath] = bytes.length;
+    }
+  }
+  writeFileSync(join(dir, ".complete"), stableStringify({
+    artifact_kind: "d2b-panel/stage-completion",
+    schema_version: 4,
+    complete: true,
+    round: state.address.round,
+    base: state.address.base,
+    previous_tip: state.address.previous_tip,
+    tip: state.address.tip,
+    delta_sha256: state.address.delta_sha256,
+    full_sha256: state.address.full_sha256,
+    phase: "verification",
+    lifecycle_id: state.selection.lifecycle_id,
+    selection_sha256: sha256(finalSelectionBytes),
+    artifact_sha256: artifactSha256,
+    artifact_bytes: artifactBytes,
+  }));
   for (const [role, v] of Object.entries(state.verdicts)) {
     writeFileSync(join(dir, "verdicts", `${role}.json`), stableStringify(v));
   }
   return dir;
 }
 
-function run(dir, selectionPath = join(dir, "selection.json")) {
+function runArgs(args) {
   try {
     const stdout = execFileSync(
       "node",
-      [
-        script,
-        dir,
-        "--selection",
-        selectionPath,
-        "--ledger",
-        join(dir, "ledger.json"),
-        "--responses",
-        join(dir, "responses.json"),
-        "--verification-results",
-        join(dir, "verification-results.json"),
-        "--approval",
-        join(dir, "approval.json"),
-      ],
+      [script, ...args],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     return { code: 0, out: stdout, err: "" };
   } catch (e) {
     return { code: e.status ?? 1, out: e.stdout ?? "", err: e.stderr ?? "" };
   }
+}
+
+function argsFor(dir, selectionPath = join(dir, "selection.json")) {
+  return [
+    dir,
+    "--selection",
+    selectionPath,
+    "--ledger",
+    join(dir, "discovery-ledger.json"),
+    "--responses",
+    join(dir, "responses.json"),
+    "--verification-results",
+    join(dir, "verification-results.json"),
+    "--approval",
+    join(dir, "approval.json"),
+  ];
+}
+
+function run(dir, selectionPath = join(dir, "selection.json")) {
+  return runArgs(argsFor(dir, selectionPath));
 }
 
 // A case that must be REJECTED, and whose message must name the cause.
@@ -249,8 +386,7 @@ console.log("make-records: the happy path");
 {
   const dir = buildRound();
   try {
-    const relativeSelectionPath = `./${relative(process.cwd(), join(dir, "selection.json"))}`;
-    const r = run(dir, relativeSelectionPath);
+    const r = run(dir);
     check("a complete unanimous round is accepted", r.code === 0, `${r.err}`);
     const recordsDir = join(dir, "records");
     check("one record per seat is written", ROLES.every((x) => existsSync(join(recordsDir, `${x}.json`))));
@@ -258,9 +394,69 @@ console.log("make-records: the happy path");
     if (existsSync(join(recordsDir, "security.json"))) {
       const rec = JSON.parse(readFileSync(join(recordsDir, "security.json"), "utf8"));
       check("the record carries the observed effort", rec.reasoning_effort === "xhigh", JSON.stringify(rec.reasoning_effort));
-      check("the record carries the candidate address", rec.candidate_id === "cand-0001");
+      check("the record carries the candidate address", rec.candidate_id === "c".repeat(64));
       check("the record carries current panel format version", rec.panel_format_version === 1);
       check("the record digests the verdict", typeof rec.output_sha256 === "string" && rec.output_sha256.length === 64);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    rmSync(join(dir, "handoff.json"));
+    const markerPath = join(dir, ".complete");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    delete marker.artifact_sha256["handoff.json"];
+    delete marker.artifact_bytes["handoff.json"];
+    writeFileSync(markerPath, stableStringify(marker));
+    const r = run(dir);
+    check(
+      "a discovery-first verification packet without handoff is accepted",
+      r.code === 0,
+      `${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log("make-records: strict CLI parsing");
+{
+  const dir = buildRound();
+  try {
+    const valid = argsFor(dir);
+    const cases = [
+      ["an unknown flag is rejected", [...valid, "--unknown"], /unknown option/],
+      [
+        "a duplicate flag is rejected",
+        [...valid, "--selection", join(dir, "selection.json")],
+        /may be supplied only once/,
+      ],
+      [
+        "a missing flag value is rejected",
+        valid.slice(0, -1),
+        /option --approval requires one value/,
+      ],
+      [
+        "a surplus positional is rejected",
+        [valid[0], "extra", ...valid.slice(1)],
+        /unexpected positional argument/,
+      ],
+      [
+        "a missing round directory is rejected",
+        valid.slice(1),
+        /exactly one round directory positional/,
+      ],
+    ];
+    for (const [name, args, expected] of cases) {
+      const result = runArgs(args);
+      check(
+        name,
+        result.code === 2 && expected.test(`${result.out}${result.err}`),
+        `code=${result.code} output=${result.out}${result.err}`,
+      );
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -310,6 +506,48 @@ console.log("make-records: approval and publication preflight");
 {
   const dir = buildRound();
   try {
+    const markerPath = join(dir, ".complete");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    delete marker.artifact_sha256["evidence.md"];
+    delete marker.artifact_bytes["evidence.md"];
+    writeFileSync(markerPath, stableStringify(marker));
+    const missingBoundArtifact = run(dir);
+    check(
+      "a current packet with a missing bound artifact entry is rejected",
+      missingBoundArtifact.code !== 0 &&
+        /exact current verification artifact set.*missing.*evidence\.md/.test(
+          `${missingBoundArtifact.out}${missingBoundArtifact.err}`,
+        ),
+      `${missingBoundArtifact.out}${missingBoundArtifact.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    const markerPath = join(dir, ".complete");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    marker.artifact_sha256["extra.txt"] = "0".repeat(64);
+    marker.artifact_bytes["extra.txt"] = 0;
+    writeFileSync(markerPath, stableStringify(marker));
+    const extraBoundArtifact = run(dir);
+    check(
+      "a current packet with an extra bound artifact entry is rejected",
+      extraBoundArtifact.code !== 0 &&
+        /exact current verification artifact set.*extra\.txt/.test(
+          `${extraBoundArtifact.out}${extraBoundArtifact.err}`,
+        ),
+      `${extraBoundArtifact.out}${extraBoundArtifact.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
     const missingLedger = execFileSync(
       "node",
       [
@@ -351,6 +589,9 @@ console.log("make-records: approval and publication preflight");
       first.code === 0 &&
         conflict.code !== 0 &&
         /conflicting generated record bytes/.test(`${conflict.out}${conflict.err}`) &&
+        /exact byte-identical record family.*same inputs.*new qualified round/.test(
+          `${conflict.out}${conflict.err}`,
+        ) &&
         readFileSync(recordPath, "utf8") !== before,
       `first=${first.code} conflict=${conflict.code} output=${conflict.out}${conflict.err}`,
     );
@@ -399,7 +640,7 @@ console.log("make-records: legacy Gemini is rejected by current records");
     const r = run(dir);
     check(
       "a current record round rejects the legacy Gemini binding",
-      r.code !== 0 && /current records|policy accepts only/.test(`${r.out}${r.err}`),
+      r.code !== 0 && /current records|policy accepts only|dispatch policy/.test(`${r.out}${r.err}`),
       `${r.err}`,
     );
   } finally {
@@ -424,7 +665,7 @@ rejects(
     s.observed.agentic.model = "gemini-3.1-pro-preview";
     s.observed.agentic.reasoning_effort = "xhigh";
   },
-  /legacy|compatibility pair|xhigh/i,
+  /gemini|policy pins|dispatch policy/i,
 );
 rejects(
   "a seat with no observed binding cannot be attested",
@@ -437,10 +678,101 @@ rejects(
   /run_id/i,
 );
 rejects(
+  "an unknown observed binding field is rejected",
+  (s) => { s.observed.kernel.unexpected = "not-allowed"; },
+  /exactly the nine documented fields|unknown.*unexpected/i,
+);
+rejects(
   "a receipt locator without its provider scheme is rejected",
   (s) => { s.observed.product.receipt_locator = "receipt/7"; },
   /receipt_locator/i,
 );
+rejects(
+  "a substituted agent type cannot be attested",
+  (s) => { s.observed.agentic.agent_type = "panel-software"; },
+  /agent_type.*selected binding/i,
+);
+rejects(
+  "a missing context tier is not defaulted",
+  (s) => { delete s.observed.product.context_tier; },
+  /context_tier/i,
+);
+rejects(
+  "a missing communication mode is not defaulted",
+  (s) => { delete s.observed.product.communication; },
+  /communication/i,
+);
+rejects(
+  "a non-default context tier is rejected",
+  (s) => { s.observed.product.context_tier = "long_context"; },
+  /context_tier.*default/i,
+);
+rejects(
+  "an observed communication mode must match policy",
+  (s) => { s.observed.product.communication = "normal"; },
+  /communication|policy pins/i,
+);
+rejects(
+  "an observed agent definition digest must match the staged packet",
+  (s) => { s.observed.agentic.agent_definition_sha256 = "0".repeat(64); },
+  /agent definition digest|agent_definition_sha256/i,
+);
+rejects(
+  "a tampered dispatch binding is refused",
+  (s) => { s.dispatchBinding.bindings.agentic.model = "claude-opus-5"; },
+  /dispatch-binding|dispatch policy/i,
+);
+{
+  const dir = buildRound();
+  try {
+    const selectionAlias = join(dir, "selection-alias.json");
+    writeFileSync(selectionAlias, readFileSync(join(dir, "selection.json")));
+    const r = run(dir, selectionAlias);
+    check(
+      "a non-canonical selection path is refused",
+      r.code !== 0 &&
+        /canonical round-local path/.test(
+          `${r.out}${r.err}`,
+        ),
+      `${r.out}${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    const selectionPath = join(dir, "selection.json");
+    const original = readFileSync(selectionPath);
+    writeFileSync(selectionPath, `${original}tampered\n`);
+    const r = run(dir);
+    check(
+      "a completion-bound artifact size or digest change is refused",
+      r.code !== 0 &&
+        /completion-bound artifact selection\.json has a different size or digest/.test(
+          `${r.out}${r.err}`,
+        ),
+      `${r.out}${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = buildRound();
+  try {
+    rmSync(join(dir, ".complete"));
+    const r = run(dir);
+    check(
+      "a missing immutable completion marker fails closed",
+      r.code !== 0 && /completion marker|\.complete/.test(`${r.out}${r.err}`),
+      `${r.out}${r.err}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log("make-records: the verdict contract");
 rejects(

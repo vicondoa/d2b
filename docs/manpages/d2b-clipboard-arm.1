@@ -2,20 +2,32 @@
 .el .ds Aq '
 .TH d2b-clipboard-arm 1 1970-01-01 d2b "d2b CLI"
 .SH NAME
-arm \- Open the picker and request paste replay for the focused target
+clipboard arm \- Open the clipboard picker through the declared Provider projection
 .SH SYNOPSIS
-\fBarm\fR [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBclipboard arm\fR [\fB\-\-zone\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-\-deadline\fR] [\fB\-\-no\-deadline\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR]
 .SH DESCRIPTION
-Open the picker and request paste replay for the focused target.
-.PP
-Opens the d2b\-clip\-picker, waits for a selection, then asks d2b\-clipd to publish the selected payload and trigger paste replay. Requires d2b\-clipd to be running.
+Open the clipboard picker through the declared Provider projection
 .SH OPTIONS
 .TP
+\fB\-\-zone\fR \fI<ZONE>\fR
+Address a declared Zone. Without this flag the nearest local runtime is selected
+.TP
 \fB\-\-json\fR
-Emit a structured JSON envelope
+Emit the stable JSON envelope
 .TP
 \fB\-\-human\fR
-Emit a human\-readable status line
+Force human\-readable terminal output
+.TP
+\fB\-\-deadline\fR \fI<DURATION>\fR
+Bound all Zone requests and streams
+.TP
+\fB\-\-no\-deadline\fR
+Suppress the command default deadline
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v0.0.0\-bootstrap

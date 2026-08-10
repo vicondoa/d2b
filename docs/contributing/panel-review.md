@@ -1,7 +1,9 @@
 # Panel review
 
 Panel sign-off contract: phase gate, Discover-Fix-Verify lifecycle, selected
-roster and focus, and future producer parity.
+roster and focus, and future producer parity. Panel output is feedback
+documentation and delivery-review evidence; it is not a runtime security
+boundary, authorization mechanism, or durability guarantee.
 
 Binding rules are in [`../../AGENTS.md`](../../AGENTS.md) under "Panel review":
 a phase closes only on unanimous sign-off, `signoff` is `true` iff
@@ -15,11 +17,13 @@ section 12.3.
 
 ## Phase gate
 
-Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. The
-integrator MUST NOT begin the next phase until every selected reviewer returns
-`signoff: true` (N/N for the selected roster size). The current role domain is
-the thirteen-seat selection table; the lifecycle selection artifact chooses
-the ordered roster and the roster may only widen.
+Multi-phase plans MUST pass a panel sign-off gate at each phase boundary. A
+phase advances only after every selected reviewer returns `signoff: true`
+(N/N for the selected roster size). The current role domain is the
+thirteen-seat selection table; the lifecycle selection artifact chooses the
+ordered roster and the roster may only widen. The constitution permits a
+successor's implementation to start earlier only under the four conditions
+below; that exception never advances the successor's review or delivery gate.
 
 For plan-driven work, a "phase" is usually one wave from the plan's graph
 (`Wave 0`, `Wave 1`, ...). For plans touching fewer than three files, one phase
@@ -29,16 +33,36 @@ For each phase:
 
 1. **Plan review** - panel runs one comprehensive discovery over the plan,
    batches any fixes, and performs scoped verification until N/N sign-off.
-   The integrator may not dispatch implementation subagents until this gate
-   passes.
+   The integrator may not dispatch implementation subagents for this phase
+   until this gate passes.
 2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
-3. **Integration** - integrator merges subagent output.
+3. **Integration** - integrator integrates subagent output into the owned
+   feature/integration branch; protected branches are reached only through PR.
 4. **Work review** - panel runs one comprehensive discovery over the
    integrated candidate, batches fixes, and performs scoped verification until
    N/N sign-off.
-5. **Advance** - only now may the integrator begin the next phase's
-   plan review.
+5. **Advance** - only now may the integrator begin the next phase's plan
+   review or binding delivery.
+
+### Permitted pipelined implementation
+
+The constitution permits implementation of the successor phase to begin before
+the predecessor's panel returns unanimous sign-off only when **all four**
+conditions hold:
+
+1. At least five of the predecessor's selected-roster reviews have returned.
+2. The predecessor's integration tests pass on its converged tree.
+3. The successor issues no panel request, produces no seal, and merges nothing
+   until the predecessor is sealed at full unanimity with zero recommendations
+   and merged to the integration lineage.
+4. The successor rebases onto the updated integration lineage after that merge
+   and before its own panel runs.
+
+Only implementation start is pipelined. Successor panel request, seal, and
+merge remain blocked until predecessor completion, and any rework caused by a
+predecessor finding is absorbed by the successor rather than used to weaken
+the predecessor's review.
 
 Panel prompts MUST include the validation evidence the integrator already
 ran for the phase (commands and pass/fail results) and MUST instruct
@@ -77,9 +101,54 @@ reconstructing those instructions in free-form prompts. For a later
 review, staging fails unless the supplied previous tip matches the prior
 `address.json` and every seat's prior verdict is present.
 
+Dispatch selected seats through proper task subagents registered from the
+exact reviewed worktree. Never substitute an agent type or definition and
+never spawn a nested `copilot` CLI reviewer. If the current session registry
+cannot supply every selected exact agent definition, park and restart in the
+reviewed worktree before dispatch.
+
+The completion-bound packet carries the exact selected agent-definition bytes
+at `agent-definitions/panel-<seat>.agent.md`, their SHA-256 digests, and each
+seat's exact `context_tier`. These are process evidence for the round. Each
+current `observed.json` seat entry carries exactly these nine fields:
+`provider`, `model`, `reasoning_effort`, `context_tier`, `communication`,
+`agent_type`, `agent_definition_sha256`, `run_id`, and `receipt_locator`;
+unknown fields are rejected. The dispatch fields are checked against the
+completion-bound policy, and the definition digest is checked against the
+bound definition bytes. `run_id` and `receipt_locator` are same-user process
+metadata used for correlation and uniqueness. `make-records.mjs` validates
+declared same-user metadata against the completion-bound policy and bound
+definition bytes; it cannot detect a lying declaration or prove execution. That
+residual is accepted without authenticated receipts. `observed.json` is not authentication
+and does not establish a security boundary. The active phase
+contract is authoritative for output:
+discovery uses exactly `engineer`, `signoff`, `summary`, and
+`recommendations`, while verification adds required
+`verified_issue_statuses` and `late_findings`. Keeping the schemas distinct
+lets first discovery bootstrap the ledger before issue statuses exist.
+
+One machine readable dispatch policy is the source for every seat's agent
+type, model, reasoning effort, context tier, and communication. Staging
+projects the selected roster into the packet and binds that projection along
+with the agent definitions. Observed same user process metadata is compared
+with the bound policy and definition digest for correlation; it does not
+authenticate a run or prove that the declared process actually ran.
+
+The observed `agent_type` and `agent_definition_sha256` value are checked
+against the completion-bound selection and definition bytes when records are
+generated.
+Observed `run_id` and `receipt_locator` fields are same-user process metadata
+for correlation and uniqueness only. They do not authenticate a run or
+establish a security boundary, and a self-reported value cannot prove which
+definition ran.
+
 Any content change invalidates sign-off for that candidate. The lifecycle
 roster remains selected, may widen, and verifies the new candidate without
 running a second discovery.
+Discovery staging also rejects any completed discovery packet with the same
+lifecycle identity, regardless of its round label.
+Non-content dispositions and evidence updates do not by themselves create a
+new candidate snapshot; only an actual tree-content change does.
 
 Selected panel lanes may use optional full transient communication through the
 `d2b-caveman` contract. An explicit `normal` or `off` request wins. This is a
@@ -88,7 +157,7 @@ stays byte-identical, verdict JSON stays exact, `signoff` still means
 `recommendations` is empty, and optional communication never waives or changes
 the normal panel gate.
 
-Each engineer returns a JSON sign-off record shaped like:
+During discovery, each engineer returns a JSON sign-off record shaped like:
 
 ```json
 {
@@ -105,6 +174,24 @@ findings enter the shared ledger, implementation resolves them in a batch,
 and the selected lifecycle roster performs scoped verification. Green tests
 do not waive this gate; a phase closes only on unanimous sign-off.
 
+Verification uses the distinct exact top-level shape:
+
+```json
+{
+  "engineer": "software",
+  "signoff": true,
+  "summary": "What was verified and the overall posture.",
+  "verified_issue_statuses": {
+    "R1": "verified"
+  },
+  "late_findings": [],
+  "recommendations": []
+}
+```
+
+`verified_issue_statuses` has exactly one entry per ledger issue, and
+`late_findings` is present even when empty.
+
 ## Discover-Fix-Verify lifecycle
 
 ADR 0055 makes one comprehensive discovery the start of a lifecycle. The
@@ -113,12 +200,14 @@ selected seat with the full candidate and supplied validation evidence, and
 requires an explicit complete result from every seat. `{ complete: true,
 findings: [] }` is a valid zero-finding result; an absent seat result is not.
 
-Discovery findings are merged into one shared ledger with deterministic `R`
-identifiers and complete source attribution. Implementation receives the full
-ledger and records exactly one supported disposition, justification, changed
-surface, and evidence for every issue. The integrator then reruns selection
-over the full candidate and every fix delta, unions each result with the
-lifecycle roster, and never removes a selected seat.
+All actionable discovery defects enter one shared ledger with deterministic `R`
+identifiers and complete source attribution, including `MINOR` and `NIT`
+observations. Implementation receives the full ledger and records exactly one
+supported disposition, justification, changed surface, and evidence for every
+issue. A lower-severity issue becomes non-blocking history only after that
+processing is complete; it is not omitted. The integrator then reruns
+selection over the full candidate and every fix delta, unions each result with
+the lifecycle roster, and never removes a selected seat.
 
 Verification receives the complete ledger, all responses, validation and
 self-review evidence, the latest delta, full candidate context, and each
@@ -126,6 +215,103 @@ reviewer's prior obligations. It checks resolutions, dispositions, evidence,
 regressions, and unsafe late `BLOCKER` or `MAJOR` findings. A pre-existing late
 `MINOR` or `NIT` remains non-blocking history. Sign-off remains true exactly
 when the blocking recommendation list is empty.
+
+### Continuing blocked verification
+
+Approval may embed late findings without producing the next implementation
+handoff. When verification is blocked, preserve the completed round and run
+the canonical continuation command against its exact selection, immutable
+ledger, response envelope, adapted verification results, and current
+candidate:
+
+```bash
+ROUND=.scratch/panel/<round-id>
+NEXT=.scratch/panel/<next-handoff>
+NEXT_SELF_VERIFICATION=.scratch/panel/<next-self-verification>.json
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+The command publishes only the immutable
+`NEXT/discovery-ledger.json` and partial `NEXT/responses.json` by independent
+per-file create-or-compare. It publishes those files independently. A retry
+after a partial publication compares every
+existing file byte-for-byte and creates only missing files; conflicting bytes
+fail. The command validates lifecycle, selection digest, roster, candidate,
+ledger, response, and verification bindings; appends admitted late findings
+with stable contiguous `R` identifiers; and rejects conflicting regeneration,
+duplicate late sources, candidate or selection mismatch, missing prior
+responses, and malformed verification statuses.
+
+Copy the partial template to a distinct completed-response file, preserve
+every carried non-null response unchanged, fill only reset or newly added null
+responses there, and finalize the handoff:
+
+```bash
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+```
+
+`handoff.json` is published last and is completeness evidence. It binds the
+exact ledger and completed-response bytes, but it is not an atomic transaction
+or a security proof. Never edit `NEXT/responses.json`, the ledger, or the
+completed responses after finalization. The finalized continuation requires all three files before
+use: the ledger, completed responses, and `handoff.json`.
+When the prior selection phase is verification, both verification preparation
+and staging require `--handoff` and validate it against the exact supplied
+ledger and completed-response raw bytes. The discovery-to-first-verification
+transition remains marker-free and may omit the flag.
+Prepare a **fresh** self-verification artifact for the new
+candidate and fix delta; never reuse `$ROUND/self-verification.json` for the
+continuation. Then rerun selection with the new fix delta, prepare
+verification from the new ledger and response envelope, and stage the new
+packet:
+
+```bash
+FIX_DELTA=.scratch/panel/<next-fix-delta>.json
+CURRENT_CANDIDATE=.scratch/panel/<next-current-candidate>.json
+NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select "$CURRENT_CANDIDATE" <lifecycle-id> --phase verification \
+  --previous-selection "$ROUND/selection.json" --fix-delta "$FIX_DELTA")
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT_SELF_VERIFICATION" "$NEXT/verification" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
+
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> --selection "$NEXT_SELECTION" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
+  --self-verification "$NEXT_SELF_VERIFICATION" \
+  --verification-dir "$NEXT/verification" \
+  --lifecycle <lifecycle-id> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
+
+The discovery scratch scan validates `handoff.json`, the bound
+`discovery-ledger.json`, and `responses-completed.json`. After finalization it
+permits the retained continuation outputs `verification/`,
+`self-verification.json`, `candidate.json`, `current-candidate.json`,
+`delta.json`, `fix-delta.json`, `actual-delta.json`, `evidence.md`, and
+`validation-evidence.md`. Staged-packet anchors such as `selection.json`,
+`address.json`, and `full.diff` are rejected; an unrelated lifecycle handoff
+is still ignored.
+
+Metrics remain final-only and may refuse blocked verification. Do not run
+metrics until the new verification is passing.
 
 The current selection table defines these thirteen seats:
 `software`, `test`, `product`, `docs`, `security`, `observability`,
@@ -143,9 +329,26 @@ The lifecycle selection is the one roster authority:
 ```
 
 `stage-diffs.sh`, `make-records.mjs`, and xtask `panel-request` consume the
-same artifact. Current delivery request, record, attestation, and embedded
-seal panel objects carry `panel_format_version: 1`; legacy fixed-ten objects
-omit it. The workspace delivery schema remains version `2`.
+same artifact. Current completion packets use schema-version `4`, binding the
+selected agent definitions and the roster-projected dispatch policy.
+Schema-version `2` predecessors are readable only when their marker binds
+exactly either the historical base set without agent definitions or that same
+set plus every selected definition, and neither form contains
+`dispatch-binding.json`. Schema-version `3` predecessors bind exactly the
+historical set plus every selected definition and no dispatch binding. An
+arbitrary subset is never accepted; schema versions `2` and `3` are
+predecessor-only and newly staged packets use schema-version `4`. Current
+delivery request, record, attestation, and embedded seal panel objects carry
+`panel_format_version: 1`; legacy fixed-ten objects omit it. The workspace
+delivery schema remains version `2`.
+
+For Track A delivery, the lifecycle above is the nonbinding feedback phase.
+After unanimous approval and any content-changing fixes are complete, freeze
+the final candidate, create its snapshot and selection, issue the sole
+candidate-bound `panel-request`, run `make-records`, and run `panel-attest`.
+Only then may the owned branch proceed through PR and merge; seal follows the
+merge. Never create that request while the lifecycle can still change the
+tree. Feedback approval alone is not merge approval.
 
 ## Fix passes are scoped to the ledger
 
@@ -284,7 +487,7 @@ already recovered one slice's uncommitted output in this program.
 | `kernel`          | Syscalls, descriptor and lock semantics, signals, mounts, filesystems, races, and kernel-version assumptions. |
 | `build`           | Build graphs, CI scheduling, toolchains, targets, hermeticity, caches, dependencies, packaging, and release artifacts. |
 
-Older commits and [CHANGELOG.md](CHANGELOG.md) entries may reference
+Older commits and [CHANGELOG.md](../../CHANGELOG.md) entries may reference
 the historical ten-seat or six-engineer rosters. The selection-table domain
 above supersedes them for current work. Legacy delivery artifacts remain
 readable under their strict fixed-ten compatibility format, including `rust`.
@@ -305,7 +508,8 @@ equivalent and cannot satisfy the gate.
 
 ## Commit-tag mapping
 
-The tag examples in [Commit conventions](#commit-conventions) use this
+The tag examples in
+[changelog and commit conventions](./changelog-and-commits.md) use this
 mapping, and every commit that comes out of a panel-fix round MUST
 carry the relevant tag:
 

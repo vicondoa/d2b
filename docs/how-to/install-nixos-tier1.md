@@ -46,7 +46,7 @@ lifecycle for more VMs.
 ## 4. Start the first VM with the Rust CLI
 
 ```bash
-sudo d2b vm start personal-dev --apply
+sudo d2b guest start personal-dev --apply
 ```
 
 Drop `D2B_NATIVE_ONLY=1` if you still want the default
@@ -55,7 +55,7 @@ v1.0 daemon-only behavior (per ADR 0015; D2B_NATIVE_ONLY is a no-op for lifecycl
 For the Entra showcase, the matching command is:
 
 ```bash
-sudo d2b vm start work-entra --apply
+sudo d2b guest start work-entra --apply
 ```
 
 ## 5. Migrating an existing bash-era host

@@ -82,7 +82,7 @@ Practical implications:
 - `autostart = true` on a graphics VM is rejected; the daemon cannot
   reach the user's Wayland session at boot. Always bring graphics VMs
   up interactively from a compositor terminal:
-  `d2b vm start corp-desktop --apply`.
+  `d2b guest start corp-desktop --apply`.
 - Guest app IDs are prefixed with `d2b.corp-desktop.` by the
   filter proxy. If you use niri, you can opt into a generated
   window-rule include file via
@@ -163,18 +163,18 @@ Declare the approved busid in the copied example and use the read-only probe to
 confirm host observation:
 
 ```bash
-d2b usb probe
+d2b device usb probe
 ```
 
 Then attach the declared device through the daemon:
 
 ```bash
-d2b vm start corp-desktop --apply
-d2b usb attach corp-desktop 1-2 --apply
+d2b guest start corp-desktop --apply
+d2b device usb attach corp-desktop 1-2 --apply
 ```
 
 Replace `1-2` with the busid you declared for your host. To release the claim,
-run `d2b usb detach corp-desktop 1-2 --apply`. For degraded probe rows or
+run `d2b device usb detach corp-desktop 1-2 --apply`. For degraded probe rows or
 restart recovery, use the targeted runbook:
 [`docs/how-to/troubleshoot-usbip.md`](../../docs/how-to/troubleshoot-usbip.md).
 
@@ -246,31 +246,19 @@ implicitly by the host activation script) produces:
 Once the host activation completes:
 
 ```bash
-d2b list                              # expect 'corp-desktop' + 'sys-desktop-net'
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-desktop       desktop   true      false true    10.42.0.10      stopped
-# sys-desktop-net    desktop   false     false false   192.0.2.2       running (net-vm)
-
-d2b status                            # adds a "Bridge health" block
-# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-desktop       desktop   true      false true    10.42.0.10      stopped
-# sys-desktop-net    desktop   false     false false   192.0.2.2       running (net-vm)
-#
-# === Bridge health ===
-# BRIDGE               STATE      ADMIN   EXPECTED     RESULT
-# br-desktop-up        UP         up      UP           ok
-# br-desktop-lan       NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
+d2b guest list                         # typed Guest resource inventory
+d2b host doctor --read-only            # host and bridge readiness
 
 # `corp-desktop` is GRAPHICS=true, so start it from an active
 # Plasma/Wayland session. After the daemon starts its runners, STATUS
 # transitions to `running`.
 
-d2b vm start corp-desktop --apply      # interactive boot from a Plasma terminal
+d2b guest start corp-desktop --apply   # interactive boot from a Plasma terminal
 ssh -i /var/lib/d2b/keys/corp-desktop_ed25519 alice@10.42.0.10 hostname
 d2b audio mic on corp-desktop         # grant microphone
 d2b audio speaker on corp-desktop     # grant speakers
-d2b usb attach corp-desktop 1-2 --apply # attach declared YubiKey busid
-d2b vm stop corp-desktop --apply       # clean shutdown
+d2b device usb attach corp-desktop 1-2 --apply # attach declared YubiKey busid
+d2b guest stop corp-desktop --apply    # clean shutdown
 ```
 
 ## Verifying the example before deploying
@@ -306,17 +294,17 @@ Plasma + PipeWire + d2b closure and takes minutes.
 
 ## Common gotchas
 
-- **`d2b vm start corp-desktop --apply` must run from a Plasma/Wayland
+- **`d2b guest start corp-desktop --apply` must run from a Plasma/Wayland
   terminal on the host** - not over SSH.
   The launcher reads the operator's Wayland environment to wire
   the crosvm GPU sidecar; over SSH there is no `wayland-0` socket
   to reach. (Headless VMs are unaffected.)
 - **`d2b.site.waylandUser` must own an active session** when
   the VM boots, not just be declared. A fresh boot with no Plasma
-  login leaves the GPU sidecar idle; `d2b vm start` will block on
+  login leaves the GPU sidecar idle; `d2b guest start` will block on
   the Wayland socket.
 - **YubiKey USBIP is exclusive per declared busid.** A durable broker claim
-  names the owning VM. If `d2b usb probe` reports a degraded or
+  names the owning VM. If `d2b device usb probe` reports a degraded or
   other-owner row, follow the command it prints or the USBIP troubleshooting
   runbook rather than editing locks or sysfs driver links directly.
 - **Host route/CIDR diagnostics are fail-closed.** A stale `ip route`
@@ -328,9 +316,8 @@ Plasma + PipeWire + d2b closure and takes minutes.
 `nixos-rebuild switch` updates the declared d2b bundle and may
 restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`d2b list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `d2b vm restart
-<vm> --apply`. See
+`d2b guest list` exposes update currency in each Guest resource; apply with
+`d2b guest restart <name> --apply`. See
 [`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

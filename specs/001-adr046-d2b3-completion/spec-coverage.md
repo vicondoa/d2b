@@ -15,12 +15,18 @@ once.
 
 ### The binding rule
 
-The manifests are authoritative. For every work item, these fields are **carried verbatim**
-into `tasks.md` and into the implementing change; they are never paraphrased, condensed, or
-selectively quoted:
+The manifests are authoritative. A primary manifest-backed row in `tasks.md` carries the
+stable `workItemId` pointer and may carry a non-authoritative orientation label; it does not
+copy manifest fields into a second source of truth. Before dispatch, that id MUST resolve to
+exactly one complete 15-field object, retrieved verbatim and carried unchanged in the work
+prompt. Selecting, paraphrasing, or copying only some fields is not equivalent to retrieving
+the object:
 
 | Field | Obligation it creates |
 | --- | --- |
+| `workItemId` | The authoritative lookup key, which MUST resolve to exactly one object |
+| `specId`, `specPath` | The owning specification identity and canonical specification path |
+| `implementationState` | The manifest-recorded lifecycle state |
 | `detailedDesign` | What must be built, including every named constant, algorithm, and prohibition |
 | `validation` | The exact tests and evidence required before the item can be `Merged` |
 | `destination` | The exact file paths the item may write |
@@ -29,7 +35,9 @@ selectively quoted:
 | `dataMigration` | The migration disposition for state the item touches |
 | `currentSource` | The existing code the item adapts, replaces, or extracts from |
 | `reuseAction` | One closed scalar governing how existing code may be reused |
+| `reuseSource` | The canonical source from which reuse is permitted |
 | `dependencyOwner` | The item or owner that must land first |
+| `evidence` | The manifest-recorded evidence obligations and references |
 
 Retrieve any item's full text with:
 
@@ -64,8 +72,9 @@ definition.
 | --- | --- | --- |
 | Member specs | 55 | implementation graph, `kind == "spec"` |
 | Work items | 545 | implementation graph and work-item manifest agree |
-| Merged | 14 | W0 (8) + W1 (6) |
-| Planned | 531 | the scope of this program |
+| Initial program scope | 531 | items that were `Planned` when primary tasks were generated |
+| Merged | 68 | current manifest at `868469bf9c293cd48fff483717f14cb88c246821` |
+| Planned | 477 | current manifest remainder of the initial 531 |
 | Graph nodes / edges | 600 / 1949 | 55 + 545 |
 | Max topological rank | 22 | |
 
@@ -73,15 +82,15 @@ definition.
 
 | Wave | Specs | Work items | Cumulative | Status |
 | --- | --- | --- | --- | --- |
-| W0 | 6 | 8 | 8 | Merged, delivered under waiver (FR-034) |
-| W1 | 2 | 6 | 14 | Merged, delivered under waiver (FR-034) |
-| W2 | 2 | 19 | 33 | Ready to launch |
-| W3 | 1 | 4 | 37 | Serial; gates every Provider dossier |
-| W4 | 5 | 32 | 69 | |
-| W5 | 7 | 146 | 215 | Carries the corrected store engine (RK-1) |
-| W6 | 27 | 257 | 472 | Largest wave; 5 file-disjoint families |
+| W0 | 6 | 8 | 8 | Merged; missing panel/seal history recorded, non-authorizing (FR-034/FR-036) |
+| W1 | 2 | 6 | 14 | Merged; missing panel/seal history recorded, non-authorizing (FR-034/FR-036) |
+| W2 | 2 | 19 | 33 | All 19 manifest `Merged`; entry disposition and close tasks remain open |
+| W3 | 1 | 4 | 37 | All 4 manifest `Merged`; serial Provider contract |
+| W4 | 5 | 31 | 68 | All 31 current-wave items manifest `Merged`; entry disposition and close tasks remain open |
+| W5 | 7 | 146 | 214 | Carries the corrected store engine (RK-1) |
+| W6 | 27 | 258 | 472 | Includes deferred `ADR046-process-002`; largest wave |
 | W7 | 5 | 73 | 545 | Destructive cutover |
-| W8 | 0 | recorded at W7 close | 545+ | Terminal; release gate evaluated here |
+| W8 | 0 | recorded after W7 seal, merge, and cleanup | 545+ | Terminal; release gate evaluated here |
 
 ### Reuse disposition across all 545 items
 
@@ -155,6 +164,18 @@ Each spec's work items are listed in the per-wave sections below.
 | `ADR-046-provider-transport-vsock` | W6 | 7 | W6-transport-observability-activation |
 | `ADR-046-provider-volume-local` | W6 | 13 | W6-storage-network-device |
 | `ADR-046-provider-volume-virtiofs` | W6 | 7 | W6-storage-network-device |
+
+The full-US1 Guest acceptance is not a four-family matrix. Its sole family is
+`ADR-046-provider-runtime-cloud-hypervisor` / `Provider/runtime-cloud-hypervisor`. T384
+(`ADR046-ch-001`) owns `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` and
+`tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, its sole `Makefile`
+recipe, and the authoritative real-KVM plus guest-control `make test-host-integration`
+obligation through exact attr
+`vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`;
+T384-T390 bound the complete family file set, including T387's Nix Guest emitter. T479 owns
+the exact-F6 `w6-cloud-hypervisor-guest-acceptance` evidence gate and T480 revalidates that
+same record at every close boundary. The ACA, Azure VM, and qemu-media runtime families
+cannot satisfy this acceptance.
 | `ADR-046-feasibility-and-spikes` | W7 | 11 | W7-closing |
 | `ADR-046-reset-and-cutover` | W7 | 11 | W7-closing |
 | `ADR-046-security-and-threat-model` | W7 | 19 | W7-closing |
@@ -165,14 +186,15 @@ Each spec's work items are listed in the per-wave sections below.
 
 ## Complete work-item enumeration (all 545)
 
-Grouped by wave, then spec. `Dest` is the first destination path; the manifest holds the
-full list plus `detailedDesign`, `validation`, `integration`, `dataMigration`,
-`currentSource`, and `removalProof` for each item. Those fields are the authoritative
-obligation and are carried verbatim into tasks.
+Grouped by wave, then spec. The work-item id is the sole authoritative pointer. `Orientation`
+is a non-authoritative navigation label: it may be path-shaped, partial, or omitted, and is
+never the manifest `destination` or a writable-path grant. The other columns are generated
+coverage displays. No displayed column substitutes for resolving the id and retrieving the
+complete 15-field manifest object.
 
 ### W0 - 8 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-api-001` | `resource-api-and-authorization` | Merged | adapt | `packages/d2b-contracts/proto/d2b-resource-v3.proto` |
 | `ADR046-api-002` | `resource-api-and-authorization` | Merged | adapt | `packages/d2b-resource-api/src/authz.rs` |
@@ -185,7 +207,7 @@ obligation and are carried verbatim into tasks.
 
 ### W1 - 6 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-bus-001` | `componentsession-and-bus` | Merged | adapt | `packages/d2b-bus/src/{router |
 | `ADR046-feasibility-001` | `feasibility-and-spikes` | Merged | adapt | `proofs/redb-resource-store-spike/` |
@@ -196,77 +218,76 @@ obligation and are carried verbatim into tasks.
 
 ### W2 - 19 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
-| `ADR046-primitives-001` | `primitive-resource-composition` | Planned | adapt | `packages/d2b-contracts/src/v3/host.rs` |
-| `ADR046-primitives-002` | `primitive-resource-composition` | Planned | adapt | `packages/d2b-provider-system-systemd/` |
-| `ADR046-primitives-003` | `primitive-resource-composition` | Planned | adapt | `packages/d2b-provider-volume-*/` |
-| `ADR046-routing-001` | `zone-routing` | Planned | adapt | `packages/d2b-contracts/src/v3/zone_routing.rs` |
-| `ADR046-routing-002` | `zone-routing` | Planned | adapt | `packages/d2b-zone-routing/src/engine.rs` |
-| `ADR046-routing-003` | `zone-routing` | Planned | adapt | `packages/d2b-zone-routing/src/resolver.rs` (ZoneEntrypointResolver) |
-| `ADR046-routing-004` | `zone-routing` | Planned | adapt | `packages/d2b-core-controller/src/zone_links.rs` |
-| `ADR046-routing-005` | `zone-routing` | Planned | adapt | `packages/d2b-bus/src/zone_route.rs` (cross-Zone bus routing) |
-| `ADR046-routing-006` | `zone-routing` | Planned | adapt | `packages/d2b-zone-routing/tests/route_engine_vectors.rs` |
-| `ADR046-routing-007` | `zone-routing` | Planned | adapt | `packages/d2b-bus/src/session/` |
-| `ADR046-routing-008` | `zone-routing` | Planned | adapt | `packages/d2b-bus/src/transport/unix.rs` |
-| `ADR046-routing-009` | `zone-routing` | Planned | adapt | `packages/d2b-contracts/src/v3/zone_session.rs` |
-| `ADR046-routing-010` | `zone-routing` | Planned | adapt | `packages/d2b-resource-client/` |
-| `ADR046-routing-011` | `zone-routing` | Planned | adapt | `nixos-modules/options-zones.nix` (new structural base) |
-| `ADR046-routing-012` | `zone-routing` | Planned | adapt | `nixos-modules/zone-resources-json.nix` (new) |
-| `ADR046-routing-013` | `zone-routing` | Planned | adapt | `packages/d2b-core-controller/src/configuration.rs` (defined by ADR-046-core-controllers) |
-| `ADR046-routing-014` | `zone-routing` | Planned | adapt | `packages/d2b-provider/src/` (adapted in place) |
-| `ADR046-routing-015` | `zone-routing` | Planned | adapt | `packages/d2b-provider-toolkit/src/` (adapted in place) |
-| `ADR046-routing-016` | `zone-routing` | Planned | adapt | `packages/d2b-zone-routing/src/service.rs` |
+| `ADR046-primitives-001` | `primitive-resource-composition` | Merged | adapt | `packages/d2b-contracts/src/v3/host.rs` |
+| `ADR046-primitives-002` | `primitive-resource-composition` | Merged | adapt | `packages/d2b-provider-system-systemd/` |
+| `ADR046-primitives-003` | `primitive-resource-composition` | Merged | adapt | `packages/d2b-provider-volume-*/` |
+| `ADR046-routing-001` | `zone-routing` | Merged | adapt | `packages/d2b-contracts/src/v3/zone_routing.rs` |
+| `ADR046-routing-002` | `zone-routing` | Merged | adapt | `packages/d2b-zone-routing/src/engine.rs` |
+| `ADR046-routing-003` | `zone-routing` | Merged | adapt | `packages/d2b-zone-routing/src/resolver.rs` (ZoneEntrypointResolver) |
+| `ADR046-routing-004` | `zone-routing` | Merged | adapt | `packages/d2b-core-controller/src/zone_links.rs` |
+| `ADR046-routing-005` | `zone-routing` | Merged | adapt | `packages/d2b-bus/src/zone_route.rs` (cross-Zone bus routing) |
+| `ADR046-routing-006` | `zone-routing` | Merged | adapt | `packages/d2b-zone-routing/tests/route_engine_vectors.rs` |
+| `ADR046-routing-007` | `zone-routing` | Merged | adapt | `packages/d2b-bus/src/session/` |
+| `ADR046-routing-008` | `zone-routing` | Merged | adapt | `packages/d2b-bus/src/transport/unix.rs` |
+| `ADR046-routing-009` | `zone-routing` | Merged | adapt | `packages/d2b-contracts/src/v3/zone_session.rs` |
+| `ADR046-routing-010` | `zone-routing` | Merged | adapt | `packages/d2b-resource-client/` |
+| `ADR046-routing-011` | `zone-routing` | Merged | adapt | `nixos-modules/options-zones.nix` (new structural base) |
+| `ADR046-routing-012` | `zone-routing` | Merged | adapt | `nixos-modules/zone-resources-json.nix` (new) |
+| `ADR046-routing-013` | `zone-routing` | Merged | adapt | `packages/d2b-core-controller/src/configuration.rs` (defined by ADR-046-core-controllers) |
+| `ADR046-routing-014` | `zone-routing` | Merged | adapt | `packages/d2b-provider/src/` (adapted in place) |
+| `ADR046-routing-015` | `zone-routing` | Merged | adapt | `packages/d2b-provider-toolkit/src/` (adapted in place) |
+| `ADR046-routing-016` | `zone-routing` | Merged | adapt | `packages/d2b-zone-routing/src/service.rs` |
 
 ### W3 - 4 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
-| `ADR046-provider-001` | `provider-model-and-packaging` | Planned | adapt | `packages/d2b-contracts/src/v3/provider.rs` |
-| `ADR046-provider-002` | `provider-model-and-packaging` | Planned | adapt | one `packages/d2b-provider-<base>-<implementation>/` per Provider with mandatory src/ |
-| `ADR046-provider-003` | `provider-model-and-packaging` | Planned | adapt | `packages/d2b-provider-system-core/` |
-| `ADR046-provider-004` | `provider-model-and-packaging` | Planned | create | `packages/d2b-contracts/src/v3/semantic_services/{mod |
+| `ADR046-provider-001` | `provider-model-and-packaging` | Merged | adapt | `packages/d2b-contracts/src/v3/provider.rs` |
+| `ADR046-provider-002` | `provider-model-and-packaging` | Merged | adapt | one `packages/d2b-provider-<base>-<implementation>/` per Provider with mandatory src/ |
+| `ADR046-provider-003` | `provider-model-and-packaging` | Merged | adapt | `packages/d2b-provider-system-core/` |
+| `ADR046-provider-004` | `provider-model-and-packaging` | Merged | create | `packages/d2b-contracts/src/v3/semantic_services/{mod |
 
-### W4 - 32 work items
+### W4 - 31 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
-| `ADR046-core-001` | `core-controllers` | Planned | adapt | `packages/d2b-core-controller/src/{main |
-| `ADR046-credential-001` | `resources-credential` | Planned | adapt | `packages/d2b-contracts/src/v3/credential.rs` |
-| `ADR046-credential-002` | `resources-credential` | Planned | adapt | `packages/d2b-contracts/proto/v3/credential.proto` |
-| `ADR046-credential-003` | `resources-credential` | Planned | adapt | `packages/d2b-provider-credential-secret-service/src/{lib.rs |
-| `ADR046-credential-004` | `resources-credential` | Planned | adapt | `packages/d2b-provider-credential-entra/src/{lib.rs |
-| `ADR046-credential-005` | `resources-credential` | Planned | adapt | `packages/d2b-provider-credential-managed-identity/src/{lib.rs |
-| `ADR046-credential-006` | `resources-credential` | Planned | adapt | `packages/d2b-provider-credential-<impl>/src/controller.rs` |
-| `ADR046-credential-007` | `resources-credential` | Planned | adapt | `nixos-modules/options-resources.nix` (generic schema-derived resource options |
-| `ADR046-credential-008` | `resources-credential` | Planned | adapt | `packages/d2b-provider-credential-<impl>/src/audit.rs` |
-| `ADR046-network-001` | `resources-network` | Planned | adapt | `packages/d2b-contracts/src/v3/network.rs`: NetworkSpec |
-| `ADR046-network-002` | `resources-network` | Planned | adapt | `packages/d2b-provider-network-local/src/ifname.rs` |
-| `ADR046-network-003` | `resources-network` | Planned | adapt | `packages/d2b-provider-network-local/` - artifact catalog integration for net-VM nixos-system artifact resolution |
-| `ADR046-network-004` | `resources-network` | Planned | adapt | `nixos-modules/resources-network.nix`: Nix resource object emitter for Network ResourceType |
-| `ADR046-network-005` | `resources-network` | Planned | adapt | `packages/d2b-provider-network-local/src/controller.rs`: async NetworkReconciler |
-| `ADR046-network-006` | `resources-network` | Planned | adapt | `tests/unit/nix/cases/net-vm-network.nix` (adapted to v3 resource API) |
-| `ADR046-network-007` | `resources-network` | Planned | adapt | `Provider/device-usbip` owns one relay Process/Endpoint authority per Network and calls the typed UsbipEffectPort for the shared closed `ApplyNftablesProjection` request with closed action enum `Apply/Remove` |
-| `ADR046-network-008` | `resources-network` | Planned | create | `packages/d2b-core-controller/src/configuration.rs`: bundle application |
-| `ADR046-network-009` | `resources-network` | Planned | adapt | `packages/d2b-contracts/src/v3/network.rs` external-attachment sharing schema/status |
-| `ADR046-process-001` | `components-processes-and-sandbox` | Planned | adapt | `packages/d2b-process/src/` |
-| `ADR046-process-002` | `components-processes-and-sandbox` | Planned | adapt | `packages/d2b-provider-system-systemd/` |
-| `ADR046-pstate-001` | `provider-state` | Planned | adapt | `packages/d2b-contracts/src/v3/volume_state.rs` |
-| `ADR046-pstate-002` | `provider-state` | Planned | adapt | `packages/d2b-contracts/src/v3/provider.rs` (component descriptor `stateNamespaces` field) |
-| `ADR046-pstate-003` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/` (new crate |
-| `ADR046-pstate-004` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/src/migration.rs` |
-| `ADR046-pstate-005` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/src/sealing.rs` |
-| `ADR046-pstate-006` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/src/snapshot.rs` |
-| `ADR046-pstate-007` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/src/relocation.rs` |
-| `ADR046-pstate-008` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/src/audit.rs` |
-| `ADR046-pstate-009` | `provider-state` | Planned | adapt | `packages/d2b-provider-volume-local/tests/state.rs` (ported hermetic atomic/lock/quarantine/lease tests) |
-| `ADR046-pstate-010` | `provider-state` | Planned | adapt | `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module) |
-| `ADR046-pstate-011` | `provider-state` | Planned | adapt | `packages/xtask/src/provider_crate_policy.rs` |
-| `ADR046-pstate-012` | `provider-state` | Planned | adapt | `packages/d2b-core-controller/src/optional_state_admission.rs` (storage-need admission: reject a declared namespace whose payload is derivable from spec/status/core ledger/external observation with `component-state-not-justified` |
+| `ADR046-core-001` | `core-controllers` | Merged | adapt | `packages/d2b-core-controller/src/{main |
+| `ADR046-credential-001` | `resources-credential` | Merged | adapt | `packages/d2b-contracts/src/v3/credential.rs` |
+| `ADR046-credential-002` | `resources-credential` | Merged | adapt | `packages/d2b-contracts/proto/v3/credential.proto` |
+| `ADR046-credential-003` | `resources-credential` | Merged | adapt | `packages/d2b-provider-credential-secret-service/src/{lib.rs |
+| `ADR046-credential-004` | `resources-credential` | Merged | adapt | `packages/d2b-provider-credential-entra/src/{lib.rs |
+| `ADR046-credential-005` | `resources-credential` | Merged | adapt | `packages/d2b-provider-credential-managed-identity/src/{lib.rs |
+| `ADR046-credential-006` | `resources-credential` | Merged | adapt | `packages/d2b-provider-credential-<impl>/src/controller.rs` |
+| `ADR046-credential-007` | `resources-credential` | Merged | adapt | `nixos-modules/options-resources.nix` (generic schema-derived resource options |
+| `ADR046-credential-008` | `resources-credential` | Merged | adapt | `packages/d2b-provider-credential-<impl>/src/audit.rs` |
+| `ADR046-network-001` | `resources-network` | Merged | adapt | `packages/d2b-contracts/src/v3/network.rs`: NetworkSpec |
+| `ADR046-network-002` | `resources-network` | Merged | adapt | `packages/d2b-provider-network-local/src/ifname.rs` |
+| `ADR046-network-003` | `resources-network` | Merged | adapt | `packages/d2b-provider-network-local/` - artifact catalog integration for net-VM nixos-system artifact resolution |
+| `ADR046-network-004` | `resources-network` | Merged | adapt | `nixos-modules/resources-network.nix`: Nix resource object emitter for Network ResourceType |
+| `ADR046-network-005` | `resources-network` | Merged | adapt | `packages/d2b-provider-network-local/src/controller.rs`: async NetworkReconciler |
+| `ADR046-network-006` | `resources-network` | Merged | adapt | `tests/unit/nix/cases/net-vm-network.nix` (adapted to v3 resource API) |
+| `ADR046-network-007` | `resources-network` | Merged | adapt | `Provider/device-usbip` owns one relay Process/Endpoint authority per Network and calls the typed UsbipEffectPort for the shared closed `ApplyNftablesProjection` request with closed action enum `Apply/Remove` |
+| `ADR046-network-008` | `resources-network` | Merged | create | `packages/d2b-core-controller/src/configuration.rs`: bundle application |
+| `ADR046-network-009` | `resources-network` | Merged | adapt | `packages/d2b-contracts/src/v3/network.rs` external-attachment sharing schema/status |
+| `ADR046-process-001` | `components-processes-and-sandbox` | Merged | adapt | `packages/d2b-process/src/` |
+| `ADR046-pstate-001` | `provider-state` | Merged | adapt | `packages/d2b-contracts/src/v3/volume_state.rs` |
+| `ADR046-pstate-002` | `provider-state` | Merged | adapt | `packages/d2b-contracts/src/v3/provider.rs` (component descriptor `stateNamespaces` field) |
+| `ADR046-pstate-003` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/` (new crate |
+| `ADR046-pstate-004` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/src/migration.rs` |
+| `ADR046-pstate-005` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/src/sealing.rs` |
+| `ADR046-pstate-006` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/src/snapshot.rs` |
+| `ADR046-pstate-007` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/src/relocation.rs` |
+| `ADR046-pstate-008` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/src/audit.rs` |
+| `ADR046-pstate-009` | `provider-state` | Merged | adapt | `packages/d2b-provider-volume-local/tests/state.rs` (ported hermetic atomic/lock/quarantine/lease tests) |
+| `ADR046-pstate-010` | `provider-state` | Merged | adapt | `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module) |
+| `ADR046-pstate-011` | `provider-state` | Merged | adapt | `packages/xtask/src/provider_crate_policy.rs` |
+| `ADR046-pstate-012` | `provider-state` | Merged | adapt | `packages/d2b-core-controller/src/optional_state_admission.rs` (storage-need admission: reject a declared namespace whose payload is derivable from spec/status/core ledger/external observation with `component-state-not-justified` |
 
 ### W5 - 146 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-audit-001` | `telemetry-audit-and-support` | Planned | adapt | `packages/d2b-audit/src/{hash_chain.rs |
 | `ADR046-audit-002` | `telemetry-audit-and-support` | Planned | adapt | `packages/d2b-resource-store-redb/src/audit.rs` |
@@ -415,9 +436,9 @@ obligation and are carried verbatim into tasks.
 | `ADR046-zone-control-023` | `resources-zone-control` | Planned | adapt | `packages/d2b-core-controller/src/{quota |
 | `ADR046-zone-control-024` | `resources-zone-control` | Planned | adapt | `packages/d2b-core-controller/src/authority.rs` (Host-global index scope + hardware admission) |
 
-### W6 - 257 work items
+### W6 - 258 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-aca-001` | `provider-runtime-azure-container-apps` | Planned | replace | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
 | `ADR046-aca-002` | `provider-runtime-azure-container-apps` | Planned | adapt | `packages/d2b-provider-runtime-azure-container-apps/src/deployment_service.rs` |
@@ -551,6 +572,7 @@ obligation and are carried verbatim into tasks.
 | `ADR046-otel-004` | `provider-observability-otel` | Planned | adapt | `packages/d2b-contract-tests/tests/policy_observability.rs` (updated) |
 | `ADR046-otel-005` | `provider-observability-otel` | Planned | adapt | `packages/d2b-provider-observability-otel/src/share_adapter.rs` |
 | `ADR046-otel-006` | `provider-observability-otel` | Planned | adapt | `packages/d2b-provider-observability-otel/src/{authority |
+| `ADR046-process-002` | `components-processes-and-sandbox` | Planned | adapt | `packages/d2b-provider-system-systemd/` |
 | `ADR046-qemu-media-001` | `provider-runtime-qemu-media` | Planned | create | packages/d2b-provider-runtime-qemu-media/{src/lib.rs |
 | `ADR046-qemu-media-002` | `provider-runtime-qemu-media` | Planned | adapt | packages/d2b-provider-runtime-qemu-media/src/types/guest.rs |
 | `ADR046-qemu-media-003` | `provider-runtime-qemu-media` | Planned | adapt | packages/d2b-provider-runtime-qemu-media/src/config.rs |
@@ -679,7 +701,7 @@ obligation and are carried verbatim into tasks.
 
 ### W7 - 73 work items
 
-| Work item | Spec | State | Reuse | Dest (first path) |
+| Work item | Spec | State | Reuse | Orientation (non-authoritative) |
 | --- | --- | --- | --- | --- |
 | `ADR046-delivery-001` | `validation-and-delivery` | Planned | adapt | `packages/xtask/src/heavy_gate.rs` |
 | `ADR046-delivery-002` | `validation-and-delivery` | Planned | adapt | `packages/xtask/src/delivery/snapshot.rs` |
@@ -786,6 +808,108 @@ lints), D116 (envelope `defaultUserRef`), D128 (the failed RSS spike and its fou
 A change that contradicts a decision is a specification amendment, not an implementation
 choice.
 
+### Wave 5 production reachability is boundary-bound
+
+The approved 2026-08-06 amendment adds fifteen local Wave 5 completion/evidence tasks without
+changing the 545-item manifest census. T589-T602 plus T605 own the missing production
+composition, coordinated handler-contract correction, and exact-candidate Wave 5 evidence;
+existing T220 is the integrator convergence/freeze boundary before that evidence, and T603 is
+the sixteenth local Wave 5 editor-reconciliation task. An accepted external Network
+contract/work-item amendment must remove every current-facing sole Network-opt-in path before
+T220 and retain the double-opt-in production path plus all four cases in authoritative W6
+rows T336-T355 under T221. T604 remains the W6 operator activation boundary and consumes
+their merged implementation. The feature task total remains 605.
+The completion boundary is:
+
+- registrar-consumed, pidfd-bound authenticated ComponentSession and authoritative subject,
+  using T592's typed `OpenPeerPidfdFromAcceptedSocket` broker operation and the approved
+  broker `sys.rs` FFI quarantine, with fresh restart pidfd and
+  PID-reuse/mismatch/`ESRCH`/ambiguity denials;
+- matching nonzero Zone policy revision under `ZoneResourceRuntime`, with initial/restart
+  installation through one private-issuer, compiler/API-sealed, non-fabricable one-shot
+  `PolicyBootstrapRead` limited to exact-revision policy envelopes and every later policy
+  access through the authenticated Resource API;
+- registered ResourceService and controller endpoint on the exact ZoneBus;
+- admitted production watch through store and controller fan-in;
+- durable effect/adoption and cleanup ledger;
+- a transactional immutable authoritative mutation-audit journal row at commit plus separate
+  segment export/completion/retention health before ordinary success, with operation-bound
+  `CommittedPendingAudit` represented by `ResourceStatus.phase =
+  ResourcePhase::Degraded`, `ResourceStatus.outcome.code =
+  StatusCode("committed-pending-audit")`, `ResourceStatus.update.state =
+  UpdateState::Blocked`, and `ResourceStatus.update.operation_id =
+  Some(original_operation_id)`, carried by additive protobuf `PendingAuditStatus` on every
+  mutation response including delete, with bounded redacted detail, typed domain-separated
+  identifier digests and no raw identity in audit or telemetry, exact same-Zone
+  replay-binding, required-Zone inspection, independent same-ID operations across Zones,
+  UUIDv7 bounded expiry/post-prune refusal, and same-Zone same-ID
+  no-reapply/eventual-final-result behavior;
+- one aggregate readiness projection containing exactly the
+  `d2b-core-controller`-owned `Provider/system-core` registration plus an actual
+  `Zone.status.handlers[]` list with exactly one `system-core-host` record and one
+  `system-core-user` record, each carrying `phase` and `lastReconciledAt` from an active,
+  initialized, current handler; `ProviderLifecycle` remains distinct and cannot substitute,
+  and Wave 5 does not wait for other Wave 6 dossiers;
+- T605's pre-consumer `ZoneHandlerName::SystemCoreHost` and
+  `ZoneHandlerName::SystemCoreUser` kebab-case
+  round-trip as `system-core-host`/`system-core-user`, underscore-label rejection on the Zone
+  wire, both governing normative specs and version metadata, exact-list acceptance and
+  rejection coverage, current compiler-derived public/private API snapshots, paired
+  `docs/reference/resource-plane-runtime.md`, and read-only proof that
+  `packages/xtask/src/zone_schema.rs` leaves
+  `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` byte-identical because the
+  desired Zone spec is unchanged; T595 owns later emission, T599 owns remaining consumer
+  reconciliation, and T220 reconciles integrator-owned generated spec manifests and runs the
+  full drift gate;
+- per-Zone failure isolation;
+- separate W6 T604 exact-F6 coverage, after T221 and merged authoritative T336-T355, from an operator Nix declaration and emitted bundle through
+  startup and public declaration/removal switches without manual restart to a real owned
+  effect/readiness for the exact spec-pinned `Volume/acceptance-state`,
+  `Network/acceptance-net`, and `Device/acceptance-tpm`, including their selected Provider
+  resources/configs, followed by exact Device swtpm/flush cleanup, an unresolvable Endpoint,
+  finalizer clearance, and
+  same-identity TPM state-Volume preservation with ready, identity-stable, unrecreated
+  acceptance Volume/Network and unrelated resources. T479 separately binds FR-075 continuity
+  and the `Provider/runtime-cloud-hypervisor` Guest result to the same F6. No Guest emission,
+  status, or refusal can satisfy either positive; refusals remain separate negative cases.
+  This operator evidence bullet is the W6 continuation boundary, not an eighth Wave 5
+  evidence-profile member. The accepted double-opt-in contract migration, removal of every
+  current-facing sole Network-opt-in path, and settled T336-T355 W6 ownership remain separate
+  pre-T220 Wave 5 prerequisites; production implementation and the four-case results remain
+  W6 work;
+- one clean-base analysis and current selected-roster lifecycle, followed by the sole `/d2b-spec-edit` all-satisfied checkbox batch, dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589; T603 owns no source, fragment, sidecar, digest chain, or resume receipt;
+
+- T220 convergence of every content change before clean exact F, followed by T600-T602
+  evidence closure. Wave 5's retained request is already consumed, so T219 performs no
+  binding action and remains blocked until an accepted external disposition preserves
+  the request and authorizes a non-request close action; and
+- exact-candidate evidence whose `EvidenceRecord.validation` multiset is exactly
+  `production-session-watch`, `effect-replay-cleanup`, `audit-drain-replay`,
+  `system-core-handler-contract`, `resource-plane-rss-owner-fanin`,
+  `wave5-removal-proofs`, and `cli-reference-conformance`, with the first four owned by T600
+  and the final three by T601.
+
+A direct ResourceService or `WatchService` call, `ProductionWatchHarness`, fixed/fake endpoint,
+constructed subject, numeric-PID-only identity, fabricable/reusable bootstrap reader,
+independent readiness bit, status-only Provider substitute, disabled audit owner, missing
+authoritative row, incomplete export, ordinary success for a
+committed-pending-audit mutation, a claim that `ResourceUpdateStatus` owns phase/code, an
+operator test that bypasses the public Nix switch or accepts a refusal as a positive
+representative path, a stale receipt, a dirty candidate tree, a free-form/duplicate/conflated
+evidence identifier, post-attestation content under the same candidate, a second request for
+one immutable candidate, or evidence from another commit cannot cover
+FR-066 through FR-072 or SC-030 through SC-034.
+
+### D106 keeps policy interpretation out of both store crates
+
+`d2b-resource-store` and `d2b-resource-store-redb` own sealed mutation admission,
+policy-neutral envelope/schema/atomicity checks, revisions, and persistence. They do not
+deserialize or own Role, RoleBinding, PolicySet, or any other RBAC DTO. The Resource API and
+Zone policy owner compile and interpret policy. `PolicyBootstrapRead` may expose only
+policy-neutral envelopes to `d2b-resource-api`; its existence does not permit either store to
+select or parse an RBAC DTO. T591 must extend the existing guard to the whole source and
+dependency surface; checking only selected files does not cover D106.
+
 ### The 19 ResourceTypes have exclusive owners
 
 | Owning spec | Count | Types |
@@ -814,7 +938,7 @@ weakening durability, authorization, or audit, and never by adding a sleep, a ti
 | p95 crash-safe single-resource mutation | <= 10 ms |
 | p95 durable commit to controller handler start | <= 5 ms |
 | p95 ready Process commit to launch-attempt start | <= 20 ms |
-| Whole-process RSS, no baseline subtraction | <= 24,576 KiB (**currently 25,216 - the one failure**) |
+| Whole-process RSS, no baseline subtraction | <= 24,576 KiB (**historical corrected proof and production fixtures passed at their recorded tips; T601 owns the current completed-publication-path measurement on F**) |
 | Aggregate idle RSS | <= 64 MiB |
 | `Provider/system-core` / `Provider/system-minijail` | 22 MiB / 12 MiB |
 | Per-Provider-crate hermetic suite, aggregate process CPU p95 | <= 3 s |
@@ -843,8 +967,10 @@ For every `RETAIN`, `ADAPT`, `REPLACE`, or `DELETE` path:
 
 Migration-map dispositions: 94 `ADAPT`, 32 `REPLACE`, 19 `RETAIN`, 16 `DELETE`. Of the DELETE
 rows, 12 name a successor (parity-enforced, FR-041) and 4 do not (explicit retirement, FR-042).
-The map supplies explicit removal proofs for only 3 of the 16, so the remaining proofs are
-authored with the wave that removes each path.
+The current [`removal-proof-inventory.md`](./removal-proof-inventory.md) 48-row
+DELETE/REPLACE census records 5 proofed DELETE rows, 9 proofed REPLACE rows, 1 retired
+DELETE row that names no baseline path, and 33 outstanding rows. Each outstanding proof is
+authored with the wave that removes its path.
 
 ---
 
@@ -852,8 +978,13 @@ authored with the wave that removes each path.
 
 Run this against `tasks.md` before implementation starts.
 
-- [x] Every one of the 531 `Planned` work-item ids appears in `tasks.md` exactly once
-      (verified: exact bijection, 0 duplicates, 0 missing, 0 extra)
+- [x] Every one of the 531 work-item ids that was `Planned` at program opening has exactly
+      one primary work-item task (verified: exact initial-scope bijection, 0 primary
+      duplicates, 0 missing, 0 extra). Current manifest reconciliation is 54 checked primary
+      tasks for items now `Merged` and 477 unchecked primary tasks for items still `Planned`;
+      with the 14 pre-existing W0/W1 merged items, the authoritative total is 68/477.
+      T575 and T583 are process tasks that cite a work-item id and do not count as primary
+      work-item rows.
 - [x] Each task **references** its item's authoritative manifest entry and does not paraphrase
       it. **Correction (2026-07-29)**: an earlier draft of this line required
       `detailedDesign` and `validation` to be copied verbatim *into* `tasks.md`. That was
@@ -861,18 +992,46 @@ Run this against `tasks.md` before implementation starts.
       entries into Markdown creates exactly the unchecked second source of truth that the
       plan refuses to create elsewhere. The rule is **never paraphrase**; referencing the
       authoritative bytes satisfies it, copying them does not improve on it.
-- [x] Each task lists its item's first destination path and points at the full list
-- [x] Each task records its `reuseAction`
-- [ ] Before starting a task, the implementer retrieves the full manifest entry and treats
-      `detailedDesign`, `validation`, and `removalProof` as the task definition
-- [x] `dependencyOwner` edges are represented: 91 items are marked free-to-start, the rest
-      wait on a named predecessor
+- [x] Every primary manifest-backed task carries the authoritative `workItemId` pointer.
+      Any trailing path-shaped, reuse, or descriptive text is explicitly a
+      non-authoritative orientation label, not a copied manifest field or writable-path grant.
+- [ ] Before starting a task, the implementer resolves its id to exactly one complete
+      15-field manifest object, carries that object unchanged, and treats all of its fields as
+      the task definition; selecting only named fields is not equivalent
+- [x] `dependencyOwner` edges are represented: 91 of 545 manifest work items are marked
+      free-to-start, while the full `tasks.md` census has 99 `[P]` tasks of 605 total
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
-- [x] The 14 `file-overlap-order` edges are recorded as explicit ordering constraints
+- [x] The 14 manifest `file-overlap-order` edges are recorded as explicit ordering
+      constraints; local completion handoffs additionally serialize `T591 -> T592` for
+      `transaction.rs` and `T595 -> T599` for `packages/d2b/src/dispatch.rs`
+- [x] The approved W5 completion graph has one integrator-prep commit; parallel T590, T591,
+      and T594 starts; the serialized `T591 -> T592 -> T593 -> T605` chain; one serial daemon
+      composition owner; four disjoint acceptance/docs slices T596-T599; and T220
+      convergence/freeze plus exact-candidate evidence before
+      T219's external-disposition-only conditional close. T219 issues no request. T591 and
+      T592 deliberately overlap
+      `packages/d2b-resource-store-redb/src/transaction.rs`, so T592 starts only after T591.
+      T593 starts only after T592 because it consumes T592's frozen broker op and approved
+      FFI quarantine; it does not own `packages/Cargo.lock`. The six implementation tasks are
+      not all file-disjoint. This is permitted because
+      every shared writer and strict dependency edge is explicit; no two owners write a
+      contended file concurrently.
+- [x] T603 is the sole in-feature direct prerequisite of T589 and uses `/d2b-spec-edit` as the sole feature mutation surface. One clean-base analysis and selected-roster lifecycle precede the all-satisfied checkbox batch; the editor receipt and dedicated checkbox-only Git commit are the only authority; and fresh analysis plus a new selected-roster lifecycle bind the changed snapshot before T589. T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Final F evidence remains separate.
+
+- [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
+      adds the two closed-enum values and owned pre-consumer artifacts, T595 emits them, T599
+      reconciles downstream consumers, and T220 reconciles generated manifests and full drift
+      before F. The same Wave 5 PR carries the coordinated result. No implementation or
+      delivery result is claimed
+- [x] T600 and T601 have disjoint ownership of the closed seven-identifier FR-072 evidence
+      set, and T602 compares the exact lane/identifier multiset before T219
 - [ ] No task contradicts a decision in the register (checked per task at implementation time,
       per FR-047)
-- [x] Contended files are integrator-prep, not slice-owned
+- [x] Unordered contended files are integrator-prep and integrator-owned. A contended file may
+      instead have explicitly ordered serial slice owners only when the plan names every
+      writer and the dependency edge, as for `transaction.rs`. `packages/Cargo.lock` is not
+      transferred: T592 is its sole owner and T593 consumes the frozen dependency graph
 ---
 
 ## Requirement traceability (FR/SC to ADR-046 owners)
@@ -906,29 +1065,39 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-023 | Removal only after successor plus proof, own commit | `current-code-migration-map`, `streamline` | `streamline`, `reuse` |
 | FR-024 | No dual control plane in the release | `reset-and-cutover`, `streamline` | `reset`, `streamline` |
 | FR-025 - FR-033 | Wave gating, seal, evidence, anti-serialization, semaphore, drift, test layers, suite retirement | `validation-and-delivery` | `delivery` |
-| FR-034 - FR-036 | W0/W1 waiver, sealed delivery from W2, entry check | `validation-and-delivery` (§4 entry/exit) | `delivery` |
+| FR-034 - FR-036 | W0/W1 historical evidence, external Principle VI constitution prerequisite, then sealed delivery from W2 | `validation-and-delivery` (§4 entry/exit) plus external constitution amendment | `delivery` |
 | FR-037 - FR-038 | Deliver W2-W8; satisfy the six-condition release gate | `validation-and-delivery` §15 | `delivery` |
 | FR-039 - FR-040 | Companion compatibility as a release blocker | **Locally added** - no ADR-046 owner | none |
 | FR-041 - FR-042 | Parity where a successor was promised; explicit retirement otherwise | `current-code-migration-map` | `streamline`, `reuse` |
-| FR-043 | Recovery-point attestation before the irreversible phase | **Locally added** - extends `reset-and-cutover` | `reset` (extends) |
+| FR-043 | Qualified, fresh recovery-point attestation bound to F7 candidate/commit/tree, exact preview, and daily-driver host before the irreversible phase and every W7 close boundary | **Locally added** - extends `reset-and-cutover` | `reset` (extends) plus T580/T555/T556 |
 | FR-044 - FR-045 | Gated pull-request landing; no intermediate release | `validation-and-delivery` §13 | `delivery` |
 | FR-046 | Generated manifests authoritative over prose | **Locally added** - applies the repository's existing-code-is-canon rule | none |
 | FR-047 | Conformance to the 129 frozen decisions | `decision-register` | `decisions` |
+| FR-048 - FR-050 | Pipelined implementation start with strict ordered exit | `validation-and-delivery` section 4 | `delivery` |
+| FR-051 - FR-055 | Discover-Fix-Verify lifecycle, historical deferral compatibility, and pre-panel review gates | `validation-and-delivery` plus program process | `delivery` |
+| FR-056 - FR-059 | Standing Gate 0, entry/exit distinction after the external constitution prerequisite, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
+| FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
+| FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
+| FR-066 - FR-072 | Authenticated production publication through the typed accepted-socket broker pidfd operation and approved broker FFI quarantine, one-shot policy bootstrap then authenticated policy access, controller ledger, exact system-core Provider readiness, committed-pending-audit status, broker-only audited host-generation mutation and recovery, generated Version 2 SC-002 ownership, restart/Zone isolation, and exact Wave 5 production-plane evidence. Before T220, an accepted Network contract/work-item amendment must remove every current-facing sole Network-opt-in path, install the double-opt-in migration, and retain T336-T355 plus all four cases as W6 work under T221. Exact Provider/config/effect/readiness and Device cleanup for `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm` remain W6 T604 acceptance after those rows merge; Guest remains W6 `Provider/runtime-cloud-hypervisor` T384/T479/T480 exact-F6 acceptance. | **Locally added Wave 5 production-plane checkpoint plus Wave 6 operator/Guest acceptance assignment**, constrained by `componentsession-and-bus`, `resource-api-and-authorization`, `resource-store-redb`, `resource-reconciliation`, `core-controllers`, `resources-volume`, `resources-network`, `resources-device`, `provider-volume-local`, `provider-network-local`, `provider-device-tpm`, `provider-system-core`, `provider-runtime-cloud-hypervisor`, `telemetry-audit-and-support`, ADR 0034 | `session`, `bus`, `api`, `store`, `reconcile`, `core`, `volume`, `network`, `device`, `volume-local`, `network-local`, `device-tpm`, `system-core`, `ch`, `audit` plus T589-T605 and T479-T480 |
+| FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
+| FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
+| FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity through W2-W6 | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | T028/T029, T035/T036, T070/T071, T220/T600/T602/T219, and T479/T480 |
 
 ### Locally added requirements
 
-Four requirements have no upstream ADR-046 owner. Each came from a recorded clarification
-decision, not from the specification set, and each is therefore **this program's own
-obligation** rather than an inherited one:
+Program-local requirements are explicit rather than masquerading as work-item-manifest
+content. The original clarification family and the later approved additions are:
 
 | Requirement | Origin | Consequence |
 | --- | --- | --- |
 | FR-039, FR-040 | Clarification: companions block the release | Adds a release-gate condition the ADR-046 set does not contain. If it is ever dropped, it must be dropped here, not looked for upstream. |
-| FR-043 | Clarification: recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. |
+| FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
+| FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
+| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | T603 uses the exclusive editor plus checkbox-only Git commit; accepted Version 2 and generated `VD2-SC002-*` traceability own all SC-002 protocol detail; T599 owns the versioned recovery runbook/action mapping, client-side response-loss operation ID, and direct Version 2 recovery-coordinate exception without telemetry/audit propagation; T220 freezes only after Wave 5 generated traceability, one selected-roster lifecycle with one stable discovery ledger, widen-only deterministic reselection and scoped verification, the exact seven evidence identifiers, and the accepted Network amendment has removed every current-facing sole Network-opt-in path while retaining T336-T355 plus all four cases as W6 work under T221. T604 remains W6 acceptance-only after those rows merge and emits `operator-nix-activation-cleanup` for T479 on exact F6. This feature does not silently reassign rows. |
+| FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Makes the existing daemon restart VM survival check exact-candidate close evidence at W2-W6, with full namespace equality after excluding only canonical `d2b.slice` and separate unexpected-slice/unexpected-service negative injections. It adds no task and no W5 evidence identifier. |
 
-A reviewer checking upstream fidelity should expect these four to have no counterpart in
-`docs/specs/`. That is intended, not a coverage gap.
+Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. The generator maps every identifier to one schema, fixture set, implementation owner, task, and gate and fails on missing, duplicate, extra, or ownerless rows. T589, T600, and T220 consume only their Wave 5 rows; T604 and T479 consume only the W6 operator rows. Feature-local counts or protocol copies are non-authoritative.
 
 ### Success-criteria traceability
 
@@ -940,4 +1109,7 @@ A reviewer checking upstream fidelity should expect these four to have no counte
 | SC-014 - SC-018 | FR-020 - FR-024, FR-041, FR-042; `reset-and-cutover` and `streamline` |
 | SC-019 - SC-023, SC-026 | FR-025 - FR-038, FR-044, FR-045; `validation-and-delivery` §4 and §15 |
 | SC-024 | FR-039, FR-040 - locally added |
-| SC-025 | FR-043 - locally added |
+| SC-025 | FR-043 - locally added; candidate-bound enforcement through T580/T555/T556 |
+| SC-027 - SC-029 | FR-025 - FR-029, FR-049, FR-051 - FR-055 |
+| SC-030 - SC-034 | FR-066 - FR-074; T603 exclusive-editor reconciliation, generated Version 2 SC-002 traceability, T589-T602 plus T605 Wave 5 acceptance, and T604/T479/T480 exact-F6 operator acceptance |
+| SC-035 | FR-075; candidate-bound close evidence at T028/T029, T035/T036, T070/T071, T220/T600/T602/T219, and T479/T480 |

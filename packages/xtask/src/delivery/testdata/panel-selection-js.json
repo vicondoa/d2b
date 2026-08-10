@@ -1,0 +1,50 @@
+{
+  "ambiguity_widened": false,
+  "artifact_kind": "d2b-panel/lifecycle-selection",
+  "candidate_class": "code",
+  "candidate_id": "b14017729b4312480b217eb378d89da8e629ca0ccb082a66230a297450d9270e",
+  "classification_inputs": {
+    "ambiguous": false,
+    "candidate_class": "code",
+    "changed_paths": [
+      "packages/xtask/src/delivery/panel.rs"
+    ],
+    "signals": []
+  },
+  "content_id": "2a7104db2b2fb08db7062bf0080594f4c002abede9328b579fee4700725a1c40",
+  "lifecycle_id": "rust-panel-interop",
+  "phase": "discovery",
+  "profiles": {
+    "agentic": [],
+    "build": [],
+    "docs": [],
+    "nixos": [],
+    "observability": [],
+    "product": [],
+    "reliability": [],
+    "security": [],
+    "simplicity": [],
+    "software": [
+      "rust"
+    ],
+    "test": []
+  },
+  "program": "ADR046",
+  "roster": [
+    "software",
+    "test",
+    "product",
+    "docs",
+    "security",
+    "observability",
+    "simplicity",
+    "reliability",
+    "agentic",
+    "nixos",
+    "build"
+  ],
+  "schema_version": 1,
+  "selection_table_version": 2,
+  "snapshot_sha256": "c6364dcb391510507604fbd15d5cc8fba1617ede694403fcb2296332cecd04c8",
+  "wave": "W0"
+}

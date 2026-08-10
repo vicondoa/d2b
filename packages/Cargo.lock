@@ -907,6 +907,7 @@ dependencies = [
  "d2b-core",
  "d2b-realm-core",
  "d2b-realm-router",
+ "d2b-resource-client",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
@@ -927,21 +928,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-audit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-telemetry",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-audit",
  "d2b-contracts",
+ "d2b-controller-toolkit",
  "d2b-resource-api",
  "d2b-resource-store",
+ "d2b-resource-store-redb",
  "d2b-session",
  "d2b-session-unix",
+ "d2b-telemetry",
  "getrandom 0.3.4",
  "quote",
  "serde_json",
  "sha2",
  "snow",
  "syn 2.0.118",
+ "tempfile",
  "tokio",
 ]
 
@@ -1000,10 +1016,19 @@ dependencies = [
 name = "d2b-controller-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts",
+ "d2b-process",
+ "d2b-process-conformance",
+ "d2b-provider-supervisor",
+ "d2b-provider-system-minijail",
+ "d2b-resource-api",
+ "d2b-resource-store",
+ "d2b-resource-store-redb",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1028,8 +1053,12 @@ dependencies = [
 name = "d2b-core-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-telemetry",
+ "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -1038,20 +1067,6 @@ name = "d2b-credential-service"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
-]
-
-[[package]]
-name = "d2b-daemon-access"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts",
- "d2b-realm-core",
- "d2b-realm-provider",
- "nix 0.29.0",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1123,8 +1138,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-core",
- "d2b-realm-core",
- "d2b-realm-provider",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
@@ -1143,19 +1156,6 @@ name = "d2b-host-activation-helper"
 version = "0.0.0-bootstrap"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "d2b-host-providers"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-core",
- "d2b-host",
- "d2b-realm-core",
- "d2b-realm-provider",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1235,6 +1235,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-device-gpu"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-provider-device-security-key"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-provider-device-tpm"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-provider-device-usbip"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1246,6 +1273,16 @@ name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+]
+
+[[package]]
+name = "d2b-provider-observability-otel"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-provider-toolkit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1280,7 +1317,9 @@ dependencies = [
  "d2b-process-conformance",
  "d2b-provider-system-minijail",
  "d2b-provider-system-systemd",
+ "d2b-telemetry",
  "rustix 0.38.44",
+ "serde_json",
  "sha2",
  "socket2 0.5.10",
  "tempfile",
@@ -1310,6 +1349,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-process-conformance",
+ "d2b-provider-toolkit",
 ]
 
 [[package]]
@@ -1317,6 +1357,12 @@ name = "d2b-provider-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-provider",
+ "d2b-session",
+ "schemars",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -1409,7 +1455,9 @@ dependencies = [
  "d2b-core-controller",
  "d2b-resource-store",
  "d2b-resource-store-redb",
+ "d2b-telemetry",
  "protobuf",
+ "serde_json",
  "sha2",
  "tempfile",
  "tokio",
@@ -1421,6 +1469,22 @@ name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-resource-compiler"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "base64",
+ "d2b-contracts",
+ "d2b-core",
+ "ring",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -1434,9 +1498,11 @@ dependencies = [
 name = "d2b-resource-store-redb"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
  "d2b-resource-store",
+ "d2b-telemetry",
  "redb",
  "rustix 0.38.44",
  "serde",
@@ -1451,10 +1517,13 @@ name = "d2b-session"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-audit",
  "d2b-contracts",
  "d2b-resource-api",
+ "d2b-telemetry",
  "futures-util",
  "protobuf",
+ "serde_json",
  "sha2",
  "snow",
  "tokio",
@@ -1488,6 +1557,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-telemetry"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "d2b-unsafe-local-helper"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1505,13 +1584,6 @@ dependencies = [
  "socket2 0.5.10",
  "uzers",
  "zbus",
-]
-
-[[package]]
-name = "d2b-userd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
 ]
 
 [[package]]
@@ -1550,16 +1622,22 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
+ "d2b-bus",
  "d2b-contracts",
  "d2b-core",
+ "d2b-core-controller",
  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
+ "d2b-provider",
  "d2b-provider-aca",
  "d2b-provider-relay",
  "d2b-realm-core",
  "d2b-realm-provider",
  "d2b-realm-router",
+ "d2b-resource-api",
+ "d2b-resource-store",
+ "d2b-resource-store-redb",
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",

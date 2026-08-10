@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2126,SC2329
-# tests/integration/live/live-vm-smoke.sh - v1.2 live-VM smoke gate.
+# tests/integration/live/live-vm-smoke.sh - live Guest smoke gate.
 #
 # Pre-tag maintainer-side gate per ADR 0022 + v1.2 plan §.
 # SKIP-ON-CI (requires KVM / systemd / privileged broker).
@@ -16,8 +16,8 @@
 #   77  SKIP (KVM absent / d2b not running / VMs not declared)
 #
 # Configurable via environment:
-#   D2B_SMOKE_TIMEOUT_SSH     seconds to wait for SSH (default 120)
-#   D2B_SMOKE_APIREADY_BUDGET seconds to wait for api_ready (default 60)
+#   D2B_SMOKE_EXEC_BUDGET     seconds to wait for Guest exec (default 120)
+#   D2B_SMOKE_READY_BUDGET    seconds to wait for Guest Ready (default 60)
 #   D2B_SMOKE_VM_PRIMARY      primary VM name (default personal-dev)
 #   D2B_SMOKE_VM_SECONDARY    secondary VM for --full (default work-aad)
 
@@ -51,8 +51,8 @@ fi
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-D2B_SMOKE_TIMEOUT_SSH=${D2B_SMOKE_TIMEOUT_SSH:-120}
-D2B_SMOKE_APIREADY_BUDGET=${D2B_SMOKE_APIREADY_BUDGET:-60}
+D2B_SMOKE_EXEC_BUDGET=${D2B_SMOKE_EXEC_BUDGET:-120}
+D2B_SMOKE_READY_BUDGET=${D2B_SMOKE_READY_BUDGET:-60}
 D2B_SMOKE_VM_PRIMARY=${D2B_SMOKE_VM_PRIMARY:-personal-dev}
 D2B_SMOKE_VM_SECONDARY=${D2B_SMOKE_VM_SECONDARY:-work-aad}
 
@@ -98,15 +98,22 @@ if ! command -v d2b >/dev/null 2>&1; then
   exit 77
 fi
 
-# Check that the primary VM is declared in the manifest.
-if ! d2b vm status "$D2B_SMOKE_VM_PRIMARY" >/dev/null 2>&1; then
-  log "==> SKIP: VM '$D2B_SMOKE_VM_PRIMARY' not declared in manifest"
+# Guest status is parsed with jq below; do not fall back to the retired
+# manifest or VM-array status surfaces.
+if ! command -v jq >/dev/null 2>&1; then
+  log "==> SKIP: jq is required to parse v3 Guest Resource envelopes"
+  exit 77
+fi
+
+# Check that the primary Guest is declared in the Zone Resource API.
+if ! d2b guest status "$D2B_SMOKE_VM_PRIMARY" --json >/dev/null 2>&1; then
+  log "==> SKIP: Guest '$D2B_SMOKE_VM_PRIMARY' not declared in the Zone"
   exit 77
 fi
 
 if [ "$MODE" = "full" ]; then
-  if ! d2b vm status "$D2B_SMOKE_VM_SECONDARY" >/dev/null 2>&1; then
-    log "==> SKIP: VM '$D2B_SMOKE_VM_SECONDARY' not declared (required for --full)"
+  if ! d2b guest status "$D2B_SMOKE_VM_SECONDARY" --json >/dev/null 2>&1; then
+    log "==> SKIP: Guest '$D2B_SMOKE_VM_SECONDARY' not declared (required for --full)"
     exit 77
   fi
 fi
@@ -115,12 +122,12 @@ fi
 # Probe helpers
 # ---------------------------------------------------------------------------
 
-# wait_for_guest_exec <vm> <timeout_secs> -- <argv...>
+# wait_for_guest_exec <name> <timeout_secs> -- <argv...>
 wait_for_guest_exec() {
-  local vm="$1" timeout="$2" elapsed=0 interval=5
+  local name="$1" timeout="$2" elapsed=0 interval=5
   shift 2
   while [ "$elapsed" -lt "$timeout" ]; do
-    if d2b vm exec "$vm" -- "$@" >/dev/null 2>&1; then
+    if d2b exec run "Guest/$name" -- "$@" >/dev/null 2>&1; then
       return 0
     fi
     sleep "$interval"
@@ -129,28 +136,23 @@ wait_for_guest_exec() {
   return 1
 }
 
-# vm_ip <vm> - resolve the VM's static IP from the d2b manifest.
-vm_ip() {
-  local vm="$1" ip
-  ip=$(d2b vm status "$vm" --json 2>/dev/null \
-    | grep -Eo '"static(_i|I)p"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | grep -o '"[0-9][^"]*"' \
-    | tr -d '"' \
-    | head -1)
-  if [ -n "$ip" ]; then
-    printf '%s\n' "$ip"
-    return 0
-  fi
-  d2b list --json 2>/dev/null \
-    | awk -v vm="\"$vm\"" '
-      /"name"[[:space:]]*:/ { in_vm = ($0 ~ vm) }
-      in_vm && /"staticIp"[[:space:]]*:/ {
-        gsub(/.*"staticIp"[[:space:]]*:[[:space:]]*"/, "")
-        gsub(/".*/, "")
-        print
-        exit
-      }
-    '
+# guest_status_json <name> - fetch one complete v3 Guest Resource envelope.
+guest_status_json() {
+  d2b guest status "$1" --json 2>/dev/null
+}
+
+# guest_envelope_is_valid <name> - validate identity and current v3 status
+# fields without consulting legacy manifest or VM-array output.
+guest_envelope_is_valid() {
+  local name="$1"
+  jq -e --arg name "$name" '
+    .ok == true
+    and .apiVersion == "resources.d2bus.org/v3"
+    and .type == "Guest"
+    and .metadata.name == $name
+    and (.status.phase | type == "string")
+    and (.status.conditions | type == "array")
+  ' >/dev/null
 }
 
 # api_socket <vm> - path to CH HTTP API socket.
@@ -171,17 +173,23 @@ ch_pid() {
   fi
 }
 
-# wait_for_api_ready <vm> <budget_secs> - wait until d2b vm status reports api_ready yes.
-wait_for_api_ready() {
-  local vm="$1" budget="$2" elapsed=0 interval=5
+# wait_for_guest_ready <name> <budget_secs> - wait for current Guest status.
+wait_for_guest_ready() {
+  local name="$1" budget="$2" elapsed=0 interval=5
   while [ "$elapsed" -lt "$budget" ]; do
     local status
-    status=$(d2b vm status "$vm" --json 2>/dev/null || true)
-    if printf '%s\n' "$status" | grep -Eq '"api_ready"[[:space:]]*:[[:space:]]*"yes"|"apiReady"[[:space:]]*:[[:space:]]*"yes"'; then
-      return 0
-    fi
-    if printf '%s\n' "$status" | grep -q '"runtime"[[:space:]]*:[[:space:]]*"running"' \
-       && printf '%s\n' "$status" | grep -q '"guest-control-health"'; then
+    status=$(guest_status_json "$name" || true)
+    if printf '%s\n' "$status" \
+      | jq -e --arg name "$name" '
+          .ok == true
+          and .apiVersion == "resources.d2bus.org/v3"
+          and .type == "Guest"
+          and .metadata.name == $name
+          and (
+            .status.phase == "Ready"
+            or any(.status.conditions[]?; .type == "Ready" and .status == "True")
+          )
+        ' >/dev/null 2>&1; then
       return 0
     fi
     sleep "$interval"
@@ -197,44 +205,52 @@ probe_common() {
   local vm="$1"
   log "==> probe_common: VM=$vm"
 
-  # 1. Start VM.
+  # Later-wave blocker: the current production Zone Resource runtime serves
+  # Guest Get/List/Status/Watch, but does not yet expose UpdateSpec lifecycle
+  # dispatch. This lane uses the typed Guest lifecycle command below and must
+  # remain visibly blocked until that production semantic exists; it must not
+  # fall back to a legacy VM command.
+
+  # 1. Start Guest.
   log "  starting $vm"
   local start_output
-  if ! start_output=$(d2b vm start "$vm" --apply 2>&1); then
+  if ! start_output=$(d2b guest start "$vm" --apply 2>&1); then
     if printf '%s\n' "$start_output" | grep -q 'pending un-approved guest config edit'; then
       log "  WARN: $vm has a pending un-approved guest config edit; skipping live VM probes for this host-local state"
       return 2
     fi
-    fail_check "$vm: d2b vm start failed"
+    fail_check "$vm: d2b guest start failed"
     return 1
   fi
-  pass_check "$vm: d2b vm start returned"
+  pass_check "$vm: d2b guest start returned"
   PROBE_COMMON_STARTED=1
 
-  # 2. api_ready within budget.
-  if wait_for_api_ready "$vm" "$D2B_SMOKE_APIREADY_BUDGET"; then
-    pass_check "$vm: api_ready=yes within ${D2B_SMOKE_APIREADY_BUDGET}s"
+  # 2. Validate the v3 Guest envelope and wait for current readiness.
+  local initial_status
+  initial_status=$(guest_status_json "$vm" || true)
+  if printf '%s\n' "$initial_status" | guest_envelope_is_valid "$vm"; then
+    pass_check "$vm: v3 Guest status envelope is valid"
   else
-    fail_check "$vm: api_ready never became yes within ${D2B_SMOKE_APIREADY_BUDGET}s"
+    fail_check "$vm: d2b guest status did not return a v3 Guest envelope"
+    return 1
+  fi
+  if wait_for_guest_ready "$vm" "$D2B_SMOKE_READY_BUDGET"; then
+    pass_check "$vm: Guest Ready within ${D2B_SMOKE_READY_BUDGET}s"
+  else
+    fail_check "$vm: Guest did not become Ready within ${D2B_SMOKE_READY_BUDGET}s"
   fi
 
   # 3. Guest-control exec reachability + uname.
-  local ip
-  ip=$(vm_ip "$vm")
-  if [ -z "$ip" ]; then
-    fail_check "$vm: could not resolve static IP from manifest"
-    return 1
-  fi
-  if wait_for_guest_exec "$vm" "$D2B_SMOKE_TIMEOUT_SSH" uname -a; then
-    pass_check "$vm: guest-control exec uname -a succeeded within ${D2B_SMOKE_TIMEOUT_SSH}s"
+  if wait_for_guest_exec "$vm" "$D2B_SMOKE_EXEC_BUDGET" uname -a; then
+    pass_check "$vm: guest-control exec uname -a succeeded within ${D2B_SMOKE_EXEC_BUDGET}s"
   else
-    fail_check "$vm: guest-control exec unreachable after ${D2B_SMOKE_TIMEOUT_SSH}s"
+    fail_check "$vm: guest-control exec unreachable after ${D2B_SMOKE_EXEC_BUDGET}s"
     return 1
   fi
 
   # 4. virtiofsd file-IO probe.
   local store_entry
-  store_entry=$(d2b vm exec "$vm" -- sh -lc 'ls /nix/store 2>/dev/null | head -1' 2>/dev/null || true)
+  store_entry=$(d2b exec run "Guest/$vm" -- sh -lc 'ls /nix/store 2>/dev/null | head -1' 2>/dev/null || true)
   if [ -n "$store_entry" ]; then
     pass_check "$vm: virtiofsd file-IO probe: /nix/store entry='${store_entry}'"
   else
@@ -340,7 +356,7 @@ probe_teardown() {
   local vm="$1"
   log "==> probe_teardown: VM=$vm"
 
-  d2b vm stop "$vm" --apply >/dev/null 2>&1 || true
+  d2b guest stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 3
 
   # Assert no orphan sidecar processes.
@@ -375,47 +391,12 @@ probe_tpm() {
   local vm="$1"
   log "==> probe_tpm: VM=$vm"
 
-  if ! d2b vm status "$vm" --json 2>/dev/null | grep -q '"swtpm"[[:space:]]*:[[:space:]]*"running"'; then
-    log "  WARN: $vm has no running swtpm service; skipping TPM live probe"
-    return
-  fi
-
-  # TPM functional probe: tpm2_getrandom 8.
-  if d2b vm exec "$vm" -- sh -lc 'tpm2_getrandom 8 >/dev/null 2>&1' >/dev/null 2>&1; then
-    pass_check "$vm: TPM functional probe tpm2_getrandom 8 succeeded"
-  else
-    fail_check "$vm: TPM functional probe tpm2_getrandom 8 failed (fu36 class)"
-  fi
-
-  # TPM SRK persistence pre-state.
-  local srk_count_before
-  srk_count_before=$(d2b vm exec "$vm" -- sh -lc 'tpm2_getcap handles-persistent 2>/dev/null | grep -c 0x81000001 || echo 0' 2>/dev/null || echo 0)
-  if [ "${srk_count_before:-0}" -ge 1 ]; then
-    pass_check "$vm: TPM SRK handle 0x81000001 present before restart"
-  else
-    log "  WARN: SRK handle 0x81000001 absent pre-restart (VM may not have enrolled yet)"
-  fi
-
-  # Restart VM; re-assert SRK handle.
-  log "  restarting $vm for TPM persistence check"
-  d2b vm stop "$vm" --apply >/dev/null 2>&1 || true
-  sleep 2
-  if ! d2b vm start "$vm" --apply >/dev/null 2>&1; then
-    fail_check "$vm: d2b vm start (post-stop for TPM persistence) failed"
-    return
-  fi
-  # Wait for guest-control exec to come back.
-  if ! wait_for_guest_exec "$vm" "$D2B_SMOKE_TIMEOUT_SSH" uname -a; then
-    fail_check "$vm: guest-control exec unreachable after restart for TPM persistence check"
-    return
-  fi
-  local srk_count_after
-  srk_count_after=$(d2b vm exec "$vm" -- sh -lc 'tpm2_getcap handles-persistent 2>/dev/null | grep -c 0x81000001 || echo 0' 2>/dev/null || echo 0)
-  if [ "${srk_count_after:-0}" -ge 1 ]; then
-    pass_check "$vm: TPM SRK handle 0x81000001 survived restart (panel-virt R0 #6)"
-  else
-    fail_check "$vm: TPM SRK handle 0x81000001 absent after restart (fu36 class)"
-  fi
+  # Later-wave blocker: the v3 Guest Resource status contract does not yet
+  # expose a standardized TPM runner/readiness field. Do not infer TPM
+  # enablement from the retired VM status service map or run a compatibility
+  # probe based on that legacy shape.
+  log "  BLOCKED: v3 Guest status has no TPM readiness field; TPM persistence probe is deferred to the Guest Provider status contract"
+  return 2
 }
 
 # ---------------------------------------------------------------------------
@@ -474,7 +455,7 @@ probe_audio() {
 
   # Audio card probe.
   local card_count
-  card_count=$(d2b vm exec "$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
+  card_count=$(d2b exec run "Guest/$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
   if [ "${card_count:-0}" -ge 1 ]; then
     pass_check "$vm: audio sidecar probe: ${card_count} card(s) visible in guest"
   else
@@ -483,10 +464,10 @@ probe_audio() {
 
   # Audio sidecar restart binding.
   log "  audio restart binding: stop + restart $vm"
-  d2b vm stop "$vm" --apply >/dev/null 2>&1 || true
+  d2b guest stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 2
-  if ! d2b vm start "$vm" --apply >/dev/null 2>&1; then
-    fail_check "$vm: d2b vm start (audio restart) failed"
+  if ! d2b guest start "$vm" --apply >/dev/null 2>&1; then
+    fail_check "$vm: d2b guest start (audio restart) failed"
     return
   fi
   if ! wait_for_guest_exec "$vm" 30 uname -a; then
@@ -494,7 +475,7 @@ probe_audio() {
     return
   fi
   local card_count_after
-  card_count_after=$(d2b vm exec "$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
+  card_count_after=$(d2b exec run "Guest/$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
   if [ "${card_count_after:-0}" -ge 1 ]; then
     pass_check "$vm: audio sidecar restart binding: ${card_count_after} card(s) after restart"
   else

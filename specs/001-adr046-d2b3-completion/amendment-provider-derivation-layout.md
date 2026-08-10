@@ -4,19 +4,18 @@
 | --- | --- |
 | Scope | The required derivation outputs of a Provider artifact: output name, file paths, executable set, digest preimages, signature anchoring, and the conformance scenarios that check them |
 | Raised under | The W5 audit, recorded in `implementation-debt.md` sections 12.1, 12.2, 12.3, 14.8, and 19.7 |
-| Deciding record | [ADR 0050](../../docs/adr/0050-provider-derivation-artifact-layout.md), currently **Proposed** |
+| Deciding record | [ADR 0050](../../docs/adr/0050-provider-derivation-artifact-layout.md), **Accepted** |
 | Affected member specs | `ADR-046-resources-zone-control` (sections 4.3.1, 4.9 new, 13.4, 14.10, 15.8, 17); `ADR-046-provider-model-and-packaging` (Package catalog, Crate/package boundary); `ADR-046-nix-configuration` (Validation); `ADR-046-security-and-threat-model`; `ADR-046-decision-register` (D101 domain tags); provider dossiers `system-core` (naming **and** a `binaryRef` self-contradiction) and `transport-azure-relay` |
 | Affected manifests | `ADR-046-work-items.json`, `ADR-046-implementation-graph.json`, `ADR-046-implementation-graph.md`, `ADR-046-spec-set.json` - all four are **generated**, see section 9 |
 | Unblocks | `ADR046-zone-control-015` (T174), and transitively `ADR046-zone-control-016` (T212) and `ADR046-zone-control-021` (T213) |
-| Status | Drafted. **Not applied.** ADR 0050 is Proposed; the edits below land once it is Accepted |
+| Status | Accepted and applied with ADR 0050. The member-spec edits and generated artifacts below are authoritative |
 
-## 0. Why the text is drafted here rather than applied
+## 0. Applying the accepted amendment
 
-`docs/specs/` is normative and its work-item manifests are drift-gated. Landing a
-normative amendment against a Proposed ADR would put the spec set ahead of the
-decision it cites, which is the failure mode the register exists to catch. The
-exact replacement text is therefore written out here, verbatim and applyable, and
-the edit lands in the change that flips ADR 0050 to Accepted.
+`docs/specs/` is normative and its work-item manifests are drift-gated. ADR 0050
+is now Accepted, so the replacement text below has been applied to the
+authoritative member specs and the generated registry/graph artifacts in the
+same W5 preparation change.
 
 Every edit below is a replacement or an insertion with its anchor quoted, so the
 implementer applying it does not have to infer placement.
@@ -364,7 +363,8 @@ A Process created for a Provider component resolves its program as
 manifest-supplied absolute path, no path relative to a working directory.
 
 **`BinaryRef` is a validated newtype and launchability is modelled.** The
-`binaryRef` term of (3) is not implementable against the contract as committed.
+`binaryRef` term of (3) was not implementable against the pre-amendment
+contract. The applied W5 prep now carries the field and parser described below.
 `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` declares
 `component_id`, `component_type`, `exported_resource_types`, `exported_methods`,
 `allowed_domains`, `cardinality`, `config_digest`, `dependencies`,
@@ -1270,6 +1270,10 @@ Unlike section 11, these are **in scope**, so they are recorded
 separately rather than as observed drift. Two of the three block named
 scenarios; the third blocks none and is recorded because the rule it
 discharges is otherwise satisfiable only by hand.
+
+The first obligation below is completed by the applied W5 contract change;
+its description retains the pre-amendment field inventory to make the drift
+that prompted the amendment explicit.
 
 | Obligation | Owner | Blocks |
 | --- | --- | --- |

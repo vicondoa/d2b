@@ -155,7 +155,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds }, liveActivation: { timeoutSeconds } }`. `gracefulShutdown` controls provider-aware guest shutdown before forced VMM cleanup; its timeout is a nullable 1-600 second per-VM override. `liveActivation.timeoutSeconds` is a nullable 1-3600 second per-VM override for in-guest `switch`/`test`/`rollback`; `null` means the daemon default from `/etc/d2b/daemon-config.json` applies. |
 | `graphics` | boolean | yes | Mirror of `d2b.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `d2b.vms.<name>.tpm.enable`. |
-| `usbipYubikey` | boolean | yes | Mirror of `d2b.vms.<name>.usbip.yubikey`. `d2b usb attach\|detach\|probe` refuses to run when false. |
+| `usbipYubikey` | boolean | yes | Mirror of `d2b.vms.<name>.usbip.yubikey`. `d2b device usb attach\|detach\|probe` refuses to run when false. |
 | `audio` | boolean | yes | Mirror of `d2b.vms.<name>.audio.enable` (the capability bit). Live grant state lives in `audioStateFile`. |
 | `securityKey` | boolean | yes | Mirror of `d2b.vms.<name>.usb.securityKey.enable`. True when the VM receives the CTAPHID virtual security-key frontend. |
 | `tap` | string | yes | Host-side tap-device name. Derived: `<env>-l<index>` (workload), `<env>-u2` (net VM), or `vm-<name>` (legacy). |

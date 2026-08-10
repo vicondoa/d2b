@@ -16,6 +16,7 @@ use crate::error::VolumeLocalError;
 use crate::identity::VolumeRootHandle;
 use crate::layout::{ConditionSeverity, EntryCondition, EntryRequest, plan_cleanup, plan_entry};
 use crate::port::{QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort};
+use crate::source::{SourcePolicyCatalog, validate_source_spec};
 use crate::status::{AttachmentState, AttachmentStatus, LayoutPhase, VolumeStatusReport};
 use crate::views::admit_attachments;
 
@@ -25,6 +26,7 @@ pub struct VolumeLocalProfile {
     provider: BoundedToken,
     supported_source_kinds: BTreeSet<SourceKind>,
     supports_shared_write: bool,
+    source_policies: Option<SourcePolicyCatalog>,
 }
 
 impl VolumeLocalProfile {
@@ -42,6 +44,7 @@ impl VolumeLocalProfile {
             provider,
             supported_source_kinds,
             supports_shared_write,
+            source_policies: None,
         })
     }
 
@@ -57,6 +60,7 @@ impl VolumeLocalProfile {
             .into_iter()
             .collect(),
             supports_shared_write: false,
+            source_policies: None,
         }
     }
 
@@ -73,6 +77,12 @@ impl VolumeLocalProfile {
     /// Whether this Provider admits `shared-write` attachments.
     pub const fn supports_shared_write(&self) -> bool {
         self.supports_shared_write
+    }
+
+    /// Attach the private source-policy catalog used for strict admission.
+    pub fn with_source_policy_catalog(mut self, catalog: SourcePolicyCatalog) -> Self {
+        self.source_policies = Some(catalog);
+        self
     }
 }
 
@@ -105,6 +115,10 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         volume_uid: &ResourceUid,
         spec: &VolumeSpec,
     ) -> Result<VolumeStatusReport, VolumeLocalError> {
+        validate_source_spec(spec)?;
+        if let Some(catalog) = &self.profile.source_policies {
+            catalog.validate(spec)?;
+        }
         let kind = spec.source().settings().kind();
         if !self.profile.supported_source_kinds().contains(&kind) {
             return Err(VolumeLocalError::SourceKindUnsupported);
@@ -121,7 +135,16 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         let mut phase = LayoutPhase::Pending;
         let mut conditions = Vec::new();
 
-        for declared in spec.layout() {
+        let mut ordered_entries: Vec<_> = spec.layout().iter().collect();
+        ordered_entries.sort_by_key(|entry| {
+            (
+                !entry.path().is_empty(),
+                entry.path().split('/').count(),
+                entry.path(),
+            )
+        });
+
+        for declared in ordered_entries {
             let entry = EntryRequest::resolve(volume_uid, declared)?;
             let observed = self.layout.observe(&root, &entry).await?;
             let plan = plan_entry(&entry, &observed, marker);
@@ -179,6 +202,10 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         volume_uid: &ResourceUid,
         spec: &VolumeSpec,
     ) -> Result<Vec<crate::identity::EntryDigest>, VolumeLocalError> {
+        validate_source_spec(spec)?;
+        if let Some(catalog) = &self.profile.source_policies {
+            catalog.validate(spec)?;
+        }
         let root = self
             .source
             .resolve_root(
@@ -187,7 +214,15 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
             )
             .await?;
         let mut removed = Vec::new();
-        for declared in spec.layout().iter().rev() {
+        let mut ordered_entries: Vec<_> = spec.layout().iter().collect();
+        ordered_entries.sort_by_key(|entry| {
+            (
+                entry.path().is_empty(),
+                core::cmp::Reverse(entry.path().split('/').count()),
+                core::cmp::Reverse(entry.path()),
+            )
+        });
+        for declared in ordered_entries {
             let entry = EntryRequest::resolve(volume_uid, declared)?;
             let observed = self.layout.observe(&root, &entry).await?;
             if plan_cleanup(&entry, &observed) {

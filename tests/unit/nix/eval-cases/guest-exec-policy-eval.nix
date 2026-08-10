@@ -161,9 +161,9 @@ let
 
   corpGuest = nixos.config.d2b._computed.corp-vm.config;
 
-  # No per-user `d2b-userd-*` services exist anywhere anymore.
-  userdNames = guestConfig:
-    lib.filter (name: lib.hasPrefix "d2b-userd-" name)
+  # No per-user legacy user-session services exist anywhere anymore.
+  userSessionServiceNames = guestConfig:
+    lib.filter (name: lib.hasInfix "userd" name)
       (lib.attrNames guestConfig.systemd.services);
 
   guestdExecStart = corpGuest.systemd.services.d2b-guestd.serviceConfig.ExecStart;
@@ -178,10 +178,9 @@ let
     assert corpGuest.d2b.guestControl.exec.enable == true;
     # The host-fixed workload user is derived from ssh.user.
     assert corpGuest.d2b.guestControl.exec.execUser == "alice";
-    # No userd services anywhere (the stub + scaffolding were removed).
-    assert userdNames corpGuest == [ ];
-    assert userdNames nixos.config == [ ];
-    assert !(builtins.hasAttr "d2b-userd-alice" corpGuest.systemd.services);
+    # No legacy user-session services exist anywhere.
+    assert userSessionServiceNames corpGuest == [ ];
+    assert userSessionServiceNames nixos.config == [ ];
     # guestd ExecStart carries the workload user + the exec-runtime helper paths
     # (systemd-run + exec-runner), wired whenever exec is enabled.
     assert lib.hasInfix "--exec-user alice" guestdExecStart;
@@ -206,7 +205,7 @@ let
 
   positiveDefault =
     assert corpGuest.d2b.guestControl.exec.enable == false;
-    assert userdNames corpGuest == [ ];
+    assert userSessionServiceNames corpGuest == [ ];
     # With guest-control disabled the guestd service is not emitted at all.
     assert !(builtins.hasAttr "d2b-guestd" corpGuest.systemd.services);
     builtins.toJSON {

@@ -1,300 +1,361 @@
-//! W3 CLI-contract integration test, migrated from
-//! tests/cli-rust-native-status.sh.
+//! CLI-contract integration coverage for the v3 ModernCli status surface.
 //!
-//! Spawns the real `d2b` binary against the rendered fixture-smoke bundle
-//! (D2B_FIXTURES) + a synthetic systemd/bridge state fixture, and asserts that
-//! `status`:
-//!   * `--vm <name>` and the positional `<name>` form produce byte-identical
-//!     `--json` output;
-//!   * `--json` deserializes strictly into `d2b_contracts::cli_output::StatusVmOutputV2`
-//!     (`deny_unknown_fields` makes this the schema check the bash gate did via
-//!     docs/reference/cli-output/status.schema.json) and is classified as the
-//!     `StatusOutputV2::Vm` untagged variant;
-//!   * corp-vm exposes its declared/static state: `declaredRoles` contains
-//!     `cloud-hypervisor-runner` and `runnerParity.runnerParityOk == true`
-//!     (closures are emitted in fixture-smoke, so parity resolves);
-//!   * `--check-bridges --json` returns the frozen not-yet-implemented envelope
-//!     (`StatusOutputV2::CheckBridges`, mode `check-bridges`);
-//!   * `--human` renders the runner-parity and bridge-health sections.
+//! The former tests exercised the retired v2 static VM inventory and bridge
+//! checks. The v3 status surface addresses Zone resources through either the
+//! generic `status <ResourceType>/<name>` command or the typed
+//! `guest status <name>` command. These tests keep the historical libtest names
+//! because the migration census pins them, but assert only the v3 envelopes.
 //!
-//! Requires D2B_FIXTURES (the fixture-smoke output dir), delivered by the
-//! dedicated CLI-contract step in tests/tools/rust-workspace-checks.sh. When unset
-//! (e.g. the plain `cargo test --workspace` pass that has no Nix sandbox) the
-//! test skips; the gate step always sets D2B_FIXTURES, so the contract cannot be
-//! silently disabled there.
-//!
-//! Hermeticity vs the bash gate (see tests/README.md): the bash gate pointed
-//! the CLI at fixture-smoke's bundle.json, whose `processesPath`/`hostPath` are
-//! the *absolute* `/etc/d2b/{processes,host}.json`. On a deployed d2b
-//! host those files exist, so `read_bundle_json` reads the host's deployed
-//! manifest instead of the fixture (the fixture's corp-vm vanishes ->
-//! declaredRoles empty). This test copies the fixture artifacts into a temp
-//! bundle and rewrites those two paths to relative basenames so the CLI reads
-//! the COPIED fixture, regardless of host state. It also pins `d2bd.service`
-//! in the system-state fixture and sandboxes `D2B_DAEMON_STATE_DIR` to an
-//! empty dir (pidfd-table.json absent -> per-role "stopped").
+//! The rendered fixture artifacts remain present in the child environment
+//! while the Zone socket is deliberately unavailable. A v3 command must fail
+//! closed with a strict envelope rather than reading the retired manifest,
+//! invoking a legacy CLI or SSH fallback, or exposing a secret canary.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
-use d2b_contracts::cli_output::{StatusBridgeCheckOutputV2, StatusOutputV2, StatusVmOutputV2};
+use serde_json::Value;
+use tempfile::TempDir;
 
-// corp-vm: all units inactive + an empty daemon-state dir (pidfd-table.json
-// absent -> ch-runner / virtiofsd "stopped"). d2bd.service is pinned
-// inactive (the bash helper omitted it, so the CLI fell back to the real
-// host's `systemctl is-active d2bd.service` - non-hermetic). The bridges
-// drive the `--human` "Bridge health" section.
-const SYSTEM_STATE_JSON: &str = r#"{
-  "units": {
-    "d2bd.service": "inactive",
-    "d2b@corp-vm.service": "inactive",
-    "microvm@corp-vm.service": "inactive",
-    "d2b@sys-work-net.service": "active",
-    "microvm@sys-work-net.service": "active"
-  },
-  "bridges": {
-    "br-work-lan": { "state": "UP", "admin": "up", "expectedCarrier": "NO-CARRIER", "result": "ok" },
-    "br-work-up":  { "state": "UP", "admin": "up", "expectedCarrier": "UP", "result": "ok" }
-  }
-}"#;
+const V3_ERROR_KEYS: &[&str] = &["errorClass", "message", "ok", "schemaVersion", "zoneRef"];
+const SECRET_CANARY: &str = "zone-private-canary";
+const LEGACY_CLI_POISON: &str = "#!/bin/sh\nexit 99\n";
+const SSH_POISON: &str = "#!/bin/sh\nexit 98\n";
 
-/// The fixture-smoke output dir, or `None` when D2B_FIXTURES is unset (plain
-/// non-gated `cargo test` runs). The gated rust-workspace-checks.sh step always
-/// sets it.
-fn fixtures_dir() -> Option<String> {
-    std::env::var("D2B_FIXTURES").ok()
-}
-
-/// A hermetic `status` invocation environment: a temp bundle copied from the
-/// fixture-smoke output (with absolute `/etc/d2b` artifact paths rewritten
-/// to relative basenames), a synthetic system-state fixture, and an empty
-/// daemon-state dir. Built once, reused across multiple `run`s so the
-/// flag/positional equivalence check compares against an identical bundle.
 struct StatusEnv {
-    _tmp: tempfile::TempDir,
-    manifest: String,
+    _tmp: TempDir,
+    manifest: PathBuf,
     bundle: PathBuf,
-    sys: PathBuf,
-    daemon_state: PathBuf,
+    missing_public: PathBuf,
+    missing_broker: PathBuf,
+    legacy_cli: PathBuf,
+    tool_path: PathBuf,
 }
 
 impl StatusEnv {
     fn new(fixtures: &str) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let bundle = build_hermetic_bundle(fixtures, tmp.path());
-        let sys = tmp.path().join("system-state.json");
-        std::fs::write(&sys, SYSTEM_STATE_JSON).expect("write system-state fixture");
-        let daemon_state = tmp.path().join("daemon-state");
-        std::fs::create_dir_all(&daemon_state).expect("mk daemon-state dir");
+        let fixtures = Path::new(fixtures);
+        let manifest = fixtures.join("manifest.json");
+        let bundle = fixtures.join("bundle.json");
+        assert!(manifest.is_file(), "D2B_FIXTURES is missing manifest.json");
+        assert!(bundle.is_file(), "D2B_FIXTURES is missing bundle.json");
+
+        let tool_path = tmp.path().join("tools");
+        std::fs::create_dir(&tool_path).expect("mk tool fixture dir");
+        write_executable(&tool_path.join("ssh"), SSH_POISON);
+        write_executable(&tool_path.join("scp"), SSH_POISON);
+
+        // Put the canary in a legacy executable path. If any retired route
+        // tries to surface that path, the output must still remain redacted.
+        let legacy_cli = tmp.path().join(SECRET_CANARY);
+        write_executable(&legacy_cli, LEGACY_CLI_POISON);
+
         Self {
+            missing_public: tmp.path().join("missing-public.sock"),
+            missing_broker: tmp.path().join("missing-broker.sock"),
+            legacy_cli,
+            tool_path,
             _tmp: tmp,
-            manifest: format!("{fixtures}/manifest.json"),
+            manifest,
             bundle,
-            sys,
-            daemon_state,
         }
     }
 
-    fn run(&self, args: &[&str]) -> std::process::Output {
+    fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_d2b"))
+            .env_clear()
             .args(args)
+            .env("PATH", &self.tool_path)
             .env("D2B_MANIFEST_PATH", &self.manifest)
             .env("D2B_BUNDLE_PATH", &self.bundle)
-            .env("D2B_TEST_SYSTEM_STATE_JSON", &self.sys)
-            .env("D2B_DAEMON_STATE_DIR", &self.daemon_state)
+            .env("D2B_PUBLIC_SOCKET", &self.missing_public)
+            .env("D2B_BROKER_SOCKET", &self.missing_broker)
+            .env("D2B_LEGACY_CLI_PATH", &self.legacy_cli)
+            .env("D2B_LEGACY_CLI", &self.legacy_cli)
+            .env("D2B_LEGACY_BASH_OPT_IN", "1")
+            .env("D2B_SUPPRESS_LEGACY_BASH_WARNING", "1")
+            .env("D2B_SECRET_CANARY", SECRET_CANARY)
             .output()
             .unwrap_or_else(|err| panic!("spawn d2b {}: {err}", args.join(" ")))
     }
 }
 
-/// Copy the fixture-smoke bundle artifacts into `tmp/bundle` and rewrite the
-/// absolute `processesPath`/`hostPath` to relative basenames so the bundle
-/// context resolves the COPIED fixture, never the host's deployed
-/// `/etc/d2b/*.json`. Returns the temp bundle.json path.
-fn build_hermetic_bundle(fixtures: &str, tmp: &Path) -> PathBuf {
-    let bundle_dir = tmp.join("bundle");
-    let closures_dir = bundle_dir.join("closures");
-    std::fs::create_dir_all(&closures_dir).expect("mk bundle dir");
-
-    std::fs::copy(
-        format!("{fixtures}/processes.json"),
-        bundle_dir.join("processes.json"),
-    )
-    .expect("copy processes.json");
-    std::fs::copy(
-        format!("{fixtures}/host.json"),
-        bundle_dir.join("host.json"),
-    )
-    .expect("copy host.json");
-    for entry in std::fs::read_dir(format!("{fixtures}/closures")).expect("read closures dir") {
-        let entry = entry.expect("closure dirent");
-        std::fs::copy(entry.path(), closures_dir.join(entry.file_name())).expect("copy closure");
-    }
-
-    let raw = std::fs::read(format!("{fixtures}/bundle.json")).expect("read bundle.json");
-    let mut bundle: serde_json::Value =
-        serde_json::from_slice(&raw).expect("parse fixture bundle.json");
-    bundle["processesPath"] = serde_json::Value::String("processes.json".to_owned());
-    bundle["hostPath"] = serde_json::Value::String("host.json".to_owned());
-    let bundle_path = bundle_dir.join("bundle.json");
-    std::fs::write(
-        &bundle_path,
-        serde_json::to_vec(&bundle).expect("serialize rewritten bundle"),
-    )
-    .expect("write rewritten bundle.json");
-    bundle_path
+fn write_executable(path: &Path, contents: &str) {
+    std::fs::write(path, contents).expect("write executable fixture");
+    let mut permissions = std::fs::metadata(path)
+        .expect("stat executable fixture")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("chmod executable fixture");
 }
 
-fn assert_success(out: &std::process::Output, what: &str) {
+fn fixtures_dir() -> Option<String> {
+    std::env::var("D2B_FIXTURES").ok().or_else(|| {
+        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
+        None
+    })
+}
+
+fn rendered_output(output: &Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn assert_no_retired_transport(output: &Output, env: &StatusEnv, label: &str) {
+    assert_ne!(
+        output.status.code(),
+        Some(99),
+        "{label}: executed the legacy CLI poison-pill\n{}",
+        rendered_output(output)
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(98),
+        "{label}: executed the SSH/SCP poison-pill\n{}",
+        rendered_output(output)
+    );
+    let rendered = rendered_output(output);
     assert!(
-        out.status.success(),
-        "`d2b {what}` exited {:?}; stderr:\n{}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
+        !rendered.contains(SECRET_CANARY),
+        "{label}: leaked the private canary\n{rendered}"
+    );
+    assert!(
+        !rendered.to_ascii_lowercase().contains("bash"),
+        "{label}: exposed a bash fallback\n{rendered}"
+    );
+    assert!(
+        !rendered.to_ascii_lowercase().contains("ssh"),
+        "{label}: exposed an SSH fallback\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(&env.missing_public.display().to_string()),
+        "{label}: leaked the missing Zone socket path\n{rendered}"
+    );
+}
+
+fn json_value(output: &Output, label: &str) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "{label}: stdout was not valid JSON: {err}\n{}",
+            rendered_output(output)
+        )
+    })
+}
+
+fn assert_json_error(
+    output: &Output,
+    env: &StatusEnv,
+    label: &str,
+    exit_code: i32,
+    zone_ref: &str,
+    error_class: &str,
+    message: &str,
+) {
+    assert_no_retired_transport(output, env, label);
+    assert_eq!(
+        output.status.code(),
+        Some(exit_code),
+        "{label}: unexpected exit code\n{}",
+        rendered_output(output)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{label}: JSON errors must stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = json_value(output, label);
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("{label}: error envelope is not an object: {value}"));
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, V3_ERROR_KEYS,
+        "{label}: v3 error envelope keys drifted: {value}"
+    );
+    assert_eq!(value["ok"], false, "{label}: expected ok=false");
+    assert_eq!(
+        value["zoneRef"], zone_ref,
+        "{label}: unexpected Zone reference"
+    );
+    assert_eq!(
+        value["errorClass"], error_class,
+        "{label}: unexpected error class"
+    );
+    assert_eq!(value["message"], message, "{label}: unexpected message");
+    assert_eq!(
+        value["schemaVersion"], 1,
+        "{label}: unexpected JSON schema version"
+    );
+}
+
+fn assert_human_zone_unavailable(output: &Output, env: &StatusEnv, label: &str) {
+    assert_no_retired_transport(output, env, label);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{label}: unexpected exit code\n{}",
+        rendered_output(output)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "{label}: human errors must stay on stderr; stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("zone-unavailable") && stderr.contains("Zone runtime is unavailable"),
+        "{label}: unexpected human Zone error:\n{stderr}"
+    );
+}
+
+fn assert_usage_rejection(output: &Output, env: &StatusEnv, label: &str, marker: &str) {
+    assert_no_retired_transport(output, env, label);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{label}: expected ModernCli usage exit 2\n{}",
+        rendered_output(output)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "{label}: usage rejection must not emit a JSON document"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(marker),
+        "{label}: usage error missed {marker:?}; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Usage: d2b"),
+        "{label}: usage error did not identify d2b; stderr:\n{stderr}"
     );
 }
 
 #[test]
 fn status_vm_json_matches_schema_and_static_state() {
+    // Historical test id retained for the migration pin. The v3 generic and
+    // typed Guest status commands must not recover the retired static state.
     let Some(fixtures) = fixtures_dir() else {
-        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
     let env = StatusEnv::new(&fixtures);
-    let out = env.run(&["status", "--vm", "corp-vm", "--json"]);
-    assert_success(&out, "status --vm corp-vm --json");
 
-    // The untagged StatusOutputV2 classifies this payload as the Vm variant
-    // (not Inventory / CheckBridges).
-    let classified: StatusOutputV2 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-        panic!(
-            "status --json did not match the StatusOutputV2 schema: {err}\noutput:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-    assert!(
-        matches!(classified, StatusOutputV2::Vm(_)),
-        "status --vm output must classify as the Vm variant, got {classified:?}"
-    );
-
-    // Strict schema validation: StatusVmOutputV2 is deny_unknown_fields, so a
-    // successful direct deserialize is equivalent to validating against
-    // docs/reference/cli-output/status.schema.json. (serde's untagged path does
-    // not enforce deny_unknown_fields, so the direct deserialize is the strict
-    // check.)
-    let vm: StatusVmOutputV2 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-        panic!(
-            "status --json did not strictly match StatusVmOutputV2: {err}\noutput:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-
-    assert_eq!(vm.name, "corp-vm");
-    assert_eq!(vm.env.as_deref(), Some("work"));
-    assert!(
-        !vm.pending_restart,
-        "corp-vm: all units inactive -> not pending-restart"
-    );
-    // RUNTIME_UNKNOWN is the bare "unknown" sentinel.
-    assert_eq!(vm.runtime, "unknown");
-    assert_eq!(
-        vm.services.d2b, "inactive",
-        "d2bd.service pinned inactive in the system-state fixture"
-    );
-    assert_eq!(
-        vm.services.microvm, "stopped",
-        "empty daemon-state (pidfd-table.json absent) -> ch-runner stopped"
-    );
-    assert_eq!(
-        vm.services.virtiofsd, "stopped",
-        "empty daemon-state (pidfd-table.json absent) -> virtiofsd stopped"
-    );
-    assert!(
-        vm.declared_roles
-            .iter()
-            .any(|r| r == "cloud-hypervisor-runner"),
-        "corp-vm declaredRoles must include cloud-hypervisor-runner, got {:?}",
-        vm.declared_roles
-    );
-    let parity = vm
-        .runner_parity
-        .as_ref()
-        .expect("corp-vm runner parity must be present (closure emitted in fixture-smoke)");
-    assert!(
-        parity.runner_parity_ok,
-        "corp-vm runner parity must be OK against its committed closure"
-    );
+    for args in [
+        &["status", "Guest/corp-vm", "--zone", "work", "--json"][..],
+        &["guest", "status", "corp-vm", "--zone", "work", "--json"][..],
+    ] {
+        let output = env.run(args);
+        assert_json_error(
+            &output,
+            &env,
+            &format!("d2b {}", args.join(" ")),
+            1,
+            "Zone/work",
+            "zone-unavailable",
+            "Zone runtime is unavailable",
+        );
+    }
 }
 
 #[test]
 fn status_vm_flag_and_positional_json_are_equivalent() {
+    // Modern generic and typed Guest status are equivalent only at the
+    // v3 Zone envelope. The old bare VM positional form is a ref-invalid
+    // resource reference, not a static VM lookup.
     let Some(fixtures) = fixtures_dir() else {
-        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
     let env = StatusEnv::new(&fixtures);
-    let flag = env.run(&["status", "--vm", "corp-vm", "--json"]);
-    assert_success(&flag, "status --vm corp-vm --json");
-    let positional = env.run(&["status", "corp-vm", "--json"]);
-    assert_success(&positional, "status corp-vm --json");
+
+    let generic = env.run(&["status", "Guest/corp-vm", "--zone", "work", "--json"]);
+    let guest = env.run(&["guest", "status", "corp-vm", "--zone", "work", "--json"]);
+    assert_json_error(
+        &generic,
+        &env,
+        "d2b status Guest/corp-vm --zone work --json",
+        1,
+        "Zone/work",
+        "zone-unavailable",
+        "Zone runtime is unavailable",
+    );
+    assert_json_error(
+        &guest,
+        &env,
+        "d2b guest status corp-vm --zone work --json",
+        1,
+        "Zone/work",
+        "zone-unavailable",
+        "Zone runtime is unavailable",
+    );
     assert_eq!(
-        flag.stdout,
-        positional.stdout,
-        "`status --vm <name>` and `status <name>` must stay byte-equivalent;\nflag:\n{}\npositional:\n{}",
-        String::from_utf8_lossy(&flag.stdout),
-        String::from_utf8_lossy(&positional.stdout),
+        generic.stdout, guest.stdout,
+        "generic and Guest status must share the same v3 Zone envelope"
+    );
+
+    let old_positional = env.run(&["status", "corp-vm", "--zone", "work", "--json"]);
+    assert_json_error(
+        &old_positional,
+        &env,
+        "d2b status corp-vm --zone work --json",
+        2,
+        "Zone/work",
+        "ref-invalid",
+        "resource reference must use <ResourceType>/<name>",
     );
 }
 
 #[test]
 fn status_check_bridges_returns_frozen_not_yet_implemented_envelope() {
+    // Historical test id retained for the migration pin. Bridge checking was
+    // removed from the v3 status command, so ModernCli must reject it instead
+    // of reviving the retired static bridge path.
     let Some(fixtures) = fixtures_dir() else {
-        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
     let env = StatusEnv::new(&fixtures);
-    let out = env.run(&["status", "--check-bridges", "--json"]);
-    assert_success(&out, "status --check-bridges --json");
 
-    let classified: StatusOutputV2 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-        panic!(
-            "status --check-bridges --json did not match StatusOutputV2: {err}\noutput:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-    assert!(
-        matches!(classified, StatusOutputV2::CheckBridges(_)),
-        "check-bridges output must classify as the CheckBridges variant, got {classified:?}"
+    let bridges = env.run(&["status", "--check-bridges", "--json"]);
+    assert_usage_rejection(
+        &bridges,
+        &env,
+        "retired status --check-bridges",
+        "unexpected argument '--check-bridges'",
     );
 
-    // Strict deny_unknown_fields schema check on the concrete envelope.
-    let envelope: StatusBridgeCheckOutputV2 =
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
-            panic!(
-                "status --check-bridges --json did not strictly match StatusBridgeCheckOutputV2: {err}\noutput:\n{}",
-                String::from_utf8_lossy(&out.stdout)
-            )
-        });
-    assert_eq!(envelope.mode, "check-bridges");
-    assert_eq!(envelope.status, "not-yet-implemented");
+    let vm_flag = env.run(&["status", "--vm", "corp-vm", "--json"]);
+    assert_usage_rejection(
+        &vm_flag,
+        &env,
+        "retired status --vm",
+        "unexpected argument '--vm'",
+    );
 }
 
 #[test]
 fn status_human_renders_runner_parity_and_bridge_sections() {
+    // Historical test id retained for the migration pin. Human v3 status
+    // reports the unavailable Zone and never renders retired static sections.
     let Some(fixtures) = fixtures_dir() else {
-        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
     let env = StatusEnv::new(&fixtures);
-    let out = env.run(&["status", "--vm", "corp-vm", "--human"]);
-    assert_success(&out, "status --vm corp-vm --human");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("runner parity: ok"),
-        "status --human must render the runner-parity section:\n{stdout}"
+    let output = env.run(&["guest", "status", "corp-vm", "--zone", "work", "--human"]);
+    assert_human_zone_unavailable(
+        &output,
+        &env,
+        "d2b guest status corp-vm --zone work --human",
     );
+
+    let rendered = rendered_output(&output);
     assert!(
-        stdout.contains("Bridge health"),
-        "status --human must render the bridge-health section:\n{stdout}"
+        !rendered.contains("runner parity") && !rendered.contains("Bridge health"),
+        "v3 human status must not render retired static sections:\n{rendered}"
     );
 }

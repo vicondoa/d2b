@@ -2,6 +2,9 @@
 
 The `system-minijail` Process Provider controller.
 
+See [Create a Provider](../../docs/how-to/create-provider.md) for the
+uniform crate layout, schema links, configuration, and test lanes.
+
 ## Provider identity
 
 `system-minijail`, referenced as `Provider/system-minijail`. It is the

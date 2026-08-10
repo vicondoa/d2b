@@ -198,7 +198,7 @@ The matching guest-visible option lives in the imported
 
 ## Lifecycle
 
-Graphics lifecycle is daemon-supervised. `d2b vm start <vm>` sends
+Graphics lifecycle is daemon-supervised. `d2b guest start <name>` sends
 the request to `d2bd`; the daemon evaluates the per-VM DAG and uses
 the broker to spawn `gpu` / `gpu-render-node`, optional sidecars, and
 `cloud-hypervisor-runner` in dependency order. Runners are tracked by
@@ -209,15 +209,15 @@ Implications:
 - **`nixos-rebuild switch` does NOT restart the running VM.**
   `d2bd.service` may restart, but the restart kills only the daemon
   main PID and re-adopts existing VM runners.
-  After a rebuild, `d2b list`
+  After a rebuild, `d2b guest list`
   flags the VM with `[pending restart]` if its `current` closure
-  has drifted from `booted`. Apply with `d2b vm restart <vm> --apply`.
+  has drifted from the observed generation. Apply with `d2b guest restart <name> --apply`.
 
 - **`booted` symlink is owned by the daemon start path.** The daemon
   updates per-VM `booted`/`current` state so pending-restart detection
   works for graphics and headless VMs without per-VM systemd units.
 
-- **`d2b status <vm>` reports `pending-restart: yes/no`** with
+- **`d2b guest status <name>` reports `status.update` currency** with
   both store paths and the exact remediation command.
 
 See [`docs/explanation/design.md`](../explanation/design.md#per-vm-sidecars)
@@ -246,7 +246,7 @@ nixpkgs rev - defence-in-depth payload waiting on an upstream knob).
 
 - **Black screen / no guest window.** The host `wayland-0` socket
   must be reachable as the user named by `d2b.site.waylandUser`.
-  `d2b vm start <vm>` must be invoked from a Plasma session terminal -
+  `d2b guest start <name>` must be invoked from a Plasma session terminal -
   never as root, never over SSH (`autostart = true` is also wrong
   for graphics VMs and triggers an assertion in the audio module if
   audio is enabled).
@@ -277,8 +277,8 @@ nixpkgs rev - defence-in-depth payload waiting on an upstream knob).
 - [Manifest schema](./manifest-schema.md) - graphics state is surfaced
   through the evaluated bundle and daemon status, not a per-VM
   systemd unit.
-- [CLI contract](./cli-contract.md) - `d2b vm start <vm>` /
-  `d2b vm stop <vm>` lifecycle.
+- [CLI contract](./cli-contract.md) - `d2b guest start <name>` /
+  `d2b guest stop <name>` lifecycle.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) -
   end-to-end example with graphics + audio + USBIP YubiKey.
 - [`examples/with-entra-id`](../../examples/with-entra-id/) - graphics

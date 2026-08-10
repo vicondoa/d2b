@@ -560,15 +560,12 @@ test-drift:
 ## test-policy - meta gates that guard the test architecture + cross-cutting
 ## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
 ##
-## The Provider crate layout policy runs here as
-## `cargo xtask check-provider-crate-layout`, not as a shell gate: the drift and
-## meta gate set is closed. Its dispatch arm is landed and returns an error
-## until the policy is implemented, so the recipe line below is added by the
-## change that implements it rather than now, which would red this lane for
-## every concurrent branch.
+## The Provider crate layout policies run here as xtask commands, not as
+## shell gates: the drift and meta gate set is closed.
 test-policy:
 	bash tests/test-policy.sh
 	cd packages && cargo run --quiet -p xtask -- check-provider-crate-layout
+	cd packages && cargo run --quiet -p xtask -- check-provider-layout
 
 ## test-performance-budgets - execute the self-gating performance canary.
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.
@@ -744,12 +741,12 @@ endif
 HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
-## heavy-gate-build - build the semaphore wrapper. Runs from packages/ so the
-## workspace cargo config (and its rustc wrapper) applies. The build target dir
-## is forced to the same absolute HEAVY_GATE_TARGET_DIR the wrapper is executed
-## from, so a relative CARGO_TARGET_DIR cannot split the two.
+## heavy-gate-build - build the semaphore wrapper from the governed workspace
+## manifest. The build target dir is forced to the same absolute
+## HEAVY_GATE_TARGET_DIR the wrapper is executed from, so a relative
+## CARGO_TARGET_DIR cannot split the two.
 heavy-gate-build:
-	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
+	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet --manifest-path Cargo.toml --locked -p xtask --bin xtask
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
 ## current numeric uid without resolving a user name through NSS. This is the

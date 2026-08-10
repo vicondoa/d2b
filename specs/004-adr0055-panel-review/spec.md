@@ -36,6 +36,10 @@ ledger item without losing attribution.
 4. **Given** a selected reviewer finds no issues, **When** discovery is
    collected, **Then** its explicit complete result with zero findings is
    accepted and is distinguishable from a missing reviewer result.
+5. **Given** a discovery reviewer returns a verdict, **When** the adapter
+   accepts it, **Then** the reviewer layer has exactly
+   `engineer/signoff/summary/recommendations` and the normalized result layer
+   has exactly `seat/complete/findings`.
 
 ---
 
@@ -59,8 +63,9 @@ and previous status.
    disposition.
 2. **Given** completed fixes, **When** verification runs, **Then** reviewers
    verify prior findings, dispositions, evidence, and introduced regressions.
-3. **Given** a pre-existing MINOR or NIT missed during discovery, **When**
-   verification notices it, **Then** it does not become a new blocking issue.
+3. **Given** an actionable MINOR or NIT, **When** discovery or verification
+   records it, **Then** it enters the ledger and receives a complete response
+   and verification status before becoming non-blocking.
 4. **Given** unresolved merge-blocking conditions, **When** verification
    completes, **Then** sign-off remains false.
 5. **Given** a BLOCKER response, **When** approval is evaluated, **Then** only
@@ -73,6 +78,11 @@ and previous status.
    **When** its `acceptance` is missing, is not a strict closed object with
    exactly `accepter`, `capacity`, and `justification`, or any field violates
    its required string content, **Then** approval is refused.
+8. **Given** only a disposition, acceptance, response, or evidence update,
+   **When** another qualified round is staged, **Then** the candidate snapshot
+   remains unchanged.
+9. **Given** a repository tree change, **When** another qualified round is
+   staged, **Then** a new candidate snapshot is required.
 
 ---
 
@@ -133,6 +143,14 @@ conversion into current artifacts.
   refuses the response.
 - A selected seat returns an explicit complete discovery result with an empty
   findings list; it is accepted as a positive zero-finding result.
+- A reviewer attempts to return the adapter's `seat/complete/findings` shape;
+  the reviewer-schema validator refuses it rather than treating it as a raw
+  verdict.
+- A completed reviewer packet is edited in place; its `.complete` binding
+  refuses reuse and directs the contributor to stage a new qualified round.
+- An evidence-only correction is staged against a new candidate snapshot; the
+  lifecycle refuses the false content change and retains the existing
+  candidate digest triple.
 - A panel artifact carries an unknown, malformed, misplaced, or mixed-family
   `panel_format_version`; the bounded probe or strict family parser refuses it
   without retrying the other DTO.
@@ -150,7 +168,8 @@ conversion into current artifacts.
 - **FR-003**: Discovery reviewers MUST report all reasonably discoverable
   actionable findings with severity, impact, and a concrete recommendation.
 - **FR-004**: The orchestrator MUST merge all discovery findings into one
-  deduplicated ledger with deterministic stable identifiers.
+  deduplicated ledger with deterministic stable identifiers, without filtering
+  MINOR or NIT findings out of the ledger.
 - **FR-005**: Every source finding MUST map to exactly one ledger issue while
   preserving its reviewer attribution.
 - **FR-006**: Every ledger issue MUST record one supported disposition before
@@ -161,9 +180,10 @@ conversion into current artifacts.
   implementation responses, evidence, latest delta, full candidate context,
   and their prior obligations.
 - **FR-009**: Verification MUST focus on issue resolution, dispositions,
-  evidence, regressions, and unsafe late BLOCKER or MAJOR findings.
-- **FR-010**: Verification MUST reject new pre-existing MINOR or NIT findings
-  and other optional improvements as blocking recommendations.
+  evidence, regressions, and actionable late findings.
+- **FR-010**: Verification MUST record actionable late MINOR and NIT findings
+  for complete processing and MUST treat them as non-blocking only after they
+  have complete supported responses and passing verification statuses.
 - **FR-011**: Sign-off MUST remain equivalent to an empty blocking
   recommendation list.
 - **FR-012**: The workflow MUST automatically generate lifecycle selection,
@@ -254,6 +274,33 @@ conversion into current artifacts.
   The current role domain MUST contain the thirteen selected-roster seats and
   exclude `rust`; the legacy role domain MUST remain the exact fixed ten
   including `rust`.
+- **FR-036**: A discovery reviewer verdict MUST have exactly `engineer`,
+  `signoff`, `summary`, and `recommendations`; each recommendation MUST have
+  exactly `severity`, `where`, `what`, `why`, and `fix`. The adapter MUST
+  validate that verdict and emit a distinct normalized per-seat result with
+  exactly `seat`, `complete: true`, and `findings`. Reviewers MUST NOT be asked
+  to return adapter fields.
+- **FR-037**: A verification reviewer verdict MUST have the four reviewer base
+  fields plus exactly `verified_issue_statuses` and `late_findings`. Its
+  adapter output MUST remain a distinct closed normalized schema containing
+  `seat`, `complete`, `summary`, `signoff`, `verified_issue_statuses`,
+  `blocking_recommendations`, `recommendations`, and `late_findings`.
+- **FR-038**: The completed `.complete` marker MUST byte-bind every enumerated
+  reviewer packet input. Bound packet content MUST be immutable; any content
+  update MUST use a new qualified round and MUST leave the completed prior
+  packet unchanged.
+- **FR-039**: Only repository tree changes MUST create a new candidate
+  snapshot. Disposition, acceptance, response, and evidence-only updates MUST
+  retain the existing candidate digest triple while using a new qualified
+  round when reviewer packet content changes.
+- **FR-040**: Panel artifacts MUST remain process evidence and MUST NOT be
+  described or implemented as a privilege, authentication, secrecy,
+  hostile-input, cryptographic-authority, or adversarial same-UID boundary.
+- **FR-041**: Single-file output MUST use create-or-compare publication. Atomic
+  family-directory publication MUST be limited to selected-seat verification
+  requests and selected-seat delivery records. The workflow MUST NOT add a
+  generic lock, fsync, raw-syscall, procfs-pinning, retention, quota, or
+  filesystem transaction framework.
 
 ### Key Entities
 
@@ -291,8 +338,8 @@ conversion into current artifacts.
   optional trigger, both roster floors, ambiguity widening, and build expertise.
 - **SC-005**: Complete and partial legacy fixtures convert without losing any
   completed source finding and remain stable across repeated imports.
-- **SC-006**: Verification cannot block approval with a newly reported
-  pre-existing MINOR or NIT issue.
+- **SC-006**: Every actionable MINOR and NIT is present in the ledger and has a
+  complete response and passing verification status before it is non-blocking.
 - **SC-007**: A merge-ready candidate receives unanimous lifecycle-roster
   sign-off without requiring another discovery pass.
 - **SC-008**: The delivered change adds zero privileged services, runtime
@@ -322,6 +369,17 @@ conversion into current artifacts.
   thirteen-seat Discover-Fix-Verify guidance is present and the superseded
   fixed-roster, four-field verdict, held-reviewer, repeated-round, and old
   verification requirements are absent or explicitly marked withdrawn.
+- **SC-014**: Schema tests accept the exact reviewer verdicts, accept their
+  exact adapter-produced normalized forms, and reject either layer when fields
+  from the other layer are substituted.
+- **SC-015**: Packet tests prove that changing any `.complete`-bound byte
+  refuses reuse, a new qualified round accepts corrected packet content, and
+  evidence-only rounds preserve the candidate digest triple while tree changes
+  require a new snapshot.
+- **SC-016**: Source and behavior tests prove simple create-or-compare output,
+  atomic publication only for the two named family directories, and absence of
+  generic lock, fsync, raw-syscall, procfs-pinning, retention, quota, and
+  filesystem transaction machinery from the panel implementation.
 
 ## Assumptions
 
@@ -337,4 +395,7 @@ conversion into current artifacts.
   shape is checked. ADR 0055 treats panel artifacts as bypassable process
   records, so authoritative identity verification, signatures, GitHub API
   lookup, services, and authorization machinery are deliberately excluded.
+- Panel files are cooperative process evidence. Deterministic bytes and
+  digests are equality checks, not cryptographic authority or protection from
+  a hostile process with the contributor's UID.
 - The first implementation targets the standard Copilot panel skill only.

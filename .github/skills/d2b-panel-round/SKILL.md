@@ -46,6 +46,24 @@ own relevance.
 | kernel | `panel-kernel` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 | build | `panel-build` | `gpt-5.6-sol` | `xhigh` | `default` | `caveman-full-optional` |
 
+The `agent_type` column is an exact dispatch binding, not a suggested role
+name. The selection table is the roster authority; use the selected seat key
+and its `panel-<seat>` dispatch type rather than maintaining a second mapping.
+Observed binding records carry `provider`, `model`, `reasoning_effort`,
+`context_tier`, `communication`, `agent_type`, `agent_definition_sha256`,
+`run_id`, and `receipt_locator` as same-user process metadata. The dispatch
+fields are checked against the completion-bound policy and the definition
+digest is checked against the bound definition bytes. `run_id` and
+`receipt_locator` are used for correlation and uniqueness. They do not
+authenticate a run, attest harness identity, or establish a security
+boundary.
+
+One machine readable dispatch policy supplies every seat's agent type, model,
+reasoning effort, context tier, and communication. Staging projects only the
+selected roster from that policy into the packet, and the completion marker
+binds that projection beside the selected agent definitions.
+The table below is the operator readable projection of those same bindings.
+
 The current pool has seven mandatory seats. Code and operative configuration
 have a floor of ten; documentation-only candidates have a floor of eight.
 Every matching optional trigger is selected even when the floor is already
@@ -92,17 +110,26 @@ Stage the candidate with the same lifecycle and selection:
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <round-id> --discovery-request <request.json> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
-  --candidate <current-candidate.json>
+  --candidate <current-candidate.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
 ```
 
-For verification staging, supply the complete canonical handoff instead:
+Discovery-to-first-verification staging is marker-free because its previous
+selection is discovery. For every later verification whose previous selection
+is verification, supply the finalized continuation handoff and the distinct
+completed-response file:
 
 ```
 bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
   <base> <previous-tip> <round-id> \
   --lifecycle <lifecycle-id> --selection <selection.json> \
   --candidate <current-candidate.json> \
-  --ledger <discovery-ledger.json> --responses <responses.json> \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes> \
+  --ledger <discovery-ledger.json> \
+  --responses <responses-completed.json> \
+  --handoff <handoff.json> \
   --self-verification <self-verification.json> \
   --verification-dir <verification-requests>
 ```
@@ -125,19 +152,71 @@ Both consumers must refuse a candidate, selection schema, selection-table
 version, or ordered-roster mismatch. Records are current workspace
 schema-version `2` objects with `panel_format_version: 1`.
 
-Staging materializes the supplied exact bytes into the round directory:
-`selection.json`, `current-candidate.json`, `discovery-request.json`,
-`discovery-ledger.json`,
-`responses.json`, and `self-verification.json` when those artifacts are
-supplied. Discovery staging additionally requires a readable
-`--discovery-request` artifact. Verification staging requires a readable
-complete per-seat `--verification-dir`; it also requires the ledger, response,
-and self-verification artifacts above. All canonical artifacts and verification
-requests are materialized before the round's `.complete` marker is published.
-Once `.complete` exists, staging may only compare or reuse existing canonical
-artifacts and never add a missing one. The generated `dispatch-prompt.txt` is
-usable only when the round's `.complete` marker exists; an unmarked scratch
-directory is non-authoritative.
+Current completion packets use schema-version `4`, binding the selected agent
+definitions and roster-projected dispatch policy. Schema-version `2`
+predecessors are accepted only as exactly the historical base set without
+definitions or that same set plus every selected definition, and neither form
+contains `dispatch-binding.json`. Schema-version `3` requires exactly the
+definition-bound set without `dispatch-binding.json`. Missing, extra, or
+partial artifacts are never accepted; schema versions `2` and `3` are
+predecessor-only and new staging emits schema-version `4`.
+
+Staging materializes the supplied exact bytes for `selection.json`,
+`current-candidate.json`, `discovery-ledger.json`, `responses.json`, and
+`self-verification.json` when those artifacts are supplied. The discovery
+request is intentionally different: `--discovery-request` supplies the
+generated request before evidence binding, and staging derives the round-local
+`discovery-request.json` by preserving that request and appending the exact
+`evidence.md` SHA-256 and byte-count descriptor to `validation_evidence`.
+Staging reuses an already matching descriptor and rejects a conflicting one.
+The staged request is therefore the canonical evidence-bound request; it is
+not claimed to be a byte-for-byte copy of the supplied request.
+
+Finalize the non-empty validation evidence before staging and pass it with the
+required `--evidence` argument. To supply integrator-authored notes, finalize
+them before staging and pass `--reviewer-notes-dir`; that directory must
+contain exactly one non-empty regular `<seat>.md` file per selected seat and no
+other entries. Omitting the notes argument uses the generated defaults.
+Discovery staging additionally requires a readable `--discovery-request`
+artifact. Verification staging requires a readable complete per-seat
+`--verification-dir`; it also requires the ledger, response, and
+self-verification artifacts above. When the predecessor selection is
+verification, `--handoff` is mandatory and staging validates that marker
+against the exact supplied ledger and completed-response bytes before
+publishing any packet artifact.
+Discovery scanning validates a retained finalized handoff against
+`handoff.json`, `discovery-ledger.json`, and `responses-completed.json`.
+It permits `verification/`, `self-verification.json`, candidate/delta/evidence
+outputs (`candidate.json`, `current-candidate.json`, `delta.json`,
+`fix-delta.json`, `actual-delta.json`, `evidence.md`, and
+`validation-evidence.md`) while rejecting staged-packet anchors such as
+`selection.json`, `address.json`, and `full.diff`. A handoff from another
+lifecycle remains unrelated scratch and is ignored.
+
+All canonical artifacts, evidence, reviewer notes, and verification requests
+are materialized before the round's `.complete` marker is published. That
+marker byte-binds every reviewer-visible artifact. Once `.complete` exists,
+the round is immutable: do not edit, replace, delete, or backfill a staged
+artifact. Staging may only compare or reuse the existing bytes; changed
+evidence or reviewer notes require a new qualified round. The generated
+`dispatch-prompt.txt` is usable only when the round's `.complete` marker
+exists; an unmarked scratch directory is non-authoritative.
+
+For every later round, staging first requires the immediately preceding
+round's canonical schema-version `4` `.complete` packet, or an exact
+schema-version `2` or `3` predecessor packet during migration, and validates
+each bound artifact's recorded size and digest before reading the predecessor
+address, selection, or verdicts. Legacy packets are handled only by the
+explicit legacy-import path; they are not predecessors for current staging.
+Discovery is exactly once by lifecycle identity: completed discovery packets
+are checked before discovery staging even when their round labels differ.
+
+Both `review-request.md` and `dispatch-prompt.txt` name the selected panel
+agent definition and carry the active phase's authoritative verdict contract.
+Discovery keeps its bootstrap-compatible four-field schema and explicitly excludes
+`verified_issue_statuses` and `late_findings`; verification requires those two
+fields in its distinct six-field schema. An inactive-phase output example in
+the bound agent definition does not override the staged phase contract.
 
 The phase handoff uses a staged candidate, a discovery request, an immutable
 ledger, a response envelope, verification requests, an approval artifact, and
@@ -163,6 +242,83 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   approval "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
   "$ROUND/responses.json" "$ROUND/verification-results.json" \
   "$ROUND/approval.json" --candidate "$ROUND/current-candidate.json"
+```
+
+When approval is blocked, do not edit the immutable round ledger or copy its
+responses by hand. Promote the exact blocked handoff into one new handoff:
+
+```bash
+NEXT=.scratch/panel/<next-handoff>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  advance-verification "$ROUND/selection.json" "$ROUND/discovery-ledger.json" \
+  "$ROUND/responses.json" "$ROUND/verification-results.json" "$NEXT" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+`advance-verification` validates the exact selection digest, lifecycle,
+candidate, roster, prior ledger, response envelope, and adapted verification
+bindings before publishing only the immutable
+`NEXT/discovery-ledger.json` and partial `NEXT/responses.json` by independent
+per-file create-or-compare. It publishes those files independently. A retry
+compares every existing file byte-for-byte
+and creates only missing files; conflicting bytes fail. It appends admitted
+late findings with contiguous `R` identifiers and preserved source identity.
+Copy the partial response template to a distinct completed-response file,
+preserve every carried non-null response unchanged, fill only reset or newly
+added null responses there, and publish the finalized handoff marker last:
+
+```bash
+cp "$NEXT/responses.json" "$NEXT/responses-completed.json"
+# Fill and save only "$NEXT/responses-completed.json".
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  finalize-handoff "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/handoff.json"
+```
+
+Never edit `NEXT/responses.json` after `advance-verification`, and never edit
+the ledger or completed responses after `finalize-handoff` has published
+`handoff.json`. The finalized marker is completeness evidence, not an atomic
+transaction or a security proof. It binds the exact ledger and completed
+response bytes. The finalized continuation requires all three files before
+use: the ledger, completed responses, and `handoff.json`. Write a fresh
+`$NEXT/self-verification.json` for that candidate; do not reuse the prior
+self-verification artifact. Then prepare verification and stage:
+
+```bash
+FIX_DELTA=.scratch/panel/<next-fix-delta>.json
+CURRENT_CANDIDATE=.scratch/panel/<next-current-candidate>.json
+NEXT_SELECTION=$(node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  select "$CURRENT_CANDIDATE" <lifecycle-id> --phase verification \
+  --previous-selection "$ROUND/selection.json" --fix-delta "$FIX_DELTA")
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  verification "$NEXT_SELECTION" "$NEXT/discovery-ledger.json" \
+  "$NEXT/responses-completed.json" "$NEXT/self-verification.json" "$NEXT/verification" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --prior-selection "$ROUND/selection.json" \
+  --prior-verdicts "$ROUND/verdicts" --delta "$FIX_DELTA" \
+  --handoff "$NEXT/handoff.json"
+
+bash .github/skills/d2b-panel-round/scripts/stage-diffs.sh \
+  <base> <previous-tip> <next-round-id> \
+  --lifecycle <lifecycle-id> \
+  --selection "$NEXT_SELECTION" \
+  --candidate "$CURRENT_CANDIDATE" \
+  --ledger "$NEXT/discovery-ledger.json" \
+  --responses "$NEXT/responses-completed.json" \
+  --handoff "$NEXT/handoff.json" \
+  --self-verification "$NEXT/self-verification.json" \
+  --verification-dir "$NEXT/verification" \
+  --evidence <finalized-evidence.md> \
+  --reviewer-notes-dir <finalized-reviewer-notes>
+```
+
+Do not run final metrics on blocked verification; metrics remain final-only
+and refuse nonpassing verification. After the next verification passes, run
+approval, metrics, and record generation against the new canonical paths.
+
+```bash
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   metrics --selection "$ROUND/selection.json" \
   --ledger "$ROUND/discovery-ledger.json" --responses "$ROUND/responses.json" \
@@ -174,6 +330,10 @@ node .github/skills/d2b-panel-round/scripts/make-records.mjs "$ROUND" \
   --verification-results "$ROUND/verification-results.json" \
   --approval "$ROUND/approval.json"
 ```
+
+The `approval` command exits `0` when the valid artifact is approved, `3`
+when the valid artifact is blocked, and `2` for an invalid invocation or
+input. Exit `3` is a normal negative gate result, not a tooling failure.
 
 ## Discover once
 
@@ -187,19 +347,97 @@ node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
 
 The discovery instruction is comprehensive: spend the effort now, report
 every reasonably discoverable actionable finding, and do not save observations
-for later rounds. Every seat must return exactly one explicit result:
+for later rounds. Every seat returns exactly one reviewer verdict with exactly
+these four top-level fields:
 
 ```json
 {
-  "seat": "software",
-  "complete": true,
-  "findings": []
+  "engineer": "software",
+  "signoff": false,
+  "summary": "A source mapping issue was found.",
+  "recommendations": [
+    {
+      "severity": "high",
+      "where": "scripts/panel.js:1",
+      "what": "A source can disappear.",
+      "why": "The ledger would be incomplete.",
+      "fix": "Validate source coverage."
+    }
+  ]
 }
 ```
 
-`findings: []` is a positive zero-finding result. A missing result is an
-error, never an inferred empty result. Findings include severity, impact,
-recommendation, source ordinal, raw text, and attribution.
+Each recommendation has exactly `severity`, `where`, `what`, `why`, and
+`fix`. Severity is exactly `critical`, `high`, `medium`, or `low`. A
+zero-finding verdict uses `signoff: true` and `recommendations: []`; otherwise
+`signoff` is false. A missing verdict is an error, never an inferred
+zero-finding result. Reviewers do not return `seat`, `complete`, or
+`findings`; those are adapter-owned fields.
+
+Adapt the canonical per-seat verdict directory without hand-copying or
+aggregating reviewer output:
+
+```bash
+ROUND=.scratch/panel/<round-id>
+
+node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
+  adapt-discovery "$ROUND/verdicts" "$ROUND/discovery-results.json" \
+  --selection "$ROUND/selection.json" \
+  --candidate "$ROUND/current-candidate.json"
+```
+
+The directory must contain exactly one regular `<seat>.json` file for every
+selected seat and no other entries. Each verdict's declared seat must match
+its filename; missing, unselected, mismatched, duplicate, or malformed entries
+are errors. A malformed entry error names both its directory and filename.
+
+`adapt-discovery` writes exactly one `d2b-panel/discovery-result` artifact:
+
+```json
+{
+  "artifact_kind": "d2b-panel/discovery-result",
+  "current_candidate": {
+    "candidate_id": "candidate-1",
+    "content_id": "content-1",
+    "program": "SPEC004",
+    "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "wave": "spec004w1"
+  },
+  "lifecycle_id": "spec004w1",
+  "phase": "discovery",
+  "results": [
+    {
+      "complete": true,
+      "findings": [
+        {
+          "attribution": "software",
+          "impact": "The ledger would be incomplete.",
+          "raw_text": "scripts/panel.js:1: A source can disappear.: The ledger would be incomplete.: Validate source coverage.",
+          "recommendation": "Validate source coverage.",
+          "seat": "software",
+          "severity": "MAJOR",
+          "source_id": "software:1",
+          "source_ordinal": 1
+        }
+      ],
+      "seat": "software"
+    }
+  ],
+  "schema_version": 1,
+  "selection_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
+```
+
+The example abbreviates `results` to one seat; the real array contains exactly
+one result per selected seat in roster order. The shown digest is a shape
+placeholder; the adapter writes the SHA-256 of the exact selection file bytes.
+It maps `critical`, `high`, `medium`, and `low` to `BLOCKER`, `MAJOR`,
+`MINOR`, and `NIT`. It derives `source_id` and `source_ordinal` from
+recommendation order, copies `why` to `impact`, copies `fix` to
+`recommendation`, and constructs `raw_text` from `where`, `what`, `why`, and
+`fix`. The envelope binds the lifecycle, exact selection bytes, and canonical
+candidate address. `merge-ledger` validates all three, so an artifact from a
+stale same-roster selection is not reusable.
 
 The orchestrator supplies deduplication groups. The lifecycle helper validates
 that every source finding maps to exactly one group, then assigns contiguous
@@ -208,7 +446,7 @@ stable lifecycle-local identifiers `R1`, `R2`, and so on:
 ```
 node .github/skills/d2b-panel-round/scripts/panel-lifecycle.mjs \
   merge-ledger <selection.json> <discovery-results.json> \
-  <dedup-groups.json> <ledger.json>
+  <dedup-groups.json> <ledger.json> --candidate <current-candidate.json>
 ```
 
 All source attribution and source-to-issue mappings remain in the ledger.
@@ -280,6 +518,9 @@ and theoretical out-of-scope observations remain non-blocking ledger history.
 Every verification result must status every ledger issue exactly once. Only
 `resolved` or `verified` is a passing status; `open`, `blocked`, `unresolved`,
 `regression`, `accepted`, and every other status keep approval blocked.
+The reviewer verdict always includes `verified_issue_statuses` and
+`late_findings`, even when the latter is empty; discovery verdicts include
+neither field.
 
 The lifecycle records initial and late findings, late BLOCKER and MAJOR
 counts, review and implementation iterations, and average fixed issues per
@@ -311,21 +552,64 @@ Current candidate selection is unioned into the imported roster, including
 
 ## Dispatch and verdict
 
-Dispatch only the seats in the current selection artifact. Panel agents are
-read-only and must inspect staged evidence rather than run validation. Each
-selected seat returns exactly one JSON verdict:
+Dispatch only the seats in the current selection artifact through proper task
+subagents using the policy's `agent_type`. Never substitute a different agent
+type or spawn a nested `copilot` CLI reviewer. The model, effort, context tier,
+and communication mode are dispatch metadata; they are not reviewer-authored
+claims or a cryptographic provenance boundary. Observed same user process
+metadata is compared with the completion bound policy and the staged agent
+definition digest for the seat. It is correlation evidence, not
+authentication.
+
+Panel agents are read-only and must inspect staged evidence rather than run validation. The
+exact discovery reviewer schema and recommendation schema are defined above.
+A verification reviewer uses those same four base fields and adds
+`verified_issue_statuses` plus `late_findings`:
 
 ```json
 {
   "engineer": "software",
   "signoff": true,
   "summary": "What was reviewed and the overall posture.",
+  "verified_issue_statuses": {
+    "R1": "verified"
+  },
+  "late_findings": [],
   "recommendations": []
 }
 ```
 
-`signoff` is true if and only if `recommendations` is empty. Generate records
-only after every selected seat has a verdict and observed binding:
+`verified_issue_statuses` has exactly one entry per ledger issue.
+`late_findings` is either `[]` or an array whose non-empty entries have exactly
+these fields:
+
+```json
+{
+  "severity": "high",
+  "introduced_regression": true,
+  "previously_missed": false,
+  "category": "correctness",
+  "source_id": "software:late-1",
+  "source_ordinal": 1,
+  "seat": "software",
+  "attribution": "software",
+  "raw_text": "The introduced regression.",
+  "description": "The introduced regression.",
+  "impact": "The current candidate is unsafe.",
+  "recommendation": "Fix the regression."
+}
+```
+
+`severity` is `critical`, `high`, `medium`, or `low`; at least one of
+`introduced_regression` and `previously_missed` is true; and `category` is
+`correctness`, `security`, `data-loss`, or `reliability`. `signoff` is true if
+and only if `recommendations` is empty. Generate records only after every
+selected seat has a verdict and an observed binding containing `provider`,
+`model`, `reasoning_effort`, `context_tier`, `communication`, exact
+`agent_type`, `agent_definition_sha256`, `run_id`, and `receipt_locator`.
+These are same-user process metadata checked against the completion-bound
+dispatch policy and definition bytes, not authentication or a security
+boundary:
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs \
@@ -341,6 +625,10 @@ exact adapted verification-result bytes, and immutable discovery ledger before
 publication. It requires `--approval` and an explicit canonical `--ledger`
 path; no ledger or verification artifact is inferred from an alternate
 filename.
+The supplied selection, ledger, responses, verification-results, and approval
+paths must each be the matching file in the round directory. Before parsing,
+the helper reads the ordinary round files named by the current schema-version 4
+`.complete` marker and checks their recorded size and SHA-256.
 
 The metrics command reads and validates the canonical ledger, response
 envelope, current selection, and adapted verification results. Final metrics

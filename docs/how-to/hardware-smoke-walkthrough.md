@@ -47,8 +47,8 @@ When the host is idle, follow the script's printed sequence:
 
 1. start `d2bd` with the explicit broker binary overrides;
 2. run `packages/target/debug/d2b host install --apply`;
-3. run `packages/target/debug/d2b vm start work-vm --apply`;
-4. attach the YubiKey via `packages/target/debug/d2b usb attach work-vm <busid> --apply` if you are
+3. run `packages/target/debug/d2b guest start work-vm --apply`;
+4. attach the YubiKey via `packages/target/debug/d2b device usb attach work-vm <busid> --apply` if you are
    validating the USBIP leg (the legacy `d2b usb work-vm` bash orchestrator was retired in v1.0 per ADR 0015);
 5. confirm `ExportBrokerAudit` contains the expected `ApplyNftables`,
    `SpawnRunner`, `OpenPidfd`, and `UsbipBind` rows.

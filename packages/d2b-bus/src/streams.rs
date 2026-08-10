@@ -7,12 +7,20 @@ use std::{
 use tokio::sync::Notify;
 
 #[cfg(test)]
+use crate::metrics::NoopBusTelemetry;
+#[cfg(test)]
 use crate::router::NoopBusObserver;
 use crate::{
+    metrics::{BusBackpressureReason, BusDirection, BusStreamKind, BusStreamOutcome, BusTelemetry},
     operations::SessionId,
     registry::PrincipalId,
     router::{BusEvent, BusFailureReason, BusObserver},
 };
+
+// The bus owns addressing and admission, while the portable session crate
+// owns the protocol stream FSM.  Re-exporting that canonical FSM here keeps
+// callers from constructing a second half-close/reset implementation.
+pub use d2b_session::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 
 /// Default maximum bytes credited to one stream.
 pub const DEFAULT_MAX_STREAM_CREDIT: usize = 256 * 1024;
@@ -106,6 +114,8 @@ struct StreamState {
     source: SessionId,
     destination: SessionId,
     credit: usize,
+    acknowledged_bytes: usize,
+    direction: BusDirection,
     frames: VecDeque<Vec<u8>>,
 }
 
@@ -137,6 +147,7 @@ pub(crate) struct StreamBridge {
     state: Mutex<BridgeState>,
     notify: Notify,
     observer: Arc<dyn BusObserver>,
+    metrics: Arc<dyn BusTelemetry>,
 }
 
 impl StreamBridge {
@@ -145,9 +156,18 @@ impl StreamBridge {
         Self::with_observer(limits, Arc::new(NoopBusObserver))
     }
 
+    #[cfg(test)]
     pub(crate) fn with_observer(
         limits: StreamLimits,
         observer: Arc<dyn BusObserver>,
+    ) -> Result<Arc<Self>, StreamError> {
+        Self::with_observer_and_metrics(limits, observer, Arc::new(NoopBusTelemetry))
+    }
+
+    pub(crate) fn with_observer_and_metrics(
+        limits: StreamLimits,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
     ) -> Result<Arc<Self>, StreamError> {
         Ok(Arc::new(Self {
             limits: limits.validate()?,
@@ -161,9 +181,11 @@ impl StreamBridge {
             }),
             notify: Notify::new(),
             observer,
+            metrics,
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         self: &Arc<Self>,
         name: StreamName,
@@ -171,6 +193,7 @@ impl StreamBridge {
         source_principal: PrincipalId,
         destination: SessionId,
         destination_principal: PrincipalId,
+        direction: BusDirection,
         initial_credit: usize,
     ) -> Result<(OutgoingStream, IncomingStream), StreamError> {
         if initial_credit == 0 || initial_credit > self.limits.max_stream_credit {
@@ -210,18 +233,26 @@ impl StreamBridge {
                 source,
                 destination,
                 credit: initial_credit,
+                acknowledged_bytes: 0,
+                direction,
                 frames: VecDeque::new(),
             },
         );
         let usage = state.usage.entry(source_principal).or_default();
         usage.streams += 1;
         usage.credit += initial_credit;
+        let (active, credits) = Self::direction_gauges(&state, direction);
         drop(state);
+        self.metrics.stream_active(direction, active);
+        self.metrics.credits(direction, credits);
+        self.metrics
+            .stream_result(direction, BusStreamOutcome::Accepted);
         Ok((
             OutgoingStream {
                 bridge: Arc::clone(self),
                 key: key.clone(),
                 source,
+                direction,
                 closed: false,
             },
             IncomingStream {
@@ -239,14 +270,22 @@ impl StreamBridge {
         name: &StreamName,
         principal: &PrincipalId,
         source: SessionId,
+        direction: BusDirection,
         payload: Vec<u8>,
     ) -> Result<(), StreamError> {
         if payload.is_empty() || payload.len() > self.limits.max_frame_bytes {
+            self.metrics
+                .stream_result(direction, BusStreamOutcome::Rejected);
             return Err(StreamError::FrameBounds);
         }
         let frame_len = payload.len();
         let mut state = self.lock();
         if state.aggregate_bytes.saturating_add(frame_len) > self.limits.max_aggregate_bytes {
+            self.metrics.backpressure(
+                direction,
+                BusStreamKind::Stream,
+                BusBackpressureReason::BufferFull,
+            );
             return Err(StreamError::AggregateBackpressure);
         }
         let key = StreamKey {
@@ -258,29 +297,34 @@ impl StreamBridge {
             .get(principal)
             .map_or(0, |usage| usage.queued_bytes);
         if principal_queued.saturating_add(frame_len) > self.limits.max_queued_bytes_per_principal {
+            self.metrics.backpressure(
+                direction,
+                BusStreamKind::Stream,
+                BusBackpressureReason::BufferFull,
+            );
             return Err(StreamError::PrincipalBackpressure);
         }
-        let stream = state
-            .streams
-            .get_mut(&key)
-            .ok_or(StreamError::StreamClosed)?;
-        if stream.source != source {
-            return Err(StreamError::DirectionMismatch);
-        }
-        if stream.credit < frame_len {
-            return Err(StreamError::CreditExceeded);
-        }
-        let was_empty = stream.frames.is_empty();
-        stream.credit -= frame_len;
-        stream.frames.push_back(payload);
-        state.aggregate_credit -= frame_len;
-        state.aggregate_bytes += frame_len;
-        let usage = state
-            .usage
-            .get_mut(principal)
-            .ok_or(StreamError::StreamClosed)?;
-        usage.credit -= frame_len;
-        usage.queued_bytes += frame_len;
+        let was_empty = {
+            let stream = state
+                .streams
+                .get_mut(&key)
+                .ok_or(StreamError::StreamClosed)?;
+            if stream.source != source {
+                return Err(StreamError::DirectionMismatch);
+            }
+            if stream.credit < frame_len {
+                self.metrics.backpressure(
+                    direction,
+                    BusStreamKind::Stream,
+                    BusBackpressureReason::Credit,
+                );
+                return Err(StreamError::CreditExceeded);
+            }
+            let was_empty = stream.frames.is_empty();
+            stream.credit -= frame_len;
+            stream.frames.push_back(payload);
+            was_empty
+        };
         if was_empty {
             let principal_ready = state
                 .ready_streams
@@ -295,7 +339,17 @@ impl StreamBridge {
                 state.ready_principals.push_back(principal.clone());
             }
         }
+        state.aggregate_credit -= frame_len;
+        state.aggregate_bytes += frame_len;
+        let usage = state
+            .usage
+            .get_mut(principal)
+            .ok_or(StreamError::StreamClosed)?;
+        usage.credit -= frame_len;
+        usage.queued_bytes += frame_len;
+        let (_, credits) = Self::direction_gauges(&state, direction);
         drop(state);
+        self.metrics.credits(direction, credits);
         self.notify.notify_waiters();
         Ok(())
     }
@@ -371,47 +425,81 @@ impl StreamBridge {
         principal: &PrincipalId,
         destination: SessionId,
         bytes: usize,
+        acknowledge: bool,
     ) -> Result<(), StreamError> {
         if bytes == 0 {
             return Err(StreamError::CreditExceeded);
         }
         let mut state = self.lock();
-        if state.aggregate_credit.saturating_add(bytes) > self.limits.max_aggregate_bytes {
-            return Err(StreamError::AggregateBackpressure);
-        }
         let key = StreamKey {
             principal: principal.clone(),
             name: name.clone(),
         };
+        let direction = state
+            .streams
+            .get(&key)
+            .map_or(BusDirection::Local, |stream| stream.direction);
+        if state.aggregate_credit.saturating_add(bytes) > self.limits.max_aggregate_bytes {
+            self.metrics.backpressure(
+                direction,
+                BusStreamKind::Stream,
+                BusBackpressureReason::BufferFull,
+            );
+            return Err(StreamError::AggregateBackpressure);
+        }
         let principal_credit = state.usage.get(principal).map_or(0, |usage| usage.credit);
         if principal_credit.saturating_add(bytes) > self.limits.max_credit_per_principal {
+            self.metrics.backpressure(
+                direction,
+                BusStreamKind::Stream,
+                BusBackpressureReason::BufferFull,
+            );
             return Err(StreamError::PrincipalBackpressure);
         }
-        let stream = state
-            .streams
-            .get_mut(&key)
-            .ok_or(StreamError::StreamClosed)?;
-        if stream.destination != destination {
-            return Err(StreamError::DirectionMismatch);
-        }
-        stream.credit = stream
-            .credit
-            .checked_add(bytes)
-            .filter(|credit| *credit <= self.limits.max_stream_credit)
-            .ok_or(StreamError::CreditExceeded)?;
+        let direction = {
+            let stream = state
+                .streams
+                .get_mut(&key)
+                .ok_or(StreamError::StreamClosed)?;
+            if stream.destination != destination {
+                return Err(StreamError::DirectionMismatch);
+            }
+            stream.credit = stream
+                .credit
+                .checked_add(bytes)
+                .filter(|credit| *credit <= self.limits.max_stream_credit)
+                .ok_or_else(|| {
+                    self.metrics.backpressure(
+                        direction,
+                        BusStreamKind::Stream,
+                        BusBackpressureReason::Credit,
+                    );
+                    StreamError::CreditExceeded
+                })?;
+            if acknowledge {
+                stream.acknowledged_bytes = stream.acknowledged_bytes.saturating_add(bytes);
+            }
+            stream.direction
+        };
         state.aggregate_credit += bytes;
         state
             .usage
             .get_mut(principal)
             .ok_or(StreamError::StreamClosed)?
             .credit += bytes;
+        let (_, credits) = Self::direction_gauges(&state, direction);
+        drop(state);
+        self.metrics.credits(direction, credits);
+        self.notify.notify_waiters();
         Ok(())
     }
 
     fn close(&self, key: &StreamKey) {
         let mut state = self.lock();
         let mut shed = false;
+        let mut direction = None;
         if let Some(stream) = state.streams.remove(key) {
+            direction = Some(stream.direction);
             let queued = stream.frames.iter().map(Vec::len).sum::<usize>();
             shed = queued != 0;
             state.aggregate_bytes = state.aggregate_bytes.saturating_sub(queued);
@@ -434,7 +522,16 @@ impl StreamBridge {
                 }
             }
         }
-        drop(state);
+        if let Some(direction) = direction {
+            let (active, credits) = Self::direction_gauges(&state, direction);
+            drop(state);
+            self.metrics.stream_active(direction, active);
+            self.metrics.credits(direction, credits);
+            self.metrics
+                .stream_result(direction, BusStreamOutcome::Closed);
+        } else {
+            drop(state);
+        }
         if shed {
             self.observer
                 .record(BusEvent::Cleanup, BusFailureReason::StreamShed);
@@ -461,6 +558,28 @@ impl StreamBridge {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn direction_gauges(state: &BridgeState, direction: BusDirection) -> (u64, u64) {
+        let streams = state
+            .streams
+            .values()
+            .filter(|stream| stream.direction == direction);
+        let mut active = 0_u64;
+        let mut credits = 0_u64;
+        for stream in streams {
+            active = active.saturating_add(1);
+            credits = credits.saturating_add(stream.credit as u64);
+        }
+        (active, credits)
+    }
+
+    fn acknowledged_bytes(&self, key: &StreamKey) -> Result<usize, StreamError> {
+        self.lock()
+            .streams
+            .get(key)
+            .map(|stream| stream.acknowledged_bytes)
+            .ok_or(StreamError::StreamClosed)
     }
 }
 
@@ -497,6 +616,7 @@ pub(crate) struct OutgoingStream {
     bridge: Arc<StreamBridge>,
     key: StreamKey,
     source: SessionId,
+    direction: BusDirection,
     closed: bool,
 }
 
@@ -506,8 +626,49 @@ impl OutgoingStream {
     }
 
     pub(crate) fn send(&self, payload: Vec<u8>) -> Result<(), StreamError> {
-        self.bridge
-            .send(&self.key.name, &self.key.principal, self.source, payload)
+        self.bridge.send(
+            &self.key.name,
+            &self.key.principal,
+            self.source,
+            self.direction,
+            payload,
+        )
+    }
+
+    pub(crate) async fn send_wait(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+        loop {
+            let notified = self.bridge.notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            match self.send(payload.clone()) {
+                Ok(()) => return Ok(()),
+                Err(
+                    StreamError::CreditExceeded
+                    | StreamError::AggregateBackpressure
+                    | StreamError::PrincipalBackpressure,
+                ) => {
+                    notified.await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn send_and_wait_ack(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+        let target = self
+            .bridge
+            .acknowledged_bytes(&self.key)?
+            .saturating_add(payload.len());
+        self.send_wait(payload).await?;
+        loop {
+            let notified = self.bridge.notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            if self.bridge.acknowledged_bytes(&self.key)? >= target {
+                return Ok(());
+            }
+            notified.await;
+        }
     }
 
     pub(crate) fn close(&mut self) {
@@ -555,8 +716,13 @@ impl IncomingStream {
 
     /// Grant more byte credit to one named stream at this destination.
     pub async fn grant(&self, stream: &StreamName, bytes: usize) -> Result<(), StreamError> {
-        self.bridge
-            .grant(stream, &self.owner.principal, self.destination, bytes)
+        self.bridge.grant(
+            stream,
+            &self.owner.principal,
+            self.destination,
+            bytes,
+            false,
+        )
     }
 
     /// Grant credit to the exact authenticated principal and stream in a frame.
@@ -570,6 +736,7 @@ impl IncomingStream {
             &frame.key.principal,
             self.destination,
             bytes,
+            true,
         )
     }
 
@@ -669,6 +836,7 @@ mod tests {
                 principal(source.0),
                 destination,
                 principal(destination.0),
+                BusDirection::Local,
                 initial_credit,
             )
         }
@@ -806,6 +974,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_watch_delivery_waits_for_transport_credit() {
+        let bridge = bridge(16);
+        let (outgoing, incoming) = bridge
+            .open_test(
+                StreamName::parse("watch:wait-credit").unwrap(),
+                SessionId(1),
+                SessionId(2),
+                2,
+            )
+            .unwrap();
+        let outgoing = Arc::new(outgoing);
+        let sender = {
+            let outgoing = Arc::clone(&outgoing);
+            tokio::spawn(async move { outgoing.send_wait(vec![1, 2, 3, 4]).await })
+        };
+        tokio::task::yield_now().await;
+        incoming.grant(outgoing.name(), 2).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), sender)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let frame = incoming.receive_next().await.unwrap();
+        assert_eq!(frame.payload(), &[1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
     async fn ready_streams_are_served_round_robin() {
         let bridge = bridge(32);
         let (first_out, first_in) = bridge
@@ -849,6 +1044,7 @@ mod tests {
                 principal(1),
                 SessionId(9),
                 destination.clone(),
+                BusDirection::Local,
                 8,
             )
             .unwrap();
@@ -859,6 +1055,7 @@ mod tests {
                 principal(2),
                 SessionId(9),
                 destination,
+                BusDirection::Local,
                 8,
             )
             .unwrap();
@@ -896,6 +1093,7 @@ mod tests {
                 principal(1),
                 SessionId(9),
                 destination.clone(),
+                BusDirection::Local,
                 8,
             )
             .unwrap();
@@ -906,6 +1104,7 @@ mod tests {
                 principal(1),
                 SessionId(9),
                 destination.clone(),
+                BusDirection::Local,
                 8,
             ),
             Err(StreamError::PrincipalCapacityExceeded)
@@ -918,6 +1117,7 @@ mod tests {
                     principal(2),
                     SessionId(9),
                     destination,
+                    BusDirection::Local,
                     8,
                 )
                 .is_ok()

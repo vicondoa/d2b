@@ -292,19 +292,49 @@ async fn owner_fan_in_emits_one_direct_hint_per_child_mutation() {
         .await
         .unwrap();
     let collector = tokio::spawn(async move {
+        const EXPECTED_RESOURCE_HINTS: usize = 4_681;
+        const EXPECTED_OWNER_HINTS: usize = 4_680;
+        const COLLECTION_TIMEOUT: Duration = Duration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + COLLECTION_TIMEOUT;
         let mut owner_hints = 0_usize;
         let mut resource_hints = 0_usize;
-        while owner_hints < 4_680 || resource_hints < 4_681 {
-            let hint = hints.recv().await.expect("hint bus remains open");
+        while owner_hints < EXPECTED_OWNER_HINTS || resource_hints < EXPECTED_RESOURCE_HINTS {
+            let hint = match tokio::time::timeout_at(deadline, hints.recv()).await {
+                Ok(Some(hint)) => hint,
+                Ok(None) => {
+                    return Err(format!(
+                        "owner fan-in hint bus closed early: resource_hints={resource_hints}/{EXPECTED_RESOURCE_HINTS} owner_hints={owner_hints}/{EXPECTED_OWNER_HINTS}"
+                    ));
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "owner fan-in hint collector timed out after {}s: resource_hints={resource_hints}/{EXPECTED_RESOURCE_HINTS} owner_hints={owner_hints}/{EXPECTED_OWNER_HINTS}",
+                        COLLECTION_TIMEOUT.as_secs()
+                    ));
+                }
+            };
             match hint.kind {
                 HintKind::ResourceChanged => resource_hints += 1,
                 HintKind::OwnedResourceChanged => owner_hints += 1,
             }
         }
-        (resource_hints, owner_hints)
+        Ok((resource_hints, owner_hints))
     });
 
-    for start in (0..4_681).step_by(16) {
+    // Admit each owner before starting mutations whose hints refer to it. The
+    // first concurrent group otherwise lets a child race its owner into the
+    // actor's uid_index.
+    insert_group(&store, std::iter::once(synthetic_resource(0))).await;
+    insert_group(
+        &store,
+        (1..9).map(|index| {
+            let mut resource = synthetic_resource(index);
+            resource.owner_uid = Some(format!("uid-{:08}", (index - 1) / 8));
+            resource
+        }),
+    )
+    .await;
+    for start in (9..4_681).step_by(16) {
         insert_group(
             &store,
             (start..(start + 16).min(4_681)).map(|index| {
@@ -315,7 +345,10 @@ async fn owner_fan_in_emits_one_direct_hint_per_child_mutation() {
         )
         .await;
     }
-    let (resource_hints, owner_hints) = collector.await.unwrap();
+    let (resource_hints, owner_hints) = collector
+        .await
+        .unwrap()
+        .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(resource_hints, 4_681);
     assert_eq!(owner_hints, 4_680);
     let stats = store.stats().await.unwrap();

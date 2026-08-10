@@ -127,7 +127,7 @@ spawn-related authority field across the wire).
 
 ## Graceful stop path
 
-Stop walks the per-VM DAG in reverse, but local primary VMM runners get a
+Stop walks the per-Guest DAG in reverse, but local primary VMM runners get a
 provider-aware guest shutdown phase before pidfd signal cleanup. Cloud
 Hypervisor/NixOS VMs use the CH API socket and request
 `PUT /api/v1/vm.shutdown`. qemu-media VMs route QMP through the broker:
@@ -137,9 +137,9 @@ polling, and `quit` only after the guest is stopped and QEMU is an empty VMM.
 The wait is controlled by
 `d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds` (default 90,
 bounded 1-600) or
-`d2b.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds`. Per-VM
+`d2b.vms.<name>.lifecycle.gracefulShutdown.timeoutSeconds`. Per-Guest
 `lifecycle.gracefulShutdown.enable = false` skips the provider phase without
-creating a degraded marker. Explicit `d2b vm stop <vm> --force --apply`
+creating a degraded marker. Explicit `d2b guest stop <name> --force --apply`
 also skips the provider wait, but still uses the normal SIGTERM/SIGKILL and
 cgroup cleanup policy; it is recorded as operator intent rather than as an
 unexpected degraded condition.
@@ -307,8 +307,8 @@ The handler:
    supervisor's event channel:
    - `VfsdDied { vm, role_id, exit }` - the audit-facing typed event.
    - `VfsdShareDegraded { vm, role_id }` - the per-share mount is now
-     unrecoverable; `d2b status <vm>` surfaces this in the
-     per-VM degraded counter.
+     unrecoverable; `d2b guest status <name>` surfaces this in the
+     per-Guest degraded counter.
    - `StopRunnerRequested { runner_role: CloudHypervisor, reason }` -
      drives CH down through the existing SIGTERM→SIGKILL pidfd
      ladder. Suppressed when

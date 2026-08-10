@@ -1,73 +1,20 @@
 # `d2b list` output
 
-Schema: [`list.schema.json`](./list.schema.json)
+`d2b list <RESOURCE_TYPE> --json` emits the v3 Resource API `ListResponse`
+for one ResourceType in one Zone. The response is stable JSON with these
+top-level fields:
 
-`d2b list --json` emits one JSON array ordered lexicographically by
-VM name. Each array element is a declared VM plus its current dispatch
-status.
+| Field | Type | Semantics |
+| --- | --- | --- |
+| `resources` | array | Canonical resource envelopes for the requested type. |
+| `snapshotRevision` | integer | Zone revision that anchors this page. |
+| `nextCursor` | object or `null` | Opaque continuation cursor. |
+| `truncated` | boolean | Whether another page is available. |
+| `error` | object or `null` | Typed, bounded Resource API failure. |
 
-## Fields
+The required positional ResourceType prevents an unbounded global inventory
+scan. Use `--zone`, `--label-selector`, `--limit`, and `--page-token` to scope
+the request. Human formatting is not a wire contract.
 
-| Field | Type | Semantics | Stability |
-| --- | --- | --- | --- |
-| `name` | string | Stable VM name. Unique within the manifest. | Stable wire contract. |
-| `env` | string or `null` | Environment name. Present and `null` only when the VM has no environment binding. | Stable wire contract. |
-| `graphics` | boolean | Whether the VM is a graphics VM. | Stable wire contract. |
-| `tpm` | boolean | Whether the VM declares TPM support. | Stable wire contract. |
-| `usbip` | boolean | Whether the VM declares USBIP/YubiKey support. | Stable wire contract. |
-| `staticIp` | string or `null` | Declared static IPv4 address. Present and `null` for DHCP-backed shapes. | Stable wire contract. |
-| `status` | string enum | One of `stopped`, `running`, `pending-restart`, `failed`, or `unknown`. | Stable wire contract. |
-| `isNetVm` | boolean | True only for auto-declared per-env net VMs. | Stable wire contract. |
-| `guestClosureOutPath` | string | Absolute Nix store path of the VM's effective guest system closure. For a running VM with `status = "pending-restart"`, this is the booted closure; otherwise it is the declared bundle closure. Present when the daemon or local fallback can read closure metadata. | Additive stable wire contract. |
-
-## Ordering and null handling
-
-- The top-level array is ordered by `name`.
-- Core inventory fields are not omitted. Additive capability fields such as
-  `guestClosureOutPath` may be omitted when the active generation predates the
-  field or the static fallback cannot read bundle metadata.
-- `env` and `staticIp` are the only nullable core fields.
-
-## Stability promise
-
-The field set and the five `status` enum values are part of the
-compatibility contract. Human table spacing may change; the JSON shape
-may not change without an intentional schema update.
-
-## Human example
-
-```text
-$ d2b list
-NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-corp-vm            work      false     false false   10.20.0.10      stopped
-sys-work-net       work      false     false false   192.0.2.1       stopped (net-vm)
-```
-
-## JSON example
-
-```json
-[
-  {
-    "name": "corp-vm",
-    "env": "work",
-    "graphics": false,
-    "tpm": false,
-    "usbip": false,
-    "staticIp": "10.20.0.10",
-    "status": "stopped",
-    "isNetVm": false,
-    "guestClosureOutPath": "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixos-system-corp-vm"
-  },
-  {
-    "name": "sys-work-net",
-    "env": "work",
-    "graphics": false,
-    "tpm": false,
-    "usbip": false,
-    "staticIp": "192.0.2.1",
-    "status": "stopped",
-    "isNetVm": true,
-    "guestClosureOutPath": "/nix/store/ffffffffffffffffffffffffffffffff-nixos-system-sys-work-net"
-  }
-]
-```
+The pre-v3 untyped VM inventory form, `d2b list --json`, is retired. VM and
+Guest inventory is queried through the corresponding v3 ResourceType instead.

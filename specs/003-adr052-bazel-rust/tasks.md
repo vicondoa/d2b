@@ -159,8 +159,11 @@ to the same file are explicitly sequential.
   `.scratch/spec003w0-parked-evidence/`; prove none is an ancestor of the base.
 - [ ] T003 [owner: integrator] [files: none] [depends: T002] Run the amended
   read-only plan-structure validator self-tests and positive plan check, then
-  run the Track A plan panel over every artifact in this directory and require
-  ten signoffs with empty recommendations.
+  run the Track A plan panel over every artifact in this directory using every
+  trigger and the applicable floor from the versioned selection table. Dispatch
+  exactly the roster and per-seat profiles recorded by the lifecycle selection
+  and require unanimous signoff with empty recommendations from every selected
+  seat.
 
 ## spec003w0 product workspace and foundation
 
@@ -528,11 +531,31 @@ to the same file are explicitly sequential.
 ### spec003w0 Cargo gate scope
 
 - [ ] T012 [owner: spec003w0-cargo-gates] [files: tests/test-rust.sh,
-  tests/tools/assert-pinned-tests.sh]
+  tests/tools/assert-pinned-tests.sh,
+  tests/unit/meta/ci-runner-regression.py]
   [depends: T011] Add failing same-file selector tests for package-only guest
   fmt, locked broker and guest resolving commands, exact generic-main
-  exclusions, gate-owned target directories, and serial broker contexts. In the
-  same test-first step, add failing assertions that the package supply-chain
+  exclusions, gate-owned target directories, and serial broker contexts. Add
+  failing regression fixtures that derive product manifests and package names
+  from locked offline root-workspace metadata rather than top-level directory
+  names; classify `packages/d2b-wlproxy-spike` and the nested fuzz and UI
+  workspaces as independent, classify `packages/policy-inputs` as a generated
+  non-crate directory, and reject an unclassified package-root entry. Cover
+  broker and guest becoming product workspace members, the independent
+  workspace never becoming a root `-p` selector, and generated policy inputs
+  neither becoming a crate nor breaking API fingerprint generation. Add the
+  closed exact direct-build census assertion for every supported direct Cargo
+  build call site changed by T006: `Makefile` `heavy-gate-build`,
+  `tests/test-rust.sh`, `tests/static.sh`,
+  `tests/cli-rust-native-common.sh`, `tests/tools/stub-no-socket.sh`,
+  `tests/tools/heavy-gate-reexec.sh`, `tests/unit/gates/drift-check.sh`,
+  `tests/unit/gates/performance-budgets.sh`,
+  `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`, and
+  `tests/integration/distro-matrix/ubuntu-2404-tier1.sh`. Plant missing,
+  extra, unlocked, wrong-manifest, generic-includes-broker,
+  generic-includes-guest, wrong-package, wrong-bin, default-feature, and
+  feature-set mutations. In the same test-first step, add failing assertions
+  that the package supply-chain
   surfaces read the four native selected policy inputs
   (`packages/policy-inputs/<system>/<gnu-target>/broker-production/policy/{metadata.json,Cargo.lock}`
   and
@@ -543,15 +566,40 @@ to the same file are explicitly sequential.
   the pinned inventory lists with `--locked` root-lock package selection,
   creates no backup path, registers no restoring `EXIT` trap, and leaves the
   candidate clean under tracked, staged, and untracked assertions.
-- [ ] T013 [owner: spec003w0-cargo-gates] [files: tests/test-rust.sh,
+- [ ] T013 [owner: spec003w0-cargo-gates] [files: Makefile,
+  tests/test-rust.sh,
   tests/tools/assert-pinned-tests.sh,
+  tests/tools/api-surface-input-fingerprint.sh,
+  tests/static.sh,
+  tests/cli-rust-native-common.sh,
+  tests/tools/stub-no-socket.sh,
+  tests/tools/heavy-gate-reexec.sh,
+  tests/unit/gates/drift-check.sh,
+  tests/unit/gates/performance-budgets.sh,
+  tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh,
+  tests/integration/distro-matrix/ubuntu-2404-tier1.sh,
   tests/golden/pinned/kernel-canaries.txt,
   tests/golden/pinned/usbip-firewall-skeleton.txt,
   tests/golden/pinned/host-prepare-network.txt,
   tests/golden/pinned/broker-socket-acl.txt,
   tests/golden/pinned/broker-export-audit.txt]
   [depends: T012] Implement the root-workspace command shapes and make every
-  T012 assertion pass without changing topology or fixture behavior. Move the
+  T012 assertion pass without changing topology or fixture behavior. Derive
+  API fingerprint inputs and changed-scope package names from the exact
+  `workspace_members`, package `manifest_path`, and package `name` fields of
+  locked offline metadata for `packages/Cargo.toml`. Use the closed
+  classification for independent workspaces, generated non-crate directories,
+  workspace administration, and ignored target output; never infer a package
+  from the first path component. Add `--locked` and the contract's exact
+  package, bin, default-feature, feature, and generic broker/guest exclusion
+  selectors to every T012-censused Cargo build. Preserve each call site's
+  existing target directory, profile, skip or soft-fail policy, output
+  consumer, and runtime phase; do not migrate a call to Bazel or otherwise
+  change runtime behavior assigned to a later task. For `Makefile`
+  `heavy-gate-build`, preserve the quiet debug build, absolute
+  `HEAVY_GATE_TARGET_DIR`, workspace Cargo configuration, and runtime phase
+  while requiring literal
+  `--manifest-path packages/Cargo.toml --locked -p xtask --bin xtask`. Move the
   package deny, audit, and census onto the selected policy inputs; replace the
   nested broker-lock snapshot, restore function, scratch path, and `EXIT`
   trap with the two root-lock listings
@@ -602,7 +650,15 @@ to the same file are explicitly sequential.
   no-fetch audit, generic Nix build/test and Clippy broker/guest exclusions,
   dedicated-context exact selectors, expected native `e_machine`, `ET_DYN`,
   no `PT_INTERP`, no `DT_NEEDED`, and all missing/wrong/one-sided pin,
-  non-PIE, and wrong-machine mutations. Add failing tests for realization of
+  non-PIE, and wrong-machine mutations. Bind the Nix portion of the closed
+  Cargo build census: generic `rust-build`, `rust-tests`, and `rust-clippy`
+  exclude broker and guest exactly; broker production selects its package and
+  bin with defaults disabled and no feature; guest production selects its
+  package and bin with defaults disabled and only `real-libshpool`; every
+  build remains locked to its declared root or generated guest lock. Preserve
+  already exact individual product and generated-guest package builders
+  without changing their runtime feature behavior. Add failing tests for
+  realization of
   both dedicated derivations, exact broker interpreter and sorted `DT_NEEDED`
   SONAME set, transient exact recursive broker/guest Nix closures with only
   persisted counts/digests, selected-policy digests, and exactly four measured
@@ -649,7 +705,8 @@ to the same file are explicitly sequential.
   nixos-modules/host-broker.nix, flake.nix,
   packages/d2b-guest-shell-runner/deny.toml] [depends: T018] Implement the
   dedicated root-lock derivations and package checks, retain the exact output
-  hash in both derivations, preserve exact generic/dedicated contexts, drop
+  hash in both derivations, implement every T018 Cargo build-census selector,
+  preserve exact generic/dedicated contexts, drop
   both deleted nested lock inputs from the aggregate audit and repoint the
   guest-shell-runner static dependency policy at
   `guest-real-libshpool/production/{closure.json,Cargo.lock}` while reserving
@@ -679,8 +736,16 @@ to the same file are explicitly sequential.
   `make test-rust-supply-chain`, and stable-head binding. Update the two
   existing fail-closed gates with failing predicates for the unified release
   root manifest, collapsed cache workspace, explicit gate directories, and
-  native arm six-realization shape; add a failing advisory-classification
-  mutation for `test-flake-aarch64`; do not delete or retire either gate.
+  native arm six-realization shape. Add release-workflow regressions proving
+  the channel read from `packages/rust-toolchain.toml` is installed and
+  activated before `Swatinem/rust-cache`, both `rustc` and `cargo` versions are
+  asserted against that channel, and all six release builds use `--locked`
+  with the exact package, bin, default-feature, and feature selections from
+  the workspace contract. Plant cache-before-toolchain, ambient-toolchain,
+  missing-version-assertion, unlocked, wrong-package, wrong-bin,
+  broker-default-feature, and extra-feature failures. Add a failing
+  advisory-classification mutation for `test-flake-aarch64`; do not delete or
+  retire either gate.
 - [ ] T022 [owner: spec003w0-policy-ci] [files: tests/lib.sh,
   packages/xtask/tests/policy_ci.rs,
   packages/d2b-contract-tests/tests/policy_docs.rs,
@@ -701,10 +766,12 @@ to the same file are explicitly sequential.
   `make test-rust-supply-chain`, 60-minute bound, renderer coverage, stable-head
   binding, explicit non-advisory enforcement, and
   wrong-runner/foreign-system/remote-builder refusals. Update the
-  release workflow to the root manifest, `--locked`, explicit package/bin/
-  default-feature selectors, `packages/target/release`, one `packages ->
-  target` workspace cache mapping, and explicit gate target directories; make
-  both retained T021 gates pass.
+  release workflow to install and activate the channel pinned by
+  `packages/rust-toolchain.toml` before initializing rust-cache, assert exact
+  `rustc` and `cargo` versions, and use the root manifest, `--locked`, the
+  contract's exact package/bin/default-feature/feature selectors,
+  `packages/target/release`, one `packages -> target` workspace cache mapping,
+  and explicit gate target directories; make both retained T021 gates pass.
 - [ ] T024 [owner: spec003w0-binding-docs] [files: AGENTS.md,
   tests/AGENTS.md, CONTRIBUTING.md, docs/contributing/gates-and-lints.md,
   docs/contributing/workflow.md,
@@ -791,15 +858,19 @@ to the same file are explicitly sequential.
 - [ ] T030 [owner: integrator] [files: none] [depends: T029] Run the complete
   spec003w0 validation from `plan.md` in its exact order, including clean-diff
   assertions around product-lock generation, product repin, walker repin,
-  module refresh last, Nix-unit pin regeneration, and every generator. Run the
-  full `make test-rust` aggregate in addition to focused checks and the
-  explicit fixture-contract lane.
+  module refresh last, Nix-unit pin regeneration, every generator, the
+  authoritative-membership fixtures, and the closed Cargo build-call-site
+  census. Run the full `make test-rust` aggregate in addition to focused checks
+  and the explicit fixture-contract lane.
 - [ ] T031 [owner: integrator] [files: none] [depends: T030] Obtain native x86
   and arm results on one stable PR head; require arm six-check realization and
   `make test-rust-supply-chain` plus renderer coverage.
-- [ ] T032 [owner: integrator] [files: none] [depends: T031] Run the ten-seat
-  integrated-diff panel; any content fix invalidates affected validation and
-  panel records.
+- [ ] T032 [owner: integrator] [files: none] [depends: T031] Run the
+  selected-roster integrated-diff panel using exactly the roster and per-seat
+  profiles recorded by the lifecycle selection. Across fix verification, rerun
+  selection over the full candidate and every fix delta and only widen the
+  lifecycle roster. Any content fix invalidates affected validation and panel
+  records.
 - [ ] T033 [owner: integrator] [files: none] [depends: T032] Seal
   `spec003w0`, merge to protected `v3`, record the merged SHA, collect garbage,
   and remove finished worktrees.

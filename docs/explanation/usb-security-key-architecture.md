@@ -32,7 +32,7 @@ and a `work-aad` realm - and a single physical YubiKey used for WebAuthn
 authentication on sites like GitHub, GitLab, and corporate identity providers.
 
 The naive solution - USBIP passthrough - transfers the physical USB device into
-one VM at a time. Switching VMs requires an explicit `d2b usb detach` / `d2b usb attach`
+one VM at a time. Switching Guests requires an explicit `d2b device usb detach` / `d2b device usb attach`
 cycle, during which Firefox in both VMs sees the key disappear and reappear.
 This is disruptive when switching contexts rapidly.
 

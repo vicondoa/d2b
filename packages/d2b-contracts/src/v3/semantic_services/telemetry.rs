@@ -28,8 +28,8 @@
 use std::sync::OnceLock;
 
 use super::{
-    super::provider::BindingTargetType, SemanticFamily, SemanticPairContract,
-    SemanticPairDeclaration,
+    super::provider::BindingTargetType, NonEmpty, SemanticBackingDeclaration, SemanticFamily,
+    SemanticPairContract, SemanticPairDeclaration,
 };
 
 /// The dot-qualified API ResourceType of the telemetry ingest authority and
@@ -81,10 +81,6 @@ const PROJECTION_SPEC_ALLOWED: &[&str] =
 const PROJECTION_SPEC_REQUIRED: &[&str] =
     &["providerRef", "serviceRole", "signals", "quota", "policy"];
 
-/// The authority Service references same-Zone local telemetry-ingest
-/// `Endpoint` resources.
-const ALLOWED_BACKING_REF_TYPES: &[&str] = &["Endpoint"];
-
 /// A telemetry Binding's producer is a same-Zone Zone or Guest.
 const ALLOWED_BINDING_TARGET_REF_TYPES: &[BindingTargetType] =
     &[BindingTargetType::Guest, BindingTargetType::Zone];
@@ -99,7 +95,10 @@ const DECLARATION: SemanticPairDeclaration = SemanticPairDeclaration {
     binding_spec_allowed: BINDING_SPEC_ALLOWED,
     binding_spec_required: BINDING_SPEC_REQUIRED,
     binding_status_allowed: BINDING_STATUS_ALLOWED,
-    allowed_backing_ref_types: Some(ALLOWED_BACKING_REF_TYPES),
+    backing: SemanticBackingDeclaration::Constrained {
+        types: NonEmpty::of("Endpoint"),
+        fields: NonEmpty::of("ingestEndpointRefs"),
+    },
     allowed_binding_target_ref_types: ALLOWED_BINDING_TARGET_REF_TYPES,
     projection_spec_allowed: PROJECTION_SPEC_ALLOWED,
     projection_spec_required: PROJECTION_SPEC_REQUIRED,

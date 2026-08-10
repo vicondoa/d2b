@@ -427,7 +427,7 @@ group = "B"
 make_target = "test-drift"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["tests/unit/gates/drift-check.sh (runs xtask gen-cli-shell-artifacts and checks git diff --exit-code -- docs/manpages/ docs/completions/)"]
+successor_ids = ["tests/unit/gates/drift-check.sh (runs xtask gen-cli-shell-artifacts and checks git diff --exit-code -- docs/manpages/ completions/)"]
 exercised_today = "yes"
 
 [[script]]

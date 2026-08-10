@@ -19,6 +19,14 @@ Expected:
 - mandatory and optional seat selection is deterministic;
 - build changes select `build`, while citation-only prose does not;
 - discovery, ledger, response, and verification artifacts are byte-stable;
+- reviewer verdict schemas and adapter-produced normalized schemas remain
+  distinct and exact;
+- every actionable discovery finding, including MINOR and NIT, reaches the
+  ledger and complete processing;
+- `.complete` rejects in-place packet mutation and requires a new qualified
+  round, while evidence-only rounds preserve the candidate snapshot;
+- publication uses create-or-compare and only the two named atomic family
+  directories, without generic filesystem safety machinery;
 - legacy imports, stable `R` identifiers, monotonic roster widening, late issue
   rules, and metrics pass their behavior tests.
 
@@ -60,5 +68,8 @@ Expected:
 Stage the finished candidate with the panel skill, run one discovery, create
 the merged ledger and responses, then run scoped verification. The lifecycle
 passes when every selected reviewer signs off with no blocking
-recommendations. For this feature, only HIGH or CRITICAL defects are
-merge-blocking.
+recommendations. Every actionable finding enters the ledger. MINOR and NIT
+become non-blocking only after their responses and verification statuses are
+complete. Completed packet artifacts are process evidence, not an
+authentication, privilege, secrecy, hostile-input, or same-UID security
+boundary.

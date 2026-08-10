@@ -253,7 +253,6 @@ pub enum GuestControlShellErrorKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsafeLocalShellErrorKind {
-    FeatureUnavailable,
     HelperUnavailable,
     HelperStale,
     QueueFull,
@@ -480,7 +479,6 @@ impl GuestControlShellErrorKind {
 impl UnsafeLocalShellErrorKind {
     pub fn wire_kind(self) -> &'static str {
         match self {
-            Self::FeatureUnavailable => "unsafe-local-shell-feature-unavailable",
             Self::HelperUnavailable => "unsafe-local-shell-helper-unavailable",
             Self::HelperStale => "unsafe-local-shell-helper-stale",
             Self::QueueFull => "unsafe-local-shell-capacity",
@@ -510,7 +508,6 @@ impl UnsafeLocalShellErrorKind {
 
     fn exit_code(self) -> u8 {
         match self {
-            Self::FeatureUnavailable => 70,
             Self::HelperUnavailable
             | Self::HelperStale
             | Self::Timeout
@@ -538,9 +535,6 @@ impl UnsafeLocalShellErrorKind {
 
     fn human_message(self) -> &'static str {
         match self {
-            Self::FeatureUnavailable => {
-                "the client and daemon did not negotiate unsafe-local-shell-v1"
-            }
             Self::HelperUnavailable => "no same-UID unsafe-local helper is connected",
             Self::HelperStale => "the same-UID unsafe-local helper generation is stale",
             Self::QueueFull => "the unsafe-local shell request queue is at capacity",
@@ -576,9 +570,6 @@ impl UnsafeLocalShellErrorKind {
 
     fn remediation(self) -> &'static str {
         match self {
-            Self::FeatureUnavailable => {
-                "update d2b, d2bd, and d2b-unsafe-local-helper together; no host-shell fallback is permitted"
-            }
             Self::HelperUnavailable | Self::HelperStale => {
                 "start or restart d2b-unsafe-local-helper in the requesting user's login session, then retry"
             }
@@ -1937,7 +1928,6 @@ mod tests {
     fn unsafe_local_shell_failed_kinds_are_closed_and_leak_free() {
         use UnsafeLocalShellErrorKind as UnsafeKind;
         let kinds = [
-            UnsafeKind::FeatureUnavailable,
             UnsafeKind::HelperUnavailable,
             UnsafeKind::HelperStale,
             UnsafeKind::QueueFull,

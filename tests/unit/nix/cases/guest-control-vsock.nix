@@ -26,7 +26,10 @@
 # aarch64 platform guard is required; the existing
 # flake.checks.aarch64-linux.guest-control-vsock proves the "base" eval is
 # arch-portable.
-{ mkEval, pkgs, system, flakeRoot, ... }:
+{ lib, mkEval, pkgs, system, flakeRoot
+, only ? [ "guest-control-vsock/base-positive" ]
+, ...
+}:
 
 let
   flakeShim = {
@@ -37,8 +40,7 @@ let
     inherit system pkgs scenario;
     flake = flakeShim;
   };
-in
-{
+  allCases = {
   # --- base: CID/socket parity, CID ladder, tmpfiles, readiness ------
   "guest-control-vsock/base-positive" = {
     expr = vsock "base";
@@ -71,4 +73,8 @@ in
     expr = vsock "long-socket";
     expectedError = { };
   };
-}
+  };
+in
+  if only == null
+  then allCases
+  else lib.filterAttrs (name: _: builtins.elem name only) allCases

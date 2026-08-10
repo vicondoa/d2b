@@ -2396,8 +2396,225 @@ let
           zone.resources
         ++ zoneLinkAssertions zoneName zone)
       cfg.zones);
+
+  # --- Device ResourceType cross-resource assertions -------------------
+  #
+  # Field shape and Provider settings belong to resources-device.nix. These
+  # six cross-resource checks remain here so the top-level assertion surface
+  # also protects evaluations that only import the established assertions
+  # module.
+  deviceRows = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      lib.mapAttrsToList
+        (resourceName: resource: {
+          inherit zoneName zone resourceName resource;
+          path = "d2b.zones.${zoneName}.resources.${resourceName}";
+        })
+        (lib.filterAttrs (_: resource: resource.type == "Device") zone.resources))
+    cfg.zones);
+
+  deviceProviderName = row:
+    let parts = lib.splitString "/" (zoneAttrOr row.resource.spec "providerRef" "");
+    in if lib.length parts == 2 && builtins.elemAt parts 0 == "Provider"
+    then builtins.elemAt parts 1
+    else null;
+
+  deviceSelector = row:
+    zoneAttrOr (zoneAttrOr row.resource.spec "inventory" { }) "selector" { };
+
+  deviceSelectorLabel = row:
+    zoneAttrOr (deviceSelector row) "label" null;
+
+  deviceSettings = row:
+    zoneAttrOr (zoneAttrOr row.resource.spec "provider" { }) "settings" { };
+
+  deviceSelectorBusClass = row:
+    zoneAttrOr (deviceSelector row) "busClass" null;
+
+  deviceSelectorField = row: field:
+    zoneAttrOr (deviceSelector row) field null;
+
+  deviceSelectorValuesCompatible = left: right:
+    left == null || right == null || left == right;
+
+  # Nix can only reject selectors that are known to overlap. Core remains the
+  # authority for the opaque Host physical-backing key at runtime. USB and
+  # hidraw selectors with compatible vendor/product/serial filters are
+  # conservatively treated as one possible backing so a cross-Zone collision
+  # cannot be authored past activation.
+  devicePhysicalUsbSelectorsOverlap = left: right:
+    let
+      leftBus = deviceSelectorBusClass left;
+      rightBus = deviceSelectorBusClass right;
+    in
+    builtins.elem leftBus [ "usb" "hidraw" ]
+    && builtins.elem rightBus [ "usb" "hidraw" ]
+    && deviceSelectorValuesCompatible
+      (deviceSelectorField left "vendorId")
+      (deviceSelectorField right "vendorId")
+    && deviceSelectorValuesCompatible
+      (deviceSelectorField left "productId")
+      (deviceSelectorField right "productId")
+    && deviceSelectorValuesCompatible
+      (deviceSelectorField left "serial")
+      (deviceSelectorField right "serial");
+
+  deviceUnorderedPairs = values:
+    let count = lib.length values;
+    in lib.concatMap
+      (index: lib.genList
+        (offset: {
+          left = lib.elemAt values index;
+          right = lib.elemAt values (index + offset + 1);
+        })
+        (count - index - 1))
+      (lib.genList (index: index) count);
+
+  deviceOwnerRefValid = row:
+    let owner = zoneAttrOr row.resource.metadata "ownerRef" null;
+        parsed = if builtins.isString owner then lib.splitString "/" owner else [ ];
+    in owner == null
+      || (lib.length parsed == 2
+        && builtins.elem (builtins.elemAt parsed 0) [ "Guest" "Host" ]
+        && builtins.hasAttr (builtins.elemAt parsed 1) row.zone.resources
+        && row.zone.resources.${builtins.elemAt parsed 1}.type == builtins.elemAt parsed 0);
+
+  deviceOwnerAssertions = map
+    (row: {
+      assertion = deviceOwnerRefValid row;
+      message = "${row.path}.metadata.ownerRef must be null or resolve to a same-Zone Guest or Host (invalid-owner-ref).";
+    })
+    deviceRows;
+
+  deviceMutualExclusionPairs = lib.filter
+    (pair:
+      deviceProviderName pair.left != deviceProviderName pair.right
+      && builtins.elem (deviceProviderName pair.left) [ "device-usbip" "device-security-key" ]
+      && builtins.elem (deviceProviderName pair.right) [ "device-usbip" "device-security-key" ]
+      && devicePhysicalUsbSelectorsOverlap pair.left pair.right)
+    (deviceUnorderedPairs deviceRows);
+
+  deviceMutualExclusionAssertions = map
+    (pair: {
+      assertion = false;
+      message = "${pair.left.path} and ${pair.right.path}: usbip-sk-mutual-exclusion for overlapping physical USB selectors (usbip-sk-mutual-exclusion).";
+    })
+    deviceMutualExclusionPairs;
+
+  deviceVideoSidecarAssertions = map
+    (row:
+      let settings = deviceSettings row;
+      in {
+        assertion = !(deviceProviderName row == "device-gpu"
+          && zoneAttrOr settings "videoSidecar" false)
+          || !(zoneAttrOr settings "renderNodeOnly" false);
+        message = "${row.path}: videoSidecar requires a full GPU realization (video-sidecar-requires-full-gpu).";
+      })
+    deviceRows;
+
+  deviceVirglVideoAssertions = map
+    (row:
+      let settings = deviceSettings row;
+      in {
+        assertion = !(deviceProviderName row == "device-gpu"
+          && zoneAttrOr settings "virglVideo" false
+          && zoneAttrOr settings "videoSidecar" false);
+        message = "${row.path}: virglVideo and videoSidecar are mutually exclusive (gpu-video-modes-conflict).";
+      })
+    deviceRows;
+
+  deviceProviderShapeAssertions = lib.concatMap
+    (row:
+      let
+        provider = deviceProviderName row;
+        spec = row.resource.spec;
+        deviceClass = zoneAttrOr spec "deviceClass" null;
+        arbitration = zoneAttrOr spec "arbitration" null;
+        busClass = deviceSelectorBusClass row;
+        settings = deviceSettings row;
+      in
+      [
+        {
+          assertion = provider != "device-tpm"
+            || (deviceClass == "emulated" && deviceSelector row == { });
+          message = "${row.path}: device-tpm requires an emulated Device with an empty inventory selector (tpm-device-shape-invalid).";
+        }
+        {
+          assertion = provider != "device-usbip"
+            || (deviceClass == "physical"
+              && arbitration == "exclusive"
+              && busClass == "usb");
+          message = "${row.path}: device-usbip requires an exclusive physical USB Device (usbip-device-shape-invalid).";
+        }
+        {
+          assertion = provider != "device-security-key"
+            || (deviceClass == "physical"
+              && arbitration == "exclusive"
+              && busClass == "hidraw");
+          message = "${row.path}: device-security-key requires an exclusive physical hidraw Device (security-key-device-shape-invalid).";
+        }
+        {
+          assertion = provider != "device-gpu"
+            || (deviceClass == "physical" && busClass == "drm");
+          message = "${row.path}: device-gpu requires a physical DRM Device (gpu-device-shape-invalid).";
+        }
+        {
+          assertion = !(provider == "device-tpm"
+            && builtins.isAttrs settings
+            && builtins.hasAttr "startupClear" settings);
+          message = "${row.path}.spec.provider.settings.startupClear is not supported; the TPM flush is mandatory (tpm-startup-clear-forbidden).";
+        }
+        {
+          assertion = !(provider == "device-gpu"
+            && zoneAttrOr settings "videoNvidiaDecode" false)
+            || zoneAttrOr settings "videoSidecar" false;
+          message = "${row.path}: videoNvidiaDecode requires videoSidecar = true (nvidia-decode-requires-video-sidecar).";
+        }
+      ])
+    deviceRows;
+
+  deviceSharedArbitrationAssertions = map
+    (row:
+      let
+        spec = row.resource.spec;
+        settings = deviceSettings row;
+        shared = zoneAttrOr spec "arbitration" null == "shared";
+      in {
+        assertion = !shared
+          || (zoneAttrOr spec "deviceClass" null == "physical"
+            && (deviceProviderName row != "device-gpu"
+              || zoneAttrOr settings "renderNodeOnly" false));
+        message = "${row.path}: shared arbitration requires a physical Device and GPU renderNodeOnly (shared-arbitration-requires-render-node-only).";
+      })
+    deviceRows;
+
+  deviceLabelRows = lib.filter (row: deviceSelectorLabel row != null) deviceRows;
+  deviceLabelGroups = lib.groupBy
+    (row: "${row.zoneName}:${deviceSelectorLabel row}")
+    deviceLabelRows;
+  deviceDuplicateLabelAssertions = lib.flatten (lib.mapAttrsToList
+    (key: rows: lib.optional (lib.length rows > 1) {
+      assertion = false;
+      message = "Device selector label ${key} is declared more than once in one Zone (duplicate-device-label).";
+    })
+    deviceLabelGroups);
+
+  deviceCrossResourceAssertions =
+    deviceOwnerAssertions
+    ++ deviceMutualExclusionAssertions
+    ++ deviceVideoSidecarAssertions
+    ++ deviceVirglVideoAssertions
+    ++ deviceProviderShapeAssertions
+    ++ deviceSharedArbitrationAssertions
+    ++ deviceDuplicateLabelAssertions;
 in
 {
+  imports = [
+    ./resource-schema-validation.nix
+    ./provider-settings-validation.nix
+    ./resources-sharing.nix
+  ];
+
   assertions = lib.flatten (
     vmAssertions
     ++ qemuMediaAssertions
@@ -2427,6 +2644,7 @@ in
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
+    ++ deviceCrossResourceAssertions
     ++ zoneTopologyAssertions
   );
 
