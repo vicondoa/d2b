@@ -18,8 +18,8 @@ artifact and requires a clean `git diff`, fail-closed.
 | `nixos-modules/generated/options-zones-<Type>.nix` | `xtask gen-zone-nix-options` | Nix option surface | NEW in W2, one per ResourceType |
 | per-Zone `resource-bundle.json` | sole active chain: `bundle-zones.nix` -> `d2b-resource-compiler` -> `bundle-artifacts.nix`; historical/compatibility-only input: `zone-resources-json.nix` | Zone runtime, core controllers | W5 emits only `schemaVersion: 4` / `bundleVersion: 2`; the required top-level compiler-only `audit` object is outside `resources`, and `contentHash` covers canonical `{audit,resources}`. `zone-resources-json.nix` is not an active generator and cannot emit, version, hash, or publish the active bundle |
 | `docs/reference/schemas/v3/resource-bundle.json` | `xtask gen-zone-schemas` from the active crate-root `ZoneBundle` | compiler, Nix and daemon contract tests, companions | Generated with the 4/2 change; no duplicate full-envelope DTO may generate a competing schema |
-| target-closure `share/d2b/host-generation-rebuild-ref` | `host-daemon.nix` from required `d2b.site.hostGenerationRebuildRef` | Target-closure deployment entrypoint, broker handoff | Immutable trusted input in the target Nix closure; never the stable runtime reference |
-| `/etc/d2b/host-generation-rebuild-ref` | `d2b-priv-broker` from the verified target-closure input | Handoff digest, post-bootstrap operator recovery | Broker-published bounded `<flake-ref>#<configuration-name>` reference; `root:d2bd` mode `0640`; file and directory durable; runtime binds only its digest and never renders the value or path |
+| target-closure `share/d2b/host-generation-rebuild-ref` | prospective T227 after T222 from required `d2b.site.hostGenerationRebuildRef` | T604 deployment entrypoint, broker handoff | Code-canon search found it absent; T227 must land the immutable trusted target-closure input before T604 |
+| `/etc/d2b/host-generation-rebuild-ref` | prospective T222 broker operation consuming T227 input | Handoff digest, post-bootstrap operator recovery | Code-canon search found it absent; T222/T227 must land bounded root:d2bd 0640 durable publication and redaction before T604 |
 | `docs/specs/ADR-046-spec-set.json` | `xtask spec-registry` | Gate 0, drift gate | Integrator-only; last commit of each wave |
 | `docs/specs/ADR-046-work-items.json` | `xtask spec-registry` | Wave entry/seal checks | Same |
 | `docs/specs/ADR-046-implementation-graph.{json,md}` | `xtask implementation-graph` | Wave planning, seal | Same |
@@ -34,6 +34,10 @@ artifact and requires a clean `git diff`, fail-closed.
 | `/run/d2b/allocator.sock` | DELETE, no successor - same cluster |
 
 ## Invariants
+
+The host-generation bullets below are prospective NIX-8/NIX-9 requirements owned by
+T222/T227 after T221 and before T604. Code canon does not yet implement them. Other bullets
+describe existing or independently prospective artifact invariants as stated.
 
 - Work-item and spec-set manifests are written by the integrator only, as the last commit of
   a wave, because every slice would otherwise contend on them.
@@ -84,15 +88,14 @@ artifact and requires a clean `git diff`, fail-closed.
   existing `d2b-priv-broker.service`, after both installed source peers negotiate numeric
   protocol 4 plus Hello `operation_catalogue_sha256` exactly equal to the
   `source-handoff-v1` operation-catalogue fingerprint; after durable
-  transfer it is the target broker. The accepted external disposition names the `SourceGenerationCompatibilityFloorV1`
-  producer/installer and typed import/validation owners. Canonical membership, receipts,
+  transfer it is the target broker. Prospective T222 owns `SourceGenerationCompatibilityFloorV1`
+  production, installation, typed import, and validation. Canonical membership, receipts,
   fixtures, poison registries, and transitions come only from generated
   `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
   `VD2-SC002-TRACEABILITY` rows. Missing, stale, wrong-owner, non-ancestor, or failing rows
-  refuse before source mutation. Committed protocol 4 has no
-  handoff operation and omits the field or advertises a different catalogue fingerprint, so this feature remains
-  blocked until that external floor is installed before migration. T592 consumes those source
-  outputs read-only and owns only target-v5 adoption plus target artifacts. A
+  refuse before source mutation. Code canon has no handoff operation or catalogue fingerprint.
+  T222 must land that implementation after T221 and before T227/T604. Retired T592 owns
+  nothing prospective. A
   target-closure-only mode, synthetic starting image, new unit or override, child, mutating
   entrypoint, or daemon recovery owner is not a substitute.
 - The stock activation orders the target `d2b-priv-broker.service` before target `d2bd.service`.

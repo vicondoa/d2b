@@ -62,12 +62,10 @@ inputs and are matched byte-for-byte only by the Wave 6 predecessor guard.
 
 The C1 contract defect is approved and fully assigned under Constitution 2.2.0. The accepted
 provider-system-core member specification is authority for the stable internal handler names,
-while the committed unreleased v3 `ZoneHandlerName` enum omitted their status values. T605
-adds `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialized as
-`system-core-host` and `system-core-user`, and owns its paired snapshots, focused tests,
-drift proof, and reference status surface. T595 consumes the variants in the production
-emitter and T599 reconciles the remaining consumers; all paired artifacts and evidence land
-in the same Wave 5 PR. T603 is now an editor-only accounting gate. At one clean base, cross-artifact analysis and a current selected-roster plan lifecycle bind the complete feature snapshot. If every T073-T218 obligation is satisfied, one `/d2b-spec-edit` batch checks exactly those rows plus T603 and the integrator records only that checkbox transition in a dedicated commit. The editor receipt and Git commit are the sole authority; no Rust resume validator, changelog fragment, scratch receipt, digest chain, or sidecar exists. Because the edit changes feature content, T589 requires fresh analysis and a fresh selected-roster lifecycle bound to the resulting clean commit and snapshot.
+while code canon still omits their status values. The former T595/T599/T605 ownership map is
+retired. Prospective T423 owns the enum, emitter, consumers, snapshots, focused tests, drift
+proof, and reference status surface before T604/T479. T603/T589 are read-only unchecked
+records; no editor, resume, or lifecycle action is reconstructed.
 
 **Current installed-host bootstrap state: BLOCKED.** Committed protocol 4 has no
 host-generation handoff operation, while committed `nixos-modules/host-broker.nix` makes the
@@ -75,20 +73,18 @@ source generation's `d2b-priv-broker.service` execute that generation's `brokerP
 Consequently the target closure's proposed compatibility mode is not an executable,
 supervised actor before profile publication. The constraints correctly forbid solving that
 cycle with a new unit, runtime override, child process, mutating entrypoint, or daemon recovery
-owner. This plan therefore escalates the missing `SourceGenerationCompatibilityFloorV1`
-rather than claiming T592/T595 can implement it inside the Wave 5 target transition. The
-accepted external disposition must name its producer/installer and typed import/validation
-owners. Accepted Version 2 and generated `VD2-SC002-SOURCE-FLOOR`,
+owner. Code canon confirms the missing `SourceGenerationCompatibilityFloorV1` and handoff,
+rather than any landed output from retired T592/T595. Prospective W6 T222 owns the producer,
+installer, typed import/validation, broker/daemon/client path, and tests. T227 follows with
+the rebuild-reference carrier. Accepted Version 2 and generated `VD2-SC002-SOURCE-FLOOR`,
 `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows solely own the object shape,
-validation, fixtures, poison cases, and transitions. T589 and downstream tasks consume only
-their generated assignments. A missing, stale, non-ancestor, wrong-owner, or failing row
-blocks with remediation to accept Version 2, regenerate traceability, and pass Gate 0.
+validation, fixtures, poison cases, and transitions. Retired Wave 5 tasks consume nothing
+prospectively.
 The caller-flake target entrypoint
 remains unprivileged. Numeric protocol 4 without that exact negotiated fingerprint is the
-bare committed protocol and refuses. T589 and all downstream Wave 5 implementation remain
-blocked until an accepted external disposition lands, is installed in the source 3/1
-generation, and proves the exact actor contract stated in FR-070. A target-only binary,
-synthetic starting image, or prose compatibility claim is not that disposition.
+bare committed protocol and refuses. T222/T227 must merge after T221 and before T604. A
+target-only binary, synthetic starting image, or prose compatibility claim is not a
+substitute.
 
 ## Technical Context
 
@@ -178,8 +174,8 @@ feature-owned validator contract and prospective Wave 6 entry remain blocked on 
 unit, privileged path, top-level test gate, toolchain, overlay, compatibility shim, or
 store-owned policy interpreter. The audit drainer and controller ledger are Zone-runtime
 owners inside `d2bd`, and production publication consumes the existing
-ComponentSession/ZoneBus boundary. T605 corrects the omitted closed status-enum values through
-the approved coordinated path. `spec-coverage.md` binds the local tasks to the unchanged
+ComponentSession/ZoneBus boundary. Code canon leaves the status-enum values absent;
+prospective T423 owns them. `spec-coverage.md` binds the local tasks to the unchanged
 generated-manifest census.
 
 ### C1 correction and version impact
@@ -187,15 +183,15 @@ generated-manifest census.
 The accepted `docs/specs/providers/ADR-046-provider-system-core.md` member spec currently uses
 `system_core_host` and `system_core_user` both for internal telemetry labels and for the
 serialized `Zone.status.handlers` names, while the committed
-`packages/d2b-contracts/src/v3/zone.rs` closed enum uses kebab-case wire serialization. T605
+`packages/d2b-contracts/src/v3/zone.rs` closed enum uses kebab-case wire serialization. T423
 resolves that defect in favor of the committed serialization rule: the only serialized Zone
 handler names are `system-core-host` and `system-core-user`. The underscore spellings remain
 internal closed telemetry-label values only and MUST NOT appear in serialized
-`Zone.status.handlers[]`. T605 adds `ZoneHandlerName::SystemCoreHost` and
+`Zone.status.handlers[]`. Prospective T423 adds `ZoneHandlerName::SystemCoreHost` and
 `ZoneHandlerName::SystemCoreUser`; readiness consumes exactly one status record for each.
 `ProviderLifecycle` remains a separate aggregate enum value and cannot satisfy either record.
 
-T605 bumps the `Version` metadata of both governing normative specifications and corrects
+T423 owns the `Version` metadata of both governing normative specifications and corrects
 their handler-name language in the same commit as the Rust enum, unit/serialization and
 closed-list tests, compiler-derived public and private API snapshots regenerated only by
 `make api-surface-pin`, the existing lowest-layer contract/policy guard, and
@@ -203,7 +199,7 @@ closed-list tests, compiler-derived public and private API snapshots regenerated
 `manifestVersion`, or `bundleVersion` bump is made because no desired-state field or
 ResourceType schema changes. The generated
 `docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains byte-identical after its
-existing generator and drift gate run. T595 consumes the new variants only after T605 merges.
+existing generator and drift gate run. T423 also owns emitter and consumer reconciliation.
 
 ## Project Structure
 
@@ -336,9 +332,20 @@ applies without modification.
 | W3 | 1 | 4 | 1, strictly serial | Delivery state reports sealed/merged; T030, T035, and T036 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W4 | 5 | 31 | 6 parallel | Delivery state reports sealed/merged; T037, T070, and T071 are historical verification/adjudication only under the same external-confirmation-or-correction rule. |
 | W5 (`adr046w5` delivery address) | 7 | 146 + 15 local completion/evidence tasks + T603 | Historical only | Merged at `177235ed37188b3be87525e7f016fb43401574c5`. The exact delivery validator/tooling contract applies the generic Constitution 3.1.0 disposition to the retained candidate, snapshot, head, request digest, evidence inventory, zero attestations, and absent seal. T219 records that disposition. No Wave 5 recovery or close action remains. |
-| W6 | 27 manifest dossiers | 258 manifest items + T604 operator acceptance | 5 families; T604 is a later file-disjoint acceptance slice after T336-T355 merge | T221 first fetches and binds exact `origin/v3`, passes the historical-predecessor production guard and its focused tests, then obtains the ordinary unanimous exact-base selected-roster plan result with zero recommendations. T336-T355 own the double-opt-in Network production path and four-case matrix. T604 remains W6 acceptance-only, consumes that merged implementation, and emits `operator-nix-activation-cleanup` only for F6; T479 requires that result plus `Provider/runtime-cloud-hypervisor` Guest acceptance, and T480 revalidates both before close. |
+| W6 | 27 manifest dossiers | 258 manifest items + T604 operator acceptance | 5 families plus serialized T222 -> T227 host-generation ownership and T423 system-core contract ownership before T604 | T221 first passes the exact predecessor guard and ordinary plan panel. T222 owns absent NIX-8, T227 absent NIX-9, T423 the absent retired-T605 handler contract, and T336-T355 Network implementation. T604 starts only after those owners merge; T479/T480 retain the prospective evidence and close gates. |
 | W7 | 5 | 73 | 5 parallel | T481 plan panel before implementation; T555 work panel after convergence |
 | W8 | 0 | determined by T557 after W7 merge, seal, and cleanup | friction closure | No pipelined triage or entry; T558 plan panel after triage and before implementation; T565 work panel after convergence |
+
+#### Code-canon obligation disposition
+
+| Obligation | Code evidence | Disposition |
+| --- | --- | --- |
+| NIX-8 host-generation handoff | Zero exact matches for `ApplyHostGenerationHandoff`, `SourceGenerationCompatibilityFloorV1`, `apply-authorized-handoff`, or equivalent source | **Reassigned** to prospective T222 after T221 and before T227/T604 |
+| NIX-9 rebuild reference | Zero exact matches for `hostGenerationRebuildRef` or `host-generation-rebuild-ref` across source, tests, examples, and templates | **Reassigned** to prospective T227 after T222 and before T604 |
+| System-core handler contract | Zero `ZoneHandlerName::SystemCoreHost` or `SystemCoreUser` source matches | **Reassigned** from retired T605 to prospective T423 before T604/T479 |
+| Accepted-socket peer pidfd operation | Zero `OpenPeerPidfdFromAcceptedSocket` source/test matches | **Reassigned** from retired T592/T593 to prospective T445 before T479 |
+| T589-T603, T605, T220, T219 closed phase | Exact retained state and checkbox history only | **Retired** as read-only history; no reconstruction |
+| W2-W5 host continuity | Retained evidence only | **Retired** from execution; prospective execution belongs to T479 and later current work |
 
 #### W8 release freeze and publication
 
@@ -860,7 +867,7 @@ Every source-writing completion slice has disjoint, exact fragment ownership:
 | T599 | `changelog.d/cli-operation-recovery.md` |
 | T605 | `changelog.d/system-core-handlers.md` |
 
-These paths record the former fragment assignment. No current T220 fold is authorized. T604 owns
+These paths record the former fragment assignment. T220 has no current fragment authority. T604 owns
 `changelog.d/operator-resource-activation.md` in W6, and T479 folds it with the W6 fragments.
 T603 owns no changelog fragment or source file. T600-T602 remain historical planned evidence
 lanes; T219 records only the accepted historical disposition and writes no recovery state.
@@ -872,6 +879,8 @@ not current implementation authority; T220 has no prospective effect.
 
 The validation sequence below is retained as design evidence. It MUST NOT be run to recover,
 attest, seal, or close Wave 5.
+
+<!-- RETIRED-W5-VALIDATION-BEGIN: read-only historical compatibility -->
 
 The implementation tasks run focused hermetic tests while writing their files. Before T595,
 T605 runs the `d2b-contracts` unit/serialization cases, the existing
@@ -887,14 +896,16 @@ daemon/session boundary and the registered ZoneBus route, and assigned T599 reco
 the T595 emitter and downstream consumers. The former T220 manifest/drift sequence is
 historical and is not run.
 
-T604 is a W6 acceptance slice under T221. It starts only after authoritative W6
-T336-T355 merge and verifies the emitted Nix resource
+<!-- RETIRED-W5-VALIDATION-END -->
+
+T604 is a W6 acceptance slice under T221. It starts only after prospective T222/T227
+host-generation implementation and authoritative W6 T336-T355 merge, then verifies the emitted Nix resource
 bundle in
 `packages/d2b-contract-tests/tests/resource_operator_activation.rs`. Its lowest feasible
 production-boundary leg is the Type-3
 `packages/d2bd/tests/resource_operator_activation.rs`, which consumes those exact generation
 bytes through the daemon startup/change-ingestion entry and production store/controller path
-without calling ResourceService directly. T595 separately owns the Type-1 option case and
+without calling ResourceService directly. T227 owns the Type-1 option case and T222 owns the
 Type-10 handoff test; T604 does not replace either. Run the lower legs through
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` and `make test-rust`. Because a real
 owned host effect requires systemd, broker mutation, and a booted NixOS system, the canonical
@@ -1006,8 +1017,11 @@ historical-predecessor guard and ordinary prospective plan panel.
 | AGENTS.md says the host exit census matching `d2b*`/`microvm*` returns three. | Committed code exposes canonical `d2b.slice` plus `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service`. | FR-075 enumerates the full loaded namespace, fails on listing error, excludes exactly `d2b.slice`, sorts, and compares the remainder with exactly the three service/socket names. The conforming raw census is four. Unexpected slice and service injections survive the sole exclusion and fail equality. This feature records but does not edit the external AGENTS.md drift. |
 | Earlier handoff prose treated a broker-derived daemon principal and bootstrap euid 0 as independent authorization. | The existing lifecycle authorization chain is public-socket `SO_PEERCRED` plus current `d2b` group classification; broker-socket identity and root execution are not substitute operator authority. | Initial handoff admission transfers the accepted public-socket evidence only after the installed source peers negotiate numeric protocol 4 plus the exact `source-handoff-v1` catalogue fingerprint, then consumes that attachment into one nonfabricable intent-bound capability. No serialized caller/root/provenance/role claim substitutes. Every source or target broker phase consumes the capability or a phase attenuation; daemon identity, Hello, target-closure provenance, and euid 0 are integrity/eligibility checks only. |
 | Earlier handoff prose claimed the target closure could supply a pre-publication compatibility broker and privileged apply actor. | Committed protocol 4 has no host-generation handoff operation, and the existing broker service executes the installed source-generation package. | Block T589 until the external compatibility disposition installs `SourceGenerationCompatibilityFloorV1` through owners named by generated `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY` rows. T592 owns target adoption only; no target-only actor, new unit, or caller-selected privileged executable substitutes. |
-| Earlier follow-up prose assigned source-floor membership and fixture detail to T592. | The source floor and legacy-to-target negotiation are external prerequisites; T592 consumes them read-only. | Retain only the stable type and generated ownership identifiers. Missing, stale, wrong-owner, non-ancestor, or failing rows block with remediation to accept Version 2, regenerate traceability, and pass Gate 0. |
+| Earlier follow-up prose assigned source-floor membership and fixture detail to T592. | That retired ownership is historical only. | Retain the stable type and generated ownership identifiers; prospective T222 owns the actual handoff implementation. |
 | Historical feature artifacts copied SC-002 and source-floor schemas, registries, fixtures, transitions, and changing counts. | Accepted Version 2 `ADR-046-validation-and-delivery` plus generated `VD2-SC002-*` rows are the sole authority. | Retain stable identifiers and ownership pointers only. T589/T592/T595/T600/T220 are historical consumers; prospective T604/T479 use only their current generated rows. |
+| NIX-8 assigned host-generation handoff to retired T592/T595 owners. | Exact source searches found zero `ApplyHostGenerationHandoff`, `SourceGenerationCompatibilityFloorV1`, `apply-authorized-handoff`, or equivalent production handoff in `packages/`, `nixos-modules/`, or `tests/`. | Classify NIX-8 as unfinished. Prospective W6 T222 owns the typed contracts, broker/daemon/client implementation, durable coordinator, source-target transfer, denials, restart adoption, and tests. T222 follows T221 and precedes T227/T604. |
+| NIX-9 assigned `hostGenerationRebuildRef` to retired T595. | Exact source searches found zero option, emitter, or test matches across source, tests, examples, and templates. | Classify NIX-9 as unfinished. Prospective W6 T227 owns the required option, grammar/bounds, carrier, broker-published file, redaction, rollback, fixture updates, inventory, and tests. T227 follows T222 and precedes T604. |
+| The system-core handler contract remained assigned to retired T605. | Code canon contains neither `ZoneHandlerName::SystemCoreHost` nor `SystemCoreUser`; only unrelated telemetry labels exist. | Classify the contract as unfinished. Prospective W6 T423 owns the enum/list/API/reference/schema proof and precedes T604/T479. |
 | `ADR-046-provider-device-tpm` section 11.2 names the finalizer `device-tpm/cleanup`. | Committed `packages/d2b-provider-device-tpm/src/lib.rs` and `packages/d2b-contracts/src/v3/device.rs` both expose `device-tpm.d2bus.org/state-preserved`. | Existing code is canon. The exact T604 fixture uses `device-tpm.d2bus.org/state-preserved` while retaining the dossier's stop/wait/delete-process/delete-flush/retain-Volume/clear sequencing. Correcting the upstream dossier is external to this feature-only batch. |
 | Feature-local prose treated the W0/W1 record and W2-W4 late remediation as authority to continue despite Constitution Principle VI, while T072 omitted Wave 5's contemporaneous plan-panel predicate. | Constitution 3.1.0 supplies only the generic historical-process disposition; existing Wave 5 implementation does not prove its historical entry gate. | FR-036 and the exact validator/tooling contract own the ADR-046 boundary, retain T072 as unproven historical evidence, and require T221 to prove the exact accepted integration lineage and retained state before prospective Wave 6 dispatch. |
 | Feature-local Wave 5 recovery prose allowed repeated binding requests. | Wave 5 retains one legacy fixed-ten `panel-request.json` with zero attestations and no seal, and content invalidation does not erase its historical bytes. The exact validator/tooling contract instantiates the generic disposition only for that state through the merged Wave 5 boundary. | Retire every actionable recovery path. T219 records the closed history only. No current lifecycle may reinterpret, supplement, attest, recover, or seal the retained request. T221 is the next executable gate and applies the ordinary current selected-roster lifecycle to Wave 6. |
@@ -1053,8 +1067,8 @@ round/commit/tree/recommendation/convergence/validation identity; exclusivity co
 post-request content/history/evidence movement. T029, T036, and T071 may invoke that validator
 only to adjudicate retained records or an accepted correction, never to create a new close. A
 local predicate, happy-path-only test, missing case, ignored/empty discovery, or different
-acceptance between waves leaves historical confirmation open. T589 consumes accepted v1 on its own actual base and adds the stricter
-wave-scoped `adr046w5` storage profile;
+acceptance between waves leaves historical confirmation open. The former T589 v1/storage
+profile text is read-only history;
 it does not close T008 retroactively. This batch records the external scope escalation in
 `friction-log.md` but does not edit the external ADR, ADR index, normative specification,
 delivery source, `AGENTS.md`, contributor guidance, or panel tooling.
@@ -1221,8 +1235,8 @@ Those results corrected the claim that production RSS had never been measured. T
 historical because the approved publication path changes the measured owner graph. They do not
 discharge the broader authenticated publication, restart, audit, disconnect, fan-in, and
 compaction matrices. All four items therefore stay `Planned` in the manifest until their complete
-validation obligations are met; T601 must measure the amended candidate and T602 rejects either
-2026-08-03 artifact as current evidence.
+validation obligations are met. Retired T601/T602 supply no current measurement or rejection;
+prospective T479 owns any required exact-F6 measurement.
 
 The backend commit predates the amendment base, so it is outside this focused Gate 0 review and
 is not reverted or re-adjudicated here.
@@ -1241,7 +1255,8 @@ one-time ADR-046 bounds. It does not mark T072 or T603-T602 complete, create a W
 or authorize a Wave 5 resume. T221 is the prospective continuation
 gate: exact fetched base, exact first-parent amendment lineage, exact retained state and
 evidence, focused guard validation, and unanimous exact-base selected-roster plan approval
-with zero recommendations. C1 remains fully assigned to T605 and creates no exception.
+with zero recommendations. The unlanded C1 contract is prospectively assigned to T423 and
+creates no exception.
 
 ### Program-local safety
 ### Program-local safety and delivery risks

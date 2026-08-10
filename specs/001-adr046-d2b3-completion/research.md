@@ -261,6 +261,35 @@ Constraints").
 | RK-5 | 33 of the current 48 DELETE/REPLACE census rows lack removal proofs | FR-023 requires one per removed path | Author proofs with the removing wave, not at W7 |
 | RK-6 | The W0/W1 missing-gate history hides unverified foundation | Those waves carry the contracts every later wave builds on | Constitution 3.1.0 supplies the generic historical-process disposition; the exact ADR-046 delivery validator/tooling contract bounds it through merged Wave 5. T221 must match the accepted first-parent generic-amendment lineage and immutable retained state before the ordinary prospective Wave 6 plan panel; SC-021 still forces live reachability |
 
+## NIX-8 and NIX-9 code-canon adjudication
+
+Read-only searches against the current merged code found:
+
+```text
+hostGenerationRebuildRef|host-generation-rebuild-ref
+  -> zero matches in nixos-modules/, packages/, tests/, examples/, templates/
+
+ApplyHostGenerationHandoff|SourceGenerationCompatibilityFloorV1|
+apply-authorized-handoff|source-handoff-v1
+  -> zero matches in packages/, nixos-modules/, tests/
+
+host generation|host-generation
+  -> zero matches in the d2b, d2bd, broker, and contracts source trees
+
+ZoneHandlerName::SystemCoreHost|ZoneHandlerName::SystemCoreUser
+  -> zero matches in the contracts, daemon, and system-core source trees
+
+OpenPeerPidfdFromAcceptedSocket
+  -> zero matches in packages/ and tests/
+```
+
+Therefore neither NIX-8 nor NIX-9 is landed. The old T592/T595/T220 ownership is retired.
+Prospective Wave 6 T222 owns NIX-8's typed handoff and T227 owns NIX-9's required rebuild
+reference and carrier. T222 precedes T227; both precede T604. T221 remains the next
+executable gate. The retired T605 handler contract is likewise unlanded and is reassigned to
+prospective T423 before T604/T479. The retired T592/T593 peer-pidfd operation is unlanded and
+reassigned to prospective T445 before T479.
+
 ---
 
 ## R8: Can privilege-dropped publication link an exact unnamed inode?
@@ -271,16 +300,13 @@ set, user namespace, procfs mount, target mount, kernel, or production filesyste
 restricts `AT_EMPTY_PATH` linking to a caller with `CAP_DAC_READ_SEARCH`; that observation
 therefore cannot authorize the required zero-effective-capability target.
 
-**Decision**: Wave 5 forbids `AT_EMPTY_PATH` and create-and-unlink link probing. Preimage,
-candidate sidecar, and request-output publishers write, file-sync, and revalidate an
+**Historical Wave 5 decision**: the retired plan forbade `AT_EMPTY_PATH` and
+create-and-unlink link probing. Its preimage, candidate-sidecar, and request-output design
+wrote, file-synced, and revalidated an
 `O_TMPFILE` inode, retain a validated procfs `/proc/self/fd` directory fd, and use
 `linkat(proc_self_fd_dirfd, decimal_fd, target_parent_fd, final_name,
 AT_SYMLINK_FOLLOW)` to capability-free link the exact opened inode directly to its final
 no-replace name. No linked temporary or name-consuming publication rename exists.
 
-T589 must run the production credential/kernel/mount/filesystem matrix with an empty
-effective capability set and independently inject unsupported-open, invalid-procfs/mount,
-and unsupported-link failures. Preimage link failure exposes no incident name or internal
-request. Request-output open/environment failure occurs before freeze/request creation;
-link failure occurs only after candidate-internal durability and retains that exact pair as
-an ordinary replayable output failure. No named-partial fallback is allowed.
+The former T589 matrix and its failure injections are read-only historical design evidence.
+They authorize no current run or publication path.

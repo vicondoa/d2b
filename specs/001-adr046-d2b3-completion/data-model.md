@@ -262,12 +262,11 @@ fixtures, poison registries, and transitions are owned solely by accepted Versio
 `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
 `VD2-SC002-TRACEABILITY`.
 
-The accepted external compatibility disposition names the producer/installer and typed
-import/validation owners. T589 and T592 are read-only consumers of their generated
-assignments and own no source-floor protocol. A missing, duplicate, stale, wrong-owner,
-non-enforcing, non-ancestor, or failing generated row blocks dispatch with remediation to
-accept Version 2, regenerate traceability, and pass Gate 0. No field list, digest recipe,
-fixture census, registry count, or transition copy in this feature can satisfy that gate.
+Code canon contains no source-floor or host-generation handoff implementation. Retired
+T589/T592 assignments are read-only history. Prospective W6 T222 owns production,
+installation, typed import/validation, and the generated-row enforcement before T227/T604.
+No feature-local field list, digest recipe, fixture census, registry count, or transition copy
+substitutes.
 
 ---
 

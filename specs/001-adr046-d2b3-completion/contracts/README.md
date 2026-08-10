@@ -248,7 +248,9 @@ post-merge seal, merge-target registration, and merge eligibility.
     make same-ID retry observe rather than reapply the mutation. Audit/export identifiers are
     fixed domain-separated digests, and retention/prune failure is typed degraded health
     (FR-070).
-11. **Amended-plan reconciliation is editor-bound.** T603 uses `/d2b-spec-edit` as the sole feature mutation surface. One current selected-roster lifecycle binds the pre-edit snapshot; the editor receipt plus dedicated checkbox-only Git commit are the only authority; and fresh analysis plus a new selected-roster lifecycle bind the post-edit snapshot before T589. T603 owns no source, fragment, sidecar, digest chain, or resume receipt. The installed source-generation compatibility floor is a separate external prerequisite owned only by accepted Version 2 and generated `VD2-SC002-SOURCE-FLOOR` plus `VD2-SC002-TRACEABILITY` rows. Feature-local census or encoding prose cannot satisfy it (FR-072, SC-034).
+11. **Amended-plan reconciliation is historical.** The former T603/T589 editor and lifecycle
+    sequence is read-only history and authorizes no current mutation. Code canon lacks the
+    source-generation handoff; prospective T222/T227 own it before T604.
 12. **Operator activation is acceptance evidence.** T604 starts from the emitted Nix
     resource declaration and per-Zone bundle, activates on startup and public declaration and
     removal switches without manual restart, observes the spec-pinned Provider/config/effect
@@ -273,15 +275,13 @@ post-merge seal, merge-target registration, and merge eligibility.
     candidate result is emitted once by T604 as
     `operator-nix-activation-cleanup`, imported by T479 on exact F6, and excluded from the
     Wave 5 T589/T600-T602 profile.
-13. **C1 is a coordinated unreleased-v3 correction.** Constitution 2.2.0 authorizes T605 to
-    add `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialized only
+13. **C1 is a prospective W6 correction.** Retired T605 did not land: code canon contains
+    neither `ZoneHandlerName::SystemCoreHost` nor `SystemCoreUser`. T423 now owns those values, serialized only
     as `system-core-host` and `system-core-user`; underscore spellings remain internal
     telemetry labels. Both governing normative specs and their version metadata move with
     targeted Rust/contract tests, compiler-derived public/private API snapshots, paired
-    reference status text, and byte-identical Zone desired-schema proof. T605 completes on
-    those owned pre-consumer artifacts; it assigned T595 emission, T599 consumer
-    reconciliation, and T220 generated-manifest/full-drift convergence. Those Wave 5 rows are
-    historical and not reconstructed.
+    reference status text, and byte-identical Zone desired-schema proof before T604/T479.
+    Former T595/T599/T605/T220 ownership is historical and not reconstructed.
 14. **Wave 5 evidence is immutable history.** The former T220 graph and T600/T601 evidence
     ownership are retained as unchecked historical design only. The T600 set was
     `production-session-watch`,

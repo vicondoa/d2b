@@ -875,7 +875,8 @@ planned completion boundary was:
   evidence-profile member. The accepted double-opt-in contract migration, removal of every
   current-facing sole Network-opt-in path, and settled T336-T355 W6 ownership are prospective
   T221 predicates; production implementation and the four-case results remain W6 work;
-- one clean-base analysis and current selected-roster lifecycle, followed by the sole `/d2b-spec-edit` all-satisfied checkbox batch, dedicated checkbox-only Git commit, and fresh post-edit analysis plus a new selected-roster lifecycle before T589; T603 owns no source, fragment, sidecar, digest chain, or resume receipt;
+- the former T603/T589 editor/lifecycle sequence, retained as read-only historical planning
+  evidence with no current mutation or predecessor effect;
 
 - historical T220/T600-T602 planning for exact F remains unchecked and is not reconstructed.
   Wave 5's retained request is already consumed with zero attestations and no seal.
@@ -998,7 +999,7 @@ Run this against `tasks.md` before implementation starts.
       15-field manifest object, carries that object unchanged, and treats all of its fields as
       the task definition; selecting only named fields is not equivalent
 - [x] `dependencyOwner` edges are represented: 91 of 545 manifest work items are marked
-      free-to-start, while the full `tasks.md` census has 99 `[P]` tasks of 605 total
+      free-to-start, while the full `tasks.md` census has 96 `[P]` tasks of 605 total
 - [x] Wave assignment matches the implementation graph, with no item moved between waves
 - [x] Parallel groups are preserved so file-disjoint slices launch together (FR-028)
 - [x] The 14 manifest `file-overlap-order` edges are recorded as explicit ordering
@@ -1016,7 +1017,8 @@ Run this against `tasks.md` before implementation starts.
       not all file-disjoint. This is permitted because
       every shared writer and strict dependency edge is explicit; no two owners write a
       contended file concurrently.
-- [x] T603 is the sole in-feature direct prerequisite of T589 and uses `/d2b-spec-edit` as the sole feature mutation surface. One clean-base analysis and selected-roster lifecycle precede the all-satisfied checkbox batch; the editor receipt and dedicated checkbox-only Git commit are the only authority; and fresh analysis plus a new selected-roster lifecycle bind the changed snapshot before T589. T603 owns no source, fragment, sidecar, digest chain, or resume receipt. Final F evidence remains separate.
+- [x] T603/T589 are retained as unchecked read-only historical editor/lifecycle records and
+      have no prospective mutation or predecessor role
 
 - [x] C1 is resolved as a specification-quality assignment under Constitution 2.2.0: T605
       historically assigned the two closed-enum values and pre-consumer artifacts to T605,
@@ -1029,7 +1031,7 @@ Run this against `tasks.md` before implementation starts.
 - [x] Unordered contended files are integrator-prep and integrator-owned. A contended file may
       instead have explicitly ordered serial slice owners only when the plan names every
       writer and the dependency edge, as for `transaction.rs`. `packages/Cargo.lock` is not
-      transferred: T592 is its sole owner and T593 consumes the frozen dependency graph
+      transferred in the historical map: retired T592/T593 ownership remains read-only
 ---
 
 ## Requirement traceability (FR/SC to ADR-046 owners)
@@ -1076,7 +1078,7 @@ jq -r --arg p routing '.items[] | select(.workItemId | startswith("ADR046-\($p)-
 | FR-056 - FR-059 | Standing Gate 0, entry/exit distinction with the feature-owned exact predecessor exception under generic Constitution 3.1.0, historical-record scope, unordered contended-file prep or explicitly ordered serial ownership | `validation-and-delivery` plus program process | `delivery` |
 | FR-060 | Removal proof follows the wave that removes the path | `current-code-migration-map`, `validation-and-delivery` | `reuse`, `streamline`, `delivery` |
 | FR-061 - FR-065 | Contract publication versus artifact release; companion classification, membership, and verification | **Locally added** - companion clarification family | none |
-| FR-066 - FR-072 | Authenticated production publication and the historical Wave 5 production-plane evidence design. T589-T602 are read-only historical records. T221 requires the accepted Network amendment, removal of sole opt-in, and retained T336-T355/four-case W6 ownership. Exact Provider/config/effect/readiness and Device cleanup remain W6 T604/T479/T480 acceptance. | **Historical Wave 5 design plus prospective Wave 6 acceptance assignment**, constrained by the listed ADR-046 member specs and ADR 0034 | historical T589-T605; prospective T221/T479/T480 |
+| FR-066 - FR-072 | Authenticated production publication and the historical Wave 5 production-plane evidence design. T589-T603/T605 are read-only history. Code-canon gaps are reassigned to T222/T227 host generation, T423 system-core handlers, and T445 peer-pidfd admission. T221 owns entry, T336-T355 Network, and T604/T479/T480 acceptance. | **Historical Wave 5 design plus explicit prospective Wave 6 owners**, constrained by the listed ADR-046 member specs and ADR 0034 | historical T589-T605; prospective T221/T222/T227/T423/T445/T604/T479/T480 |
 | FR-073 | RBAC policy DTOs and interpretation stay outside store/redb | `decision-register` D106, `resource-api-and-authorization`, ADR 0049 | `api`, `store` plus T591 |
 | FR-074 | CLI/reference promises match emitted behavior | `cli-and-operations`, `validation-and-delivery` | `cli`, `delivery` plus T599 |
 | FR-075 | Exact-candidate pre-ADR-046 operator lifecycle continuity, retained as immutable W2-W5 history and prospective W6 evidence | **Locally promoted from the former assumption**, constrained by ADR 0015, `validation-and-delivery`, and the committed daemon restart survival case | Historical T028/T029, T035/T036, T070/T071, T219; prospective T221/T479/T480 |
@@ -1092,10 +1094,10 @@ content. The original clarification family and the later approved additions are:
 | FR-043 | Clarification: qualified recovery-point attestation required | Tightens `reset-and-cutover`. The owning spec permits proceeding past the rollback boundary without attestation; this program does not. A qualifying point is an externally verified full-host snapshot or backup covering boot/system state, the active generation, the exact preview inventory, and preserved identity state for the same daily-driver host. Its closed version 1 record binds F7 candidate/commit/tree, preview and host digests, exact qualification fields, ordered timestamps, 86,400-second freshness, retention and expiration. T580 owns import through one digest-bound `EvidenceRecord`; T555/T556 refuse every missing, extra, duplicate, malformed, partial, failed, stale, expired, wrong-host, wrong-candidate, wrong-commit, wrong-tree, wrong-preview, or unresolvable record. External snapshot/backup creation and restore remain operator-owned and unimplemented by this feature. |
 | FR-046 | Applies the repository's existing-code-is-canon rule to spec-versus-manifest drift | Governs the recorded W2 destination drift. |
 | FR-061 - FR-065 | Companion contract/artifact, classification, membership, and verification clarifications | Makes the locally added companion release blocker mechanically decidable. |
-| FR-066 - FR-072, FR-074 | Operator-approved Wave 5 production-completion amendment plus analysis remediation | T603-T602 remain historical planned evidence and are not reconstructed. The exact ADR-046 validator/tooling contract applies the generic Constitution 3.1.0 disposition only to the merged Wave 5 retained bytes. T221 matches those bytes and the accepted generic-amendment lineage before prospective W6 work. T604 remains W6 acceptance-only after T336-T355 merge and emits `operator-nix-activation-cleanup` for T479 on exact F6. This feature does not silently reassign rows or claim unchecked implementation. |
+| FR-066 - FR-072, FR-074 | Historical Wave 5 amendment plus prospective Wave 6 correction | Retired rows remain read-only. T221 matches retained bytes; T222/T227/T423/T445 own code-canon gaps; T604/T479/T480 own exact-F6 acceptance and close. |
 | FR-075 | Analysis finding promoted the former W2-W6 host-continuity assumption | Retains W2-W5 bytes as historical evidence and makes the existing daemon restart VM survival check exact-candidate close evidence for prospective W6, with full namespace equality after excluding only canonical `d2b.slice` and separate unexpected-slice/unexpected-service negative injections. It adds no task and no W5 evidence identifier. |
 
-Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. T589/T600/T220 are historical consumers only; prospective T604/T479 use only their W6 operator rows. Feature-local counts or protocol copies are non-authoritative.
+Accepted external Version 2 and generated `ADR-046-validation-and-delivery-traceability.{json,md}` remain the authority for the `VD2-SC002-*` families. Retired Wave 5 consumers are historical only; prospective T222/T227/T423/T445/T604/T479 use only current assigned rows. Feature-local counts or protocol copies are non-authoritative.
 
 ### Success-criteria traceability
 

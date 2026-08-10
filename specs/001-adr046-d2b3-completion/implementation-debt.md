@@ -1677,7 +1677,7 @@ The current tree corrects one ownership assumption in that table:
 `NetworkEffectPort` already lives in
 `packages/d2b-provider-network-local/src/controller.rs`, not in `d2b-contracts`. T336 keeps
 that trait and owns the production implementation in
-`packages/d2bd/src/network_effect_adapter.rs`, with serialized post-T595 edits to
+`packages/d2bd/src/network_effect_adapter.rs`, with prospective W6 edits to
 `d2bd/{Cargo.toml,src/lib.rs,src/resource_runtime.rs}`. It maps opaque intents only to typed
 broker operations and performs no direct host mutation. Current generated rows T336-T355
 place that work in W6, and final R9 preserves that ownership. The former T220/T219 blocker is
@@ -2272,14 +2272,14 @@ false positive costs one investigation while a false negative hides a stuck
 finalizer for twice as long, and the shorter window is the fail-closed direction
 for a threshold that surfaces rather than denies.
 
-## 21. C1 planned and assigned: add the omitted system-core handler names
+## 21. C1 reassigned to prospective W6: add the omitted system-core handler names
 
 **Status: planned/assigned, not delivered.** The earlier read-only analysis correctly found
 that the committed unreleased v3 `ZoneHandlerName` enum cannot encode the two system-core
-handler observations. Constitution 2.2.0 now authorizes the approved plan/contract defect to
-be repaired in the same coordinated Wave 5 PR as its implementation.
+handler observations. The retired Wave 5 repair did not land.
 
-T605 owns the contract correction: add `ZoneHandlerName::SystemCoreHost` and
+Code canon still lacks the contract correction. Retired T605 owns nothing prospective.
+T423 now owns `ZoneHandlerName::SystemCoreHost` and
 `ZoneHandlerName::SystemCoreUser`, serialized by the existing kebab-case rule as
 `system-core-host` and `system-core-user`. The actual projection is the
 `Zone.status.handlers[]` list, with exactly one record of each name and each record carrying
@@ -2287,7 +2287,7 @@ T605 owns the contract correction: add `ZoneHandlerName::SystemCoreHost` and
 substitution are rejected. `ProviderLifecycle` remains a distinct allowed value and cannot
 substitute for either required record.
 
-T605 also owns focused Rust round-trip/list coverage, the ownership-compatible
+T423 also owns focused Rust round-trip/list coverage, the ownership-compatible
 `packages/d2b-contract-tests/tests/policy_contracts.rs` guard, compiler-regenerated public
 and private snapshots under `tests/golden/api-surface/` via `make api-surface-pin` only, and
 the existing paired `docs/reference/resource-plane-runtime.md`. It treats
@@ -2301,8 +2301,9 @@ records are read-only history and authorize no current run, evidence import, or 
 
 No `apiVersion`, `schemaVersion`, `manifestVersion`, `bundleVersion`, or wire-field version
 bump is required: no field or operation changes, the desired-state Zone schema is unchanged,
-and v3 is unreleased. The same Wave 5 PR still carries all paired Rust contract changes,
-tests, API snapshots, reference status docs, consumers/emitters, generator no-drift proof,
-and panel evidence.
+and v3 is unreleased. Prospective T423 carries all paired Rust contract changes, tests, API
+snapshots, reference status docs, consumers/emitters, and generator no-drift proof before
+T604/T479.
 
-CHK054 is checked only as a specification-quality resolution. Implementation remains unchecked. T603 uses `/d2b-spec-edit` as the sole mutation surface; the editor receipt and dedicated checkbox-only Git commit are the only authority. Fresh analysis and a current selected-roster lifecycle bind the pre-edit snapshot, and fresh analysis plus a new selected-roster lifecycle bind the post-edit snapshot before T589. T603 owns no validator source, changelog fragment, scratch receipt, sidecar, or digest chain.
+CHK054 is checked only as a specification-quality resolution. Retired T603/T589 editor and
+lifecycle text is read-only history. Prospective implementation is owned by T423.

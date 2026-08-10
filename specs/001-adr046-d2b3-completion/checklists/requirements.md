@@ -23,13 +23,16 @@
 - [x] Dependencies and assumptions identified
 - [x] Wave 6 T604 Nix acceptance, after T221 and merged T336-T355, names exactly
   `Volume/acceptance-state`, `Network/acceptance-net`, and `Device/acceptance-tpm`; each effect
-  and production `Ready` projection is bound to that same identity. Wave 5 retains only the
-  emitted-bundle, source-floor, and double-opt-in contract prerequisites, while Guest
+  and production `Ready` projection is bound to that same identity. T222/T227 own the
+  unlanded host-generation prerequisites and T423 owns the unlanded system-core contract,
+  while Guest
   runtime-effect acceptance remains distinct Wave 6 `Provider/runtime-cloud-hypervisor`
   T384/T479/T480 work
 - [x] Accepted Version 2 `ADR-046-validation-and-delivery` and generated `ADR-046-validation-and-delivery-traceability.{json,md}` are the sole authority for `VD2-SC002-RECEIPT`, `VD2-SC002-PUBLICATION`, `VD2-SC002-INCIDENT`, `VD2-SC002-DISPOSITION`, `VD2-SC002-RECOVERY`, `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`
-- [x] The generated bijection maps every Version 2 identifier to exact schemas, fixtures, implementation owners, tasks, and enforcing gates; missing, duplicate, extra, ownerless, or stale rows block T589, T600, T604, and T220, and no feature-local encoding or historical count substitutes
-- [x] Host-generation recovery is broker-coordinator-owned before first mutation, transfers
+- [x] Retired T589-T603/T605/T220 rows are read-only history; prospective generated ownership
+  belongs to T222/T227/T423/T445/T604/T479, and no feature-local encoding or historical count
+  substitutes
+- [x] Prospective T222/T227 host-generation recovery is broker-coordinator-owned before first mutation, transfers
   durably from bootstrap broker to target broker, survives broker/daemon startup failures
   through existing units only, and never treats daemon identity or euid 0 as authorization
 - [x] T070/T071 and the T220/T219 records are historical only. T221 requires the accepted

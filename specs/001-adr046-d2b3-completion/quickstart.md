@@ -99,8 +99,8 @@ with zero recommendations.
 ### 1c. Reject actionable retired-phase prose
 
 Run this read-only check after any feature-artifact edit. Explicitly marked historical blocks
-and lines are allowed; actionable T219/T220/T600 instructions and round-threshold deferral
-rules are not.
+are allowed; the word `historical` alone is not suppression. Actionable retired-task
+instructions, including multiline forms, and round-threshold deferral rules are not.
 
 <!-- STALE-PROSE-CHECK-BEGIN -->
 
@@ -108,35 +108,26 @@ rules are not.
 set -eu
 
 FEATURE_DIR="specs/001-adr046-d2b3-completion"
-ACTION='(T219|T220|T600).{0,120}(MUST|run|consume|refuse|require|revalidate|verify|freeze|emit|import|reopen|block)|(MUST|run|consume|refuse|require|revalidate|verify|freeze|emit|import|reopen|block).{0,120}(T219|T220|T600)'
-HISTORICAL='historical|former|retired|read-only|no current|does not|has no|performs no|authorizes no|unchecked'
+RETIRED='T(219|220|589|590|591|592|593|594|595|596|597|598|599|600|601|602|603|605)'
+ACTION="(?s)\\b${RETIRED}\\b([[:space:]]*(/|,|and)[[:space:]]*\\b${RETIRED}\\b)*[[:space:]]+(MUST[[:space:]]+)?(dispatch|implement|prepare|reconcile|fold|measure|consume|reject|seal|close|run|verify|import|freeze|refuse|require|revalidate|emit|reopen|block)(s|es|ed|ing|ation|ment)?\\b"
+EDGE="(?s)\\b(before|until|depends[[:space:]]+on)[[:space:]]+\\b${RETIRED}\\b"
 
 current_hits="$(
-  rg -n -i "$ACTION" "$FEATURE_DIR" -g '*.md' -g '!tasks.md' -g '!plan.md' -g '!quickstart.md' |
-    rg -v -i "$HISTORICAL" || true
+  while IFS= read -r -d '' file; do
+    awk -v file="$file" '
+      /RETIRED-W5-.*-BEGIN/ { retired = 1; next }
+      /RETIRED-W5-.*-END/ { retired = 0; next }
+      /STALE-PROSE-CHECK-BEGIN/ { retired = 1; next }
+      /STALE-PROSE-CHECK-END/ { retired = 0; next }
+      !retired { print file ":" FNR ":" $0 }
+    ' "$file"
+  done < <(find "$FEATURE_DIR" -type f -name '*.md' -print0) |
+    rg -n -U -i "$ACTION|$EDGE" || true
 )"
 test -z "$current_hits" || {
   printf '%s\n' "$current_hits"
   exit 1
 }
-
-for file in tasks.md plan.md quickstart.md; do
-  current_hits="$(
-    awk '
-      /RETIRED-W5-.*-BEGIN/ { retired = 1; next }
-      /RETIRED-W5-.*-END/ { retired = 0; next }
-      /STALE-PROSE-CHECK-BEGIN/ { retired = 1; next }
-      /STALE-PROSE-CHECK-END/ { retired = 0; next }
-      !retired { print }
-    ' "$FEATURE_DIR/$file" |
-      rg -n -i "$ACTION" |
-      rg -v -i "$HISTORICAL" || true
-  )"
-  test -z "$current_hits" || {
-    printf '%s\n' "$current_hits"
-    exit 1
-  }
-done
 
 ! rg -n -i \
   'round nine.*\bMAY\b|eight panel rounds.*\bMAY\b|^## Standing obligations$' \
@@ -708,27 +699,25 @@ T479/T480 accept exact-F6 `Provider/runtime-cloud-hypervisor` evidence for a rea
 Hypervisor process effect, authenticated guest-control session, and ready Guest; missing,
 skipped, status-only, fake-boundary, other-family, or refusal evidence leaves it incomplete.
 Direct ResourceService calls, private reloads, and status-only effects do not satisfy T604.
-The host configuration must set `d2b.site.hostGenerationRebuildRef` to the exact
-`<flake-ref>#<configuration-name>` value. It is required, has no default, and is limited to
-2048 bytes. Use the real validated flake and configuration values below; this procedure has
-no fixed illustrative target.
+After prospective T227 lands, the host configuration must set
+`d2b.site.hostGenerationRebuildRef` to the exact `<flake-ref>#<configuration-name>` value. It
+is required, has no default, and is limited to 2048 bytes. Use the real validated flake and
+configuration values below; this procedure has no fixed illustrative target.
 
 > **Blocked at this committed base.** The installed protocol-4 broker has no
 > host-generation handoff operation, and the existing broker service cannot execute a
-> target-closure compatibility binary before profile publication. Do not run migration or
-> rollback until the accepted external compatibility disposition installs and validates
-> `SourceGenerationCompatibilityFloorV1` on the source generation.
+> target-closure compatibility binary before profile publication. Exact code-canon searches
+> also find no `hostGenerationRebuildRef` option or carrier. Do not run migration or rollback
+> until T221 passes and prospective T222/T227 merge.
 >
 > The source-floor schema, encoding, digest and signature rules, receipts, capability
 > transitions, fixtures, poison registries, and transition matrices are owned solely by
 > accepted Version 2 through `VD2-SC002-SOURCE-FLOOR`, `VD2-SC002-REGISTRIES`, and
-> `VD2-SC002-TRACEABILITY`. T589 and T592 consume only their generated rows. A missing,
-> stale, non-ancestor, wrong-owner, or failing row blocks with remediation to accept Version 2,
-> regenerate traceability, and pass Gate 0. Do not infer any field, count, or command from
-> superseded feature-local prose. The accepted external disposition must name the source
-> producer/installer and typed import/validation owners; no feature task substitutes for them.
+> `VD2-SC002-TRACEABILITY`. T222 owns the typed handoff and T227 owns the option/carrier. A
+> missing, stale, wrong-owner, or failing prospective row blocks T604. Retired T589/T592/T595
+> text supplies no implementation or command.
 >
-After that prerequisite is accepted and installed, the first 3/1-to-4/2 migration cannot read
+After T222/T227 merge, the first 3/1-to-4/2 migration cannot read
 the stable reference because only the target broker can publish it. The following is the
 post-prerequisite operator contract named `host-generation-deploy-bootstrap-v1`, using the
 deployment entrypoint from the explicit target configuration:
@@ -1035,7 +1024,7 @@ become durable, immediately before each individual later mutation edge.
 
 The mutation-edge, peer-transition, pre-start, unit-census, redaction, and source-floor
 fixture sets are resolved only through the accepted generated `VD2-SC002-REGISTRIES` and
-`VD2-SC002-TRACEABILITY` rows assigned to T589, T592, T595, and T604. This quickstart does
+`VD2-SC002-TRACEABILITY` rows assigned prospectively to T222, T227, and T604. This quickstart does
 not copy their ids, counts, ordering, or poison cases. The generated rows must name
 independently authored expectations and enforcing gates; missing, duplicate, stale,
 wrong-owner, non-ancestor, runtime-derived, skipped, or unvisited coverage fails closed.

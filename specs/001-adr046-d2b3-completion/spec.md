@@ -107,24 +107,25 @@ contract defect to be corrected in the same coordinated change as the affected c
 implementation. The accepted `ADR-046-provider-system-core` member specification currently
 uses `system_core_host` and `system_core_user` for both internal telemetry labels and
 serialized status names, while the committed v3 `ZoneHandlerName` closed enum uses kebab-case
-wire serialization and omitted those variants. T605 owns the coordinated correction: add
+wire serialization and still omits those variants. Retired T605 is historical only.
+Prospective W6 T423 owns the coordinated correction: add
 `ZoneHandlerName::SystemCoreHost` and `ZoneHandlerName::SystemCoreUser`, serialize them only as
 `system-core-host` and `system-core-user`, retain the underscore spellings only as internal
 telemetry labels, bump both governing normative specification versions, and update every
 paired compiler-derived API snapshot, Rust serialization and duplicate/underscore-rejection
-test, lowest-layer contract/policy guard, and reference status surface. T595 consumes the two
-variants in the production emitter, and T599 reconciles the remaining status consumers. All
-paired normative specs and version metadata, Rust contract/tests, API snapshots, reference
-status docs, consumers/emitters, generator no-drift proof, and panel evidence land in the
-same Wave 5 PR.
+test, lowest-layer contract/policy guard, and reference status surface. The historical plan
+assigned emitter and consumer work to T595/T599; those assignments are retired. Prospective
+T423 owns the enum, emitter, consumer, generated-artifact, and focused evidence correction
+before T604/T479.
 
 The C1 correction itself adds no field or operation and changes no desired-state ResourceType
 schema. Therefore it requires no `apiVersion`, JSON `schemaVersion`, `manifestVersion`,
 `bundleVersion`, or C1-specific wire-field version bump.
 The Zone desired-spec artifact
-`docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains unchanged and T605 must
+`docs/reference/schemas/v3/core.d2bus.org_Zone.schema.json` remains unchanged and T423 must
 prove generator output is byte-identical rather than hand-editing it. C1 is resolved in these
-feature artifacts but is not implemented. T603 is an editor-only accounting gate. Cross-artifact analysis and one current selected-roster plan lifecycle bind clean base A and the complete feature snapshot. If every T073-T218 obligation is satisfied, one `/d2b-spec-edit` batch checks those rows plus T603 and the integrator creates dedicated checkbox-only commit C. The editor receipt and C are the sole authority; T603 owns no source, fragment, scratch receipt, sidecar, digest chain, or resume protocol. Fresh analysis and a new selected-roster lifecycle bound to clean C and the changed snapshot gate T589.
+feature artifacts but is not implemented. The former T603/T589 accounting and review sequence
+is read-only historical planning evidence and is not reconstructed.
 
 ## Clarifications
 
@@ -419,9 +420,10 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   identity rather than proving it.
 - **FR-009**: Resources MUST NOT be referenced across Zone boundaries except through the
   explicit, declared linking mechanism, and cross-Zone access MUST be default-denied.
-- **FR-066**: Wave 5 MUST publish the production Resource API only through an authenticated,
-  single-owner ComponentSession admitted by the authoritative Zone registrar and routed by
-  the ZoneBus. The registrar MUST derive the subject from verified peer evidence in its
+- **FR-066**: Code canon lacks the accepted-socket peer-pidfd operation formerly assigned to
+  retired T592/T593. Prospective W6 T445 MUST publish the production Resource API only through
+  an authenticated, single-owner ComponentSession admitted by the authoritative Zone
+  registrar and routed by the ZoneBus. The registrar MUST derive the subject from verified peer evidence in its
   private state and propagate that authoritative subject through every Resource API
   operation. Unix peer evidence MUST obtain the process descriptor directly from the accepted
   socket with `SO_PEERPIDFD`; opening a pidfd later from `SO_PEERCRED.pid` is forbidden.
@@ -580,10 +582,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   All source-generation floor schemas, encodings, digests, receipts, capability transitions,
   fixtures, poison registries, and handoff transition matrices are owned solely by accepted
   Version 2 `ADR-046-validation-and-delivery` through `VD2-SC002-SOURCE-FLOOR`,
-  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. T589, T592, and T595 consume only
-  their generated ownership rows. A missing, stale, non-ancestor, wrong-owner, or failing row
-  blocks dispatch with remediation to accept Version 2, regenerate traceability, and pass
-  Gate 0. Feature-local field lists, counts, or transition copies are not authority.
+  `VD2-SC002-REGISTRIES`, and `VD2-SC002-TRACEABILITY`. Retired T589/T592/T595 own no
+  prospective work. T222 owns the W6 handoff implementation and generated-row enforcement
+  before T227/T604. Feature-local field lists, counts, or transition copies are not authority.
 - **FR-071**: Persisted store, policy, active-configuration, and controller identities MUST
   reopen after their mutable revisions advance. Immutable store and Zone identity MAY be
   checked at open, but mutable revisions MUST be recovered from durable state rather than
@@ -596,9 +597,9 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   boundaries; restart crash windows for effect replay/adoption and cleanup stale, zero, and
   UID-mismatch refusals; durable audit drain and restart replay; whole-process RSS and
   single-owner fan-in at 10,000 resources and 100 watches; current removal proofs; and
-  reference documentation compared with emitted behavior; and T605's exact enum
-  round-trip, handler-list duplicate/missing/wrong-name, `ProviderLifecycle` non-substitution,
-  API-snapshot, paired-reference, and unchanged Zone desired-schema drift results. The exact
+  reference documentation compared with emitted behavior. The former T605 enum/list evidence
+  was planned but is absent from code canon; prospective T423 owns the exact round-trip,
+  list-shape, API/reference, and unchanged-schema proof before T604/T479. The exact
   three-resource operator activation positive is not Wave 5 evidence: T604 runs in Wave 6
   after T221 and merged authoritative T336-T355, and
   T479/T480 bind it to F6 together with the
@@ -640,10 +641,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   contract already defines it or that explicit path introduces it; candidate absence alone
   never authorizes rewriting the promise. Reference documentation MUST NOT invent an absent
   command, field, fallback, or production route. Pending-audit recovery MUST either conform to
-  accepted `ADR-046-cli-and-operations` Version 1 or land T599's coordinated Version 2
-  amendment with migration guidance, mandatory `zoneRef`/`schemaVersion`, DTO/schema and
-  contract tests, release treatment, and closed remediation actions that contain no executable
-  Zone/operation-ID argv or free-form command text.
+  accepted `ADR-046-cli-and-operations` Version 1. The former T599 Version 2 amendment plan is
+  historical and authorizes no current implementation.
 - **FR-075**: The pre-ADR-046 operator lifecycle MUST remain functional on every exact
   prospective candidate that closes W6. Historical W2-W5 results remain immutable evidence
   and are not rerun or reconstructed. Before the W6 work-panel request,
@@ -1056,14 +1055,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   specification may seal, and a wave holding evidence gathered before the amendment MUST
   regather that evidence rather than carry it forward. This is a standing program obligation
   for the full duration of W2 through W8, not a one-time precondition satisfied at program
-  start. For T589 this obligation moves to dispatch, not seal: its planned SC-002 incident
-  surface materially changes the accepted delivery contract. A separate external amendment
-  MUST bump `ADR-046-validation-and-delivery` from Version 1 to Version 2, receive the parent
-  ADR's required pre-panel and post-panel approvals, regenerate
-  `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and
-  `ADR-046-implementation-graph.{json,md}`, and pass Gate 0 and drift validation on an exact
-  commit that is an ancestor of T589's base. T589 MUST refuse every source edit until that
-  prerequisite validates and MUST NOT own the amendment or regenerated artifacts.
+  start. Retired T589 amendment text has no prospective effect.
 
 #### Program scope
 
@@ -1442,8 +1434,8 @@ carries the object verbatim rather than copying selected fields into the task ro
 - **SC-012**: The Zone runtime whole-process resident memory stays at or below 24,576 KiB with
   no baseline subtraction, met by design change rather than by relaxing durability,
   authorization, or audit (FR-030). Corrected disposable-proof and production-fixture
-  measurements passed at their recorded tips; the completed production publication path has
-  no current measurement until T601 measures final candidate F.
+  measurements passed at their recorded tips. Retired T601 supplies no current measurement;
+  prospective T479 owns any required exact-F6 measurement.
 - **SC-013**: A Zone with an empty store becomes ready to serve within half a second.
 
 #### Migration and release

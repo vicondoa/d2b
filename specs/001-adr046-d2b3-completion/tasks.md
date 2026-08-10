@@ -36,7 +36,7 @@ boundary and retained no-seal state. It does not weaken any Wave 6 gate.
 - **[P]**: Parallelizable with other ready tasks after all of its declared prerequisites
   complete, with no file-overlap edge among the tasks launched together. The marker does not
   remove an incoming dependency or mean immediate wave-entry eligibility. 91 of 545 manifest
-  work items qualify. Across the full task list, 99 of 605 total tasks carry `[P]`.
+  work items qualify. Across the full task list, 96 of 605 total tasks carry `[P]`.
 - **[Story]**: US1 live resource plane, US2 Providers, US3 cutover, US4 release.
 - Text after `WorkItemId` is a **non-authoritative navigation label**, not the manifest
   `destination` field, a writable path list, or a substitute for retrieval. Labels use
@@ -527,6 +527,8 @@ The historical plan assigned twelve source-writing fragments to T589-T599 and T6
 owns no fragment; T600-T602 were evidence-only; T219 writes nothing. T604's fragment belongs
 to prospective W6.
 
+<!-- RETIRED-W5-MANIFEST-BEGIN: read-only historical compatibility -->
+
 ### Group `wi:ADR-046-cli-and-operations` (13 items)
 
 - [ ] T073 [US1] `ADR046-cli-001` - `packages/d2b/src/lib.rs` (adapt)
@@ -555,13 +557,11 @@ to prospective W6.
 - [ ] T093 [US1] `ADR046-nix-008` - Compiler-only `parentZone` map in `nixos-modules/options-zones.nix` (adapt)
 - [ ] T094 [US1] `ADR046-nix-009` - Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/resource-bundle.json` (adapt)
 - [ ] T095 [US1] `ADR046-nix-010` - User-only `Host` resource in `zones/<z>/resource-bundle.json` (adapt)
-- [ ] T096 [P] [US1] `ADR046-nix-011` - `nixos-modules/privileges-json.nix` (retained baseline only; T592 later adapts it for the handoff op) (copy-unchanged)
+- [ ] T096 [P] [US1] `ADR046-nix-011` - historical retained baseline for `nixos-modules/privileges-json.nix` (copy-unchanged)
 
-T096's manifest disposition covers only the pre-handoff retained matrix and is not a claim
-that Wave 5 privileges remain unchanged. The new `ApplyHostGenerationHandoff` operation
-cannot inherit that disposition: T592 is its serialized sole writer and must update the
-canonical Rust matrix, Nix renderer, generated schemas/catalogues, parity tests, and reference
-table before the operation exists.
+T096's historical disposition did not implement a handoff operation. Code canon confirms the
+operation is absent. Prospective T222 owns its Rust/Nix privilege matrix, schemas/catalogues,
+parity tests, and reference treatment before T227 or T604.
 - [ ] T097 [US1] `ADR046-nix-012` - `nixos-modules/closures-json.nix` (adapt)
 - [ ] T098 [US1] `ADR046-nix-013` - Per-Zone `zones/<z>/resource-bundle.json` (`schemaVersion`) (replace)
 - [ ] T099 [US1] `ADR046-nix-014` - `nixos-modules/assertions.nix` (adapt)
@@ -729,6 +729,8 @@ new runtime boundary is added.
 - [X] T578 [US1] **Publish the replacement contracts the companions consume**, early enough for them to adapt given that no preview release may be published (contracts/companion-contracts.md CO-2, FR-045). **Done**: `docs/reference/zone-cli-contract.md` revision 1, landed at `b72b205f`. CO-5 remains the W5 exit condition: every "surface consumed" cell in the inventory must resolve to a committed contract at a public ref
 - [X] T579 [US1] **Resolve the FR-039 / FR-045 tension before these contracts publish** (CHK025). FR-039 blocks release on external repositories while FR-045 forbids the preview build they would adapt against. This is the last moment the choice is cheap: resolve it here or amend FR-045. **Done, out of order**: T577 and T578 published first, so the resolution was encoded in shipped prose before any requirement said it. Closed by **FR-061** (contract/artifact boundary, publish-adapt-verify sequencing, per-stage refusals, amendment-only relaxation of FR-045) and **FR-062** (the adaptation assumption recorded as unvalidated with a mitigation, a detection point, and an escalation path). FR-045 is preserved, not amended. See `checklists/coverage.md`, "The W5 date-bound gate"
 
+<!-- RETIRED-W5-MANIFEST-END -->
+
 ### Approved production resource-plane completion
 
 Every unchecked task in this Wave 5 completion subsection is retained as historical planning
@@ -885,12 +887,35 @@ acceptance task that consumes the merged T336-T355 result; it does not move thos
 
 ### Group `wi:ADR-046-provider-activation-nixos` (7 items)
 
-- [ ] T222 [P] [US2] `ADR046-activation-001` - packages/d2b-host/src/bin/d2b-activation-helper.rs (adapt)
+NIX-8 and NIX-9 are code-canon gaps, not landed Wave 5 work. The exact searches recorded in
+`research.md` found no production handoff contract and no rebuild-reference option. T222 then
+T227 are serialized prospective W6 owners and both must merge before T604.
+
+- [ ] T222 [US2] `ADR046-activation-001` + NIX-8 PROSPECTIVE HOST-GENERATION HANDOFF - after
+  T221, own `packages/d2b-host/src/bin/d2b-activation-helper.rs` plus the exact typed
+  contract/core/broker/daemon/client and focused-test files required for
+  `SourceGenerationCompatibilityFloorV1` and `ApplyHostGenerationHandoff`. Implement the
+  unprivileged target entry, broker-owned durable coordinator and audited mutation, one
+  durable source-to-target transfer, restart adoption, and target/apply/GC-root/live-peer and
+  unauthorized-caller denials using only the existing broker socket/service lifecycle.
+  **Done when** exact source, target, restart, substitution, authorization, and three-unit
+  tests pass and T227 can consume the typed handoff contract.
 - [ ] T223 [P] [US2] `ADR046-activation-002` - docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json and packages/d2b-contracts/src/activation_nixos.rs (create)
 - [ ] T224 [US2] `ADR046-activation-003` - packages/d2b-provider-activation-nixos/src/controller/ (replace)
 - [ ] T225 [US2] `ADR046-activation-004` - packages/d2b-provider-activation-nixos/src/runner/ (adapt)
 - [ ] T226 [P] [US2] `ADR046-activation-005` - packages/d2b/src/activation.rs (replace)
-- [ ] T227 [P] [US2] `ADR046-activation-006` - nixos-modules/providers/activation-nixos.nix (adapt)
+- [ ] T227 [US2] `ADR046-activation-006` + NIX-9 PROSPECTIVE REBUILD-REFERENCE CARRIER -
+  depends on T222. Own `nixos-modules/providers/activation-nixos.nix`,
+  `nixos-modules/options-site.nix`, the host-generation carrier/emitter module,
+  `tests/unit/nix/cases/host-generation-rebuild-ref.nix`, affected flake/example/template
+  fixtures, and required inventory regeneration. Declare required no-default
+  `d2b.site.hostGenerationRebuildRef` with
+  `^[A-Za-z0-9+._~:/?@%=&,-]+#[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` and an exact 2048-byte UTF-8
+  ceiling. Publish only the validated target-closure bytes through T222's typed broker
+  operation as root:d2bd 0640, audit only the fixed digest, restore prior bytes or absence on
+  rollback, and emit no value or stable path. **Done when** valid, boundary, missing,
+  malformed, multiline, whitespace, selector, and redaction cases pass and T604 can consume
+  the exact carrier without retired Wave 5 ownership.
 - [ ] T228 [US2] `ADR046-activation-007` - packages/d2b/src/lib.rs (delete-after-cutover)
 
 ### Group `wi:ADR-046-provider-audio-pipewire` (13 items)
@@ -1040,7 +1065,7 @@ require
 remove every current-facing sole Network-opt-in path, and regenerate these rows with the
 production adapter, site-gate transport, schema migration, and all four real
 emitter/controller/broker/net-VM cases still assigned to W6. The amendment must not move or
-replace T336-T355 with pre-T220 implementation owners. T604 remains W6 acceptance-only, owns
+replace T336-T355 with retired Wave 5 owners. T604 remains W6 acceptance-only, owns
 no Network implementation, and consumes the merged T336-T355 result. T479 revalidates the
 implementation and evidence, and T480 rechecks them at close.
 
@@ -1066,7 +1091,9 @@ implementation and evidence, and T480 rechecks them at close.
 - [ ] T355 [P] [US2] `ADR046-nl-020` - Network schema/Provider descriptor (adapt)
 
 - [ ] T604 [US1] **Prove exact-F6 operator activation through real effect and cleanup.**
-  Depends on T221 and merged W6 T336-T355 production implementation plus the four-case matrix.
+  Depends on T221, merged prospective T222/T227 host-generation ownership, merged T423
+  system-core contract ownership, and merged W6 T336-T355 production implementation plus the
+  four-case matrix.
   This prospective W6 task owns the fixture-contract, daemon production-boundary,
   `resource-operator-activation`, and `daemon-restart-vm-survival` host checks named in the
   plan. It proves the exact Volume, Network, and TPM Device effects and cleanup on F6. T479
@@ -1164,7 +1191,16 @@ implementation and evidence, and T480 rechecks them at close.
 
 ### Group `wi:ADR-046-provider-system-core` (1 items)
 
-- [ ] T423 [US2] `ADR046-system-core-001` - `packages/d2b-provider-system-core/src/manifest.rs` (adapt)
+- [ ] T423 [US2] `ADR046-system-core-001` + RETIRED-T605 CONTRACT REASSIGNMENT -
+  `packages/d2b-provider-system-core/src/manifest.rs` plus
+  `packages/d2b-contracts/src/v3/zone.rs`, focused contract tests, compiler-derived API
+  snapshots, the production status emitter and consumers, governing specification/reference
+  pages, generated-manifest reconciliation, and unchanged Zone desired-schema proof. Code
+  canon lacks `ZoneHandlerName::SystemCoreHost` and `SystemCoreUser`. Add the exact
+  `system-core-host`/`system-core-user` wire values, preserve telemetry-only underscore
+  labels, and prove exactly-one-each list acceptance plus duplicate/missing/wrong-name and
+  `ProviderLifecycle` non-substitution. This prospective W6 task follows T221 and must merge
+  before T604/T479.
 
 ### Group `wi:ADR-046-provider-system-minijail` (6 items)
 
@@ -1202,7 +1238,12 @@ implementation and evidence, and T480 rechecks them at close.
 - [ ] T442 [US2] `ADR046-transport-unix-003` - `packages/d2b-provider-transport-unix/src/{stream,socket}.rs` (adapt)
 - [ ] T443 [US2] `ADR046-transport-unix-004` - `packages/d2b-provider-transport-unix/src/credit.rs` (adapt)
 - [ ] T444 [US2] `ADR046-transport-unix-005` - `packages/d2b-provider-transport-unix/src/descriptor.rs` (adapt)
-- [ ] T445 [US2] `ADR046-transport-unix-006` - `packages/d2b-provider-transport-unix/src/admission.rs` (adapt)
+- [ ] T445 [US2] `ADR046-transport-unix-006` + RETIRED-T592/T593 PEER-PIDFD REASSIGNMENT -
+  own `packages/d2b-provider-transport-unix/src/admission.rs` plus the typed broker
+  accepted-socket pidfd operation, safe session adapter, descriptor ownership, ancillary-fd
+  closure, private registrar issuance, compile-fail/API seals, and focused tests. Code canon
+  contains no `OpenPeerPidfdFromAcceptedSocket`; add it prospectively after T221 and before
+  T479, with no numeric-PID fallback or new FFI crate.
 - [ ] T446 [US2] `ADR046-transport-unix-007` - `packages/d2b-provider-transport-unix/src/{portal,service}.rs` (adapt)
 - [ ] T447 [US2] `ADR046-transport-unix-008` - `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service` (adapt)
 - [ ] T448 [US2] `ADR046-transport-unix-009` - `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json` (create)
@@ -1715,7 +1756,7 @@ agents share a working tree or a `packages/target/`:
 | W2 | 2 | **2** - zero file-overlap edges; both start together |
 | W3 | 1 | **1** - strictly serial by design |
 | W4 | 6 | **6** |
-| W5 | 12 manifest groups + completion graph | **12** for the manifest groups; after T595, T596-T599 run without claiming W6 work |
+| W5 | historical only | Retired T589-T605 rows remain inside the explicit read-only compatibility block |
 | W6 | 29 manifest/coordination groups + T604 acceptance | **up to 28** after dependencies - all 27 Provider dossiers, process-provider integration, core-controller coordination, and T604 stay scheduled in W6 |
 | W7 | 5 | **5** |
 
@@ -1823,8 +1864,7 @@ contended file with named, non-overlapping-in-time owners is permitted: the plan
 all writers, state their order, and block the later branch until the earlier owner merges.
 `transaction.rs` (`T591 -> T592`) is the representative slice-to-slice ownership transfer;
 prep-to-slice ownership transfers are named in T589's file map and dependency chain.
-`packages/d2b/src/dispatch.rs` transfers only after T595 freezes the host-generation
-namespace; T599 is its sole later writer and may not remove or alias that namespace.
+The former T595/T599 `packages/d2b/src/dispatch.rs` transfer is read-only history.
 `packages/Cargo.lock` is not transferred: T592 is its sole owner and T593 is a read-only
 consumer of the frozen dependency graph. None is parallel ownership.
 
