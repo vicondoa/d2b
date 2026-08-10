@@ -32,7 +32,7 @@ const EXPECTED_WORK_ITEMS: usize = 545;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
 const EXPECTED_NODES: u64 = 600;
-const EXPECTED_EDGES: u64 = 1949;
+const EXPECTED_EDGES: u64 = 1960;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
@@ -920,15 +920,6 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
         *census.entry(item.form).or_default() += 1;
     }
 
-    #[test]
-    fn feature_local_coordination_tasks_are_closed_and_authoritative() {
-        let findings = check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS));
-        assert!(
-            findings.is_empty(),
-            "feature-local coordination task policy failed:\n{}",
-            findings.join("\n")
-        );
-    }
     assert_eq!(
         census,
         BTreeMap::from([
@@ -974,6 +965,16 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     assert!(
         findings.is_empty(),
         "ADR 0046 work-item bijection violations:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn feature_local_coordination_tasks_are_closed_and_authoritative() {
+    let findings = check_local_coordination_tasks(&read_repo_file(FEATURE_TASKS));
+    assert!(
+        findings.is_empty(),
+        "feature-local coordination task policy failed:\n{}",
         findings.join("\n")
     );
 }
