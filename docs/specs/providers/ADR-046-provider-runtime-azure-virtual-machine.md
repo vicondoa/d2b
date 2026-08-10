@@ -5,16 +5,16 @@
 | Spec ID | `ADR-046-provider-runtime-azure-virtual-machine` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 4 |
+| Version | 5 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-runtime-azure-virtual-machine` crate owner, Guest contracts, Nix integration |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-primitive-resource-composition`, `ADR-046-componentsession-and-bus`, `ADR-046-resources-credential`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-network`, `ADR-046-nix-configuration`, `ADR-046-components-processes-and-sandbox`, `ADR-046-telemetry-audit-and-support`, `ADR-046-zone-routing`, `ADR-046-provider-state` |
-| Supersedes | Version 3 audit/telemetry fields where corrected below; current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads |
+| Supersedes | Version 4 prospective authority where corrected below; Version 3 audit/telemetry fields; current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads |
 
 ## Prospective Wave 6 authority correction
 
-Version 4 consumes Version 3 of
+Version 5 consumes Version 4 of
 `ADR-046-telemetry-audit-and-support`:
 
 - The Provider emits bounded diagnostics and identity-free telemetry only. Core
@@ -43,6 +43,10 @@ Version 4 consumes Version 3 of
 - Benchmark evidence is produced separately from exported metrics.
 - Audit segment pruning is outside this Provider and remains blocked until all
   required export destinations durably acknowledge the exact segment.
+- Every audit-producing Resource API/Credential/session/effect call consumes
+  T609's operational durable-export readiness gate. Export-unready means no ARM
+  or bootstrap work that requires audit starts; the Provider propagates the
+  closed refusal and creates no local audit backlog or substitute writer.
 
 ---
 
@@ -1431,6 +1435,28 @@ d2b.zones.dev.resources.corp-vm = {
   `ImageChangeRequiresConfirm`. With it: Drain → Delete → Provision cycle.
 
 ---
+
+## T609 execution overlay for every W6 work item
+
+This overlay applies without exception to `ADR046-azure-vm-001`,
+`ADR046-azure-vm-002`, `ADR046-azure-vm-003`, `ADR046-azure-vm-004`,
+`ADR046-azure-vm-005`, `ADR046-azure-vm-006`, `ADR046-azure-vm-007`,
+`ADR046-azure-vm-008`, and `ADR046-azure-vm-009`. T609 completes first and
+freezes the typed audit and telemetry ports they consume.
+
+For execution, each item removes raw Zone/Guest/resource/cloud-account
+identity, ResourceRefs, operation/Credential/LRO/session handles, credentials,
+ARM locators, cgroup/unit fields, and attacker-authored text from observable
+output. It removes Provider-local and best-effort audit, refuses
+audit-producing calls while durable export is unready, selects metrics only
+from the central closed descriptor/label registry, and emits only complete
+typed-correlation spans with one terminal outcome. The per-signal byte/age
+bounds and non-failing emitter contract apply even where a historical row
+mentions only effects, lifecycle, bootstrap, Credential, idempotency, Nix, or
+tests. Conflicting audit, identity, local metric, or partial trace prose is
+historical source context and not execution authority. No item is complete
+until raw-identity, best-effort-audit, export-unready, descriptor-domain,
+trace-terminal, and retention planted negatives pass.
 
 ## Work items
 

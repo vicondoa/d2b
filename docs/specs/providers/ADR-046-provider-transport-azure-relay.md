@@ -5,16 +5,16 @@
 | Spec ID | `ADR-046-provider-transport-azure-relay` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `packages/d2b-provider-transport-azure-relay/` |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-componentsession-and-bus`, `ADR-046-zone-routing`, `ADR-046-resources-credential`, `ADR-046-provider-model-and-packaging`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
-| Supersedes | Version 1 audit/telemetry fields where corrected below; `d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface |
+| Supersedes | Version 2 prospective authority where corrected below; Version 1 audit/telemetry fields; `d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface |
 
 ## Prospective Wave 6 authority correction
 
-Version 2 consumes the telemetry/audit authority from Version 3 of
+Version 3 consumes the telemetry/audit authority from Version 4 of
 `ADR-046-telemetry-audit-and-support`:
 
 - The Provider emits bounded diagnostic observations only. It does not append
@@ -41,6 +41,10 @@ Version 2 consumes the telemetry/audit authority from Version 3 of
   exported metrics are not acceptance evidence.
 - Audit segment pruning is outside this Provider and remains gated by durable
   acknowledgement from every required export destination.
+- Every audit-producing Resource API/Credential/session/effect call consumes
+  T609's operational durable-export readiness gate. Export-unready means no
+  audited transport work starts; the Provider propagates the closed refusal
+  and creates no local backlog or substitute audit.
 
 ## Purpose
 
@@ -1428,6 +1432,27 @@ download, or PATH scan.
 | Feasibility proof | Fake relay server in `src/tests/integration/` enabling hermetic reconnect and credential scenarios without live Azure service |
 
 ---
+
+## T609 execution overlay for every W6 work item
+
+This overlay applies without exception to `ADR046-transport-relay-001`,
+`ADR046-transport-relay-002`, `ADR046-transport-relay-003`,
+`ADR046-transport-relay-004`, `ADR046-transport-relay-005`,
+`ADR046-transport-relay-006`, and `ADR046-transport-relay-007`. T609
+completes first and freezes the typed audit and telemetry ports they consume.
+
+For execution, each item removes raw Zone/ZoneLink/resource/account identity,
+ResourceRefs, handles, credentials, locators, cgroup/unit fields, and
+attacker-authored text from observable output. It removes Provider-local and
+best-effort audit, refuses audit-producing calls while durable export is
+unready, selects metrics only from the central closed descriptor/label
+registry, and emits only complete typed-correlation spans with one terminal
+outcome. The per-signal byte/age bounds and non-failing emitter contract apply
+even where a historical row mentions only transport, credentials, reconnect,
+schema, backpressure, or fixtures. Conflicting `audit/OTEL`, identity, or local
+metric prose is historical source context and not execution authority. No item
+is complete until raw-identity, best-effort-audit, export-unready,
+descriptor-domain, trace-terminal, and retention planted negatives pass.
 
 ## Implementation work items
 

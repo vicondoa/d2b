@@ -5,16 +5,16 @@
 | Spec ID | `ADR-046-provider-observability-otel` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 4 |
+| Version | 5 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-observability-otel`, `TelemetryService`/`TelemetryBinding` controllers, telemetry/observability integrator |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-primitive-resource-composition`, `ADR-046-components-processes-and-sandbox`, `ADR-046-componentsession-and-bus`, `ADR-046-resources-volume`, `ADR-046-resources-credential`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
-| Supersedes | Version 3 telemetry fields where corrected below; `ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone) |
+| Supersedes | Version 4 prospective authority where corrected below; Version 3 telemetry fields; `ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone) |
 
 ## Prospective Wave 6 authority correction
 
-Version 4 consumes Version 3 of
+Version 5 consumes Version 4 of
 `ADR-046-telemetry-audit-and-support` without defining a Provider-local
 alternative:
 
@@ -45,6 +45,16 @@ alternative:
   effect audit is durable and exactly once at the typed effect boundary, and
   audit segment pruning remains blocked until every required export
   acknowledgement is durable and exact.
+- Every audit-producing Resource API/session/effect call consumes T609's
+  operational durable-export readiness gate. If the required export path is
+  not ready, the Provider performs no audited work and propagates the closed
+  refusal; it never buffers a Provider-local substitute.
+- `Provider/observability-otel` is the runtime owner of native
+  SigNoz/ClickHouse per-signal TTL. `ADR046-otel-002` owns implementation in
+  the authority controller, `src/retention.rs`, and native stack Nix. Metrics
+  default to 30 days, logs to 14 days, and traces to 7 days, each bounded
+  1 through 3650 days. Readiness requires verified effective TTL on every
+  registered native table class.
 - Performance gates consume dedicated benchmark evidence. No exported metric
   can satisfy or fail a benchmark target.
 
@@ -332,18 +342,34 @@ strict Provider extension:
 ```yaml
 provider:
   schemaId: observability-otel.d2bus.org/TelemetryService/spec
-  schemaVersion: "1.0"
+  schemaVersion: "2.0"
   settings:
     backend: signoz
     backendEndpointRefs:
       - Endpoint/signoz-query-backend
     ingestProtocol: otlp-grpc
+    retentionDays:
+      metrics: 30
+      logs: 14
+      traces: 7
 ```
 
 The extension is authority-only, signed, versioned/digested, deny-unknown, and
 bounded. A projection has no Service `spec.provider`. The extension cannot
 shadow the generic ingest Endpoint refs, signals, quota, policy, authority
 descriptor, or update policy and contains no locator, credential, or secret.
+`retentionDays` is authority-only native backend policy. It has exactly the
+`metrics`, `logs`, and `traces` keys; each is an integer from 1 through 3650.
+It does not change the separate 60/300/120-second transient queue ceilings.
+
+The authority controller is the sole runtime TTL reconciler. `ADR046-otel-002`
+owns `src/retention.rs` and the native stack Nix that maps the three signal
+values to all registered SigNoz/ClickHouse table classes. Reconcile reads back
+the effective TTL expressions after apply. Missing, duplicate, unknown,
+unbounded, or mismatched table TTL keeps the authority Service `Degraded`,
+sets `RetentionReady=False` with a closed reason, and prevents Provider
+readiness; a compatibility `d2b.observability.retention.*` value is never an
+alternative owner.
 
 A projection Service is created and owned by core with
 `metadata.ownerRef: ResourceImport/<name>`. Core and the signed import adapter
@@ -362,7 +388,8 @@ credential, payload, raw `exportKey`, or stream handle.
 
 Closed provider-neutral Service conditions are `ServiceReady`, `IngestReady`,
 `AuthorityUnique`, `ExportReady`, `ImportBound`, `RouteReady`,
-`QuotaSaturated`, `BackpressureActive`, `Revoking`, and `UpgradeRequired`.
+`RetentionReady`, `QuotaSaturated`, `BackpressureActive`, `Revoking`, and
+`UpgradeRequired`.
 Authority conditions that are inapplicable to projections are absent, not
 false. Projection loss/revocation sets `ImportBound=False`,
 `RouteReady=False`, and phase `Degraded`.
@@ -1668,11 +1695,16 @@ d2b.zones.sys-obs.resources.telemetry = {
     updatePolicy.mode = "manual-disruptive";
     provider = {
       schemaId = "observability-otel.d2bus.org/TelemetryService/spec";
-      schemaVersion = "1.0";
+      schemaVersion = "2.0";
       settings = {
         backend = "signoz";
         backendEndpointRefs = [ "Endpoint/signoz-query-backend" ];
         ingestProtocol = "otlp-grpc";
+        retentionDays = {
+          metrics = 30;
+          logs = 14;
+          traces = 7;
+        };
       };
     };
   };
@@ -1789,11 +1821,16 @@ canonical shapes:
     "ingestEndpointRefs": ["Endpoint/telemetry-ingest"],
     "provider": {
       "schemaId": "observability-otel.d2bus.org/TelemetryService/spec",
-      "schemaVersion": "1.0",
+      "schemaVersion": "2.0",
       "settings": {
         "backend": "signoz",
         "backendEndpointRefs": ["Endpoint/signoz-query-backend"],
-        "ingestProtocol": "otlp-grpc"
+        "ingestProtocol": "otlp-grpc",
+        "retentionDays": {
+          "logs": 14,
+          "metrics": 30,
+          "traces": 7
+        }
       }
     },
     "providerRef": "Provider/observability-otel",
@@ -1933,6 +1970,9 @@ integration-only.
 - Reject exporting a Binding, using an Endpoint as `serviceRef`, moving common
   fields into the extension, putting OTLP/SigNoz/OTEL fields in either base
   spec, unknown extension fields, or quota overflow.
+- Require Service extension schema Version 2 retention values for exactly
+  metrics/logs/traces; prove defaults 30/14/7, bounds 1 through 3650, and
+  rejection of missing, unknown, zero, and over-maximum values.
 - Reject the old provider-qualified ResourceType names and every alias.
 - Assert Binding-owned collector/forwarder/Volume/private Endpoints have
   `ownerRef: telemetry.d2bus.org.TelemetryBinding/<name>` and finalizers
@@ -2262,6 +2302,10 @@ vsock-forwarder path: Guest → vsock → host forwarder → `otlp.sock` → col
   backend/ingest readiness, trusted-source admission followed by identity
   stripping, fixed per-signal retention, redaction, cardinality, quota, and
   bounded backpressure.
+- Query every registered native SigNoz/ClickHouse table class and verify exact
+  metrics/logs/traces TTL expressions. Remove, duplicate, widen, or mismatch
+  one class at a time and assert `RetentionReady=False` plus Provider
+  non-readiness until `ADR046-otel-002` reconciliation repairs it.
 
 #### `integration/scenario_real_projection_stream.rs`
 
@@ -2324,6 +2368,27 @@ Old and new suites never run in parallel indefinitely.
 | Future owner | Work items below |
 
 ---
+
+## T609 execution overlay for every W6 work item
+
+This overlay applies without exception to `ADR046-otel-001`,
+`ADR046-otel-002`, `ADR046-otel-003`, `ADR046-otel-004`,
+`ADR046-otel-005`, and `ADR046-otel-006`. T609 completes first and freezes the
+typed audit and telemetry ports they consume.
+
+For execution, each item removes every raw or digested identity not admitted by
+the closed correlation registry, removes every Provider-local or best-effort
+audit path, and refuses audit-producing calls when T609 reports durable export
+unready. Each item selects metrics only from the central closed descriptor/
+label registry, emits only complete typed-correlation spans with one terminal
+outcome, applies the per-signal byte/age bounds, and keeps emitter failure
+observational. `ADR046-otel-002` additionally owns native per-signal
+SigNoz/ClickHouse TTL reconciliation and readiness verification. Any older
+work-item sentence about identity stamping, audit projection, local descriptor
+ownership, incomplete spans, or unwired retention is historical source context
+and is superseded by this overlay. No item is complete until its tests include
+raw-identity, best-effort-audit, descriptor-domain, trace-terminal, retention,
+and export-unready planted negatives.
 
 ## Implementation work items
 

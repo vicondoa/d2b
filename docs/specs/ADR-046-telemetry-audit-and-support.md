@@ -5,16 +5,16 @@
 | Spec ID | `ADR-046-telemetry-audit-and-support` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 3 |
+| Version | 4 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-telemetry`, `d2b-audit`, `d2b-provider-observability-otel`, `d2b zone` CLI |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-store-redb`, `ADR-046-componentsession-and-bus`, `ADR-046-core-controllers`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging` |
-| Supersedes | Version 2 telemetry/audit authority where corrected below; current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths |
+| Supersedes | Version 3 prospective authority where corrected below; Version 2 telemetry/audit authority; current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths |
 
 ## Prospective Wave 6 authority correction
 
-Version 3 is the prospective Wave 6 authority. The following rules supersede
+Version 4 is the prospective Wave 6 authority. The following rules supersede
 every later example or Provider dossier where the older text conflicts:
 
 1. A privileged effect has one authoritative audit owner. The broker or other
@@ -76,6 +76,43 @@ every later example or Provider dossier where the older text conflicts:
 9. Performance acceptance uses dedicated benchmark evidence produced by the
    benchmark harness. Exported histograms are operational observations and
    cannot satisfy, waive, or fail an acceptance target.
+10. T609 is the prospective execution owner for the retained audit/telemetry
+    obligations. Its adopted implementation contract supersedes conflicting
+    implementation, integration, validation, durability, identity, metric,
+    trace, export, and retention prose in the historical W5 work-item rows.
+    Those rows remain byte-for-byte historical evidence and are not edited,
+    regenerated, or reinterpreted as current execution authority.
+11. Before a Zone publishes or accepts any request whose outcome requires an
+    authoritative audit record, the T609 audit owner MUST have an operational
+    durable export path. The required destination set always includes the
+    root-owned local segment sink and may include configured durable mirrors;
+    an empty set or an opt-out is invalid. Startup/recovery verifies the held
+    directory fd, chain tail, export and acknowledgement cursors, file and
+    parent-directory sync, current-segment capacity, and a bounded
+    write/sync/verify/remove preflight. Failure keeps the Zone unpublished,
+    returns `audit-export-unavailable`, and permits only audit-free read-only
+    doctor/export/recovery work. Any runtime export or acknowledgement failure
+    revokes audit readiness before the next audit-producing admission.
+12. Audit-producing admission reserves capacity under both
+    `maxSegmentBytes` and `maxRecordsPerSegment` before mutation or effect
+    release. If rotation, durable export, acknowledgement, or the reservation
+    cannot complete, work fails closed before its authoritative row is needed.
+    A failure after the mutation row commits returns only
+    `CommittedPendingAudit`; no new audit-producing work is admitted until
+    replay restores export readiness. This bounds unacknowledged retention by
+    admitted in-flight work and the current segment instead of allowing an
+    unbounded backlog.
+13. `retentionDays` starts for a journal row and segment only at durable export
+    acknowledgement. Pruning requires the exact segment sequence/hash and
+    terminal-record acknowledgement from every required destination plus the
+    elapsed retention interval. Missing acknowledgement retains the bytes and
+    closes audit-producing admission before capacity is exhausted.
+14. Native backend telemetry retention is separate from transient queue age.
+    `Provider/observability-otel` is the runtime owner of SigNoz/ClickHouse
+    per-signal TTL reconciliation. `ADR046-otel-002` is the W6 implementation
+    owner. Metrics default to 30 days, logs to 14 days, and traces to 7 days;
+    each accepts 1 through 3650 days. Provider readiness requires every native
+    table class to report the exact effective TTL.
 
 The correlation digest registry is closed:
 
@@ -896,8 +933,9 @@ d2b.zones.work.resources.work = {
   spec = {
     telemetry.emitter.ringCapacityBytes = 4194304;  # default 2097152
     audit = {
-      retentionDays   = 30;        # range 1..3650
-      maxSegmentBytes = 67108864;  # range 1 MiB..1 GiB
+      retentionDays       = 30;        # range 1..3650
+      maxRecordsPerSegment = 65536;    # range 1..1000000
+      maxSegmentBytes     = 67108864;  # range 1 MiB..1 GiB
     };
   };
 };
@@ -964,6 +1002,7 @@ owned by this spec):
   },
   "spec": {
     "audit": {
+      "maxRecordsPerSegment": 65536,
       "maxSegmentBytes": 67108864,
       "retentionDays": 30
     },
@@ -994,6 +1033,7 @@ shown; `status` is a separate read-only sub-document):
   },
   "spec": {
     "audit": {
+      "maxRecordsPerSegment": 65536,
       "maxSegmentBytes": 67108864,
       "retentionDays": 30
     },
@@ -1416,26 +1456,41 @@ event.
 
 ### Segmentation and retention
 
-Segments rotate at 64 MiB or UTC midnight (whichever first). Segment names:
+Segments rotate at `maxSegmentBytes`, `maxRecordsPerSegment`, or UTC midnight
+(whichever first). `maxRecordsPerSegment` defaults to 65536 and accepts
+1 through 1000000. `maxSegmentBytes` defaults to 67108864 and accepts
+1048576 through 1073741824. Both are validated at activation, startup
+recovery, reservation, append, and rotation. Segment names:
 `audit-<YYYYMMDDHHMMSSNNNNNN>.jsonl` (adapts the 20-digit format from ADR
 0045 v3 audit journal). Files are immutable after rotation. Default retention:
 30 days (adapts `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS = 14` from
 `packages/d2b-gateway-runtime/src/audit_jsonl.rs`; extended for the more
 authoritative Zone audit). Age alone never authorizes pruning.
 
-For each configured required export destination, the audit owner stores a
+The required export destination set is non-empty and always contains the
+root-owned local segment sink. Before audit-producing work, the audit owner
+must be `Ready` after recovery and a bounded write/sync/verify/remove preflight
+under the held directory fd. The admission path reserves one record and its
+bounded encoded bytes before mutation/effect release. A failed preflight,
+reservation, rotation, export, or acknowledgement returns
+`audit-export-unavailable` and leaves the Zone unpublished. Only audit-free
+read-only doctor/export/recovery work remains admitted until a fresh preflight
+and replay succeed.
+
+For each required export destination, the audit owner stores a
 durable `AuditExportAcknowledgement` containing destination class, segment
 sequence, segment hash, acknowledged terminal record hash, and acknowledgement
 time. All fields are closed or typed digests; no destination locator or Zone
-identity is exposed. Pruning is allowed only when the 30-day floor has elapsed,
+identity is exposed. `retentionDays` begins at that acknowledgement, not append
+or rotation. Pruning is allowed only when the configured floor has elapsed,
 the segment is not current, hash-chain verification succeeds, and every
 required destination has a matching durable acknowledgement. Export disabled
-by configuration is not an acknowledgement and makes every segment
-non-pruneable. Once the retention floor elapses, the audit owner sets
-`audit-prune-blocked` with remediation to configure and complete a required
-export destination. An unavailable configured destination is not equivalent
-to disabled. Ack mismatch, missing ack, sync failure, or acknowledgement
-rollback leaves bytes untouched.
+by configuration is invalid rather than an acknowledgement. Ack mismatch,
+missing ack, sync failure, acknowledgement rollback, or capacity exhaustion
+leaves bytes untouched, sets `audit-prune-blocked`, revokes audit-producing
+admission before the reservation envelope is exhausted, and names
+`restore the required durable audit export and retry the same operation` as
+remediation.
 
 ### Export
 
@@ -1686,7 +1741,8 @@ own deletion ordering.
   their creator.
 - Deletes audit segment files, OTEL emitter ring state, or any non-resource
   filesystem artifact. Audit data is governed exclusively by `retentionDays`,
-  `maxSegmentBytes`, and durability-class rules.
+  `maxRecordsPerSegment`, `maxSegmentBytes`, operational export readiness,
+  durable acknowledgement, and durability-class rules.
 - Touches resources in other Zones.
 - Applies broad `chmod`, `chown`, `setfacl`, or path sweeps - consistent with
   the ADR 0034 no-broad-sweep invariant.
@@ -1873,7 +1929,9 @@ New `packages/d2b-audit/tests/`:
   are absent and every present correlation digest has the exact record-specific
   type/domain.
 - `audit_segment_rotation`: adapted from rotation logic tests in
-  `packages/d2b-gateway-runtime/src/audit_jsonl.rs`.
+  `packages/d2b-gateway-runtime/src/audit_jsonl.rs`; independently hit
+  `maxSegmentBytes`, `maxRecordsPerSegment`, and UTC midnight, including
+  exact-boundary and out-of-range cases.
 - `privileged_effect_audit_exactly_once`: crash at every intent/effect/
   completion boundary; prove one durable intent, at most one released effect,
   one logical completion, and no best-effort/rate-limit path.
@@ -1881,7 +1939,14 @@ New `packages/d2b-audit/tests/`:
   commit and `CommittedPendingAudit` after commit.
 - `audit_prune_requires_export_ack`: vary every destination, sequence/hash,
   retention-floor, sync, restart, and acknowledgement-rollback condition;
-  bytes remain until all required acknowledgements match durably.
+  bytes remain until all required acknowledgements match durably and
+  `retentionDays` elapses from acknowledgement.
+- `audit_export_preflight_gates_work`: missing/empty/disabled destination set,
+  failed directory-fd recovery, chain/ack cursor mismatch, failed probe
+  write/file-sync/directory-sync/verify/remove, and failed capacity reservation
+  keep the Zone unpublished and refuse audit-producing work before mutation or
+  effect release. A runtime failure revokes readiness; only read-only recovery
+  remains until replay plus a fresh preflight succeeds.
 
 ### Doctor contract tests
 
@@ -2016,6 +2081,11 @@ cases; auto-discovered; adapts the existing eval-case pattern from
 - `eval_rejects_invalid_emitter_ring_size`: set
   `d2b.zones.work.resources.work.spec.telemetry.emitter.ringCapacityBytes = 0`;
   assert NixOS eval fails with a schema-range violation.
+- `audit_limits_are_exact`: defaults are `retentionDays=30`,
+  `maxRecordsPerSegment=65536`, and `maxSegmentBytes=67108864`; reject zero,
+  one-above-maximum, missing, unknown, and wrong-type values for each bound.
+- `audit_export_cannot_be_disabled`: an empty or disabled required durable
+  export destination set is rejected before bundle publication.
 - `eval_rejects_unknown_provider_config`: set an unknown key in
   `d2b.zones.work.resources.observability-otel.spec.config`; assert eval
   fails with an unknown-field message (schema-generated option set rejects it).
@@ -2110,6 +2180,26 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Replacement/deletion | `d2bd/src/metrics.rs` hand-rolled registry removed only after OTEL SDK metrics reach parity in all covered paths; `otel_host_bridge_argv.rs` socat runner retired after `observability-otel` Provider delivers native OTLP/vsock; daemon/broker/gateway `*_audit.rs` JSONL writers retired per-component after `d2b-audit` sink achieves parity; `AuditStreamKind` renamed `Daemon→Zone`, `Gateway→ZoneLink`, `RemoteNode→RemoteZone` in `d2b-telemetry`; `AuditChainRecord{realm, node}` re-versioned to `{zone}` in `d2b-audit`; `d2b-unsafe-local-helper` binary and `DaemonToUnsafeLocalHelper` wire protocol retired after Process Provider supervisor ticket migration for Host resources |
 | Feasibility proof | `TraceContext` proven. Hash-chain JSONL proven in broker/daemon. Rate-limit/rotation proven in broker. `BoundedEmitter` datagram-socket pattern follows existing `otelRuntimeDir` ACL + socket design. OTEL SDK + Unix socket exporter proven in the v3 Nix OTEL pipeline (Provider-only). SigNoz stack operational. `broker_export_audit` path-free NDJSON proven. `host_doctor_contract` env-redirect scaffold proven |
 | Future owner | Work items below |
+
+## T609 prospective execution adoption
+
+The following retained W5 work-item records are historical projection bytes:
+`ADR046-audit-001`, `ADR046-audit-002`, `ADR046-audit-003`,
+`ADR046-audit-004`, `ADR046-telem-001`, `ADR046-telem-002`,
+`ADR046-telem-004`, `ADR046-telem-005`, `ADR046-telem-006`,
+`ADR046-telem-007`, `ADR046-telem-008`, and `ADR046-telem-011`.
+Their complete headings and field rows remain byte-identical to `origin/v3`.
+
+T609 adopts their obligations prospectively and supersedes their implementation
+text for execution. In particular, historical `BestEffort`, raw identity,
+Provider-local writer, unacknowledged prune, unbounded retention, local metric
+descriptor, incomplete trace, or metric-as-benchmark language is not
+implementable authority. T609 supplies the durable export readiness gate,
+transactional/exactly-once audit ports, export acknowledgement and retention
+state, record/byte rotation bounds, typed digest/redaction contract, closed
+metric descriptor registry, complete trace lifecycle, and bounded non-failing
+telemetry port consumed by later W6 Provider items. Historical bytes remain
+unchanged so the FR-036 projection guard stays valid.
 
 ## Implementation work items
 

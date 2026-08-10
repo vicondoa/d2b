@@ -5,16 +5,16 @@
 | Spec ID | `ADR-046-provider-shell-terminal` |
 | Parent | ADR 0046 |
 | Status | Accepted |
-| Version | 3 |
+| Version | 4 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-shell-terminal`, Zone core-controller (ProviderDeployment/Process reconcile), Nix resource compiler |
 | Depends on | `ADR-046-decision-register`, `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging`, `ADR-046-primitive-resource-composition`, `ADR-046-provider-state`, `ADR-046-componentsession-and-bus`, `ADR-046-core-controllers`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration`, `ADR-046-zone-routing` |
-| Supersedes | Version 2 audit/telemetry fields where corrected below; v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`) |
+| Supersedes | Version 3 prospective authority where corrected below; Version 2 audit/telemetry fields; v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`) |
 
 ## Prospective Wave 6 authority correction
 
-Version 3 consumes Version 3 of
+Version 4 consumes Version 4 of
 `ADR-046-telemetry-audit-and-support`:
 
 - The Provider emits bounded diagnostic observations only. Resource API,
@@ -43,6 +43,10 @@ Version 3 consumes Version 3 of
 - Benchmark evidence is separate from exported metrics, and audit pruning
   remains blocked until every required export acknowledgement is durable and
   exact.
+- Every audit-producing Resource API/session/effect call consumes T609's
+  operational durable-export readiness gate. Export-unready means no audited
+  shell/session action starts; the Provider propagates the closed refusal and
+  creates no local audit backlog or substitute writer.
 
 ## Scope
 
@@ -1511,6 +1515,30 @@ default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
 per-test advisory threshold.
+
+## T609 execution overlay for every W6 work item
+
+This overlay applies without exception to `ADR046-sterm-001`,
+`ADR046-sterm-002`, `ADR046-sterm-003`, `ADR046-sterm-004`,
+`ADR046-sterm-005`, `ADR046-sterm-006`, `ADR046-sterm-007`,
+`ADR046-sterm-008`, `ADR046-sterm-009`, `ADR046-sterm-010`,
+`ADR046-sterm-011`, `ADR046-sterm-012`, and `ADR046-sterm-013`. T609
+completes first and freezes the typed audit and telemetry ports they consume.
+
+For execution, each item removes raw Zone/pool/session/resource/user/process
+identity, ResourceRefs, handles, credentials, terminal data, paths,
+PID/pidfd/cgroup/unit fields, and attacker-authored text from observable
+output. It removes Provider-local and best-effort audit, refuses
+audit-producing calls while durable export is unready, selects metrics only
+from the central closed descriptor/label registry, and emits only complete
+typed-correlation spans with one terminal outcome. The per-signal byte/age
+bounds and non-failing emitter contract apply even where a historical row
+mentions only schemas, controller/supervisor mechanics, process templates,
+session lifecycle, PTY/ring, adoption, Host/Guest policy, RBAC, removal, or
+services. Conflicting status/audit, identity, local metric, or partial trace
+prose is historical source context and not execution authority. No item is
+complete until raw-identity, best-effort-audit, export-unready,
+descriptor-domain, trace-terminal, and retention planted negatives pass.
 
 ## Implementation work items
 
