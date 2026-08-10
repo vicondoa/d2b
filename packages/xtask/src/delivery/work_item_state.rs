@@ -967,18 +967,40 @@ mod tests {
 
     #[test]
     fn historical_mutation_guard_is_wired_to_every_mutating_delivery_command() {
-        for (source, operation) in [
-            (include_str!("snapshot.rs"), "\"snapshot\""),
-            (include_str!("evidence.rs"), "\"evidence import\""),
-            (include_str!("panel.rs"), "\"panel request\""),
-            (include_str!("panel.rs"), "\"panel attestation\""),
-            (include_str!("seal.rs"), "\"seal\""),
-            (include_str!("eligibility.rs"), "\"merge target capture\""),
-            (include_str!("eligibility.rs"), "\"merge eligibility\""),
+        for (source, exact_call) in [
+            (
+                include_str!("snapshot.rs"),
+                "reject_adr046_w5_mutation(&material,\"snapshot\")",
+            ),
+            (
+                include_str!("evidence.rs"),
+                "reject_adr046_w5_mutation(&supplied.material,\"evidenceimport\")",
+            ),
+            (
+                include_str!("panel.rs"),
+                "reject_adr046_w5_mutation(&snapshot.material,\"panelrequest\")",
+            ),
+            (
+                include_str!("panel.rs"),
+                "reject_adr046_w5_mutation(&snapshot.material,\"panelattestation\")",
+            ),
+            (
+                include_str!("seal.rs"),
+                "reject_adr046_w5_mutation(&snapshot.material,\"seal\")",
+            ),
+            (
+                include_str!("eligibility.rs"),
+                "reject_adr046_w5_mutation(&seal.material,\"mergetargetcapture\")",
+            ),
+            (
+                include_str!("eligibility.rs"),
+                "reject_adr046_w5_mutation(&seal.material,\"mergeeligibility\")",
+            ),
         ] {
+            let compact = source.split_whitespace().collect::<String>();
             assert!(
-                source.contains("reject_adr046_w5_mutation") && source.contains(operation),
-                "missing historical mutation guard for {operation}"
+                compact.contains(exact_call),
+                "missing exact historical mutation guard call {exact_call}"
             );
         }
     }
