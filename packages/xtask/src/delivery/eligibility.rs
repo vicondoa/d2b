@@ -242,6 +242,7 @@ pub(crate) fn evaluate_checked(
     )?;
     if super::coordination::is_wave6_entry_wave(&seal.material) {
         super::coordination::require_close_receipts(
+            state,
             &seal.material,
             repository_roots,
             Some(&seal.panel.roles),

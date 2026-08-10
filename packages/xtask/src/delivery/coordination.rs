@@ -37,6 +37,7 @@ use super::{
         SnapshotSha256, canonical_digest, qualified_wave_parts, sha256_bytes,
         validate_bounded_string, validate_hash, validate_identifier, validate_sha256,
     },
+    snapshot,
     storage::{MAX_JSON_BYTES, absolute_path, ensure_external_path},
 };
 
@@ -1596,22 +1597,53 @@ pub fn require_plan_receipt(
 }
 
 pub fn require_close_receipts(
+    state: &super::storage::StateRoot,
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,
     panel_roles: Option<&[PanelRole]>,
     final_eligibility: bool,
 ) -> Result<DispatchLedger> {
-    let _receipt = require_plan_receipt(material, repository_roots, None, panel_roles)?;
     let paths = W6Paths::from_environment(repository_roots)?;
+    let receipt = read_plan_approval(&paths.plan_approval, repository_roots)?;
+    let entry_candidate = state.existing_candidate(
+        &receipt.wave,
+        &receipt.entry_candidate_id,
+    )?;
+    let entry_snapshot = snapshot::read(&entry_candidate)?.ok_or_else(|| {
+        DeliveryError::new(
+            "plan approval receipt names an entry candidate without a readable production snapshot",
+        )
+    })?;
+    let entry_material = entry_snapshot.material.clone();
     let ledger = read_dispatch_ledger(&paths.ledger, repository_roots)?;
-    let digests = material.digests()?;
-    let head = material
+    let digests = entry_material.digests()?;
+    let head = entry_material
         .repository_set
         .first()
         .ok_or_else(|| DeliveryError::new("Wave 6 material has no repository"))?
         .head_oid
         .as_str();
     ledger.validate_for_candidate(&digests.candidate_id, head)?;
+    let evidence = read_command_evidence(&paths.command_evidence_dir, repository_roots)?;
+    evidence.validate_t221(head)?;
+    let feature_root = feature_root(repository_roots)?;
+    receipt.validate_for(
+        &entry_material,
+        None,
+        &ledger,
+        &evidence,
+        &feature_root,
+        panel_roles,
+    )?;
+    let current_digests = material.digests()?;
+    if current_digests.content_id == entry_snapshot.content_id
+        && current_digests.candidate_id == entry_snapshot.candidate_id
+        && current_digests.snapshot_sha256 != entry_snapshot.snapshot_sha256
+    {
+        return Err(DeliveryError::new(
+            "Wave 6 close material moved commit history without a replacement production snapshot",
+        ));
+    }
     for group in [
         "feature-local:w6-shared-prep",
         "feature-local:w6-core-control-foundations",
