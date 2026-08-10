@@ -36,7 +36,7 @@ const D2B_INTEGRATION_REF: &str = "refs/remotes/origin/v3";
 const ADR046_W5_RETAINED_EVIDENCE_SHA256: &str =
     "7deb84943d36962493422407ac74342fd598b2fea4970ea1a162942e25cfd33d";
 const ADR046_W5_WORK_ITEM_PROJECTION_SHA256: &str =
-    "42099e7e75a5e00f1637d48d575b4af4cf3ceef9c0c4b7cef8313ce44864d991";
+    "3a7112ccade53a2a47f56e2d25abd9931e48723208ea0bf36787cd387df6ddf4";
 
 struct HistoricalPredecessorPolicy<'a> {
     repository_id: &'a str,
@@ -501,36 +501,72 @@ fn require_disposed_work_item_projection(
     disposed_wave: u8,
     expected_sha256: &str,
 ) -> Result<()> {
-    let graph: GraphView = serde_json::from_slice(graph)?;
-    let work_items: WorkItemsView = serde_json::from_slice(work_items)?;
-    let mut states = BTreeMap::new();
-    for item in work_items.items {
-        if states
-            .insert(item.work_item_id.clone(), item.implementation_state)
-            .is_some()
-        {
+    let graph: serde_json::Value = serde_json::from_slice(graph)?;
+    let work_items: serde_json::Value = serde_json::from_slice(work_items)?;
+    let nodes = graph
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DeliveryError::new("implementation graph has no nodes array"))?;
+    let items = work_items
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DeliveryError::new("work-item manifest has no items array"))?;
+
+    let mut graph_items = BTreeMap::new();
+    for node in nodes {
+        if node.get("kind").and_then(serde_json::Value::as_str) != Some("work-item") {
+            continue;
+        }
+        let id = node
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DeliveryError::new("work-item graph node has no id"))?;
+        if graph_items.insert(id.to_owned(), node.clone()).is_some() {
             return Err(DeliveryError::new(
-                "work-item state manifest repeats a disposed work item",
+                "implementation graph repeats a work item",
             ));
         }
     }
 
-    let mut projection = BTreeMap::new();
-    for node in graph.nodes {
-        if node.kind != "work-item" || wave_number(&node.wave)? != disposed_wave {
-            continue;
-        }
-        let state = states.get(&node.id).ok_or_else(|| {
-            DeliveryError::new("disposed work-item projection is missing a graph work item")
-        })?;
-        if projection.insert(node.id, state.clone()).is_some() {
-            return Err(DeliveryError::new(
-                "disposed work-item projection repeats a graph work item",
-            ));
+    let mut manifest_items = BTreeMap::new();
+    for item in items {
+        let id = item
+            .get("workItemId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DeliveryError::new("work-item manifest row has no workItemId"))?;
+        if manifest_items.insert(id.to_owned(), item.clone()).is_some() {
+            return Err(DeliveryError::new("work-item manifest repeats a work item"));
         }
     }
-    let rows = projection.into_iter().collect::<Vec<_>>();
-    if sha256_bytes(&serde_json::to_vec(&rows)?) != expected_sha256 {
+    if graph_items.keys().collect::<Vec<_>>() != manifest_items.keys().collect::<Vec<_>>() {
+        return Err(DeliveryError::new(
+            "implementation graph and work-item manifest are not bijective",
+        ));
+    }
+
+    let mut graph_projection = Vec::new();
+    let mut manifest_projection = Vec::new();
+    for (id, node) in graph_items {
+        let wave = node
+            .get("wave")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DeliveryError::new("work-item graph node has no wave"))?;
+        if wave_number(wave)? != disposed_wave {
+            continue;
+        }
+        graph_projection.push(node);
+        manifest_projection.push(
+            manifest_items
+                .get(&id)
+                .expect("graph/manifest bijection checked")
+                .clone(),
+        );
+    }
+    let projection = serde_json::json!({
+        "graphNodes": graph_projection,
+        "workItems": manifest_projection,
+    });
+    if sha256_bytes(&serde_json::to_vec(&projection)?) != expected_sha256 {
         return Err(DeliveryError::new(
             "disposed work-item projection differs from the accepted historical boundary",
         ));
@@ -1397,6 +1433,48 @@ mod tests {
             ADR046_W5_WORK_ITEM_PROJECTION_SHA256,
         )
         .expect_err("an added historical row must invalidate the disposition");
+
+        let graph_json: serde_json::Value = serde_json::from_slice(&graph).expect("parse graph");
+        let first_id = graph_json["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .find(|node| node["kind"] == "work-item" && node["wave"] == "W5")
+            .and_then(|node| node["id"].as_str())
+            .expect("historical work item");
+        let mut changed_field: serde_json::Value =
+            serde_json::from_slice(&work_items).expect("parse work items");
+        let row = changed_field["items"]
+            .as_array_mut()
+            .expect("items")
+            .iter_mut()
+            .find(|item| item["workItemId"] == first_id)
+            .expect("historical manifest row");
+        row["detailedDesign"] = serde_json::Value::String("changed design".to_owned());
+        require_disposed_work_item_projection(
+            &graph,
+            &serde_json::to_vec(&changed_field).expect("work-item bytes"),
+            5,
+            ADR046_W5_WORK_ITEM_PROJECTION_SHA256,
+        )
+        .expect_err("a changed historical field must invalidate the disposition");
+
+        let mut manifest_only: serde_json::Value =
+            serde_json::from_slice(&work_items).expect("parse work items");
+        manifest_only["items"]
+            .as_array_mut()
+            .expect("items")
+            .push(serde_json::json!({
+                "workItemId": "ADR046-manifest-only-001",
+                "implementationState": "Planned"
+            }));
+        require_disposed_work_item_projection(
+            &graph,
+            &serde_json::to_vec(&manifest_only).expect("work-item bytes"),
+            5,
+            ADR046_W5_WORK_ITEM_PROJECTION_SHA256,
+        )
+        .expect_err("a manifest-only work item must invalidate the disposition");
     }
 
     #[test]
