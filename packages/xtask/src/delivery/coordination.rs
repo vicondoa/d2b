@@ -381,45 +381,6 @@ impl FreshFetchEvidence {
         }
         Ok(())
     }
-
-    pub fn validate_for_close(
-        &self,
-        ledger: &DispatchLedger,
-        command_evidence: &CommandEvidenceSet,
-        feature_dir: &Path,
-        panel_roles: Option<&[PanelRole]>,
-    ) -> Result<()> {
-        self.validate_shape()?;
-        if let Some(panel_roles) = panel_roles {
-            let roster = panel_roles
-                .iter()
-                .map(|role| role.as_str().to_owned())
-                .collect::<Vec<_>>();
-            if roster != self.selected_roster {
-                return Err(DeliveryError::new(
-                    "plan approval receipt selected roster differs from the panel request",
-                ));
-            }
-        }
-        if self.dispatch_ledger_sha256 != ledger.material_digest()? {
-            return Err(DeliveryError::new(
-                "plan approval receipt dispatch ledger material has changed",
-            ));
-        }
-        if self.command_evidence_set_sha256 != command_evidence.digest() {
-            return Err(DeliveryError::new(
-                "plan approval receipt command evidence set has changed",
-            ));
-        }
-        let expected_feature = feature_plan_material_digest(feature_dir)?;
-        if self.feature_plan_material_sha256 != expected_feature {
-            return Err(DeliveryError::new(
-                "plan approval receipt feature material is stale; status-only checkbox updates \
-                 are excluded, but requirement and guard changes invalidate approval",
-            ));
-        }
-        Ok(())
-    }
 }
 
 pub fn read_fresh_fetch_evidence(
@@ -1569,6 +1530,45 @@ impl PlanApprovalReceipt {
                 ));
             }
         } else if let Some(panel_roles) = panel_roles {
+            let roster = panel_roles
+                .iter()
+                .map(|role| role.as_str().to_owned())
+                .collect::<Vec<_>>();
+            if roster != self.selected_roster {
+                return Err(DeliveryError::new(
+                    "plan approval receipt selected roster differs from the panel request",
+                ));
+            }
+        }
+        if self.dispatch_ledger_sha256 != ledger.material_digest()? {
+            return Err(DeliveryError::new(
+                "plan approval receipt dispatch ledger material has changed",
+            ));
+        }
+        if self.command_evidence_set_sha256 != command_evidence.digest() {
+            return Err(DeliveryError::new(
+                "plan approval receipt command evidence set has changed",
+            ));
+        }
+        let expected_feature = feature_plan_material_digest(feature_dir)?;
+        if self.feature_plan_material_sha256 != expected_feature {
+            return Err(DeliveryError::new(
+                "plan approval receipt feature material is stale; status-only checkbox updates \
+                 are excluded, but requirement and guard changes invalidate approval",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_close(
+        &self,
+        ledger: &DispatchLedger,
+        command_evidence: &CommandEvidenceSet,
+        feature_dir: &Path,
+        panel_roles: Option<&[PanelRole]>,
+    ) -> Result<()> {
+        self.validate_shape()?;
+        if let Some(panel_roles) = panel_roles {
             let roster = panel_roles
                 .iter()
                 .map(|role| role.as_str().to_owned())
