@@ -2849,7 +2849,7 @@ evidence, or delivery row.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-vl-009` |
-| Dependency/owner | ADR046-vl-001; ADR046-audit-001; ADR046-telem-001; authoritative audit owner; central telemetry registry owner |
+| Dependency/owner | ADR046-vl-001; authoritative audit owner; central telemetry registry owner |
 | Current source | `d2b-state/src/audit.rs` (main `6faa5256`); OTEL cardinality model from `d2b-provider-observability-local/src/` (main `a1cc0b2d`) |
 | Reuse action | adapt |
 | Destination | `src/audit.rs`; `src/otel.rs`; `src/error.rs`; `tests/audit_unit.rs`; `integration/audit.rs` |

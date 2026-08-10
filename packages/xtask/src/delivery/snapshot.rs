@@ -581,14 +581,14 @@ fn compare_w6_input<T: Ord + Clone>(label: &str, supplied: &[T], canonical: &[T]
     Ok(())
 }
 
-fn canonical_w6_inputs(
-    heads: &BTreeMap<String, (PathBuf, String)>,
-) -> Result<(
+type W6CanonicalInputs = (
     Vec<DependencyEdge>,
     Vec<Fingerprint>,
     Vec<Fingerprint>,
     Vec<Fingerprint>,
-)> {
+);
+
+fn canonical_w6_inputs(heads: &BTreeMap<String, (PathBuf, String)>) -> Result<W6CanonicalInputs> {
     let (root, head) = heads
         .get("github.com/vicondoa/d2b")
         .ok_or_else(|| DeliveryError::new("Wave 6 canonical inputs require the d2b repository"))?;
